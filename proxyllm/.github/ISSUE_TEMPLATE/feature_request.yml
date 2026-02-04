@@ -1,0 +1,75 @@
+name: ✨ Feature Request
+description: Suggest a new feature or enhancement
+title: "[FEATURE] "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature! Please provide as much detail as possible to help us understand your request.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What problem are you trying to solve?
+      placeholder: I'm always frustrated when I have to manage multiple API keys for different providers...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Describe the solution you'd like
+      placeholder: Add a unified key management system that can route to different providers...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What alternative solutions have you considered?
+      placeholder: I could use environment variables, but that doesn't work well for multi-tenant setups...
+
+  - type: textarea
+    id: usecase
+    attributes:
+      label: Use Case
+      description: Describe your use case and how this feature would benefit you
+      placeholder: As a developer building a SaaS application, I need to...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How important is this feature to you?
+      options:
+        - "Nice to have"
+        - "Would make my life easier"
+        - "Blocking my use of DeltaLLM"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: willing
+    attributes:
+      label: Contribution
+      description: Are you willing to contribute this feature?
+      options:
+        - label: I am willing to submit a PR for this feature
+          required: false
+        - label: I would need guidance to implement this
+          required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Add any other context, screenshots, or examples here
+      placeholder: |
+        Here's a mockup of what the UI could look like:
+        [Screenshot or diagram]

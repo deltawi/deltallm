@@ -1,0 +1,118 @@
+name: 🐛 Bug Report
+description: Report a bug to help us improve DeltaLLM
+title: "[BUG] "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the information below to help us diagnose and fix the issue.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of what the bug is
+      placeholder: When I try to use the Azure provider, I get an authentication error...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior
+      placeholder: |
+        1. Configure DeltaLLM with Azure provider
+        2. Send a chat completion request
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen
+      placeholder: The request should succeed and return a chat completion response
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened
+      placeholder: |
+        Error: Authentication failed
+        Stack trace:
+        ```
+        Traceback (most recent call last):
+          ...
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: code
+    attributes:
+      label: Code Sample
+      description: Minimal code sample that reproduces the issue
+      render: python
+      placeholder: |
+        from deltallm import completion
+
+        response = await completion(
+            model="azure/gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="..."
+        )
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Please provide details about your environment
+      value: |
+        - DeltaLLM Version: [e.g., 0.9.0]
+        - Python Version: [e.g., 3.11.0]
+        - OS: [e.g., Ubuntu 22.04, macOS 14.0]
+        - Deployment: [e.g., Docker, local, cloud]
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: Your DeltaLLM configuration (redact sensitive info)
+      render: yaml
+      placeholder: |
+        model_list:
+          - model_name: gpt-4
+            litellm_params:
+              model: azure/gpt-4
+              api_base: https://...
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      description: Before submitting, please confirm
+      options:
+        - label: I have searched existing issues to ensure this is not a duplicate
+          required: true
+        - label: I have provided a minimal reproducible example
+          required: false
+        - label: I have included the full error traceback
+          required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Add any other context about the problem here
+      placeholder: |
+        - This worked in version 0.8.0
+        - I'm using a proxy server
+        - The issue only happens with streaming

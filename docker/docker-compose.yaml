@@ -1,0 +1,89 @@
+services:
+  deltallm:
+    container_name: deltallm-api
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - DELTALLM_MASTER_KEY=${DELTALLM_MASTER_KEY:-sk-master-default}
+      - DATABASE_URL=postgresql://deltallm:deltallm@deltallm-postgres:5432/deltallm
+      - REDIS_URL=redis://deltallm-redis:6379/0
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@deltallm.local}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+    volumes:
+      - ../config:/app/config:ro
+      - ../data:/app/data
+      - deltallm-logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  postgres:
+    container_name: deltallm-postgres
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=deltallm
+      - POSTGRES_PASSWORD=deltallm
+      - POSTGRES_DB=deltallm
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deltallm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    container_name: deltallm-redis
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Admin dashboard
+  dashboard:
+    container_name: deltallm-dashboard
+    build:
+      context: ../admin-dashboard
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - deltallm
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  postgres-data:
+  redis-data:
+  deltallm-logs:

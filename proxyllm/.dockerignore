@@ -1,0 +1,49 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv
+venv
+ENV
+env.bak
+venv.bak
+
+# Testing
+.pytest_cache
+.coverage
+htmlcov
+coverage.xml
+*.cover
+.hypothesis
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Build
+*.egg-info
+dist
+build
+*.egg
+
+# Docker
+docker/
+
+# Docs and misc
+*.md
+!README.md
+*.log
+.env*
+!.env.example
+
+# Admin dashboard (built separately)
+admin-dashboard/node_modules
+admin-dashboard/dist

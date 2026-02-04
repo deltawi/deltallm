@@ -1,0 +1,116 @@
+name: 🔌 Provider Request
+description: Request support for a new LLM provider
+title: "[PROVIDER] Add support for "
+labels: ["provider", "enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for requesting a new provider! Please provide details about the provider's API.
+
+  - type: input
+    id: provider_name
+    attributes:
+      label: Provider Name
+      description: Name of the LLM provider
+      placeholder: e.g., Together AI, AI21 Labs, Perplexity
+    validations:
+      required: true
+
+  - type: input
+    id: provider_url
+    attributes:
+      label: Provider Website
+      description: URL to the provider's website
+      placeholder: https://...
+    validations:
+      required: true
+
+  - type: input
+    id: docs_url
+    attributes:
+      label: API Documentation URL
+      description: URL to the provider's API documentation
+      placeholder: https://docs.provider.com/api
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: endpoints
+    attributes:
+      label: Supported Endpoints
+      description: Which endpoints does this provider support?
+      options:
+        - label: Chat Completions
+        - label: Text Completions (Legacy)
+        - label: Embeddings
+        - label: Image Generation
+        - label: Audio (TTS/STT)
+        - label: Fine-tuning
+        - label: Batch API
+
+  - type: textarea
+    id: models
+    attributes:
+      label: Available Models
+      description: List the main models available from this provider
+      placeholder: |
+        - model-name-1 (e.g., togethercomputer/llama-2-70b)
+        - model-name-2
+        - model-name-3
+    validations:
+      required: true
+
+  - type: textarea
+    id: api_format
+    attributes:
+      label: API Format
+      description: Describe the provider's API format. Is it OpenAI-compatible?
+      placeholder: |
+        The API uses a standard REST format similar to OpenAI:
+        ```json
+        {
+          "model": "model-name",
+          "messages": [...],
+          "temperature": 0.7
+        }
+        ```
+    validations:
+      required: true
+
+  - type: dropdown
+    id: auth
+    attributes:
+      label: Authentication Method
+      description: How does the provider authenticate requests?
+      options:
+        - API Key in Header
+        - API Key in Query Parameter
+        - OAuth 2.0
+        - AWS Signature
+        - Other (specify in additional info)
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: features
+    attributes:
+      label: Supported Features
+      description: Which features does this provider support?
+      options:
+        - label: Streaming
+        - label: Function Calling / Tools
+        - label: Vision / Multimodal
+        - label: JSON Mode
+        - label: Seed for Reproducibility
+        - label: System Messages
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Information
+      description: Any other details about this provider
+      placeholder: |
+        - Pricing information: https://...
+        - Rate limits: 1000 RPM for free tier
+        - Python SDK available: yes/no
