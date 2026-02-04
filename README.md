@@ -85,13 +85,46 @@ Built with React + TypeScript + Tailwind CSS:
 
 ## 🚀 Quick Start
 
-### Installation
+### Deploy DeltaLLM (Server + UI)
+
+The fastest way to get started:
 
 ```bash
+# Clone the repository
+git clone https://github.com/mehditantaoui/deltallm.git
+cd deltallm
+
+# Start both server and UI with Docker Compose
+docker-compose up -d
+
+# Or start manually:
+# Terminal 1: Start the server
 pip install deltallm
+deltallm server --port 8000
+
+# Terminal 2: Start the admin dashboard
+cd admin-dashboard && npm install && npm run dev
 ```
 
+
+**Access points:**
+
+- 🖥️ **Admin Dashboard**: http://localhost:5173
+- ⚡ **API Server**: http://localhost:8000
+- 📚 **API Docs**: http://localhost:8000/docs
+
+### UI Demo
+
+<p align="center">
+  <!-- TODO: Replace with actual demo GIF -->
+  <img src="assets/demo-ui.gif" alt="DeltaLLM Admin Dashboard Demo" width="90%">
+  <br>
+  <i>DeltaLLM Admin Dashboard - Manage organizations, teams, and API keys</i>
+</p>
+
 ### 30-Second Example
+
+API keys are **optional** for getting started:
 
 ```python
 import asyncio
@@ -102,7 +135,7 @@ async def main():
     response = await completion(
         model="gpt-4o",  # or "claude-3-sonnet", "gemini-1.5-pro", etc.
         messages=[{"role": "user", "content": "Hello, DeltaLLM!"}],
-        api_key="your-api-key"
+        # api_key="optional"  # Optional: only if you have API keys configured
     )
     print(response.choices[0].message.content)
 
@@ -112,9 +145,14 @@ asyncio.run(main())
 ### Start the Proxy Server
 
 ```bash
-# Run with Docker (quickest)
+# Run with Docker (quickest) - no API keys required to start
+docker run -p 8000:8000 \
+  ghcr.io/mehditantaoui/deltallm:latest
+
+# With provider API keys (optional)
 docker run -p 8000:8000 \
   -e OPENAI_API_KEY="sk-..." \
+  -e ANTHROPIC_API_KEY="sk-ant-..." \
   ghcr.io/mehditantaoui/deltallm:latest
 
 # Or install locally
@@ -129,7 +167,7 @@ from openai import OpenAI
 
 client = OpenAI(
     base_url="http://localhost:8000",
-    api_key="any-key"  # Your DeltaLLM key
+    api_key="any-key"  # Your DeltaLLM key (optional for testing)
 )
 
 response = client.chat.completions.create(
