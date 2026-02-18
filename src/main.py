@@ -31,7 +31,8 @@ from src.config_runtime import DynamicConfigManager, ModelHotReloadManager, Secr
 from src.db.client import prisma_manager
 from src.db.repositories import KeyRepository
 from src.auth import CustomAuthManager, InMemoryUserRepository, JWTAuthHandler, SSOAuthHandler, SSOConfig, SSOProvider
-from src.api.auth import router as auth_router
+from src.api.admin import admin_router
+from src.api.v1.router import v1_router
 from src.guardrails.middleware import GuardrailMiddleware
 from src.guardrails.registry import GuardrailRegistry
 from src.middleware.errors import register_exception_handlers
@@ -50,16 +51,8 @@ from src.router import (
     RoutingStrategy,
     build_deployment_registry,
 )
-from src.routers.chat import router as chat_router
-from src.routers.embeddings import router as embeddings_router
-from src.routers.health import router as health_router
-from src.routers.metrics import router as metrics_router
-from src.routers.models import router as models_router
-from src.routers.spend import global_router as global_spend_router
-from src.routers.spend import spend_router
 from src.services.key_service import KeyService
 from src.services.limit_counter import LimitCounter
-from src.ui import ui_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -313,15 +306,8 @@ def create_app() -> FastAPI:
     app = FastAPI(title="DeltaLLM Core API", version="0.1.0", lifespan=lifespan)
     register_exception_handlers(app)
     app.add_middleware(CacheMiddleware)
-    app.include_router(health_router)
-    app.include_router(metrics_router)
-    app.include_router(chat_router)
-    app.include_router(embeddings_router)
-    app.include_router(models_router)
-    app.include_router(spend_router)
-    app.include_router(global_spend_router)
-    app.include_router(auth_router)
-    app.include_router(ui_router)
+    app.include_router(v1_router)
+    app.include_router(admin_router)
 
     ui_dist = Path(__file__).resolve().parent.parent / "ui" / "dist"
     if ui_dist.is_dir():
