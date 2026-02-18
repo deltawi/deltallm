@@ -4,13 +4,14 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
+from src.auth.roles import Permission
 from src.api.admin.endpoints.common import db_or_503, optional_int, to_json_value
-from src.middleware.admin import require_master_key
+from src.middleware.admin import require_admin_permission
 
 router = APIRouter(tags=["Admin Users"])
 
 
-@router.get("/ui/api/users", dependencies=[Depends(require_master_key)])
+@router.get("/ui/api/users", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def list_users(request: Request, team_id: str | None = Query(default=None)) -> list[dict[str, Any]]:
     db = db_or_503(request)
     if team_id:
@@ -36,7 +37,7 @@ async def list_users(request: Request, team_id: str | None = Query(default=None)
     return [to_json_value(dict(row)) for row in rows]
 
 
-@router.post("/ui/api/users", dependencies=[Depends(require_master_key)])
+@router.post("/ui/api/users", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def create_user(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     db = db_or_503(request)
     user_id = str(payload.get("user_id") or "").strip()
@@ -102,7 +103,7 @@ async def create_user(request: Request, payload: dict[str, Any]) -> dict[str, An
     }
 
 
-@router.put("/ui/api/users/{user_id}", dependencies=[Depends(require_master_key)])
+@router.put("/ui/api/users/{user_id}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def update_user(request: Request, user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     db = db_or_503(request)
     rows = await db.query_raw(
@@ -166,7 +167,7 @@ async def update_user(request: Request, user_id: str, payload: dict[str, Any]) -
     return to_json_value(dict(updated_rows[0]))
 
 
-@router.post("/ui/api/users/{user_id}/block", dependencies=[Depends(require_master_key)])
+@router.post("/ui/api/users/{user_id}/block", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def block_user(request: Request, user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     db = db_or_503(request)
     blocked = bool(payload.get("blocked", True))

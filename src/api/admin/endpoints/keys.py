@@ -5,13 +5,14 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from src.auth.roles import Permission
 from src.api.admin.endpoints.common import db_or_503, to_json_value
-from src.middleware.admin import require_master_key
+from src.middleware.admin import require_admin_permission
 
 router = APIRouter(tags=["Admin Keys"])
 
 
-@router.get("/ui/api/keys", dependencies=[Depends(require_master_key)])
+@router.get("/ui/api/keys", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def list_keys(request: Request) -> list[dict[str, Any]]:
     db = db_or_503(request)
     rows = await db.query_raw(
@@ -24,7 +25,7 @@ async def list_keys(request: Request) -> list[dict[str, Any]]:
     return [to_json_value(dict(row)) for row in rows]
 
 
-@router.post("/ui/api/keys", dependencies=[Depends(require_master_key)])
+@router.post("/ui/api/keys", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def create_key(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     db = db_or_503(request)
     raw_key = f"sk-{secrets.token_urlsafe(24)}"
@@ -72,7 +73,7 @@ async def create_key(request: Request, payload: dict[str, Any]) -> dict[str, Any
     }
 
 
-@router.put("/ui/api/keys/{token_hash}", dependencies=[Depends(require_master_key)])
+@router.put("/ui/api/keys/{token_hash}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def update_key(request: Request, token_hash: str, payload: dict[str, Any]) -> dict[str, Any]:
     db = db_or_503(request)
     rows = await db.query_raw(
@@ -142,7 +143,7 @@ async def update_key(request: Request, token_hash: str, payload: dict[str, Any])
     return to_json_value(dict(updated_rows[0]))
 
 
-@router.post("/ui/api/keys/{token_hash}/regenerate", dependencies=[Depends(require_master_key)])
+@router.post("/ui/api/keys/{token_hash}/regenerate", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def regenerate_key(request: Request, token_hash: str) -> dict[str, Any]:
     db = db_or_503(request)
     rows = await db.query_raw("SELECT token FROM litellm_verificationtoken WHERE token = $1 LIMIT 1", token_hash)
@@ -159,14 +160,14 @@ async def regenerate_key(request: Request, token_hash: str) -> dict[str, Any]:
     return {"token": new_hash, "raw_key": raw_key}
 
 
-@router.post("/ui/api/keys/{token_hash}/revoke", dependencies=[Depends(require_master_key)])
+@router.post("/ui/api/keys/{token_hash}/revoke", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def revoke_key(request: Request, token_hash: str) -> dict[str, bool]:
     db = db_or_503(request)
     deleted = await db.execute_raw("DELETE FROM litellm_verificationtoken WHERE token = $1", token_hash)
     return {"revoked": int(deleted or 0) > 0}
 
 
-@router.delete("/ui/api/keys/{token_hash}", dependencies=[Depends(require_master_key)])
+@router.delete("/ui/api/keys/{token_hash}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def delete_key(request: Request, token_hash: str) -> dict[str, bool]:
     db = db_or_503(request)
     deleted = await db.execute_raw("DELETE FROM litellm_verificationtoken WHERE token = $1", token_hash)

@@ -39,6 +39,11 @@ class MFAVerifyRequest(BaseModel):
     code: str
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str | None = None
+    new_password: str
+
+
 class MFAStartResponse(BaseModel):
     secret: str
     otpauth_url: str

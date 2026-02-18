@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request, status
 
-from src.auth.roles import Permission, has_platform_permission
+from src.auth.roles import ORG_ROLE_PERMISSIONS, TEAM_ROLE_PERMISSIONS, Permission, has_platform_permission
 from src.models.platform_auth import PlatformAuthContext
 
 SESSION_COOKIE_NAME = "deltallm_session"
@@ -53,3 +53,31 @@ def has_platform_admin_session(request: Request) -> bool:
     if context is None:
         return False
     return has_platform_permission(context.role, Permission.PLATFORM_ADMIN)
+
+
+def has_scoped_permission(
+    context: PlatformAuthContext,
+    permission: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+) -> bool:
+    if has_platform_permission(context.role, Permission.PLATFORM_ADMIN):
+        return True
+
+    if organization_id:
+        for membership in context.organization_memberships:
+            if str(membership.get("organization_id")) != organization_id:
+                continue
+            role = str(membership.get("role") or "")
+            if permission in ORG_ROLE_PERMISSIONS.get(role, set()):
+                return True
+
+    if team_id:
+        for membership in context.team_memberships:
+            if str(membership.get("team_id")) != team_id:
+                continue
+            role = str(membership.get("role") or "")
+            if permission in TEAM_ROLE_PERMISSIONS.get(role, set()):
+                return True
+
+    return False

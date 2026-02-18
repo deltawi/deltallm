@@ -4,15 +4,16 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from src.auth.roles import Permission
 from src.api.admin.endpoints.common import model_entries, to_json_value
 from src.config import GuardrailConfig
-from src.middleware.admin import require_master_key
+from src.middleware.admin import require_admin_permission
 from src.router import RoutingStrategy
 
 router = APIRouter(tags=["Admin Config"])
 
 
-@router.get("/ui/api/routing", dependencies=[Depends(require_master_key)])
+@router.get("/ui/api/routing", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def get_routing(request: Request) -> dict[str, Any]:
     app_config = getattr(request.app.state, "app_config", None)
     router_settings = getattr(app_config, "router_settings", None)
@@ -77,7 +78,7 @@ async def get_routing(request: Request) -> dict[str, Any]:
     }
 
 
-@router.put("/ui/api/routing", dependencies=[Depends(require_master_key)])
+@router.put("/ui/api/routing", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def update_routing(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     app_config = getattr(request.app.state, "app_config", None)
     if app_config is None:
@@ -114,7 +115,7 @@ async def update_routing(request: Request, payload: dict[str, Any]) -> dict[str,
     return await get_routing(request)
 
 
-@router.get("/ui/api/settings", dependencies=[Depends(require_master_key)])
+@router.get("/ui/api/settings", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def get_settings(request: Request) -> dict[str, Any]:
     app_config = getattr(request.app.state, "app_config", None)
     if app_config is None:
@@ -128,7 +129,7 @@ async def get_settings(request: Request) -> dict[str, Any]:
     }
 
 
-@router.put("/ui/api/settings", dependencies=[Depends(require_master_key)])
+@router.put("/ui/api/settings", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def update_settings(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     app_config = getattr(request.app.state, "app_config", None)
     if app_config is None:

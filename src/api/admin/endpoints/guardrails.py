@@ -4,14 +4,15 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from src.auth.roles import Permission
 from src.api.admin.endpoints.common import serialize_guardrail
 from src.config import GuardrailConfig
-from src.middleware.admin import require_master_key
+from src.middleware.admin import require_admin_permission
 
 router = APIRouter(tags=["Admin Guardrails"])
 
 
-@router.get("/ui/api/guardrails", dependencies=[Depends(require_master_key)])
+@router.get("/ui/api/guardrails", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def get_guardrails(request: Request) -> dict[str, Any]:
     app_config = getattr(request.app.state, "app_config", None)
     if app_config is None:
@@ -21,7 +22,7 @@ async def get_guardrails(request: Request) -> dict[str, Any]:
     return {"guardrails": items}
 
 
-@router.put("/ui/api/guardrails", dependencies=[Depends(require_master_key)])
+@router.put("/ui/api/guardrails", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def update_guardrails(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     app_config = getattr(request.app.state, "app_config", None)
     if app_config is None:

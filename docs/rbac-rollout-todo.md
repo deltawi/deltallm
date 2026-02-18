@@ -23,16 +23,17 @@
 
 ## Phase 3 - Auth + SSO Integration
 - [x] Bootstrap first platform admin from config (internal login)
-- [ ] Add password-change flow marker (force change flag)
+- [x] Add password-change flow marker (force change flag)
 - [x] Integrate SSO callback with DB identity linking/upsert
 - [x] Issue session cookie for SSO login
 
 ## Phase 4 - RBAC Enforcement
-- [ ] Add permission-based dependency for admin operations
-- [ ] Map roles to permissions for platform/org/team scopes
-- [ ] Start enforcing on org/team/user/key admin endpoints
+- [x] Add permission-based dependency for admin operations
+- [x] Map roles to permissions for platform/org/team scopes
+- [x] Start enforcing on org/team/user/key admin endpoints
 
 ## Validation
-- [ ] Compile checks on changed modules
-- [ ] End-to-end login + admin route checks (internal + SSO path)
-- [ ] Verify master key remains functional (break-glass)
+- [x] Compile checks on changed modules
+- [x] End-to-end login + admin route checks (internal path)
+- [ ] End-to-end SSO login callback/session checks
+- [x] Verify master key remains functional (break-glass)

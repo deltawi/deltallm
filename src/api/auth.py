@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from src.middleware.platform_auth import SESSION_COOKIE_NAME, get_platform_auth_context
 from src.models.platform_auth import (
+    ChangePasswordRequest,
     CurrentSessionResponse,
     InternalLoginRequest,
     InternalLoginResponse,
@@ -119,6 +120,30 @@ async def mfa_enroll_confirm(request: Request, payload: MFAVerifyRequest) -> dic
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid MFA code")
 
     return {"mfa_enabled": True}
+
+
+@router.post("/internal/change-password")
+async def internal_change_password(request: Request, payload: ChangePasswordRequest) -> dict[str, bool]:
+    context = get_platform_auth_context(request)
+    if context is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+
+    if len(payload.new_password) < 12:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="new_password must be at least 12 characters")
+
+    service = getattr(request.app.state, "platform_identity_service", None)
+    if service is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable")
+
+    ok = await service.change_password(
+        account_id=context.account_id,
+        current_password=payload.current_password,
+        new_password=payload.new_password,
+    )
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid current password")
+
+    return {"changed": True}
 
 
 @router.get("/login")

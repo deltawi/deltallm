@@ -285,6 +285,34 @@ class PlatformIdentityService:
 
         return True
 
+    async def change_password(self, account_id: str, new_password: str, current_password: str | None = None) -> bool:
+        if self.db is None:
+            return False
+        rows = await self.db.query_raw(
+            "SELECT password_hash FROM litellm_platformaccount WHERE account_id = $1 LIMIT 1",
+            account_id,
+        )
+        if not rows:
+            return False
+
+        existing_hash = rows[0].get("password_hash")
+        if isinstance(existing_hash, str) and existing_hash:
+            if not current_password or not self._verify_password(current_password, existing_hash):
+                return False
+
+        await self.db.execute_raw(
+            """
+            UPDATE litellm_platformaccount
+            SET password_hash = $1,
+                force_password_change = false,
+                updated_at = NOW()
+            WHERE account_id = $2
+            """,
+            self._hash_password(new_password),
+            account_id,
+        )
+        return True
+
     async def _create_session_from_email(self, email: str, mfa_verified: bool) -> str:
         rows = await self.db.query_raw(
             "SELECT account_id FROM litellm_platformaccount WHERE lower(email) = lower($1) LIMIT 1",

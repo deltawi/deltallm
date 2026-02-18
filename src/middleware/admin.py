@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from fastapi import Header, HTTPException, Request, status
 
-from src.middleware.platform_auth import has_platform_admin_session
+from src.auth.roles import Permission
+from src.middleware.platform_auth import get_platform_auth_context, has_platform_admin_session, has_scoped_permission
 
 
 def _extract_bearer_token(authorization: str | None) -> str | None:
@@ -37,3 +40,42 @@ async def require_master_key(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid master key")
 
     return configured
+
+
+def require_admin_permission(permission: str) -> Callable:
+    async def _require(
+        request: Request,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+        organization_id: str | None = None,
+        team_id: str | None = None,
+    ) -> str:
+        configured = None
+        app_config = getattr(request.app.state, "app_config", None)
+        if app_config is not None:
+            configured = getattr(getattr(app_config, "general_settings", None), "master_key", None)
+        if not configured:
+            configured = getattr(getattr(request.app.state, "settings", None), "master_key", None)
+
+        provided = x_master_key or _extract_bearer_token(authorization)
+        if configured and provided == configured:
+            return "master_key"
+
+        context = get_platform_auth_context(request)
+        if context is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+
+        if permission == Permission.PLATFORM_ADMIN and has_platform_admin_session(request):
+            return "platform_session"
+
+        if has_scoped_permission(
+            context=context,
+            permission=permission,
+            organization_id=organization_id,
+            team_id=team_id,
+        ):
+            return "platform_session"
+
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+
+    return _require

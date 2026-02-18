@@ -5,13 +5,14 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from src.auth.roles import Permission
 from src.api.admin.endpoints.common import db_or_503, optional_int, to_json_value
-from src.middleware.admin import require_master_key
+from src.middleware.admin import require_admin_permission
 
 router = APIRouter(tags=["Admin Teams"])
 
 
-@router.get("/ui/api/teams", dependencies=[Depends(require_master_key)])
+@router.get("/ui/api/teams", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def list_teams(request: Request) -> list[dict[str, Any]]:
     db = db_or_503(request)
     rows = await db.query_raw(
@@ -26,7 +27,7 @@ async def list_teams(request: Request) -> list[dict[str, Any]]:
     return [to_json_value(dict(row)) for row in rows]
 
 
-@router.post("/ui/api/teams", dependencies=[Depends(require_master_key)])
+@router.post("/ui/api/teams", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def create_team(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     db = db_or_503(request)
     team_id = str(payload.get("team_id") or f"team-{secrets.token_hex(6)}")
@@ -62,7 +63,7 @@ async def create_team(request: Request, payload: dict[str, Any]) -> dict[str, An
     }
 
 
-@router.put("/ui/api/teams/{team_id}", dependencies=[Depends(require_master_key)])
+@router.put("/ui/api/teams/{team_id}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def update_team(request: Request, team_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     db = db_or_503(request)
     rows = await db.query_raw(
@@ -121,7 +122,7 @@ async def update_team(request: Request, team_id: str, payload: dict[str, Any]) -
     return to_json_value(dict(updated_rows[0]))
 
 
-@router.get("/ui/api/teams/{team_id}/members", dependencies=[Depends(require_master_key)])
+@router.get("/ui/api/teams/{team_id}/members", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def list_team_members(request: Request, team_id: str) -> list[dict[str, Any]]:
     db = db_or_503(request)
     rows = await db.query_raw(
@@ -136,7 +137,7 @@ async def list_team_members(request: Request, team_id: str) -> list[dict[str, An
     return [to_json_value(dict(row)) for row in rows]
 
 
-@router.post("/ui/api/teams/{team_id}/members", dependencies=[Depends(require_master_key)])
+@router.post("/ui/api/teams/{team_id}/members", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def add_team_member(request: Request, team_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     db = db_or_503(request)
     user_id = str(payload.get("user_id") or "").strip()
@@ -165,7 +166,7 @@ async def add_team_member(request: Request, team_id: str, payload: dict[str, Any
     }
 
 
-@router.delete("/ui/api/teams/{team_id}/members/{user_id}", dependencies=[Depends(require_master_key)])
+@router.delete("/ui/api/teams/{team_id}/members/{user_id}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def remove_team_member(request: Request, team_id: str, user_id: str) -> dict[str, bool]:
     db = db_or_503(request)
     updated = await db.execute_raw(

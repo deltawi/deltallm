@@ -5,13 +5,14 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from src.auth.roles import Permission
 from src.api.admin.endpoints.common import db_or_503, optional_int, to_json_value
-from src.middleware.admin import require_master_key
+from src.middleware.admin import require_admin_permission
 
 router = APIRouter(tags=["Admin Organizations"])
 
 
-@router.get("/ui/api/organizations", dependencies=[Depends(require_master_key)])
+@router.get("/ui/api/organizations", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def list_organizations(request: Request) -> list[dict[str, Any]]:
     db = db_or_503(request)
     rows = await db.query_raw(
@@ -24,7 +25,7 @@ async def list_organizations(request: Request) -> list[dict[str, Any]]:
     return [to_json_value(dict(row)) for row in rows]
 
 
-@router.post("/ui/api/organizations", dependencies=[Depends(require_master_key)])
+@router.post("/ui/api/organizations", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def create_organization(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     db = db_or_503(request)
     organization_id = str(payload.get("organization_id") or f"org-{secrets.token_hex(6)}")
@@ -70,7 +71,7 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
     }
 
 
-@router.put("/ui/api/organizations/{organization_id}", dependencies=[Depends(require_master_key)])
+@router.put("/ui/api/organizations/{organization_id}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def update_organization(request: Request, organization_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     db = db_or_503(request)
     rows = await db.query_raw(

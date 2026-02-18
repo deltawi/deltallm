@@ -45,6 +45,19 @@ PLATFORM_ROLE_PERMISSIONS: dict[str, set[str]] = {
     PlatformRole.CO_ADMIN: {Permission.PLATFORM_ADMIN},
 }
 
+ORG_ROLE_PERMISSIONS: dict[str, set[str]] = {
+    OrganizationRole.OWNER: {Permission.ORG_READ, Permission.ORG_UPDATE, Permission.SPEND_READ},
+    OrganizationRole.ADMIN: {Permission.ORG_READ, Permission.ORG_UPDATE},
+    OrganizationRole.BILLING: {Permission.ORG_READ, Permission.SPEND_READ},
+    OrganizationRole.AUDITOR: {Permission.ORG_READ, Permission.SPEND_READ},
+}
+
+TEAM_ROLE_PERMISSIONS: dict[str, set[str]] = {
+    TeamRole.ADMIN: {Permission.TEAM_READ, Permission.TEAM_UPDATE, Permission.USER_READ, Permission.USER_UPDATE, Permission.KEY_READ, Permission.KEY_UPDATE, Permission.KEY_REVOKE},
+    TeamRole.DEVELOPER: {Permission.TEAM_READ, Permission.USER_READ, Permission.KEY_READ},
+    TeamRole.VIEWER: {Permission.TEAM_READ},
+}
+
 
 def has_platform_permission(role: str | None, permission: str) -> bool:
     if not role:
