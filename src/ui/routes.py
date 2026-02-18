@@ -243,8 +243,8 @@ async def create_key(request: Request, payload: dict[str, Any]) -> dict[str, Any
 
     await db.execute_raw(
         """
-        INSERT INTO litellm_verificationtoken (token, key_name, user_id, team_id, models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5::text[], 0, $6, $7, $8, $9::timestamp, NOW(), NOW())
+        INSERT INTO litellm_verificationtoken (id, token, key_name, user_id, team_id, models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at)
+        VALUES (gen_random_uuid(), $1, $2, $3, $4, $5::text[], 0, $6, $7, $8, $9::timestamp, NOW(), NOW())
         """,
         token_hash,
         key_name,

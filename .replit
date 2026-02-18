@@ -14,6 +14,10 @@ author = "agent"
 task = "workflow.run"
 args = "UI Dev Server"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Backend Server"
+
 [[workflows.workflow]]
 name = "UI Dev Server"
 author = "agent"
@@ -26,6 +30,18 @@ waitForPort = 5000
 [workflows.workflow.metadata]
 outputType = "webview"
 
+[[workflows.workflow]]
+name = "Backend Server"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "redis-server --daemonize yes && cd /home/runner/workspace && python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload"
+waitForPort = 8000
+
+[workflows.workflow.metadata]
+outputType = "console"
+
 [[ports]]
 localPort = 5000
 externalPort = 80
@@ -33,6 +49,14 @@ externalPort = 80
 [[ports]]
 localPort = 5001
 externalPort = 3000
+
+[[ports]]
+localPort = 6379
+externalPort = 3001
+
+[[ports]]
+localPort = 8000
+externalPort = 8000
 
 [deployment]
 deploymentTarget = "static"
