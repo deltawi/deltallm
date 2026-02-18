@@ -126,6 +126,8 @@ model LiteLLM_OrganizationTable {
   organization_id   String   @unique
   organization_name String?
   max_budget        Float?
+  rpm_limit         Int?
+  tpm_limit         Int?
   spend             Float    @default(0)
   budget_duration   String?
   budget_reset_at   DateTime?
