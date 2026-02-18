@@ -111,6 +111,24 @@ class FakeRedis:
     async def ping(self):
         return True
 
+    async def eval(self, script: str, numkeys: int, *args):
+        del script
+        keys = [str(item) for item in args[:numkeys]]
+        argv = [str(item) for item in args[numkeys:]]
+        n = len(keys)
+        amounts = [int(argv[i]) for i in range(n)]
+        limits = [int(argv[n + i]) for i in range(n)]
+
+        for idx, key in enumerate(keys):
+            current = int(self.store.get(key, 0))
+            if current + amounts[idx] > limits[idx]:
+                return [0, idx + 1]
+
+        for idx, key in enumerate(keys):
+            self.store[key] = int(self.store.get(key, 0)) + amounts[idx]
+
+        return [1, 0]
+
 
 class FakePipeline:
     def __init__(self, redis: FakeRedis) -> None:

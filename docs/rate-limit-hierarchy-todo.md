@@ -25,16 +25,16 @@
 - [x] Ensure responses expose configured values clearly
 
 ## Phase 4 - Tests & Validation
-- [ ] Unit tests for limit resolution precedence and null behavior
-- [ ] Unit/integration tests for middleware enforcement across all scopes
-- [ ] Atomic limiter tests (no partial increments on failure)
-- [ ] Regression checks for chat + embeddings paths
+- [x] Unit tests for limit resolution precedence and null behavior
+- [x] Unit/integration tests for middleware enforcement across all scopes
+- [x] Atomic limiter tests (no partial increments on failure)
+- [x] Regression checks for chat + embeddings paths
 - [ ] Run test suite and lint for touched modules
 
 ## Phase Transitions
 - [x] Phase 1 -> Phase 2: merge/cherry-pick only after passing phase checks
 - [x] Phase 2 -> Phase 3: merge/cherry-pick only after passing phase checks
-- [ ] Phase 3 -> Phase 4: merge/cherry-pick only after passing phase checks
+- [x] Phase 3 -> Phase 4: merge/cherry-pick only after passing phase checks
 
 ## Worktree Layout
 - `.worktrees/phase-1-context`
