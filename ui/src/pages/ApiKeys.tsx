@@ -114,6 +114,8 @@ export default function ApiKeys() {
     { key: 'token', header: 'Token', render: (r: any) => <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{maskKey(r.token)}</code> },
     { key: 'status', header: 'Status', render: (r: any) => <KeyStatus row={r} /> },
     { key: 'budget', header: 'Budget', render: (r: any) => <BudgetBar spend={r.spend || 0} max_budget={r.max_budget} /> },
+    { key: 'rpm_limit', header: 'RPM', render: (r: any) => r.rpm_limit != null ? <span className="text-xs font-medium">{Number(r.rpm_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
+    { key: 'tpm_limit', header: 'TPM', render: (r: any) => r.tpm_limit != null ? <span className="text-xs font-medium">{Number(r.tpm_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
     { key: 'models', header: 'Models', render: (r: any) => r.models?.length ? <span className="text-xs">{r.models.join(', ')}</span> : <span className="text-gray-400 text-xs">All</span> },
     {
       key: 'actions', header: '', render: (r: any) => (

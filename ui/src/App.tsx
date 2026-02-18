@@ -5,6 +5,7 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Models from './pages/Models';
 import ApiKeys from './pages/ApiKeys';
+import Organizations from './pages/Organizations';
 import Teams from './pages/Teams';
 import UsersPage from './pages/UsersPage';
 import Usage from './pages/Usage';
@@ -24,6 +25,7 @@ function AppRoutes() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/models" element={<Models />} />
         <Route path="/keys" element={<ApiKeys />} />
+        <Route path="/organizations" element={<Organizations />} />
         <Route path="/teams" element={<Teams />} />
         <Route path="/users" element={<UsersPage />} />
         <Route path="/usage" element={<Usage />} />
