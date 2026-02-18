@@ -39,6 +39,17 @@ def _db_or_503(request: Request) -> Any:
     return db
 
 
+def _optional_int(value: Any, field_name: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be an integer")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be an integer") from exc
+
+
 def _model_entries(app: Any) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     registry: dict[str, list[dict[str, Any]]] = getattr(app.state, "model_registry", {})
@@ -387,6 +398,116 @@ async def list_teams(request: Request) -> list[dict[str, Any]]:
     return [_to_json_value(dict(row)) for row in rows]
 
 
+@ui_router.get("/ui/api/organizations", dependencies=[Depends(require_master_key)])
+async def list_organizations(request: Request) -> list[dict[str, Any]]:
+    db = _db_or_503(request)
+    rows = await db.query_raw(
+        """
+        SELECT organization_id, organization_name, max_budget, spend, rpm_limit, tpm_limit, created_at, updated_at
+        FROM litellm_organizationtable
+        ORDER BY created_at DESC
+        """
+    )
+    return [_to_json_value(dict(row)) for row in rows]
+
+
+@ui_router.post("/ui/api/organizations", dependencies=[Depends(require_master_key)])
+async def create_organization(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    db = _db_or_503(request)
+    organization_id = str(payload.get("organization_id") or f"org-{secrets.token_hex(6)}")
+    organization_name = payload.get("organization_name")
+    max_budget = payload.get("max_budget")
+    rpm_limit = _optional_int(payload.get("rpm_limit"), "rpm_limit")
+    tpm_limit = _optional_int(payload.get("tpm_limit"), "tpm_limit")
+
+    await db.execute_raw(
+        """
+        INSERT INTO litellm_organizationtable (
+            id,
+            organization_id,
+            organization_name,
+            max_budget,
+            spend,
+            rpm_limit,
+            tpm_limit,
+            created_at,
+            updated_at
+        )
+        VALUES (gen_random_uuid(), $1, $2, $3, 0, $4, $5, NOW(), NOW())
+        ON CONFLICT (organization_id)
+        DO UPDATE SET
+            organization_name = EXCLUDED.organization_name,
+            max_budget = EXCLUDED.max_budget,
+            rpm_limit = EXCLUDED.rpm_limit,
+            tpm_limit = EXCLUDED.tpm_limit,
+            updated_at = NOW()
+        """,
+        organization_id,
+        organization_name,
+        max_budget,
+        rpm_limit,
+        tpm_limit,
+    )
+    return {
+        "organization_id": organization_id,
+        "organization_name": organization_name,
+        "max_budget": max_budget,
+        "rpm_limit": rpm_limit,
+        "tpm_limit": tpm_limit,
+    }
+
+
+@ui_router.put("/ui/api/organizations/{organization_id}", dependencies=[Depends(require_master_key)])
+async def update_organization(request: Request, organization_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    db = _db_or_503(request)
+    rows = await db.query_raw(
+        """
+        SELECT organization_id, organization_name, max_budget, spend, rpm_limit, tpm_limit, created_at, updated_at
+        FROM litellm_organizationtable
+        WHERE organization_id = $1
+        LIMIT 1
+        """,
+        organization_id,
+    )
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+
+    existing = dict(rows[0])
+    organization_name = payload.get("organization_name", existing.get("organization_name"))
+    max_budget = payload.get("max_budget", existing.get("max_budget"))
+    rpm_limit = _optional_int(payload.get("rpm_limit", existing.get("rpm_limit")), "rpm_limit")
+    tpm_limit = _optional_int(payload.get("tpm_limit", existing.get("tpm_limit")), "tpm_limit")
+
+    await db.execute_raw(
+        """
+        UPDATE litellm_organizationtable
+        SET organization_name = $1,
+            max_budget = $2,
+            rpm_limit = $3,
+            tpm_limit = $4,
+            updated_at = NOW()
+        WHERE organization_id = $5
+        """,
+        organization_name,
+        max_budget,
+        rpm_limit,
+        tpm_limit,
+        organization_id,
+    )
+    updated_rows = await db.query_raw(
+        """
+        SELECT organization_id, organization_name, max_budget, spend, rpm_limit, tpm_limit, created_at, updated_at
+        FROM litellm_organizationtable
+        WHERE organization_id = $1
+        LIMIT 1
+        """,
+        organization_id,
+    )
+    if not updated_rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+    return _to_json_value(dict(updated_rows[0]))
+
+
 @ui_router.post("/ui/api/teams", dependencies=[Depends(require_master_key)])
 async def create_team(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     db = _db_or_503(request)
@@ -394,17 +515,21 @@ async def create_team(request: Request, payload: dict[str, Any]) -> dict[str, An
     team_alias = payload.get("team_alias")
     organization_id = payload.get("organization_id")
     max_budget = payload.get("max_budget")
+    rpm_limit = _optional_int(payload.get("rpm_limit"), "rpm_limit")
+    tpm_limit = _optional_int(payload.get("tpm_limit"), "tpm_limit")
     models = payload.get("models") if isinstance(payload.get("models"), list) else []
 
     await db.execute_raw(
         """
-        INSERT INTO litellm_teamtable (team_id, team_alias, organization_id, max_budget, spend, models, blocked, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, 0, $5::text[], false, NOW(), NOW())
+        INSERT INTO litellm_teamtable (team_id, team_alias, organization_id, max_budget, spend, rpm_limit, tpm_limit, models, blocked, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, 0, $5, $6, $7::text[], false, NOW(), NOW())
         """,
         team_id,
         team_alias,
         organization_id,
         max_budget,
+        rpm_limit,
+        tpm_limit,
         models,
     )
     return {
@@ -412,9 +537,70 @@ async def create_team(request: Request, payload: dict[str, Any]) -> dict[str, An
         "team_alias": team_alias,
         "organization_id": organization_id,
         "max_budget": max_budget,
+        "rpm_limit": rpm_limit,
+        "tpm_limit": tpm_limit,
         "models": models,
         "blocked": False,
     }
+
+
+@ui_router.put("/ui/api/teams/{team_id}", dependencies=[Depends(require_master_key)])
+async def update_team(request: Request, team_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    db = _db_or_503(request)
+    rows = await db.query_raw(
+        """
+        SELECT team_id, team_alias, organization_id, max_budget, spend, models, rpm_limit, tpm_limit, blocked, created_at, updated_at
+        FROM litellm_teamtable
+        WHERE team_id = $1
+        LIMIT 1
+        """,
+        team_id,
+    )
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
+    existing = dict(rows[0])
+    team_alias = payload.get("team_alias", existing.get("team_alias"))
+    organization_id = payload.get("organization_id", existing.get("organization_id"))
+    max_budget = payload.get("max_budget", existing.get("max_budget"))
+    rpm_limit = _optional_int(payload.get("rpm_limit", existing.get("rpm_limit")), "rpm_limit")
+    tpm_limit = _optional_int(payload.get("tpm_limit", existing.get("tpm_limit")), "tpm_limit")
+    models = payload.get("models", existing.get("models"))
+    if not isinstance(models, list):
+        models = existing.get("models") or []
+
+    await db.execute_raw(
+        """
+        UPDATE litellm_teamtable
+        SET team_alias = $1,
+            organization_id = $2,
+            max_budget = $3,
+            rpm_limit = $4,
+            tpm_limit = $5,
+            models = $6::text[],
+            updated_at = NOW()
+        WHERE team_id = $7
+        """,
+        team_alias,
+        organization_id,
+        max_budget,
+        rpm_limit,
+        tpm_limit,
+        models,
+        team_id,
+    )
+    updated_rows = await db.query_raw(
+        """
+        SELECT team_id, team_alias, organization_id, max_budget, spend, models, rpm_limit, tpm_limit, blocked, created_at, updated_at
+        FROM litellm_teamtable
+        WHERE team_id = $1
+        LIMIT 1
+        """,
+        team_id,
+    )
+    if not updated_rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+    return _to_json_value(dict(updated_rows[0]))
 
 
 @ui_router.get("/ui/api/teams/{team_id}/members", dependencies=[Depends(require_master_key)])
@@ -509,12 +695,27 @@ async def create_user(request: Request, payload: dict[str, Any]) -> dict[str, An
     user_role = payload.get("user_role") or "user"
     team_id = payload.get("team_id")
     max_budget = payload.get("max_budget")
+    rpm_limit = _optional_int(payload.get("rpm_limit"), "rpm_limit")
+    tpm_limit = _optional_int(payload.get("tpm_limit"), "tpm_limit")
     models = payload.get("models") if isinstance(payload.get("models"), list) else []
 
     await db.execute_raw(
         """
-        INSERT INTO litellm_usertable (user_id, user_email, user_role, spend, models, team_id, max_budget, metadata, created_at, updated_at)
-        VALUES ($1, $2, $3, 0, $4::text[], $5, $6, '{}'::jsonb, NOW(), NOW())
+        INSERT INTO litellm_usertable (
+            user_id,
+            user_email,
+            user_role,
+            spend,
+            models,
+            team_id,
+            max_budget,
+            rpm_limit,
+            tpm_limit,
+            metadata,
+            created_at,
+            updated_at
+        )
+        VALUES ($1, $2, $3, 0, $4::text[], $5, $6, $7, $8, '{}'::jsonb, NOW(), NOW())
         ON CONFLICT (user_id)
         DO UPDATE SET
             user_email = EXCLUDED.user_email,
@@ -522,6 +723,8 @@ async def create_user(request: Request, payload: dict[str, Any]) -> dict[str, An
             team_id = EXCLUDED.team_id,
             max_budget = EXCLUDED.max_budget,
             models = EXCLUDED.models,
+            rpm_limit = EXCLUDED.rpm_limit,
+            tpm_limit = EXCLUDED.tpm_limit,
             updated_at = NOW()
         """,
         user_id,
@@ -530,6 +733,8 @@ async def create_user(request: Request, payload: dict[str, Any]) -> dict[str, An
         models,
         team_id,
         max_budget,
+        rpm_limit,
+        tpm_limit,
     )
 
     return {
@@ -538,9 +743,75 @@ async def create_user(request: Request, payload: dict[str, Any]) -> dict[str, An
         "user_role": user_role,
         "team_id": team_id,
         "max_budget": max_budget,
+        "rpm_limit": rpm_limit,
+        "tpm_limit": tpm_limit,
         "models": models,
         "blocked": False,
     }
+
+
+@ui_router.put("/ui/api/users/{user_id}", dependencies=[Depends(require_master_key)])
+async def update_user(request: Request, user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    db = _db_or_503(request)
+    rows = await db.query_raw(
+        """
+        SELECT user_id, user_email, user_role, team_id, spend, max_budget, models, tpm_limit, rpm_limit,
+               COALESCE((metadata->>'blocked')::boolean, false) AS blocked, created_at, updated_at
+        FROM litellm_usertable
+        WHERE user_id = $1
+        LIMIT 1
+        """,
+        user_id,
+    )
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    existing = dict(rows[0])
+    user_email = payload.get("user_email", existing.get("user_email"))
+    user_role = payload.get("user_role", existing.get("user_role"))
+    team_id = payload.get("team_id", existing.get("team_id"))
+    max_budget = payload.get("max_budget", existing.get("max_budget"))
+    models = payload.get("models", existing.get("models"))
+    if not isinstance(models, list):
+        models = existing.get("models") or []
+    rpm_limit = _optional_int(payload.get("rpm_limit", existing.get("rpm_limit")), "rpm_limit")
+    tpm_limit = _optional_int(payload.get("tpm_limit", existing.get("tpm_limit")), "tpm_limit")
+
+    await db.execute_raw(
+        """
+        UPDATE litellm_usertable
+        SET user_email = $1,
+            user_role = $2,
+            team_id = $3,
+            max_budget = $4,
+            models = $5::text[],
+            rpm_limit = $6,
+            tpm_limit = $7,
+            updated_at = NOW()
+        WHERE user_id = $8
+        """,
+        user_email,
+        user_role,
+        team_id,
+        max_budget,
+        models,
+        rpm_limit,
+        tpm_limit,
+        user_id,
+    )
+    updated_rows = await db.query_raw(
+        """
+        SELECT user_id, user_email, user_role, team_id, spend, max_budget, models, tpm_limit, rpm_limit,
+               COALESCE((metadata->>'blocked')::boolean, false) AS blocked, created_at, updated_at
+        FROM litellm_usertable
+        WHERE user_id = $1
+        LIMIT 1
+        """,
+        user_id,
+    )
+    if not updated_rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return _to_json_value(dict(updated_rows[0]))
 
 
 @ui_router.post("/ui/api/users/{user_id}/block", dependencies=[Depends(require_master_key)])

@@ -19,10 +19,10 @@
 - [x] Add structured 429 reason metadata and retry-after
 
 ## Phase 3 - Management APIs
-- [ ] Teams: allow create/update of `rpm_limit` and `tpm_limit`
-- [ ] Users: allow create/update of `rpm_limit` and `tpm_limit`
-- [ ] Organizations: add list/create/update endpoints and include RPM/TPM
-- [ ] Ensure responses expose configured values clearly
+- [x] Teams: allow create/update of `rpm_limit` and `tpm_limit`
+- [x] Users: allow create/update of `rpm_limit` and `tpm_limit`
+- [x] Organizations: add list/create/update endpoints and include RPM/TPM
+- [x] Ensure responses expose configured values clearly
 
 ## Phase 4 - Tests & Validation
 - [ ] Unit tests for limit resolution precedence and null behavior
@@ -33,7 +33,7 @@
 
 ## Phase Transitions
 - [x] Phase 1 -> Phase 2: merge/cherry-pick only after passing phase checks
-- [ ] Phase 2 -> Phase 3: merge/cherry-pick only after passing phase checks
+- [x] Phase 2 -> Phase 3: merge/cherry-pick only after passing phase checks
 - [ ] Phase 3 -> Phase 4: merge/cherry-pick only after passing phase checks
 
 ## Worktree Layout
