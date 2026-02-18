@@ -59,7 +59,7 @@ localPort = 8000
 externalPort = 8000
 
 [deployment]
-deploymentTarget = "vm"
+deploymentTarget = "cloudrun"
 build = ["bash", "-c", "cd ui && npm run build"]
 publicDir = "ui/dist"
 run = ["bash", "-c", "redis-server --daemonize yes && python -m uvicorn src.main:app --host 0.0.0.0 --port 5000"]
