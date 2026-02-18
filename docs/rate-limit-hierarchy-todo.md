@@ -12,11 +12,11 @@
 - [x] Preserve backward compatibility when fields are missing
 
 ## Phase 2 - Enforcement Engine
-- [ ] Implement atomic multi-scope limiter in Redis (all-or-nothing increment)
-- [ ] Add scope-aware limit resolution policy (org/team/user/key)
-- [ ] Enforce hierarchical RPM/TPM in shared rate-limit middleware
-- [ ] Keep parallel-request limit behavior for API keys
-- [ ] Add structured 429 reason metadata and retry-after
+- [x] Implement atomic multi-scope limiter in Redis (all-or-nothing increment)
+- [x] Add scope-aware limit resolution policy (org/team/user/key)
+- [x] Enforce hierarchical RPM/TPM in shared rate-limit middleware
+- [x] Keep parallel-request limit behavior for API keys
+- [x] Add structured 429 reason metadata and retry-after
 
 ## Phase 3 - Management APIs
 - [ ] Teams: allow create/update of `rpm_limit` and `tpm_limit`
@@ -32,7 +32,7 @@
 - [ ] Run test suite and lint for touched modules
 
 ## Phase Transitions
-- [ ] Phase 1 -> Phase 2: merge/cherry-pick only after passing phase checks
+- [x] Phase 1 -> Phase 2: merge/cherry-pick only after passing phase checks
 - [ ] Phase 2 -> Phase 3: merge/cherry-pick only after passing phase checks
 - [ ] Phase 3 -> Phase 4: merge/cherry-pick only after passing phase checks
 
