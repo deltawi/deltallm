@@ -32,8 +32,15 @@
 - [x] Map roles to permissions for platform/org/team scopes
 - [x] Start enforcing on org/team/user/key admin endpoints
 
+## Phase 5 - Membership Management + Scoped Access
+- [x] Add platform account management endpoints
+- [x] Add org/team membership management endpoints
+- [x] Add tenant-scoped org/team read endpoints
+- [x] Enforce team/org scoped permissions (without org->team inheritance)
+
 ## Validation
 - [x] Compile checks on changed modules
 - [x] End-to-end login + admin route checks (internal path)
-- [ ] End-to-end SSO login callback/session checks
+- [x] End-to-end SSO login callback/session checks
+- [x] End-to-end tenant membership scoped access checks
 - [x] Verify master key remains functional (break-glass)

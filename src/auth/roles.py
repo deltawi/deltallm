@@ -11,6 +11,7 @@ class PlatformRole:
 
 @dataclass(frozen=True)
 class OrganizationRole:
+    MEMBER: str = "org_member"
     OWNER: str = "org_owner"
     ADMIN: str = "org_admin"
     BILLING: str = "org_billing"
@@ -46,6 +47,7 @@ PLATFORM_ROLE_PERMISSIONS: dict[str, set[str]] = {
 }
 
 ORG_ROLE_PERMISSIONS: dict[str, set[str]] = {
+    OrganizationRole.MEMBER: {Permission.ORG_READ},
     OrganizationRole.OWNER: {Permission.ORG_READ, Permission.ORG_UPDATE, Permission.SPEND_READ},
     OrganizationRole.ADMIN: {Permission.ORG_READ, Permission.ORG_UPDATE},
     OrganizationRole.BILLING: {Permission.ORG_READ, Permission.SPEND_READ},

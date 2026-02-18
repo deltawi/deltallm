@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 
 from src.middleware.platform_auth import SESSION_COOKIE_NAME, get_platform_auth_context
+from src.auth.roles import TeamRole
 from src.models.platform_auth import (
     ChangePasswordRequest,
     CurrentSessionResponse,
@@ -186,6 +187,8 @@ async def auth_callback(request: Request, code: str = Query(default=""), state: 
         is_platform_admin=email in admins,
         provider=provider,
         subject=str(subject) if subject else None,
+        team_id=response_payload.get("team_id"),
+        default_team_role=TeamRole.VIEWER,
     )
     if login is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to establish session")

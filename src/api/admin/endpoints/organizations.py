@@ -25,6 +25,23 @@ async def list_organizations(request: Request) -> list[dict[str, Any]]:
     return [to_json_value(dict(row)) for row in rows]
 
 
+@router.get("/ui/api/organizations/{organization_id}", dependencies=[Depends(require_admin_permission(Permission.ORG_READ))])
+async def get_organization(request: Request, organization_id: str) -> dict[str, Any]:
+    db = db_or_503(request)
+    rows = await db.query_raw(
+        """
+        SELECT organization_id, organization_name, max_budget, spend, rpm_limit, tpm_limit, created_at, updated_at
+        FROM litellm_organizationtable
+        WHERE organization_id = $1
+        LIMIT 1
+        """,
+        organization_id,
+    )
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+    return to_json_value(dict(rows[0]))
+
+
 @router.post("/ui/api/organizations", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def create_organization(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     db = db_or_503(request)
@@ -71,7 +88,7 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
     }
 
 
-@router.put("/ui/api/organizations/{organization_id}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.put("/ui/api/organizations/{organization_id}", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
 async def update_organization(request: Request, organization_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     db = db_or_503(request)
     rows = await db.query_raw(

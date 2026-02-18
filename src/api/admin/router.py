@@ -5,6 +5,7 @@ from src.api.admin.endpoints import (
     guardrails_router,
     keys_router,
     organizations_router,
+    rbac_router,
     teams_router,
     users_router,
 )
@@ -17,6 +18,7 @@ admin_router.include_router(keys_router)
 admin_router.include_router(users_router)
 admin_router.include_router(teams_router)
 admin_router.include_router(organizations_router)
+admin_router.include_router(rbac_router)
 admin_router.include_router(guardrails_router)
 admin_router.include_router(config_router)
 

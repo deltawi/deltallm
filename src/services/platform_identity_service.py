@@ -10,7 +10,7 @@ import struct
 from typing import Any
 import urllib.parse
 
-from src.auth.roles import PLATFORM_ROLE_PERMISSIONS, Permission, PlatformRole
+from src.auth.roles import OrganizationRole, PLATFORM_ROLE_PERMISSIONS, Permission, PlatformRole, TeamRole
 from src.models.platform_auth import PlatformAuthContext
 
 
@@ -114,6 +114,8 @@ class PlatformIdentityService:
         is_platform_admin: bool,
         provider: str = "sso",
         subject: str | None = None,
+        team_id: str | None = None,
+        default_team_role: str = TeamRole.VIEWER,
     ) -> LoginResult | None:
         if self.db is None:
             return None
@@ -147,6 +149,39 @@ class PlatformIdentityService:
             provider,
             subject or email.lower(),
         )
+        if not is_platform_admin and team_id:
+            await self.db.execute_raw(
+                """
+                INSERT INTO litellm_teammembership (membership_id, account_id, team_id, role, created_at, updated_at)
+                SELECT gen_random_uuid(), account_id, $2, $3, NOW(), NOW()
+                FROM litellm_platformaccount
+                WHERE lower(email) = lower($1)
+                ON CONFLICT (account_id, team_id)
+                DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
+                """,
+                email,
+                team_id,
+                default_team_role,
+            )
+            org_rows = await self.db.query_raw(
+                "SELECT organization_id FROM litellm_teamtable WHERE team_id = $1 LIMIT 1",
+                team_id,
+            )
+            organization_id = org_rows[0].get("organization_id") if org_rows else None
+            if organization_id:
+                await self.db.execute_raw(
+                    """
+                    INSERT INTO litellm_organizationmembership (membership_id, account_id, organization_id, role, created_at, updated_at)
+                    SELECT gen_random_uuid(), account_id, $2, $3, NOW(), NOW()
+                    FROM litellm_platformaccount
+                    WHERE lower(email) = lower($1)
+                    ON CONFLICT (account_id, organization_id)
+                    DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
+                    """,
+                    email,
+                    organization_id,
+                    OrganizationRole.MEMBER,
+                )
 
         token = await self._create_session_from_email(email=email, mfa_verified=False)
         context = await self.get_context_for_session(token)
