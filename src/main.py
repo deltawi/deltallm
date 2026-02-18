@@ -5,10 +5,13 @@ import logging
 from asyncio import Task, create_task
 import contextlib
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
 
 from src.cache import (
@@ -319,6 +322,18 @@ def create_app() -> FastAPI:
     app.include_router(global_spend_router)
     app.include_router(auth_router)
     app.include_router(ui_router)
+
+    ui_dist = Path(__file__).resolve().parent.parent / "ui" / "dist"
+    if ui_dist.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(ui_dist / "assets")), name="ui-assets")
+
+        @app.get("/{full_path:path}")
+        async def serve_spa(request: Request, full_path: str):
+            file_path = ui_dist / full_path
+            if file_path.is_file():
+                return FileResponse(str(file_path))
+            return FileResponse(str(ui_dist / "index.html"))
+
     return app
 
 
