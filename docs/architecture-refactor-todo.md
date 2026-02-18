@@ -16,13 +16,19 @@
 
 ## Phase 3: App Wiring
 - [x] Update `src/main.py` to include new aggregated routers
-- [x] Update `src/ui/__init__.py` to expose admin router via compatibility alias
+- [x] Update `src/ui/__init__.py` compatibility exports
 
-## Phase 4: Validation
+## Phase 4: Full Admin Endpoint Split
+- [x] Create `src/api/admin/endpoints/{keys,users,teams,organizations,guardrails,config}.py`
+- [x] Move corresponding `/ui/api/*` admin handlers out of `src/ui/routes.py`
+- [x] Add `src/api/admin/endpoints/common.py` shared helpers for admin modules
+- [x] Keep `src/ui/routes.py` for remaining UI/static + non-split handlers
+- [x] Keep route compatibility (same paths, methods, and payload shape)
+
+## Phase 5: Validation
 - [x] Compile check changed source files
-- [x] Confirm no endpoint path regressions in route registration
+- [ ] Re-test critical admin routes end-to-end against local stack
 
 ## Notes
 - Scope of this refactor is structural organization; no endpoint behavior changes intended.
-- Existing `src/ui/routes.py` remains source of UI/admin endpoint definitions in this pass.
-- Runtime import validation requiring third-party deps could not run in this environment (`httpx` missing on host Python).
+- `src/api/admin/router.py` now mounts split admin endpoints and then the legacy `src/ui/routes.py` router for remaining handlers.
