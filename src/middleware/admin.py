@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from fastapi import Header, HTTPException, Request, status
 
+from src.middleware.platform_auth import has_platform_admin_session
+
 
 def _extract_bearer_token(authorization: str | None) -> str | None:
     if not authorization:
@@ -17,6 +19,9 @@ async def require_master_key(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> str:
+    if has_platform_admin_session(request):
+        return "platform_session"
+
     configured = None
     app_config = getattr(request.app.state, "app_config", None)
     if app_config is not None:

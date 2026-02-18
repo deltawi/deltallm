@@ -137,3 +137,90 @@ model LiteLLM_OrganizationTable {
 
   @@map("litellm_organizationtable")
 }
+
+model LiteLLM_PlatformAccount {
+  account_id          String   @id @default(uuid())
+  email               String   @unique
+  password_hash       String?
+  role                String   @default("org_user")
+  is_active           Boolean  @default(true)
+  force_password_change Boolean @default(false)
+  mfa_enabled         Boolean  @default(false)
+  mfa_secret          String?
+  mfa_pending_secret  String?
+  metadata            Json?
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+  last_login_at       DateTime?
+
+  sessions            LiteLLM_PlatformSession[]
+  identities          LiteLLM_PlatformIdentity[]
+  organization_memberships LiteLLM_OrganizationMembership[]
+  team_memberships    LiteLLM_TeamMembership[]
+
+  @@map("litellm_platformaccount")
+}
+
+model LiteLLM_PlatformSession {
+  session_id          String   @id @default(uuid())
+  account_id          String
+  session_token_hash  String   @unique
+  mfa_verified        Boolean  @default(false)
+  expires_at          DateTime
+  revoked_at          DateTime?
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+  last_seen_at        DateTime @default(now())
+
+  account LiteLLM_PlatformAccount @relation(fields: [account_id], references: [account_id])
+
+  @@index([account_id])
+  @@index([expires_at])
+  @@map("litellm_platformsession")
+}
+
+model LiteLLM_PlatformIdentity {
+  identity_id         String   @id @default(uuid())
+  account_id          String
+  provider            String
+  subject             String
+  email               String?
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  account LiteLLM_PlatformAccount @relation(fields: [account_id], references: [account_id])
+
+  @@unique([provider, subject])
+  @@index([account_id])
+  @@map("litellm_platformidentity")
+}
+
+model LiteLLM_OrganizationMembership {
+  membership_id       String   @id @default(uuid())
+  account_id          String
+  organization_id     String
+  role                String   @default("org_member")
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  account LiteLLM_PlatformAccount @relation(fields: [account_id], references: [account_id])
+
+  @@unique([account_id, organization_id])
+  @@index([organization_id])
+  @@map("litellm_organizationmembership")
+}
+
+model LiteLLM_TeamMembership {
+  membership_id       String   @id @default(uuid())
+  account_id          String
+  team_id             String
+  role                String   @default("team_viewer")
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  account LiteLLM_PlatformAccount @relation(fields: [account_id], references: [account_id])
+
+  @@unique([account_id, team_id])
+  @@index([team_id])
+  @@map("litellm_teammembership")
+}

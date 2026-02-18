@@ -125,6 +125,9 @@ class GeneralSettings(BaseModel):
     jwt_issuer: str | None = None
     jwt_claims_mapping: dict[str, str] = Field(default_factory=dict)
     custom_auth: str | None = None
+    platform_bootstrap_admin_email: str | None = None
+    platform_bootstrap_admin_password: str | None = None
+    auth_session_ttl_hours: int = 12
 
 
 class AppConfig(BaseModel):

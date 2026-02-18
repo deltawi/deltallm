@@ -61,3 +61,6 @@ general_settings:
   cache_backend: memory
   cache_ttl: 3600
   cache_max_size: 10000
+  platform_bootstrap_admin_email: os.environ/PLATFORM_BOOTSTRAP_ADMIN_EMAIL
+  platform_bootstrap_admin_password: os.environ/PLATFORM_BOOTSTRAP_ADMIN_PASSWORD
+  auth_session_ttl_hours: 12

@@ -36,6 +36,7 @@ from src.api.v1.router import v1_router
 from src.guardrails.middleware import GuardrailMiddleware
 from src.guardrails.registry import GuardrailRegistry
 from src.middleware.errors import register_exception_handlers
+from src.middleware.platform_auth import attach_platform_auth_context
 from src.providers.openai import OpenAIAdapter
 from src.router import (
     BackgroundHealthChecker,
@@ -53,6 +54,7 @@ from src.router import (
 )
 from src.services.key_service import KeyService
 from src.services.limit_counter import LimitCounter
+from src.services.platform_identity_service import PlatformIdentityService
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -122,6 +124,15 @@ async def lifespan(app: FastAPI):
         repository=KeyRepository(prisma_manager.client),
         redis_client=redis_client,
         salt=cfg.general_settings.salt_key or settings.salt_key,
+    )
+    app.state.platform_identity_service = PlatformIdentityService(
+        db_client=prisma_manager.client,
+        salt=cfg.general_settings.salt_key or settings.salt_key,
+        session_ttl_hours=cfg.general_settings.auth_session_ttl_hours,
+    )
+    await app.state.platform_identity_service.ensure_bootstrap_admin(
+        email=cfg.general_settings.platform_bootstrap_admin_email,
+        password=cfg.general_settings.platform_bootstrap_admin_password,
     )
     app.state.limit_counter = LimitCounter(redis_client=redis_client)
     app.state.model_registry = _build_model_registry(cfg, settings)
@@ -306,6 +317,12 @@ def create_app() -> FastAPI:
     app = FastAPI(title="DeltaLLM Core API", version="0.1.0", lifespan=lifespan)
     register_exception_handlers(app)
     app.add_middleware(CacheMiddleware)
+
+    @app.middleware("http")
+    async def _platform_auth_context_middleware(request: Request, call_next):
+        await attach_platform_auth_context(request)
+        return await call_next(request)
+
     app.include_router(v1_router)
     app.include_router(admin_router)
 
