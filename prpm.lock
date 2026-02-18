@@ -1,0 +1,58 @@
+{
+  "version": "1.0.0",
+  "lockfileVersion": 1,
+  "packages": {
+    "@agent-relay/agent-relay-snippet#generic:CLAUDE.md": {
+      "version": "1.1.6",
+      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-relay%2Fagent-relay-snippet/1.1.6.tar.gz",
+      "integrity": "sha256-40ebe6488ca460812e23cd101f839a55379fa006a328cecc8b1a083e3a91a13e",
+      "format": "generic",
+      "subtype": "snippet",
+      "sourceFormat": "generic",
+      "sourceSubtype": "snippet",
+      "installedPath": "CLAUDE.md",
+      "snippetMetadata": {
+        "targetPath": "CLAUDE.md",
+        "config": {
+          "target": "CLAUDE.md",
+          "position": "append"
+        }
+      }
+    },
+    "@agent-relay/agent-relay-snippet#claude.md:GEMINI.md": {
+      "version": "1.1.6",
+      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-relay%2Fagent-relay-snippet/1.1.6.tar.gz",
+      "integrity": "sha256-40ebe6488ca460812e23cd101f839a55379fa006a328cecc8b1a083e3a91a13e",
+      "format": "claude.md",
+      "subtype": "snippet",
+      "sourceFormat": "generic",
+      "sourceSubtype": "snippet",
+      "installedPath": "GEMINI.md",
+      "snippetMetadata": {
+        "targetPath": "GEMINI.md",
+        "config": {
+          "target": "GEMINI.md",
+          "position": "append"
+        }
+      }
+    },
+    "@agent-relay/agent-relay-snippet#gemini.md:AGENTS.md": {
+      "version": "1.1.6",
+      "resolved": "https://registry.prpm.dev/api/v1/packages/%40agent-relay%2Fagent-relay-snippet/1.1.6.tar.gz",
+      "integrity": "sha256-40ebe6488ca460812e23cd101f839a55379fa006a328cecc8b1a083e3a91a13e",
+      "format": "gemini.md",
+      "subtype": "snippet",
+      "sourceFormat": "generic",
+      "sourceSubtype": "snippet",
+      "installedPath": "AGENTS.md",
+      "snippetMetadata": {
+        "targetPath": "AGENTS.md",
+        "config": {
+          "target": "AGENTS.md",
+          "position": "append"
+        }
+      }
+    }
+  },
+  "generated": "2026-02-13T09:24:20.905Z"
+}

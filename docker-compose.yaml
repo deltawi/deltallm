@@ -1,0 +1,109 @@
+services:
+  deltallm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["single"]
+    ports:
+      - "4000:4000"
+    environment:
+      DELTALLM_CONFIG_PATH: /app/config/config.yaml
+      DELTALLM_OPENAI_API_KEY: ${DELTALLM_OPENAI_API_KEY:-}
+      DELTALLM_MASTER_KEY: ${DELTALLM_MASTER_KEY:-}
+      DELTALLM_DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
+      DELTALLM_REDIS_URL: redis://redis:6379/0
+      DELTALLM_SALT_KEY: ${DELTALLM_SALT_KEY:-change-me}
+    volumes:
+      - ./config.example.yaml:/app/config/config.yaml:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:4000/health/liveliness"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  deltallm-ha-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["ha"]
+    environment:
+      DELTALLM_CONFIG_PATH: /app/config/config.yaml
+      DELTALLM_OPENAI_API_KEY: ${DELTALLM_OPENAI_API_KEY:-}
+      DELTALLM_MASTER_KEY: ${DELTALLM_MASTER_KEY:-}
+      DELTALLM_DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
+      DELTALLM_REDIS_URL: redis://redis:6379/0
+      DELTALLM_SALT_KEY: ${DELTALLM_SALT_KEY:-change-me}
+      INSTANCE_ID: instance-1
+    volumes:
+      - ./config.example.yaml:/app/config/config.yaml:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  deltallm-ha-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["ha"]
+    environment:
+      DELTALLM_CONFIG_PATH: /app/config/config.yaml
+      DELTALLM_OPENAI_API_KEY: ${DELTALLM_OPENAI_API_KEY:-}
+      DELTALLM_MASTER_KEY: ${DELTALLM_MASTER_KEY:-}
+      DELTALLM_DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
+      DELTALLM_REDIS_URL: redis://redis:6379/0
+      DELTALLM_SALT_KEY: ${DELTALLM_SALT_KEY:-change-me}
+      INSTANCE_ID: instance-2
+    volumes:
+      - ./config.example.yaml:/app/config/config.yaml:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  nginx:
+    image: nginx:1.27-alpine
+    profiles: ["ha"]
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - deltallm-ha-1
+      - deltallm-ha-2
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: deltallm
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
+  redis_data:

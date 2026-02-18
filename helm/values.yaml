@@ -1,0 +1,126 @@
+replicaCount: 2
+
+image:
+  repository: deltallm/deltallm
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext: {}
+securityContext: {}
+
+service:
+  type: ClusterIP
+  port: 4000
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+  hosts:
+    - host: deltallm.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+probes:
+  liveness:
+    path: /health/liveliness
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    path: /health/readiness
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+config:
+  masterKey: ""
+  databaseUrl: ""
+  redisUrl: ""
+  model_list: []
+  router_settings:
+    routing_strategy: simple-shuffle
+    num_retries: 3
+    retry_after: 1
+    timeout: 300
+    cooldown_time: 60
+    allowed_fails: 0
+    enable_pre_call_checks: false
+    model_group_alias: {}
+  litellm_settings:
+    fallbacks: []
+    context_window_fallbacks: []
+    content_policy_fallbacks: []
+    guardrails: []
+    success_callback: []
+    failure_callback: []
+    callbacks: []
+    callback_settings: {}
+    turn_off_message_logging: false
+  general_settings:
+    litellm_key_header_name: Authorization
+    salt_key: change-me
+    cache_enabled: false
+    cache_backend: memory
+    cache_ttl: 3600
+    cache_max_size: 10000
+    background_health_checks: true
+    health_check_interval: 300
+    health_check_model: gpt-3.5-turbo
+
+postgresql:
+  enabled: true
+  auth:
+    username: deltallm
+    password: deltallm
+    database: deltallm
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+
+redis:
+  enabled: true
+  auth:
+    enabled: false
+  master:
+    persistence:
+      enabled: true
+      size: 5Gi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

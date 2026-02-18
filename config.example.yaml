@@ -1,0 +1,63 @@
+model_list:
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+      api_base: https://api.openai.com/v1
+      timeout: 60
+
+router_settings:
+  routing_strategy: simple-shuffle
+  num_retries: 3
+  retry_after: 1
+  timeout: 600
+  cooldown_time: 60
+  allowed_fails: 0
+
+litellm_settings:
+  success_callback:
+    - prometheus
+  failure_callback:
+    - prometheus
+  callback_settings:
+    s3:
+      bucket: os.environ/LITELLM_S3_BUCKET
+      region: us-east-1
+      prefix: litellm-logs/
+  turn_off_message_logging: false
+  guardrails:
+    - guardrail_name: presidio-pii
+      litellm_params:
+        guardrail: src.guardrails.presidio.PresidioGuardrail
+        mode: pre_call
+        default_on: true
+        default_action: block
+        anonymize: true
+        threshold: 0.5
+        entities:
+          - EMAIL_ADDRESS
+          - PHONE_NUMBER
+          - US_SSN
+    - guardrail_name: lakera-prompt-injection
+      litellm_params:
+        guardrail: src.guardrails.lakera.LakeraGuardrail
+        mode: pre_call
+        default_on: true
+        default_action: block
+        api_key: os.environ/LAKERA_API_KEY
+        threshold: 0.5
+        fail_open: false
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  litellm_key_header_name: Authorization
+  salt_key: os.environ/LITELLM_SALT_KEY
+  database_url: os.environ/DATABASE_URL
+  redis_url: os.environ/REDIS_URL
+  redis_host: localhost
+  redis_port: 6379
+  redis_password: os.environ/REDIS_PASSWORD
+  cache_enabled: false
+  cache_backend: memory
+  cache_ttl: 3600
+  cache_max_size: 10000

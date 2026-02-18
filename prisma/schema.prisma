@@ -1,0 +1,137 @@
+generator client {
+  provider  = "prisma-client-py"
+  interface = "asyncio"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model LiteLLM_SpendLogs {
+  id                String   @id @default(uuid())
+  request_id        String
+  call_type         String
+  api_key           String
+  spend             Float
+  total_tokens      Int
+  prompt_tokens     Int
+  completion_tokens Int
+  start_time        DateTime
+  end_time          DateTime
+  model             String
+  api_base          String?
+  user              String?
+  team_id           String?
+  end_user          String?
+  metadata          Json?
+  cache_hit         Boolean  @default(false)
+  cache_key         String?
+  request_tags      String[]
+
+  key LiteLLM_VerificationToken? @relation(fields: [api_key], references: [token])
+
+  @@index([api_key])
+  @@index([team_id])
+  @@index([user])
+  @@index([start_time])
+  @@index([model])
+  @@index([request_tags])
+  @@map("litellm_spendlogs")
+}
+
+model LiteLLM_VerificationToken {
+  id                    String   @id @default(uuid())
+  token                 String   @unique
+  key_name              String?
+  user_id               String?
+  team_id               String?
+  models                String[]
+  max_budget            Float?
+  soft_budget           Float?
+  spend                 Float    @default(0)
+  budget_duration       String?
+  budget_reset_at       DateTime?
+  rpm_limit             Int?
+  tpm_limit             Int?
+  max_parallel_requests Int?
+  expires               DateTime?
+  permissions           Json?
+  metadata              Json?
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
+
+  user       LiteLLM_UserTable? @relation(fields: [user_id], references: [user_id])
+  team       LiteLLM_TeamTable? @relation(fields: [team_id], references: [team_id])
+  spend_logs LiteLLM_SpendLogs[]
+
+  @@index([token])
+  @@index([user_id])
+  @@index([team_id])
+  @@index([expires])
+  @@map("litellm_verificationtoken")
+}
+
+model LiteLLM_UserTable {
+  user_id         String   @id
+  user_email      String?  @unique
+  user_role       String   @default("internal_user")
+  max_budget      Float?
+  soft_budget     Float?
+  spend           Float    @default(0)
+  budget_duration String?
+  budget_reset_at DateTime?
+  models          String[]
+  tpm_limit       Int?
+  rpm_limit       Int?
+  team_id         String?
+  metadata        Json?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  team LiteLLM_TeamTable?          @relation(fields: [team_id], references: [team_id])
+  keys LiteLLM_VerificationToken[]
+
+  @@index([team_id])
+  @@map("litellm_usertable")
+}
+
+model LiteLLM_TeamTable {
+  team_id          String   @id @default(uuid())
+  team_alias       String?
+  organization_id  String?
+  max_budget       Float?
+  soft_budget      Float?
+  spend            Float    @default(0)
+  budget_duration  String?
+  budget_reset_at  DateTime?
+  model_max_budget Json?
+  tpm_limit        Int?
+  rpm_limit        Int?
+  models           String[]
+  blocked          Boolean  @default(false)
+  metadata         Json?
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  members LiteLLM_UserTable[]
+  keys    LiteLLM_VerificationToken[]
+
+  @@index([organization_id])
+  @@map("litellm_teamtable")
+}
+
+model LiteLLM_OrganizationTable {
+  id                String   @id @default(uuid())
+  organization_id   String   @unique
+  organization_name String?
+  max_budget        Float?
+  spend             Float    @default(0)
+  budget_duration   String?
+  budget_reset_at   DateTime?
+  metadata          Json?
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  @@map("litellm_organizationtable")
+}
