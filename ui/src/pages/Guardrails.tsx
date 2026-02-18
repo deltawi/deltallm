@@ -17,45 +17,68 @@ export default function Guardrails() {
     mode: 'pre_call',
     default_action: 'block',
     threshold: '0.5',
-    enabled: true,
+    default_on: true,
   });
 
-  const handleSave = async () => {
+  const saveAll = async (updated: any[]) => {
     const payload = {
+      guardrails: updated.map((g: any) => ({
+        guardrail_name: g.guardrail_name,
+        litellm_params: g.litellm_params || {
+          guardrail: g.guardrail,
+          mode: g.mode,
+          default_action: g.default_action,
+          threshold: g.threshold,
+          default_on: g.default_on,
+        },
+      })),
+    };
+    await guardrails.update(payload);
+    refetch();
+  };
+
+  const handleSave = async () => {
+    const current = data || [];
+    const newItem = {
       guardrail_name: form.guardrail_name,
       litellm_params: {
         guardrail: form.guardrail,
         mode: form.mode,
         default_action: form.default_action,
         threshold: Number(form.threshold),
-        enabled: form.enabled,
+        default_on: form.default_on,
       },
     };
+
+    let updated;
     if (editItem) {
-      await guardrails.update(editItem.guardrail_name, payload);
+      updated = current.map((g: any) =>
+        g.guardrail_name === editItem.guardrail_name ? newItem : g
+      );
     } else {
-      await guardrails.create(payload);
+      updated = [...current, newItem];
     }
+    await saveAll(updated);
     setShowCreate(false);
     setEditItem(null);
-    setForm({ guardrail_name: '', guardrail: '', mode: 'pre_call', default_action: 'block', threshold: '0.5', enabled: true });
-    refetch();
+    setForm({ guardrail_name: '', guardrail: '', mode: 'pre_call', default_action: 'block', threshold: '0.5', default_on: true });
   };
 
   const handleDelete = async (name: string) => {
     if (!confirm('Delete this guardrail?')) return;
-    await guardrails.delete(name);
-    refetch();
+    const updated = (data || []).filter((g: any) => g.guardrail_name !== name);
+    await saveAll(updated);
   };
 
   const openEdit = (row: any) => {
+    const params = row.litellm_params || {};
     setForm({
       guardrail_name: row.guardrail_name || '',
-      guardrail: row.litellm_params?.guardrail || '',
-      mode: row.mode || 'pre_call',
-      default_action: row.default_action || 'block',
-      threshold: String(row.threshold ?? 0.5),
-      enabled: row.enabled !== false,
+      guardrail: params.guardrail || '',
+      mode: params.mode || 'pre_call',
+      default_action: params.default_action || 'block',
+      threshold: String(params.threshold ?? 0.5),
+      default_on: params.default_on !== false,
     });
     setEditItem(row);
   };
@@ -67,11 +90,11 @@ export default function Guardrails() {
         <span className="font-medium">{r.guardrail_name}</span>
       </div>
     ) },
-    { key: 'type', header: 'Type', render: (r: any) => <span className="text-xs bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full">{r.type}</span> },
-    { key: 'mode', header: 'Mode', render: (r: any) => <span className="text-xs bg-gray-100 px-2 py-0.5 rounded-full">{r.mode}</span> },
-    { key: 'default_action', header: 'Action', render: (r: any) => <span className="text-xs">{r.default_action}</span> },
-    { key: 'threshold', header: 'Threshold', render: (r: any) => r.threshold },
-    { key: 'enabled', header: 'Status', render: (r: any) => <StatusBadge status={r.enabled ? 'enabled' : 'disabled'} /> },
+    { key: 'type', header: 'Class', render: (r: any) => <span className="text-xs bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full">{r.litellm_params?.guardrail || '—'}</span> },
+    { key: 'mode', header: 'Mode', render: (r: any) => <span className="text-xs bg-gray-100 px-2 py-0.5 rounded-full">{r.litellm_params?.mode || '—'}</span> },
+    { key: 'default_action', header: 'Action', render: (r: any) => <span className="text-xs">{r.litellm_params?.default_action || '—'}</span> },
+    { key: 'threshold', header: 'Threshold', render: (r: any) => r.litellm_params?.threshold ?? '—' },
+    { key: 'enabled', header: 'Status', render: (r: any) => <StatusBadge status={r.litellm_params?.default_on !== false ? 'enabled' : 'disabled'} /> },
     {
       key: 'actions', header: '', render: (r: any) => (
         <div className="flex gap-1">
@@ -89,7 +112,7 @@ export default function Guardrails() {
           <h1 className="text-2xl font-bold text-gray-900">Guardrails</h1>
           <p className="text-sm text-gray-500 mt-1">Configure content safety and security policies</p>
         </div>
-        <button onClick={() => { setForm({ guardrail_name: '', guardrail: '', mode: 'pre_call', default_action: 'block', threshold: '0.5', enabled: true }); setShowCreate(true); }} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
+        <button onClick={() => { setForm({ guardrail_name: '', guardrail: '', mode: 'pre_call', default_action: 'block', threshold: '0.5', default_on: true }); setShowCreate(true); }} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
           <Plus className="w-4 h-4" /> Add Guardrail
         </button>
       </div>
@@ -130,8 +153,8 @@ export default function Guardrails() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} id="enabled" className="rounded" />
-            <label htmlFor="enabled" className="text-sm text-gray-700">Enabled</label>
+            <input type="checkbox" checked={form.default_on} onChange={(e) => setForm({ ...form, default_on: e.target.checked })} id="default_on" className="rounded" />
+            <label htmlFor="default_on" className="text-sm text-gray-700">Enabled by default</label>
           </div>
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => { setShowCreate(false); setEditItem(null); }} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>

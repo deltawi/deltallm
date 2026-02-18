@@ -23,11 +23,17 @@ export default function Usage() {
   const [tab, setTab] = useState<'overview' | 'logs'>('overview');
 
   const { data: summary } = useApi(() => spend.summary(startDate, endDate), [startDate, endDate]);
-  const { data: daily } = useApi(() => spend.daily(startDate, endDate), [startDate, endDate]);
-  const { data: perModel } = useApi(() => spend.perModel(startDate, endDate), [startDate, endDate]);
-  const { data: perKey } = useApi(() => spend.perKey(startDate, endDate), [startDate, endDate]);
-  const { data: perTeam } = useApi(() => spend.perTeam(startDate, endDate), [startDate, endDate]);
-  const { data: logs, loading: logsLoading } = useApi(() => spend.logs({ limit: '50' }), []);
+  const { data: dailyReport } = useApi(() => spend.report('day', startDate, endDate), [startDate, endDate]);
+  const { data: modelReport } = useApi(() => spend.report('model', startDate, endDate), [startDate, endDate]);
+  const { data: userReport } = useApi(() => spend.report('user', startDate, endDate), [startDate, endDate]);
+  const { data: teamReport } = useApi(() => spend.report('team', startDate, endDate), [startDate, endDate]);
+  const { data: logsData, loading: logsLoading } = useApi(() => spend.logs({ limit: '50' }), []);
+
+  const daily = (dailyReport?.breakdown || []).map((r: any) => ({ date: r.group_key, total_spend: r.total_spend }));
+  const perModel = (modelReport?.breakdown || []).map((r: any) => ({ model: r.group_key, total_spend: r.total_spend, total_tokens: r.total_tokens, request_count: r.request_count }));
+  const perKey = (userReport?.breakdown || []).map((r: any) => ({ api_key: r.group_key, total_spend: r.total_spend, request_count: r.request_count }));
+  const perTeam = (teamReport?.breakdown || []).map((r: any) => ({ team_id: r.group_key, total_spend: r.total_spend, request_count: r.request_count }));
+  const logs = logsData?.logs || [];
 
   const modelColumns = [
     { key: 'model', header: 'Model', render: (r: any) => <span className="font-medium">{r.model}</span> },
@@ -121,7 +127,7 @@ export default function Usage() {
         </>
       ) : (
         <Card title="Request Logs">
-          <DataTable columns={logColumns} data={logs?.logs || logs || []} loading={logsLoading} emptyMessage="No request logs yet" />
+          <DataTable columns={logColumns} data={logs || []} loading={logsLoading} emptyMessage="No request logs yet" />
         </Card>
       )}
     </div>

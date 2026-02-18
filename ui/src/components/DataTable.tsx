@@ -30,6 +30,8 @@ export default function DataTable<T extends Record<string, any>>({
     );
   }
 
+  const rows = Array.isArray(data) ? data : [];
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full">
@@ -43,14 +45,14 @@ export default function DataTable<T extends Record<string, any>>({
           </tr>
         </thead>
         <tbody>
-          {data.length === 0 ? (
+          {rows.length === 0 ? (
             <tr>
               <td colSpan={columns.length} className="text-center py-12 text-gray-400 text-sm">
                 {emptyMessage}
               </td>
             </tr>
           ) : (
-            data.map((row, i) => (
+            rows.map((row, i) => (
               <tr
                 key={i}
                 onClick={() => onRowClick?.(row)}
