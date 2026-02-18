@@ -1,0 +1,33 @@
+model_list:
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+      api_base: https://api.openai.com/v1
+      timeout: 60
+
+router_settings:
+  routing_strategy: simple-shuffle
+  num_retries: 3
+  retry_after: 1
+  timeout: 600
+  cooldown_time: 60
+  allowed_fails: 0
+
+litellm_settings:
+  success_callback: []
+  failure_callback: []
+  turn_off_message_logging: false
+  guardrails: []
+
+general_settings:
+  master_key: sk-deltallm-dev-master-key
+  litellm_key_header_name: Authorization
+  salt_key: os.environ/DELTALLM_SALT_KEY
+  database_url: os.environ/DATABASE_URL
+  redis_host: localhost
+  redis_port: 6379
+  cache_enabled: false
+  cache_backend: memory
+  cache_ttl: 3600
+  cache_max_size: 10000

@@ -1,4 +1,4 @@
-modules = ["nodejs-20"]
+modules = ["nodejs-20", "python-3.11"]
 [agent]
 expertMode = true
 
@@ -30,7 +30,21 @@ outputType = "webview"
 localPort = 5000
 externalPort = 80
 
+[[ports]]
+localPort = 5001
+externalPort = 3000
+
 [deployment]
 deploymentTarget = "static"
 build = ["bash", "-c", "cd ui && npm run build"]
 publicDir = "ui/dist"
+
+[nix]
+channel = "stable-25_05"
+packages = ["redis"]
+
+[userenv]
+
+[userenv.shared]
+DELTALLM_SALT_KEY = "dev-salt-key-change-in-production"
+DELTALLM_CONFIG_PATH = "config.yaml"
