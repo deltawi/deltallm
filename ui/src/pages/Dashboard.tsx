@@ -19,11 +19,14 @@ function fmtNum(n: number | null | undefined): string {
 
 export default function Dashboard() {
   const { data: summary } = useApi(() => spend.summary(), []);
-  const { data: daily } = useApi(() => spend.daily(), []);
-  const { data: perModel } = useApi(() => spend.perModel(), []);
+  const { data: dailyReport } = useApi(() => spend.report('day'), []);
+  const { data: modelReport } = useApi(() => spend.report('model'), []);
   const { data: modelsList } = useApi(() => modelsApi.list(), []);
   const { data: keysList } = useApi(() => keysApi.list(), []);
   const { data: healthData } = useApi(() => health.check(), []);
+
+  const daily = (dailyReport?.breakdown || []).map((r: any) => ({ date: r.group_key, total_spend: r.total_spend }));
+  const perModel = (modelReport?.breakdown || []).map((r: any) => ({ model: r.group_key, total_spend: r.total_spend }));
 
   const healthStatus = healthData?.readiness?.status || healthData?.liveliness || 'unknown';
 
