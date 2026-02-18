@@ -190,3 +190,6 @@ CLAUDE.md
 proxyllm/.coverage
 proxyllm/.pytest_cache/
 proxyllm/.DS_Store
+
+AGENTS.md
+config.yaml
