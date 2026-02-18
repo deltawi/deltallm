@@ -59,12 +59,22 @@ class UserAPIKeyAuth(BaseModel):
     api_key: str
     user_id: str | None = None
     team_id: str | None = None
+    organization_id: str | None = None
     user_role: str | None = None
     models: list[str] = Field(default_factory=list)
     max_budget: float | None = None
     spend: float = 0.0
+    # Legacy key-level limit aliases preserved for compatibility.
     tpm_limit: int | None = None
     rpm_limit: int | None = None
+    key_tpm_limit: int | None = None
+    key_rpm_limit: int | None = None
+    user_tpm_limit: int | None = None
+    user_rpm_limit: int | None = None
+    team_tpm_limit: int | None = None
+    team_rpm_limit: int | None = None
+    org_tpm_limit: int | None = None
+    org_rpm_limit: int | None = None
     max_parallel_requests: int | None = None
     guardrails: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] | None = None

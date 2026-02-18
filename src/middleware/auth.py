@@ -46,6 +46,7 @@ async def _try_fallback_auth(request: Request, raw_token: str) -> UserAPIKeyAuth
                 api_key=f"jwt:{claims.get('user_id') or claims.get('email') or 'unknown'}",
                 user_id=claims.get("user_id"),
                 team_id=claims.get("team_id"),
+                organization_id=claims.get("organization_id"),
                 user_role=claims.get("user_role"),
                 metadata={"jwt_claims": claims.get("claims", claims)},
             )
