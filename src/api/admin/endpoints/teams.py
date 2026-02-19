@@ -3,14 +3,59 @@ from __future__ import annotations
 import secrets
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Header, HTTPException, Request, status
 
-from src.auth.roles import Permission
-from src.api.admin.endpoints.common import db_or_503, optional_int, to_json_value, get_auth_scope
-from src.middleware.admin import require_admin_permission
+from src.auth.roles import Permission, ORG_ROLE_PERMISSIONS, TEAM_ROLE_PERMISSIONS
+from src.api.admin.endpoints.common import db_or_503, optional_int, to_json_value, get_auth_scope, AuthScope
 from src.middleware.platform_auth import get_platform_auth_context
 
 router = APIRouter(tags=["Admin Teams"])
+
+
+async def _require_team_access(
+    request: Request,
+    scope: AuthScope,
+    db: Any,
+    team_id: str,
+    *,
+    write: bool = False,
+) -> dict[str, Any]:
+    rows = await db.query_raw(
+        """
+        SELECT team_id, team_alias, organization_id, max_budget, spend, models, rpm_limit, tpm_limit, blocked, created_at, updated_at
+        FROM litellm_teamtable
+        WHERE team_id = $1
+        LIMIT 1
+        """,
+        team_id,
+    )
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+    team = dict(rows[0])
+    if scope.is_platform_admin:
+        return team
+
+    required_perm = Permission.TEAM_UPDATE if write else Permission.TEAM_READ
+    team_org = team.get("organization_id")
+
+    ctx = get_platform_auth_context(request)
+    if ctx:
+        if team_org:
+            for membership in ctx.organization_memberships:
+                if str(membership.get("organization_id")) != team_org:
+                    continue
+                role = str(membership.get("role") or "")
+                if required_perm in ORG_ROLE_PERMISSIONS.get(role, set()):
+                    return team
+
+        for membership in ctx.team_memberships:
+            if str(membership.get("team_id")) != team_id:
+                continue
+            role = str(membership.get("role") or "")
+            if required_perm in TEAM_ROLE_PERMISSIONS.get(role, set()):
+                return team
+
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
 
 
 @router.get("/ui/api/teams")
@@ -51,21 +96,17 @@ async def list_teams(
     return [to_json_value(dict(row)) for row in rows]
 
 
-@router.get("/ui/api/teams/{team_id}", dependencies=[Depends(require_admin_permission(Permission.TEAM_READ))])
-async def get_team(request: Request, team_id: str) -> dict[str, Any]:
+@router.get("/ui/api/teams/{team_id}")
+async def get_team(
+    request: Request,
+    team_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
-    rows = await db.query_raw(
-        """
-        SELECT team_id, team_alias, organization_id, max_budget, spend, models, rpm_limit, tpm_limit, blocked, created_at, updated_at
-        FROM litellm_teamtable
-        WHERE team_id = $1
-        LIMIT 1
-        """,
-        team_id,
-    )
-    if not rows:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
-    return to_json_value(dict(rows[0]))
+    team = await _require_team_access(request, scope, db, team_id)
+    return to_json_value(team)
 
 
 @router.post("/ui/api/teams")
@@ -139,32 +180,30 @@ async def create_team(
     }
 
 
-@router.put("/ui/api/teams/{team_id}", dependencies=[Depends(require_admin_permission(Permission.TEAM_UPDATE))])
-async def update_team(request: Request, team_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+@router.put("/ui/api/teams/{team_id}")
+async def update_team(
+    request: Request,
+    team_id: str,
+    payload: dict[str, Any],
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
-    rows = await db.query_raw(
-        """
-        SELECT team_id, team_alias, organization_id, max_budget, spend, models, rpm_limit, tpm_limit, blocked, created_at, updated_at
-        FROM litellm_teamtable
-        WHERE team_id = $1
-        LIMIT 1
-        """,
-        team_id,
-    )
-    if not rows:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+    existing_team = await _require_team_access(request, scope, db, team_id, write=True)
 
-    existing = dict(rows[0])
-    team_alias = payload.get("team_alias", existing.get("team_alias"))
-    organization_id = payload.get("organization_id", existing.get("organization_id"))
+    team_alias = payload.get("team_alias", existing_team.get("team_alias"))
+    organization_id = payload.get("organization_id", existing_team.get("organization_id"))
     if not organization_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="organization_id is required")
-    max_budget = payload.get("max_budget", existing.get("max_budget"))
-    rpm_limit = optional_int(payload.get("rpm_limit", existing.get("rpm_limit")), "rpm_limit")
-    tpm_limit = optional_int(payload.get("tpm_limit", existing.get("tpm_limit")), "tpm_limit")
-    models = payload.get("models", existing.get("models"))
+    if not scope.is_platform_admin and organization_id not in scope.org_ids:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot move team to an organization you don't manage")
+    max_budget = payload.get("max_budget", existing_team.get("max_budget"))
+    rpm_limit = optional_int(payload.get("rpm_limit", existing_team.get("rpm_limit")), "rpm_limit")
+    tpm_limit = optional_int(payload.get("tpm_limit", existing_team.get("tpm_limit")), "tpm_limit")
+    models = payload.get("models", existing_team.get("models"))
     if not isinstance(models, list):
-        models = existing.get("models") or []
+        models = existing_team.get("models") or []
 
     await db.execute_raw(
         """
@@ -200,9 +239,16 @@ async def update_team(request: Request, team_id: str, payload: dict[str, Any]) -
     return to_json_value(dict(updated_rows[0]))
 
 
-@router.get("/ui/api/teams/{team_id}/members", dependencies=[Depends(require_admin_permission(Permission.TEAM_READ))])
-async def list_team_members(request: Request, team_id: str) -> list[dict[str, Any]]:
+@router.get("/ui/api/teams/{team_id}/members")
+async def list_team_members(
+    request: Request,
+    team_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> list[dict[str, Any]]:
+    scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
+    await _require_team_access(request, scope, db, team_id)
     rows = await db.query_raw(
         """
         SELECT user_id, user_email, user_role, spend, max_budget, team_id, created_at, updated_at
@@ -215,9 +261,17 @@ async def list_team_members(request: Request, team_id: str) -> list[dict[str, An
     return [to_json_value(dict(row)) for row in rows]
 
 
-@router.post("/ui/api/teams/{team_id}/members", dependencies=[Depends(require_admin_permission(Permission.TEAM_UPDATE))])
-async def add_team_member(request: Request, team_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+@router.post("/ui/api/teams/{team_id}/members")
+async def add_team_member(
+    request: Request,
+    team_id: str,
+    payload: dict[str, Any],
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
+    await _require_team_access(request, scope, db, team_id, write=True)
     user_id = str(payload.get("user_id") or "").strip()
     user_email = payload.get("user_email")
     user_role = payload.get("user_role") or "internal_user"
@@ -244,9 +298,17 @@ async def add_team_member(request: Request, team_id: str, payload: dict[str, Any
     }
 
 
-@router.delete("/ui/api/teams/{team_id}/members/{user_id}", dependencies=[Depends(require_admin_permission(Permission.TEAM_UPDATE))])
-async def remove_team_member(request: Request, team_id: str, user_id: str) -> dict[str, bool]:
+@router.delete("/ui/api/teams/{team_id}/members/{user_id}")
+async def remove_team_member(
+    request: Request,
+    team_id: str,
+    user_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, bool]:
+    scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
+    await _require_team_access(request, scope, db, team_id, write=True)
     updated = await db.execute_raw(
         "UPDATE litellm_usertable SET team_id = NULL, updated_at = NOW() WHERE team_id = $1 AND user_id = $2",
         team_id,
