@@ -47,11 +47,11 @@ PLATFORM_ROLE_PERMISSIONS: dict[str, set[str]] = {
 }
 
 ORG_ROLE_PERMISSIONS: dict[str, set[str]] = {
-    OrganizationRole.MEMBER: {Permission.ORG_READ},
-    OrganizationRole.OWNER: {Permission.ORG_READ, Permission.ORG_UPDATE, Permission.SPEND_READ},
-    OrganizationRole.ADMIN: {Permission.ORG_READ, Permission.ORG_UPDATE},
-    OrganizationRole.BILLING: {Permission.ORG_READ, Permission.SPEND_READ},
-    OrganizationRole.AUDITOR: {Permission.ORG_READ, Permission.SPEND_READ},
+    OrganizationRole.MEMBER: {Permission.ORG_READ, Permission.TEAM_READ},
+    OrganizationRole.OWNER: {Permission.ORG_READ, Permission.ORG_UPDATE, Permission.SPEND_READ, Permission.TEAM_READ, Permission.TEAM_UPDATE},
+    OrganizationRole.ADMIN: {Permission.ORG_READ, Permission.ORG_UPDATE, Permission.TEAM_READ, Permission.TEAM_UPDATE},
+    OrganizationRole.BILLING: {Permission.ORG_READ, Permission.SPEND_READ, Permission.TEAM_READ},
+    OrganizationRole.AUDITOR: {Permission.ORG_READ, Permission.SPEND_READ, Permission.TEAM_READ},
 }
 
 TEAM_ROLE_PERMISSIONS: dict[str, set[str]] = {

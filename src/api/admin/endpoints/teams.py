@@ -68,14 +68,23 @@ async def get_team(request: Request, team_id: str) -> dict[str, Any]:
     return to_json_value(dict(rows[0]))
 
 
-@router.post("/ui/api/teams", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
-async def create_team(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
-    db = db_or_503(request)
-    team_id = str(payload.get("team_id") or f"team-{secrets.token_hex(6)}")
-    team_alias = payload.get("team_alias")
+@router.post("/ui/api/teams")
+async def create_team(
+    request: Request,
+    payload: dict[str, Any],
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    scope = get_auth_scope(request, authorization, x_master_key)
     organization_id = payload.get("organization_id")
     if not organization_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="organization_id is required")
+    if not scope.is_platform_admin:
+        if organization_id not in scope.org_ids:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only create teams in your own organizations")
+    db = db_or_503(request)
+    team_id = str(payload.get("team_id") or f"team-{secrets.token_hex(6)}")
+    team_alias = payload.get("team_alias")
     max_budget = payload.get("max_budget")
     rpm_limit = optional_int(payload.get("rpm_limit"), "rpm_limit")
     tpm_limit = optional_int(payload.get("tpm_limit"), "tpm_limit")

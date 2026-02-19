@@ -43,26 +43,36 @@ export default function Teams() {
     [selectedTeam?.team_id]
   );
 
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const resetForm = () => setForm({ team_alias: '', organization_id: '', max_budget: '', rpm_limit: '', tpm_limit: '', models: '' });
 
   const handleSave = async () => {
-    const payload = {
-      team_alias: form.team_alias || undefined,
-      organization_id: form.organization_id || undefined,
-      max_budget: form.max_budget ? Number(form.max_budget) : undefined,
-      rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
-      tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
-      models: form.models ? form.models.split(',').map(m => m.trim()).filter(Boolean) : [],
-    };
-    if (editItem) {
-      await teams.update(editItem.team_id, payload);
-    } else {
-      await teams.create(payload);
+    setError(null);
+    setSaving(true);
+    try {
+      const payload = {
+        team_alias: form.team_alias || undefined,
+        organization_id: form.organization_id || undefined,
+        max_budget: form.max_budget ? Number(form.max_budget) : undefined,
+        rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
+        tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
+        models: form.models ? form.models.split(',').map(m => m.trim()).filter(Boolean) : [],
+      };
+      if (editItem) {
+        await teams.update(editItem.team_id, payload);
+      } else {
+        await teams.create(payload);
+      }
+      setShowCreate(false);
+      setEditItem(null);
+      resetForm();
+      refetch();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to save team');
+    } finally {
+      setSaving(false);
     }
-    setShowCreate(false);
-    setEditItem(null);
-    resetForm();
-    refetch();
   };
 
   const openEdit = (row: any) => {
@@ -136,8 +146,11 @@ export default function Teams() {
         <DataTable columns={columns} data={data || []} loading={loading} emptyMessage="No teams created yet" onRowClick={(r) => navigate(`/teams/${r.team_id}`)} />
       </Card>
 
-      <Modal open={showCreate || !!editItem} onClose={() => { setShowCreate(false); setEditItem(null); resetForm(); }} title={editItem ? 'Edit Team' : 'Create Team'}>
+      <Modal open={showCreate || !!editItem} onClose={() => { setShowCreate(false); setEditItem(null); resetForm(); setError(null); }} title={editItem ? 'Edit Team' : 'Create Team'}>
         <div className="space-y-4">
+          {error && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>
+          )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Team Name</label>
             <input value={form.team_alias} onChange={(e) => setForm({ ...form, team_alias: e.target.value })} placeholder="Engineering" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
@@ -174,8 +187,8 @@ export default function Teams() {
             <input value={form.models} onChange={(e) => setForm({ ...form, models: e.target.value })} placeholder="gpt-4o, claude-3" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
           <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => { setShowCreate(false); setEditItem(null); resetForm(); }} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-            <button onClick={handleSave} disabled={!form.organization_id} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">{editItem ? 'Save Changes' : 'Create Team'}</button>
+            <button onClick={() => { setShowCreate(false); setEditItem(null); resetForm(); setError(null); }} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
+            <button onClick={handleSave} disabled={!form.organization_id || saving} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">{saving ? 'Saving...' : editItem ? 'Save Changes' : 'Create Team'}</button>
           </div>
         </div>
       </Modal>
