@@ -112,15 +112,23 @@ export default function ApiKeys() {
 
   const handleRevoke = async (hash: string) => {
     if (!confirm('Are you sure you want to revoke this key?')) return;
-    await keys.revoke(hash);
-    refetch();
+    try {
+      await keys.revoke(hash);
+      refetch();
+    } catch (err: any) {
+      alert(err?.message || 'Failed to revoke key');
+    }
   };
 
   const handleRegenerate = async (hash: string) => {
     if (!confirm('Regenerate this key? The old key will stop working.')) return;
-    const result = await keys.regenerate(hash);
-    setCreatedKey(result.raw_key);
-    refetch();
+    try {
+      const result = await keys.regenerate(hash);
+      setCreatedKey(result.raw_key);
+      refetch();
+    } catch (err: any) {
+      alert(err?.message || 'Failed to regenerate key');
+    }
   };
 
   const copyKey = () => {

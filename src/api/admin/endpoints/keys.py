@@ -185,9 +185,32 @@ async def update_key(request: Request, token_hash: str, payload: dict[str, Any])
     return to_json_value(dict(updated_rows[0]))
 
 
-@router.post("/ui/api/keys/{token_hash}/regenerate", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
-async def regenerate_key(request: Request, token_hash: str) -> dict[str, Any]:
+async def _require_key_access(scope, db, token_hash: str) -> None:
+    if scope.is_platform_admin:
+        return
+    rows = await db.query_raw(
+        """
+        SELECT t.organization_id FROM litellm_verificationtoken vt
+        JOIN litellm_teamtable t ON vt.team_id = t.team_id
+        WHERE vt.token = $1 LIMIT 1
+        """,
+        token_hash,
+    )
+    if not rows or not rows[0].get("organization_id") or rows[0]["organization_id"] not in scope.org_ids:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+
+
+@router.post("/ui/api/keys/{token_hash}/regenerate")
+async def regenerate_key(
+    request: Request,
+    token_hash: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
+    await _require_key_access(scope, db, token_hash)
+
     rows = await db.query_raw("SELECT token FROM litellm_verificationtoken WHERE token = $1 LIMIT 1", token_hash)
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
@@ -202,9 +225,16 @@ async def regenerate_key(request: Request, token_hash: str) -> dict[str, Any]:
     return {"token": new_hash, "raw_key": raw_key}
 
 
-@router.post("/ui/api/keys/{token_hash}/revoke", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
-async def revoke_key(request: Request, token_hash: str) -> dict[str, bool]:
+@router.post("/ui/api/keys/{token_hash}/revoke")
+async def revoke_key(
+    request: Request,
+    token_hash: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, bool]:
+    scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
+    await _require_key_access(scope, db, token_hash)
     deleted = await db.execute_raw("DELETE FROM litellm_verificationtoken WHERE token = $1", token_hash)
     return {"revoked": int(deleted or 0) > 0}
 
