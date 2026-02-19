@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { teams } from '../lib/api';
 import Card from '../components/Card';
@@ -28,6 +29,7 @@ function RateLimit({ value, unit }: { value: number | null | undefined; unit: st
 }
 
 export default function Teams() {
+  const navigate = useNavigate();
   const { data, loading, refetch } = useApi(() => teams.list(), []);
   const [showCreate, setShowCreate] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
@@ -130,7 +132,7 @@ export default function Teams() {
         </button>
       </div>
       <Card>
-        <DataTable columns={columns} data={data || []} loading={loading} emptyMessage="No teams created yet" />
+        <DataTable columns={columns} data={data || []} loading={loading} emptyMessage="No teams created yet" onRowClick={(r) => navigate(`/teams/${r.team_id}`)} />
       </Card>
 
       <Modal open={showCreate || !!editItem} onClose={() => { setShowCreate(false); setEditItem(null); resetForm(); }} title={editItem ? 'Edit Team' : 'Create Team'}>

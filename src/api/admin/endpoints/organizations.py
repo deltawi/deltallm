@@ -17,9 +17,10 @@ async def list_organizations(request: Request) -> list[dict[str, Any]]:
     db = db_or_503(request)
     rows = await db.query_raw(
         """
-        SELECT organization_id, organization_name, max_budget, spend, rpm_limit, tpm_limit, created_at, updated_at
-        FROM litellm_organizationtable
-        ORDER BY created_at DESC
+        SELECT o.organization_id, o.organization_name, o.max_budget, o.spend, o.rpm_limit, o.tpm_limit, o.created_at, o.updated_at,
+               (SELECT COUNT(*) FROM litellm_teamtable t WHERE t.organization_id = o.organization_id) AS team_count
+        FROM litellm_organizationtable o
+        ORDER BY o.created_at DESC
         """
     )
     return [to_json_value(dict(row)) for row in rows]
@@ -137,3 +138,35 @@ async def update_organization(request: Request, organization_id: str, payload: d
     if not updated_rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
     return to_json_value(dict(updated_rows[0]))
+
+
+@router.get("/ui/api/organizations/{organization_id}/members", dependencies=[Depends(require_admin_permission(Permission.ORG_READ))])
+async def list_organization_members(request: Request, organization_id: str) -> list[dict[str, Any]]:
+    db = db_or_503(request)
+    rows = await db.query_raw(
+        """
+        SELECT u.user_id, u.user_email, u.user_role, u.spend, u.max_budget, u.team_id, t.team_alias, u.created_at, u.updated_at
+        FROM litellm_usertable u
+        LEFT JOIN litellm_teamtable t ON u.team_id = t.team_id
+        WHERE t.organization_id = $1
+        ORDER BY u.created_at DESC
+        """,
+        organization_id,
+    )
+    return [to_json_value(dict(row)) for row in rows]
+
+
+@router.get("/ui/api/organizations/{organization_id}/teams", dependencies=[Depends(require_admin_permission(Permission.ORG_READ))])
+async def list_organization_teams(request: Request, organization_id: str) -> list[dict[str, Any]]:
+    db = db_or_503(request)
+    rows = await db.query_raw(
+        """
+        SELECT t.team_id, t.team_alias, t.max_budget, t.spend, t.rpm_limit, t.tpm_limit, t.models, t.blocked, t.created_at, t.updated_at,
+               (SELECT COUNT(*) FROM litellm_usertable u WHERE u.team_id = t.team_id) AS member_count
+        FROM litellm_teamtable t
+        WHERE t.organization_id = $1
+        ORDER BY t.created_at DESC
+        """,
+        organization_id,
+    )
+    return [to_json_value(dict(row)) for row in rows]

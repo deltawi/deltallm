@@ -14,6 +14,8 @@ import Usage from './pages/Usage';
 import Guardrails from './pages/Guardrails';
 import SettingsPage from './pages/SettingsPage';
 import RBACAccounts from './pages/RBACAccounts';
+import OrganizationDetail from './pages/OrganizationDetail';
+import TeamDetail from './pages/TeamDetail';
 
 function AppRoutes() {
   const { isAuthenticated, isLoading, session, authMode, mfaSkipped } = useAuth();
@@ -45,7 +47,9 @@ function AppRoutes() {
         <Route path="/models" element={<Models />} />
         <Route path="/keys" element={<ApiKeys />} />
         <Route path="/organizations" element={<Organizations />} />
+        <Route path="/organizations/:orgId" element={<OrganizationDetail />} />
         <Route path="/teams" element={<Teams />} />
+        <Route path="/teams/:teamId" element={<TeamDetail />} />
         <Route path="/users" element={<UsersPage />} />
         <Route path="/usage" element={<Usage />} />
         <Route path="/guardrails" element={<Guardrails />} />

@@ -1,10 +1,11 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { organizations } from '../lib/api';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import Modal from '../components/Modal';
-import { Plus, Pencil, Building2 } from 'lucide-react';
+import { Plus, Pencil, Building2, Users } from 'lucide-react';
 
 function BudgetBar({ spend, max_budget }: { spend: number; max_budget: number | null }) {
   if (!max_budget) return <span className="text-gray-400 text-xs">No limit</span>;
@@ -28,6 +29,7 @@ function RateLimit({ value, unit }: { value: number | null | undefined; unit: st
 }
 
 export default function Organizations() {
+  const navigate = useNavigate();
   const { data, loading, refetch } = useApi(() => organizations.list(), []);
   const [showCreate, setShowCreate] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
@@ -71,12 +73,13 @@ export default function Organizations() {
       </div>
     ) },
     { key: 'organization_id', header: 'Org ID', render: (r: any) => <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{r.organization_id}</code> },
+    { key: 'team_count', header: 'Teams', render: (r: any) => <span className="flex items-center gap-1"><Users className="w-3.5 h-3.5 text-gray-400" /> {r.team_count || 0}</span> },
     { key: 'budget', header: 'Budget', render: (r: any) => <BudgetBar spend={r.spend || 0} max_budget={r.max_budget} /> },
     { key: 'rpm_limit', header: 'RPM', render: (r: any) => <RateLimit value={r.rpm_limit} unit="req/min" /> },
     { key: 'tpm_limit', header: 'TPM', render: (r: any) => <RateLimit value={r.tpm_limit} unit="tok/min" /> },
     {
       key: 'actions', header: '', render: (r: any) => (
-        <button onClick={() => openEdit(r)} className="p-1.5 hover:bg-gray-100 rounded-lg"><Pencil className="w-4 h-4 text-gray-500" /></button>
+        <button onClick={(e) => { e.stopPropagation(); openEdit(r); }} className="p-1.5 hover:bg-gray-100 rounded-lg"><Pencil className="w-4 h-4 text-gray-500" /></button>
       ),
     },
   ];
@@ -93,7 +96,7 @@ export default function Organizations() {
         </button>
       </div>
       <Card>
-        <DataTable columns={columns} data={data || []} loading={loading} emptyMessage="No organizations created yet" />
+        <DataTable columns={columns} data={data || []} loading={loading} emptyMessage="No organizations created yet" onRowClick={(r) => navigate(`/organizations/${r.organization_id}`)} />
       </Card>
 
       <Modal open={showCreate || !!editItem} onClose={() => { setShowCreate(false); setEditItem(null); resetForm(); }} title={editItem ? 'Edit Organization' : 'Create Organization'}>
