@@ -70,10 +70,10 @@ export default function Usage() {
           <h1 className="text-2xl font-bold text-gray-900">Usage & Spend</h1>
           <p className="text-sm text-gray-500 mt-1">Monitor costs, tokens, and request analytics</p>
         </div>
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
-          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-          <span className="text-gray-400">to</span>
-          <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="flex-1 sm:flex-none px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          <span className="text-gray-400 shrink-0">to</span>
+          <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="flex-1 sm:flex-none px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
         </div>
       </div>
 
