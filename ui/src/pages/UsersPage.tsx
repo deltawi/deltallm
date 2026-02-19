@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useApi } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
-import { users } from '../lib/api';
+import { users, teams } from '../lib/api';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import StatusBadge from '../components/StatusBadge';
@@ -34,11 +34,13 @@ export default function UsersPage() {
   const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
   const isPlatformAdmin = userRole === 'platform_admin' || userRole === 'platform_co_admin';
   const { data, loading, refetch } = useApi(() => users.list(), []);
+  const { data: teamsList } = useApi(() => teams.list(), []);
   const [showCreate, setShowCreate] = useState(false);
+  const [teamSearch, setTeamSearch] = useState('');
   const [editItem, setEditItem] = useState<any>(null);
   const [form, setForm] = useState({ user_id: '', user_email: '', user_role: 'internal_user', team_id: '', max_budget: '', rpm_limit: '', tpm_limit: '', models: '' });
 
-  const resetForm = () => setForm({ user_id: '', user_email: '', user_role: 'internal_user', team_id: '', max_budget: '', rpm_limit: '', tpm_limit: '', models: '' });
+  const resetForm = () => { setForm({ user_id: '', user_email: '', user_role: 'internal_user', team_id: '', max_budget: '', rpm_limit: '', tpm_limit: '', models: '' }); setTeamSearch(''); };
 
   const handleSave = async () => {
     const payload = {
@@ -63,6 +65,8 @@ export default function UsersPage() {
   };
 
   const openEdit = (row: any) => {
+    const matchedTeam = (teamsList || []).find((t: any) => t.team_id === row.team_id);
+    setTeamSearch(matchedTeam ? (matchedTeam.team_alias || matchedTeam.team_id) : (row.team_id || ''));
     setForm({
       user_id: row.user_id || '',
       user_email: row.user_email || '',
@@ -140,9 +144,28 @@ export default function UsersPage() {
                 <option value="user">User</option>
               </select>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Team ID</label>
-              <input value={form.team_id} onChange={(e) => setForm({ ...form, team_id: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <div className="relative">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Team</label>
+              <input
+                value={teamSearch}
+                onChange={(e) => { setTeamSearch(e.target.value); if (!e.target.value) setForm({ ...form, team_id: '' }); }}
+                onFocus={() => setTeamSearch(teamSearch || (teamsList || []).find((t: any) => t.team_id === form.team_id)?.team_alias || '')}
+                placeholder="Search teams..."
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              {teamSearch && !form.team_id && (teamsList || []).filter((t: any) => (t.team_alias || t.team_id).toLowerCase().includes(teamSearch.toLowerCase())).length > 0 && (
+                <div className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                  {(teamsList || []).filter((t: any) => (t.team_alias || t.team_id).toLowerCase().includes(teamSearch.toLowerCase())).map((t: any) => (
+                    <button key={t.team_id} type="button" onClick={() => { setForm({ ...form, team_id: t.team_id }); setTeamSearch(t.team_alias || t.team_id); }} className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 transition-colors">
+                      <span className="font-medium">{t.team_alias || t.team_id}</span>
+                      <span className="text-gray-400 ml-2 text-xs">{t.team_id}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {form.team_id && (
+                <button type="button" onClick={() => { setForm({ ...form, team_id: '' }); setTeamSearch(''); }} className="absolute right-2 top-8 text-gray-400 hover:text-gray-600 text-xs">clear</button>
+              )}
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
