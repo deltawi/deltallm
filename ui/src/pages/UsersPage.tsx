@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useApi } from '../lib/hooks';
+import { useAuth } from '../lib/auth';
 import { users } from '../lib/api';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
@@ -29,6 +30,9 @@ function RateLimit({ value, unit }: { value: number | null | undefined; unit: st
 }
 
 export default function UsersPage() {
+  const { session, authMode } = useAuth();
+  const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
+  const isPlatformAdmin = userRole === 'platform_admin' || userRole === 'platform_co_admin';
   const { data, loading, refetch } = useApi(() => users.list(), []);
   const [showCreate, setShowCreate] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
@@ -90,9 +94,11 @@ export default function UsersPage() {
       key: 'actions', header: '', render: (r: any) => (
         <div className="flex gap-1">
           <button onClick={() => openEdit(r)} className="p-1.5 hover:bg-gray-100 rounded-lg" title="Edit"><Pencil className="w-4 h-4 text-gray-500" /></button>
-          <button onClick={() => toggleBlock(r.user_id, r.blocked)} className="p-1.5 hover:bg-gray-100 rounded-lg" title={r.blocked ? 'Unblock' : 'Block'}>
-            {r.blocked ? <CheckCircle className="w-4 h-4 text-green-500" /> : <Ban className="w-4 h-4 text-red-500" />}
-          </button>
+          {isPlatformAdmin && (
+            <button onClick={() => toggleBlock(r.user_id, r.blocked)} className="p-1.5 hover:bg-gray-100 rounded-lg" title={r.blocked ? 'Unblock' : 'Block'}>
+              {r.blocked ? <CheckCircle className="w-4 h-4 text-green-500" /> : <Ban className="w-4 h-4 text-red-500" />}
+            </button>
+          )}
         </div>
       ),
     },
