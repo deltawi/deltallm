@@ -25,8 +25,11 @@ async def enforce_rate_limits(request: Request):
         return
 
     limiter: LimitCounter = request.app.state.limit_counter
-    body = await request.body()
-    request._body = body  # noqa: SLF001 - FastAPI-compatible caching of request body
+    try:
+        body = await request.body()
+        request._body = body  # noqa: SLF001 - FastAPI-compatible caching of request body
+    except RuntimeError:
+        body = b""
     tokens = estimate_tokens(body)
 
     key_rpm_limit = auth.key_rpm_limit if auth.key_rpm_limit is not None else auth.rpm_limit
