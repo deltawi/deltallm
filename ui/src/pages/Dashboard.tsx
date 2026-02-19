@@ -31,7 +31,7 @@ export default function Dashboard() {
   const healthStatus = healthData?.readiness?.status || healthData?.liveliness || 'unknown';
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
         <p className="text-sm text-gray-500 mt-1">Overview of your LLM proxy</p>
@@ -85,7 +85,7 @@ export default function Dashboard() {
 
         <Card title="Spend by Model">
           {perModel && perModel.length > 0 ? (
-            <div className="flex items-center gap-4">
+            <div className="flex flex-col sm:flex-row items-center gap-4">
               <ResponsiveContainer width="50%" height={250}>
                 <PieChart>
                   <Pie

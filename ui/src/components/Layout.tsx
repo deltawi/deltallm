@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import {
@@ -13,6 +14,8 @@ import {
   LogOut,
   Zap,
   UserCog,
+  Menu,
+  X,
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -43,8 +46,65 @@ function RoleBadge({ role }: { role: string }) {
   );
 }
 
+function SidebarContent({ visibleNavItems, displayEmail, displayRole, logout, onNavClick }: {
+  visibleNavItems: typeof navItems;
+  displayEmail: string;
+  displayRole: string;
+  logout: () => void;
+  onNavClick?: () => void;
+}) {
+  return (
+    <>
+      <div className="p-5 border-b border-gray-800">
+        <div className="flex items-center gap-2">
+          <Zap className="w-6 h-6 text-blue-400" />
+          <span className="text-lg font-bold">DeltaLLM</span>
+        </div>
+        <p className="text-xs text-gray-400 mt-1">Admin Dashboard</p>
+      </div>
+      <nav className="flex-1 py-4 overflow-y-auto">
+        {visibleNavItems.map(({ to, icon: Icon, label }) => (
+          <NavLink
+            key={to}
+            to={to}
+            end={to === '/'}
+            onClick={onNavClick}
+            className={({ isActive }) =>
+              clsx(
+                'flex items-center gap-3 px-5 py-2.5 text-sm transition-colors',
+                isActive
+                  ? 'bg-gray-800 text-white border-r-2 border-blue-400'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
+              )
+            }
+          >
+            <Icon className="w-4 h-4" />
+            {label}
+          </NavLink>
+        ))}
+      </nav>
+      <div className="p-4 border-t border-gray-800">
+        <div className="mb-3">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-300 truncate">{displayEmail}</span>
+            {displayRole && <RoleBadge role={displayRole} />}
+          </div>
+        </div>
+        <button
+          onClick={logout}
+          className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors w-full"
+        >
+          <LogOut className="w-4 h-4" />
+          Sign Out
+        </button>
+      </div>
+    </>
+  );
+}
+
 export default function Layout() {
   const { logout, session, authMode } = useAuth();
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   const displayEmail = authMode === 'master_key' ? 'Master Key' : (session?.email || 'Unknown');
   const displayRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
@@ -54,53 +114,50 @@ export default function Layout() {
 
   return (
     <div className="flex h-screen bg-gray-50">
-      <aside className="w-64 bg-gray-900 text-white flex flex-col">
-        <div className="p-5 border-b border-gray-800">
-          <div className="flex items-center gap-2">
-            <Zap className="w-6 h-6 text-blue-400" />
-            <span className="text-lg font-bold">DeltaLLM</span>
-          </div>
-          <p className="text-xs text-gray-400 mt-1">Admin Dashboard</p>
-        </div>
-        <nav className="flex-1 py-4 overflow-y-auto">
-          {visibleNavItems.map(({ to, icon: Icon, label }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === '/'}
-              className={({ isActive }) =>
-                clsx(
-                  'flex items-center gap-3 px-5 py-2.5 text-sm transition-colors',
-                  isActive
-                    ? 'bg-gray-800 text-white border-r-2 border-blue-400'
-                    : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
-                )
-              }
-            >
-              <Icon className="w-4 h-4" />
-              {label}
-            </NavLink>
-          ))}
-        </nav>
-        <div className="p-4 border-t border-gray-800">
-          <div className="mb-3">
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-300 truncate">{displayEmail}</span>
-              {displayRole && <RoleBadge role={displayRole} />}
-            </div>
-          </div>
-          <button
-            onClick={logout}
-            className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors w-full"
-          >
-            <LogOut className="w-4 h-4" />
-            Sign Out
-          </button>
-        </div>
+      <aside className="hidden md:flex w-64 bg-gray-900 text-white flex-col shrink-0">
+        <SidebarContent
+          visibleNavItems={visibleNavItems}
+          displayEmail={displayEmail}
+          displayRole={displayRole}
+          logout={logout}
+        />
       </aside>
-      <main className="flex-1 overflow-auto">
-        <Outlet />
-      </main>
+
+      {mobileOpen && (
+        <div className="fixed inset-0 z-40 md:hidden">
+          <div className="fixed inset-0 bg-black/50" onClick={() => setMobileOpen(false)} />
+          <aside className="fixed inset-y-0 left-0 w-64 bg-gray-900 text-white flex flex-col z-50">
+            <button
+              onClick={() => setMobileOpen(false)}
+              className="absolute top-4 right-4 p-1 text-gray-400 hover:text-white"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <SidebarContent
+              visibleNavItems={visibleNavItems}
+              displayEmail={displayEmail}
+              displayRole={displayRole}
+              logout={logout}
+              onNavClick={() => setMobileOpen(false)}
+            />
+          </aside>
+        </div>
+      )}
+
+      <div className="flex-1 flex flex-col min-w-0">
+        <header className="md:hidden flex items-center gap-3 px-4 py-3 bg-white border-b border-gray-200 shrink-0">
+          <button onClick={() => setMobileOpen(true)} className="p-1.5 hover:bg-gray-100 rounded-lg">
+            <Menu className="w-5 h-5 text-gray-700" />
+          </button>
+          <div className="flex items-center gap-2">
+            <Zap className="w-5 h-5 text-blue-600" />
+            <span className="font-semibold text-gray-900">DeltaLLM</span>
+          </div>
+        </header>
+        <main className="flex-1 overflow-auto">
+          <Outlet />
+        </main>
+      </div>
     </div>
   );
 }

@@ -89,8 +89,8 @@ export default function Organizations() {
   ];
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
+    <div className="p-4 sm:p-6">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Organizations</h1>
           <p className="text-sm text-gray-500 mt-1">Manage organizations and their rate limits</p>
@@ -115,7 +115,7 @@ export default function Organizations() {
             <label className="block text-sm font-medium text-gray-700 mb-1">Max Budget ($)</label>
             <input type="number" value={form.max_budget} onChange={(e) => setForm({ ...form, max_budget: e.target.value })} placeholder="1000" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">RPM Limit</label>
               <input type="number" value={form.rpm_limit} onChange={(e) => setForm({ ...form, rpm_limit: e.target.value })} placeholder="100" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />

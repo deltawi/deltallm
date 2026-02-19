@@ -129,12 +129,12 @@ export default function OrganizationDetail() {
   ];
 
   return (
-    <div className="p-6 max-w-6xl">
-      <div className="flex items-center gap-3 mb-6">
-        <button onClick={() => navigate('/organizations')} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
-          <ArrowLeft className="w-5 h-5 text-gray-500" />
-        </button>
-        <div className="flex-1">
+    <div className="p-4 sm:p-6 max-w-6xl">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 mb-6">
+        <div className="flex items-center gap-3 flex-1 min-w-0">
+          <button onClick={() => navigate('/organizations')} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
+            <ArrowLeft className="w-5 h-5 text-gray-500" />
+          </button>
           <div className="flex items-center gap-3">
             <div className="p-2 bg-blue-50 rounded-lg">
               <Building2 className="w-5 h-5 text-blue-600" />
@@ -150,7 +150,7 @@ export default function OrganizationDetail() {
         </button>
       </div>
 
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard icon={DollarSign} label="Spend" value={`$${(org.spend || 0).toFixed(2)}`} subValue={org.max_budget ? `of $${org.max_budget} budget` : 'No budget limit'} color="bg-green-50 text-green-600" />
         <StatCard icon={Users} label="Teams" value={String(orgTeams?.length || 0)} color="bg-blue-50 text-blue-600" />
         <StatCard icon={User} label="Members" value={String(orgMembers?.length || 0)} subValue="Across all teams" color="bg-teal-50 text-teal-600" />
@@ -195,7 +195,7 @@ export default function OrganizationDetail() {
             <label className="block text-sm font-medium text-gray-700 mb-1">Max Budget ($)</label>
             <input type="number" value={form.max_budget} onChange={(e) => setForm({ ...form, max_budget: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">RPM Limit</label>
               <input type="number" value={form.rpm_limit} onChange={(e) => setForm({ ...form, rpm_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
@@ -218,7 +218,7 @@ export default function OrganizationDetail() {
             <label className="block text-sm font-medium text-gray-700 mb-1">Team Name</label>
             <input value={teamForm.team_alias} onChange={(e) => setTeamForm({ ...teamForm, team_alias: e.target.value })} placeholder="Engineering" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Max Budget ($)</label>
               <input type="number" value={teamForm.max_budget} onChange={(e) => setTeamForm({ ...teamForm, max_budget: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
@@ -228,7 +228,7 @@ export default function OrganizationDetail() {
               <input value={teamForm.models} onChange={(e) => setTeamForm({ ...teamForm, models: e.target.value })} placeholder="gpt-4o, claude-3" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">RPM Limit</label>
               <input type="number" value={teamForm.rpm_limit} onChange={(e) => setTeamForm({ ...teamForm, rpm_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />

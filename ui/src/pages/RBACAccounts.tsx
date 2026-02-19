@@ -217,8 +217,8 @@ export default function RBACAccounts() {
   };
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
+    <div className="p-4 sm:p-6">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Access Control</h1>
           <p className="text-sm text-gray-500 mt-1">Manage platform accounts, organization and team memberships</p>
