@@ -104,6 +104,17 @@ export default function Teams() {
     refetchMembers();
   };
 
+  const handleDelete = async (row: any) => {
+    if (!confirm(`Delete team "${row.team_alias || row.team_id}"? All members will be unassigned.`)) return;
+    try {
+      await teams.delete(row.team_id);
+      if (selectedTeam?.team_id === row.team_id) setSelectedTeam(null);
+      refetch();
+    } catch (err: any) {
+      alert(err?.message || 'Failed to delete team');
+    }
+  };
+
   const columns = [
     { key: 'team_alias', header: 'Name', render: (r: any) => <span className="font-medium">{r.team_alias || r.team_id}</span> },
     { key: 'team_id', header: 'Team ID', render: (r: any) => <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{r.team_id}</code> },
@@ -117,6 +128,7 @@ export default function Teams() {
         <div className="flex gap-1">
           <button onClick={(e) => { e.stopPropagation(); openEdit(r); }} className="p-1.5 hover:bg-gray-100 rounded-lg" title="Edit"><Pencil className="w-4 h-4 text-gray-500" /></button>
           <button onClick={(e) => { e.stopPropagation(); setSelectedTeam(r); }} className="p-1.5 hover:bg-gray-100 rounded-lg" title="Members"><Users className="w-4 h-4 text-gray-500" /></button>
+          <button onClick={(e) => { e.stopPropagation(); handleDelete(r); }} className="p-1.5 hover:bg-red-50 rounded-lg" title="Delete"><Trash2 className="w-4 h-4 text-red-500" /></button>
         </div>
       ),
     },

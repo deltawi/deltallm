@@ -298,6 +298,33 @@ async def add_team_member(
     }
 
 
+@router.delete("/ui/api/teams/{team_id}")
+async def delete_team(
+    request: Request,
+    team_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, bool]:
+    scope = get_auth_scope(request, authorization, x_master_key)
+    db = db_or_503(request)
+    await _require_team_access(request, scope, db, team_id, write=True)
+    key_count = await db.query_raw(
+        "SELECT COUNT(*) AS cnt FROM litellm_verificationtoken WHERE team_id = $1",
+        team_id,
+    )
+    if key_count and int(key_count[0].get("cnt", 0)) > 0:
+        raise HTTPException(status_code=409, detail=f"Cannot delete team: {key_count[0]['cnt']} API key(s) still assigned. Reassign or revoke them first.")
+    await db.execute_raw(
+        "UPDATE litellm_usertable SET team_id = NULL, updated_at = NOW() WHERE team_id = $1",
+        team_id,
+    )
+    deleted = await db.execute_raw(
+        "DELETE FROM litellm_teamtable WHERE team_id = $1",
+        team_id,
+    )
+    return {"deleted": int(deleted or 0) > 0}
+
+
 @router.delete("/ui/api/teams/{team_id}/members/{user_id}")
 async def remove_team_member(
     request: Request,

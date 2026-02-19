@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useApi } from '../lib/hooks';
-import { keys } from '../lib/api';
+import { keys, teams } from '../lib/api';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import StatusBadge from '../components/StatusBadge';
@@ -38,6 +38,7 @@ function BudgetBar({ spend, max_budget }: { spend: number; max_budget: number | 
 
 export default function ApiKeys() {
   const { data, loading, refetch } = useApi(() => keys.list(), []);
+  const { data: teamsList } = useApi(() => teams.list(), []);
   const [showCreate, setShowCreate] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
   const [createdKey, setCreatedKey] = useState<string | null>(null);
@@ -155,8 +156,16 @@ export default function ApiKeys() {
               <input value={form.user_id} onChange={(e) => setForm({ ...form, user_id: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Team ID</label>
-              <input value={form.team_id} onChange={(e) => setForm({ ...form, team_id: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <label className="block text-sm font-medium text-gray-700 mb-1">Team</label>
+              <select value={form.team_id} onChange={(e) => setForm({ ...form, team_id: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+                <option value="">No team</option>
+                {form.team_id && !(teamsList || []).some((t: any) => t.team_id === form.team_id) && (
+                  <option value={form.team_id} disabled>{form.team_id} (inaccessible)</option>
+                )}
+                {(teamsList || []).map((t: any) => (
+                  <option key={t.team_id} value={t.team_id}>{t.team_alias || t.team_id}</option>
+                ))}
+              </select>
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
