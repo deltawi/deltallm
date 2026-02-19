@@ -1,4 +1,4 @@
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './lib/auth';
 import Layout from './components/Layout';
 import Login from './pages/Login';
@@ -19,6 +19,8 @@ import TeamDetail from './pages/TeamDetail';
 
 function AppRoutes() {
   const { isAuthenticated, isLoading, session, authMode, mfaSkipped } = useAuth();
+  const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
+  const isPlatformAdmin = userRole === 'platform_admin' || userRole === 'platform_co_admin';
 
   if (isLoading) {
     return (
@@ -54,7 +56,7 @@ function AppRoutes() {
         <Route path="/usage" element={<Usage />} />
         <Route path="/guardrails" element={<Guardrails />} />
         <Route path="/settings" element={<SettingsPage />} />
-        <Route path="/access-control" element={<RBACAccounts />} />
+        <Route path="/access-control" element={isPlatformAdmin ? <RBACAccounts /> : <Navigate to="/" replace />} />
       </Route>
     </Routes>
   );

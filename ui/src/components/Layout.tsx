@@ -25,7 +25,7 @@ const navItems = [
   { to: '/users', icon: Users, label: 'Users' },
   { to: '/usage', icon: BarChart3, label: 'Usage' },
   { to: '/guardrails', icon: Shield, label: 'Guardrails' },
-  { to: '/access-control', icon: UserCog, label: 'Access Control' },
+  { to: '/access-control', icon: UserCog, label: 'Access Control', adminOnly: true },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
 
@@ -48,6 +48,9 @@ export default function Layout() {
 
   const displayEmail = authMode === 'master_key' ? 'Master Key' : (session?.email || 'Unknown');
   const displayRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
+  const isPlatformAdmin = displayRole === 'platform_admin' || displayRole === 'platform_co_admin';
+
+  const visibleNavItems = navItems.filter(item => !item.adminOnly || isPlatformAdmin);
 
   return (
     <div className="flex h-screen bg-gray-50">
@@ -60,7 +63,7 @@ export default function Layout() {
           <p className="text-xs text-gray-400 mt-1">Admin Dashboard</p>
         </div>
         <nav className="flex-1 py-4 overflow-y-auto">
-          {navItems.map(({ to, icon: Icon, label }) => (
+          {visibleNavItems.map(({ to, icon: Icon, label }) => (
             <NavLink
               key={to}
               to={to}
