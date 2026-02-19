@@ -47,36 +47,54 @@ export default function ApiKeys() {
   const [createdKey, setCreatedKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [form, setForm] = useState({ key_name: '', user_id: '', team_id: '', max_budget: '', rpm_limit: '', tpm_limit: '', models: '' });
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const handleCreate = async () => {
-    const result = await keys.create({
-      key_name: form.key_name || undefined,
-      user_id: currentUserId || undefined,
-      team_id: form.team_id || undefined,
-      max_budget: form.max_budget ? Number(form.max_budget) : undefined,
-      rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
-      tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
-      models: form.models ? form.models.split(',').map(m => m.trim()).filter(Boolean) : [],
-    });
-    setCreatedKey(result.raw_key);
-    setForm({ key_name: '', user_id: '', team_id: '', max_budget: '', rpm_limit: '', tpm_limit: '', models: '' });
-    refetch();
+    setError(null);
+    setSaving(true);
+    try {
+      const result = await keys.create({
+        key_name: form.key_name || undefined,
+        user_id: currentUserId || undefined,
+        team_id: form.team_id || undefined,
+        max_budget: form.max_budget ? Number(form.max_budget) : undefined,
+        rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
+        tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
+        models: form.models ? form.models.split(',').map(m => m.trim()).filter(Boolean) : [],
+      });
+      setCreatedKey(result.raw_key);
+      setForm({ key_name: '', user_id: '', team_id: '', max_budget: '', rpm_limit: '', tpm_limit: '', models: '' });
+      refetch();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to create key');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleUpdate = async () => {
     if (!editItem) return;
-    await keys.update(editItem.token, {
-      key_name: form.key_name || undefined,
-      user_id: form.user_id || undefined,
-      team_id: form.team_id || undefined,
-      max_budget: form.max_budget ? Number(form.max_budget) : undefined,
-      rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
-      tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
-      models: form.models ? form.models.split(',').map(m => m.trim()).filter(Boolean) : [],
-    });
-    setEditItem(null);
-    setForm({ key_name: '', user_id: '', team_id: '', max_budget: '', rpm_limit: '', tpm_limit: '', models: '' });
-    refetch();
+    setError(null);
+    setSaving(true);
+    try {
+      await keys.update(editItem.token, {
+        key_name: form.key_name || undefined,
+        user_id: form.user_id || undefined,
+        team_id: form.team_id || undefined,
+        max_budget: form.max_budget ? Number(form.max_budget) : undefined,
+        rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
+        tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
+        models: form.models ? form.models.split(',').map(m => m.trim()).filter(Boolean) : [],
+      });
+      setEditItem(null);
+      setForm({ key_name: '', user_id: '', team_id: '', max_budget: '', rpm_limit: '', tpm_limit: '', models: '' });
+      refetch();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to update key');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const openEdit = (row: any) => {
@@ -189,9 +207,10 @@ export default function ApiKeys() {
             <label className="block text-sm font-medium text-gray-700 mb-1">Allowed Models (comma-separated)</label>
             <input value={form.models} onChange={(e) => setForm({ ...form, models: e.target.value })} placeholder="gpt-4o, claude-3-sonnet" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
+          {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>}
           <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => { setShowCreate(false); setEditItem(null); }} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-            <button onClick={editItem ? handleUpdate : handleCreate} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">{editItem ? 'Save Changes' : 'Create Key'}</button>
+            <button onClick={() => { setShowCreate(false); setEditItem(null); setError(null); }} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
+            <button onClick={editItem ? handleUpdate : handleCreate} disabled={saving} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">{saving ? 'Saving...' : editItem ? 'Save Changes' : 'Create Key'}</button>
           </div>
         </div>
       </Modal>

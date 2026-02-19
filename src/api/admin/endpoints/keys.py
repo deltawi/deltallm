@@ -47,12 +47,15 @@ async def list_keys(
     return [to_json_value(dict(row)) for row in rows]
 
 
-@router.post("/ui/api/keys", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
-async def create_key(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+@router.post("/ui/api/keys")
+async def create_key(
+    request: Request,
+    payload: dict[str, Any],
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
-    raw_key = f"sk-{secrets.token_urlsafe(24)}"
-    key_service = request.app.state.key_service
-    token_hash = key_service.hash_key(raw_key)
 
     key_name = payload.get("key_name")
     user_id = payload.get("user_id")
@@ -64,6 +67,23 @@ async def create_key(request: Request, payload: dict[str, Any]) -> dict[str, Any
     expires = payload.get("expires")
     if expires is not None and not isinstance(expires, str):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="expires must be a string datetime")
+
+    if not scope.is_platform_admin:
+        if not team_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A team must be selected when creating a key")
+        rows = await db.query_raw(
+            "SELECT organization_id FROM litellm_teamtable WHERE team_id = $1 LIMIT 1",
+            team_id,
+        )
+        if not rows:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+        team_org = rows[0].get("organization_id")
+        if not team_org or team_org not in scope.org_ids:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only create keys for teams in your organizations")
+
+    raw_key = f"sk-{secrets.token_urlsafe(24)}"
+    key_service = request.app.state.key_service
+    token_hash = key_service.hash_key(raw_key)
 
     await db.execute_raw(
         """
