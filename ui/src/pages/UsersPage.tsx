@@ -93,7 +93,9 @@ export default function UsersPage() {
     {
       key: 'actions', header: '', render: (r: any) => (
         <div className="flex gap-1">
-          <button onClick={() => openEdit(r)} className="p-1.5 hover:bg-gray-100 rounded-lg" title="Edit"><Pencil className="w-4 h-4 text-gray-500" /></button>
+          {isPlatformAdmin && (
+            <button onClick={() => openEdit(r)} className="p-1.5 hover:bg-gray-100 rounded-lg" title="Edit"><Pencil className="w-4 h-4 text-gray-500" /></button>
+          )}
           {isPlatformAdmin && (
             <button onClick={() => toggleBlock(r.user_id, r.blocked)} className="p-1.5 hover:bg-gray-100 rounded-lg" title={r.blocked ? 'Unblock' : 'Block'}>
               {r.blocked ? <CheckCircle className="w-4 h-4 text-green-500" /> : <Ban className="w-4 h-4 text-red-500" />}
