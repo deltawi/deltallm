@@ -39,12 +39,10 @@ export default function Login() {
       await loginWithCredentials(email.trim(), password.trim(), mfaCode.trim() || undefined);
     } catch (err: any) {
       const msg = err?.message || 'Login failed';
-      if (!showMfa && !mfaCode) {
-        setShowMfa(true);
-        setError('Please enter your password. If MFA is enabled, enter your 6-digit code below.');
-      } else {
-        setError(msg);
+      if (msg.toLowerCase().includes('mfa') || msg.toLowerCase().includes('invalid credentials')) {
+        if (!showMfa) setShowMfa(true);
       }
+      setError(msg);
     } finally {
       setLoading(false);
     }
