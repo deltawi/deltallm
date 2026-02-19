@@ -93,6 +93,11 @@ DeltaLLM is an open-source LLM gateway/proxy (similar to LiteLLM) that provides 
 - Set up backend with PostgreSQL database, Redis, and Prisma ORM
 - Fixed API key creation bug (missing UUID generation in raw SQL insert)
 - Added static file serving to backend for production deployment
+- Fixed UI model CRUD routes to use ModelHotReloadManager for database persistence (models survive restarts)
+- Fixed spend logging: added UUID id column, timestamp casting, JSONB serialization, removed FK constraint
+- Added master key auth fallback to proxy endpoints (chat, audio, etc.) via `_is_master_key()` in auth middleware
+- Chat cost calculation now uses deployment-level pricing from model_info instead of only static cost map
+- Prisma schema updated to remove litellm_spendlogs FK to litellm_verificationtoken
 
 ## User Preferences
 - None recorded yet

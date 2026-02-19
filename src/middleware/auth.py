@@ -18,6 +18,17 @@ async def require_api_key(
     if not raw_key:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing API key")
 
+    if _is_master_key(request, raw_key):
+        auth = UserAPIKeyAuth(
+            api_key="master_key",
+            user_id="admin",
+            user_role="platform_admin",
+            metadata={"is_master_key": True},
+        )
+        request.state.user_api_key = auth
+        request.state.auth_context = auth
+        return
+
     key_service: KeyService | None = getattr(request.app.state, "key_service", None)
     if key_service is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Key service not configured")
@@ -35,6 +46,16 @@ async def require_api_key(
 
 def auth_dependency() -> Depends:
     return Depends(require_api_key)
+
+
+def _is_master_key(request: Request, token: str) -> bool:
+    dcm = getattr(request.app.state, "dynamic_config_manager", None)
+    if dcm is not None:
+        cfg = dcm.get_app_config()
+        configured = getattr(getattr(cfg, "general_settings", None), "master_key", None)
+    else:
+        configured = getattr(getattr(request.app.state, "settings", None), "master_key", None)
+    return bool(configured and token == configured)
 
 
 async def _try_fallback_auth(request: Request, raw_token: str) -> UserAPIKeyAuth | None:

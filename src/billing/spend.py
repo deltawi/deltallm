@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -64,9 +65,16 @@ class SpendTrackingService:
         }
 
         try:
-            await self.db.query_raw(
+            import uuid as _uuid
+            row_id = str(_uuid.uuid4())
+            st = log_entry["start_time"]
+            et = log_entry["end_time"]
+            start_iso = st.isoformat() if isinstance(st, datetime) else str(st)
+            end_iso = et.isoformat() if isinstance(et, datetime) else str(et)
+            await self.db.execute_raw(
                 """
                 INSERT INTO litellm_spendlogs (
+                    id,
                     request_id,
                     call_type,
                     api_key,
@@ -86,9 +94,10 @@ class SpendTrackingService:
                     cache_key,
                     request_tags
                 ) VALUES (
-                    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18
+                    $1,$2,$3,$4,$5,$6,$7,$8,$9::timestamp,$10::timestamp,$11,$12,$13,$14,$15,$16::jsonb,$17,$18,$19
                 )
                 """,
+                row_id,
                 log_entry["request_id"],
                 log_entry["call_type"],
                 log_entry["api_key"],
@@ -96,20 +105,20 @@ class SpendTrackingService:
                 log_entry["total_tokens"],
                 log_entry["prompt_tokens"],
                 log_entry["completion_tokens"],
-                log_entry["start_time"],
-                log_entry["end_time"],
+                start_iso,
+                end_iso,
                 log_entry["model"],
                 log_entry["api_base"],
                 log_entry["user"],
                 log_entry["team_id"],
                 log_entry["end_user"],
-                log_entry["metadata"],
+                json.dumps(log_entry["metadata"], default=str),
                 log_entry["cache_hit"],
                 log_entry["cache_key"],
                 log_entry["request_tags"],
             )
         except Exception as exc:  # pragma: no cover - defensive logging
-            logger.warning("failed to write spend log", extra={"request_id": request_id, "error": str(exc)})
+            logger.warning("failed to write spend log: %s", exc)
 
         await self.ledger.increment_spend(
             api_key=api_key,

@@ -29,8 +29,6 @@ model LiteLLM_SpendLogs {
   cache_key         String?
   request_tags      String[]
 
-  key LiteLLM_VerificationToken? @relation(fields: [api_key], references: [token])
-
   @@index([api_key])
   @@index([team_id])
   @@index([user])
@@ -63,8 +61,6 @@ model LiteLLM_VerificationToken {
 
   user       LiteLLM_UserTable? @relation(fields: [user_id], references: [user_id])
   team       LiteLLM_TeamTable? @relation(fields: [team_id], references: [team_id])
-  spend_logs LiteLLM_SpendLogs[]
-
   @@index([token])
   @@index([user_id])
   @@index([team_id])
@@ -223,4 +219,13 @@ model LiteLLM_TeamMembership {
   @@unique([account_id, team_id])
   @@index([team_id])
   @@map("litellm_teammembership")
+}
+
+model LiteLLM_Config {
+  config_name  String   @id
+  config_value String
+  updated_by   String?
+  updated_at   DateTime @default(now())
+
+  @@map("litellm_config")
 }

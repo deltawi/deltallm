@@ -54,7 +54,7 @@ class SpendLedgerService:
             return
 
         try:
-            await self.db.query_raw(
+            await self.db.execute_raw(
                 f"""
                 UPDATE {table}
                 SET spend = COALESCE(spend, 0) + $1,

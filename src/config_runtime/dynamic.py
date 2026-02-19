@@ -38,6 +38,7 @@ class DynamicConfigManager:
         self._subscribers: list[ConfigSubscriber] = []
         self._pubsub_task: asyncio.Task[None] | None = None
         self._stopping = False
+        self._update_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         self._db_config = await self._load_from_db()
@@ -66,10 +67,11 @@ class DynamicConfigManager:
         return self._config.model_copy(deep=True)
 
     async def update_config(self, config_update: dict[str, Any], updated_by: str) -> None:
-        self._db_config = deep_merge(self._db_config, config_update)
-        await self._store_db_config(self._db_config, updated_by=updated_by)
-        await self._reload_config()
-        await self._publish_reload_event(event_type="config_updated")
+        async with self._update_lock:
+            self._db_config = deep_merge(self._db_config, config_update)
+            await self._store_db_config(self._db_config, updated_by=updated_by)
+            await self._reload_config()
+            await self._publish_reload_event(event_type="config_updated")
 
     async def _listen_for_changes(self) -> None:
         if self.redis is None:

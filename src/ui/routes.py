@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from fastapi.responses import FileResponse
 
 from src.middleware.admin import require_master_key, require_authenticated
+from src.config_runtime.models import ModelHotReloadManager
 from src.router import build_deployment_registry
 
 ui_router = APIRouter(tags=["UI"])
@@ -103,13 +104,21 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
     deployment_id = str(payload.get("deployment_id") or f"{model_name}-{secrets.token_hex(4)}")
     model_info = payload.get("model_info") if isinstance(payload.get("model_info"), dict) else {}
 
-    entry = {
+    model_config = {
         "deployment_id": deployment_id,
+        "model_name": model_name,
         "litellm_params": litellm_params,
         "model_info": model_info,
     }
-    request.app.state.model_registry.setdefault(model_name, []).append(entry)
-    _rebuild_runtime_registry(request.app)
+
+    hot_reload: ModelHotReloadManager | None = getattr(request.app.state, "model_hot_reload_manager", None)
+    if hot_reload is not None:
+        deployment_id = await hot_reload.add_model(model_config, updated_by="admin_api")
+    else:
+        request.app.state.model_registry.setdefault(model_name, []).append(
+            {"deployment_id": deployment_id, "litellm_params": litellm_params, "model_info": model_info}
+        )
+        _rebuild_runtime_registry(request.app)
 
     return {
         "deployment_id": deployment_id,
@@ -121,55 +130,80 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
 
 @ui_router.put("/ui/api/models/{deployment_id}", dependencies=[Depends(require_master_key)])
 async def update_model(request: Request, deployment_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    hot_reload: ModelHotReloadManager | None = getattr(request.app.state, "model_hot_reload_manager", None)
     registry: dict[str, list[dict[str, Any]]] = request.app.state.model_registry
 
+    found_model_name: str | None = None
+    found_deployment: dict[str, Any] | None = None
     for model_name, deployments in list(registry.items()):
         for idx, deployment in enumerate(deployments):
             candidate_id = str(deployment.get("deployment_id") or f"{model_name}-{idx}")
-            if candidate_id != deployment_id:
-                continue
+            if candidate_id == deployment_id:
+                found_model_name = model_name
+                found_deployment = deployment
+                break
+        if found_deployment:
+            break
 
-            new_model_name = str(payload.get("model_name") or model_name)
-            litellm_params = payload.get("litellm_params") if isinstance(payload.get("litellm_params"), dict) else deployment.get("litellm_params", {})
-            model_info = payload.get("model_info") if isinstance(payload.get("model_info"), dict) else deployment.get("model_info", {})
+    if found_deployment is None or found_model_name is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
 
-            updated = {
-                "deployment_id": deployment_id,
-                "litellm_params": litellm_params,
-                "model_info": model_info,
-            }
+    new_model_name = str(payload.get("model_name") or found_model_name)
+    litellm_params = payload.get("litellm_params") if isinstance(payload.get("litellm_params"), dict) else found_deployment.get("litellm_params", {})
+    model_info = payload.get("model_info") if isinstance(payload.get("model_info"), dict) else found_deployment.get("model_info", {})
 
-            del deployments[idx]
-            if not deployments:
-                registry.pop(model_name, None)
-            registry.setdefault(new_model_name, []).append(updated)
-            _rebuild_runtime_registry(request.app)
+    if hot_reload is not None:
+        await hot_reload.remove_model(deployment_id, updated_by="admin_api")
+        new_config = {
+            "deployment_id": deployment_id,
+            "model_name": new_model_name,
+            "litellm_params": litellm_params,
+            "model_info": model_info,
+        }
+        await hot_reload.add_model(new_config, updated_by="admin_api")
+    else:
+        deployments = registry.get(found_model_name, [])
+        for idx, d in enumerate(deployments):
+            if str(d.get("deployment_id") or f"{found_model_name}-{idx}") == deployment_id:
+                del deployments[idx]
+                if not deployments:
+                    registry.pop(found_model_name, None)
+                break
+        registry.setdefault(new_model_name, []).append(
+            {"deployment_id": deployment_id, "litellm_params": litellm_params, "model_info": model_info}
+        )
+        _rebuild_runtime_registry(request.app)
 
-            return {
-                "deployment_id": deployment_id,
-                "model_name": new_model_name,
-                "litellm_params": litellm_params,
-                "model_info": model_info,
-            }
-
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
+    return {
+        "deployment_id": deployment_id,
+        "model_name": new_model_name,
+        "litellm_params": litellm_params,
+        "model_info": model_info,
+    }
 
 
 @ui_router.delete("/ui/api/models/{deployment_id}", dependencies=[Depends(require_master_key)])
 async def delete_model(request: Request, deployment_id: str) -> dict[str, bool]:
-    registry: dict[str, list[dict[str, Any]]] = request.app.state.model_registry
+    hot_reload: ModelHotReloadManager | None = getattr(request.app.state, "model_hot_reload_manager", None)
 
+    if hot_reload is not None:
+        removed = await hot_reload.remove_model(deployment_id, updated_by="admin_api")
+        if not removed:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
+        return {"deleted": True}
+
+    registry: dict[str, list[dict[str, Any]]] = request.app.state.model_registry
     for model_name, deployments in list(registry.items()):
         kept: list[dict[str, Any]] = []
-        removed = False
+        removed_flag = False
         for idx, deployment in enumerate(deployments):
             candidate_id = str(deployment.get("deployment_id") or f"{model_name}-{idx}")
             if candidate_id == deployment_id:
-                removed = True
+                removed_flag = True
                 continue
             kept.append(deployment)
 
-        if removed:
+        if removed_flag:
             if kept:
                 registry[model_name] = kept
             else:

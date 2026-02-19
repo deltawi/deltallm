@@ -125,6 +125,25 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             team=auth.team_id,
             spend=request_cost,
         )
+        try:
+            await request.app.state.spend_tracking_service.log_spend(
+                request_id=request_id or "",
+                api_key=auth.api_key,
+                user_id=auth.user_id,
+                team_id=auth.team_id,
+                organization_id=getattr(auth, "organization_id", None),
+                end_user_id=None,
+                model=payload.model,
+                call_type="embedding",
+                usage=usage,
+                cost=request_cost,
+                metadata={"api_base": api_base},
+                cache_hit=getattr(request.state, "cache_hit", False),
+                start_time=callback_start,
+                end_time=datetime.now(tz=UTC),
+            )
+        except Exception:
+            pass
         observe_request_latency(
             model=payload.model,
             api_provider=api_provider,

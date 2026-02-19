@@ -236,11 +236,18 @@ async def chat_completions(request: Request, payload: ChatCompletionRequest):
         )
         await request.app.state.passive_health_tracker.record_request_outcome(primary.deployment_id, success=True)
         usage = payload_data.get("usage") or {}
+        _deploy_pricing = None
+        if primary.input_cost_per_token or primary.output_cost_per_token:
+            from src.billing.cost import ModelPricing
+            _deploy_pricing = ModelPricing(
+                input_cost_per_token=primary.input_cost_per_token,
+                output_cost_per_token=primary.output_cost_per_token,
+            )
         request_cost = completion_cost(
             model=payload.model,
             usage=usage,
             cache_hit=getattr(request.state, "cache_hit", False),
-            custom_pricing=None,
+            custom_pricing=_deploy_pricing,
         )
         increment_request(
             model=payload.model,
@@ -267,6 +274,25 @@ async def chat_completions(request: Request, payload: ChatCompletionRequest):
             team=auth.team_id,
             spend=request_cost,
         )
+        try:
+            await request.app.state.spend_tracking_service.log_spend(
+                request_id=request_id or "",
+                api_key=auth.api_key,
+                user_id=auth.user_id,
+                team_id=auth.team_id,
+                organization_id=getattr(auth, "organization_id", None),
+                end_user_id=None,
+                model=payload.model,
+                call_type="completion",
+                usage=usage,
+                cost=request_cost,
+                metadata={"api_base": api_base},
+                cache_hit=cache_hit,
+                start_time=callback_start,
+                end_time=datetime.now(tz=UTC),
+            )
+        except Exception:
+            pass
         observe_request_latency(
             model=payload.model,
             api_provider=api_provider,
