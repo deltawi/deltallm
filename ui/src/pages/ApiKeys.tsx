@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useApi } from '../lib/hooks';
 import { keys, teams } from '../lib/api';
+import { useAuth } from '../lib/auth';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import StatusBadge from '../components/StatusBadge';
@@ -37,6 +38,8 @@ function BudgetBar({ spend, max_budget }: { spend: number; max_budget: number | 
 }
 
 export default function ApiKeys() {
+  const { session } = useAuth();
+  const currentUserId = session?.account_id || '';
   const { data, loading, refetch } = useApi(() => keys.list(), []);
   const { data: teamsList } = useApi(() => teams.list(), []);
   const [showCreate, setShowCreate] = useState(false);
@@ -48,7 +51,7 @@ export default function ApiKeys() {
   const handleCreate = async () => {
     const result = await keys.create({
       key_name: form.key_name || undefined,
-      user_id: form.user_id || undefined,
+      user_id: currentUserId || undefined,
       team_id: form.team_id || undefined,
       max_budget: form.max_budget ? Number(form.max_budget) : undefined,
       rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
@@ -153,7 +156,7 @@ export default function ApiKeys() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">User ID</label>
-              <input value={form.user_id} onChange={(e) => setForm({ ...form, user_id: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <input value={editItem ? form.user_id : (currentUserId || '')} readOnly={!editItem} className={`w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${!editItem ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : ''}`} onChange={editItem ? (e) => setForm({ ...form, user_id: e.target.value }) : undefined} />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Team</label>
