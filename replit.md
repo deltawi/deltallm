@@ -41,17 +41,27 @@ DeltaLLM is an open-source LLM gateway/proxy (similar to LiteLLM) that provides 
 - **RBAC APIs**: `/ui/api/rbac/accounts`, `/ui/api/rbac/organization-memberships`, `/ui/api/rbac/team-memberships`
 - **Auth flow**: Login -> Force password change (if required) -> MFA enrollment prompt (optional) -> Dashboard
 
+### Scoped Access Control
+- **AuthScope**: Helper in `common.py` determines if user is platform_admin or org-scoped via RBAC memberships
+- **Platform admins**: See all resources across the platform
+- **Org users**: See only organizations, teams, keys, and users within their assigned orgs
+- **Models/spend/settings**: Readable by any authenticated user (models are global config, spend is aggregate)
+- **Settings security**: Master key is redacted from settings response for non-admin users
+- **Cross-team protection**: Users cannot query users/keys for teams outside their org scope (403)
+- **Frontend guards**: Guardrails, Settings, Access Control pages and nav items hidden for non-platform-admins
+- **Create buttons**: Organization create button hidden for non-platform-admins
+
 ### Admin UI Pages
 - **Dashboard**: Overview stats, daily spend chart, model usage pie chart
 - **Models**: CRUD for model deployments/providers
 - **API Keys**: Create, edit, revoke, regenerate keys with budget controls
-- **Organizations**: Organization management with RPM/TPM rate limits
-- **Teams**: Team management with member management and rate limits
-- **Users**: User management with block/unblock and rate limits
+- **Organizations**: Organization management with RPM/TPM rate limits (scoped for org users)
+- **Teams**: Team management with member management and rate limits (scoped for org users)
+- **Users**: User management with block/unblock and rate limits (scoped for org users)
 - **Usage**: Spend analytics with daily trends, per-model/key/team breakdowns, request logs
-- **Guardrails**: Configure content safety policies
-- **Access Control**: Platform account management, org/team membership assignment with roles
-- **Settings**: Routing strategy, caching, health checks
+- **Guardrails**: Configure content safety policies (platform admin only)
+- **Access Control**: Platform account management, org/team membership assignment with roles (platform admin only)
+- **Settings**: Routing strategy, caching, health checks (platform admin only for writes)
 
 ### Running Locally
 1. Redis must be running: `redis-server --daemonize yes`

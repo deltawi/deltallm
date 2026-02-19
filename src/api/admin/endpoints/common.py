@@ -1,10 +1,50 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from fastapi import HTTPException, Request, status
+from fastapi import Header, HTTPException, Request, status
+
+
+@dataclass
+class AuthScope:
+    is_platform_admin: bool = False
+    org_ids: list[str] = field(default_factory=list)
+    team_ids: list[str] = field(default_factory=list)
+
+
+def get_auth_scope(request: Request, authorization: str | None = None, x_master_key: str | None = None) -> AuthScope:
+    configured = None
+    app_config = getattr(request.app.state, "app_config", None)
+    if app_config is not None:
+        configured = getattr(getattr(app_config, "general_settings", None), "master_key", None)
+    if not configured:
+        configured = getattr(getattr(request.app.state, "settings", None), "master_key", None)
+
+    if authorization and authorization.lower().startswith("bearer "):
+        provided = authorization.split(" ", 1)[1].strip()
+    else:
+        provided = x_master_key
+
+    if configured and provided == configured:
+        return AuthScope(is_platform_admin=True)
+
+    from src.middleware.platform_auth import get_platform_auth_context
+    from src.auth.roles import has_platform_permission, Permission as Perm
+
+    context = get_platform_auth_context(request)
+    if context is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+
+    if has_platform_permission(context.role, Perm.PLATFORM_ADMIN):
+        return AuthScope(is_platform_admin=True)
+
+    org_ids = [str(m.get("organization_id")) for m in context.organization_memberships if m.get("organization_id")]
+    team_ids = [str(m.get("team_id")) for m in context.team_memberships if m.get("team_id")]
+
+    return AuthScope(is_platform_admin=False, org_ids=org_ids, team_ids=team_ids)
 
 
 def db_or_503(request: Request) -> Any:

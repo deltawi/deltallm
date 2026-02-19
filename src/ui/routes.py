@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse
 
-from src.middleware.admin import require_master_key
+from src.middleware.admin import require_master_key, require_authenticated
 from src.router import build_deployment_registry
 
 ui_router = APIRouter(tags=["UI"])
@@ -75,7 +75,7 @@ def _rebuild_runtime_registry(app: Any) -> None:
             registry.update(rebuilt)
 
 
-@ui_router.get("/ui/api/models", dependencies=[Depends(require_master_key)])
+@ui_router.get("/ui/api/models", dependencies=[Depends(require_authenticated)])
 async def list_models(request: Request) -> list[dict[str, Any]]:
     health_backend = getattr(request.app.state, "router_state_backend", None)
     entries = _model_entries(request.app)
@@ -191,7 +191,7 @@ def _date_end(value: date | None) -> datetime | None:
     return datetime.combine(value, time.max, tzinfo=UTC)
 
 
-@ui_router.get("/ui/api/spend/summary", dependencies=[Depends(require_master_key)])
+@ui_router.get("/ui/api/spend/summary", dependencies=[Depends(require_authenticated)])
 async def spend_summary(
     request: Request,
     start_date: date | None = Query(default=None),
@@ -228,7 +228,7 @@ async def spend_summary(
     return _to_json_value(dict(rows[0] if rows else {}))
 
 
-@ui_router.get("/ui/api/spend/report", dependencies=[Depends(require_master_key)])
+@ui_router.get("/ui/api/spend/report", dependencies=[Depends(require_authenticated)])
 async def spend_report(
     request: Request,
     group_by: str = Query(default="day", pattern="^(model|provider|day|user|team)$"),

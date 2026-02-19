@@ -3,26 +3,48 @@ from __future__ import annotations
 import secrets
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from src.auth.roles import Permission
-from src.api.admin.endpoints.common import db_or_503, optional_int, to_json_value
+from src.api.admin.endpoints.common import db_or_503, optional_int, to_json_value, get_auth_scope, AuthScope
 from src.middleware.admin import require_admin_permission
 
 router = APIRouter(tags=["Admin Organizations"])
 
 
-@router.get("/ui/api/organizations", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
-async def list_organizations(request: Request) -> list[dict[str, Any]]:
+@router.get("/ui/api/organizations")
+async def list_organizations(
+    request: Request,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> list[dict[str, Any]]:
+    scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
-    rows = await db.query_raw(
-        """
-        SELECT o.organization_id, o.organization_name, o.max_budget, o.spend, o.rpm_limit, o.tpm_limit, o.created_at, o.updated_at,
-               (SELECT COUNT(*) FROM litellm_teamtable t WHERE t.organization_id = o.organization_id) AS team_count
-        FROM litellm_organizationtable o
-        ORDER BY o.created_at DESC
-        """
-    )
+
+    if scope.is_platform_admin:
+        rows = await db.query_raw(
+            """
+            SELECT o.organization_id, o.organization_name, o.max_budget, o.spend, o.rpm_limit, o.tpm_limit, o.created_at, o.updated_at,
+                   (SELECT COUNT(*) FROM litellm_teamtable t WHERE t.organization_id = o.organization_id) AS team_count
+            FROM litellm_organizationtable o
+            ORDER BY o.created_at DESC
+            """
+        )
+    elif scope.org_ids:
+        placeholders = ", ".join(f"${i+1}" for i in range(len(scope.org_ids)))
+        rows = await db.query_raw(
+            f"""
+            SELECT o.organization_id, o.organization_name, o.max_budget, o.spend, o.rpm_limit, o.tpm_limit, o.created_at, o.updated_at,
+                   (SELECT COUNT(*) FROM litellm_teamtable t WHERE t.organization_id = o.organization_id) AS team_count
+            FROM litellm_organizationtable o
+            WHERE o.organization_id IN ({placeholders})
+            ORDER BY o.created_at DESC
+            """,
+            *scope.org_ids,
+        )
+    else:
+        rows = []
+
     return [to_json_value(dict(row)) for row in rows]
 
 

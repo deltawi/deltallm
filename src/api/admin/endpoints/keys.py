@@ -3,25 +3,47 @@ from __future__ import annotations
 import secrets
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from src.auth.roles import Permission
-from src.api.admin.endpoints.common import db_or_503, to_json_value
+from src.api.admin.endpoints.common import db_or_503, to_json_value, get_auth_scope
 from src.middleware.admin import require_admin_permission
 
 router = APIRouter(tags=["Admin Keys"])
 
 
-@router.get("/ui/api/keys", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
-async def list_keys(request: Request) -> list[dict[str, Any]]:
+@router.get("/ui/api/keys")
+async def list_keys(
+    request: Request,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> list[dict[str, Any]]:
+    scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
-    rows = await db.query_raw(
-        """
-        SELECT token, key_name, user_id, team_id, models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at
-        FROM litellm_verificationtoken
-        ORDER BY created_at DESC
-        """
-    )
+
+    if scope.is_platform_admin:
+        rows = await db.query_raw(
+            """
+            SELECT token, key_name, user_id, team_id, models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at
+            FROM litellm_verificationtoken
+            ORDER BY created_at DESC
+            """
+        )
+    elif scope.org_ids:
+        placeholders = ", ".join(f"${i+1}" for i in range(len(scope.org_ids)))
+        rows = await db.query_raw(
+            f"""
+            SELECT vt.token, vt.key_name, vt.user_id, vt.team_id, vt.models, vt.spend, vt.max_budget, vt.rpm_limit, vt.tpm_limit, vt.expires, vt.created_at, vt.updated_at
+            FROM litellm_verificationtoken vt
+            LEFT JOIN litellm_teamtable t ON vt.team_id = t.team_id
+            WHERE t.organization_id IN ({placeholders})
+            ORDER BY vt.created_at DESC
+            """,
+            *scope.org_ids,
+        )
+    else:
+        rows = []
+
     return [to_json_value(dict(row)) for row in rows]
 
 

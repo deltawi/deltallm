@@ -17,6 +17,31 @@ def _extract_bearer_token(authorization: str | None) -> str | None:
     return token or None
 
 
+async def require_authenticated(
+    request: Request,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> str:
+    from src.middleware.platform_auth import get_platform_auth_context
+
+    context = get_platform_auth_context(request)
+    if context is not None:
+        return "platform_session"
+
+    configured = None
+    app_config = getattr(request.app.state, "app_config", None)
+    if app_config is not None:
+        configured = getattr(getattr(app_config, "general_settings", None), "master_key", None)
+    if not configured:
+        configured = getattr(getattr(request.app.state, "settings", None), "master_key", None)
+
+    provided = x_master_key or _extract_bearer_token(authorization)
+    if configured and provided == configured:
+        return configured
+
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+
+
 async def require_master_key(
     request: Request,
     authorization: str | None = Header(default=None, alias="Authorization"),

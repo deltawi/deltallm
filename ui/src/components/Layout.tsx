@@ -24,9 +24,9 @@ const navItems = [
   { to: '/teams', icon: UsersRound, label: 'Teams' },
   { to: '/users', icon: Users, label: 'Users' },
   { to: '/usage', icon: BarChart3, label: 'Usage' },
-  { to: '/guardrails', icon: Shield, label: 'Guardrails' },
+  { to: '/guardrails', icon: Shield, label: 'Guardrails', adminOnly: true },
   { to: '/access-control', icon: UserCog, label: 'Access Control', adminOnly: true },
-  { to: '/settings', icon: Settings, label: 'Settings' },
+  { to: '/settings', icon: Settings, label: 'Settings', adminOnly: true },
 ];
 
 function RoleBadge({ role }: { role: string }) {

@@ -2,19 +2,36 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 from src.auth.roles import Permission
-from src.api.admin.endpoints.common import db_or_503, optional_int, to_json_value
+from src.api.admin.endpoints.common import db_or_503, optional_int, to_json_value, get_auth_scope
 from src.middleware.admin import require_admin_permission
 
 router = APIRouter(tags=["Admin Users"])
 
 
-@router.get("/ui/api/users", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
-async def list_users(request: Request, team_id: str | None = Query(default=None)) -> list[dict[str, Any]]:
+@router.get("/ui/api/users")
+async def list_users(
+    request: Request,
+    team_id: str | None = Query(default=None),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> list[dict[str, Any]]:
+    scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
+
     if team_id:
+        if not scope.is_platform_admin and scope.org_ids:
+            verify_rows = await db.query_raw(
+                "SELECT organization_id FROM litellm_teamtable WHERE team_id = $1 LIMIT 1",
+                team_id,
+            )
+            if not verify_rows or str(verify_rows[0].get("organization_id", "")) not in scope.org_ids:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+        elif not scope.is_platform_admin:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+
         rows = await db.query_raw(
             """
             SELECT user_id, user_email, user_role, team_id, spend, max_budget, models, tpm_limit, rpm_limit,
@@ -25,7 +42,7 @@ async def list_users(request: Request, team_id: str | None = Query(default=None)
             """,
             team_id,
         )
-    else:
+    elif scope.is_platform_admin:
         rows = await db.query_raw(
             """
             SELECT user_id, user_email, user_role, team_id, spend, max_budget, models, tpm_limit, rpm_limit,
@@ -34,6 +51,22 @@ async def list_users(request: Request, team_id: str | None = Query(default=None)
             ORDER BY created_at DESC
             """
         )
+    elif scope.org_ids:
+        placeholders = ", ".join(f"${i+1}" for i in range(len(scope.org_ids)))
+        rows = await db.query_raw(
+            f"""
+            SELECT u.user_id, u.user_email, u.user_role, u.team_id, u.spend, u.max_budget, u.models, u.tpm_limit, u.rpm_limit,
+                   COALESCE((u.metadata->>'blocked')::boolean, false) AS blocked, u.created_at, u.updated_at
+            FROM litellm_usertable u
+            LEFT JOIN litellm_teamtable t ON u.team_id = t.team_id
+            WHERE t.organization_id IN ({placeholders})
+            ORDER BY u.created_at DESC
+            """,
+            *scope.org_ids,
+        )
+    else:
+        rows = []
+
     return [to_json_value(dict(row)) for row in rows]
 
 

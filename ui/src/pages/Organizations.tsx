@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
+import { useAuth } from '../lib/auth';
 import { organizations } from '../lib/api';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
@@ -30,6 +31,9 @@ function RateLimit({ value, unit }: { value: number | null | undefined; unit: st
 
 export default function Organizations() {
   const navigate = useNavigate();
+  const { session, authMode } = useAuth();
+  const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
+  const isPlatformAdmin = userRole === 'platform_admin' || userRole === 'platform_co_admin';
   const { data, loading, refetch } = useApi(() => organizations.list(), []);
   const [showCreate, setShowCreate] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
@@ -91,9 +95,11 @@ export default function Organizations() {
           <h1 className="text-2xl font-bold text-gray-900">Organizations</h1>
           <p className="text-sm text-gray-500 mt-1">Manage organizations and their rate limits</p>
         </div>
-        <button onClick={() => { resetForm(); setShowCreate(true); }} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
-          <Plus className="w-4 h-4" /> Create Organization
-        </button>
+        {isPlatformAdmin && (
+          <button onClick={() => { resetForm(); setShowCreate(true); }} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
+            <Plus className="w-4 h-4" /> Create Organization
+          </button>
+        )}
       </div>
       <Card>
         <DataTable columns={columns} data={data || []} loading={loading} emptyMessage="No organizations created yet" onRowClick={(r) => navigate(`/organizations/${r.organization_id}`)} />

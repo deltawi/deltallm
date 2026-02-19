@@ -54,8 +54,8 @@ function AppRoutes() {
         <Route path="/teams/:teamId" element={<TeamDetail />} />
         <Route path="/users" element={<UsersPage />} />
         <Route path="/usage" element={<Usage />} />
-        <Route path="/guardrails" element={<Guardrails />} />
-        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/guardrails" element={isPlatformAdmin ? <Guardrails /> : <Navigate to="/" replace />} />
+        <Route path="/settings" element={isPlatformAdmin ? <SettingsPage /> : <Navigate to="/" replace />} />
         <Route path="/access-control" element={isPlatformAdmin ? <RBACAccounts /> : <Navigate to="/" replace />} />
       </Route>
     </Routes>

@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from src.auth.roles import Permission
-from src.api.admin.endpoints.common import model_entries, to_json_value
+from src.api.admin.endpoints.common import model_entries, to_json_value, get_auth_scope
 from src.config import GuardrailConfig
-from src.middleware.admin import require_admin_permission
+from src.middleware.admin import require_admin_permission, require_authenticated
 from src.router import RoutingStrategy
 
 router = APIRouter(tags=["Admin Config"])
@@ -115,14 +115,23 @@ async def update_routing(request: Request, payload: dict[str, Any]) -> dict[str,
     return await get_routing(request)
 
 
-@router.get("/ui/api/settings", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
-async def get_settings(request: Request) -> dict[str, Any]:
+@router.get("/ui/api/settings", dependencies=[Depends(require_authenticated)])
+async def get_settings(
+    request: Request,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
     app_config = getattr(request.app.state, "app_config", None)
     if app_config is None:
         return {}
 
+    scope = get_auth_scope(request, authorization, x_master_key)
+    general = to_json_value(app_config.general_settings.model_dump())
+    if not scope.is_platform_admin:
+        general.pop("master_key", None)
+
     return {
-        "general_settings": to_json_value(app_config.general_settings.model_dump()),
+        "general_settings": general,
         "router_settings": to_json_value(app_config.router_settings.model_dump()),
         "litellm_settings": to_json_value(app_config.litellm_settings.model_dump()),
         "model_count": len(model_entries(request.app)),
