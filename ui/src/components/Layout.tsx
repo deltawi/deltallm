@@ -12,6 +12,7 @@ import {
   Settings,
   LogOut,
   Zap,
+  UserCog,
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -24,11 +25,29 @@ const navItems = [
   { to: '/users', icon: Users, label: 'Users' },
   { to: '/usage', icon: BarChart3, label: 'Usage' },
   { to: '/guardrails', icon: Shield, label: 'Guardrails' },
+  { to: '/access-control', icon: UserCog, label: 'Access Control' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
 
+function RoleBadge({ role }: { role: string }) {
+  const colors: Record<string, string> = {
+    platform_admin: 'bg-purple-500/20 text-purple-300',
+    platform_co_admin: 'bg-indigo-500/20 text-indigo-300',
+    org_user: 'bg-gray-500/20 text-gray-400',
+  };
+  const label = role === 'platform_admin' ? 'Admin' : role === 'platform_co_admin' ? 'Co-Admin' : 'User';
+  return (
+    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${colors[role] || 'bg-gray-500/20 text-gray-400'}`}>
+      {label}
+    </span>
+  );
+}
+
 export default function Layout() {
-  const { logout } = useAuth();
+  const { logout, session, authMode } = useAuth();
+
+  const displayEmail = authMode === 'master_key' ? 'Master Key' : (session?.email || 'Unknown');
+  const displayRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
 
   return (
     <div className="flex h-screen bg-gray-50">
@@ -61,6 +80,12 @@ export default function Layout() {
           ))}
         </nav>
         <div className="p-4 border-t border-gray-800">
+          <div className="mb-3">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-300 truncate">{displayEmail}</span>
+              {displayRole && <RoleBadge role={displayRole} />}
+            </div>
+          </div>
           <button
             onClick={logout}
             className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors w-full"

@@ -1,0 +1,76 @@
+### 1. New authentication model (platform users)
+
+  - Internal login is now supported (email/password), not only master key.
+  - Session is cookie-based (deltallm_session, HttpOnly).
+  - New endpoints:
+      - POST /auth/internal/login
+      - POST /auth/internal/logout
+      - GET /auth/me
+      - POST /auth/internal/change-password
+      - POST /auth/mfa/enroll/start
+      - POST /auth/mfa/enroll/confirm
+  - Existing SSO flow remains:
+      - GET /auth/login
+      - GET /auth/callback
+  - SSO callback now creates a real authenticated session cookie as well.
+
+  ### 2. Login UX behavior to implement
+
+  - After first bootstrap login, backend returns force_password_change: true.
+  - UI should force password update before normal use.
+  - MFA is optional initially:
+      - backend returns mfa_prompt: true when MFA is not enabled.
+      - if user enables MFA, it becomes mandatory on future logins.
+  - If MFA is enabled, login without mfa_code returns 401.
+
+  ### 3. RBAC is now active (not just master-key auth)
+
+  - Admin APIs can now be accessed by:
+      - valid master key, or
+      - authenticated session with sufficient RBAC permissions.
+  - Platform roles and membership-based checks are enforced on selected org/team routes.
+  - No org-to-team inheritance (explicitly implemented as requested).
+
+  ### 4. New RBAC management APIs (for admin UI)
+
+  - GET /ui/api/rbac/accounts
+  - POST /ui/api/rbac/accounts
+  - GET /ui/api/rbac/organization-memberships
+  - POST /ui/api/rbac/organization-memberships
+  - GET /ui/api/rbac/team-memberships
+  - POST /ui/api/rbac/team-memberships
+
+  These let frontend build:
+
+  - platform account administration
+  - org membership assignment
+  - team membership assignment
+
+  ### 5. Existing admin APIs kept, with updated authorization behavior
+
+  - Existing paths remain (orgs/teams/users/keys/config/guardrails).
+  - Some routes now require scoped permissions rather than only platform-wide access.
+  - Added scoped read routes:
+      - GET /ui/api/organizations/{organization_id}
+      - GET /ui/api/teams/{team_id}
+
+  ### 6. GET /auth/me response fields frontend should use
+
+  - authenticated
+  - account_id
+  - email
+  - role
+  - mfa_enabled
+  - mfa_verified
+  - mfa_prompt
+  - force_password_change
+
+  ### 7. What changed in practical UI terms
+
+  - Frontend should move from “master-key-only admin auth” to session-based auth flow.
+  - Add screens/flows for:
+      - internal login
+      - forced password change
+      - optional MFA enrollment prompt
+      - RBAC account and membership management
+  - Keep current SSO entry flow; now treat callback as session login completion.

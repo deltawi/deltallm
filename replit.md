@@ -30,14 +30,27 @@ DeltaLLM is an open-source LLM gateway/proxy (similar to LiteLLM) that provides 
 - `src/cache/` - Response caching (memory, Redis, S3)
 - `src/middleware/` - Auth, rate limiting, error handling
 
+### Authentication & RBAC
+- **Auth modes**: Session-based (cookie) login with email/password AND master key fallback
+- **Session cookie**: `deltallm_session` (HttpOnly, set by backend)
+- **Auth endpoints**: `/auth/internal/login`, `/auth/internal/logout`, `/auth/me`, `/auth/internal/change-password`, `/auth/mfa/enroll/start`, `/auth/mfa/enroll/confirm`
+- **SSO flow**: `/auth/login` + `/auth/callback`
+- **Platform roles**: `platform_admin`, `platform_co_admin`, `org_user`
+- **Org roles**: `org_member`, `org_owner`, `org_admin`, `org_billing`, `org_auditor`
+- **Team roles**: `team_admin`, `team_developer`, `team_viewer`
+- **RBAC APIs**: `/ui/api/rbac/accounts`, `/ui/api/rbac/organization-memberships`, `/ui/api/rbac/team-memberships`
+- **Auth flow**: Login -> Force password change (if required) -> MFA enrollment prompt (optional) -> Dashboard
+
 ### Admin UI Pages
 - **Dashboard**: Overview stats, daily spend chart, model usage pie chart
 - **Models**: CRUD for model deployments/providers
 - **API Keys**: Create, edit, revoke, regenerate keys with budget controls
-- **Teams**: Team management with member management
-- **Users**: User management with block/unblock
+- **Organizations**: Organization management with RPM/TPM rate limits
+- **Teams**: Team management with member management and rate limits
+- **Users**: User management with block/unblock and rate limits
 - **Usage**: Spend analytics with daily trends, per-model/key/team breakdowns, request logs
 - **Guardrails**: Configure content safety policies
+- **Access Control**: Platform account management, org/team membership assignment with roles
 - **Settings**: Routing strategy, caching, health checks
 
 ### Running Locally
@@ -59,6 +72,13 @@ DeltaLLM is an open-source LLM gateway/proxy (similar to LiteLLM) that provides 
 - Type: VM deployment (needs Redis running alongside)
 
 ## Recent Changes
+- Added session-based auth (email/password login) alongside existing master key auth
+- Implemented force password change flow and optional MFA enrollment (TOTP)
+- Created Access Control page for RBAC: platform accounts, org memberships, team memberships
+- Updated Login page with tabbed Email Login / Master Key interface
+- Updated AuthProvider to support dual-mode auth (session cookie + master key)
+- Added API layer for auth endpoints and RBAC management endpoints
+- Updated Layout sidebar with user info display and Access Control nav item
 - Built complete admin dashboard UI from scratch for v2-revamp branch
 - Set up backend with PostgreSQL database, Redis, and Prisma ORM
 - Fixed API key creation bug (missing UUID generation in raw SQL insert)
