@@ -10,6 +10,16 @@ from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+ModelMode = Literal[
+    "chat",
+    "embedding",
+    "image_generation",
+    "audio_speech",
+    "audio_transcription",
+    "rerank",
+]
+
+
 class LiteLLMParams(BaseModel):
     model: str
     api_key: str | None = None
@@ -19,17 +29,29 @@ class LiteLLMParams(BaseModel):
     rpm: int | None = None
     tpm: int | None = None
     weight: int = 1
+    stream_timeout: int | None = None
+    max_tokens: int | None = None
 
 
 class ModelInfo(BaseModel):
+    mode: ModelMode = "chat"
     weight: int = 1
     priority: int = 0
     tags: list[str] = Field(default_factory=list)
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    input_cost_per_character: float | None = None
+    input_cost_per_second: float | None = None
+    input_cost_per_image: float | None = None
+    output_cost_per_image: float | None = None
+    input_cost_per_audio_token: float | None = None
+    output_cost_per_audio_token: float | None = None
+    output_vector_size: int | None = None
     rpm_limit: int | None = None
     tpm_limit: int | None = None
     max_tokens: int | None = None
+    max_input_tokens: int | None = None
+    max_output_tokens: int | None = None
 
 
 class ModelDeployment(BaseModel):

@@ -10,3 +10,4 @@ prometheus-client>=0.20,<1.0
 PyJWT[crypto]>=2.8,<3.0
 pytest>=7.4,<9.0
 pytest-asyncio>=0.23,<1.0
+python-multipart

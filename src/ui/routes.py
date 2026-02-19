@@ -51,6 +51,7 @@ def _model_entries(app: Any) -> list[dict[str, Any]]:
                     "deployment_id": deployment_id,
                     "model_name": model_name,
                     "provider": str(params.get("model", "")).split("/")[0] or "unknown",
+                    "mode": model_info.get("mode", "chat"),
                     "litellm_params": params,
                     "model_info": model_info,
                 }

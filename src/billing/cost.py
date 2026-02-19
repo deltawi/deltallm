@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Any, Mapping
 
 
 @dataclass(frozen=True)
@@ -98,3 +98,40 @@ def completion_cost(
 
     total_cost = prompt_cost + output_cost + pricing.cost_per_request
     return round(total_cost, 10)
+
+
+def compute_cost(
+    *,
+    mode: str,
+    usage: Mapping[str, Any],
+    model_info: Mapping[str, Any] | None = None,
+) -> float:
+    info = dict(model_info or {})
+
+    if mode == "chat" or mode == "embedding" or mode == "rerank":
+        input_cost = float(info.get("input_cost_per_token") or 0)
+        output_cost = float(info.get("output_cost_per_token") or 0)
+        prompt_tokens = max(0, int(usage.get("prompt_tokens", 0) or 0))
+        completion_tokens = max(0, int(usage.get("completion_tokens", 0) or 0))
+        return round(prompt_tokens * input_cost + completion_tokens * output_cost, 10)
+
+    if mode == "image_generation":
+        cost_per_image = float(info.get("input_cost_per_image") or 0)
+        num_images = max(0, int(usage.get("images", 1) or 1))
+        return round(num_images * cost_per_image, 10)
+
+    if mode == "audio_speech":
+        cost_per_char = float(info.get("input_cost_per_character") or 0)
+        characters = max(0, int(usage.get("characters", 0) or 0))
+        if cost_per_char > 0:
+            return round(characters * cost_per_char, 10)
+        cost_per_audio_token = float(info.get("input_cost_per_audio_token") or 0)
+        audio_tokens = max(0, int(usage.get("audio_tokens", 0) or 0))
+        return round(audio_tokens * cost_per_audio_token, 10)
+
+    if mode == "audio_transcription":
+        cost_per_second = float(info.get("input_cost_per_second") or 0)
+        duration = max(0, float(usage.get("duration_seconds", 0) or 0))
+        return round(duration * cost_per_second, 10)
+
+    return 0.0
