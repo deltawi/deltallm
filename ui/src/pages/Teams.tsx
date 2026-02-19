@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
-import { teams } from '../lib/api';
+import { teams, organizations } from '../lib/api';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import Modal from '../components/Modal';
@@ -31,6 +31,7 @@ function RateLimit({ value, unit }: { value: number | null | undefined; unit: st
 export default function Teams() {
   const navigate = useNavigate();
   const { data, loading, refetch } = useApi(() => teams.list(), []);
+  const { data: orgList } = useApi(() => organizations.list(), []);
   const [showCreate, setShowCreate] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
   const [selectedTeam, setSelectedTeam] = useState<any>(null);
@@ -143,8 +144,13 @@ export default function Teams() {
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Organization ID</label>
-              <input value={form.organization_id} onChange={(e) => setForm({ ...form, organization_id: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <label className="block text-sm font-medium text-gray-700 mb-1">Organization <span className="text-red-500">*</span></label>
+              <select value={form.organization_id} onChange={(e) => setForm({ ...form, organization_id: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+                <option value="">Select an organization</option>
+                {(orgList || []).map((org: any) => (
+                  <option key={org.organization_id} value={org.organization_id}>{org.organization_name || org.organization_id}</option>
+                ))}
+              </select>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Max Budget ($)</label>
@@ -169,7 +175,7 @@ export default function Teams() {
           </div>
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => { setShowCreate(false); setEditItem(null); resetForm(); }} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-            <button onClick={handleSave} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">{editItem ? 'Save Changes' : 'Create Team'}</button>
+            <button onClick={handleSave} disabled={!form.organization_id} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">{editItem ? 'Save Changes' : 'Create Team'}</button>
           </div>
         </div>
       </Modal>
