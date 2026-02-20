@@ -34,7 +34,10 @@ DeltaLLM is an open-source LLM gateway/proxy (similar to LiteLLM) that provides 
 - **Auth modes**: Session-based (cookie) login with email/password AND master key fallback
 - **Session cookie**: `deltallm_session` (HttpOnly, set by backend)
 - **Auth endpoints**: `/auth/internal/login`, `/auth/internal/logout`, `/auth/me`, `/auth/internal/change-password`, `/auth/mfa/enroll/start`, `/auth/mfa/enroll/confirm`
-- **SSO flow**: `/auth/login` + `/auth/callback`
+- **SSO config**: `/auth/sso-config` (public, returns `{sso_enabled, provider}`)
+- **SSO flow**: `/auth/login` (stores state server-side) + `/auth/callback` (validates state, sets cookie, redirects to `/`)
+- **SSO providers**: Microsoft Entra, Google, Okta, Generic OIDC
+- **SSO UI**: Login page conditionally shows SSO tab when `enable_sso: true` in config
 - **Platform roles**: `platform_admin`, `platform_co_admin`, `org_user`
 - **Org roles**: `org_member`, `org_owner`, `org_admin`, `org_billing`, `org_auditor`
 - **Team roles**: `team_admin`, `team_developer`, `team_viewer`
