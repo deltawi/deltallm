@@ -1,9 +1,17 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { FormEvent } from 'react';
 import { useAuth } from '../lib/auth';
-import { Zap, Mail, KeyRound } from 'lucide-react';
+import { auth as authApi } from '../lib/api';
+import { Zap, Mail, KeyRound, Globe } from 'lucide-react';
 
-type Tab = 'credentials' | 'master_key';
+type Tab = 'credentials' | 'master_key' | 'sso';
+
+const SSO_PROVIDER_LABELS: Record<string, string> = {
+  microsoft: 'Microsoft',
+  google: 'Google',
+  okta: 'Okta',
+  oidc: 'SSO',
+};
 
 export default function Login() {
   const { loginWithCredentials, loginWithMasterKey, isLoading } = useAuth();
@@ -19,7 +27,23 @@ export default function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  if (isLoading) {
+  const [ssoEnabled, setSsoEnabled] = useState(false);
+  const [ssoProvider, setSsoProvider] = useState('oidc');
+  const [ssoLoading, setSsoLoading] = useState(true);
+
+  useEffect(() => {
+    authApi.ssoConfig()
+      .then((cfg) => {
+        setSsoEnabled(cfg.sso_enabled);
+        if (cfg.provider) setSsoProvider(cfg.provider);
+      })
+      .catch(() => {
+        setSsoEnabled(false);
+      })
+      .finally(() => setSsoLoading(false));
+  }, []);
+
+  if (isLoading || ssoLoading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
@@ -65,6 +89,29 @@ export default function Login() {
     }
   };
 
+  const handleSsoLogin = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const state = crypto.randomUUID();
+      const { authorize_url } = await authApi.ssoLogin(state);
+      window.location.href = authorize_url;
+    } catch (err: any) {
+      setError(err?.message || 'Failed to start SSO login');
+      setLoading(false);
+    }
+  };
+
+  const providerLabel = SSO_PROVIDER_LABELS[ssoProvider] || 'SSO';
+
+  const tabs: { key: Tab; label: string; icon: typeof Mail }[] = [
+    { key: 'credentials', label: 'Email Login', icon: Mail },
+  ];
+  if (ssoEnabled) {
+    tabs.push({ key: 'sso', label: providerLabel, icon: Globe });
+  }
+  tabs.push({ key: 'master_key', label: 'Master Key', icon: KeyRound });
+
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
       <div className="max-w-md w-full">
@@ -78,28 +125,20 @@ export default function Login() {
 
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
           <div className="flex border-b border-gray-200">
-            <button
-              onClick={() => { setTab('credentials'); setError(''); }}
-              className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-medium transition-colors ${
-                tab === 'credentials'
-                  ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50/50'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              <Mail className="w-4 h-4" />
-              Email Login
-            </button>
-            <button
-              onClick={() => { setTab('master_key'); setError(''); }}
-              className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-medium transition-colors ${
-                tab === 'master_key'
-                  ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50/50'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              <KeyRound className="w-4 h-4" />
-              Master Key
-            </button>
+            {tabs.map((t) => (
+              <button
+                key={t.key}
+                onClick={() => { setTab(t.key); setError(''); }}
+                className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-medium transition-colors ${
+                  tab === t.key
+                    ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50/50'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                <t.icon className="w-4 h-4" />
+                {t.label}
+              </button>
+            ))}
           </div>
 
           <div className="p-6">
@@ -109,7 +148,7 @@ export default function Login() {
               </div>
             )}
 
-            {tab === 'credentials' ? (
+            {tab === 'credentials' && (
               <form onSubmit={handleCredentialLogin}>
                 <div className="mb-4">
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">Email</label>
@@ -155,7 +194,25 @@ export default function Login() {
                   {loading ? 'Signing in...' : 'Sign In'}
                 </button>
               </form>
-            ) : (
+            )}
+
+            {tab === 'sso' && (
+              <div className="space-y-4">
+                <p className="text-sm text-gray-600 text-center">
+                  Sign in with your organization's {providerLabel} identity provider.
+                </p>
+                <button
+                  onClick={handleSsoLogin}
+                  disabled={loading}
+                  className="w-full bg-blue-600 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  <Globe className="w-4 h-4" />
+                  {loading ? 'Redirecting...' : `Sign In with ${providerLabel}`}
+                </button>
+              </div>
+            )}
+
+            {tab === 'master_key' && (
               <form onSubmit={handleMasterKeyLogin}>
                 <div className="mb-4">
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">Master Key</label>

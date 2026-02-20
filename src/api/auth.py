@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from src.middleware.platform_auth import SESSION_COOKIE_NAME, get_platform_auth_context
 from src.auth.roles import TeamRole
@@ -147,8 +147,31 @@ async def internal_change_password(request: Request, payload: ChangePasswordRequ
     return {"changed": True}
 
 
+@router.get("/sso-config")
+async def sso_config(request: Request):
+    handler = getattr(request.app.state, "sso_auth_handler", None)
+    if handler is None:
+        return {"sso_enabled": False}
+    app_config = getattr(request.app.state, "app_config", None)
+    provider = str(getattr(getattr(app_config, "general_settings", None), "sso_provider", "oidc"))
+    return {"sso_enabled": True, "provider": provider}
+
+
+_sso_pending_states: dict[str, float] = {}
+_SSO_STATE_TTL_SECONDS = 600
+
+
+def _cleanup_expired_states() -> None:
+    import time
+    now = time.time()
+    expired = [k for k, v in _sso_pending_states.items() if now - v > _SSO_STATE_TTL_SECONDS]
+    for k in expired:
+        _sso_pending_states.pop(k, None)
+
+
 @router.get("/login")
 async def auth_login(request: Request, state: str = Query(default="")):
+    import time
     handler = getattr(request.app.state, "sso_auth_handler", None)
     if handler is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="SSO is not enabled")
@@ -156,17 +179,28 @@ async def auth_login(request: Request, state: str = Query(default="")):
     if not state:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing state")
 
+    _cleanup_expired_states()
+    _sso_pending_states[state] = time.time()
+
     return {"authorize_url": handler.get_authorize_url(state)}
 
 
 @router.get("/callback")
-async def auth_callback(request: Request, code: str = Query(default=""), state: str | None = Query(default=None)) -> Response:
+async def auth_callback(request: Request, code: str = Query(default=""), state: str = Query(default="")) -> Response:
     handler = getattr(request.app.state, "sso_auth_handler", None)
     if handler is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="SSO is not enabled")
 
     if not code:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing code")
+
+    if not state:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing state")
+
+    _cleanup_expired_states()
+    if state not in _sso_pending_states:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired SSO state")
+    _sso_pending_states.pop(state, None)
 
     response_payload = await handler.handle_callback(code)
     email = response_payload.get("email")
@@ -194,16 +228,7 @@ async def auth_callback(request: Request, code: str = Query(default=""), state: 
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to establish session")
 
     ttl = int(getattr(getattr(app_config, "general_settings", None), "auth_session_ttl_hours", 12) * 3600)
-    response_data = {
-        "account_id": login.context.account_id,
-        "email": login.context.email,
-        "role": login.context.role,
-        "mfa_enabled": login.context.mfa_enabled,
-        "mfa_prompt": login.mfa_prompt,
-    }
-    if state is not None:
-        response_data["state"] = state
 
-    response = JSONResponse(status_code=status.HTTP_200_OK, content=response_data)
+    response = RedirectResponse(url="/", status_code=302)
     _set_session_cookie(response, login.session_token, ttl)
     return response
