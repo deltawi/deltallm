@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { models } from '../lib/api';
 import Card from '../components/Card';
@@ -75,6 +76,7 @@ function strOrEmpty(val: any): string {
 }
 
 export default function Models() {
+  const navigate = useNavigate();
   const { data, loading, refetch } = useApi(() => models.list(), []);
   const [showCreate, setShowCreate] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
@@ -139,9 +141,7 @@ export default function Models() {
         else dp[p.key.trim()] = v;
       }
     }
-    if (Object.keys(dp).length > 0) {
-      model_info.default_params = dp;
-    }
+    model_info.default_params = Object.keys(dp).length > 0 ? dp : {};
 
     return { model_name: form.model_name, litellm_params, model_info };
   };
@@ -251,7 +251,7 @@ export default function Models() {
     { key: 'healthy', header: 'Health', render: (r: any) => <StatusBadge status={r.healthy ? 'healthy' : 'unhealthy'} /> },
     {
       key: 'actions', header: '', render: (r: any) => (
-        <div className="flex gap-1">
+        <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
           <button onClick={() => openEdit(r)} className="p-1.5 hover:bg-gray-100 rounded-lg"><Pencil className="w-4 h-4 text-gray-500" /></button>
           <button onClick={() => handleDelete(r.deployment_id)} className="p-1.5 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4 text-red-500" /></button>
         </div>
@@ -274,7 +274,7 @@ export default function Models() {
         </button>
       </div>
       <Card>
-        <DataTable columns={columns} data={data || []} loading={loading} emptyMessage="No models configured" />
+        <DataTable columns={columns} data={data || []} loading={loading} emptyMessage="No models configured" onRowClick={(row) => navigate(`/models/${row.deployment_id}`)} />
       </Card>
 
       <Modal open={showCreate || !!editItem} onClose={closeModal} title={editItem ? 'Edit Model' : 'Add Model'}>

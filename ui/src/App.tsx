@@ -16,6 +16,7 @@ import SettingsPage from './pages/SettingsPage';
 import RBACAccounts from './pages/RBACAccounts';
 import OrganizationDetail from './pages/OrganizationDetail';
 import TeamDetail from './pages/TeamDetail';
+import ModelDetail from './pages/ModelDetail';
 
 function AppRoutes() {
   const { isAuthenticated, isLoading, session, authMode, mfaSkipped } = useAuth();
@@ -47,6 +48,7 @@ function AppRoutes() {
       <Route element={<Layout />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/models" element={<Models />} />
+        <Route path="/models/:deploymentId" element={<ModelDetail />} />
         <Route path="/keys" element={<ApiKeys />} />
         <Route path="/organizations" element={<Organizations />} />
         <Route path="/organizations/:orgId" element={<OrganizationDetail />} />

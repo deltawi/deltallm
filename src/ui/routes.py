@@ -92,6 +92,21 @@ async def list_models(request: Request) -> list[dict[str, Any]]:
     return entries
 
 
+@ui_router.get("/ui/api/models/{deployment_id}", dependencies=[Depends(require_authenticated)])
+async def get_model(request: Request, deployment_id: str) -> dict[str, Any]:
+    health_backend = getattr(request.app.state, "router_state_backend", None)
+    entries = _model_entries(request.app)
+    for entry in entries:
+        if entry["deployment_id"] == deployment_id:
+            healthy = True
+            if health_backend is not None:
+                health = await health_backend.get_health(deployment_id)
+                healthy = str(health.get("healthy", "true")) != "false"
+            entry["healthy"] = healthy
+            return entry
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
+
+
 @ui_router.post("/ui/api/models", dependencies=[Depends(require_master_key)])
 async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     model_name = str(payload.get("model_name") or "").strip()
