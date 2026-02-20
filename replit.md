@@ -98,6 +98,12 @@ DeltaLLM is an open-source LLM gateway/proxy (similar to LiteLLM) that provides 
 - Added master key auth fallback to proxy endpoints (chat, audio, etc.) via `_is_master_key()` in auth middleware
 - Chat cost calculation now uses deployment-level pricing from model_info instead of only static cost map
 - Prisma schema updated to remove litellm_spendlogs FK to litellm_verificationtoken
+- Added default_params feature: per-deployment default parameters injected into upstream provider requests
+  - `src/routers/utils.py`: `apply_default_params()` helper merges defaults (user values take precedence)
+  - `src/config.py`: `ModelInfo.default_params` field added for persistence
+  - All 6 routers (chat, embeddings, images, TTS, STT, rerank) call `apply_default_params()` before provider request
+  - TTS router uses `exclude_unset=True` instead of `exclude_none=True` to avoid pydantic defaults overriding model defaults
+  - UI Models page has key-value editor for default_params with type coercion (boolean, number, string)
 
 ## User Preferences
 - None recorded yet
