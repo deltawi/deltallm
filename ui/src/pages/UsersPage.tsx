@@ -117,9 +117,11 @@ export default function UsersPage() {
           <h1 className="text-2xl font-bold text-gray-900">Users</h1>
           <p className="text-sm text-gray-500 mt-1">Manage users, permissions, and rate limits</p>
         </div>
-        <button onClick={() => { resetForm(); setShowCreate(true); }} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
-          <Plus className="w-4 h-4" /> Add User
-        </button>
+        {isPlatformAdmin && (
+          <button onClick={() => { resetForm(); setShowCreate(true); }} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
+            <Plus className="w-4 h-4" /> Add User
+          </button>
+        )}
       </div>
       <Card>
         <DataTable columns={columns} data={data || []} loading={loading} emptyMessage="No users found" />
