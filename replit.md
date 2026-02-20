@@ -104,6 +104,11 @@ DeltaLLM is an open-source LLM gateway/proxy (similar to LiteLLM) that provides 
   - All 6 routers (chat, embeddings, images, TTS, STT, rerank) call `apply_default_params()` before provider request
   - TTS router uses `exclude_unset=True` instead of `exclude_none=True` to avoid pydantic defaults overriding model defaults
   - UI Models page has key-value editor for default_params with type coercion (boolean, number, string)
+- RBAC permission enforcement hardened across all admin API endpoints:
+  - `get_auth_scope()` now accepts `required_permission` to filter org/team IDs by role permissions (prevents privilege escalation)
+  - `ORG_ROLE_PERMISSIONS` expanded: org_owner/org_admin now have KEY_READ/UPDATE/REVOKE, USER_READ/UPDATE; org_billing has KEY_READ; org_auditor has KEY_READ, USER_READ
+  - All inline-scoped endpoints pass appropriate required_permission (KEY_READ for list_keys, KEY_UPDATE for create/update/delete keys, etc.)
+  - Keys update/delete changed from PLATFORM_ADMIN-only to inline scoped auth (consistent with create/regenerate/revoke)
 
 ## User Preferences
 - None recorded yet
