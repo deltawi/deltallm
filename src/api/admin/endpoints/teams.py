@@ -64,7 +64,7 @@ async def list_teams(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> list[dict[str, Any]]:
-    scope = get_auth_scope(request, authorization, x_master_key)
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.TEAM_READ)
     db = db_or_503(request)
 
     if scope.is_platform_admin:
@@ -116,7 +116,7 @@ async def create_team(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key)
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.TEAM_UPDATE)
     organization_id = payload.get("organization_id")
     if not organization_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="organization_id is required")

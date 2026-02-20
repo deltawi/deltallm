@@ -15,7 +15,12 @@ class AuthScope:
     team_ids: list[str] = field(default_factory=list)
 
 
-def get_auth_scope(request: Request, authorization: str | None = None, x_master_key: str | None = None) -> AuthScope:
+def get_auth_scope(
+    request: Request,
+    authorization: str | None = None,
+    x_master_key: str | None = None,
+    required_permission: str | None = None,
+) -> AuthScope:
     configured = None
     app_config = getattr(request.app.state, "app_config", None)
     if app_config is not None:
@@ -32,7 +37,7 @@ def get_auth_scope(request: Request, authorization: str | None = None, x_master_
         return AuthScope(is_platform_admin=True)
 
     from src.middleware.platform_auth import get_platform_auth_context
-    from src.auth.roles import has_platform_permission, Permission as Perm
+    from src.auth.roles import has_platform_permission, Permission as Perm, ORG_ROLE_PERMISSIONS, TEAM_ROLE_PERMISSIONS
 
     context = get_platform_auth_context(request)
     if context is None:
@@ -41,8 +46,22 @@ def get_auth_scope(request: Request, authorization: str | None = None, x_master_
     if has_platform_permission(context.role, Perm.PLATFORM_ADMIN):
         return AuthScope(is_platform_admin=True)
 
-    org_ids = [str(m.get("organization_id")) for m in context.organization_memberships if m.get("organization_id")]
-    team_ids = [str(m.get("team_id")) for m in context.team_memberships if m.get("team_id")]
+    if required_permission:
+        org_ids = [
+            str(m.get("organization_id"))
+            for m in context.organization_memberships
+            if m.get("organization_id")
+            and required_permission in ORG_ROLE_PERMISSIONS.get(str(m.get("role") or ""), set())
+        ]
+        team_ids = [
+            str(m.get("team_id"))
+            for m in context.team_memberships
+            if m.get("team_id")
+            and required_permission in TEAM_ROLE_PERMISSIONS.get(str(m.get("role") or ""), set())
+        ]
+    else:
+        org_ids = [str(m.get("organization_id")) for m in context.organization_memberships if m.get("organization_id")]
+        team_ids = [str(m.get("team_id")) for m in context.team_memberships if m.get("team_id")]
 
     return AuthScope(is_platform_admin=False, org_ids=org_ids, team_ids=team_ids)
 

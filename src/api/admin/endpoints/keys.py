@@ -3,11 +3,10 @@ from __future__ import annotations
 import secrets
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Header, HTTPException, Request, status
 
 from src.auth.roles import Permission
 from src.api.admin.endpoints.common import db_or_503, to_json_value, get_auth_scope
-from src.middleware.admin import require_admin_permission
 
 router = APIRouter(tags=["Admin Keys"])
 
@@ -18,7 +17,7 @@ async def list_keys(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> list[dict[str, Any]]:
-    scope = get_auth_scope(request, authorization, x_master_key)
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
     db = db_or_503(request)
 
     if scope.is_platform_admin:
@@ -54,7 +53,7 @@ async def create_key(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key)
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
     db = db_or_503(request)
 
     key_name = payload.get("key_name")
@@ -115,9 +114,17 @@ async def create_key(
     }
 
 
-@router.put("/ui/api/keys/{token_hash}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
-async def update_key(request: Request, token_hash: str, payload: dict[str, Any]) -> dict[str, Any]:
+@router.put("/ui/api/keys/{token_hash}")
+async def update_key(
+    request: Request,
+    token_hash: str,
+    payload: dict[str, Any],
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
     db = db_or_503(request)
+    await _require_key_access(scope, db, token_hash)
     rows = await db.query_raw(
         """
         SELECT token, key_name, user_id, team_id, models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at
@@ -207,7 +214,7 @@ async def regenerate_key(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key)
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
     db = db_or_503(request)
     await _require_key_access(scope, db, token_hash)
 
@@ -232,15 +239,22 @@ async def revoke_key(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, bool]:
-    scope = get_auth_scope(request, authorization, x_master_key)
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_REVOKE)
     db = db_or_503(request)
     await _require_key_access(scope, db, token_hash)
     deleted = await db.execute_raw("DELETE FROM litellm_verificationtoken WHERE token = $1", token_hash)
     return {"revoked": int(deleted or 0) > 0}
 
 
-@router.delete("/ui/api/keys/{token_hash}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
-async def delete_key(request: Request, token_hash: str) -> dict[str, bool]:
+@router.delete("/ui/api/keys/{token_hash}")
+async def delete_key(
+    request: Request,
+    token_hash: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, bool]:
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
     db = db_or_503(request)
+    await _require_key_access(scope, db, token_hash)
     deleted = await db.execute_raw("DELETE FROM litellm_verificationtoken WHERE token = $1", token_hash)
     return {"deleted": int(deleted or 0) > 0}

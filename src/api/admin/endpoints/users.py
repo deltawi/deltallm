@@ -18,7 +18,7 @@ async def list_users(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> list[dict[str, Any]]:
-    scope = get_auth_scope(request, authorization, x_master_key)
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.USER_READ)
     db = db_or_503(request)
 
     if team_id:
