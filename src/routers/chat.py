@@ -45,6 +45,9 @@ async def _execute_chat(
     api_base = params.get("api_base", request.app.state.settings.openai_base_url).rstrip("/")
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
+    from src.routers.utils import apply_default_params
+    apply_default_params(upstream_payload, deployment.model_info)
+
     await request.app.state.router_state_backend.increment_active(deployment.deployment_id)
     upstream_start = perf_counter()
     try:

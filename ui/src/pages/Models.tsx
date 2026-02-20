@@ -5,7 +5,7 @@ import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import StatusBadge from '../components/StatusBadge';
 import Modal from '../components/Modal';
-import { Plus, Pencil, Trash2, MessageSquare, FileText, Image, Mic, Volume2, ArrowUpDown } from 'lucide-react';
+import { Plus, Pencil, Trash2, MessageSquare, FileText, Image, Mic, Volume2, ArrowUpDown, X } from 'lucide-react';
 
 type ModelMode = 'chat' | 'embedding' | 'image_generation' | 'audio_speech' | 'audio_transcription' | 'rerank';
 
@@ -79,6 +79,7 @@ export default function Models() {
   const [showCreate, setShowCreate] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
   const [form, setForm] = useState<FormState>({ ...emptyForm });
+  const [defaultParams, setDefaultParams] = useState<{ key: string; value: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -128,6 +129,20 @@ export default function Models() {
       model_info.input_cost_per_token = numOrUndef(form.input_cost_per_token);
     }
 
+    const dp: Record<string, any> = {};
+    for (const p of defaultParams) {
+      if (p.key.trim()) {
+        const v = p.value.trim();
+        if (v === 'true') dp[p.key.trim()] = true;
+        else if (v === 'false') dp[p.key.trim()] = false;
+        else if (v !== '' && !isNaN(Number(v)) && v !== '') dp[p.key.trim()] = Number(v);
+        else dp[p.key.trim()] = v;
+      }
+    }
+    if (Object.keys(dp).length > 0) {
+      model_info.default_params = dp;
+    }
+
     return { model_name: form.model_name, litellm_params, model_info };
   };
 
@@ -138,6 +153,7 @@ export default function Models() {
       await models.create(buildPayload());
       setShowCreate(false);
       setForm({ ...emptyForm });
+      setDefaultParams([]);
       refetch();
     } catch (err: any) {
       setError(err?.message || 'Failed to create model');
@@ -154,6 +170,7 @@ export default function Models() {
       await models.update(editItem.deployment_id, buildPayload());
       setEditItem(null);
       setForm({ ...emptyForm });
+      setDefaultParams([]);
       refetch();
     } catch (err: any) {
       setError(err?.message || 'Failed to update model');
@@ -202,6 +219,12 @@ export default function Models() {
       input_cost_per_audio_token: strOrEmpty(mi.input_cost_per_audio_token),
       output_cost_per_audio_token: strOrEmpty(mi.output_cost_per_audio_token),
     });
+    const existingDefaults = mi.default_params;
+    if (existingDefaults && typeof existingDefaults === 'object') {
+      setDefaultParams(Object.entries(existingDefaults).map(([key, value]) => ({ key, value: String(value) })));
+    } else {
+      setDefaultParams([]);
+    }
     setError(null);
     setEditItem(row);
   };
@@ -246,7 +269,7 @@ export default function Models() {
           <h1 className="text-2xl font-bold text-gray-900">Models</h1>
           <p className="text-sm text-gray-500 mt-1">Manage model deployments and providers</p>
         </div>
-        <button onClick={() => { setForm({ ...emptyForm }); setError(null); setShowCreate(true); }} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
+        <button onClick={() => { setForm({ ...emptyForm }); setDefaultParams([]); setError(null); setShowCreate(true); }} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
           <Plus className="w-4 h-4" /> Add Model
         </button>
       </div>
@@ -452,6 +475,47 @@ export default function Models() {
               </div>
             </>
           )}
+
+          <SectionLabel>Default Parameters</SectionLabel>
+          <p className="text-xs text-gray-400">Default values injected into provider requests when not specified by the caller (e.g. voice, response_format)</p>
+          {defaultParams.map((param, idx) => (
+            <div key={idx} className="flex items-center gap-2">
+              <input
+                value={param.key}
+                onChange={(e) => {
+                  const updated = [...defaultParams];
+                  updated[idx] = { ...updated[idx], key: e.target.value };
+                  setDefaultParams(updated);
+                }}
+                placeholder="Key (e.g. voice)"
+                className={`flex-1 ${inputClass}`}
+              />
+              <input
+                value={param.value}
+                onChange={(e) => {
+                  const updated = [...defaultParams];
+                  updated[idx] = { ...updated[idx], value: e.target.value };
+                  setDefaultParams(updated);
+                }}
+                placeholder="Value (e.g. alloy)"
+                className={`flex-1 ${inputClass}`}
+              />
+              <button
+                type="button"
+                onClick={() => setDefaultParams(defaultParams.filter((_, i) => i !== idx))}
+                className="p-2 hover:bg-red-50 rounded-lg"
+              >
+                <X className="w-4 h-4 text-red-400" />
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() => setDefaultParams([...defaultParams, { key: '', value: '' }])}
+            className="flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-700 font-medium"
+          >
+            <Plus className="w-3.5 h-3.5" /> Add Default Parameter
+          </button>
 
           {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>}
           <div className="flex justify-end gap-3 pt-2">

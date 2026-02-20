@@ -52,6 +52,7 @@ class ModelInfo(BaseModel):
     max_tokens: int | None = None
     max_input_tokens: int | None = None
     max_output_tokens: int | None = None
+    default_params: dict[str, Any] | None = None
 
 
 class ModelDeployment(BaseModel):

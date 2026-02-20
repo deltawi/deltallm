@@ -63,6 +63,9 @@ async def rerank(request: Request, payload: RerankRequest):
     if upstream_model and "/" in upstream_model:
         upstream_payload["model"] = upstream_model.split("/", 1)[1]
 
+    from src.routers.utils import apply_default_params
+    apply_default_params(upstream_payload, model_info)
+
     try:
         upstream_start = perf_counter()
         response = await request.app.state.http_client.post(

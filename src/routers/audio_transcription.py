@@ -69,15 +69,21 @@ async def audio_transcriptions(
     upstream_model = params.get("model")
     form_model = upstream_model.split("/", 1)[1] if upstream_model and "/" in upstream_model else model
 
-    form_data: dict[str, Any] = {"model": (None, form_model)}
+    from src.routers.utils import apply_default_params
+    _stt_defaults: dict[str, Any] = {"model": form_model}
     if language:
-        form_data["language"] = (None, language)
+        _stt_defaults["language"] = language
     if prompt:
-        form_data["prompt"] = (None, prompt)
+        _stt_defaults["prompt"] = prompt
     if response_format:
-        form_data["response_format"] = (None, response_format)
+        _stt_defaults["response_format"] = response_format
     if temperature is not None:
-        form_data["temperature"] = (None, str(temperature))
+        _stt_defaults["temperature"] = str(temperature)
+    apply_default_params(_stt_defaults, model_info)
+
+    form_data: dict[str, Any] = {}
+    for _fk, _fv in _stt_defaults.items():
+        form_data[_fk] = (None, str(_fv) if _fv is not None else None)
 
     try:
         upstream_start = perf_counter()

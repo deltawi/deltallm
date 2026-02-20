@@ -68,10 +68,13 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
     request_id = request.headers.get("x-request-id")
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
-    upstream_payload = payload.model_dump(exclude_none=True)
+    upstream_payload = payload.model_dump(exclude_unset=True)
     upstream_model = params.get("model")
     if upstream_model and "/" in upstream_model:
         upstream_payload["model"] = upstream_model.split("/", 1)[1]
+
+    from src.routers.utils import apply_default_params
+    apply_default_params(upstream_payload, model_info)
 
     try:
         upstream_start = perf_counter()
@@ -128,7 +131,8 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
             turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
         )
         callback_manager.dispatch_success_callbacks(callback_payload)
-        content_type = AUDIO_CONTENT_TYPES.get(payload.response_format or "mp3", "audio/mpeg")
+        effective_format = upstream_payload.get("response_format") or payload.response_format or "mp3"
+        content_type = AUDIO_CONTENT_TYPES.get(effective_format, "audio/mpeg")
         return Response(content=audio_bytes, media_type=content_type)
     except httpx.HTTPError as exc:
         status_code = getattr(getattr(exc, "response", None), "status_code", 502)

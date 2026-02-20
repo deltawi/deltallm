@@ -74,6 +74,10 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
     if upstream_model and "/" in upstream_model:
         upstream_payload["model"] = upstream_model.split("/", 1)[1]
 
+    from src.routers.utils import apply_default_params
+    model_info = deployment.get("model_info", {})
+    apply_default_params(upstream_payload, model_info)
+
     try:
         await request.app.state.router_state_backend.increment_active(deployment_id)
         upstream_start = perf_counter()
