@@ -23,15 +23,51 @@ from src.metrics import (
 )
 from src.models.errors import InvalidRequestError, ModelNotFoundError, PermissionDeniedError
 from src.models.requests import EmbeddingRequest
+from src.router.router import Deployment
 
 router = APIRouter(prefix="/v1", tags=["embeddings"])
 
 
-def _pick_deployment(request: Request, model_name: str) -> dict[str, Any]:
-    deployments = request.app.state.model_registry.get(model_name) or []
-    if not deployments:
-        raise ModelNotFoundError(message=f"Model '{model_name}' not found")
-    return deployments[0]
+async def _execute_embedding(
+    request: Request,
+    payload: EmbeddingRequest,
+    deployment: Deployment,
+) -> dict[str, Any]:
+    params = deployment.litellm_params
+    api_key = params.get("api_key")
+    if not api_key:
+        raise InvalidRequestError(message="Provider API key is missing for selected model")
+
+    api_base = params.get("api_base", request.app.state.settings.openai_base_url).rstrip("/")
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    upstream_payload = payload.model_dump(exclude_none=True)
+    upstream_model = params.get("model")
+    if upstream_model and "/" in upstream_model:
+        upstream_payload["model"] = upstream_model.split("/", 1)[1]
+
+    from src.routers.utils import apply_default_params
+    apply_default_params(upstream_payload, deployment.model_info)
+
+    upstream_start = perf_counter()
+    response = await request.app.state.http_client.post(
+        f"{api_base}/embeddings",
+        headers=headers,
+        json=upstream_payload,
+        timeout=params.get("timeout") or 300,
+    )
+    if response.status_code >= 400:
+        raise httpx.HTTPStatusError(
+            f"Upstream embedding call failed with status {response.status_code}",
+            request=httpx.Request("POST", f"{api_base}/embeddings"),
+            response=response,
+        )
+    data = response.json()
+    api_latency_ms = (perf_counter() - upstream_start) * 1000
+    data["_api_latency_ms"] = api_latency_ms
+    data["_api_base"] = api_base
+    data["_deployment_model"] = params.get("model")
+    return data
 
 
 @router.post("/embeddings", dependencies=[Depends(require_api_key), Depends(enforce_rate_limits)])
@@ -57,52 +93,41 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
     )
     payload = EmbeddingRequest.model_validate(request_data)
 
-    deployment = _pick_deployment(request, payload.model)
-    params = deployment["litellm_params"]
-    deployment_id = str(deployment.get("deployment_id") or f"{payload.model}-0")
-    api_provider = infer_provider(params.get("model"))
-    api_key = params.get("api_key")
-    if not api_key:
-        raise InvalidRequestError(message="Provider API key is missing for selected model")
-
-    api_base = params.get("api_base", request.app.state.settings.openai_base_url).rstrip("/")
+    app_router = request.app.state.router
+    model_group = app_router.resolve_model_group(payload.model)
+    request_context = {"metadata": {}, "user_id": auth.user_id or auth.api_key}
+    primary = app_router.require_deployment(
+        model_group=model_group,
+        deployment=await app_router.select_deployment(model_group, request_context),
+    )
+    api_provider = infer_provider(primary.litellm_params.get("model"))
     request_id = request.headers.get("x-request-id")
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-
-    upstream_payload = payload.model_dump(exclude_none=True)
-    upstream_model = params.get("model")
-    if upstream_model and "/" in upstream_model:
-        upstream_payload["model"] = upstream_model.split("/", 1)[1]
-
-    from src.routers.utils import apply_default_params
-    model_info = deployment.get("model_info", {})
-    apply_default_params(upstream_payload, model_info)
 
     try:
-        await request.app.state.router_state_backend.increment_active(deployment_id)
-        upstream_start = perf_counter()
-        response = await request.app.state.http_client.post(
-            f"{api_base}/embeddings",
-            headers=headers,
-            json=upstream_payload,
-            timeout=params.get("timeout") or 300,
+        data = await request.app.state.failover_manager.execute_with_failover(
+            primary_deployment=primary,
+            model_group=model_group,
+            execute=lambda dep: _execute_embedding(request, payload, dep),
         )
-        if response.status_code >= 400:
-            raise httpx.HTTPStatusError(
-                f"Upstream embedding call failed with status {response.status_code}",
-                request=httpx.Request("POST", f"{api_base}/embeddings"),
-                response=response,
-            )
-        data = response.json()
+        await request.app.state.passive_health_tracker.record_request_outcome(primary.deployment_id, success=True)
+
+        api_latency_ms = data.pop("_api_latency_ms", 0)
+        api_base = data.pop("_api_base", "")
+        deployment_model = data.pop("_deployment_model", None)
+
         usage = data.get("usage") or {}
-        await request.app.state.router_state_backend.increment_usage(
-            deployment_id,
-            int(usage.get("total_tokens", 0) or 0),
-        )
+        _deploy_pricing = None
+        if primary.input_cost_per_token or primary.output_cost_per_token:
+            from src.billing.cost import ModelPricing
+            _deploy_pricing = ModelPricing(
+                input_cost_per_token=primary.input_cost_per_token,
+                output_cost_per_token=primary.output_cost_per_token,
+            )
         request_cost = completion_cost(
             model=payload.model,
             usage=usage,
             cache_hit=getattr(request.state, "cache_hit", False),
+            custom_pricing=_deploy_pricing,
         )
         increment_request(
             model=payload.model,
@@ -157,13 +182,13 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         observe_api_latency(
             model=payload.model,
             api_provider=api_provider,
-            latency_seconds=perf_counter() - upstream_start,
+            latency_seconds=api_latency_ms / 1000,
         )
         callback_payload = build_standard_logging_payload(
             call_type="embedding",
             request_id=request_id,
             model=payload.model,
-            deployment_model=params.get("model"),
+            deployment_model=deployment_model,
             request_payload=request_data,
             response_obj=data,
             user_api_key_dict=auth.model_dump(mode="json"),
@@ -171,7 +196,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             end_time=datetime.now(tz=UTC),
             api_base=api_base,
             response_cost=request_cost,
-            api_latency_ms=(perf_counter() - upstream_start) * 1000,
+            api_latency_ms=api_latency_ms,
             turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
         )
         callback_manager.dispatch_success_callbacks(callback_payload)
@@ -188,84 +213,41 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         )
         return JSONResponse(status_code=200, content=data)
     except httpx.HTTPError as exc:
+        await request.app.state.passive_health_tracker.record_request_outcome(primary.deployment_id, success=False, error=str(exc))
         status_code = getattr(getattr(exc, "response", None), "status_code", 502)
         increment_request(
-            model=payload.model,
-            api_provider=api_provider,
-            api_key=auth.api_key,
-            user=auth.user_id,
-            team=auth.team_id,
-            status_code=status_code,
+            model=payload.model, api_provider=api_provider,
+            api_key=auth.api_key, user=auth.user_id, team=auth.team_id, status_code=status_code,
         )
-        increment_request_failure(
-            model=payload.model,
-            api_provider=api_provider,
-            error_type=exc.__class__.__name__,
-        )
-        observe_request_latency(
-            model=payload.model,
-            api_provider=api_provider,
-            status_code=status_code,
-            latency_seconds=perf_counter() - request_start,
-        )
+        increment_request_failure(model=payload.model, api_provider=api_provider, error_type=exc.__class__.__name__)
+        observe_request_latency(model=payload.model, api_provider=api_provider, status_code=status_code, latency_seconds=perf_counter() - request_start)
         callback_payload = build_standard_logging_payload(
-            call_type="embedding",
-            request_id=request_id,
-            model=payload.model,
-            deployment_model=params.get("model"),
-            request_payload=request_data,
-            response_obj=None,
-            user_api_key_dict=auth.model_dump(mode="json"),
-            start_time=callback_start,
-            end_time=datetime.now(tz=UTC),
-            api_base=api_base,
+            call_type="embedding", request_id=request_id, model=payload.model,
+            deployment_model=None, request_payload=request_data, response_obj=None,
+            user_api_key_dict=auth.model_dump(mode="json"), start_time=callback_start, end_time=datetime.now(tz=UTC),
+            api_base=None,
             error_info={"error_type": exc.__class__.__name__, "message": str(exc)},
             turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
         )
         callback_manager.dispatch_failure_callbacks(callback_payload, exc)
-        await callback_manager.execute_post_call_failure_hooks(
-            request_data=request_data,
-            original_exception=exc,
-            user_api_key_dict=auth.model_dump(mode="json"),
-        )
         await request.app.state.guardrail_middleware.run_post_call_failure(
-            request_data=request_data,
-            user_api_key_dict=auth.model_dump(mode="python"),
-            original_exception=exc,
-            call_type="embedding",
+            request_data=request_data, user_api_key_dict=auth.model_dump(mode="python"),
+            original_exception=exc, call_type="embedding",
         )
         raise InvalidRequestError(message=f"Embedding request failed: {exc}") from exc
     except Exception as exc:
+        await request.app.state.passive_health_tracker.record_request_outcome(primary.deployment_id, success=False, error=str(exc))
         callback_payload = build_standard_logging_payload(
-            call_type="embedding",
-            request_id=request_id,
-            model=payload.model,
-            deployment_model=params.get("model"),
-            request_payload=request_data,
-            response_obj=None,
-            user_api_key_dict=auth.model_dump(mode="json"),
-            start_time=callback_start,
-            end_time=datetime.now(tz=UTC),
-            api_base=api_base,
+            call_type="embedding", request_id=request_id, model=payload.model,
+            deployment_model=None, request_payload=request_data, response_obj=None,
+            user_api_key_dict=auth.model_dump(mode="json"), start_time=callback_start, end_time=datetime.now(tz=UTC),
+            api_base=None,
             error_info={"error_type": exc.__class__.__name__, "message": str(exc)},
             turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
         )
         callback_manager.dispatch_failure_callbacks(callback_payload, exc)
-        await callback_manager.execute_post_call_failure_hooks(
-            request_data=request_data,
-            original_exception=exc,
-            user_api_key_dict=auth.model_dump(mode="json"),
-        )
         await request.app.state.guardrail_middleware.run_post_call_failure(
-            request_data=request_data,
-            user_api_key_dict=auth.model_dump(mode="python"),
-            original_exception=exc,
-            call_type="embedding",
+            request_data=request_data, user_api_key_dict=auth.model_dump(mode="python"),
+            original_exception=exc, call_type="embedding",
         )
         raise
-    finally:
-        await request.app.state.router_state_backend.decrement_active(deployment_id)
-        await request.app.state.router_state_backend.record_latency(
-            deployment_id,
-            (perf_counter() - request_start) * 1000,
-        )

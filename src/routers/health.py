@@ -44,6 +44,15 @@ async def deployments_health(request: Request, model: str | None = None) -> JSON
     return JSONResponse(status_code=status_code, content=payload)
 
 
+@router.get("/health/fallback-events")
+async def fallback_events(request: Request, limit: int = 50) -> JSONResponse:
+    failover_manager = getattr(request.app.state, "failover_manager", None)
+    if failover_manager is None:
+        return JSONResponse(status_code=200, content={"events": []})
+    events = failover_manager.get_recent_fallback_events(limit=min(limit, 200))
+    return JSONResponse(status_code=200, content={"events": events})
+
+
 async def _readiness_payload(request: Request) -> dict[str, object]:
     checks: dict[str, bool] = {}
 

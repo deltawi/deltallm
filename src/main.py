@@ -240,6 +240,8 @@ async def lifespan(app: FastAPI):
             retry_after=cfg.router_settings.retry_after,
             timeout=cfg.router_settings.timeout,
             fallbacks=_normalize_fallbacks(cfg.litellm_settings.fallbacks),
+            context_window_fallbacks=_normalize_fallbacks(cfg.litellm_settings.context_window_fallbacks),
+            content_policy_fallbacks=_normalize_fallbacks(cfg.litellm_settings.content_policy_fallbacks),
         ),
         deployment_registry=deployment_registry,
         state_backend=state_backend,

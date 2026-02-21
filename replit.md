@@ -112,6 +112,20 @@ DeltaLLM is an open-source LLM gateway/proxy (similar to LiteLLM) that provides 
   - `ORG_ROLE_PERMISSIONS` expanded: org_owner/org_admin now have KEY_READ/UPDATE/REVOKE, USER_READ/UPDATE; org_billing has KEY_READ; org_auditor has KEY_READ, USER_READ
   - All inline-scoped endpoints pass appropriate required_permission (KEY_READ for list_keys, KEY_UPDATE for create/update/delete keys, etc.)
   - Keys update/delete changed from PLATFORM_ADMIN-only to inline scoped auth (consistent with create/regenerate/revoke)
+- Enhanced FailoverManager with intelligent error classification and specialized fallback chains:
+  - `ErrorClassification`: Detects context_window_exceeded, content_policy_violation, rate_limit, timeout errors from response bodies
+  - `RetryPolicy`: Determines retryable errors (timeouts, rate limits, 5xx status codes)
+  - `FallbackConfig`: Supports `context_window_fallbacks` and `content_policy_fallbacks` alongside general `fallbacks`
+  - Exponential backoff with configurable multiplier (default 2.0), max delay (30s), and optional jitter for retries
+  - `FallbackEvent` logging: In-memory ring buffer (last 1000 events) tracking all fallback attempts
+  - `/health/fallback-events` API endpoint for retrieving recent fallback activity
+- Wired failover into all non-chat routers (embeddings, images, audio_speech, audio_transcription, rerank):
+  - All routers now use `Router.select_deployment` + `FailoverManager.execute_with_failover` pattern
+  - Consistent error handling, metrics tracking, and callback management across all router types
+- Settings page enhanced with Fallback Chains configuration:
+  - General, Context Window, and Content Policy fallback chain editors
+  - Retry base delay and allowed fails before cooldown settings
+  - Recent Fallback Events viewer with color-coded error classification badges
 
 ## User Preferences
 - None recorded yet
