@@ -145,6 +145,11 @@ DeltaLLM is an open-source LLM gateway/proxy (similar to LiteLLM) that provides 
   - All raw SQL queries updated to use new table names
   - UI components updated to use new key names
   - Helm charts, tests, docs, and config examples updated
+- Documentation restructured for Read the Docs (MkDocs + Material theme):
+  - Created `mkdocs.yml` with full nav structure, `.readthedocs.yaml` config, `docs/requirements.txt`
+  - New user-facing docs: Getting Started (installation, quickstart, docker), Configuration (models, router, general), Features (auth, routing, caching, guardrails, rate-limiting, budgets, observability), Admin UI (dashboard, models, keys, orgs-teams, access-control), API Reference (proxy, admin, health), Deployment (docker, kubernetes)
+  - Internal specs and completed TODOs moved to `docs/internal/` (excluded from nav)
+  - Removed `docs/skills/` directory (internal dev artifacts)
 
 ## User Preferences
 - None recorded yet
