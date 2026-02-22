@@ -1,6 +1,7 @@
 modules = ["nodejs-20", "python-3.11", "postgresql-16"]
 [agent]
 expertMode = true
+integrations = ["github:1.0.0"]
 
 [workflows]
 runButton = "Project"
