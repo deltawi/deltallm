@@ -78,6 +78,8 @@ class UserAPIKeyAuth(BaseModel):
     max_parallel_requests: int | None = None
     guardrails: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] | None = None
+    team_metadata: dict[str, Any] | None = None
+    org_metadata: dict[str, Any] | None = None
     expires: str | None = None
 
 

@@ -1,16 +1,23 @@
 import { useState } from 'react';
 import { useApi } from '../lib/hooks';
-import { guardrails } from '../lib/api';
+import { guardrails, organizations, teams, keys } from '../lib/api';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import StatusBadge from '../components/StatusBadge';
 import Modal from '../components/Modal';
-import { Plus, Pencil, Trash2, Shield } from 'lucide-react';
+import ScopedGuardrailEditor from '../components/ScopedGuardrailEditor';
+import { Plus, Pencil, Trash2, Shield, Building2, Users, Key } from 'lucide-react';
+
+type ScopeTarget = { scope: 'organization' | 'team' | 'key'; id: string; label: string } | null;
 
 export default function Guardrails() {
   const { data, loading, refetch } = useApi(() => guardrails.list(), []);
+  const { data: orgList } = useApi(() => organizations.list(), []);
+  const { data: teamList } = useApi(() => teams.list(), []);
+  const { data: keyList } = useApi(() => keys.list(), []);
   const [showCreate, setShowCreate] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
+  const [scopeTarget, setScopeTarget] = useState<ScopeTarget>(null);
   const [form, setForm] = useState({
     guardrail_name: '',
     guardrail: '',
@@ -162,6 +169,83 @@ export default function Guardrails() {
           </div>
         </div>
       </Modal>
+
+      <div className="mt-8">
+        <h2 className="text-lg font-semibold text-gray-900 mb-1">Scoped Assignments</h2>
+        <p className="text-sm text-gray-500 mb-4">Assign guardrails at the organization, team, or API key level. Scoped assignments use hierarchical resolution: Global &rarr; Organization &rarr; Team &rarr; API Key.</p>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <Card>
+            <div className="p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Building2 className="w-4 h-4 text-indigo-600" />
+                <h3 className="font-medium text-sm text-gray-900">Organizations</h3>
+              </div>
+              {(orgList || []).length === 0 ? (
+                <p className="text-xs text-gray-400">No organizations</p>
+              ) : (
+                <div className="space-y-1 max-h-48 overflow-y-auto">
+                  {(orgList || []).map((org: any) => (
+                    <button key={org.organization_id} onClick={() => setScopeTarget({ scope: 'organization', id: org.organization_id, label: org.organization_alias || org.organization_id })} className={`w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-indigo-50 transition-colors ${scopeTarget?.scope === 'organization' && scopeTarget?.id === org.organization_id ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-700'}`}>
+                      {org.organization_alias || org.organization_id}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </Card>
+
+          <Card>
+            <div className="p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Users className="w-4 h-4 text-emerald-600" />
+                <h3 className="font-medium text-sm text-gray-900">Teams</h3>
+              </div>
+              {(teamList || []).length === 0 ? (
+                <p className="text-xs text-gray-400">No teams</p>
+              ) : (
+                <div className="space-y-1 max-h-48 overflow-y-auto">
+                  {(teamList || []).map((team: any) => (
+                    <button key={team.team_id} onClick={() => setScopeTarget({ scope: 'team', id: team.team_id, label: team.team_alias || team.team_id })} className={`w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-emerald-50 transition-colors ${scopeTarget?.scope === 'team' && scopeTarget?.id === team.team_id ? 'bg-emerald-50 text-emerald-700 font-medium' : 'text-gray-700'}`}>
+                      {team.team_alias || team.team_id}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </Card>
+
+          <Card>
+            <div className="p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Key className="w-4 h-4 text-amber-600" />
+                <h3 className="font-medium text-sm text-gray-900">API Keys</h3>
+              </div>
+              {(keyList || []).length === 0 ? (
+                <p className="text-xs text-gray-400">No API keys</p>
+              ) : (
+                <div className="space-y-1 max-h-48 overflow-y-auto">
+                  {(keyList || []).map((k: any) => (
+                    <button key={k.token} onClick={() => setScopeTarget({ scope: 'key', id: k.token, label: k.key_name || k.key_alias || k.token?.slice(0, 12) })} className={`w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-amber-50 transition-colors ${scopeTarget?.scope === 'key' && scopeTarget?.id === k.token ? 'bg-amber-50 text-amber-700 font-medium' : 'text-gray-700'}`}>
+                      {k.key_name || k.key_alias || k.token?.slice(0, 12)}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </Card>
+        </div>
+
+        {scopeTarget && (
+          <ScopedGuardrailEditor
+            key={`${scopeTarget.scope}-${scopeTarget.id}`}
+            scope={scopeTarget.scope}
+            entityId={scopeTarget.id}
+            entityLabel={scopeTarget.label}
+            onClose={() => setScopeTarget(null)}
+          />
+        )}
+      </div>
     </div>
   );
 }

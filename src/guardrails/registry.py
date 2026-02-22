@@ -6,6 +6,56 @@ from typing import Any
 from src.guardrails.base import CustomGuardrail, GuardrailAction, GuardrailMode
 
 
+def _extract_guardrail_config(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(metadata, dict):
+        return None
+    cfg = metadata.get("guardrails_config")
+    if isinstance(cfg, dict):
+        return cfg
+    return None
+
+
+def resolve_guardrail_names(
+    global_defaults: list[str],
+    org_metadata: dict[str, Any] | None = None,
+    team_metadata: dict[str, Any] | None = None,
+    key_metadata: dict[str, Any] | None = None,
+    key_guardrails: list[str] | None = None,
+) -> list[str]:
+    names = set(global_defaults)
+
+    org_cfg = _extract_guardrail_config(org_metadata)
+    if org_cfg is not None:
+        mode = org_cfg.get("mode", "inherit")
+        if mode == "override":
+            names = set(org_cfg.get("include", []))
+        else:
+            names |= set(org_cfg.get("include", []))
+            names -= set(org_cfg.get("exclude", []))
+
+    team_cfg = _extract_guardrail_config(team_metadata)
+    if team_cfg is not None:
+        mode = team_cfg.get("mode", "inherit")
+        if mode == "override":
+            names = set(team_cfg.get("include", []))
+        else:
+            names |= set(team_cfg.get("include", []))
+            names -= set(team_cfg.get("exclude", []))
+
+    key_cfg = _extract_guardrail_config(key_metadata)
+    if key_cfg is not None:
+        mode = key_cfg.get("mode", "inherit")
+        if mode == "override":
+            names = set(key_cfg.get("include", []))
+        else:
+            names |= set(key_cfg.get("include", []))
+            names -= set(key_cfg.get("exclude", []))
+    elif key_guardrails:
+        names = set(key_guardrails)
+
+    return sorted(names)
+
+
 class GuardrailRegistry:
     def __init__(self) -> None:
         self._guardrails: dict[str, CustomGuardrail] = {}
@@ -31,22 +81,45 @@ class GuardrailRegistry:
     def get_default_guardrails(self) -> list[CustomGuardrail]:
         return [guardrail for guardrail in self._guardrails.values() if guardrail.default_on]
 
+    def get_all_names(self) -> list[str]:
+        return sorted(self._guardrails.keys())
+
     def get_for_key(
         self,
         key_data: dict[str, Any],
         override_guardrails: list[str] | None = None,
     ) -> list[CustomGuardrail]:
-        selected_names: list[str] | None = None
         if override_guardrails is not None:
-            selected_names = override_guardrails
-        else:
-            raw = key_data.get("guardrails")
-            if isinstance(raw, list) and raw:
-                selected_names = [str(name) for name in raw]
+            return [self._guardrails[name] for name in override_guardrails if name in self._guardrails]
 
-        if selected_names is None:
+        global_defaults = [g.name for g in self.get_default_guardrails()]
+
+        org_metadata = key_data.get("org_metadata")
+        team_metadata = key_data.get("team_metadata")
+        key_metadata = key_data.get("metadata")
+
+        raw_key_guardrails = key_data.get("guardrails")
+        key_guardrails = [str(n) for n in raw_key_guardrails] if isinstance(raw_key_guardrails, list) and raw_key_guardrails else None
+
+        has_scoped_config = (
+            _extract_guardrail_config(org_metadata) is not None
+            or _extract_guardrail_config(team_metadata) is not None
+            or _extract_guardrail_config(key_metadata) is not None
+            or key_guardrails is not None
+        )
+
+        if not has_scoped_config:
             return self.get_default_guardrails()
-        return [self._guardrails[name] for name in selected_names if name in self._guardrails]
+
+        resolved_names = resolve_guardrail_names(
+            global_defaults=global_defaults,
+            org_metadata=org_metadata,
+            team_metadata=team_metadata,
+            key_metadata=key_metadata,
+            key_guardrails=key_guardrails,
+        )
+
+        return [self._guardrails[name] for name in resolved_names if name in self._guardrails]
 
     def load_from_config(self, config: list[Any]) -> None:
         for guardrail_config in config:
@@ -80,7 +153,7 @@ class GuardrailRegistry:
             try:
                 module = importlib.import_module(candidate)
                 return getattr(module, class_name)
-            except Exception as exc:  # pragma: no cover
+            except Exception as exc:
                 last_err = exc
 
         raise ImportError(f"Could not import guardrail class '{class_path}': {last_err}") from last_err

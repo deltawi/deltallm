@@ -1,8 +1,23 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+
+
+def _parse_metadata(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else None
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return None
 
 
 @dataclass
@@ -26,6 +41,8 @@ class KeyRecord:
     organization_id: str | None = None
     guardrails: list[str] | None = None
     metadata: dict[str, Any] | None = None
+    team_metadata: dict[str, Any] | None = None
+    org_metadata: dict[str, Any] | None = None
     expires: datetime | None = None
 
 
@@ -59,6 +76,8 @@ class KeyRepository:
                 o.rpm_limit AS org_rpm_limit,
                 v.max_parallel_requests,
                 v.metadata,
+                t.metadata AS team_metadata,
+                o.metadata AS org_metadata,
                 v.expires
             FROM litellm_verificationtoken v
             LEFT JOIN litellm_usertable u
@@ -99,6 +118,8 @@ class KeyRepository:
             max_parallel_requests=row.get("max_parallel_requests"),
             organization_id=row.get("organization_id"),
             guardrails=row.get("guardrails"),
-            metadata=row.get("metadata"),
+            metadata=_parse_metadata(row.get("metadata")),
+            team_metadata=_parse_metadata(row.get("team_metadata")),
+            org_metadata=_parse_metadata(row.get("org_metadata")),
             expires=expires,
         )

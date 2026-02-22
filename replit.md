@@ -126,6 +126,13 @@ DeltaLLM is an open-source LLM gateway/proxy (similar to LiteLLM) that provides 
   - General, Context Window, and Content Policy fallback chain editors
   - Retry base delay and allowed fails before cooldown settings
   - Recent Fallback Events viewer with color-coded error classification badges
+- Scoped guardrail assignments with hierarchical resolution (global → org → team → key):
+  - `src/guardrails/registry.py`: `resolve_guardrail_names()` resolves guardrails through scope hierarchy with inherit/override modes
+  - `src/db/repositories.py`: SQL query fetches team_metadata and org_metadata alongside key data; metadata JSON strings are safely parsed
+  - `src/models/responses.py`: `UserAPIKeyAuth` now carries `team_metadata` and `org_metadata` for scoped resolution
+  - API endpoints: GET/PUT/DELETE `/ui/api/guardrails/scope/{scope}/{entity_id}` for managing per-org/team/key guardrail configs
+  - `ui/src/components/ScopedGuardrailEditor.tsx`: Reusable editor component with inherit/override mode selector, include/exclude tag management
+  - Guardrails page updated with "Scoped Assignments" section: org/team/key entity picker + inline editor
 
 ## User Preferences
 - None recorded yet

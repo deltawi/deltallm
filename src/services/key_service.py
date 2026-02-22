@@ -64,6 +64,8 @@ class KeyService:
             max_parallel_requests=record.max_parallel_requests,
             guardrails=self._extract_guardrails(record),
             metadata=record.metadata,
+            team_metadata=record.team_metadata,
+            org_metadata=record.org_metadata,
             expires=record.expires.isoformat() if record.expires else None,
         )
 
