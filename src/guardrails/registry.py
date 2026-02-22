@@ -125,11 +125,11 @@ class GuardrailRegistry:
         for guardrail_config in config:
             item = guardrail_config.model_dump(mode="python") if hasattr(guardrail_config, "model_dump") else dict(guardrail_config)
             name = item["guardrail_name"]
-            params = dict(item.get("litellm_params") or {})
+            params = dict(item.get("deltallm_params") or {})
 
             class_path = params.pop("guardrail", None)
             if not class_path:
-                raise ValueError(f"Guardrail '{name}' is missing litellm_params.guardrail")
+                raise ValueError(f"Guardrail '{name}' is missing deltallm_params.guardrail")
 
             mode = GuardrailMode(params.pop("mode", GuardrailMode.PRE_CALL))
             action = GuardrailAction(params.pop("default_action", GuardrailAction.BLOCK))

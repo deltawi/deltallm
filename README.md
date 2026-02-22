@@ -71,8 +71,8 @@ Edit `config.yaml` and set the values under `general_settings`. You can either h
 
 ```yaml
 general_settings:
-  master_key: "sk-your-master-key"               # or os.environ/LITELLM_MASTER_KEY
-  salt_key: "your-random-salt-key"                # or os.environ/LITELLM_SALT_KEY
+  master_key: "sk-your-master-key"               # or os.environ/DELTALLM_MASTER_KEY
+  salt_key: "your-random-salt-key"                # or os.environ/DELTALLM_SALT_KEY
   database_url: "postgresql://user:pass@localhost:5432/deltallm"  # or os.environ/DATABASE_URL
   redis_host: localhost
   redis_port: 6379
@@ -83,8 +83,8 @@ general_settings:
 If using environment variable references, export them before starting:
 
 ```bash
-export LITELLM_MASTER_KEY="sk-your-master-key"
-export LITELLM_SALT_KEY="your-random-salt-key"
+export DELTALLM_MASTER_KEY="sk-your-master-key"
+export DELTALLM_SALT_KEY="your-random-salt-key"
 export DATABASE_URL="postgresql://user:pass@localhost:5432/deltallm"
 ```
 
@@ -268,7 +268,7 @@ DeltaLLM is configured via a YAML file. See [`config.example.yaml`](config.examp
 |---------|-------------|
 | `model_list` | Model deployments with provider config, API keys, and default parameters |
 | `router_settings` | Routing strategy, retries, timeouts, cooldown |
-| `litellm_settings` | Callbacks, guardrails, message logging |
+| `deltallm_settings` | Callbacks, guardrails, message logging |
 | `general_settings` | Master key, database, Redis, cache, SSO, auth session settings |
 
 ### Environment variable references
@@ -277,7 +277,7 @@ Config values can reference environment variables:
 
 ```yaml
 general_settings:
-  master_key: os.environ/LITELLM_MASTER_KEY
+  master_key: os.environ/DELTALLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL
 ```
 

@@ -28,12 +28,12 @@ class S3Callback(CustomLogger):
         self,
         bucket: str | None = None,
         region: str = "us-east-1",
-        prefix: str = "litellm-logs/",
+        prefix: str = "deltallm-logs/",
         compression: str | None = None,
     ) -> None:
         if not BOTO3_AVAILABLE:
             raise ImportError("boto3 package required. Install with: pip install boto3")
-        self.bucket = bucket or os.getenv("LITELLM_S3_BUCKET")
+        self.bucket = bucket or os.getenv("DELTALLM_S3_BUCKET")
         self.region = region
         self.prefix = prefix
         self.compression = compression
@@ -47,7 +47,7 @@ class S3Callback(CustomLogger):
 
     def _generate_key(self, kwargs: dict[str, Any]) -> str:
         now = datetime.now(tz=UTC)
-        request_id = kwargs.get("litellm_call_id") or "unknown"
+        request_id = kwargs.get("deltallm_call_id") or "unknown"
         key = (
             f"{self.prefix}"
             f"year={now.year}/"
@@ -91,7 +91,7 @@ class S3Callback(CustomLogger):
 
         entry: dict[str, Any] = {
             "timestamp": datetime.now(tz=UTC).isoformat(),
-            "request_id": kwargs.get("litellm_call_id"),
+            "request_id": kwargs.get("deltallm_call_id"),
             "call_type": kwargs.get("call_type"),
             "model": kwargs.get("model"),
             "api_provider": kwargs.get("api_provider"),

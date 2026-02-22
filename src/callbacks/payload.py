@@ -16,7 +16,7 @@ class TokenUsage(BaseModel):
 
 
 class StandardLoggingPayload(BaseModel):
-    litellm_call_id: str
+    deltallm_call_id: str
     request_id: str
     call_type: str
     model: str
@@ -95,12 +95,12 @@ def build_standard_logging_payload(
     if end_time.tzinfo is None:
         end_time = end_time.replace(tzinfo=UTC)
 
-    litellm_call_id = str(metadata.get("litellm_call_id") or uuid4())
+    deltallm_call_id = str(metadata.get("deltallm_call_id") or uuid4())
     messages = None if turn_off_message_logging else request_payload.get("messages")
 
     return StandardLoggingPayload(
-        litellm_call_id=litellm_call_id,
-        request_id=request_id or litellm_call_id,
+        deltallm_call_id=deltallm_call_id,
+        request_id=request_id or deltallm_call_id,
         call_type=call_type,
         model=model,
         deployment_model=deployment_model,

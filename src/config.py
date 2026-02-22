@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,7 +20,7 @@ ModelMode = Literal[
 ]
 
 
-class LiteLLMParams(BaseModel):
+class DeltaLLMParams(BaseModel):
     model: str
     api_key: str | None = None
     api_base: str | None = None
@@ -56,8 +56,10 @@ class ModelInfo(BaseModel):
 
 
 class ModelDeployment(BaseModel):
+    model_config = {"populate_by_name": True}
+
     model_name: str
-    litellm_params: LiteLLMParams
+    deltallm_params: DeltaLLMParams = Field(validation_alias=AliasChoices("deltallm_params", "litellm_params"))
     model_info: ModelInfo | None = None
     deployment_id: str | None = None
 
@@ -84,21 +86,23 @@ class RouterSettings(BaseModel):
 
 
 class GuardrailConfig(BaseModel):
-    guardrail_name: str
-    litellm_params: dict[str, Any]
+    model_config = {"populate_by_name": True}
 
-    @field_validator("litellm_params")
+    guardrail_name: str
+    deltallm_params: dict[str, Any] = Field(validation_alias=AliasChoices("deltallm_params", "litellm_params"))
+
+    @field_validator("deltallm_params")
     @classmethod
-    def validate_litellm_params(cls, value: dict[str, Any]) -> dict[str, Any]:
+    def validate_deltallm_params(cls, value: dict[str, Any]) -> dict[str, Any]:
         if "guardrail" not in value:
-            raise ValueError("litellm_params must include 'guardrail' class path")
+            raise ValueError("deltallm_params must include 'guardrail' class path")
         mode = value.get("mode")
         if mode is not None and mode not in ("pre_call", "post_call", "during_call"):
             raise ValueError("mode must be pre_call, post_call, or during_call")
         return value
 
 
-class LiteLLMSettings(BaseModel):
+class DeltaLLMSettings(BaseModel):
     fallbacks: list[dict[str, list[str]]] = Field(default_factory=list)
     context_window_fallbacks: list[dict[str, list[str]]] = Field(default_factory=list)
     content_policy_fallbacks: list[dict[str, list[str]]] = Field(default_factory=list)
@@ -113,7 +117,7 @@ class LiteLLMSettings(BaseModel):
 class GeneralSettings(BaseModel):
     instance_name: str = "DeltaLLM"
     master_key: str | None = None
-    litellm_key_header_name: str = "Authorization"
+    deltallm_key_header_name: str = "Authorization"
     salt_key: str = "change-me"
     database_url: str | None = None
     db_pool_size: int = 20
@@ -154,9 +158,11 @@ class GeneralSettings(BaseModel):
 
 
 class AppConfig(BaseModel):
+    model_config = {"populate_by_name": True}
+
     model_list: list[ModelDeployment] = Field(default_factory=list)
     router_settings: RouterSettings = Field(default_factory=RouterSettings)
-    litellm_settings: LiteLLMSettings = Field(default_factory=LiteLLMSettings)
+    deltallm_settings: DeltaLLMSettings = Field(default_factory=DeltaLLMSettings, validation_alias=AliasChoices("deltallm_settings", "litellm_settings"))
     general_settings: GeneralSettings = Field(default_factory=GeneralSettings)
 
 

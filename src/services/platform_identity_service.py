@@ -33,14 +33,14 @@ class PlatformIdentityService:
             return
 
         existing = await self.db.query_raw(
-            "SELECT account_id, password_hash FROM litellm_platformaccount WHERE lower(email) = lower($1) LIMIT 1",
+            "SELECT account_id, password_hash FROM deltallm_platformaccount WHERE lower(email) = lower($1) LIMIT 1",
             email,
         )
         if existing:
             row = existing[0]
             if not row.get("password_hash"):
                 await self.db.execute_raw(
-                    "UPDATE litellm_platformaccount SET password_hash = $1, role = $2, updated_at = NOW() WHERE account_id = $3",
+                    "UPDATE deltallm_platformaccount SET password_hash = $1, role = $2, updated_at = NOW() WHERE account_id = $3",
                     self._hash_password(password),
                     PlatformRole.ADMIN,
                     row["account_id"],
@@ -49,7 +49,7 @@ class PlatformIdentityService:
 
         await self.db.execute_raw(
             """
-            INSERT INTO litellm_platformaccount (
+            INSERT INTO deltallm_platformaccount (
                 account_id, email, password_hash, role, is_active, force_password_change,
                 mfa_enabled, created_at, updated_at
             )
@@ -68,7 +68,7 @@ class PlatformIdentityService:
             """
             SELECT account_id, email, password_hash, role, is_active, force_password_change,
                    mfa_enabled, mfa_secret
-            FROM litellm_platformaccount
+            FROM deltallm_platformaccount
             WHERE lower(email) = lower($1)
             LIMIT 1
             """,
@@ -97,7 +97,7 @@ class PlatformIdentityService:
             return None
 
         await self.db.execute_raw(
-            "UPDATE litellm_platformaccount SET last_login_at = NOW(), updated_at = NOW() WHERE account_id = $1",
+            "UPDATE deltallm_platformaccount SET last_login_at = NOW(), updated_at = NOW() WHERE account_id = $1",
             row["account_id"],
         )
 
@@ -123,7 +123,7 @@ class PlatformIdentityService:
         role = PlatformRole.ADMIN if is_platform_admin else "org_user"
         await self.db.execute_raw(
             """
-            INSERT INTO litellm_platformaccount (
+            INSERT INTO deltallm_platformaccount (
                 account_id, email, role, is_active, force_password_change,
                 mfa_enabled, created_at, updated_at
             )
@@ -136,11 +136,11 @@ class PlatformIdentityService:
         )
         await self.db.execute_raw(
             """
-            INSERT INTO litellm_platformidentity (
+            INSERT INTO deltallm_platformidentity (
                 identity_id, account_id, provider, subject, email, created_at, updated_at
             )
             SELECT gen_random_uuid(), account_id, $2, $3, $1, NOW(), NOW()
-            FROM litellm_platformaccount
+            FROM deltallm_platformaccount
             WHERE lower(email) = lower($1)
             ON CONFLICT (provider, subject)
             DO UPDATE SET email = EXCLUDED.email, updated_at = NOW()
@@ -152,9 +152,9 @@ class PlatformIdentityService:
         if not is_platform_admin and team_id:
             await self.db.execute_raw(
                 """
-                INSERT INTO litellm_teammembership (membership_id, account_id, team_id, role, created_at, updated_at)
+                INSERT INTO deltallm_teammembership (membership_id, account_id, team_id, role, created_at, updated_at)
                 SELECT gen_random_uuid(), account_id, $2, $3, NOW(), NOW()
-                FROM litellm_platformaccount
+                FROM deltallm_platformaccount
                 WHERE lower(email) = lower($1)
                 ON CONFLICT (account_id, team_id)
                 DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
@@ -164,16 +164,16 @@ class PlatformIdentityService:
                 default_team_role,
             )
             org_rows = await self.db.query_raw(
-                "SELECT organization_id FROM litellm_teamtable WHERE team_id = $1 LIMIT 1",
+                "SELECT organization_id FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
                 team_id,
             )
             organization_id = org_rows[0].get("organization_id") if org_rows else None
             if organization_id:
                 await self.db.execute_raw(
                     """
-                    INSERT INTO litellm_organizationmembership (membership_id, account_id, organization_id, role, created_at, updated_at)
+                    INSERT INTO deltallm_organizationmembership (membership_id, account_id, organization_id, role, created_at, updated_at)
                     SELECT gen_random_uuid(), account_id, $2, $3, NOW(), NOW()
-                    FROM litellm_platformaccount
+                    FROM deltallm_platformaccount
                     WHERE lower(email) = lower($1)
                     ON CONFLICT (account_id, organization_id)
                     DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
@@ -210,8 +210,8 @@ class PlatformIdentityService:
                 a.force_password_change,
                 a.mfa_enabled,
                 a.is_active
-            FROM litellm_platformsession s
-            JOIN litellm_platformaccount a ON a.account_id = s.account_id
+            FROM deltallm_platformsession s
+            JOIN deltallm_platformaccount a ON a.account_id = s.account_id
             WHERE s.session_token_hash = $1
               AND s.revoked_at IS NULL
               AND s.expires_at > NOW()
@@ -227,7 +227,7 @@ class PlatformIdentityService:
             return None
 
         await self.db.execute_raw(
-            "UPDATE litellm_platformsession SET last_seen_at = NOW() WHERE session_token_hash = $1",
+            "UPDATE deltallm_platformsession SET last_seen_at = NOW() WHERE session_token_hash = $1",
             token_hash,
         )
 
@@ -237,7 +237,7 @@ class PlatformIdentityService:
         org_rows = await self.db.query_raw(
             """
             SELECT organization_id, role
-            FROM litellm_organizationmembership
+            FROM deltallm_organizationmembership
             WHERE account_id = $1
             """,
             row["account_id"],
@@ -245,7 +245,7 @@ class PlatformIdentityService:
         team_rows = await self.db.query_raw(
             """
             SELECT team_id, role
-            FROM litellm_teammembership
+            FROM deltallm_teammembership
             WHERE account_id = $1
             """,
             row["account_id"],
@@ -273,7 +273,7 @@ class PlatformIdentityService:
             return
         token_hash = self._hash_session_token(session_token)
         await self.db.execute_raw(
-            "UPDATE litellm_platformsession SET revoked_at = NOW(), updated_at = NOW() WHERE session_token_hash = $1",
+            "UPDATE deltallm_platformsession SET revoked_at = NOW(), updated_at = NOW() WHERE session_token_hash = $1",
             token_hash,
         )
 
@@ -283,7 +283,7 @@ class PlatformIdentityService:
 
         secret = self._generate_totp_secret()
         await self.db.execute_raw(
-            "UPDATE litellm_platformaccount SET mfa_pending_secret = $1, updated_at = NOW() WHERE account_id = $2",
+            "UPDATE deltallm_platformaccount SET mfa_pending_secret = $1, updated_at = NOW() WHERE account_id = $2",
             secret,
             account_id,
         )
@@ -295,7 +295,7 @@ class PlatformIdentityService:
         if self.db is None:
             return False
         rows = await self.db.query_raw(
-            "SELECT mfa_pending_secret FROM litellm_platformaccount WHERE account_id = $1 LIMIT 1",
+            "SELECT mfa_pending_secret FROM deltallm_platformaccount WHERE account_id = $1 LIMIT 1",
             account_id,
         )
         if not rows:
@@ -307,7 +307,7 @@ class PlatformIdentityService:
 
         await self.db.execute_raw(
             """
-            UPDATE litellm_platformaccount
+            UPDATE deltallm_platformaccount
             SET mfa_secret = $1,
                 mfa_enabled = true,
                 mfa_pending_secret = NULL,
@@ -324,7 +324,7 @@ class PlatformIdentityService:
         if self.db is None:
             return False
         rows = await self.db.query_raw(
-            "SELECT password_hash FROM litellm_platformaccount WHERE account_id = $1 LIMIT 1",
+            "SELECT password_hash FROM deltallm_platformaccount WHERE account_id = $1 LIMIT 1",
             account_id,
         )
         if not rows:
@@ -337,7 +337,7 @@ class PlatformIdentityService:
 
         await self.db.execute_raw(
             """
-            UPDATE litellm_platformaccount
+            UPDATE deltallm_platformaccount
             SET password_hash = $1,
                 force_password_change = false,
                 updated_at = NOW()
@@ -350,7 +350,7 @@ class PlatformIdentityService:
 
     async def _create_session_from_email(self, email: str, mfa_verified: bool) -> str:
         rows = await self.db.query_raw(
-            "SELECT account_id FROM litellm_platformaccount WHERE lower(email) = lower($1) LIMIT 1",
+            "SELECT account_id FROM deltallm_platformaccount WHERE lower(email) = lower($1) LIMIT 1",
             email,
         )
         if not rows:
@@ -364,7 +364,7 @@ class PlatformIdentityService:
 
         await self.db.execute_raw(
             """
-            INSERT INTO litellm_platformsession (
+            INSERT INTO deltallm_platformsession (
                 session_id, account_id, session_token_hash, mfa_verified,
                 expires_at, created_at, updated_at, last_seen_at
             )

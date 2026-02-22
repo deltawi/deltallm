@@ -45,7 +45,7 @@ def _model_entries(app: Any) -> list[dict[str, Any]]:
     for model_name, deployments in registry.items():
         for index, deployment in enumerate(deployments):
             deployment_id = str(deployment.get("deployment_id") or f"{model_name}-{index}")
-            params = dict(deployment.get("litellm_params", {}))
+            params = dict(deployment.get("deltallm_params", {}))
             model_info = dict(deployment.get("model_info", {}))
             entries.append(
                 {
@@ -53,7 +53,7 @@ def _model_entries(app: Any) -> list[dict[str, Any]]:
                     "model_name": model_name,
                     "provider": str(params.get("model", "")).split("/")[0] or "unknown",
                     "mode": model_info.get("mode", "chat"),
-                    "litellm_params": params,
+                    "deltallm_params": params,
                     "model_info": model_info,
                 }
             )
@@ -110,11 +110,11 @@ async def get_model(request: Request, deployment_id: str) -> dict[str, Any]:
 @ui_router.post("/ui/api/models", dependencies=[Depends(require_master_key)])
 async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     model_name = str(payload.get("model_name") or "").strip()
-    litellm_params = payload.get("litellm_params")
+    deltallm_params = payload.get("deltallm_params")
     if not model_name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="model_name is required")
-    if not isinstance(litellm_params, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="litellm_params must be an object")
+    if not isinstance(deltallm_params, dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params must be an object")
 
     deployment_id = str(payload.get("deployment_id") or f"{model_name}-{secrets.token_hex(4)}")
     model_info = payload.get("model_info") if isinstance(payload.get("model_info"), dict) else {}
@@ -122,7 +122,7 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
     model_config = {
         "deployment_id": deployment_id,
         "model_name": model_name,
-        "litellm_params": litellm_params,
+        "deltallm_params": deltallm_params,
         "model_info": model_info,
     }
 
@@ -131,14 +131,14 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
         deployment_id = await hot_reload.add_model(model_config, updated_by="admin_api")
     else:
         request.app.state.model_registry.setdefault(model_name, []).append(
-            {"deployment_id": deployment_id, "litellm_params": litellm_params, "model_info": model_info}
+            {"deployment_id": deployment_id, "deltallm_params": deltallm_params, "model_info": model_info}
         )
         _rebuild_runtime_registry(request.app)
 
     return {
         "deployment_id": deployment_id,
         "model_name": model_name,
-        "litellm_params": litellm_params,
+        "deltallm_params": deltallm_params,
         "model_info": model_info,
     }
 
@@ -164,7 +164,7 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
 
     new_model_name = str(payload.get("model_name") or found_model_name)
-    litellm_params = payload.get("litellm_params") if isinstance(payload.get("litellm_params"), dict) else found_deployment.get("litellm_params", {})
+    deltallm_params = payload.get("deltallm_params") if isinstance(payload.get("deltallm_params"), dict) else found_deployment.get("deltallm_params", {})
     model_info = payload.get("model_info") if isinstance(payload.get("model_info"), dict) else found_deployment.get("model_info", {})
 
     if hot_reload is not None:
@@ -172,7 +172,7 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
         new_config = {
             "deployment_id": deployment_id,
             "model_name": new_model_name,
-            "litellm_params": litellm_params,
+            "deltallm_params": deltallm_params,
             "model_info": model_info,
         }
         await hot_reload.add_model(new_config, updated_by="admin_api")
@@ -185,14 +185,14 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
                     registry.pop(found_model_name, None)
                 break
         registry.setdefault(new_model_name, []).append(
-            {"deployment_id": deployment_id, "litellm_params": litellm_params, "model_info": model_info}
+            {"deployment_id": deployment_id, "deltallm_params": deltallm_params, "model_info": model_info}
         )
         _rebuild_runtime_registry(request.app)
 
     return {
         "deployment_id": deployment_id,
         "model_name": new_model_name,
-        "litellm_params": litellm_params,
+        "deltallm_params": deltallm_params,
         "model_info": model_info,
     }
 
@@ -270,7 +270,7 @@ async def spend_summary(
             COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
             COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
             COUNT(*) AS total_requests
-        FROM litellm_spendlogs
+        FROM deltallm_spendlogs
         {where_sql}
         """,
         *params,
@@ -314,7 +314,7 @@ async def spend_report(
             COALESCE(SUM(spend), 0) AS total_spend,
             COUNT(*) AS request_count,
             COALESCE(SUM(total_tokens), 0) AS total_tokens
-        FROM litellm_spendlogs
+        FROM deltallm_spendlogs
         {where_sql}
         GROUP BY {group_column}
         ORDER BY group_key ASC
@@ -370,7 +370,7 @@ async def request_logs(
         f"""
         SELECT id, request_id, call_type, model, api_base, api_key, spend, total_tokens,
                prompt_tokens, completion_tokens, start_time, end_time, "user", team_id, cache_hit
-        FROM litellm_spendlogs
+        FROM deltallm_spendlogs
         {where_sql}
         ORDER BY start_time DESC
         LIMIT ${limit_idx}
@@ -382,7 +382,7 @@ async def request_logs(
     )
 
     total_rows = await db.query_raw(
-        f"SELECT COUNT(*) AS total FROM litellm_spendlogs {where_sql}",
+        f"SELECT COUNT(*) AS total FROM deltallm_spendlogs {where_sql}",
         *params,
     )
 

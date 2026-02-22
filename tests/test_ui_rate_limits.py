@@ -13,7 +13,7 @@ class FakeAdminDB:
         self.users: dict[str, dict[str, Any]] = {}
 
     async def execute_raw(self, query: str, *params):
-        if "INSERT INTO litellm_organizationtable" in query:
+        if "INSERT INTO deltallm_organizationtable" in query:
             organization_id, organization_name, max_budget, rpm_limit, tpm_limit = params
             self.organizations[organization_id] = {
                 "organization_id": organization_id,
@@ -27,7 +27,7 @@ class FakeAdminDB:
             }
             return 1
 
-        if "UPDATE litellm_organizationtable" in query:
+        if "UPDATE deltallm_organizationtable" in query:
             organization_name, max_budget, rpm_limit, tpm_limit, organization_id = params
             row = self.organizations[organization_id]
             row.update(
@@ -41,7 +41,7 @@ class FakeAdminDB:
             )
             return 1
 
-        if "INSERT INTO litellm_teamtable" in query:
+        if "INSERT INTO deltallm_teamtable" in query:
             team_id, team_alias, organization_id, max_budget, rpm_limit, tpm_limit, models = params
             self.teams[team_id] = {
                 "team_id": team_id,
@@ -58,7 +58,7 @@ class FakeAdminDB:
             }
             return 1
 
-        if "UPDATE litellm_teamtable" in query:
+        if "UPDATE deltallm_teamtable" in query:
             team_alias, organization_id, max_budget, rpm_limit, tpm_limit, models, team_id = params
             row = self.teams[team_id]
             row.update(
@@ -74,7 +74,7 @@ class FakeAdminDB:
             )
             return 1
 
-        if "INSERT INTO litellm_usertable" in query:
+        if "INSERT INTO deltallm_usertable" in query:
             user_id, user_email, user_role, models, team_id, max_budget, rpm_limit, tpm_limit = params
             self.users[user_id] = {
                 "user_id": user_id,
@@ -92,7 +92,7 @@ class FakeAdminDB:
             }
             return 1
 
-        if "UPDATE litellm_usertable" in query:
+        if "UPDATE deltallm_usertable" in query:
             user_email, user_role, team_id, max_budget, models, rpm_limit, tpm_limit, user_id = params
             row = self.users[user_id]
             row.update(
@@ -112,19 +112,19 @@ class FakeAdminDB:
         return 1
 
     async def query_raw(self, query: str, *params):
-        if "FROM litellm_organizationtable" in query:
+        if "FROM deltallm_organizationtable" in query:
             if "WHERE organization_id = $1" in query:
                 row = self.organizations.get(str(params[0]))
                 return [row] if row else []
             return list(self.organizations.values())
 
-        if "FROM litellm_teamtable" in query:
+        if "FROM deltallm_teamtable" in query:
             if "WHERE team_id = $1" in query:
                 row = self.teams.get(str(params[0]))
                 return [row] if row else []
             return list(self.teams.values())
 
-        if "FROM litellm_usertable" in query:
+        if "FROM deltallm_usertable" in query:
             if "WHERE user_id = $1" in query:
                 row = self.users.get(str(params[0]))
                 return [row] if row else []

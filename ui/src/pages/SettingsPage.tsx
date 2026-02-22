@@ -65,9 +65,9 @@ export default function SettingsPage() {
         log_level: data.general_settings?.log_level || 'INFO',
         instance_name: data.general_settings?.instance_name || 'DeltaLLM',
       });
-      setFallbacks(parseFallbacks(data.litellm_settings?.fallbacks || []));
-      setCtxFallbacks(parseFallbacks(data.litellm_settings?.context_window_fallbacks || []));
-      setContentFallbacks(parseFallbacks(data.litellm_settings?.content_policy_fallbacks || []));
+      setFallbacks(parseFallbacks(data.deltallm_settings?.fallbacks || []));
+      setCtxFallbacks(parseFallbacks(data.deltallm_settings?.context_window_fallbacks || []));
+      setContentFallbacks(parseFallbacks(data.deltallm_settings?.content_policy_fallbacks || []));
     }
   }, [data]);
 
@@ -105,7 +105,7 @@ export default function SettingsPage() {
           log_level: form.log_level,
           instance_name: form.instance_name,
         },
-        litellm_settings: {
+        deltallm_settings: {
           fallbacks: serializeFallbacks(fallbacks),
           context_window_fallbacks: serializeFallbacks(ctxFallbacks),
           content_policy_fallbacks: serializeFallbacks(contentFallbacks),

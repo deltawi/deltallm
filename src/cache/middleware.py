@@ -110,7 +110,7 @@ class CacheMiddleware(BaseHTTPMiddleware):
 
         if cache_options.control == CacheControl.BYPASS:
             response = await call_next(request)
-            response.headers["x-litellm-cache-hit"] = "false"
+            response.headers["x-deltallm-cache-hit"] = "false"
             return response
 
         cache_key = key_builder.build_key_from_payload(request_data, cache_options.custom_key)
@@ -127,14 +127,14 @@ class CacheMiddleware(BaseHTTPMiddleware):
                         headers={
                             "Cache-Control": "no-cache",
                             "Connection": "keep-alive",
-                            "x-litellm-cache-hit": "true",
+                            "x-deltallm-cache-hit": "true",
                         },
                     )
                 metrics.miss(endpoint=endpoint, model=model)
 
             request.state.cache_context = CacheContext(cache_key=cache_key, options=cache_options, model=model)
             response = await call_next(request)
-            response.headers["x-litellm-cache-hit"] = "false"
+            response.headers["x-deltallm-cache-hit"] = "false"
             return response
 
         if cache_options.control != CacheControl.NO_CACHE:
@@ -145,7 +145,7 @@ class CacheMiddleware(BaseHTTPMiddleware):
             metrics.miss(endpoint=endpoint, model=model)
 
         response = await call_next(request)
-        response.headers["x-litellm-cache-hit"] = "false"
+        response.headers["x-deltallm-cache-hit"] = "false"
 
         if cache_options.control == CacheControl.NO_STORE:
             return response
@@ -190,8 +190,8 @@ class CacheMiddleware(BaseHTTPMiddleware):
 
     def _cached_json_response(self, payload: dict[str, Any], cache_key: str) -> JSONResponse:
         response = JSONResponse(status_code=200, content=payload)
-        response.headers["x-litellm-cache-hit"] = "true"
-        response.headers["x-litellm-cache-key"] = cache_key
+        response.headers["x-deltallm-cache-hit"] = "true"
+        response.headers["x-deltallm-cache-key"] = cache_key
         return response
 
     async def _maybe_store(

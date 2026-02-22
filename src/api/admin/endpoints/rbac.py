@@ -23,7 +23,7 @@ async def list_rbac_accounts(request: Request) -> list[dict[str, Any]]:
     rows = await db.query_raw(
         """
         SELECT account_id, email, role, is_active, force_password_change, mfa_enabled, created_at, updated_at, last_login_at
-        FROM litellm_platformaccount
+        FROM deltallm_platformaccount
         ORDER BY created_at DESC
         """
     )
@@ -52,7 +52,7 @@ async def upsert_rbac_account(request: Request, payload: dict[str, Any]) -> dict
 
     await db.execute_raw(
         """
-        INSERT INTO litellm_platformaccount (
+        INSERT INTO deltallm_platformaccount (
             account_id, email, role, is_active, force_password_change, mfa_enabled, created_at, updated_at
         )
         VALUES (gen_random_uuid(), $1, $2, $3, false, false, NOW(), NOW())
@@ -66,7 +66,7 @@ async def upsert_rbac_account(request: Request, payload: dict[str, Any]) -> dict
 
     if isinstance(password, str) and password:
         rows = await db.query_raw(
-            "SELECT account_id FROM litellm_platformaccount WHERE lower(email)=lower($1) LIMIT 1",
+            "SELECT account_id FROM deltallm_platformaccount WHERE lower(email)=lower($1) LIMIT 1",
             email,
         )
         if rows:
@@ -75,7 +75,7 @@ async def upsert_rbac_account(request: Request, payload: dict[str, Any]) -> dict
     rows = await db.query_raw(
         """
         SELECT account_id, email, role, is_active, force_password_change, mfa_enabled, created_at, updated_at, last_login_at
-        FROM litellm_platformaccount
+        FROM deltallm_platformaccount
         WHERE lower(email)=lower($1)
         LIMIT 1
         """,
@@ -93,7 +93,7 @@ async def list_org_memberships(request: Request, account_id: str | None = None) 
         rows = await db.query_raw(
             """
             SELECT membership_id, account_id, organization_id, role, created_at, updated_at
-            FROM litellm_organizationmembership
+            FROM deltallm_organizationmembership
             WHERE account_id = $1
             ORDER BY created_at DESC
             """,
@@ -103,7 +103,7 @@ async def list_org_memberships(request: Request, account_id: str | None = None) 
         rows = await db.query_raw(
             """
             SELECT membership_id, account_id, organization_id, role, created_at, updated_at
-            FROM litellm_organizationmembership
+            FROM deltallm_organizationmembership
             ORDER BY created_at DESC
             """
         )
@@ -127,7 +127,7 @@ async def upsert_org_membership(request: Request, payload: dict[str, Any]) -> di
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="organization_id is required")
 
     if not account_id and email:
-        rows = await db.query_raw("SELECT account_id FROM litellm_platformaccount WHERE lower(email)=lower($1) LIMIT 1", email)
+        rows = await db.query_raw("SELECT account_id FROM deltallm_platformaccount WHERE lower(email)=lower($1) LIMIT 1", email)
         if rows:
             account_id = rows[0].get("account_id")
     if not account_id:
@@ -135,7 +135,7 @@ async def upsert_org_membership(request: Request, payload: dict[str, Any]) -> di
 
     await db.execute_raw(
         """
-        INSERT INTO litellm_organizationmembership (membership_id, account_id, organization_id, role, created_at, updated_at)
+        INSERT INTO deltallm_organizationmembership (membership_id, account_id, organization_id, role, created_at, updated_at)
         VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
         ON CONFLICT (account_id, organization_id)
         DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
@@ -148,7 +148,7 @@ async def upsert_org_membership(request: Request, payload: dict[str, Any]) -> di
     rows = await db.query_raw(
         """
         SELECT membership_id, account_id, organization_id, role, created_at, updated_at
-        FROM litellm_organizationmembership
+        FROM deltallm_organizationmembership
         WHERE account_id = $1 AND organization_id = $2
         LIMIT 1
         """,
@@ -167,7 +167,7 @@ async def list_team_memberships(request: Request, account_id: str | None = None)
         rows = await db.query_raw(
             """
             SELECT membership_id, account_id, team_id, role, created_at, updated_at
-            FROM litellm_teammembership
+            FROM deltallm_teammembership
             WHERE account_id = $1
             ORDER BY created_at DESC
             """,
@@ -177,7 +177,7 @@ async def list_team_memberships(request: Request, account_id: str | None = None)
         rows = await db.query_raw(
             """
             SELECT membership_id, account_id, team_id, role, created_at, updated_at
-            FROM litellm_teammembership
+            FROM deltallm_teammembership
             ORDER BY created_at DESC
             """
         )
@@ -201,7 +201,7 @@ async def upsert_team_membership(request: Request, payload: dict[str, Any]) -> d
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="team_id is required")
 
     if not account_id and email:
-        rows = await db.query_raw("SELECT account_id FROM litellm_platformaccount WHERE lower(email)=lower($1) LIMIT 1", email)
+        rows = await db.query_raw("SELECT account_id FROM deltallm_platformaccount WHERE lower(email)=lower($1) LIMIT 1", email)
         if rows:
             account_id = rows[0].get("account_id")
     if not account_id:
@@ -209,7 +209,7 @@ async def upsert_team_membership(request: Request, payload: dict[str, Any]) -> d
 
     await db.execute_raw(
         """
-        INSERT INTO litellm_teammembership (membership_id, account_id, team_id, role, created_at, updated_at)
+        INSERT INTO deltallm_teammembership (membership_id, account_id, team_id, role, created_at, updated_at)
         VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
         ON CONFLICT (account_id, team_id)
         DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
@@ -222,7 +222,7 @@ async def upsert_team_membership(request: Request, payload: dict[str, Any]) -> d
     rows = await db.query_raw(
         """
         SELECT membership_id, account_id, team_id, role, created_at, updated_at
-        FROM litellm_teammembership
+        FROM deltallm_teammembership
         WHERE account_id = $1 AND team_id = $2
         LIMIT 1
         """,

@@ -11,7 +11,7 @@ from src.router import RouterConfig, RoutingStrategy, build_deployment_registry
 def _build_model_registry(cfg: AppConfig, settings: Any) -> dict[str, list[dict[str, Any]]]:
     model_registry: dict[str, list[dict[str, Any]]] = {}
     for entry in cfg.model_list:
-        params = entry.litellm_params.model_dump(exclude_none=True)
+        params = entry.deltallm_params.model_dump(exclude_none=True)
         if not params.get("api_key") and settings.openai_api_key:
             params["api_key"] = settings.openai_api_key
         if not params.get("api_base"):
@@ -19,7 +19,7 @@ def _build_model_registry(cfg: AppConfig, settings: Any) -> dict[str, list[dict[
         model_info = entry.model_info.model_dump(exclude_none=True) if entry.model_info else {}
         model_registry.setdefault(entry.model_name, []).append(
             {
-                "litellm_params": params,
+                "deltallm_params": params,
                 "model_info": model_info,
                 "deployment_id": getattr(entry, "deployment_id", None),
             }
@@ -104,18 +104,18 @@ class ModelHotReloadManager:
         app.state.failover_manager.config.num_retries = router_settings.num_retries
         app.state.failover_manager.config.retry_after = router_settings.retry_after
         app.state.failover_manager.config.timeout = router_settings.timeout
-        app.state.failover_manager.config.fallbacks = _normalize_fallbacks(app_config.litellm_settings.fallbacks)
+        app.state.failover_manager.config.fallbacks = _normalize_fallbacks(app_config.deltallm_settings.fallbacks)
 
-        if app_config.litellm_settings.guardrails:
-            app.state.guardrail_registry.load_from_config(app_config.litellm_settings.guardrails)
+        if app_config.deltallm_settings.guardrails:
+            app.state.guardrail_registry.load_from_config(app_config.deltallm_settings.guardrails)
 
         app.state.callback_manager.load_from_settings(
-            success_callbacks=app_config.litellm_settings.success_callback,
-            failure_callbacks=app_config.litellm_settings.failure_callback,
-            callbacks=app_config.litellm_settings.callbacks,
-            callback_settings=app_config.litellm_settings.callback_settings,
+            success_callbacks=app_config.deltallm_settings.success_callback,
+            failure_callbacks=app_config.deltallm_settings.failure_callback,
+            callbacks=app_config.deltallm_settings.callbacks,
+            callback_settings=app_config.deltallm_settings.callback_settings,
         )
-        app.state.turn_off_message_logging = app_config.litellm_settings.turn_off_message_logging
+        app.state.turn_off_message_logging = app_config.deltallm_settings.turn_off_message_logging
 
     @staticmethod
     def _build_router_config(router_settings: RouterSettings) -> RouterConfig:
@@ -133,16 +133,14 @@ class ModelHotReloadManager:
 
     @staticmethod
     def _has_runtime_changes(changes: dict[str, list[str]]) -> bool:
-        interesting = {"model_list", "router_settings", "litellm_settings", "general_settings"}
+        interesting = {"model_list", "router_settings", "deltallm_settings", "litellm_settings", "general_settings"}
         touched = set(changes.get("added", [])) | set(changes.get("removed", [])) | set(changes.get("modified", []))
         return bool(touched & interesting)
 
     @staticmethod
     def _validate_model_config(config: dict[str, Any]) -> None:
-        required = {"model_name", "litellm_params"}
-        missing = sorted(required - set(config.keys()))
-        if missing:
-            raise ValueError(f"Missing required model fields: {', '.join(missing)}")
+        has_params = "deltallm_params" in config or "litellm_params" in config
+        if "model_name" not in config or not has_params:
+            raise ValueError("Missing required model fields: model_name, deltallm_params")
 
-        # Validate against schema for early feedback.
         ModelDeployment.model_validate(config)

@@ -79,12 +79,12 @@ class KeyRepository:
                 t.metadata AS team_metadata,
                 o.metadata AS org_metadata,
                 v.expires
-            FROM litellm_verificationtoken v
-            LEFT JOIN litellm_usertable u
+            FROM deltallm_verificationtoken v
+            LEFT JOIN deltallm_usertable u
                 ON u.user_id = v.user_id
-            LEFT JOIN litellm_teamtable t
+            LEFT JOIN deltallm_teamtable t
                 ON t.team_id = COALESCE(v.team_id, u.team_id)
-            LEFT JOIN litellm_organizationtable o
+            LEFT JOIN deltallm_organizationtable o
                 ON o.organization_id = t.organization_id
             WHERE v.token = $1
             LIMIT 1

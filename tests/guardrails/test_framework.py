@@ -72,7 +72,7 @@ def test_registry_loads_from_config():
         [
             {
                 "guardrail_name": "echo-from-config",
-                "litellm_params": {
+                "deltallm_params": {
                     "guardrail": "tests.guardrails.test_framework.EchoGuardrail",
                     "mode": "pre_call",
                     "default_on": True,

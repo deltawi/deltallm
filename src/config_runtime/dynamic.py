@@ -137,7 +137,7 @@ class DynamicConfigManager:
             rows = await self.db.query_raw(
                 """
                 SELECT config_value
-                FROM litellm_config
+                FROM deltallm_config
                 WHERE config_name = $1
                 LIMIT 1
                 """,
@@ -174,7 +174,7 @@ class DynamicConfigManager:
         try:
             await self.db.execute_raw(
                 """
-                INSERT INTO litellm_config (config_name, config_value, updated_by, updated_at)
+                INSERT INTO deltallm_config (config_name, config_value, updated_by, updated_at)
                 VALUES ($1, $2, $3, NOW())
                 ON CONFLICT (config_name) DO UPDATE
                 SET config_value = EXCLUDED.config_value,

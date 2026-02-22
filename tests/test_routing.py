@@ -21,8 +21,8 @@ async def test_least_busy_strategy_selects_lowest_active_requests():
     registry = build_deployment_registry(
         {
             "gpt-4o-mini": [
-                {"deployment_id": "dep-a", "litellm_params": {"model": "openai/gpt-4o-mini"}},
-                {"deployment_id": "dep-b", "litellm_params": {"model": "openai/gpt-4o-mini"}},
+                {"deployment_id": "dep-a", "deltallm_params": {"model": "openai/gpt-4o-mini"}},
+                {"deployment_id": "dep-b", "deltallm_params": {"model": "openai/gpt-4o-mini"}},
             ]
         }
     )

@@ -73,7 +73,7 @@ class SpendTrackingService:
             end_iso = et.isoformat() if isinstance(et, datetime) else str(et)
             await self.db.execute_raw(
                 """
-                INSERT INTO litellm_spendlogs (
+                INSERT INTO deltallm_spendlogs (
                     id,
                     request_id,
                     call_type,

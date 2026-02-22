@@ -31,7 +31,7 @@ export default function Guardrails() {
     const payload = {
       guardrails: updated.map((g: any) => ({
         guardrail_name: g.guardrail_name,
-        litellm_params: g.litellm_params || {
+        deltallm_params: g.deltallm_params || {
           guardrail: g.guardrail,
           mode: g.mode,
           default_action: g.default_action,
@@ -48,7 +48,7 @@ export default function Guardrails() {
     const current = data || [];
     const newItem = {
       guardrail_name: form.guardrail_name,
-      litellm_params: {
+      deltallm_params: {
         guardrail: form.guardrail,
         mode: form.mode,
         default_action: form.default_action,
@@ -78,7 +78,7 @@ export default function Guardrails() {
   };
 
   const openEdit = (row: any) => {
-    const params = row.litellm_params || {};
+    const params = row.deltallm_params || {};
     setForm({
       guardrail_name: row.guardrail_name || '',
       guardrail: params.guardrail || '',
@@ -97,11 +97,11 @@ export default function Guardrails() {
         <span className="font-medium">{r.guardrail_name}</span>
       </div>
     ) },
-    { key: 'type', header: 'Class', render: (r: any) => <span className="text-xs bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full">{r.litellm_params?.guardrail || '—'}</span> },
-    { key: 'mode', header: 'Mode', render: (r: any) => <span className="text-xs bg-gray-100 px-2 py-0.5 rounded-full">{r.litellm_params?.mode || '—'}</span> },
-    { key: 'default_action', header: 'Action', render: (r: any) => <span className="text-xs">{r.litellm_params?.default_action || '—'}</span> },
-    { key: 'threshold', header: 'Threshold', render: (r: any) => r.litellm_params?.threshold ?? '—' },
-    { key: 'enabled', header: 'Status', render: (r: any) => <StatusBadge status={r.litellm_params?.default_on !== false ? 'enabled' : 'disabled'} /> },
+    { key: 'type', header: 'Class', render: (r: any) => <span className="text-xs bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full">{r.deltallm_params?.guardrail || '—'}</span> },
+    { key: 'mode', header: 'Mode', render: (r: any) => <span className="text-xs bg-gray-100 px-2 py-0.5 rounded-full">{r.deltallm_params?.mode || '—'}</span> },
+    { key: 'default_action', header: 'Action', render: (r: any) => <span className="text-xs">{r.deltallm_params?.default_action || '—'}</span> },
+    { key: 'threshold', header: 'Threshold', render: (r: any) => r.deltallm_params?.threshold ?? '—' },
+    { key: 'enabled', header: 'Status', render: (r: any) => <StatusBadge status={r.deltallm_params?.default_on !== false ? 'enabled' : 'disabled'} /> },
     {
       key: 'actions', header: '', render: (r: any) => (
         <div className="flex gap-1">

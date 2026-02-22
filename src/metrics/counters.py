@@ -10,50 +10,50 @@ from src.metrics.prometheus import (
     sanitize_label,
 )
 
-litellm_requests_metric = Counter(
-    "litellm_requests_total",
+deltallm_requests_metric = Counter(
+    "deltallm_requests_total",
     "Total LLM API requests",
     ["model", "api_provider", "api_key", "user", "team", "status_code"],
     registry=get_prometheus_registry(),
 )
 
-litellm_request_failures_metric = Counter(
-    "litellm_request_failures_total",
+deltallm_request_failures_metric = Counter(
+    "deltallm_request_failures_total",
     "Total failed requests",
     ["model", "api_provider", "error_type"],
     registry=get_prometheus_registry(),
 )
 
-litellm_input_tokens_metric = Counter(
-    "litellm_input_tokens_total",
+deltallm_input_tokens_metric = Counter(
+    "deltallm_input_tokens_total",
     "Total input tokens",
     ["model", "api_provider", "api_key", "user", "team"],
     registry=get_prometheus_registry(),
 )
 
-litellm_output_tokens_metric = Counter(
-    "litellm_output_tokens_total",
+deltallm_output_tokens_metric = Counter(
+    "deltallm_output_tokens_total",
     "Total output tokens",
     ["model", "api_provider", "api_key", "user", "team"],
     registry=get_prometheus_registry(),
 )
 
-litellm_spend_metric = Counter(
-    "litellm_spend_total",
+deltallm_spend_metric = Counter(
+    "deltallm_spend_total",
     "Total spend in USD",
     ["model", "api_provider", "api_key", "user", "team"],
     registry=get_prometheus_registry(),
 )
 
-litellm_cache_hit_metric = Counter(
-    "litellm_cache_hit_total",
+deltallm_cache_hit_metric = Counter(
+    "deltallm_cache_hit_total",
     "Total cache hits",
     ["model", "cache_type"],
     registry=get_prometheus_registry(),
 )
 
-litellm_cache_miss_metric = Counter(
-    "litellm_cache_miss_total",
+deltallm_cache_miss_metric = Counter(
+    "deltallm_cache_miss_total",
     "Total cache misses",
     ["model", "cache_type"],
     registry=get_prometheus_registry(),
@@ -69,7 +69,7 @@ def increment_request(
     team: str | None,
     status_code: int,
 ) -> None:
-    litellm_requests_metric.labels(
+    deltallm_requests_metric.labels(
         model=sanitize_label(model),
         api_provider=sanitize_label(api_provider),
         api_key=hash_api_key(api_key),
@@ -80,7 +80,7 @@ def increment_request(
 
 
 def increment_request_failure(*, model: str, api_provider: str, error_type: str) -> None:
-    litellm_request_failures_metric.labels(
+    deltallm_request_failures_metric.labels(
         model=sanitize_label(model),
         api_provider=sanitize_label(api_provider),
         error_type=sanitize_label(error_type),
@@ -104,8 +104,8 @@ def increment_usage(
         "user": sanitize_label(user, ANONYMOUS_LABEL),
         "team": sanitize_label(team, DEFAULT_TEAM_LABEL),
     }
-    litellm_input_tokens_metric.labels(**labels).inc(max(0, int(prompt_tokens)))
-    litellm_output_tokens_metric.labels(**labels).inc(max(0, int(completion_tokens)))
+    deltallm_input_tokens_metric.labels(**labels).inc(max(0, int(prompt_tokens)))
+    deltallm_output_tokens_metric.labels(**labels).inc(max(0, int(completion_tokens)))
 
 
 def increment_spend(
@@ -117,7 +117,7 @@ def increment_spend(
     team: str | None,
     spend: float,
 ) -> None:
-    litellm_spend_metric.labels(
+    deltallm_spend_metric.labels(
         model=sanitize_label(model),
         api_provider=sanitize_label(api_provider),
         api_key=hash_api_key(api_key),
@@ -127,14 +127,14 @@ def increment_spend(
 
 
 def increment_cache_hit(*, model: str, cache_type: str) -> None:
-    litellm_cache_hit_metric.labels(
+    deltallm_cache_hit_metric.labels(
         model=sanitize_label(model),
         cache_type=sanitize_label(cache_type),
     ).inc()
 
 
 def increment_cache_miss(*, model: str, cache_type: str) -> None:
-    litellm_cache_miss_metric.labels(
+    deltallm_cache_miss_metric.labels(
         model=sanitize_label(model),
         cache_type=sanitize_label(cache_type),
     ).inc()

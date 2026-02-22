@@ -36,13 +36,13 @@ class PrometheusCacheMetrics:
     def __init__(self, cache_type: str = "default") -> None:
         self.cache_type = cache_type
         self._writes = Counter(
-            "litellm_cache_write_total",
+            "deltallm_cache_write_total",
             "Total cache writes",
             ["endpoint", "model"],
             registry=get_prometheus_registry(),
         )
         self._errors = Counter(
-            "litellm_cache_error_total",
+            "deltallm_cache_error_total",
             "Total cache errors",
             ["operation"],
             registry=get_prometheus_registry(),

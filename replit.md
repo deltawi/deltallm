@@ -100,7 +100,7 @@ DeltaLLM is an open-source LLM gateway/proxy (similar to LiteLLM) that provides 
 - Fixed spend logging: added UUID id column, timestamp casting, JSONB serialization, removed FK constraint
 - Added master key auth fallback to proxy endpoints (chat, audio, etc.) via `_is_master_key()` in auth middleware
 - Chat cost calculation now uses deployment-level pricing from model_info instead of only static cost map
-- Prisma schema updated to remove litellm_spendlogs FK to litellm_verificationtoken
+- Prisma schema updated to remove deltallm_spendlogs FK to deltallm_verificationtoken
 - Added default_params feature: per-deployment default parameters injected into upstream provider requests
   - `src/routers/utils.py`: `apply_default_params()` helper merges defaults (user values take precedence)
   - `src/config.py`: `ModelInfo.default_params` field added for persistence
@@ -133,6 +133,18 @@ DeltaLLM is an open-source LLM gateway/proxy (similar to LiteLLM) that provides 
   - API endpoints: GET/PUT/DELETE `/ui/api/guardrails/scope/{scope}/{entity_id}` for managing per-org/team/key guardrail configs
   - `ui/src/components/ScopedGuardrailEditor.tsx`: Reusable editor component with inherit/override mode selector, include/exclude tag management
   - Guardrails page updated with "Scoped Assignments" section: org/team/key entity picker + inline editor
+- Security: Master key comparisons now use `hmac.compare_digest()` for constant-time comparison (prevents timing attacks)
+- Security: Session cookie `secure` flag now conditionally enabled based on production environment detection
+- Full rebrand from "litellm" to "deltallm" across entire codebase:
+  - DB tables renamed: `litellm_*` → `deltallm_*` (11 tables)
+  - Prisma models renamed: `LiteLLM_*` → `DeltaLLM_*`
+  - Config keys: `litellm_params` → `deltallm_params`, `litellm_settings` → `deltallm_settings`
+  - Prometheus metrics: `litellm_*` → `deltallm_*` prefix
+  - Response headers: `x-litellm-cache-hit` → `x-deltallm-cache-hit`
+  - Backward compatibility: Pydantic AliasChoices accepts both old and new config key names
+  - All raw SQL queries updated to use new table names
+  - UI components updated to use new key names
+  - Helm charts, tests, docs, and config examples updated
 
 ## User Preferences
 - None recorded yet

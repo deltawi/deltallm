@@ -268,9 +268,9 @@ async def test_app() -> FastAPI:
     app.state.key_service = KeyService(repository=repo, redis_client=redis, salt=salt)
     app.state.limit_counter = LimitCounter(redis_client=redis)
     app.state.model_registry = {
-        "gpt-4o-mini": [{"litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "provider-key"}}],
+        "gpt-4o-mini": [{"deltallm_params": {"model": "openai/gpt-4o-mini", "api_key": "provider-key"}}],
         "text-embedding-3-small": [
-            {"litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "provider-key"}}
+            {"deltallm_params": {"model": "openai/text-embedding-3-small", "api_key": "provider-key"}}
         ],
     }
     app.state.http_client = mock_http

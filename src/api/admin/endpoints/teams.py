@@ -23,7 +23,7 @@ async def _require_team_access(
     rows = await db.query_raw(
         """
         SELECT team_id, team_alias, organization_id, max_budget, spend, models, rpm_limit, tpm_limit, blocked, created_at, updated_at
-        FROM litellm_teamtable
+        FROM deltallm_teamtable
         WHERE team_id = $1
         LIMIT 1
         """,
@@ -72,8 +72,8 @@ async def list_teams(
             """
             SELECT t.team_id, t.team_alias, t.organization_id, t.max_budget, t.spend, t.models, t.rpm_limit, t.tpm_limit, t.blocked,
                    t.created_at, t.updated_at,
-                   (SELECT COUNT(*) FROM litellm_usertable u WHERE u.team_id = t.team_id) AS member_count
-            FROM litellm_teamtable t
+                   (SELECT COUNT(*) FROM deltallm_usertable u WHERE u.team_id = t.team_id) AS member_count
+            FROM deltallm_teamtable t
             ORDER BY t.created_at DESC
             """
         )
@@ -83,8 +83,8 @@ async def list_teams(
             f"""
             SELECT t.team_id, t.team_alias, t.organization_id, t.max_budget, t.spend, t.models, t.rpm_limit, t.tpm_limit, t.blocked,
                    t.created_at, t.updated_at,
-                   (SELECT COUNT(*) FROM litellm_usertable u WHERE u.team_id = t.team_id) AS member_count
-            FROM litellm_teamtable t
+                   (SELECT COUNT(*) FROM deltallm_usertable u WHERE u.team_id = t.team_id) AS member_count
+            FROM deltallm_teamtable t
             WHERE t.organization_id IN ({placeholders})
             ORDER BY t.created_at DESC
             """,
@@ -133,7 +133,7 @@ async def create_team(
 
     await db.execute_raw(
         """
-        INSERT INTO litellm_teamtable (team_id, team_alias, organization_id, max_budget, spend, rpm_limit, tpm_limit, models, blocked, created_at, updated_at)
+        INSERT INTO deltallm_teamtable (team_id, team_alias, organization_id, max_budget, spend, rpm_limit, tpm_limit, models, blocked, created_at, updated_at)
         VALUES ($1, $2, $3, $4, 0, $5, $6, $7::text[], false, NOW(), NOW())
         """,
         team_id,
@@ -148,13 +148,13 @@ async def create_team(
     ctx = get_platform_auth_context(request)
     if ctx:
         existing = await db.query_raw(
-            "SELECT user_id, team_id FROM litellm_usertable WHERE user_id = $1 LIMIT 1",
+            "SELECT user_id, team_id FROM deltallm_usertable WHERE user_id = $1 LIMIT 1",
             ctx.account_id,
         )
         if not existing:
             await db.execute_raw(
                 """
-                INSERT INTO litellm_usertable (user_id, user_email, user_role, spend, models, team_id, created_at, updated_at)
+                INSERT INTO deltallm_usertable (user_id, user_email, user_role, spend, models, team_id, created_at, updated_at)
                 VALUES ($1, $2, 'team_admin', 0, '{}'::text[], $3, NOW(), NOW())
                 """,
                 ctx.account_id,
@@ -163,7 +163,7 @@ async def create_team(
             )
         elif not existing[0].get("team_id"):
             await db.execute_raw(
-                "UPDATE litellm_usertable SET team_id = $1, user_role = 'team_admin', updated_at = NOW() WHERE user_id = $2",
+                "UPDATE deltallm_usertable SET team_id = $1, user_role = 'team_admin', updated_at = NOW() WHERE user_id = $2",
                 team_id,
                 ctx.account_id,
             )
@@ -207,7 +207,7 @@ async def update_team(
 
     await db.execute_raw(
         """
-        UPDATE litellm_teamtable
+        UPDATE deltallm_teamtable
         SET team_alias = $1,
             organization_id = $2,
             max_budget = $3,
@@ -228,7 +228,7 @@ async def update_team(
     updated_rows = await db.query_raw(
         """
         SELECT team_id, team_alias, organization_id, max_budget, spend, models, rpm_limit, tpm_limit, blocked, created_at, updated_at
-        FROM litellm_teamtable
+        FROM deltallm_teamtable
         WHERE team_id = $1
         LIMIT 1
         """,
@@ -252,7 +252,7 @@ async def list_team_members(
     rows = await db.query_raw(
         """
         SELECT user_id, user_email, user_role, spend, max_budget, team_id, created_at, updated_at
-        FROM litellm_usertable
+        FROM deltallm_usertable
         WHERE team_id = $1
         ORDER BY created_at DESC
         """,
@@ -280,7 +280,7 @@ async def add_team_member(
 
     await db.execute_raw(
         """
-        INSERT INTO litellm_usertable (user_id, user_email, user_role, spend, models, team_id, created_at, updated_at)
+        INSERT INTO deltallm_usertable (user_id, user_email, user_role, spend, models, team_id, created_at, updated_at)
         VALUES ($1, $2, $3, 0, '{}'::text[], $4, NOW(), NOW())
         ON CONFLICT (user_id)
         DO UPDATE SET user_email = EXCLUDED.user_email, user_role = EXCLUDED.user_role, team_id = EXCLUDED.team_id, updated_at = NOW()
@@ -309,17 +309,17 @@ async def delete_team(
     db = db_or_503(request)
     await _require_team_access(request, scope, db, team_id, write=True)
     key_count = await db.query_raw(
-        "SELECT COUNT(*) AS cnt FROM litellm_verificationtoken WHERE team_id = $1",
+        "SELECT COUNT(*) AS cnt FROM deltallm_verificationtoken WHERE team_id = $1",
         team_id,
     )
     if key_count and int(key_count[0].get("cnt", 0)) > 0:
         raise HTTPException(status_code=409, detail=f"Cannot delete team: {key_count[0]['cnt']} API key(s) still assigned. Reassign or revoke them first.")
     await db.execute_raw(
-        "UPDATE litellm_usertable SET team_id = NULL, updated_at = NOW() WHERE team_id = $1",
+        "UPDATE deltallm_usertable SET team_id = NULL, updated_at = NOW() WHERE team_id = $1",
         team_id,
     )
     deleted = await db.execute_raw(
-        "DELETE FROM litellm_teamtable WHERE team_id = $1",
+        "DELETE FROM deltallm_teamtable WHERE team_id = $1",
         team_id,
     )
     return {"deleted": int(deleted or 0) > 0}
@@ -337,7 +337,7 @@ async def remove_team_member(
     db = db_or_503(request)
     await _require_team_access(request, scope, db, team_id, write=True)
     updated = await db.execute_raw(
-        "UPDATE litellm_usertable SET team_id = NULL, updated_at = NOW() WHERE team_id = $1 AND user_id = $2",
+        "UPDATE deltallm_usertable SET team_id = NULL, updated_at = NOW() WHERE team_id = $1 AND user_id = $2",
         team_id,
         user_id,
     )

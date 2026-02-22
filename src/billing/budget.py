@@ -78,7 +78,7 @@ class BudgetEnforcementService:
         rows = await self.db.query_raw(
             """
             SELECT model_max_budget
-            FROM litellm_teamtable
+            FROM deltallm_teamtable
             WHERE team_id = $1
             LIMIT 1
             """,
@@ -98,7 +98,7 @@ class BudgetEnforcementService:
         spend_rows = await self.db.query_raw(
             """
             SELECT COALESCE(SUM(spend), 0) AS total
-            FROM litellm_spendlogs
+            FROM deltallm_spendlogs
             WHERE team_id = $1 AND model = $2
             """,
             team_id,
@@ -115,10 +115,10 @@ class BudgetEnforcementService:
 
     async def _get_entity(self, entity_type: str, entity_id: str) -> dict[str, Any] | None:
         table_map = {
-            "key": ("litellm_verificationtoken", "token"),
-            "user": ("litellm_usertable", "user_id"),
-            "team": ("litellm_teamtable", "team_id"),
-            "org": ("litellm_organizationtable", "organization_id"),
+            "key": ("deltallm_verificationtoken", "token"),
+            "user": ("deltallm_usertable", "user_id"),
+            "team": ("deltallm_teamtable", "team_id"),
+            "org": ("deltallm_organizationtable", "organization_id"),
         }
         table_info = table_map.get(entity_type)
         if table_info is None:
@@ -157,10 +157,10 @@ class BudgetEnforcementService:
             return entity
 
         table_map = {
-            "key": ("litellm_verificationtoken", "token"),
-            "user": ("litellm_usertable", "user_id"),
-            "team": ("litellm_teamtable", "team_id"),
-            "org": ("litellm_organizationtable", "organization_id"),
+            "key": ("deltallm_verificationtoken", "token"),
+            "user": ("deltallm_usertable", "user_id"),
+            "team": ("deltallm_teamtable", "team_id"),
+            "org": ("deltallm_organizationtable", "organization_id"),
         }
         table_info = table_map.get(entity_type)
         if table_info is None:

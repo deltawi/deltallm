@@ -134,7 +134,7 @@ async def get_spend_logs(
             team_id,
             cache_hit,
             request_tags
-        FROM litellm_spendlogs
+        FROM deltallm_spendlogs
         {where_sql}
         ORDER BY start_time DESC
         LIMIT ${limit_idx}
@@ -146,7 +146,7 @@ async def get_spend_logs(
     total_rows = await db.query_raw(
         f"""
         SELECT COUNT(*) AS total
-        FROM litellm_spendlogs
+        FROM deltallm_spendlogs
         {where_sql}
         """,
         *params,
@@ -189,7 +189,7 @@ async def get_global_spend(
             COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
             COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
             COUNT(*) AS total_requests
-        FROM litellm_spendlogs
+        FROM deltallm_spendlogs
         {where_sql}
         """,
         *params,
@@ -231,7 +231,7 @@ async def get_spend_report(
             COUNT(*) AS request_count,
             COALESCE(SUM(total_tokens), 0) AS total_tokens,
             COALESCE(AVG(spend), 0) AS avg_spend_per_request
-        FROM litellm_spendlogs
+        FROM deltallm_spendlogs
         {where_sql}
         GROUP BY {group_column}
         ORDER BY total_spend DESC
@@ -250,7 +250,7 @@ async def get_spend_per_key(request: Request, _: str = Depends(require_master_ke
     rows = await db.query_raw(
         """
         SELECT token, key_name, spend, max_budget, user_id, team_id
-        FROM litellm_verificationtoken
+        FROM deltallm_verificationtoken
         ORDER BY spend DESC
         """
     )
@@ -263,7 +263,7 @@ async def get_spend_per_team(request: Request, _: str = Depends(require_master_k
     rows = await db.query_raw(
         """
         SELECT team_id, team_alias, spend, max_budget
-        FROM litellm_teamtable
+        FROM deltallm_teamtable
         ORDER BY spend DESC
         """
     )
@@ -294,7 +294,7 @@ async def get_spend_per_end_user(
             COALESCE(end_user, "user", 'anonymous') AS end_user_id,
             COALESCE(SUM(spend), 0) AS total_spend,
             COUNT(*) AS request_count
-        FROM litellm_spendlogs
+        FROM deltallm_spendlogs
         {where_sql}
         GROUP BY end_user_id
         ORDER BY total_spend DESC
@@ -329,7 +329,7 @@ async def get_spend_per_model(
             COALESCE(SUM(spend), 0) AS total_spend,
             COALESCE(SUM(total_tokens), 0) AS total_tokens,
             COUNT(*) AS request_count
-        FROM litellm_spendlogs
+        FROM deltallm_spendlogs
         {where_sql}
         GROUP BY model
         ORDER BY total_spend DESC

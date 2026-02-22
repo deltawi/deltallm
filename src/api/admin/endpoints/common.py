@@ -103,14 +103,14 @@ def model_entries(app: Any) -> list[dict[str, Any]]:
     for model_name, deployments in registry.items():
         for index, deployment in enumerate(deployments):
             deployment_id = str(deployment.get("deployment_id") or f"{model_name}-{index}")
-            params = dict(deployment.get("litellm_params", {}))
+            params = dict(deployment.get("deltallm_params", {}))
             model_info = dict(deployment.get("model_info", {}))
             entries.append(
                 {
                     "deployment_id": deployment_id,
                     "model_name": model_name,
                     "provider": str(params.get("model", "")).split("/")[0] or "unknown",
-                    "litellm_params": params,
+                    "deltallm_params": params,
                     "model_info": model_info,
                 }
             )
@@ -128,20 +128,20 @@ def guardrail_type_from_class_path(class_path: str) -> str:
 
 def serialize_guardrail(raw: Any) -> dict[str, Any]:
     item = raw.model_dump(mode="python") if hasattr(raw, "model_dump") else dict(raw)
-    litellm_params = dict(item.get("litellm_params", {}))
-    class_path = str(litellm_params.get("guardrail") or "")
-    threshold = litellm_params.get("threshold")
+    deltallm_params = dict(item.get("deltallm_params", {}))
+    class_path = str(deltallm_params.get("guardrail") or "")
+    threshold = deltallm_params.get("threshold")
     if threshold is None:
-        threshold = litellm_params.get("score_threshold")
+        threshold = deltallm_params.get("score_threshold")
     if threshold is None:
-        threshold = litellm_params.get("confidence_threshold")
+        threshold = deltallm_params.get("confidence_threshold")
 
     return {
         "guardrail_name": item.get("guardrail_name"),
         "type": guardrail_type_from_class_path(class_path),
-        "mode": litellm_params.get("mode", "pre_call"),
-        "enabled": bool(litellm_params.get("enabled", True)),
-        "default_action": litellm_params.get("default_action", "block"),
+        "mode": deltallm_params.get("mode", "pre_call"),
+        "enabled": bool(deltallm_params.get("enabled", True)),
+        "default_action": deltallm_params.get("default_action", "block"),
         "threshold": float(threshold) if threshold is not None else 0.5,
-        "litellm_params": to_json_value(litellm_params),
+        "deltallm_params": to_json_value(deltallm_params),
     }

@@ -25,8 +25,8 @@ async def list_organizations(
         rows = await db.query_raw(
             """
             SELECT o.organization_id, o.organization_name, o.max_budget, o.spend, o.rpm_limit, o.tpm_limit, o.created_at, o.updated_at,
-                   (SELECT COUNT(*) FROM litellm_teamtable t WHERE t.organization_id = o.organization_id) AS team_count
-            FROM litellm_organizationtable o
+                   (SELECT COUNT(*) FROM deltallm_teamtable t WHERE t.organization_id = o.organization_id) AS team_count
+            FROM deltallm_organizationtable o
             ORDER BY o.created_at DESC
             """
         )
@@ -35,8 +35,8 @@ async def list_organizations(
         rows = await db.query_raw(
             f"""
             SELECT o.organization_id, o.organization_name, o.max_budget, o.spend, o.rpm_limit, o.tpm_limit, o.created_at, o.updated_at,
-                   (SELECT COUNT(*) FROM litellm_teamtable t WHERE t.organization_id = o.organization_id) AS team_count
-            FROM litellm_organizationtable o
+                   (SELECT COUNT(*) FROM deltallm_teamtable t WHERE t.organization_id = o.organization_id) AS team_count
+            FROM deltallm_organizationtable o
             WHERE o.organization_id IN ({placeholders})
             ORDER BY o.created_at DESC
             """,
@@ -54,7 +54,7 @@ async def get_organization(request: Request, organization_id: str) -> dict[str, 
     rows = await db.query_raw(
         """
         SELECT organization_id, organization_name, max_budget, spend, rpm_limit, tpm_limit, created_at, updated_at
-        FROM litellm_organizationtable
+        FROM deltallm_organizationtable
         WHERE organization_id = $1
         LIMIT 1
         """,
@@ -76,7 +76,7 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
 
     await db.execute_raw(
         """
-        INSERT INTO litellm_organizationtable (
+        INSERT INTO deltallm_organizationtable (
             id,
             organization_id,
             organization_name,
@@ -117,7 +117,7 @@ async def update_organization(request: Request, organization_id: str, payload: d
     rows = await db.query_raw(
         """
         SELECT organization_id, organization_name, max_budget, spend, rpm_limit, tpm_limit, created_at, updated_at
-        FROM litellm_organizationtable
+        FROM deltallm_organizationtable
         WHERE organization_id = $1
         LIMIT 1
         """,
@@ -134,7 +134,7 @@ async def update_organization(request: Request, organization_id: str, payload: d
 
     await db.execute_raw(
         """
-        UPDATE litellm_organizationtable
+        UPDATE deltallm_organizationtable
         SET organization_name = $1,
             max_budget = $2,
             rpm_limit = $3,
@@ -151,7 +151,7 @@ async def update_organization(request: Request, organization_id: str, payload: d
     updated_rows = await db.query_raw(
         """
         SELECT organization_id, organization_name, max_budget, spend, rpm_limit, tpm_limit, created_at, updated_at
-        FROM litellm_organizationtable
+        FROM deltallm_organizationtable
         WHERE organization_id = $1
         LIMIT 1
         """,
@@ -168,8 +168,8 @@ async def list_organization_members(request: Request, organization_id: str) -> l
     rows = await db.query_raw(
         """
         SELECT u.user_id, u.user_email, u.user_role, u.spend, u.max_budget, u.team_id, t.team_alias, u.created_at, u.updated_at
-        FROM litellm_usertable u
-        LEFT JOIN litellm_teamtable t ON u.team_id = t.team_id
+        FROM deltallm_usertable u
+        LEFT JOIN deltallm_teamtable t ON u.team_id = t.team_id
         WHERE t.organization_id = $1
         ORDER BY u.created_at DESC
         """,
@@ -184,8 +184,8 @@ async def list_organization_teams(request: Request, organization_id: str) -> lis
     rows = await db.query_raw(
         """
         SELECT t.team_id, t.team_alias, t.max_budget, t.spend, t.rpm_limit, t.tpm_limit, t.models, t.blocked, t.created_at, t.updated_at,
-               (SELECT COUNT(*) FROM litellm_usertable u WHERE u.team_id = t.team_id) AS member_count
-        FROM litellm_teamtable t
+               (SELECT COUNT(*) FROM deltallm_usertable u WHERE u.team_id = t.team_id) AS member_count
+        FROM deltallm_teamtable t
         WHERE t.organization_id = $1
         ORDER BY t.created_at DESC
         """,

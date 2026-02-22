@@ -86,7 +86,7 @@ export default function Models() {
   const [saving, setSaving] = useState(false);
 
   const buildPayload = () => {
-    const litellm_params: Record<string, any> = {
+    const deltallm_params: Record<string, any> = {
       model: form.model,
       api_key: form.api_key || undefined,
       api_base: form.api_base || undefined,
@@ -98,8 +98,8 @@ export default function Models() {
     };
 
     if (form.mode === 'chat') {
-      litellm_params.stream_timeout = numOrUndef(form.stream_timeout);
-      litellm_params.max_tokens = numOrUndef(form.max_tokens);
+      deltallm_params.stream_timeout = numOrUndef(form.stream_timeout);
+      deltallm_params.max_tokens = numOrUndef(form.max_tokens);
     }
 
     const model_info: Record<string, any> = {
@@ -143,7 +143,7 @@ export default function Models() {
     }
     model_info.default_params = Object.keys(dp).length > 0 ? dp : {};
 
-    return { model_name: form.model_name, litellm_params, model_info };
+    return { model_name: form.model_name, deltallm_params, model_info };
   };
 
   const handleCreate = async () => {
@@ -190,7 +190,7 @@ export default function Models() {
   };
 
   const openEdit = (row: any) => {
-    const lp = row.litellm_params || {};
+    const lp = row.deltallm_params || {};
     const mi = row.model_info || {};
     setForm({
       mode: (mi.mode || row.mode || 'chat') as ModelMode,
