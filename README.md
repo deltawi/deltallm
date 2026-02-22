@@ -2,6 +2,8 @@
 
 An open-source LLM gateway and proxy that provides a unified OpenAI-compatible API for multiple LLM providers. Route requests across OpenAI, Anthropic, Azure OpenAI, and more through a single endpoint with enterprise features built in.
 
+**[Read the full documentation](https://deltallm.readthedocs.io/en/latest)**
+
 ## Features
 
 - **Unified API** — OpenAI-compatible endpoints for chat completions, embeddings, image generation, text-to-speech, speech-to-text, and reranking
@@ -260,7 +262,7 @@ deltallm/
 
 ## Configuration
 
-DeltaLLM is configured via a YAML file. See [`config.example.yaml`](config.example.yaml) for all available options.
+DeltaLLM is configured via a YAML file. See [`config.example.yaml`](config.example.yaml) for all available options, or visit the [Configuration Reference](https://deltallm.readthedocs.io/en/latest/configuration/) for detailed documentation.
 
 ### Key sections
 
