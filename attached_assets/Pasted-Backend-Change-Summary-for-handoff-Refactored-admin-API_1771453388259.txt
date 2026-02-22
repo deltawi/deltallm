@@ -1,0 +1,70 @@
+Backend Change Summary (for handoff)
+
+  - Refactored admin API structure by splitting large mixed src/ui/routes.py handlers into dedicated modules under:
+      - src/api/admin/endpoints/keys.py
+      - src/api/admin/endpoints/users.py
+      - src/api/admin/endpoints/teams.py
+      - src/api/admin/endpoints/organizations.py
+      - src/api/admin/endpoints/guardrails.py
+      - src/api/admin/endpoints/config.py
+      - shared helpers in src/api/admin/endpoints/common.py
+  - Updated src/api/admin/router.py to mount split admin routers, then include legacy UI routes for non-split endpoints.
+  - Kept endpoint paths and payload contracts stable (no frontend path changes required).
+
+  What this means for Orgs/Teams/Users/Keys + RPM/TPM
+
+  - CRUD support for hierarchical rate limits is preserved and validated for:
+      - Organizations: rpm_limit, tpm_limit
+      - Teams: rpm_limit, tpm_limit
+      - Users: rpm_limit, tpm_limit
+      - API Keys: rpm_limit, tpm_limit
+  - Admin endpoints continue to accept, persist, and return those fields.
+  - End-to-end checks confirmed create + update + list flows return expected RPM/TPM values at each level.
+
+  Key Admin Routes (unchanged paths)
+
+  - Organizations:
+      - GET /ui/api/organizations
+      - POST /ui/api/organizations
+      - PUT /ui/api/organizations/{organization_id}
+  - Teams:
+      - GET /ui/api/teams
+      - POST /ui/api/teams
+      - PUT /ui/api/teams/{team_id}
+  - Users:
+      - GET /ui/api/users
+      - POST /ui/api/users
+      - PUT /ui/api/users/{user_id}
+  - Keys:
+      - GET /ui/api/keys
+      - POST /ui/api/keys
+      - PUT /ui/api/keys/{token_hash}
+      - POST /ui/api/keys/{token_hash}/revoke
+
+  Additional verified admin areas
+
+  - GET/PUT /ui/api/routing
+  - GET/PUT /ui/api/settings
+  - GET/PUT /ui/api/guardrails
+
+  Operational validation
+
+  - End-to-end smoke test succeeded including:
+      - admin CRUD for org/team/user/key with RPM/TPM
+      - key issuance/revocation
+      - authenticated GET /v1/models
+      - authenticated POST /v1/chat/completions using Groq-backed model
+
+  Files changed in this refactor commit
+
+  - src/api/admin/router.py
+  - src/api/admin/endpoints/__init__.py
+  - src/api/admin/endpoints/common.py
+  - src/api/admin/endpoints/config.py
+  - src/api/admin/endpoints/guardrails.py
+  - src/api/admin/endpoints/keys.py
+  - src/api/admin/endpoints/organizations.py
+  - src/api/admin/endpoints/teams.py
+  - src/api/admin/endpoints/users.py
+  - src/ui/routes.py
+  - docs/architecture-refactor-todo.md

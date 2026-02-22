@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "deltallm.fullname" . }}-config
+  labels:
+    {{- include "deltallm.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    model_list:
+{{ toYaml .Values.config.model_list | indent 6 }}
+
+    router_settings:
+{{ toYaml .Values.config.router_settings | indent 6 }}
+
+    litellm_settings:
+{{ toYaml .Values.config.litellm_settings | indent 6 }}
+
+    general_settings:
+{{ toYaml .Values.config.general_settings | indent 6 }}

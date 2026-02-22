@@ -1,0 +1,231 @@
+generator client {
+  provider  = "prisma-client-py"
+  interface = "asyncio"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model LiteLLM_SpendLogs {
+  id                String   @id @default(uuid())
+  request_id        String
+  call_type         String
+  api_key           String
+  spend             Float
+  total_tokens      Int
+  prompt_tokens     Int
+  completion_tokens Int
+  start_time        DateTime
+  end_time          DateTime
+  model             String
+  api_base          String?
+  user              String?
+  team_id           String?
+  end_user          String?
+  metadata          Json?
+  cache_hit         Boolean  @default(false)
+  cache_key         String?
+  request_tags      String[]
+
+  @@index([api_key])
+  @@index([team_id])
+  @@index([user])
+  @@index([start_time])
+  @@index([model])
+  @@index([request_tags])
+  @@map("litellm_spendlogs")
+}
+
+model LiteLLM_VerificationToken {
+  id                    String   @id @default(uuid())
+  token                 String   @unique
+  key_name              String?
+  user_id               String?
+  team_id               String?
+  models                String[]
+  max_budget            Float?
+  soft_budget           Float?
+  spend                 Float    @default(0)
+  budget_duration       String?
+  budget_reset_at       DateTime?
+  rpm_limit             Int?
+  tpm_limit             Int?
+  max_parallel_requests Int?
+  expires               DateTime?
+  permissions           Json?
+  metadata              Json?
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
+
+  user       LiteLLM_UserTable? @relation(fields: [user_id], references: [user_id])
+  team       LiteLLM_TeamTable? @relation(fields: [team_id], references: [team_id])
+  @@index([token])
+  @@index([user_id])
+  @@index([team_id])
+  @@index([expires])
+  @@map("litellm_verificationtoken")
+}
+
+model LiteLLM_UserTable {
+  user_id         String   @id
+  user_email      String?  @unique
+  user_role       String   @default("internal_user")
+  max_budget      Float?
+  soft_budget     Float?
+  spend           Float    @default(0)
+  budget_duration String?
+  budget_reset_at DateTime?
+  models          String[]
+  tpm_limit       Int?
+  rpm_limit       Int?
+  team_id         String?
+  metadata        Json?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  team LiteLLM_TeamTable?          @relation(fields: [team_id], references: [team_id])
+  keys LiteLLM_VerificationToken[]
+
+  @@index([team_id])
+  @@map("litellm_usertable")
+}
+
+model LiteLLM_TeamTable {
+  team_id          String   @id @default(uuid())
+  team_alias       String?
+  organization_id  String?
+  max_budget       Float?
+  soft_budget      Float?
+  spend            Float    @default(0)
+  budget_duration  String?
+  budget_reset_at  DateTime?
+  model_max_budget Json?
+  tpm_limit        Int?
+  rpm_limit        Int?
+  models           String[]
+  blocked          Boolean  @default(false)
+  metadata         Json?
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  members LiteLLM_UserTable[]
+  keys    LiteLLM_VerificationToken[]
+
+  @@index([organization_id])
+  @@map("litellm_teamtable")
+}
+
+model LiteLLM_OrganizationTable {
+  id                String   @id @default(uuid())
+  organization_id   String   @unique
+  organization_name String?
+  max_budget        Float?
+  rpm_limit         Int?
+  tpm_limit         Int?
+  spend             Float    @default(0)
+  budget_duration   String?
+  budget_reset_at   DateTime?
+  metadata          Json?
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  @@map("litellm_organizationtable")
+}
+
+model LiteLLM_PlatformAccount {
+  account_id          String   @id @default(uuid())
+  email               String   @unique
+  password_hash       String?
+  role                String   @default("org_user")
+  is_active           Boolean  @default(true)
+  force_password_change Boolean @default(false)
+  mfa_enabled         Boolean  @default(false)
+  mfa_secret          String?
+  mfa_pending_secret  String?
+  metadata            Json?
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+  last_login_at       DateTime?
+
+  sessions            LiteLLM_PlatformSession[]
+  identities          LiteLLM_PlatformIdentity[]
+  organization_memberships LiteLLM_OrganizationMembership[]
+  team_memberships    LiteLLM_TeamMembership[]
+
+  @@map("litellm_platformaccount")
+}
+
+model LiteLLM_PlatformSession {
+  session_id          String   @id @default(uuid())
+  account_id          String
+  session_token_hash  String   @unique
+  mfa_verified        Boolean  @default(false)
+  expires_at          DateTime
+  revoked_at          DateTime?
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+  last_seen_at        DateTime @default(now())
+
+  account LiteLLM_PlatformAccount @relation(fields: [account_id], references: [account_id])
+
+  @@index([account_id])
+  @@index([expires_at])
+  @@map("litellm_platformsession")
+}
+
+model LiteLLM_PlatformIdentity {
+  identity_id         String   @id @default(uuid())
+  account_id          String
+  provider            String
+  subject             String
+  email               String?
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  account LiteLLM_PlatformAccount @relation(fields: [account_id], references: [account_id])
+
+  @@unique([provider, subject])
+  @@index([account_id])
+  @@map("litellm_platformidentity")
+}
+
+model LiteLLM_OrganizationMembership {
+  membership_id       String   @id @default(uuid())
+  account_id          String
+  organization_id     String
+  role                String   @default("org_member")
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  account LiteLLM_PlatformAccount @relation(fields: [account_id], references: [account_id])
+
+  @@unique([account_id, organization_id])
+  @@index([organization_id])
+  @@map("litellm_organizationmembership")
+}
+
+model LiteLLM_TeamMembership {
+  membership_id       String   @id @default(uuid())
+  account_id          String
+  team_id             String
+  role                String   @default("team_viewer")
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  account LiteLLM_PlatformAccount @relation(fields: [account_id], references: [account_id])
+
+  @@unique([account_id, team_id])
+  @@index([team_id])
+  @@map("litellm_teammembership")
+}
+
+model LiteLLM_Config {
+  config_name  String   @id
+  config_value String
+  updated_by   String?
+  updated_at   DateTime @default(now())
+
+  @@map("litellm_config")
+}

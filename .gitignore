@@ -154,6 +154,8 @@ yarn-error.log*
 
 # Vite/React build
 admin-dashboard/dist/
+ui/dist/
+ui/node_modules/
 *.local
 
 # === Project-specific ===
@@ -188,3 +190,11 @@ CLAUDE.md
 proxyllm/.coverage
 proxyllm/.pytest_cache/
 proxyllm/.DS_Store
+
+AGENTS.md
+CODEX.md
+KIMI.md
+GEMINI.md
+config.yaml
+
+.worktrees/

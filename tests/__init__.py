@@ -1,1 +1,1 @@
-"""Tests for ProxyLLM."""
+"""Test package."""
