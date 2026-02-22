@@ -91,7 +91,7 @@ async def test_dynamic_config_merges_db_and_notifies_subscribers():
                 {
                     "model_name": "gpt-4o-mini",
                     "deployment_id": "dep-1",
-                    "litellm_params": {
+                    "deltallm_params": {
                         "model": "openai/gpt-4o-mini",
                         "api_key": "os.environ/OPENAI_API_KEY",
                     },
@@ -147,7 +147,7 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
         "gpt-4o-mini": [
             {
                 "deployment_id": "old-dep",
-                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "provider-key"},
+                "deltallm_params": {"model": "openai/gpt-4o-mini", "api_key": "provider-key"},
                 "model_info": {},
             }
         ]
@@ -204,7 +204,7 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
                 {
                     "model_name": "gpt-4.1-mini",
                     "deployment_id": "new-dep",
-                    "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "provider-key"},
+                    "deltallm_params": {"model": "openai/gpt-4.1-mini", "api_key": "provider-key"},
                 }
             ],
             "router_settings": {"routing_strategy": "weighted", "num_retries": 2},

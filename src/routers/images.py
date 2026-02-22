@@ -32,7 +32,7 @@ async def _execute_image_generation(
     payload: ImageGenerationRequest,
     deployment: Deployment,
 ) -> dict[str, Any]:
-    params = deployment.litellm_params
+    params = deployment.deltallm_params
     api_key = params.get("api_key")
     if not api_key:
         raise InvalidRequestError(message="Provider API key is missing for selected model")
@@ -87,7 +87,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
         model_group=model_group,
         deployment=await app_router.select_deployment(model_group, request_context),
     )
-    api_provider = infer_provider(primary.litellm_params.get("model"))
+    api_provider = infer_provider(primary.deltallm_params.get("model"))
     request_id = request.headers.get("x-request-id")
 
     try:

@@ -24,7 +24,7 @@ async def list_keys(
         rows = await db.query_raw(
             """
             SELECT token, key_name, user_id, team_id, models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at
-            FROM litellm_verificationtoken
+            FROM deltallm_verificationtoken
             ORDER BY created_at DESC
             """
         )
@@ -33,8 +33,8 @@ async def list_keys(
         rows = await db.query_raw(
             f"""
             SELECT vt.token, vt.key_name, vt.user_id, vt.team_id, vt.models, vt.spend, vt.max_budget, vt.rpm_limit, vt.tpm_limit, vt.expires, vt.created_at, vt.updated_at
-            FROM litellm_verificationtoken vt
-            LEFT JOIN litellm_teamtable t ON vt.team_id = t.team_id
+            FROM deltallm_verificationtoken vt
+            LEFT JOIN deltallm_teamtable t ON vt.team_id = t.team_id
             WHERE t.organization_id IN ({placeholders})
             ORDER BY vt.created_at DESC
             """,
@@ -71,7 +71,7 @@ async def create_key(
         if not team_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A team must be selected when creating a key")
         rows = await db.query_raw(
-            "SELECT organization_id FROM litellm_teamtable WHERE team_id = $1 LIMIT 1",
+            "SELECT organization_id FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
             team_id,
         )
         if not rows:
@@ -86,7 +86,7 @@ async def create_key(
 
     await db.execute_raw(
         """
-        INSERT INTO litellm_verificationtoken (id, token, key_name, user_id, team_id, models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at)
+        INSERT INTO deltallm_verificationtoken (id, token, key_name, user_id, team_id, models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at)
         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5::text[], 0, $6, $7, $8, $9::timestamp, NOW(), NOW())
         """,
         token_hash,
@@ -128,7 +128,7 @@ async def update_key(
     rows = await db.query_raw(
         """
         SELECT token, key_name, user_id, team_id, models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at
-        FROM litellm_verificationtoken
+        FROM deltallm_verificationtoken
         WHERE token = $1
         LIMIT 1
         """,
@@ -155,7 +155,7 @@ async def update_key(
 
     await db.execute_raw(
         """
-        UPDATE litellm_verificationtoken
+        UPDATE deltallm_verificationtoken
         SET key_name = $1,
             user_id = $2,
             team_id = $3,
@@ -181,7 +181,7 @@ async def update_key(
     updated_rows = await db.query_raw(
         """
         SELECT token, key_name, user_id, team_id, models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at
-        FROM litellm_verificationtoken
+        FROM deltallm_verificationtoken
         WHERE token = $1
         LIMIT 1
         """,
@@ -197,8 +197,8 @@ async def _require_key_access(scope, db, token_hash: str) -> None:
         return
     rows = await db.query_raw(
         """
-        SELECT t.organization_id FROM litellm_verificationtoken vt
-        JOIN litellm_teamtable t ON vt.team_id = t.team_id
+        SELECT t.organization_id FROM deltallm_verificationtoken vt
+        JOIN deltallm_teamtable t ON vt.team_id = t.team_id
         WHERE vt.token = $1 LIMIT 1
         """,
         token_hash,
@@ -218,14 +218,14 @@ async def regenerate_key(
     db = db_or_503(request)
     await _require_key_access(scope, db, token_hash)
 
-    rows = await db.query_raw("SELECT token FROM litellm_verificationtoken WHERE token = $1 LIMIT 1", token_hash)
+    rows = await db.query_raw("SELECT token FROM deltallm_verificationtoken WHERE token = $1 LIMIT 1", token_hash)
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
 
     raw_key = f"sk-{secrets.token_urlsafe(24)}"
     new_hash = request.app.state.key_service.hash_key(raw_key)
     await db.execute_raw(
-        "UPDATE litellm_verificationtoken SET token = $1, updated_at = NOW() WHERE token = $2",
+        "UPDATE deltallm_verificationtoken SET token = $1, updated_at = NOW() WHERE token = $2",
         new_hash,
         token_hash,
     )
@@ -242,7 +242,7 @@ async def revoke_key(
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_REVOKE)
     db = db_or_503(request)
     await _require_key_access(scope, db, token_hash)
-    deleted = await db.execute_raw("DELETE FROM litellm_verificationtoken WHERE token = $1", token_hash)
+    deleted = await db.execute_raw("DELETE FROM deltallm_verificationtoken WHERE token = $1", token_hash)
     return {"revoked": int(deleted or 0) > 0}
 
 
@@ -256,5 +256,5 @@ async def delete_key(
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
     db = db_or_503(request)
     await _require_key_access(scope, db, token_hash)
-    deleted = await db.execute_raw("DELETE FROM litellm_verificationtoken WHERE token = $1", token_hash)
+    deleted = await db.execute_raw("DELETE FROM deltallm_verificationtoken WHERE token = $1", token_hash)
     return {"deleted": int(deleted or 0) > 0}

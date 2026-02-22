@@ -28,8 +28,8 @@ async def test_chat_cache_hit(client, test_app):
 
     assert r1.status_code == 200
     assert r2.status_code == 200
-    assert r1.headers["x-litellm-cache-hit"] == "false"
-    assert r2.headers["x-litellm-cache-hit"] == "true"
+    assert r1.headers["x-deltallm-cache-hit"] == "false"
+    assert r2.headers["x-deltallm-cache-hit"] == "true"
     assert test_app.state.http_client.post_calls == 1
 
 
@@ -44,8 +44,8 @@ async def test_embeddings_cache_hit(client, test_app):
 
     assert r1.status_code == 200
     assert r2.status_code == 200
-    assert r1.headers["x-litellm-cache-hit"] == "false"
-    assert r2.headers["x-litellm-cache-hit"] == "true"
+    assert r1.headers["x-deltallm-cache-hit"] == "false"
+    assert r2.headers["x-deltallm-cache-hit"] == "true"
     assert test_app.state.http_client.post_calls == 1
 
 
@@ -71,8 +71,8 @@ async def test_cache_control_no_store(client, test_app):
 
     assert r1.status_code == 200
     assert r2.status_code == 200
-    assert r1.headers["x-litellm-cache-hit"] == "false"
-    assert r2.headers["x-litellm-cache-hit"] == "false"
+    assert r1.headers["x-deltallm-cache-hit"] == "false"
+    assert r2.headers["x-deltallm-cache-hit"] == "false"
     assert test_app.state.http_client.post_calls == 2
 
 
@@ -91,7 +91,7 @@ async def test_streaming_cache_hit(client, test_app):
 
     assert r1.status_code == 200
     assert r2.status_code == 200
-    assert r1.headers["x-litellm-cache-hit"] == "false"
-    assert r2.headers["x-litellm-cache-hit"] == "true"
+    assert r1.headers["x-deltallm-cache-hit"] == "false"
+    assert r2.headers["x-deltallm-cache-hit"] == "true"
     assert "data: [DONE]" in r2.text
     assert test_app.state.http_client.stream_calls == 1

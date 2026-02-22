@@ -154,7 +154,7 @@ export default function ModelDetail() {
     );
   }
 
-  const lp = model.litellm_params || {};
+  const lp = model.deltallm_params || {};
   const mi = model.model_info || {};
   const mode: string = mi.mode || model.mode || 'chat';
   const modeOpt = MODE_OPTIONS.find(o => o.value === mode);
@@ -201,7 +201,7 @@ export default function ModelDetail() {
   };
 
   const buildPayload = () => {
-    const litellm_params: Record<string, any> = {
+    const deltallm_params: Record<string, any> = {
       model: form.model,
       api_key: form.api_key || undefined,
       api_base: form.api_base || undefined,
@@ -212,8 +212,8 @@ export default function ModelDetail() {
       weight: numOrUndef(form.weight),
     };
     if (form.mode === 'chat') {
-      litellm_params.stream_timeout = numOrUndef(form.stream_timeout);
-      litellm_params.max_tokens = numOrUndef(form.max_tokens);
+      deltallm_params.stream_timeout = numOrUndef(form.stream_timeout);
+      deltallm_params.max_tokens = numOrUndef(form.max_tokens);
     }
     const model_info: Record<string, any> = {
       mode: form.mode,
@@ -253,7 +253,7 @@ export default function ModelDetail() {
       }
     }
     model_info.default_params = Object.keys(dp).length > 0 ? dp : {};
-    return { model_name: form.model_name, litellm_params, model_info };
+    return { model_name: form.model_name, deltallm_params, model_info };
   };
 
   const handleUpdate = async () => {

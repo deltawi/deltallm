@@ -13,12 +13,12 @@ async def test_metrics_endpoint_exposes_request_and_usage_metrics(client, test_a
     metrics = await client.get("/metrics")
     assert metrics.status_code == 200
     text = metrics.text
-    assert "litellm_requests_total" in text
-    assert "litellm_input_tokens_total" in text
-    assert "litellm_output_tokens_total" in text
-    assert "litellm_spend_total" in text
-    assert "litellm_request_total_latency_seconds" in text
-    assert "litellm_llm_api_latency_seconds" in text
+    assert "deltallm_requests_total" in text
+    assert "deltallm_input_tokens_total" in text
+    assert "deltallm_output_tokens_total" in text
+    assert "deltallm_spend_total" in text
+    assert "deltallm_request_total_latency_seconds" in text
+    assert "deltallm_llm_api_latency_seconds" in text
 
 
 async def test_metrics_endpoint_exposes_cache_hit_and_miss(client, test_app):
@@ -33,12 +33,12 @@ async def test_metrics_endpoint_exposes_cache_hit_and_miss(client, test_app):
     r2 = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert r1.status_code == 200
     assert r2.status_code == 200
-    assert r2.headers.get("x-litellm-cache-hit") == "true"
+    assert r2.headers.get("x-deltallm-cache-hit") == "true"
 
     metrics = await client.get("/metrics")
     text = metrics.text
-    assert "litellm_cache_hit_total" in text
-    assert "litellm_cache_miss_total" in text
+    assert "deltallm_cache_hit_total" in text
+    assert "deltallm_cache_miss_total" in text
 
 
 async def test_metrics_endpoint_exposes_deployment_gauges(client):
@@ -47,6 +47,6 @@ async def test_metrics_endpoint_exposes_deployment_gauges(client):
 
     metrics = await client.get("/metrics")
     text = metrics.text
-    assert "litellm_deployment_state" in text
-    assert "litellm_deployment_active_requests" in text
-    assert "litellm_deployment_cooldown" in text
+    assert "deltallm_deployment_state" in text
+    assert "deltallm_deployment_active_requests" in text
+    assert "deltallm_deployment_cooldown" in text

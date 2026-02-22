@@ -35,7 +35,7 @@ async def _execute_chat(
     payload: ChatCompletionRequest,
     deployment: Deployment,
 ) -> tuple[dict[str, Any], float]:
-    params = deployment.litellm_params
+    params = deployment.deltallm_params
     api_key = params.get("api_key")
     if not api_key:
         raise InvalidRequestError(message="Provider API key is missing for selected model")
@@ -108,16 +108,16 @@ async def chat_completions(request: Request, payload: ChatCompletionRequest):
         model_group=model_group,
         deployment=await router.select_deployment(model_group, request_context),
     )
-    api_provider = infer_provider(primary.litellm_params.get("model"))
+    api_provider = infer_provider(primary.deltallm_params.get("model"))
     request_id = request.headers.get("x-request-id")
-    api_base = primary.litellm_params.get("api_base", request.app.state.settings.openai_base_url).rstrip("/")
+    api_base = primary.deltallm_params.get("api_base", request.app.state.settings.openai_base_url).rstrip("/")
     cache_context = getattr(request.state, "cache_context", None)
     cache_hit = bool(getattr(cache_context, "hit", False)) if cache_context is not None else False
     cache_key = getattr(cache_context, "cache_key", None) if cache_context is not None else None
 
     try:
         if payload.stream:
-            params = primary.litellm_params
+            params = primary.deltallm_params
             api_key = params.get("api_key")
             if not api_key:
                 raise InvalidRequestError(message="Provider API key is missing for selected model")
@@ -228,7 +228,7 @@ async def chat_completions(request: Request, payload: ChatCompletionRequest):
                 headers={
                     "Cache-Control": "no-cache",
                     "Connection": "keep-alive",
-                    "x-litellm-cache-hit": "false",
+                    "x-deltallm-cache-hit": "false",
                 },
             )
 
@@ -307,7 +307,7 @@ async def chat_completions(request: Request, payload: ChatCompletionRequest):
             call_type="completion",
             request_id=request_id,
             model=payload.model,
-            deployment_model=primary.litellm_params.get("model"),
+            deployment_model=primary.deltallm_params.get("model"),
             request_payload=request_data,
             response_obj=payload_data,
             user_api_key_dict=auth.model_dump(mode="json"),
@@ -369,7 +369,7 @@ async def chat_completions(request: Request, payload: ChatCompletionRequest):
             call_type="completion",
             request_id=request_id,
             model=payload.model,
-            deployment_model=primary.litellm_params.get("model"),
+            deployment_model=primary.deltallm_params.get("model"),
             request_payload=request_data,
             response_obj=None,
             user_api_key_dict=auth.model_dump(mode="json"),
@@ -424,7 +424,7 @@ async def chat_completions(request: Request, payload: ChatCompletionRequest):
             call_type="completion",
             request_id=request_id,
             model=payload.model,
-            deployment_model=primary.litellm_params.get("model"),
+            deployment_model=primary.deltallm_params.get("model"),
             request_payload=request_data,
             response_obj=None,
             user_api_key_dict=auth.model_dump(mode="json"),

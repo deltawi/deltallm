@@ -32,7 +32,7 @@ async def get_routing(request: Request) -> dict[str, Any]:
     for model_name, entries in getattr(request.app.state, "model_registry", {}).items():
         for index, entry in enumerate(entries):
             deployment_id = str(entry.get("deployment_id") or f"{model_name}-{index}")
-            params = dict(entry.get("litellm_params", {}))
+            params = dict(entry.get("deltallm_params", {}))
             health = health_by_id.get(deployment_id, {})
             deployments.append(
                 {
@@ -133,7 +133,7 @@ async def get_settings(
     return {
         "general_settings": general,
         "router_settings": to_json_value(app_config.router_settings.model_dump()),
-        "litellm_settings": to_json_value(app_config.litellm_settings.model_dump()),
+        "deltallm_settings": to_json_value(app_config.deltallm_settings.model_dump()),
         "model_count": len(model_entries(request.app)),
     }
 
@@ -146,7 +146,7 @@ async def update_settings(request: Request, payload: dict[str, Any]) -> dict[str
 
     general_updates = payload.get("general_settings") if isinstance(payload.get("general_settings"), dict) else {}
     router_updates = payload.get("router_settings") if isinstance(payload.get("router_settings"), dict) else {}
-    litellm_updates = payload.get("litellm_settings") if isinstance(payload.get("litellm_settings"), dict) else {}
+    deltallm_updates = payload.get("deltallm_settings") if isinstance(payload.get("deltallm_settings"), dict) else {}
 
     for key, value in general_updates.items():
         if hasattr(app_config.general_settings, key):
@@ -154,16 +154,16 @@ async def update_settings(request: Request, payload: dict[str, Any]) -> dict[str
     for key, value in router_updates.items():
         if hasattr(app_config.router_settings, key):
             setattr(app_config.router_settings, key, value)
-    for key, value in litellm_updates.items():
+    for key, value in deltallm_updates.items():
         if key == "guardrails" and isinstance(value, list):
-            app_config.litellm_settings.guardrails = [
-                GuardrailConfig(guardrail_name=str(item.get("guardrail_name")), litellm_params=item.get("litellm_params", {}))
+            app_config.deltallm_settings.guardrails = [
+                GuardrailConfig(guardrail_name=str(item.get("guardrail_name")), deltallm_params=item.get("deltallm_params", {}))
                 for item in value
-                if isinstance(item, dict) and isinstance(item.get("litellm_params"), dict)
+                if isinstance(item, dict) and isinstance(item.get("deltallm_params"), dict)
             ]
             continue
-        if hasattr(app_config.litellm_settings, key):
-            setattr(app_config.litellm_settings, key, value)
+        if hasattr(app_config.deltallm_settings, key):
+            setattr(app_config.deltallm_settings, key, value)
 
     if "routing_strategy" in router_updates:
         router_state = getattr(request.app.state, "router", None)

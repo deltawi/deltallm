@@ -1,0 +1,89 @@
+site_name: DeltaLLM Documentation
+site_description: Open-source LLM gateway with unified API, RBAC, guardrails, and observability
+site_url: https://deltallm.readthedocs.io
+repo_url: https://github.com/your-org/deltallm
+repo_name: deltallm
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - tables
+  - toc:
+      permalink: true
+  - attr_list
+  - def_list
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - getting-started/index.md
+      - Installation: getting-started/installation.md
+      - Quick Start: getting-started/quickstart.md
+      - Docker: getting-started/docker.md
+  - Configuration:
+      - configuration/index.md
+      - Model Deployments: configuration/models.md
+      - Router Settings: configuration/router.md
+      - General Settings: configuration/general.md
+  - Features:
+      - features/index.md
+      - Authentication & SSO: features/authentication.md
+      - Routing & Failover: features/routing.md
+      - Caching: features/caching.md
+      - Guardrails: features/guardrails.md
+      - Rate Limiting: features/rate-limiting.md
+      - Budgets & Spend: features/budgets.md
+      - Observability: features/observability.md
+  - Admin UI:
+      - admin-ui/index.md
+      - Dashboard: admin-ui/dashboard.md
+      - Managing Models: admin-ui/models.md
+      - Managing Keys: admin-ui/keys.md
+      - Organizations & Teams: admin-ui/orgs-teams.md
+      - Access Control: admin-ui/access-control.md
+  - API Reference:
+      - api/index.md
+      - Proxy Endpoints: api/proxy.md
+      - Admin Endpoints: api/admin.md
+      - Health & Metrics: api/health.md
+  - Deployment:
+      - deployment/index.md
+      - Docker: deployment/docker.md
+      - Kubernetes: deployment/kubernetes.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/your-org/deltallm

@@ -25,25 +25,25 @@ class SpendLedgerService:
             return
 
         await self._increment_table(
-            table="litellm_verificationtoken",
+            table="deltallm_verificationtoken",
             id_column="token",
             entity_id=api_key,
             amount=cost,
         )
         await self._increment_table(
-            table="litellm_usertable",
+            table="deltallm_usertable",
             id_column="user_id",
             entity_id=user_id,
             amount=cost,
         )
         await self._increment_table(
-            table="litellm_teamtable",
+            table="deltallm_teamtable",
             id_column="team_id",
             entity_id=team_id,
             amount=cost,
         )
         await self._increment_table(
-            table="litellm_organizationtable",
+            table="deltallm_organizationtable",
             id_column="organization_id",
             entity_id=organization_id,
             amount=cost,

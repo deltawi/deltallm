@@ -80,7 +80,7 @@ config:
     allowed_fails: 0
     enable_pre_call_checks: false
     model_group_alias: {}
-  litellm_settings:
+  deltallm_settings:
     fallbacks: []
     context_window_fallbacks: []
     content_policy_fallbacks: []
@@ -91,7 +91,7 @@ config:
     callback_settings: {}
     turn_off_message_logging: false
   general_settings:
-    litellm_key_header_name: Authorization
+    deltallm_key_header_name: Authorization
     salt_key: change-me
     cache_enabled: false
     cache_backend: memory

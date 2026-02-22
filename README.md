@@ -1,32 +1,292 @@
-# DeltaLLM Core API (Phase 1)
+# DeltaLLM
 
-FastAPI proxy implementing OpenAI-compatible endpoints:
-- `POST /v1/chat/completions`
-- `POST /v1/embeddings`
-- `GET /v1/models`
-- `GET /health/liveliness`
-- `GET /health/readiness`
+An open-source LLM gateway and proxy that provides a unified OpenAI-compatible API for multiple LLM providers. Route requests across OpenAI, Anthropic, Azure OpenAI, and more through a single endpoint with enterprise features built in.
 
-## Run
+## Features
+
+- **Unified API** — OpenAI-compatible endpoints for chat completions, embeddings, image generation, text-to-speech, speech-to-text, and reranking
+- **Multi-Provider Routing** — Route requests to OpenAI, Anthropic, Azure OpenAI with strategies like round-robin, latency-based, and cost-based
+- **Intelligent Failover** — Automatic retries with exponential backoff, context-window and content-policy aware fallback chains
+- **Admin Dashboard** — Full-featured React UI for managing models, API keys, organizations, teams, users, usage analytics, and settings
+- **RBAC** — Platform, organization, and team-level role-based access control
+- **Authentication** — Session-based login with email/password, optional MFA (TOTP), SSO (Microsoft Entra, Google, Okta, Generic OIDC), and master key fallback
+- **Budget Enforcement** — Per-key, per-team, and per-organization spend limits with alerts
+- **Guardrails** — Content safety with PII detection (Presidio) and prompt injection detection (Lakera), scoped at global, org, team, or key level
+- **Caching** — Response caching with memory, Redis, or S3 backends
+- **Observability** — Prometheus metrics, spend tracking, request logging
+
+## Quick Start
+
+### Prerequisites
+
+- Python 3.11+
+- Node.js 20+
+- PostgreSQL 15+
+- Redis 7+
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/deltawi/deltallm.git
+cd deltallm
+git checkout v2-revamp
+```
+
+### 2. Set up the backend
 
 ```bash
 pip install -r requirements.txt
-uvicorn src.main:app --reload
 ```
 
-## Config
+### 3. Set up the database
 
-Set environment variables or provide `config.yaml` (see `config.example.yaml`).
+Make sure PostgreSQL is running, then set the `DATABASE_URL` environment variable:
 
-Important variables:
-- `DELTALLM_CONFIG_PATH`
-- `DELTALLM_OPENAI_API_KEY`
-- `DELTALLM_DATABASE_URL`
-- `DELTALLM_REDIS_URL`
-- `DELTALLM_SALT_KEY`
+```bash
+export DATABASE_URL="postgresql://user:password@localhost:5432/deltallm"
+```
 
-## Test
+Generate the Prisma client and push the schema:
+
+```bash
+prisma generate --schema=prisma/schema.prisma
+prisma db push --schema=prisma/schema.prisma
+```
+
+### 4. Configure DeltaLLM
+
+Copy the example config and edit it with your provider API keys:
+
+```bash
+cp config.example.yaml config.yaml
+```
+
+Set required environment variables:
+
+```bash
+export DELTALLM_CONFIG_PATH=./config.yaml
+```
+
+Edit `config.yaml` and set the values under `general_settings`. You can either hardcode them or reference environment variables with the `os.environ/VAR_NAME` syntax:
+
+```yaml
+general_settings:
+  master_key: "sk-your-master-key"               # or os.environ/DELTALLM_MASTER_KEY
+  salt_key: "your-random-salt-key"                # or os.environ/DELTALLM_SALT_KEY
+  database_url: "postgresql://user:pass@localhost:5432/deltallm"  # or os.environ/DATABASE_URL
+  redis_host: localhost
+  redis_port: 6379
+  platform_bootstrap_admin_email: "admin@example.com"
+  platform_bootstrap_admin_password: "your-secure-password"
+```
+
+If using environment variable references, export them before starting:
+
+```bash
+export DELTALLM_MASTER_KEY="sk-your-master-key"
+export DELTALLM_SALT_KEY="your-random-salt-key"
+export DATABASE_URL="postgresql://user:pass@localhost:5432/deltallm"
+```
+
+### 5. Start Redis
+
+```bash
+redis-server --daemonize yes
+```
+
+### 6. Start the backend
+
+```bash
+uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+The API is now available at `http://localhost:8000`. Check health at `http://localhost:8000/health/liveliness`.
+
+### 7. Start the frontend (development)
+
+```bash
+cd ui
+npm install
+npm run dev
+```
+
+The admin dashboard is available at `http://localhost:5000`.
+
+### 8. Build for production
+
+```bash
+cd ui
+npm run build
+```
+
+In production, the backend serves the built frontend from `ui/dist/` on a single port:
+
+```bash
+uvicorn src.main:app --host 0.0.0.0 --port 5000
+```
+
+## Running with Docker
+
+### Single instance
+
+The fastest way to get everything running:
+
+```bash
+# Create a config file
+cp config.example.yaml config.yaml
+# Edit config.yaml with your API keys and settings
+
+# Start all services (DeltaLLM + PostgreSQL + Redis)
+docker compose --profile single up -d
+```
+
+DeltaLLM will be available at `http://localhost:4000`.
+
+### High availability (multi-instance)
+
+Run two DeltaLLM instances behind an Nginx load balancer:
+
+```bash
+docker compose --profile ha up -d
+```
+
+This starts:
+- 2 DeltaLLM instances (load balanced)
+- Nginx reverse proxy on port 80
+- PostgreSQL database
+- Redis cache
+
+DeltaLLM will be available at `http://localhost`.
+
+### Environment variables for Docker
+
+Create a `.env` file in the project root. These are passed into the container and referenced by `config.yaml`:
+
+```env
+DELTALLM_OPENAI_API_KEY=sk-your-openai-key
+DELTALLM_MASTER_KEY=sk-your-master-key
+DELTALLM_SALT_KEY=your-random-salt-key
+```
+
+The `docker-compose.yaml` automatically sets `DATABASE_URL` and `REDIS_URL` to point at the companion PostgreSQL and Redis containers.
+
+### Custom config with Docker
+
+Mount your own config file:
+
+```bash
+docker compose --profile single up -d
+```
+
+By default, `config.example.yaml` is mounted as the config. To use a custom config, update the volume mount in `docker-compose.yaml`:
+
+```yaml
+volumes:
+  - ./config.yaml:/app/config/config.yaml:ro
+```
+
+## API Usage
+
+### Chat Completions
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Authorization: Bearer sk-your-master-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+### Embeddings
+
+```bash
+curl http://localhost:8000/v1/embeddings \
+  -H "Authorization: Bearer sk-your-master-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "text-embedding-3-small",
+    "input": "Hello world"
+  }'
+```
+
+### List Models
+
+```bash
+curl http://localhost:8000/v1/models \
+  -H "Authorization: Bearer sk-your-master-key"
+```
+
+## Project Structure
+
+```
+deltallm/
+├── src/
+│   ├── main.py                 # FastAPI application entry point
+│   ├── config.py               # YAML config loader
+│   ├── routers/                # API route handlers
+│   │   ├── chat.py             # POST /v1/chat/completions
+│   │   ├── embeddings.py       # POST /v1/embeddings
+│   │   ├── images.py           # POST /v1/images/generations
+│   │   ├── audio_speech.py     # POST /v1/audio/speech
+│   │   ├── audio_transcription.py  # POST /v1/audio/transcriptions
+│   │   ├── rerank.py           # POST /v1/rerank
+│   │   ├── models.py           # GET /v1/models
+│   │   ├── health.py           # Health check endpoints
+│   │   ├── spend.py            # Spend tracking endpoints
+│   │   └── metrics.py          # Prometheus metrics
+│   ├── providers/              # LLM provider adapters
+│   │   ├── openai.py
+│   │   ├── anthropic.py
+│   │   └── azure.py
+│   ├── router/                 # Request routing strategies
+│   ├── billing/                # Spend tracking & budget enforcement
+│   ├── guardrails/             # Content safety (Presidio, Lakera)
+│   ├── auth/                   # JWT, SSO, RBAC
+│   ├── cache/                  # Response caching
+│   ├── middleware/             # Auth, rate limiting, error handling
+│   ├── db/                     # Database repositories
+│   └── ui/                     # Admin UI API endpoints
+├── ui/                         # React frontend (see ui/README.md)
+├── prisma/
+│   └── schema.prisma           # Database schema
+├── config.example.yaml         # Example configuration
+├── Dockerfile
+├── docker-compose.yaml         # Single + HA deployment profiles
+├── nginx.conf                  # Nginx config for HA mode
+└── requirements.txt            # Python dependencies
+```
+
+## Configuration
+
+DeltaLLM is configured via a YAML file. See [`config.example.yaml`](config.example.yaml) for all available options.
+
+### Key sections
+
+| Section | Description |
+|---------|-------------|
+| `model_list` | Model deployments with provider config, API keys, and default parameters |
+| `router_settings` | Routing strategy, retries, timeouts, cooldown |
+| `deltallm_settings` | Callbacks, guardrails, message logging |
+| `general_settings` | Master key, database, Redis, cache, SSO, auth session settings |
+
+### Environment variable references
+
+Config values can reference environment variables:
+
+```yaml
+general_settings:
+  master_key: os.environ/DELTALLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+```
+
+## Testing
 
 ```bash
 pytest tests/
 ```
+
+## License
+
+Open source. See [LICENSE](LICENSE) for details.

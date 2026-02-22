@@ -35,7 +35,7 @@ class RoutingStrategy(str, Enum):
 class Deployment:
     deployment_id: str
     model_name: str
-    litellm_params: dict[str, Any]
+    deltallm_params: dict[str, Any]
     model_info: dict[str, Any] = field(default_factory=dict)
     weight: int = 1
     priority: int = 0
@@ -172,7 +172,7 @@ def build_deployment_registry(model_registry: dict[str, list[dict[str, Any]]]) -
     for model_name, entries in model_registry.items():
         deployments: list[Deployment] = []
         for index, entry in enumerate(entries):
-            params = dict(entry.get("litellm_params", {}))
+            params = dict(entry.get("deltallm_params", {}))
             model_info = dict(entry.get("model_info", {}))
 
             deployment_id = entry.get("deployment_id") or f"{model_name}-{index}"
@@ -180,7 +180,7 @@ def build_deployment_registry(model_registry: dict[str, list[dict[str, Any]]]) -
                 Deployment(
                     deployment_id=str(deployment_id),
                     model_name=model_name,
-                    litellm_params=params,
+                    deltallm_params=params,
                     model_info=model_info,
                     weight=int(model_info.get("weight", params.get("weight", 1)) or 1),
                     priority=int(model_info.get("priority", 0) or 0),

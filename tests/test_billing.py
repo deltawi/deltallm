@@ -20,7 +20,7 @@ class RecordingDB:
 class BudgetDB:
     async def query_raw(self, query: str, *args):
         normalized = " ".join(query.lower().split())
-        if "from litellm_verificationtoken" in normalized:
+        if "from deltallm_verificationtoken" in normalized:
             return [
                 {
                     "entity_id": args[0],
@@ -37,7 +37,7 @@ class BudgetDB:
 class SpendQueryDB:
     async def query_raw(self, query: str, *args):
         normalized = " ".join(query.lower().split())
-        if "total_requests" in normalized and "from litellm_spendlogs" in normalized:
+        if "total_requests" in normalized and "from deltallm_spendlogs" in normalized:
             return [
                 {
                     "total_spend": 1.25,
@@ -49,7 +49,7 @@ class SpendQueryDB:
             ]
         if "count(*) as total" in normalized:
             return [{"total": 1}]
-        if "from litellm_spendlogs" in normalized and "order by start_time desc" in normalized:
+        if "from deltallm_spendlogs" in normalized and "order by start_time desc" in normalized:
             return [
                 {
                     "id": "log_1",
@@ -92,11 +92,11 @@ async def test_spend_tracking_writes_log_and_ledger_updates():
         metadata={"api_base": "https://api.openai.com/v1", "tags": ["prod"]},
     )
 
-    assert any("insert into litellm_spendlogs" in q.lower() for q, _ in db.calls)
-    assert any("update litellm_verificationtoken" in q.lower() for q, _ in db.calls)
-    assert any("update litellm_usertable" in q.lower() for q, _ in db.calls)
-    assert any("update litellm_teamtable" in q.lower() for q, _ in db.calls)
-    assert any("update litellm_organizationtable" in q.lower() for q, _ in db.calls)
+    assert any("insert into deltallm_spendlogs" in q.lower() for q, _ in db.calls)
+    assert any("update deltallm_verificationtoken" in q.lower() for q, _ in db.calls)
+    assert any("update deltallm_usertable" in q.lower() for q, _ in db.calls)
+    assert any("update deltallm_teamtable" in q.lower() for q, _ in db.calls)
+    assert any("update deltallm_organizationtable" in q.lower() for q, _ in db.calls)
 
 
 @pytest.mark.asyncio

@@ -19,7 +19,7 @@ async def get_guardrails(request: Request) -> dict[str, Any]:
     if app_config is None:
         return {"guardrails": []}
 
-    items = [serialize_guardrail(guardrail) for guardrail in app_config.litellm_settings.guardrails]
+    items = [serialize_guardrail(guardrail) for guardrail in app_config.deltallm_settings.guardrails]
     return {"guardrails": items}
 
 
@@ -38,12 +38,12 @@ async def update_guardrails(request: Request, payload: dict[str, Any]) -> dict[s
         if not isinstance(raw, dict):
             continue
         name = str(raw.get("guardrail_name") or "").strip()
-        litellm_params = raw.get("litellm_params")
-        if not name or not isinstance(litellm_params, dict):
+        deltallm_params = raw.get("deltallm_params")
+        if not name or not isinstance(deltallm_params, dict):
             continue
-        updated.append(GuardrailConfig(guardrail_name=name, litellm_params=litellm_params))
+        updated.append(GuardrailConfig(guardrail_name=name, deltallm_params=deltallm_params))
 
-    app_config.litellm_settings.guardrails = updated
+    app_config.deltallm_settings.guardrails = updated
     registry = getattr(request.app.state, "guardrail_registry", None)
     if registry is not None:
         if hasattr(registry, "_guardrails"):
@@ -57,9 +57,9 @@ async def update_guardrails(request: Request, payload: dict[str, Any]) -> dict[s
 
 
 _SCOPE_TABLE_MAP = {
-    "organization": "litellm_organizationtable",
-    "team": "litellm_teamtable",
-    "key": "litellm_verificationtoken",
+    "organization": "deltallm_organizationtable",
+    "team": "deltallm_teamtable",
+    "key": "deltallm_verificationtoken",
 }
 _SCOPE_ID_COL = {
     "organization": "organization_id",

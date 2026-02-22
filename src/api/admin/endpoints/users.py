@@ -24,7 +24,7 @@ async def list_users(
     if team_id:
         if not scope.is_platform_admin and scope.org_ids:
             verify_rows = await db.query_raw(
-                "SELECT organization_id FROM litellm_teamtable WHERE team_id = $1 LIMIT 1",
+                "SELECT organization_id FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
                 team_id,
             )
             if not verify_rows or str(verify_rows[0].get("organization_id", "")) not in scope.org_ids:
@@ -36,7 +36,7 @@ async def list_users(
             """
             SELECT user_id, user_email, user_role, team_id, spend, max_budget, models, tpm_limit, rpm_limit,
                    COALESCE((metadata->>'blocked')::boolean, false) AS blocked, created_at, updated_at
-            FROM litellm_usertable
+            FROM deltallm_usertable
             WHERE team_id = $1
             ORDER BY created_at DESC
             """,
@@ -47,7 +47,7 @@ async def list_users(
             """
             SELECT user_id, user_email, user_role, team_id, spend, max_budget, models, tpm_limit, rpm_limit,
                    COALESCE((metadata->>'blocked')::boolean, false) AS blocked, created_at, updated_at
-            FROM litellm_usertable
+            FROM deltallm_usertable
             ORDER BY created_at DESC
             """
         )
@@ -57,8 +57,8 @@ async def list_users(
             f"""
             SELECT u.user_id, u.user_email, u.user_role, u.team_id, u.spend, u.max_budget, u.models, u.tpm_limit, u.rpm_limit,
                    COALESCE((u.metadata->>'blocked')::boolean, false) AS blocked, u.created_at, u.updated_at
-            FROM litellm_usertable u
-            LEFT JOIN litellm_teamtable t ON u.team_id = t.team_id
+            FROM deltallm_usertable u
+            LEFT JOIN deltallm_teamtable t ON u.team_id = t.team_id
             WHERE t.organization_id IN ({placeholders})
             ORDER BY u.created_at DESC
             """,
@@ -87,7 +87,7 @@ async def create_user(request: Request, payload: dict[str, Any]) -> dict[str, An
 
     await db.execute_raw(
         """
-        INSERT INTO litellm_usertable (
+        INSERT INTO deltallm_usertable (
             user_id,
             user_email,
             user_role,
@@ -143,7 +143,7 @@ async def update_user(request: Request, user_id: str, payload: dict[str, Any]) -
         """
         SELECT user_id, user_email, user_role, team_id, spend, max_budget, models, tpm_limit, rpm_limit,
                COALESCE((metadata->>'blocked')::boolean, false) AS blocked, created_at, updated_at
-        FROM litellm_usertable
+        FROM deltallm_usertable
         WHERE user_id = $1
         LIMIT 1
         """,
@@ -165,7 +165,7 @@ async def update_user(request: Request, user_id: str, payload: dict[str, Any]) -
 
     await db.execute_raw(
         """
-        UPDATE litellm_usertable
+        UPDATE deltallm_usertable
         SET user_email = $1,
             user_role = $2,
             team_id = $3,
@@ -189,7 +189,7 @@ async def update_user(request: Request, user_id: str, payload: dict[str, Any]) -
         """
         SELECT user_id, user_email, user_role, team_id, spend, max_budget, models, tpm_limit, rpm_limit,
                COALESCE((metadata->>'blocked')::boolean, false) AS blocked, created_at, updated_at
-        FROM litellm_usertable
+        FROM deltallm_usertable
         WHERE user_id = $1
         LIMIT 1
         """,
@@ -207,7 +207,7 @@ async def block_user(request: Request, user_id: str, payload: dict[str, Any]) ->
 
     updated = await db.execute_raw(
         """
-        UPDATE litellm_usertable
+        UPDATE deltallm_usertable
         SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{blocked}', to_jsonb($1::boolean)),
             updated_at = NOW()
         WHERE user_id = $2

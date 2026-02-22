@@ -12,8 +12,8 @@ data:
     router_settings:
 {{ toYaml .Values.config.router_settings | indent 6 }}
 
-    litellm_settings:
-{{ toYaml .Values.config.litellm_settings | indent 6 }}
+    deltallm_settings:
+{{ toYaml .Values.config.deltallm_settings | indent 6 }}
 
     general_settings:
 {{ toYaml .Values.config.general_settings | indent 6 }}

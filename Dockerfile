@@ -1,3 +1,13 @@
+FROM node:20-alpine AS frontend
+
+WORKDIR /app/ui
+
+COPY ui/package.json ui/package-lock.json* ./
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+COPY ui/ ./
+RUN npm run build
+
 FROM python:3.11-slim AS builder
 
 WORKDIR /app
@@ -24,6 +34,7 @@ RUN apt-get update \
 
 COPY --from=builder /root/.local /root/.local
 COPY --from=builder /app /app
+COPY --from=frontend /app/ui/dist ./ui/dist
 COPY config.example.yaml ./config.example.yaml
 
 ENV PATH=/root/.local/bin:$PATH

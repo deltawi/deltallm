@@ -63,7 +63,7 @@ logger = logging.getLogger(__name__)
 def _build_model_registry(cfg: AppConfig, settings: Any) -> dict[str, list[dict[str, Any]]]:
     model_registry: dict[str, list[dict[str, Any]]] = {}
     for entry in cfg.model_list:
-        params = entry.litellm_params.model_dump(exclude_none=True)
+        params = entry.deltallm_params.model_dump(exclude_none=True)
         if not params.get("api_key") and settings.openai_api_key:
             params["api_key"] = settings.openai_api_key
         if not params.get("api_base"):
@@ -71,7 +71,7 @@ def _build_model_registry(cfg: AppConfig, settings: Any) -> dict[str, list[dict[
         model_info = entry.model_info.model_dump(exclude_none=True) if entry.model_info else {}
         model_registry.setdefault(entry.model_name, []).append(
             {
-                "litellm_params": params,
+                "deltallm_params": params,
                 "model_info": model_info,
             }
         )
@@ -137,8 +137,8 @@ async def lifespan(app: FastAPI):
     app.state.limit_counter = LimitCounter(redis_client=redis_client)
     app.state.model_registry = _build_model_registry(cfg, settings)
     guardrail_registry = GuardrailRegistry()
-    if cfg.litellm_settings.guardrails:
-        guardrail_registry.load_from_config(cfg.litellm_settings.guardrails)
+    if cfg.deltallm_settings.guardrails:
+        guardrail_registry.load_from_config(cfg.deltallm_settings.guardrails)
     app.state.guardrail_registry = guardrail_registry
     app.state.guardrail_middleware = GuardrailMiddleware(
         registry=guardrail_registry,
@@ -146,13 +146,13 @@ async def lifespan(app: FastAPI):
     )
     callback_manager = CallbackManager()
     callback_manager.load_from_settings(
-        success_callbacks=cfg.litellm_settings.success_callback,
-        failure_callbacks=cfg.litellm_settings.failure_callback,
-        callbacks=cfg.litellm_settings.callbacks,
-        callback_settings=cfg.litellm_settings.callback_settings,
+        success_callbacks=cfg.deltallm_settings.success_callback,
+        failure_callbacks=cfg.deltallm_settings.failure_callback,
+        callbacks=cfg.deltallm_settings.callbacks,
+        callback_settings=cfg.deltallm_settings.callback_settings,
     )
     app.state.callback_manager = callback_manager
-    app.state.turn_off_message_logging = cfg.litellm_settings.turn_off_message_logging
+    app.state.turn_off_message_logging = cfg.deltallm_settings.turn_off_message_logging
     app.state.alert_service = AlertService(redis_client=redis_client)
     app.state.spend_ledger_service = SpendLedgerService(prisma_manager.client)
     app.state.spend_tracking_service = SpendTrackingService(
@@ -239,9 +239,9 @@ async def lifespan(app: FastAPI):
             num_retries=cfg.router_settings.num_retries,
             retry_after=cfg.router_settings.retry_after,
             timeout=cfg.router_settings.timeout,
-            fallbacks=_normalize_fallbacks(cfg.litellm_settings.fallbacks),
-            context_window_fallbacks=_normalize_fallbacks(cfg.litellm_settings.context_window_fallbacks),
-            content_policy_fallbacks=_normalize_fallbacks(cfg.litellm_settings.content_policy_fallbacks),
+            fallbacks=_normalize_fallbacks(cfg.deltallm_settings.fallbacks),
+            context_window_fallbacks=_normalize_fallbacks(cfg.deltallm_settings.context_window_fallbacks),
+            content_policy_fallbacks=_normalize_fallbacks(cfg.deltallm_settings.content_policy_fallbacks),
         ),
         deployment_registry=deployment_registry,
         state_backend=state_backend,
@@ -276,7 +276,7 @@ async def lifespan(app: FastAPI):
             app.state.cache_metrics = NoopCacheMetrics()
 
     async def _deployment_health_check(deployment) -> bool:
-        return await app.state.openai_adapter.health_check(deployment.litellm_params)
+        return await app.state.openai_adapter.health_check(deployment.deltallm_params)
 
     health_checker = BackgroundHealthChecker(
         config=HealthCheckConfig(

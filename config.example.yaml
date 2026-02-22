@@ -1,6 +1,6 @@
 model_list:
   - model_name: gpt-4o-mini
-    litellm_params:
+    deltallm_params:
       model: openai/gpt-4o-mini
       api_key: os.environ/OPENAI_API_KEY
       api_base: https://api.openai.com/v1
@@ -14,20 +14,20 @@ router_settings:
   cooldown_time: 60
   allowed_fails: 0
 
-litellm_settings:
+deltallm_settings:
   success_callback:
     - prometheus
   failure_callback:
     - prometheus
   callback_settings:
     s3:
-      bucket: os.environ/LITELLM_S3_BUCKET
+      bucket: os.environ/DELTALLM_S3_BUCKET
       region: us-east-1
-      prefix: litellm-logs/
+      prefix: deltallm-logs/
   turn_off_message_logging: false
   guardrails:
     - guardrail_name: presidio-pii
-      litellm_params:
+      deltallm_params:
         guardrail: src.guardrails.presidio.PresidioGuardrail
         mode: pre_call
         default_on: true
@@ -39,7 +39,7 @@ litellm_settings:
           - PHONE_NUMBER
           - US_SSN
     - guardrail_name: lakera-prompt-injection
-      litellm_params:
+      deltallm_params:
         guardrail: src.guardrails.lakera.LakeraGuardrail
         mode: pre_call
         default_on: true
@@ -49,9 +49,9 @@ litellm_settings:
         fail_open: false
 
 general_settings:
-  master_key: os.environ/LITELLM_MASTER_KEY
-  litellm_key_header_name: Authorization
-  salt_key: os.environ/LITELLM_SALT_KEY
+  master_key: os.environ/DELTALLM_MASTER_KEY
+  deltallm_key_header_name: Authorization
+  salt_key: os.environ/DELTALLM_SALT_KEY
   database_url: os.environ/DATABASE_URL
   redis_url: os.environ/REDIS_URL
   redis_host: localhost
