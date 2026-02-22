@@ -33,7 +33,8 @@ def get_auth_scope(
     else:
         provided = x_master_key
 
-    if configured and provided == configured:
+    import hmac as _hmac
+    if configured and provided and _hmac.compare_digest(provided, configured):
         return AuthScope(is_platform_admin=True)
 
     from src.middleware.platform_auth import get_platform_auth_context

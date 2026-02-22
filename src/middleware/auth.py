@@ -49,13 +49,16 @@ def auth_dependency() -> Depends:
 
 
 def _is_master_key(request: Request, token: str) -> bool:
+    import hmac as _hmac
     dcm = getattr(request.app.state, "dynamic_config_manager", None)
     if dcm is not None:
         cfg = dcm.get_app_config()
         configured = getattr(getattr(cfg, "general_settings", None), "master_key", None)
     else:
         configured = getattr(getattr(request.app.state, "settings", None), "master_key", None)
-    return bool(configured and token == configured)
+    if not configured or not token:
+        return False
+    return _hmac.compare_digest(token, configured)
 
 
 async def _try_fallback_auth(request: Request, raw_token: str) -> UserAPIKeyAuth | None:

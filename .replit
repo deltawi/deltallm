@@ -34,13 +34,13 @@ outputType = "webview"
 name = "Backend Server"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "redis-server --daemonize yes && cd /home/runner/workspace && python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload"
-waitForPort = 8000
-
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "redis-server --daemonize yes && cd /home/runner/workspace && export PRISMA_QUERY_ENGINE_LIBRARY=/home/runner/.cache/prisma-python/binaries/5.17.0/393aa359c9ad4a4bb28630fb5613f9c281cde053/node_modules/@prisma/engines/libquery_engine-debian-openssl-3.0.x.so.node && python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload"
+waitForPort = 8000
 
 [[ports]]
 localPort = 5000

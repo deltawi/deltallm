@@ -17,13 +17,19 @@ from src.models.platform_auth import (
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+def _is_production() -> bool:
+    import os
+    return os.getenv("REPL_SLUG") is not None or os.getenv("REPLIT_DEPLOYMENT") == "1"
+
+
 def _set_session_cookie(response: Response, token: str, max_age_seconds: int) -> None:
+    is_prod = _is_production()
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=token,
         max_age=max_age_seconds,
         httponly=True,
-        secure=False,
+        secure=is_prod,
         samesite="lax",
         path="/",
     )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac as _hmac
 from collections.abc import Callable
 
 from fastapi import Header, HTTPException, Request, status
@@ -36,7 +37,7 @@ async def require_authenticated(
         configured = getattr(getattr(request.app.state, "settings", None), "master_key", None)
 
     provided = x_master_key or _extract_bearer_token(authorization)
-    if configured and provided == configured:
+    if configured and provided and _hmac.compare_digest(provided, configured):
         return configured
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
@@ -61,7 +62,7 @@ async def require_master_key(
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Master key not configured")
 
     provided = x_master_key or _extract_bearer_token(authorization)
-    if provided != configured:
+    if not provided or not _hmac.compare_digest(provided, configured):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid master key")
 
     return configured
@@ -83,7 +84,7 @@ def require_admin_permission(permission: str) -> Callable:
             configured = getattr(getattr(request.app.state, "settings", None), "master_key", None)
 
         provided = x_master_key or _extract_bearer_token(authorization)
-        if configured and provided == configured:
+        if configured and provided and _hmac.compare_digest(provided, configured):
             return "master_key"
 
         context = get_platform_auth_context(request)
