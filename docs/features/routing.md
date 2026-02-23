@@ -97,6 +97,10 @@ DeltaLLM automatically classifies errors to determine the appropriate retry and 
 
 ## Monitoring Fallback Events
 
+The Settings page in the admin UI provides a visual interface for configuring routing strategies, retry policies, and fallback chains.
+
+![Settings Page](../admin-ui/images/settings.png)
+
 View recent fallback activity through the API:
 
 ```bash
