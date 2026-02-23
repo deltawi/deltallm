@@ -2,6 +2,8 @@
 
 The Access Control page (platform admins only) manages platform accounts and role assignments across organizations and teams.
 
+![Access Control Page](images/access-control.png)
+
 ## Platform Accounts
 
 Manage the accounts that can log into the admin UI.
