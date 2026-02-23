@@ -16,6 +16,8 @@ The admin UI supports two login methods:
 
 When SSO is configured, a third tab appears for single sign-on.
 
+![Login Page](images/login.png)
+
 ## Pages Overview
 
 | Page | Description | Access |
@@ -29,6 +31,24 @@ When SSO is configured, a third tab appears for single sign-on.
 | [Guardrails](../features/guardrails.md) | Content safety configuration | Platform admins only |
 | [Access Control](access-control.md) | RBAC account and membership management | Platform admins only |
 | Settings | Gateway configuration | Platform admins (write), all (read) |
+
+## Users
+
+Manage users, their permissions, team assignments, and rate limits.
+
+![Users Page](images/users.png)
+
+## Usage & Spend
+
+Monitor costs, tokens, and request analytics with daily trends and per-model/key breakdowns.
+
+![Usage Page](images/usage.png)
+
+## Settings
+
+Configure routing strategy, caching, health checks, retry policies, and fallback chains.
+
+![Settings Page](images/settings.png)
 
 ## Role-Based Visibility
 
