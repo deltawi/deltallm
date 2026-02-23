@@ -2,6 +2,8 @@
 
 The API Keys page lets you create, manage, and revoke virtual API keys.
 
+![API Keys Page](images/api-keys.png)
+
 ## Creating a Key
 
 Click **Create Key** and configure:
