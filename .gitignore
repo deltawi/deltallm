@@ -198,3 +198,7 @@ GEMINI.md
 config.yaml
 
 .worktrees/
+
+# Replit-specific (not versioned)
+replit.md
+attached_assets/
