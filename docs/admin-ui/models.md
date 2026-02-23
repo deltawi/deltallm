@@ -2,6 +2,8 @@
 
 The Models page lets you add, edit, and remove LLM model deployments through the web UI.
 
+![Models Page](images/models.png)
+
 ## Listing Models
 
 The models table shows all configured deployments with:
