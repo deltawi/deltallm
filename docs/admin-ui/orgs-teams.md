@@ -4,6 +4,8 @@ DeltaLLM uses a two-level grouping structure for access control and resource man
 
 ## Organizations
 
+![Organizations Page](images/organizations.png)
+
 Organizations are the top-level grouping. They contain teams and provide shared rate limits and budget tracking.
 
 ### Creating an Organization
@@ -25,6 +27,8 @@ The organization table shows:
 - Creation date
 
 ## Teams
+
+![Teams Page](images/teams.png)
 
 Teams exist within organizations and group related API keys and users.
 
