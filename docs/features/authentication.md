@@ -37,6 +37,8 @@ curl -X POST http://localhost:8000/ui/api/keys \
 
 The admin UI uses session-based authentication with email and password. On login, a secure `deltallm_session` cookie is set.
 
+![Login Page](../admin-ui/images/login.png)
+
 #### Bootstrap Admin Account
 
 Set the initial admin credentials in your config:
