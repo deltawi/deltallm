@@ -200,5 +200,6 @@ config.yaml
 .worktrees/
 
 # Replit-specific (not versioned)
+.replit
 replit.md
 attached_assets/
