@@ -2,6 +2,8 @@
 
 The Dashboard page provides an at-a-glance overview of gateway activity.
 
+![Dashboard](images/dashboard.png)
+
 ## Overview Cards
 
 The top section displays summary statistics:
