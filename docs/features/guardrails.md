@@ -59,6 +59,12 @@ deltallm_settings:
 | `threshold` | Score threshold for blocking (0.0-1.0) |
 | `fail_open` | If `true`, allow requests when Lakera is unreachable |
 
+## Managing Guardrails in the Admin UI
+
+The Guardrails page lets you configure content safety policies and manage scoped assignments through the web interface.
+
+![Guardrails Page](../admin-ui/images/guardrails.png)
+
 ## Scoped Guardrail Assignments
 
 Guardrails can be assigned at different scope levels, allowing fine-grained control over which guardrails apply to specific organizations, teams, or API keys.
