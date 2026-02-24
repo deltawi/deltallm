@@ -155,6 +155,7 @@ class GeneralSettings(BaseModel):
     platform_bootstrap_admin_email: str | None = None
     platform_bootstrap_admin_password: str | None = None
     auth_session_ttl_hours: int = 12
+    api_key_auth_cache_ttl_seconds: int = 300
 
 
 class AppConfig(BaseModel):

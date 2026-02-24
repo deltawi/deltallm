@@ -159,6 +159,8 @@ class AzureSecretManager(BaseSecretManager):
 class SecretResolver:
     """Resolves inline env/cloud secret tokens in config values."""
 
+    _MISSING = object()
+
     def __init__(
         self,
         aws: BaseSecretManager | None = None,
@@ -227,13 +229,28 @@ class SecretResolver:
             secret = None
 
         if secret is None:
-            return value
+            # Treat unresolved secret references as "unset" so downstream config
+            # defaults can apply and optional integrations (e.g. guardrails) can
+            # be disabled when their env vars are not present.
+            return self._MISSING
 
         return self._extract_field(secret, ref.field)
 
     def resolve_tree(self, value: Any) -> Any:
         if isinstance(value, dict):
-            return {k: self.resolve_tree(v) for k, v in value.items()}
+            resolved: dict[str, Any] = {}
+            for key, item in value.items():
+                item_resolved = self.resolve_tree(item)
+                if item_resolved is self._MISSING:
+                    continue
+                resolved[key] = item_resolved
+            return resolved
         if isinstance(value, list):
-            return [self.resolve_tree(v) for v in value]
+            resolved_list: list[Any] = []
+            for item in value:
+                item_resolved = self.resolve_tree(item)
+                if item_resolved is self._MISSING:
+                    continue
+                resolved_list.append(item_resolved)
+            return resolved_list
         return self.resolve_value(value)

@@ -33,7 +33,7 @@ export default function Login() {
 
   useEffect(() => {
     authApi.ssoConfig()
-      .then((cfg) => {
+      .then((cfg: { sso_enabled: boolean; provider?: string }) => {
         setSsoEnabled(cfg.sso_enabled);
         if (cfg.provider) setSsoProvider(cfg.provider);
       })

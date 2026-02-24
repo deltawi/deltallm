@@ -1,8 +1,10 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [react()],
+  // The backend serves the built UI from `/ui/*` routes.
+  base: command === 'build' ? '/ui/' : '/',
   server: {
     host: '0.0.0.0',
     port: 5000,
@@ -37,4 +39,4 @@ export default defineConfig({
   build: {
     outDir: 'dist',
   },
-})
+}))

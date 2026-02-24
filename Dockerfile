@@ -13,26 +13,32 @@ FROM python:3.11-slim AS builder
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc libpq-dev curl \
+    && apt-get install -y --no-install-recommends gcc libpq-dev curl libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --user -r requirements.txt
 
+# `pip install --user` drops console scripts (like `prisma`) into /root/.local/bin,
+# which is not on PATH by default during the build stage.
+ENV PATH=/root/.local/bin:$PATH
+
 COPY pyproject.toml ./
 COPY src ./src
 COPY prisma ./prisma
 RUN prisma generate --schema=./prisma/schema.prisma
+RUN prisma py fetch
 
 FROM python:3.11-slim
 
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libpq5 curl \
+    && apt-get install -y --no-install-recommends libpq5 curl libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /root/.local /root/.local
+COPY --from=builder /root/.cache/prisma-python /root/.cache/prisma-python
 COPY --from=builder /app /app
 COPY --from=frontend /app/ui/dist ./ui/dist
 COPY config.example.yaml ./config.example.yaml
@@ -48,4 +54,4 @@ EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
   CMD curl -fsS "http://localhost:${PORT}/health/liveliness" || exit 1
 
-CMD ["sh", "-c", "uvicorn src.main:app --host ${HOST} --port ${PORT}"]
+CMD ["sh", "-c", "prisma db push --schema=./prisma/schema.prisma --accept-data-loss && uvicorn src.main:app --host ${HOST} --port ${PORT}"]

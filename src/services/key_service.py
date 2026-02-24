@@ -14,17 +14,24 @@ logger = logging.getLogger(__name__)
 
 
 class KeyService:
-    def __init__(self, repository: KeyRepository, redis_client: Any | None = None, salt: str = "") -> None:
+    def __init__(
+        self,
+        repository: KeyRepository,
+        redis_client: Any | None = None,
+        salt: str = "",
+        auth_cache_ttl_seconds: int = 300,
+    ) -> None:
         self.repository = repository
         self.redis = redis_client
         self.salt = salt
+        self.auth_cache_ttl_seconds = max(1, int(auth_cache_ttl_seconds))
 
     def hash_key(self, raw_key: str) -> str:
         return hashlib.sha256(f"{self.salt}:{raw_key}".encode("utf-8")).hexdigest()
 
     async def validate_key(self, raw_key: str) -> UserAPIKeyAuth:
         token_hash = self.hash_key(raw_key)
-        cache_key = f"key:{token_hash}"
+        cache_key = self._cache_key(token_hash)
 
         if self.redis is not None:
             cached = await self.redis.get(cache_key)
@@ -70,12 +77,22 @@ class KeyService:
         )
 
         if self.redis is not None:
-            ttl = 3600
+            ttl = self.auth_cache_ttl_seconds
             if record.expires is not None:
-                ttl = max(1, int((record.expires - now).total_seconds()))
+                ttl = max(1, min(ttl, int((record.expires - now).total_seconds())))
             await self.redis.setex(cache_key, ttl, auth.model_dump_json())
 
         return auth
+
+    async def invalidate_key_cache_by_hash(self, token_hash: str) -> None:
+        if self.redis is None:
+            return
+        cache_key = self._cache_key(token_hash)
+        await self.redis.delete(cache_key)
+
+    @staticmethod
+    def _cache_key(token_hash: str) -> str:
+        return f"key:{token_hash}"
 
     @staticmethod
     def _extract_guardrails(record: Any) -> list[str]:

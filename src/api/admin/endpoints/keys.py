@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
@@ -9,6 +10,7 @@ from src.auth.roles import Permission
 from src.api.admin.endpoints.common import db_or_503, to_json_value, get_auth_scope
 
 router = APIRouter(tags=["Admin Keys"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/ui/api/keys")
@@ -229,6 +231,11 @@ async def regenerate_key(
         new_hash,
         token_hash,
     )
+    try:
+        await request.app.state.key_service.invalidate_key_cache_by_hash(token_hash)
+        await request.app.state.key_service.invalidate_key_cache_by_hash(new_hash)
+    except Exception:
+        logger.exception("failed to invalidate key auth cache after regenerate")
     return {"token": new_hash, "raw_key": raw_key}
 
 
@@ -243,6 +250,11 @@ async def revoke_key(
     db = db_or_503(request)
     await _require_key_access(scope, db, token_hash)
     deleted = await db.execute_raw("DELETE FROM deltallm_verificationtoken WHERE token = $1", token_hash)
+    if int(deleted or 0) > 0:
+        try:
+            await request.app.state.key_service.invalidate_key_cache_by_hash(token_hash)
+        except Exception:
+            logger.exception("failed to invalidate key auth cache after revoke")
     return {"revoked": int(deleted or 0) > 0}
 
 
@@ -257,4 +269,9 @@ async def delete_key(
     db = db_or_503(request)
     await _require_key_access(scope, db, token_hash)
     deleted = await db.execute_raw("DELETE FROM deltallm_verificationtoken WHERE token = $1", token_hash)
+    if int(deleted or 0) > 0:
+        try:
+            await request.app.state.key_service.invalidate_key_cache_by_hash(token_hash)
+        except Exception:
+            logger.exception("failed to invalidate key auth cache after delete")
     return {"deleted": int(deleted or 0) > 0}

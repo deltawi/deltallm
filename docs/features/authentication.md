@@ -33,6 +33,16 @@ curl -X POST http://localhost:8000/ui/api/keys \
   -d '{"key_name": "production-app", "max_budget": 50.00, "models": ["gpt-4o-mini"]}'
 ```
 
+#### Key Rotation, Revocation, and Auth Cache
+
+DeltaLLM caches API key authentication lookups in Redis using a per-key cache entry (`key:{token_hash}`).
+
+- **Regenerate** (`POST /ui/api/keys/{token_hash}/regenerate`) replaces the stored key hash in-place and invalidates the old key cache entry immediately.
+- **Revoke** (`POST /ui/api/keys/{token_hash}/revoke`) deletes the key record and invalidates that key cache entry immediately.
+- **Delete** (`DELETE /ui/api/keys/{token_hash}`) deletes the key record and invalidates that key cache entry immediately.
+
+Invalidation is targeted to the affected key only; DeltaLLM does not flush unrelated Redis cache data for key lifecycle operations.
+
 ### Session-Based Login
 
 The admin UI uses session-based authentication with email and password. On login, a secure `deltallm_session` cookie is set.

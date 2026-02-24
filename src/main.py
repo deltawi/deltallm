@@ -124,6 +124,7 @@ async def lifespan(app: FastAPI):
         repository=KeyRepository(prisma_manager.client),
         redis_client=redis_client,
         salt=cfg.general_settings.salt_key or settings.salt_key,
+        auth_cache_ttl_seconds=cfg.general_settings.api_key_auth_cache_ttl_seconds,
     )
     app.state.platform_identity_service = PlatformIdentityService(
         db_client=prisma_manager.client,

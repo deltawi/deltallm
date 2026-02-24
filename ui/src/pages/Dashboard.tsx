@@ -7,6 +7,8 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pi
 
 const COLORS = ['#3b82f6', '#8b5cf6', '#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1'];
 
+type SpendReportRow = { group_key: string; total_spend: number };
+
 function fmt(n: number | null | undefined): string {
   if (n == null) return '$0.00';
   return `$${Number(n).toFixed(4)}`;
@@ -25,8 +27,8 @@ export default function Dashboard() {
   const { data: keysList } = useApi(() => keysApi.list(), []);
   const { data: healthData } = useApi(() => health.check(), []);
 
-  const daily = (dailyReport?.breakdown || []).map((r: any) => ({ date: r.group_key, total_spend: r.total_spend }));
-  const perModel = (modelReport?.breakdown || []).map((r: any) => ({ model: r.group_key, total_spend: r.total_spend }));
+  const daily = (dailyReport?.breakdown || []).map((r: SpendReportRow) => ({ date: r.group_key, total_spend: r.total_spend }));
+  const perModel = (modelReport?.breakdown || []).map((r: SpendReportRow) => ({ model: r.group_key, total_spend: r.total_spend }));
 
   const healthStatus = healthData?.readiness?.status || healthData?.liveliness || 'unknown';
 
@@ -97,7 +99,7 @@ export default function Dashboard() {
                     outerRadius={90}
                     innerRadius={50}
                   >
-                    {perModel.map((_, i) => (
+                    {perModel.map((_m: { model: string; total_spend: number }, i: number) => (
                       <Cell key={i} fill={COLORS[i % COLORS.length]} />
                     ))}
                   </Pie>

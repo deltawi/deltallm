@@ -20,6 +20,7 @@ general_settings:
   platform_bootstrap_admin_email: os.environ/PLATFORM_BOOTSTRAP_ADMIN_EMAIL
   platform_bootstrap_admin_password: os.environ/PLATFORM_BOOTSTRAP_ADMIN_PASSWORD
   auth_session_ttl_hours: 12
+  api_key_auth_cache_ttl_seconds: 300
 ```
 
 ## Authentication Settings
@@ -32,6 +33,7 @@ general_settings:
 | `platform_bootstrap_admin_email` | — | Email for the initial platform admin account |
 | `platform_bootstrap_admin_password` | — | Password for the initial platform admin account |
 | `auth_session_ttl_hours` | `12` | Session cookie lifetime in hours |
+| `api_key_auth_cache_ttl_seconds` | `300` | Redis TTL for API key authentication cache entries |
 
 ## Database Settings
 

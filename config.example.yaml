@@ -64,3 +64,4 @@ general_settings:
   platform_bootstrap_admin_email: os.environ/PLATFORM_BOOTSTRAP_ADMIN_EMAIL
   platform_bootstrap_admin_password: os.environ/PLATFORM_BOOTSTRAP_ADMIN_PASSWORD
   auth_session_ttl_hours: 12
+  api_key_auth_cache_ttl_seconds: 300

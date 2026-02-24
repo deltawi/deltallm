@@ -11,6 +11,7 @@ services:
       DELTALLM_OPENAI_API_KEY: ${DELTALLM_OPENAI_API_KEY:-}
       DELTALLM_MASTER_KEY: ${DELTALLM_MASTER_KEY:-}
       DELTALLM_DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
       DELTALLM_REDIS_URL: redis://redis:6379/0
       DELTALLM_SALT_KEY: ${DELTALLM_SALT_KEY:-change-me}
     volumes:
@@ -37,6 +38,7 @@ services:
       DELTALLM_OPENAI_API_KEY: ${DELTALLM_OPENAI_API_KEY:-}
       DELTALLM_MASTER_KEY: ${DELTALLM_MASTER_KEY:-}
       DELTALLM_DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
       DELTALLM_REDIS_URL: redis://redis:6379/0
       DELTALLM_SALT_KEY: ${DELTALLM_SALT_KEY:-change-me}
       INSTANCE_ID: instance-1
@@ -58,6 +60,7 @@ services:
       DELTALLM_OPENAI_API_KEY: ${DELTALLM_OPENAI_API_KEY:-}
       DELTALLM_MASTER_KEY: ${DELTALLM_MASTER_KEY:-}
       DELTALLM_DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
       DELTALLM_REDIS_URL: redis://redis:6379/0
       DELTALLM_SALT_KEY: ${DELTALLM_SALT_KEY:-change-me}
       INSTANCE_ID: instance-2
@@ -82,6 +85,8 @@ services:
 
   db:
     image: postgres:15-alpine
+    ports:
+      - "5432:5432"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -96,6 +101,8 @@ services:
 
   redis:
     image: redis:7-alpine
+    ports:
+      - "6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
