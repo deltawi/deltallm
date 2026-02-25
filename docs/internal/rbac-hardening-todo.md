@@ -14,9 +14,9 @@ Status legend: `[ ]` pending, `[~]` in progress, `[x]` done.
 - [x] Validate/normalize user-table role-like field as non-RBAC metadata.
 
 ## Phase 3 — Enforce scoped RBAC on legacy UI endpoints
-- [ ] Replace broad `require_authenticated` with permission-based guards where applicable.
-- [ ] Keep `master_key` as explicit super-admin bypass only.
-- [ ] Add/adjust tests for permission checks and regressions.
+- [x] Replace broad `require_authenticated` with permission-based guards where applicable.
+- [x] Keep `master_key` as explicit super-admin bypass only.
+- [x] Add/adjust tests for permission checks and regressions.
 
 ## Rollup
 - [ ] All phases merged to `main`.

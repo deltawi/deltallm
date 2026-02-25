@@ -6,10 +6,12 @@ from pathlib import Path
 import secrets
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse
 
-from src.middleware.admin import require_master_key, require_authenticated
+from src.middleware.admin import require_admin_permission, require_master_key, require_authenticated
+from src.auth.roles import Permission
+from src.api.admin.endpoints.common import get_auth_scope
 from src.config_runtime.models import ModelHotReloadManager
 from src.router import build_deployment_registry
 
@@ -241,12 +243,28 @@ def _date_end(value: date | None) -> datetime | None:
     return datetime.combine(value, time.max, tzinfo=UTC)
 
 
-@ui_router.get("/ui/api/spend/summary", dependencies=[Depends(require_authenticated)])
+def _apply_org_scope_to_spendlogs(
+    clauses: list[str],
+    params: list[Any],
+    org_ids: list[str],
+) -> None:
+    if not org_ids:
+        clauses.append("1 = 0")
+        return
+    placeholders = ", ".join(f"${len(params) + i + 1}" for i in range(len(org_ids)))
+    params.extend(org_ids)
+    clauses.append(f"team_id IN (SELECT team_id FROM deltallm_teamtable WHERE organization_id IN ({placeholders}))")
+
+
+@ui_router.get("/ui/api/spend/summary", dependencies=[Depends(require_admin_permission(Permission.SPEND_READ))])
 async def spend_summary(
     request: Request,
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.SPEND_READ)
     db = _db_or_503(request)
     clauses: list[str] = []
     params: list[Any] = []
@@ -257,6 +275,8 @@ async def spend_summary(
     if end_date is not None:
         params.append(_date_end(end_date))
         clauses.append(f"start_time <= ${len(params)}")
+    if not scope.is_platform_admin:
+        _apply_org_scope_to_spendlogs(clauses, params, scope.org_ids)
 
     where_sql = ""
     if clauses:
@@ -278,13 +298,16 @@ async def spend_summary(
     return _to_json_value(dict(rows[0] if rows else {}))
 
 
-@ui_router.get("/ui/api/spend/report", dependencies=[Depends(require_authenticated)])
+@ui_router.get("/ui/api/spend/report", dependencies=[Depends(require_admin_permission(Permission.SPEND_READ))])
 async def spend_report(
     request: Request,
     group_by: str = Query(default="day", pattern="^(model|provider|day|user|team)$"),
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.SPEND_READ)
     db = _db_or_503(request)
     group_column = {
         "model": "model",
@@ -302,6 +325,8 @@ async def spend_report(
     if end_date is not None:
         params.append(_date_end(end_date))
         clauses.append(f"start_time <= ${len(params)}")
+    if not scope.is_platform_admin:
+        _apply_org_scope_to_spendlogs(clauses, params, scope.org_ids)
 
     where_sql = ""
     if clauses:
@@ -328,7 +353,7 @@ async def spend_report(
     }
 
 
-@ui_router.get("/ui/api/logs", dependencies=[Depends(require_master_key)])
+@ui_router.get("/ui/api/logs", dependencies=[Depends(require_admin_permission(Permission.SPEND_READ))])
 async def request_logs(
     request: Request,
     model: str | None = Query(default=None),
@@ -338,7 +363,10 @@ async def request_logs(
     end_date: date | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.SPEND_READ)
     db = _db_or_503(request)
 
     clauses: list[str] = []
@@ -358,6 +386,8 @@ async def request_logs(
         add_clause("start_time >= ${i}", _date_start(start_date))
     if end_date is not None:
         add_clause("start_time <= ${i}", _date_end(end_date))
+    if not scope.is_platform_admin:
+        _apply_org_scope_to_spendlogs(clauses, params, scope.org_ids)
 
     where_sql = ""
     if clauses:
