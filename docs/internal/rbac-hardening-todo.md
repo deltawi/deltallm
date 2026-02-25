@@ -9,9 +9,9 @@ Status legend: `[ ]` pending, `[~]` in progress, `[x]` done.
 - [x] Update docs to list only canonical platform roles.
 
 ## Phase 2 — Remove unused/non-enforced role paths
-- [ ] Remove unused API-key role gate helper (`require_role`) if not used.
-- [ ] Stop carrying non-enforced `user_role` in API-key auth model/path.
-- [ ] Validate/normalize user-table role-like field as non-RBAC metadata.
+- [x] Remove unused API-key role gate helper (`require_role`) if not used.
+- [x] Stop carrying non-enforced `user_role` in API-key auth model/path.
+- [x] Validate/normalize user-table role-like field as non-RBAC metadata.
 
 ## Phase 3 — Enforce scoped RBAC on legacy UI endpoints
 - [ ] Replace broad `require_authenticated` with permission-based guards where applicable.

@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request, status
 
 from src.auth.roles import Permission, ORG_ROLE_PERMISSIONS, TEAM_ROLE_PERMISSIONS
-from src.api.admin.endpoints.common import db_or_503, optional_int, to_json_value, get_auth_scope, AuthScope
+from src.api.admin.endpoints.common import db_or_503, optional_int, to_json_value, get_auth_scope, AuthScope, normalize_user_profile_type
 from src.middleware.platform_auth import get_platform_auth_context
 
 router = APIRouter(tags=["Admin Teams"])
@@ -274,7 +274,7 @@ async def add_team_member(
     await _require_team_access(request, scope, db, team_id, write=True)
     user_id = str(payload.get("user_id") or "").strip()
     user_email = payload.get("user_email")
-    user_role = payload.get("user_role") or "internal_user"
+    user_role = normalize_user_profile_type(payload.get("user_role"), default="internal_user")
     if not user_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id is required")
 

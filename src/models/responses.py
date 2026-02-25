@@ -60,7 +60,6 @@ class UserAPIKeyAuth(BaseModel):
     user_id: str | None = None
     team_id: str | None = None
     organization_id: str | None = None
-    user_role: str | None = None
     models: list[str] = Field(default_factory=list)
     max_budget: float | None = None
     spend: float = 0.0

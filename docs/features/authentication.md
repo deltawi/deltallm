@@ -152,6 +152,15 @@ DeltaLLM uses a three-level RBAC hierarchy:
 | `team_developer` | Create and use API keys |
 | `team_viewer` | Read-only access |
 
+### User Profile Types (Non-RBAC)
+
+`deltallm_usertable.user_role` is treated as a user profile type label for UI/member management metadata, not as an authorization source of truth.
+
+Canonical values are:
+- `internal_user`
+- `internal_user_viewer`
+- `team_admin`
+
 ### Scope Resolution
 
 - **Platform admins** see all resources across the entire platform

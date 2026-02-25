@@ -15,6 +15,18 @@ class AuthScope:
     team_ids: list[str] = field(default_factory=list)
 
 
+ALLOWED_USER_PROFILE_TYPES = {
+    "internal_user",
+    "internal_user_viewer",
+    "team_admin",
+}
+
+USER_PROFILE_TYPE_ALIASES = {
+    "user": "internal_user",
+    "admin": "team_admin",
+}
+
+
 def get_auth_scope(
     request: Request,
     authorization: str | None = None,
@@ -95,6 +107,15 @@ def optional_int(value: Any, field_name: str) -> int | None:
         return int(value)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be an integer") from exc
+
+
+def normalize_user_profile_type(value: Any, default: str = "internal_user") -> str:
+    raw = str(value or default).strip().lower()
+    normalized = USER_PROFILE_TYPE_ALIASES.get(raw, raw)
+    if normalized not in ALLOWED_USER_PROFILE_TYPES:
+        allowed = ", ".join(sorted(ALLOWED_USER_PROFILE_TYPES))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"user_role must be one of: {allowed}")
+    return normalized
 
 
 def model_entries(app: Any) -> list[dict[str, Any]]:
