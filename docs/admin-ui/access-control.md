@@ -13,7 +13,7 @@ Manage the accounts that can log into the admin UI.
 | Field | Description |
 |-------|-------------|
 | Email | Account email address |
-| Role | `platform_admin`, `platform_co_admin`, or `org_user` |
+| Role | `platform_admin` or `org_user` |
 | Active | Whether the account can log in |
 | Force Password Change | Require password change on next login |
 | MFA Enabled | Whether multi-factor authentication is active |

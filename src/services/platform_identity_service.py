@@ -231,7 +231,8 @@ class PlatformIdentityService:
             token_hash,
         )
 
-        role = str(row.get("role") or "org_user")
+        raw_role = str(row.get("role") or "org_user")
+        role = PlatformRole.ADMIN if raw_role == "platform_co_admin" else raw_role
         permissions = sorted(PLATFORM_ROLE_PERMISSIONS.get(role, set()))
 
         org_rows = await self.db.query_raw(

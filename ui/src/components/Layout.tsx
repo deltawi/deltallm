@@ -35,10 +35,9 @@ const navItems = [
 function RoleBadge({ role }: { role: string }) {
   const colors: Record<string, string> = {
     platform_admin: 'bg-purple-500/20 text-purple-300',
-    platform_co_admin: 'bg-indigo-500/20 text-indigo-300',
     org_user: 'bg-gray-500/20 text-gray-400',
   };
-  const label = role === 'platform_admin' ? 'Admin' : role === 'platform_co_admin' ? 'Co-Admin' : 'User';
+  const label = role === 'platform_admin' ? 'Admin' : 'User';
   return (
     <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${colors[role] || 'bg-gray-500/20 text-gray-400'}`}>
       {label}
@@ -108,7 +107,7 @@ export default function Layout() {
 
   const displayEmail = authMode === 'master_key' ? 'Master Key' : (session?.email || 'Unknown');
   const displayRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
-  const isPlatformAdmin = displayRole === 'platform_admin' || displayRole === 'platform_co_admin';
+  const isPlatformAdmin = displayRole === 'platform_admin';
 
   const visibleNavItems = navItems.filter(item => !item.adminOnly || isPlatformAdmin);
 

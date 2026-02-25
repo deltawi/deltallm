@@ -126,7 +126,7 @@ export default function ModelDetail() {
   const navigate = useNavigate();
   const { session, authMode } = useAuth();
   const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
-  const canEdit = userRole === 'platform_admin' || userRole === 'platform_co_admin' || authMode === 'master_key';
+  const canEdit = userRole === 'platform_admin' || authMode === 'master_key';
   const { data: model, loading, refetch } = useApi(() => models.get(deploymentId!), [deploymentId]);
 
   const [showEdit, setShowEdit] = useState(false);

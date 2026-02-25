@@ -132,7 +132,6 @@ DeltaLLM uses a three-level RBAC hierarchy:
 | Role | Description |
 |------|-------------|
 | `platform_admin` | Full access to all resources and settings |
-| `platform_co_admin` | Administrative access without platform settings |
 | `org_user` | Access scoped to assigned organizations only |
 
 ### Organization Roles
