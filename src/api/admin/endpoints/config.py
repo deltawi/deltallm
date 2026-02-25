@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from src.auth.roles import Permission
 from src.api.admin.endpoints.common import model_entries, to_json_value, get_auth_scope
 from src.config import GuardrailConfig
-from src.middleware.admin import require_admin_permission, require_authenticated
+from src.middleware.admin import require_admin_permission
 from src.router import RoutingStrategy
 
 router = APIRouter(tags=["Admin Config"])
@@ -115,7 +115,7 @@ async def update_routing(request: Request, payload: dict[str, Any]) -> dict[str,
     return await get_routing(request)
 
 
-@router.get("/ui/api/settings", dependencies=[Depends(require_authenticated)])
+@router.get("/ui/api/settings", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
 async def get_settings(
     request: Request,
     authorization: str | None = Header(default=None, alias="Authorization"),
