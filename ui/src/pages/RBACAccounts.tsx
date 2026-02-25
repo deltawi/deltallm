@@ -5,7 +5,6 @@ import Modal from '../components/Modal';
 
 const PLATFORM_ROLES = [
   { value: 'platform_admin', label: 'Platform Admin' },
-  { value: 'platform_co_admin', label: 'Platform Co-Admin' },
   { value: 'org_user', label: 'Organization User' },
 ];
 
@@ -31,7 +30,6 @@ function formatDate(d: string | null) {
 function RoleBadge({ role }: { role: string }) {
   const colors: Record<string, string> = {
     platform_admin: 'bg-purple-100 text-purple-800',
-    platform_co_admin: 'bg-indigo-100 text-indigo-800',
     org_user: 'bg-gray-100 text-gray-700',
     org_owner: 'bg-amber-100 text-amber-800',
     org_admin: 'bg-blue-100 text-blue-800',

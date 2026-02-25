@@ -6,7 +6,6 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class PlatformRole:
     ADMIN: str = "platform_admin"
-    CO_ADMIN: str = "platform_co_admin"
 
 
 @dataclass(frozen=True)
@@ -43,7 +42,10 @@ class Permission:
 
 PLATFORM_ROLE_PERMISSIONS: dict[str, set[str]] = {
     PlatformRole.ADMIN: {Permission.PLATFORM_ADMIN},
-    PlatformRole.CO_ADMIN: {Permission.PLATFORM_ADMIN},
+}
+
+LEGACY_PLATFORM_ROLE_ALIASES: dict[str, str] = {
+    "platform_co_admin": PlatformRole.ADMIN,
 }
 
 ORG_ROLE_PERMISSIONS: dict[str, set[str]] = {
@@ -74,5 +76,6 @@ TEAM_ROLE_PERMISSIONS: dict[str, set[str]] = {
 def has_platform_permission(role: str | None, permission: str) -> bool:
     if not role:
         return False
-    allowed = PLATFORM_ROLE_PERMISSIONS.get(role, set())
+    normalized = LEGACY_PLATFORM_ROLE_ALIASES.get(role, role)
+    allowed = PLATFORM_ROLE_PERMISSIONS.get(normalized, set())
     return permission in allowed

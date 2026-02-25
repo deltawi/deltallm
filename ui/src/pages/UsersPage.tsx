@@ -32,7 +32,7 @@ function RateLimit({ value, unit }: { value: number | null | undefined; unit: st
 export default function UsersPage() {
   const { session, authMode } = useAuth();
   const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
-  const isPlatformAdmin = userRole === 'platform_admin' || userRole === 'platform_co_admin';
+  const isPlatformAdmin = userRole === 'platform_admin';
   const { data, loading, refetch } = useApi(() => users.list(), []);
   const { data: teamsList } = useApi(() => teams.list(), []);
   const [showCreate, setShowCreate] = useState(false);

@@ -21,7 +21,7 @@ import ModelDetail from './pages/ModelDetail';
 function AppRoutes() {
   const { isAuthenticated, isLoading, session, authMode, mfaSkipped } = useAuth();
   const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
-  const isPlatformAdmin = userRole === 'platform_admin' || userRole === 'platform_co_admin';
+  const isPlatformAdmin = userRole === 'platform_admin';
 
   if (isLoading) {
     return (

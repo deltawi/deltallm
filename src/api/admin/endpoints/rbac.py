@@ -44,7 +44,7 @@ async def upsert_rbac_account(request: Request, payload: dict[str, Any]) -> dict
     role = str(payload.get("role") or "org_user")
     role = _require_valid_role(
         role,
-        {"platform_admin", "platform_co_admin", "org_user"},
+        {"platform_admin", "org_user"},
         "role",
     )
     is_active = bool(payload.get("is_active", True))

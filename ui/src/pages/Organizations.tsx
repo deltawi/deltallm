@@ -33,7 +33,7 @@ export default function Organizations() {
   const navigate = useNavigate();
   const { session, authMode } = useAuth();
   const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
-  const isPlatformAdmin = userRole === 'platform_admin' || userRole === 'platform_co_admin';
+  const isPlatformAdmin = userRole === 'platform_admin';
   const { data, loading, refetch } = useApi(() => organizations.list(), []);
   const [showCreate, setShowCreate] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
