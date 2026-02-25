@@ -142,8 +142,8 @@ export default function UsersPage() {
               <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
               <select value={form.user_role} onChange={(e) => setForm({ ...form, user_role: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                 <option value="internal_user">Internal User</option>
-                <option value="admin">Admin</option>
-                <option value="user">User</option>
+                <option value="internal_user_viewer">Viewer</option>
+                <option value="team_admin">Team Admin</option>
               </select>
             </div>
             <div className="relative">

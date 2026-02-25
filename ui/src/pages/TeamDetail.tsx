@@ -230,7 +230,7 @@ export default function TeamDetail() {
             <select value={memberForm.user_role} onChange={(e) => setMemberForm({ ...memberForm, user_role: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
               <option value="internal_user">Internal User</option>
               <option value="internal_user_viewer">Viewer</option>
-              <option value="admin">Admin</option>
+              <option value="team_admin">Team Admin</option>
             </select>
           </div>
           <div className="flex justify-end gap-3 pt-2">

@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 from src.auth.roles import Permission
-from src.api.admin.endpoints.common import db_or_503, optional_int, to_json_value, get_auth_scope
+from src.api.admin.endpoints.common import db_or_503, optional_int, to_json_value, get_auth_scope, normalize_user_profile_type
 from src.middleware.admin import require_admin_permission
 
 router = APIRouter(tags=["Admin Users"])
@@ -78,7 +78,7 @@ async def create_user(request: Request, payload: dict[str, Any]) -> dict[str, An
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id is required")
 
     user_email = payload.get("user_email")
-    user_role = payload.get("user_role") or "user"
+    user_role = normalize_user_profile_type(payload.get("user_role"), default="internal_user")
     team_id = payload.get("team_id")
     max_budget = payload.get("max_budget")
     rpm_limit = optional_int(payload.get("rpm_limit"), "rpm_limit")
@@ -154,7 +154,7 @@ async def update_user(request: Request, user_id: str, payload: dict[str, Any]) -
 
     existing = dict(rows[0])
     user_email = payload.get("user_email", existing.get("user_email"))
-    user_role = payload.get("user_role", existing.get("user_role"))
+    user_role = normalize_user_profile_type(payload.get("user_role", existing.get("user_role")), default="internal_user")
     team_id = payload.get("team_id", existing.get("team_id"))
     max_budget = payload.get("max_budget", existing.get("max_budget"))
     models = payload.get("models", existing.get("models"))

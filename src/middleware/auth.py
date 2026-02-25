@@ -22,7 +22,6 @@ async def require_api_key(
         auth = UserAPIKeyAuth(
             api_key="master_key",
             user_id="admin",
-            user_role="platform_admin",
             metadata={"is_master_key": True},
         )
         request.state.user_api_key = auth
@@ -71,7 +70,6 @@ async def _try_fallback_auth(request: Request, raw_token: str) -> UserAPIKeyAuth
                 user_id=claims.get("user_id"),
                 team_id=claims.get("team_id"),
                 organization_id=claims.get("organization_id"),
-                user_role=claims.get("user_role"),
                 metadata={"jwt_claims": claims.get("claims", claims)},
             )
         except HTTPException:
