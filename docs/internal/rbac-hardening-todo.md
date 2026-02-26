@@ -25,4 +25,4 @@ Status legend: `[ ]` pending, `[~]` in progress, `[x]` done.
 - [x] Add tests for profile type validation and alias normalization.
 
 ## Rollup
-- [ ] All phases merged to `main`.
+- [x] All phases merged to `main`.
