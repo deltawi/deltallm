@@ -88,7 +88,7 @@ export default function UsersPage() {
   const columns = [
     { key: 'user_id', header: 'User ID', render: (r: any) => <span className="font-medium">{r.user_id}</span> },
     { key: 'user_email', header: 'Email', render: (r: any) => r.user_email || <span className="text-gray-400">—</span> },
-    { key: 'user_role', header: 'Role', render: (r: any) => <span className="text-xs bg-gray-100 px-2 py-0.5 rounded-full">{r.user_role}</span> },
+    { key: 'user_role', header: 'Profile Type', render: (r: any) => <span className="text-xs bg-gray-100 px-2 py-0.5 rounded-full">{r.user_role}</span> },
     { key: 'team_id', header: 'Team', render: (r: any) => r.team_id || <span className="text-gray-400">—</span> },
     { key: 'budget', header: 'Budget', render: (r: any) => <BudgetBar spend={r.spend || 0} max_budget={r.max_budget} /> },
     { key: 'rpm_limit', header: 'RPM', render: (r: any) => <RateLimit value={r.rpm_limit} unit="req/min" /> },
@@ -115,7 +115,7 @@ export default function UsersPage() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Users</h1>
-          <p className="text-sm text-gray-500 mt-1">Manage users, permissions, and rate limits</p>
+          <p className="text-sm text-gray-500 mt-1">Manage users, profile types, and rate limits</p>
         </div>
         {isPlatformAdmin && (
           <button onClick={() => { resetForm(); setShowCreate(true); }} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
@@ -139,12 +139,13 @@ export default function UsersPage() {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Profile Type</label>
               <select value={form.user_role} onChange={(e) => setForm({ ...form, user_role: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                 <option value="internal_user">Internal User</option>
                 <option value="internal_user_viewer">Viewer</option>
                 <option value="team_admin">Team Admin</option>
               </select>
+              <p className="text-xs text-gray-400 mt-1">Authorization is managed via Access Control memberships.</p>
             </div>
             <div className="relative">
               <label className="block text-sm font-medium text-gray-700 mb-1">Team</label>

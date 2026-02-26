@@ -137,7 +137,7 @@ export default function Teams() {
   const memberColumns = [
     { key: 'user_id', header: 'User ID', render: (r: any) => <span className="font-medium">{r.user_id}</span> },
     { key: 'user_email', header: 'Email', render: (r: any) => r.user_email || <span className="text-gray-400">—</span> },
-    { key: 'user_role', header: 'Role' },
+    { key: 'user_role', header: 'Profile Type' },
     { key: 'actions', header: '', render: (r: any) => (
       <button onClick={() => handleRemoveMember(r.user_id)} className="p-1.5 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4 text-red-500" /></button>
     ) },
@@ -213,10 +213,16 @@ export default function Teams() {
           <div className="flex gap-2 mb-4">
             <input value={memberForm.user_id} onChange={(e) => setMemberForm({ ...memberForm, user_id: e.target.value })} placeholder="User ID" className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             <input value={memberForm.user_email} onChange={(e) => setMemberForm({ ...memberForm, user_email: e.target.value })} placeholder="Email (optional)" className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <select value={memberForm.user_role} onChange={(e) => setMemberForm({ ...memberForm, user_role: e.target.value })} className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="internal_user">Internal User</option>
+              <option value="internal_user_viewer">Viewer</option>
+              <option value="team_admin">Team Admin</option>
+            </select>
             <button onClick={handleAddMember} className="flex items-center gap-1 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition-colors">
               <UserPlus className="w-4 h-4" /> Add
             </button>
           </div>
+          <p className="text-xs text-gray-400 mb-4">Authorization is managed via Access Control memberships.</p>
           <DataTable columns={memberColumns} data={members || []} emptyMessage="No members in this team" />
         </div>
       </Modal>

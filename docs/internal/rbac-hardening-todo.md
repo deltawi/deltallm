@@ -18,5 +18,11 @@ Status legend: `[ ]` pending, `[~]` in progress, `[x]` done.
 - [x] Keep `master_key` as explicit super-admin bypass only.
 - [x] Add/adjust tests for permission checks and regressions.
 
+## Phase 4 — Clarify profile types vs RBAC roles
+- [x] Update Users/Teams UI labels from "Role" to "Profile Type" where tied to `deltallm_usertable.user_role`.
+- [x] Add contextual UI guidance that authorization is managed in Access Control memberships.
+- [x] Update API/admin docs to describe `user_role` as non-RBAC profile metadata.
+- [x] Add tests for profile type validation and alias normalization.
+
 ## Rollup
 - [ ] All phases merged to `main`.
