@@ -49,9 +49,16 @@ All admin endpoints require authentication with either a master key or an active
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/ui/api/users` | List all users |
+| `POST` | `/ui/api/users` | Create a user |
 | `PUT` | `/ui/api/users/{user_id}` | Update a user |
 | `POST` | `/ui/api/users/{user_id}/block` | Block a user |
-| `POST` | `/ui/api/users/{user_id}/unblock` | Unblock a user |
+
+`user_role` on users is a profile type metadata field (non-RBAC). Allowed values are:
+- `internal_user`
+- `internal_user_viewer`
+- `team_admin`
+
+Authorization is enforced through platform/org/team RBAC memberships, not `user_role`.
 
 ## Spend
 

@@ -34,7 +34,9 @@ When SSO is configured, a third tab appears for single sign-on.
 
 ## Users
 
-Manage users, their permissions, team assignments, and rate limits.
+Manage users, their profile types, team assignments, and rate limits.
+
+User profile types (`internal_user`, `internal_user_viewer`, `team_admin`) are metadata labels for user/team management views. Authorization is enforced via Access Control memberships and platform account roles.
 
 ![Users Page](images/users.png)
 

@@ -122,7 +122,7 @@ export default function OrganizationDetail() {
     { key: 'team_alias', header: 'Team', render: (r: any) => (
       <Link to={`/teams/${r.team_id}`} className="text-sm text-blue-600 hover:text-blue-700">{r.team_alias || r.team_id}</Link>
     ) },
-    { key: 'user_role', header: 'Role', render: (r: any) => (
+    { key: 'user_role', header: 'Profile Type', render: (r: any) => (
       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">{r.user_role}</span>
     ) },
     { key: 'spend', header: 'Spend', render: (r: any) => <span className="text-sm">${(r.spend || 0).toFixed(2)}</span> },

@@ -111,7 +111,7 @@ export default function TeamDetail() {
   const memberColumns = [
     { key: 'user_id', header: 'User ID', render: (r: any) => <span className="font-medium font-mono text-xs">{r.user_id}</span> },
     { key: 'user_email', header: 'Email', render: (r: any) => r.user_email || <span className="text-gray-400">--</span> },
-    { key: 'user_role', header: 'Role', render: (r: any) => (
+    { key: 'user_role', header: 'Profile Type', render: (r: any) => (
       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">{r.user_role}</span>
     ) },
     { key: 'spend', header: 'Spend', render: (r: any) => <span className="text-sm">${(r.spend || 0).toFixed(2)}</span> },
@@ -226,12 +226,13 @@ export default function TeamDetail() {
             <input value={memberForm.user_email} onChange={(e) => setMemberForm({ ...memberForm, user_email: e.target.value })} placeholder="user@example.com" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Profile Type</label>
             <select value={memberForm.user_role} onChange={(e) => setMemberForm({ ...memberForm, user_role: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
               <option value="internal_user">Internal User</option>
               <option value="internal_user_viewer">Viewer</option>
               <option value="team_admin">Team Admin</option>
             </select>
+            <p className="text-xs text-gray-400 mt-1">Authorization is managed via Access Control memberships.</p>
           </div>
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setShowAddMember(false)} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
