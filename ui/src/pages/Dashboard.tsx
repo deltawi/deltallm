@@ -23,8 +23,8 @@ export default function Dashboard() {
   const { data: summary } = useApi(() => spend.summary(), []);
   const { data: dailyReport } = useApi(() => spend.report('day'), []);
   const { data: modelReport } = useApi(() => spend.report('model'), []);
-  const { data: modelsList } = useApi(() => modelsApi.list(), []);
-  const { data: keysList } = useApi(() => keysApi.list(), []);
+  const { data: modelsResult } = useApi(() => modelsApi.list(), []);
+  const { data: keysResult } = useApi(() => keysApi.list(), []);
   const { data: healthData } = useApi(() => health.check(), []);
 
   const daily = (dailyReport?.breakdown || []).map((r: SpendReportRow) => ({ date: r.group_key, total_spend: r.total_spend }));
@@ -53,12 +53,12 @@ export default function Dashboard() {
         />
         <StatCard
           title="Active Keys"
-          value={fmtNum(keysList?.length)}
+          value={fmtNum(keysResult?.pagination?.total ?? keysResult?.data?.length)}
           icon={<Key className="w-5 h-5" />}
         />
         <StatCard
           title="Models"
-          value={fmtNum(modelsList?.length)}
+          value={fmtNum(modelsResult?.pagination?.total ?? modelsResult?.data?.length)}
           icon={<Box className="w-5 h-5" />}
           subtitle={healthStatus === 'ok' ? 'System healthy' : `Status: ${healthStatus}`}
         />

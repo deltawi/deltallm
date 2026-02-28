@@ -3,7 +3,7 @@ from __future__ import annotations
 import secrets
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Request, status
+from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
 from src.auth.roles import Permission, ORG_ROLE_PERMISSIONS, TEAM_ROLE_PERMISSIONS
 from src.api.admin.endpoints.common import db_or_503, optional_int, to_json_value, get_auth_scope, AuthScope, normalize_user_profile_type
@@ -61,39 +61,63 @@ async def _require_team_access(
 @router.get("/ui/api/teams")
 async def list_teams(
     request: Request,
+    search: str | None = Query(default=None),
+    organization_id: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.TEAM_READ)
     db = db_or_503(request)
 
-    if scope.is_platform_admin:
-        rows = await db.query_raw(
-            """
-            SELECT t.team_id, t.team_alias, t.organization_id, t.max_budget, t.spend, t.models, t.rpm_limit, t.tpm_limit, t.blocked,
-                   t.created_at, t.updated_at,
-                   (SELECT COUNT(*) FROM deltallm_usertable u WHERE u.team_id = t.team_id) AS member_count
-            FROM deltallm_teamtable t
-            ORDER BY t.created_at DESC
-            """
-        )
-    elif scope.org_ids:
-        placeholders = ", ".join(f"${i+1}" for i in range(len(scope.org_ids)))
-        rows = await db.query_raw(
-            f"""
-            SELECT t.team_id, t.team_alias, t.organization_id, t.max_budget, t.spend, t.models, t.rpm_limit, t.tpm_limit, t.blocked,
-                   t.created_at, t.updated_at,
-                   (SELECT COUNT(*) FROM deltallm_usertable u WHERE u.team_id = t.team_id) AS member_count
-            FROM deltallm_teamtable t
-            WHERE t.organization_id IN ({placeholders})
-            ORDER BY t.created_at DESC
-            """,
-            *scope.org_ids,
-        )
-    else:
-        rows = []
+    clauses: list[str] = []
+    params: list[Any] = []
 
-    return [to_json_value(dict(row)) for row in rows]
+    if not scope.is_platform_admin:
+        if scope.org_ids:
+            ph = ", ".join(f"${len(params) + i + 1}" for i in range(len(scope.org_ids)))
+            params.extend(scope.org_ids)
+            clauses.append(f"t.organization_id IN ({ph})")
+        else:
+            return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
+
+    if search:
+        params.append(f"%{search}%")
+        clauses.append(f"(t.team_alias ILIKE ${len(params)} OR t.team_id ILIKE ${len(params)})")
+    if organization_id:
+        params.append(organization_id)
+        clauses.append(f"t.organization_id = ${len(params)}")
+
+    where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+
+    select_cols = """t.team_id, t.team_alias, t.organization_id, t.max_budget, t.spend, t.models, t.rpm_limit, t.tpm_limit, t.blocked,
+                   t.created_at, t.updated_at,
+                   (SELECT COUNT(*) FROM deltallm_usertable u WHERE u.team_id = t.team_id) AS member_count"""
+
+    count_rows = await db.query_raw(
+        f"SELECT COUNT(*) AS total FROM deltallm_teamtable t {where_sql}",
+        *params,
+    )
+    total = int((count_rows[0] if count_rows else {}).get("total") or 0)
+
+    params.append(limit)
+    params.append(offset)
+    rows = await db.query_raw(
+        f"""
+        SELECT {select_cols}
+        FROM deltallm_teamtable t
+        {where_sql}
+        ORDER BY t.created_at DESC
+        LIMIT ${len(params) - 1} OFFSET ${len(params)}
+        """,
+        *params,
+    )
+
+    return {
+        "data": [to_json_value(dict(row)) for row in rows],
+        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+    }
 
 
 @router.get("/ui/api/teams/{team_id}")

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { models } from '../lib/api';
@@ -77,13 +77,24 @@ function strOrEmpty(val: any): string {
 
 export default function Models() {
   const navigate = useNavigate();
-  const { data, loading, refetch } = useApi(() => models.list(), []);
+  const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [pageOffset, setPageOffset] = useState(0);
+  const pageSize = 10;
+  const { data: result, loading, refetch } = useApi(() => models.list({ search, limit: pageSize, offset: pageOffset }), [search, pageOffset]);
+  const items = result?.data || [];
+  const pagination = result?.pagination;
   const [showCreate, setShowCreate] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
   const [form, setForm] = useState<FormState>({ ...emptyForm });
   const [defaultParams, setDefaultParams] = useState<{ key: string; value: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const t = setTimeout(() => { setSearch(searchInput); setPageOffset(0); }, 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 
   const buildPayload = () => {
     const deltallm_params: Record<string, any> = {
@@ -274,7 +285,10 @@ export default function Models() {
         </button>
       </div>
       <Card>
-        <DataTable columns={columns} data={data || []} loading={loading} emptyMessage="No models configured" onRowClick={(row) => navigate(`/models/${row.deployment_id}`)} />
+        <div className="px-4 pt-3 pb-2">
+          <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search models..." className="w-full sm:w-72 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        </div>
+        <DataTable columns={columns} data={items} loading={loading} emptyMessage="No models configured" onRowClick={(row) => navigate(`/models/${row.deployment_id}`)} pagination={pagination} onPageChange={setPageOffset} />
       </Card>
 
       <Modal open={showCreate || !!editItem} onClose={closeModal} title={editItem ? 'Edit Model' : 'Add Model'}>

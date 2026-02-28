@@ -85,14 +85,14 @@ export default function RBACAccounts() {
         rbac.accounts.list(),
         rbac.orgMemberships.list(),
         rbac.teamMemberships.list(),
-        organizations.list().catch(() => []),
-        teams.list().catch(() => []),
+        organizations.list({ limit: 500 }).catch(() => ({ data: [], pagination: { total: 0, limit: 500, offset: 0, has_more: false } })),
+        teams.list({ limit: 500 }).catch(() => ({ data: [], pagination: { total: 0, limit: 500, offset: 0, has_more: false } })),
       ]);
       setAccounts(accts);
       setOrgMemberships(orgMs);
       setTeamMemberships(teamMs);
-      setOrgList(orgs);
-      setTeamList(tms);
+      setOrgList(orgs?.data || orgs || []);
+      setTeamList(tms?.data || tms || []);
     } catch (err: any) {
       setError(err?.message || 'Failed to load accounts');
     } finally {

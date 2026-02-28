@@ -12,9 +12,12 @@ type ScopeTarget = { scope: 'organization' | 'team' | 'key'; id: string; label: 
 
 export default function Guardrails() {
   const { data, loading, refetch } = useApi(() => guardrails.list(), []);
-  const { data: orgList } = useApi(() => organizations.list(), []);
-  const { data: teamList } = useApi(() => teams.list(), []);
-  const { data: keyList } = useApi(() => keys.list(), []);
+  const { data: orgResult } = useApi(() => organizations.list({ limit: 500 }), []);
+  const orgList = orgResult?.data || [];
+  const { data: teamResult } = useApi(() => teams.list({ limit: 500 }), []);
+  const teamList = teamResult?.data || [];
+  const { data: keyResult } = useApi(() => keys.list({ limit: 500 }), []);
+  const keyList = keyResult?.data || [];
   const [showCreate, setShowCreate] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
   const [scopeTarget, setScopeTarget] = useState<ScopeTarget>(null);
@@ -181,11 +184,11 @@ export default function Guardrails() {
                 <Building2 className="w-4 h-4 text-indigo-600" />
                 <h3 className="font-medium text-sm text-gray-900">Organizations</h3>
               </div>
-              {(orgList || []).length === 0 ? (
+              {orgList.length === 0 ? (
                 <p className="text-xs text-gray-400">No organizations</p>
               ) : (
                 <div className="space-y-1 max-h-48 overflow-y-auto">
-                  {(orgList || []).map((org: any) => (
+                  {orgList.map((org: any) => (
                     <button key={org.organization_id} onClick={() => setScopeTarget({ scope: 'organization', id: org.organization_id, label: org.organization_alias || org.organization_id })} className={`w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-indigo-50 transition-colors ${scopeTarget?.scope === 'organization' && scopeTarget?.id === org.organization_id ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-700'}`}>
                       {org.organization_alias || org.organization_id}
                     </button>
@@ -201,11 +204,11 @@ export default function Guardrails() {
                 <Users className="w-4 h-4 text-emerald-600" />
                 <h3 className="font-medium text-sm text-gray-900">Teams</h3>
               </div>
-              {(teamList || []).length === 0 ? (
+              {teamList.length === 0 ? (
                 <p className="text-xs text-gray-400">No teams</p>
               ) : (
                 <div className="space-y-1 max-h-48 overflow-y-auto">
-                  {(teamList || []).map((team: any) => (
+                  {teamList.map((team: any) => (
                     <button key={team.team_id} onClick={() => setScopeTarget({ scope: 'team', id: team.team_id, label: team.team_alias || team.team_id })} className={`w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-emerald-50 transition-colors ${scopeTarget?.scope === 'team' && scopeTarget?.id === team.team_id ? 'bg-emerald-50 text-emerald-700 font-medium' : 'text-gray-700'}`}>
                       {team.team_alias || team.team_id}
                     </button>
@@ -221,11 +224,11 @@ export default function Guardrails() {
                 <Key className="w-4 h-4 text-amber-600" />
                 <h3 className="font-medium text-sm text-gray-900">API Keys</h3>
               </div>
-              {(keyList || []).length === 0 ? (
+              {keyList.length === 0 ? (
                 <p className="text-xs text-gray-400">No API keys</p>
               ) : (
                 <div className="space-y-1 max-h-48 overflow-y-auto">
-                  {(keyList || []).map((k: any) => (
+                  {keyList.map((k: any) => (
                     <button key={k.token} onClick={() => setScopeTarget({ scope: 'key', id: k.token, label: k.key_name || k.key_alias || k.token?.slice(0, 12) })} className={`w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-amber-50 transition-colors ${scopeTarget?.scope === 'key' && scopeTarget?.id === k.token ? 'bg-amber-50 text-amber-700 font-medium' : 'text-gray-700'}`}>
                       {k.key_name || k.key_alias || k.token?.slice(0, 12)}
                     </button>
