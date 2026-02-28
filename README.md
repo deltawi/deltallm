@@ -86,6 +86,7 @@ general_settings:
 
 For one-time migration from file models, you can temporarily set `model_deployment_bootstrap_from_config: true`, start once, then set it back to `false`.
 After startup in `db_only`, manage models through the dashboard/API (`/ui/api/models`).
+For Redis, you can provide either `redis_url` (recommended) or `redis_host` + `redis_port`.
 
 If using environment variable references, export them before starting:
 
