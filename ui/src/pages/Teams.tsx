@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { teams, organizations } from '../lib/api';
@@ -30,8 +30,20 @@ function RateLimit({ value, unit }: { value: number | null | undefined; unit: st
 
 export default function Teams() {
   const navigate = useNavigate();
-  const { data, loading, refetch } = useApi(() => teams.list(), []);
-  const { data: orgList } = useApi(() => organizations.list(), []);
+  const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [pageOffset, setPageOffset] = useState(0);
+  const pageSize = 50;
+  const { data: result, loading, refetch } = useApi(() => teams.list({ search, limit: pageSize, offset: pageOffset }), [search, pageOffset]);
+  const items = result?.data || [];
+  const pagination = result?.pagination;
+  const { data: orgResult } = useApi(() => organizations.list({ limit: 500 }), []);
+  const orgList = orgResult?.data || [];
+
+  useEffect(() => {
+    const t = setTimeout(() => { setSearch(searchInput); setPageOffset(0); }, 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
   const [showCreate, setShowCreate] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
   const [selectedTeam, setSelectedTeam] = useState<any>(null);
@@ -155,7 +167,10 @@ export default function Teams() {
         </button>
       </div>
       <Card>
-        <DataTable columns={columns} data={data || []} loading={loading} emptyMessage="No teams created yet" onRowClick={(r) => navigate(`/teams/${r.team_id}`)} />
+        <div className="px-4 pt-3 pb-2">
+          <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search teams..." className="w-full sm:w-72 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        </div>
+        <DataTable columns={columns} data={items} loading={loading} emptyMessage="No teams created yet" onRowClick={(r) => navigate(`/teams/${r.team_id}`)} pagination={pagination} onPageChange={setPageOffset} />
       </Card>
 
       <Modal open={showCreate || !!editItem} onClose={() => { setShowCreate(false); setEditItem(null); resetForm(); setError(null); }} title={editItem ? 'Edit Team' : 'Create Team'}>

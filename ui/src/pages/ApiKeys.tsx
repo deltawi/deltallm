@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useApi } from '../lib/hooks';
 import { keys, teams } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -40,8 +40,20 @@ function BudgetBar({ spend, max_budget }: { spend: number; max_budget: number | 
 export default function ApiKeys() {
   const { session } = useAuth();
   const currentUserId = session?.account_id || '';
-  const { data, loading, refetch } = useApi(() => keys.list(), []);
-  const { data: teamsList } = useApi(() => teams.list(), []);
+  const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [pageOffset, setPageOffset] = useState(0);
+  const pageSize = 50;
+  const { data: result, loading, refetch } = useApi(() => keys.list({ search, limit: pageSize, offset: pageOffset }), [search, pageOffset]);
+  const items = result?.data || [];
+  const pagination = result?.pagination;
+  const { data: teamsResult } = useApi(() => teams.list({ limit: 500 }), []);
+  const teamsList = teamsResult?.data || [];
+
+  useEffect(() => {
+    const t = setTimeout(() => { setSearch(searchInput); setPageOffset(0); }, 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
   const [showCreate, setShowCreate] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
   const [createdKey, setCreatedKey] = useState<string | null>(null);
@@ -170,7 +182,10 @@ export default function ApiKeys() {
         </button>
       </div>
       <Card>
-        <DataTable columns={columns} data={data || []} loading={loading} emptyMessage="No API keys created yet" />
+        <div className="px-4 pt-3 pb-2">
+          <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search keys..." className="w-full sm:w-72 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        </div>
+        <DataTable columns={columns} data={items} loading={loading} emptyMessage="No API keys created yet" pagination={pagination} onPageChange={setPageOffset} />
       </Card>
 
       <Modal open={showCreate || !!editItem} onClose={() => { setShowCreate(false); setEditItem(null); }} title={editItem ? 'Edit API Key' : 'Create API Key'}>

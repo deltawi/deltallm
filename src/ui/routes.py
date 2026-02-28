@@ -80,18 +80,41 @@ def _rebuild_runtime_registry(app: Any) -> None:
 
 
 @ui_router.get("/ui/api/models", dependencies=[Depends(require_authenticated)])
-async def list_models(request: Request) -> list[dict[str, Any]]:
+async def list_models(
+    request: Request,
+    search: str | None = Query(default=None),
+    provider: str | None = Query(default=None),
+    mode: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
     health_backend = getattr(request.app.state, "router_state_backend", None)
     entries = _model_entries(request.app)
 
-    for entry in entries:
+    if search:
+        q = search.lower()
+        entries = [e for e in entries if q in e["model_name"].lower() or q in e["deployment_id"].lower() or q in e.get("provider", "").lower()]
+    if provider:
+        p = provider.lower()
+        entries = [e for e in entries if e.get("provider", "").lower() == p]
+    if mode:
+        m = mode.lower()
+        entries = [e for e in entries if (e.get("model_info", {}).get("mode") or "chat").lower() == m]
+
+    total = len(entries)
+    page = entries[offset: offset + limit]
+
+    for entry in page:
         healthy = True
         if health_backend is not None:
             health = await health_backend.get_health(entry["deployment_id"])
             healthy = str(health.get("healthy", "true")) != "false"
         entry["healthy"] = healthy
 
-    return entries
+    return {
+        "data": page,
+        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+    }
 
 
 @ui_router.get("/ui/api/models/{deployment_id}", dependencies=[Depends(require_authenticated)])

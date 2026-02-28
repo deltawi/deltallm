@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useApi } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
 import { users, teams } from '../lib/api';
@@ -33,8 +33,20 @@ export default function UsersPage() {
   const { session, authMode } = useAuth();
   const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
   const isPlatformAdmin = userRole === 'platform_admin';
-  const { data, loading, refetch } = useApi(() => users.list(), []);
-  const { data: teamsList } = useApi(() => teams.list(), []);
+  const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [pageOffset, setPageOffset] = useState(0);
+  const pageSize = 50;
+  const { data: result, loading, refetch } = useApi(() => users.list({ search, limit: pageSize, offset: pageOffset }), [search, pageOffset]);
+  const items = result?.data || [];
+  const pagination = result?.pagination;
+  const { data: teamsResult } = useApi(() => teams.list({ limit: 500 }), []);
+  const teamsList = teamsResult?.data || [];
+
+  useEffect(() => {
+    const t = setTimeout(() => { setSearch(searchInput); setPageOffset(0); }, 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
   const [showCreate, setShowCreate] = useState(false);
   const [teamSearch, setTeamSearch] = useState('');
   const [editItem, setEditItem] = useState<any>(null);
@@ -124,7 +136,10 @@ export default function UsersPage() {
         )}
       </div>
       <Card>
-        <DataTable columns={columns} data={data || []} loading={loading} emptyMessage="No users found" />
+        <div className="px-4 pt-3 pb-2">
+          <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search users..." className="w-full sm:w-72 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        </div>
+        <DataTable columns={columns} data={items} loading={loading} emptyMessage="No users found" pagination={pagination} onPageChange={setPageOffset} />
       </Card>
 
       <Modal open={showCreate || !!editItem} onClose={() => { setShowCreate(false); setEditItem(null); resetForm(); }} title={editItem ? 'Edit User' : 'Add User'}>
