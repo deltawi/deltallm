@@ -121,7 +121,9 @@ class InMemoryModelRepository:
 
 
 @pytest.mark.asyncio
-async def test_dynamic_config_merges_db_and_notifies_subscribers():
+async def test_dynamic_config_merges_db_and_notifies_subscribers(monkeypatch):
+    monkeypatch.setenv("MASTER", "resolved-master")
+    monkeypatch.setenv("OPENAI_API_KEY", "resolved-openai-key")
     db = FakeDB(
         {
             "general_settings": {"master_key": "os.environ/MASTER"},
@@ -170,8 +172,9 @@ async def test_dynamic_config_merges_db_and_notifies_subscribers():
     await asyncio.sleep(0.05)
 
     cfg = manager.get_app_config()
-    assert cfg.general_settings.master_key == "os.environ/MASTER"
+    assert cfg.general_settings.master_key == "resolved-master"
     assert cfg.model_list[0].deployment_id == "dep-1"
+    assert cfg.model_list[0].deltallm_params.api_key == "resolved-openai-key"
     assert cfg.router_settings.routing_strategy == "weighted"
     assert called
 

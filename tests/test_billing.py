@@ -16,6 +16,10 @@ class RecordingDB:
         self.calls.append((query, args))
         return []
 
+    async def execute_raw(self, query: str, *args):
+        self.calls.append((query, args))
+        return None
+
 
 class BudgetDB:
     async def query_raw(self, query: str, *args):
