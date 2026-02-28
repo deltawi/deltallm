@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 
@@ -43,13 +45,19 @@ async def test_auth_login_and_callback_routes(client, test_app):
         async def handle_callback(self, code: str):
             return {"user_id": "user-1", "email": "user@example.com", "role": "internal_user", "token": "session-token"}
 
+    class StubIdentityService:
+        async def upsert_sso_account(self, **kwargs):
+            del kwargs
+            return SimpleNamespace(session_token="session-token")
+
     test_app.state.sso_auth_handler = StubSSOHandler()
+    test_app.state.platform_identity_service = StubIdentityService()
 
     login = await client.get("/auth/login", params={"state": "abc"})
     assert login.status_code == 200
     assert "sso.example.com" in login.json()["authorize_url"]
 
     callback = await client.get("/auth/callback", params={"code": "oauth-code", "state": "abc"})
-    assert callback.status_code == 200
-    assert callback.json()["token"] == "session-token"
-    assert callback.json()["state"] == "abc"
+    assert callback.status_code == 302
+    assert callback.headers["location"] == "/"
+    assert "deltallm_session=session-token" in callback.headers.get("set-cookie", "")

@@ -78,9 +78,15 @@ general_settings:
   database_url: "postgresql://user:pass@localhost:5432/deltallm"  # or os.environ/DATABASE_URL
   redis_host: localhost
   redis_port: 6379
+  model_deployment_source: db_only
+  model_deployment_bootstrap_from_config: false
   platform_bootstrap_admin_email: "admin@example.com"
   platform_bootstrap_admin_password: "your-secure-password"
 ```
+
+For one-time migration from file models, you can temporarily set `model_deployment_bootstrap_from_config: true`, start once, then set it back to `false`.
+After startup in `db_only`, manage models through the dashboard/API (`/ui/api/models`).
+For Redis, you can provide either `redis_url` (recommended) or `redis_host` + `redis_port`.
 
 If using environment variable references, export them before starting:
 
@@ -268,10 +274,10 @@ DeltaLLM is configured via a YAML file. See [`config.example.yaml`](config.examp
 
 | Section | Description |
 |---------|-------------|
-| `model_list` | Model deployments with provider config, API keys, and default parameters |
+| `model_list` | Bootstrap/file deployments (not the primary runtime write path in `db_only`) |
 | `router_settings` | Routing strategy, retries, timeouts, cooldown |
 | `deltallm_settings` | Callbacks, guardrails, message logging |
-| `general_settings` | Master key, database, Redis, cache, SSO, auth session settings |
+| `general_settings` | Master key, database, Redis, cache, SSO, auth session settings, deployment source mode |
 
 ### Environment variable references
 

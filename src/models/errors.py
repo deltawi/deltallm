@@ -30,7 +30,7 @@ class RateLimitError(ProxyError):
 
 
 class BudgetExceededError(ProxyError):
-    status_code = 400
+    status_code = 429
     error_type = "budget_exceeded"
     message = "Budget exceeded"
 

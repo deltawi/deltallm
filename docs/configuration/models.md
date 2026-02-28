@@ -2,6 +2,20 @@
 
 The `model_list` section defines which LLM models are available through the gateway. Each entry maps a public model name to a specific provider deployment.
 
+## Storage Source
+
+Runtime deployments are persisted in the `deltallm_modeldeployment` database table.
+
+- `general_settings.model_deployment_source: db_only` — read deployments only from DB (recommended)
+- `general_settings.model_deployment_source: hybrid` — prefer DB, fallback to `model_list` when DB is empty/unavailable
+- `general_settings.model_deployment_source: config_only` — read only from `model_list`
+
+### Bootstrap Behavior
+
+Use `general_settings.model_deployment_bootstrap_from_config: true` only to seed DB from `model_list` when the deployment table is empty.
+
+After startup, runtime model lifecycle is managed via Admin UI/API (`/ui/api/models`). Changes to `config.yaml` are not the primary runtime write path in `db_only`.
+
 ## Basic Model Definition
 
 ```yaml

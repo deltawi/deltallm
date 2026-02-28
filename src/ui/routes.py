@@ -170,14 +170,18 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
     model_info = payload.get("model_info") if isinstance(payload.get("model_info"), dict) else found_deployment.get("model_info", {})
 
     if hot_reload is not None:
-        await hot_reload.remove_model(deployment_id, updated_by="admin_api")
-        new_config = {
-            "deployment_id": deployment_id,
-            "model_name": new_model_name,
-            "deltallm_params": deltallm_params,
-            "model_info": model_info,
-        }
-        await hot_reload.add_model(new_config, updated_by="admin_api")
+        updated = await hot_reload.update_model(
+            deployment_id,
+            {
+                "deployment_id": deployment_id,
+                "model_name": new_model_name,
+                "deltallm_params": deltallm_params,
+                "model_info": model_info,
+            },
+            updated_by="admin_api",
+        )
+        if not updated:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
     else:
         deployments = registry.get(found_model_name, [])
         for idx, d in enumerate(deployments):
@@ -271,10 +275,10 @@ async def spend_summary(
 
     if start_date is not None:
         params.append(_date_start(start_date))
-        clauses.append(f"start_time >= ${len(params)}")
+        clauses.append(f"start_time >= ${len(params)}::timestamp")
     if end_date is not None:
         params.append(_date_end(end_date))
-        clauses.append(f"start_time <= ${len(params)}")
+        clauses.append(f"start_time <= ${len(params)}::timestamp")
     if not scope.is_platform_admin:
         _apply_org_scope_to_spendlogs(clauses, params, scope.org_ids)
 
@@ -321,10 +325,10 @@ async def spend_report(
     params: list[Any] = []
     if start_date is not None:
         params.append(_date_start(start_date))
-        clauses.append(f"start_time >= ${len(params)}")
+        clauses.append(f"start_time >= ${len(params)}::timestamp")
     if end_date is not None:
         params.append(_date_end(end_date))
-        clauses.append(f"start_time <= ${len(params)}")
+        clauses.append(f"start_time <= ${len(params)}::timestamp")
     if not scope.is_platform_admin:
         _apply_org_scope_to_spendlogs(clauses, params, scope.org_ids)
 
@@ -383,9 +387,9 @@ async def request_logs(
     if user_id:
         add_clause('"user" = ${i}', user_id)
     if start_date is not None:
-        add_clause("start_time >= ${i}", _date_start(start_date))
+        add_clause("start_time >= ${i}::timestamp", _date_start(start_date))
     if end_date is not None:
-        add_clause("start_time <= ${i}", _date_end(end_date))
+        add_clause("start_time <= ${i}::timestamp", _date_end(end_date))
     if not scope.is_platform_admin:
         _apply_org_scope_to_spendlogs(clauses, params, scope.org_ids)
 

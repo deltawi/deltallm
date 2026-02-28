@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 import pytest
@@ -91,3 +92,48 @@ async def test_spend_report_not_scoped_for_platform_admin(client, test_app, monk
 
     query, _ = fake_db.calls[0]
     assert "team_id IN (SELECT team_id FROM deltallm_teamtable WHERE organization_id IN" not in query
+
+
+@pytest.mark.asyncio
+async def test_spend_endpoints_cast_date_filters_to_timestamp(client, test_app, monkeypatch):
+    fake_db = FakeSpendDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    monkeypatch.setattr(
+        "src.ui.routes.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
+            is_platform_admin=True,
+            org_ids=[],
+            team_ids=[],
+        ),
+    )
+
+    start = date(2026, 2, 1).isoformat()
+    end = date(2026, 2, 27).isoformat()
+
+    summary = await client.get(
+        f"/ui/api/spend/summary?start_date={start}&end_date={end}",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+    assert summary.status_code == 200
+    summary_query, _ = fake_db.calls[0]
+    assert "::timestamp" in summary_query
+
+    fake_db.calls.clear()
+    report = await client.get(
+        f"/ui/api/spend/report?start_date={start}&end_date={end}",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+    assert report.status_code == 200
+    report_query, _ = fake_db.calls[0]
+    assert "::timestamp" in report_query
+
+    fake_db.calls.clear()
+    logs = await client.get(
+        f"/ui/api/logs?start_date={start}&end_date={end}",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+    assert logs.status_code == 200
+    logs_query, _ = fake_db.calls[0]
+    assert "::timestamp" in logs_query

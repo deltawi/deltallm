@@ -10,6 +10,31 @@ POST /v1/chat/completions
 
 Create a chat completion. Supports streaming.
 
+## Completions (Legacy)
+
+```
+POST /v1/completions
+```
+
+Legacy prompt-based completions API. Supports streaming.
+
+Compatibility notes:
+- `prompt` is mapped to a chat `user` message.
+- Unsupported fields currently return `400`: `echo`, `best_of > 1`, `logprobs`, `suffix`.
+
+## Responses
+
+```
+POST /v1/responses
+```
+
+Unified Responses API (compatible subset) with `input` and optional `instructions`.
+
+Compatibility notes:
+- Requests are translated to chat completions internally.
+- Supported input forms: plain text and simple message/text blocks.
+- Advanced Responses item/tool state graph features are not fully implemented yet.
+
 **Request:**
 
 ```json

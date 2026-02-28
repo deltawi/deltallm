@@ -19,9 +19,22 @@ def estimate_tokens(payload: Any) -> int:
 
 
 async def enforce_rate_limits(request: Request):
+    await _check_and_acquire_rate_limits(request)
+
+    try:
+        yield
+    except RateLimitError:
+        raise
+    finally:
+        await _release_rate_limits(request)
+
+
+async def _check_and_acquire_rate_limits(request: Request) -> None:
+    if bool(getattr(request.state, "_rate_limit_checked", False)):
+        return
     auth = getattr(request.state, "user_api_key", None)
     if auth is None:
-        yield
+        request.state._rate_limit_checked = True
         return
 
     limiter: LimitCounter = request.app.state.limit_counter
@@ -53,10 +66,17 @@ async def enforce_rate_limits(request: Request):
 
     await limiter.check_rate_limits_atomic(checks)
     await limiter.acquire_parallel("key", auth.api_key, auth.max_parallel_requests)
+    request.state._rate_limit_checked = True
+    request.state._rate_limit_parallel_key = auth.api_key
 
-    try:
-        yield
-    except RateLimitError:
-        raise
-    finally:
-        await limiter.release_parallel("key", auth.api_key)
+
+async def _release_rate_limits(request: Request) -> None:
+    if bool(getattr(request.state, "_rate_limit_released", False)):
+        return
+    api_key = getattr(request.state, "_rate_limit_parallel_key", None)
+    if not api_key:
+        request.state._rate_limit_released = True
+        return
+    limiter: LimitCounter = request.app.state.limit_counter
+    await limiter.release_parallel("key", api_key)
+    request.state._rate_limit_released = True

@@ -4,7 +4,7 @@ DeltaLLM is configured through a YAML file (`config.yaml` by default). The confi
 
 | Section | Purpose |
 |---------|---------|
-| [`model_list`](models.md) | Define LLM model deployments and providers |
+| [`model_list`](models.md) | Define bootstrap/file-based model deployments and providers |
 | [`router_settings`](router.md) | Configure routing strategy, retries, and timeouts |
 | [`general_settings`](general.md) | Authentication, database, Redis, and platform settings |
 | `deltallm_settings` | Callbacks, guardrails, and logging |
@@ -29,19 +29,17 @@ general_settings:
 
 This keeps secrets out of the config file.
 
-## Minimal Configuration
+## Minimal Configuration (DB-Only Runtime)
 
 ```yaml
-model_list:
-  - model_name: gpt-4o-mini
-    deltallm_params:
-      model: openai/gpt-4o-mini
-      api_key: os.environ/OPENAI_API_KEY
-
 general_settings:
   master_key: os.environ/DELTALLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL
+  model_deployment_source: db_only
+  model_deployment_bootstrap_from_config: false
 ```
+
+Add deployments at runtime via Admin UI/API (`/ui/api/models`). If you need initial seeding from file, enable bootstrap temporarily.
 
 ## Full Example
 

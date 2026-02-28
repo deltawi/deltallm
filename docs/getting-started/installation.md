@@ -49,7 +49,9 @@ cp config.example.yaml config.yaml
 Edit `config.yaml` with your LLM provider credentials. At minimum, set:
 
 - Your master key in `general_settings.master_key`
-- At least one model in `model_list`
+- At least one deployment source:
+  - Recommended: `general_settings.model_deployment_source: db_only` and add models via Admin UI/API after startup
+  - Optional one-time seed: set `model_deployment_bootstrap_from_config: true` with `model_list`, start once, then switch it back to `false`
 
 See the [Configuration Reference](../configuration/index.md) for full details.
 

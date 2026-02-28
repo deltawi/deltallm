@@ -11,6 +11,7 @@ from src.config import AppConfig, RouterSettings
 from src.config_runtime.dynamic import DynamicConfigManager
 from src.config_runtime.models import ModelHotReloadManager
 from src.config_runtime.secrets import BaseSecretManager, SecretResolver
+from src.db.repositories import ModelDeploymentRecord
 from src.router import (
     CooldownManager,
     FailoverManager,
@@ -82,8 +83,47 @@ class FakeDB:
         self.updated_by = updated_by
 
 
+class InMemoryModelRepository:
+    def __init__(self, records: list[ModelDeploymentRecord] | None = None) -> None:
+        self.records = records or []
+
+    async def list_all(self) -> list[ModelDeploymentRecord]:
+        return list(self.records)
+
+    async def create(self, record: ModelDeploymentRecord) -> ModelDeploymentRecord:
+        self.records.append(record)
+        return record
+
+    async def update(
+        self,
+        deployment_id: str,
+        *,
+        model_name: str,
+        deltallm_params: dict[str, Any],
+        model_info: dict[str, Any] | None,
+    ) -> ModelDeploymentRecord | None:
+        for idx, record in enumerate(self.records):
+            if record.deployment_id == deployment_id:
+                updated = ModelDeploymentRecord(
+                    deployment_id=deployment_id,
+                    model_name=model_name,
+                    deltallm_params=deltallm_params,
+                    model_info=model_info,
+                )
+                self.records[idx] = updated
+                return updated
+        return None
+
+    async def delete(self, deployment_id: str) -> bool:
+        original_len = len(self.records)
+        self.records = [item for item in self.records if item.deployment_id != deployment_id]
+        return len(self.records) < original_len
+
+
 @pytest.mark.asyncio
-async def test_dynamic_config_merges_db_and_notifies_subscribers():
+async def test_dynamic_config_merges_db_and_notifies_subscribers(monkeypatch):
+    monkeypatch.setenv("MASTER", "resolved-master")
+    monkeypatch.setenv("OPENAI_API_KEY", "resolved-openai-key")
     db = FakeDB(
         {
             "general_settings": {"master_key": "os.environ/MASTER"},
@@ -132,8 +172,9 @@ async def test_dynamic_config_merges_db_and_notifies_subscribers():
     await asyncio.sleep(0.05)
 
     cfg = manager.get_app_config()
-    assert cfg.general_settings.master_key == "os.environ/MASTER"
+    assert cfg.general_settings.master_key == "resolved-master"
     assert cfg.model_list[0].deployment_id == "dep-1"
+    assert cfg.model_list[0].deltallm_params.api_key == "resolved-openai-key"
     assert cfg.router_settings.routing_strategy == "weighted"
     assert called
 
@@ -218,5 +259,97 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
     assert app.state.router.config.num_retries == 2
     assert app.state.failover_manager.config.num_retries == 2
     assert app.state.router.deployment_registry["gpt-4.1-mini"][0].deployment_id == "new-dep"
+
+    await dynamic.close()
+
+
+@pytest.mark.asyncio
+async def test_model_hot_reload_manager_model_crud_refreshes_runtime_registry():
+    settings = SimpleNamespace(openai_api_key="provider-key", openai_base_url="https://api.openai.com/v1")
+    initial_model_registry = {
+        "gpt-4o-mini": [
+            {
+                "deployment_id": "old-dep",
+                "deltallm_params": {"model": "openai/gpt-4o-mini", "api_key": "provider-key"},
+                "model_info": {},
+            }
+        ]
+    }
+    deployment_registry = build_deployment_registry(initial_model_registry)
+    state_backend = RedisStateBackend(None)
+    router = Router(
+        strategy=RoutingStrategy.SIMPLE_SHUFFLE,
+        state_backend=state_backend,
+        config=RouterConfig(),
+        deployment_registry=deployment_registry,
+    )
+    cooldown_manager = CooldownManager(state_backend=state_backend)
+    failover_manager = FailoverManager(
+        config=FallbackConfig(),
+        deployment_registry=deployment_registry,
+        state_backend=state_backend,
+        cooldown_manager=cooldown_manager,
+    )
+    health_handler = HealthEndpointHandler(deployment_registry=deployment_registry, state_backend=state_backend)
+    health_checker = BackgroundHealthChecker(
+        config=HealthCheckConfig(enabled=False),
+        deployment_registry=deployment_registry,
+        state_backend=state_backend,
+        checker=lambda _: asyncio.sleep(0, result=True),
+    )
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            settings=settings,
+            app_config=AppConfig.model_validate({}),
+            model_registry=initial_model_registry,
+            router=router,
+            failover_manager=failover_manager,
+            router_health_handler=health_handler,
+            background_health_checker=health_checker,
+            cooldown_manager=cooldown_manager,
+            guardrail_registry=SimpleNamespace(load_from_config=lambda _: None),
+            callback_manager=SimpleNamespace(load_from_settings=lambda **_: None),
+            turn_off_message_logging=False,
+        )
+    )
+    dynamic = DynamicConfigManager(db_client=FakeDB(), redis_client=None, file_config={})
+    await dynamic.initialize()
+    repo = InMemoryModelRepository(
+        records=[
+            ModelDeploymentRecord(
+                deployment_id="old-dep",
+                model_name="gpt-4o-mini",
+                deltallm_params={"model": "openai/gpt-4o-mini"},
+                model_info={},
+            )
+        ]
+    )
+    manager = ModelHotReloadManager(app=app, dynamic_config=dynamic, model_repository=repo)
+
+    new_id = await manager.add_model(
+        {
+            "model_name": "gpt-4.1-mini",
+            "deployment_id": "new-dep",
+            "deltallm_params": {"model": "openai/gpt-4.1-mini"},
+            "model_info": {"weight": 2},
+        }
+    )
+    assert new_id == "new-dep"
+    assert "gpt-4.1-mini" in app.state.model_registry
+
+    updated = await manager.update_model(
+        "new-dep",
+        {
+            "model_name": "gpt-4.1-mini",
+            "deltallm_params": {"model": "openai/gpt-4.1-mini"},
+            "model_info": {"weight": 4},
+        },
+    )
+    assert updated is True
+    assert app.state.model_registry["gpt-4.1-mini"][0]["model_info"]["weight"] == 4
+
+    removed = await manager.remove_model("new-dep")
+    assert removed is True
+    assert "gpt-4.1-mini" not in app.state.model_registry
 
     await dynamic.close()

@@ -224,6 +224,8 @@ class FailoverManager:
         model_group: str,
         execute: Callable[[Deployment], Awaitable[Any]],
         request_tokens: int = 0,
+        *,
+        return_deployment: bool = False,
     ) -> Any:
         chain = self._build_fallback_chain(primary_deployment, model_group, request_tokens)
         last_error: Exception | None = None
@@ -260,6 +262,8 @@ class FailoverManager:
                             success=True,
                         )
 
+                    if return_deployment:
+                        return result, deployment
                     return result
                 except asyncio.TimeoutError:
                     last_error = TimeoutError(message=f"Deployment '{deployment.deployment_id}' timed out")
@@ -301,7 +305,10 @@ class FailoverManager:
                             extra_chain, model_group, execute, deployment.deployment_id, classification,
                         )
                         if extra_result is not None:
-                            return extra_result
+                            if return_deployment:
+                                result, served = extra_result
+                                return result, served
+                            return extra_result[0]
 
                     if RetryPolicy.is_retryable(exc) and attempt < self.config.num_retries:
                         await asyncio.sleep(self._compute_backoff(attempt))
@@ -329,7 +336,10 @@ class FailoverManager:
                             extra_chain, model_group, execute, deployment.deployment_id, classification,
                         )
                         if extra_result is not None:
-                            return extra_result
+                            if return_deployment:
+                                result, served = extra_result
+                                return result, served
+                            return extra_result[0]
 
                     if RetryPolicy.is_retryable(exc) and attempt < self.config.num_retries:
                         await asyncio.sleep(self._compute_backoff(attempt))
@@ -357,7 +367,10 @@ class FailoverManager:
                             extra_chain, model_group, execute, deployment.deployment_id, classification,
                         )
                         if extra_result is not None:
-                            return extra_result
+                            if return_deployment:
+                                result, served = extra_result
+                                return result, served
+                            return extra_result[0]
 
                     if RetryPolicy.is_retryable(exc) and attempt < self.config.num_retries:
                         await asyncio.sleep(self._compute_backoff(attempt))
@@ -406,7 +419,7 @@ class FailoverManager:
         execute: Callable[[Deployment], Awaitable[Any]],
         from_deployment_id: str,
         classification: str,
-    ) -> Any | None:
+    ) -> tuple[Any, Deployment] | None:
         for deployment in chain:
             if await self.state.is_cooled_down(deployment.deployment_id):
                 continue
@@ -436,7 +449,7 @@ class FailoverManager:
                     success=True,
                 )
 
-                return result
+                return result, deployment
             except Exception as exc:
                 await self.cooldown.record_failure(deployment.deployment_id, str(exc))
                 self._record_fallback_event(

@@ -23,6 +23,7 @@ from src.metrics import (
 from src.models.errors import InvalidRequestError, PermissionDeniedError
 from src.models.requests import ImageGenerationRequest
 from src.router.router import Deployment
+from src.routers.utils import enforce_budget_if_configured, fire_and_forget
 
 router = APIRouter(prefix="/v1", tags=["images"])
 
@@ -76,6 +77,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
     auth = request.state.user_api_key
     if auth.models and payload.model not in auth.models:
         raise PermissionDeniedError(message=f"Model '{payload.model}' is not allowed for this key")
+    await enforce_budget_if_configured(request, model=payload.model, auth=auth)
 
     callback_manager: CallbackManager = getattr(request.app.state, "callback_manager", CallbackManager())
     request_data = payload.model_dump(exclude_none=True)
@@ -91,12 +93,14 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
     request_id = request.headers.get("x-request-id")
 
     try:
-        data = await request.app.state.failover_manager.execute_with_failover(
+        data, served_deployment = await request.app.state.failover_manager.execute_with_failover(
             primary_deployment=primary,
             model_group=model_group,
             execute=lambda dep: _execute_image_generation(request, payload, dep),
+            return_deployment=True,
         )
-        await request.app.state.passive_health_tracker.record_request_outcome(primary.deployment_id, success=True)
+        await request.app.state.passive_health_tracker.record_request_outcome(served_deployment.deployment_id, success=True)
+        api_provider = infer_provider(served_deployment.deltallm_params.get("model"))
 
         api_latency_ms = data.pop("_api_latency_ms", 0)
         api_base = data.pop("_api_base", "")
@@ -114,8 +118,8 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
             model=payload.model, api_provider=api_provider,
             api_key=auth.api_key, user=auth.user_id, team=auth.team_id, spend=request_cost,
         )
-        try:
-            await request.app.state.spend_tracking_service.log_spend(
+        fire_and_forget(
+            request.app.state.spend_tracking_service.log_spend(
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -131,8 +135,7 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
                 start_time=callback_start,
                 end_time=datetime.now(tz=UTC),
             )
-        except Exception:
-            pass
+        )
         observe_request_latency(model=payload.model, api_provider=api_provider, status_code=200, latency_seconds=perf_counter() - request_start)
         observe_api_latency(model=payload.model, api_provider=api_provider, latency_seconds=api_latency_ms / 1000)
         callback_payload = build_standard_logging_payload(

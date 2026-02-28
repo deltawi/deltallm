@@ -5,26 +5,9 @@ from uuid import uuid4
 
 from src.config import AppConfig, ModelDeployment, RouterSettings
 from src.config_runtime.dynamic import DynamicConfigManager
+from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
 from src.router import RouterConfig, RoutingStrategy, build_deployment_registry
-
-
-def _build_model_registry(cfg: AppConfig, settings: Any) -> dict[str, list[dict[str, Any]]]:
-    model_registry: dict[str, list[dict[str, Any]]] = {}
-    for entry in cfg.model_list:
-        params = entry.deltallm_params.model_dump(exclude_none=True)
-        if not params.get("api_key") and settings.openai_api_key:
-            params["api_key"] = settings.openai_api_key
-        if not params.get("api_base"):
-            params["api_base"] = settings.openai_base_url
-        model_info = entry.model_info.model_dump(exclude_none=True) if entry.model_info else {}
-        model_registry.setdefault(entry.model_name, []).append(
-            {
-                "deltallm_params": params,
-                "model_info": model_info,
-                "deployment_id": getattr(entry, "deployment_id", None),
-            }
-        )
-    return model_registry
+from src.services.model_deployments import load_model_registry
 
 
 def _normalize_fallbacks(items: list[dict[str, list[str]]]) -> dict[str, list[str]]:
@@ -38,9 +21,15 @@ def _normalize_fallbacks(items: list[dict[str, list[str]]]) -> dict[str, list[st
 class ModelHotReloadManager:
     """Handles dynamic model lifecycle and in-place runtime reloads."""
 
-    def __init__(self, app: Any, dynamic_config: DynamicConfigManager) -> None:
+    def __init__(
+        self,
+        app: Any,
+        dynamic_config: DynamicConfigManager,
+        model_repository: ModelDeploymentRepository | None = None,
+    ) -> None:
         self.app = app
         self.dynamic_config = dynamic_config
+        self.model_repository = model_repository
         self.dynamic_config.subscribe(self._on_config_change)
 
     async def add_model(self, model_config: dict[str, Any], updated_by: str = "admin_api") -> str:
@@ -49,37 +38,87 @@ class ModelHotReloadManager:
         deployment["deployment_id"] = deployment_id
 
         self._validate_model_config(deployment)
-
-        current = self.dynamic_config.get_config()
-        model_list = list(current.get("model_list", []))
-        model_list.append(deployment)
-
-        await self.dynamic_config.update_config({"model_list": model_list}, updated_by=updated_by)
+        if self.model_repository is None:
+            current = self.dynamic_config.get_config()
+            model_list = list(current.get("model_list", []))
+            model_list.append(deployment)
+            await self.dynamic_config.update_config({"model_list": model_list}, updated_by=updated_by)
+        else:
+            await self.model_repository.create(
+                ModelDeploymentRecord(
+                    deployment_id=deployment_id,
+                    model_name=str(deployment["model_name"]),
+                    deltallm_params=dict(deployment["deltallm_params"]),
+                    model_info=dict(deployment.get("model_info", {})),
+                )
+            )
+            await self._reload_runtime()
         return deployment_id
 
-    async def remove_model(self, deployment_id: str, updated_by: str = "admin_api") -> bool:
-        current = self.dynamic_config.get_config()
-        model_list = list(current.get("model_list", []))
-        filtered = [item for item in model_list if item.get("deployment_id") != deployment_id]
+    async def update_model(self, deployment_id: str, model_config: dict[str, Any], updated_by: str = "admin_api") -> bool:
+        deployment = model_config.copy()
+        deployment["deployment_id"] = deployment_id
+        self._validate_model_config(deployment)
 
-        if len(filtered) == len(model_list):
+        if self.model_repository is None:
+            current = self.dynamic_config.get_config()
+            model_list = list(current.get("model_list", []))
+            updated = False
+            for idx, item in enumerate(model_list):
+                if item.get("deployment_id") == deployment_id:
+                    model_list[idx] = deployment
+                    updated = True
+                    break
+            if not updated:
+                return False
+            await self.dynamic_config.update_config({"model_list": model_list}, updated_by=updated_by)
+            return True
+
+        updated_record = await self.model_repository.update(
+            deployment_id,
+            model_name=str(deployment["model_name"]),
+            deltallm_params=dict(deployment["deltallm_params"]),
+            model_info=dict(deployment.get("model_info", {})),
+        )
+        if updated_record is None:
             return False
+        await self._reload_runtime()
+        return True
 
-        await self.dynamic_config.update_config({"model_list": filtered}, updated_by=updated_by)
+    async def remove_model(self, deployment_id: str, updated_by: str = "admin_api") -> bool:
+        if self.model_repository is None:
+            current = self.dynamic_config.get_config()
+            model_list = list(current.get("model_list", []))
+            filtered = [item for item in model_list if item.get("deployment_id") != deployment_id]
+            if len(filtered) == len(model_list):
+                return False
+            await self.dynamic_config.update_config({"model_list": filtered}, updated_by=updated_by)
+            return True
+
+        removed = await self.model_repository.delete(deployment_id)
+        if not removed:
+            return False
+        await self._reload_runtime()
         return True
 
     async def _on_config_change(self, new_config: AppConfig, changes: dict[str, list[str]]) -> None:
         if not self._has_runtime_changes(changes):
             return
 
-        self._apply_runtime_config(new_config)
+        await self._apply_runtime_config(new_config)
 
-    def _apply_runtime_config(self, app_config: AppConfig) -> None:
+    async def _apply_runtime_config(self, app_config: AppConfig) -> None:
         app = self.app
         settings = app.state.settings
 
         app.state.app_config = app_config
-        app.state.model_registry = _build_model_registry(app_config, settings)
+        model_registry, _ = await load_model_registry(
+            self.model_repository,
+            app_config,
+            settings,
+            source_mode=app_config.general_settings.model_deployment_source,
+        )
+        app.state.model_registry = model_registry
 
         new_deployments = build_deployment_registry(app.state.model_registry)
         registries = [
@@ -116,6 +155,11 @@ class ModelHotReloadManager:
             callback_settings=app_config.deltallm_settings.callback_settings,
         )
         app.state.turn_off_message_logging = app_config.deltallm_settings.turn_off_message_logging
+
+    async def _reload_runtime(self) -> None:
+        app_config = self.dynamic_config.get_app_config()
+        await self._apply_runtime_config(app_config)
+        await self.dynamic_config.publish_model_updated()
 
     @staticmethod
     def _build_router_config(router_settings: RouterSettings) -> RouterConfig:
