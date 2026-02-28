@@ -20,6 +20,19 @@ def _parse_metadata(value: Any) -> dict[str, Any] | None:
     return None
 
 
+def _parse_json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return {}
+
+
 @dataclass
 class KeyRecord:
     token: str
@@ -123,3 +136,148 @@ class KeyRepository:
             org_metadata=_parse_metadata(row.get("org_metadata")),
             expires=expires,
         )
+
+
+@dataclass
+class ModelDeploymentRecord:
+    deployment_id: str
+    model_name: str
+    deltallm_params: dict[str, Any]
+    model_info: dict[str, Any] | None = None
+
+
+class ModelDeploymentRepository:
+    def __init__(self, prisma_client: Any | None = None) -> None:
+        self.prisma = prisma_client
+
+    async def list_all(self) -> list[ModelDeploymentRecord]:
+        if self.prisma is None:
+            return []
+
+        rows = await self.prisma.query_raw(
+            """
+            SELECT deployment_id, model_name, deltallm_params, model_info
+            FROM deltallm_modeldeployment
+            ORDER BY model_name ASC, created_at ASC
+            """
+        )
+        return [
+            ModelDeploymentRecord(
+                deployment_id=str(row.get("deployment_id") or ""),
+                model_name=str(row.get("model_name") or ""),
+                deltallm_params=_parse_json_object(row.get("deltallm_params")),
+                model_info=_parse_metadata(row.get("model_info")),
+            )
+            for row in rows
+        ]
+
+    async def get_by_deployment_id(self, deployment_id: str) -> ModelDeploymentRecord | None:
+        if self.prisma is None:
+            return None
+
+        rows = await self.prisma.query_raw(
+            """
+            SELECT deployment_id, model_name, deltallm_params, model_info
+            FROM deltallm_modeldeployment
+            WHERE deployment_id = $1
+            LIMIT 1
+            """,
+            deployment_id,
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return ModelDeploymentRecord(
+            deployment_id=str(row.get("deployment_id") or ""),
+            model_name=str(row.get("model_name") or ""),
+            deltallm_params=_parse_json_object(row.get("deltallm_params")),
+            model_info=_parse_metadata(row.get("model_info")),
+        )
+
+    async def create(self, record: ModelDeploymentRecord) -> ModelDeploymentRecord:
+        if self.prisma is None:
+            return record
+
+        await self.prisma.execute_raw(
+            """
+            INSERT INTO deltallm_modeldeployment (deployment_id, model_name, deltallm_params, model_info, created_at, updated_at)
+            VALUES ($1, $2, $3::jsonb, $4::jsonb, NOW(), NOW())
+            """,
+            record.deployment_id,
+            record.model_name,
+            json.dumps(record.deltallm_params),
+            json.dumps(record.model_info) if record.model_info is not None else None,
+        )
+        return record
+
+    async def update(
+        self,
+        deployment_id: str,
+        *,
+        model_name: str,
+        deltallm_params: dict[str, Any],
+        model_info: dict[str, Any] | None,
+    ) -> ModelDeploymentRecord | None:
+        if self.prisma is None:
+            return None
+
+        rows = await self.prisma.query_raw(
+            """
+            UPDATE deltallm_modeldeployment
+            SET model_name = $2,
+                deltallm_params = $3::jsonb,
+                model_info = $4::jsonb,
+                updated_at = NOW()
+            WHERE deployment_id = $1
+            RETURNING deployment_id, model_name, deltallm_params, model_info
+            """,
+            deployment_id,
+            model_name,
+            json.dumps(deltallm_params),
+            json.dumps(model_info) if model_info is not None else None,
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return ModelDeploymentRecord(
+            deployment_id=str(row.get("deployment_id") or ""),
+            model_name=str(row.get("model_name") or ""),
+            deltallm_params=_parse_json_object(row.get("deltallm_params")),
+            model_info=_parse_metadata(row.get("model_info")),
+        )
+
+    async def delete(self, deployment_id: str) -> bool:
+        if self.prisma is None:
+            return False
+
+        rows = await self.prisma.query_raw(
+            """
+            DELETE FROM deltallm_modeldeployment
+            WHERE deployment_id = $1
+            RETURNING deployment_id
+            """,
+            deployment_id,
+        )
+        return bool(rows)
+
+    async def bulk_insert_if_empty(self, records: list[ModelDeploymentRecord]) -> bool:
+        if self.prisma is None or not records:
+            return False
+
+        count_rows = await self.prisma.query_raw("SELECT COUNT(*)::int AS count FROM deltallm_modeldeployment")
+        if count_rows and int(count_rows[0].get("count") or 0) > 0:
+            return False
+
+        for record in records:
+            await self.prisma.execute_raw(
+                """
+                INSERT INTO deltallm_modeldeployment (deployment_id, model_name, deltallm_params, model_info, created_at, updated_at)
+                VALUES ($1, $2, $3::jsonb, $4::jsonb, NOW(), NOW())
+                ON CONFLICT (deployment_id) DO NOTHING
+                """,
+                record.deployment_id,
+                record.model_name,
+                json.dumps(record.deltallm_params),
+                json.dumps(record.model_info) if record.model_info is not None else None,
+            )
+        return True

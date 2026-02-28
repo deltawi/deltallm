@@ -55,6 +55,6 @@ async def test_embeddings_runs_failure_callback(client, test_app):
     body = {"model": "text-embedding-3-small", "input": "hello"}
 
     response = await client.post("/v1/embeddings", headers=headers, json=body)
-    assert response.status_code == 400
+    assert response.status_code == 503
     await asyncio.sleep(0.05)
     assert recorder.failure == 1

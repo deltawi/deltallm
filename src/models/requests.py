@@ -46,6 +46,39 @@ class ChatCompletionRequest(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
+class CompletionsRequest(BaseModel):
+    model: str
+    prompt: str | list[str]
+    suffix: str | None = None
+    max_tokens: int | None = Field(default=None, ge=1)
+    temperature: float | None = Field(default=1.0, ge=0, le=2)
+    top_p: float | None = Field(default=1.0, ge=0, le=1)
+    n: int | None = Field(default=1, ge=1, le=10)
+    stream: bool | None = False
+    stop: str | list[str] | None = None
+    presence_penalty: float | None = Field(default=0, ge=-2, le=2)
+    frequency_penalty: float | None = Field(default=0, ge=-2, le=2)
+    best_of: int | None = Field(default=None, ge=1, le=20)
+    logprobs: int | None = Field(default=None, ge=0, le=20)
+    echo: bool | None = False
+    user: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class ResponsesRequest(BaseModel):
+    model: str
+    input: str | list[dict[str, Any]] | list[str]
+    instructions: str | None = None
+    temperature: float | None = Field(default=1.0, ge=0, le=2)
+    top_p: float | None = Field(default=1.0, ge=0, le=1)
+    max_output_tokens: int | None = Field(default=None, ge=1)
+    stream: bool | None = False
+    user: str | None = None
+    metadata: dict[str, Any] | None = None
+    tools: list[ToolDefinition] | None = None
+    tool_choice: Literal["auto", "none", "required"] | ToolChoice | None = "auto"
+
+
 class EmbeddingRequest(BaseModel):
     model: str
     input: str | list[str] | list[int] | list[list[int]]

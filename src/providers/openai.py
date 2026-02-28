@@ -23,6 +23,8 @@ class OpenAIAdapter(ProviderAdapter):
         provider_config: dict[str, Any],
     ) -> dict[str, Any]:
         payload = canonical_request.model_dump(exclude_none=True)
+        if payload.get("tool_choice") is not None and not payload.get("tools"):
+            payload.pop("tool_choice", None)
         upstream_model = provider_config.get("model")
         if upstream_model and "/" in upstream_model:
             payload["model"] = upstream_model.split("/", 1)[1]

@@ -24,6 +24,7 @@ from src.metrics import (
 from src.models.errors import InvalidRequestError, ModelNotFoundError, PermissionDeniedError
 from src.models.requests import EmbeddingRequest
 from src.router.router import Deployment
+from src.routers.utils import enforce_budget_if_configured, fire_and_forget
 
 router = APIRouter(prefix="/v1", tags=["embeddings"])
 
@@ -77,6 +78,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
     auth = request.state.user_api_key
     if auth.models and payload.model not in auth.models:
         raise PermissionDeniedError(message=f"Model '{payload.model}' is not allowed for this key")
+    await enforce_budget_if_configured(request, model=payload.model, auth=auth)
 
     callback_manager: CallbackManager = getattr(request.app.state, "callback_manager", CallbackManager())
     request_data = payload.model_dump(exclude_none=True)
@@ -104,12 +106,14 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
     request_id = request.headers.get("x-request-id")
 
     try:
-        data = await request.app.state.failover_manager.execute_with_failover(
+        data, served_deployment = await request.app.state.failover_manager.execute_with_failover(
             primary_deployment=primary,
             model_group=model_group,
             execute=lambda dep: _execute_embedding(request, payload, dep),
+            return_deployment=True,
         )
-        await request.app.state.passive_health_tracker.record_request_outcome(primary.deployment_id, success=True)
+        await request.app.state.passive_health_tracker.record_request_outcome(served_deployment.deployment_id, success=True)
+        api_provider = infer_provider(served_deployment.deltallm_params.get("model"))
 
         api_latency_ms = data.pop("_api_latency_ms", 0)
         api_base = data.pop("_api_base", "")
@@ -117,11 +121,11 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
 
         usage = data.get("usage") or {}
         _deploy_pricing = None
-        if primary.input_cost_per_token or primary.output_cost_per_token:
+        if served_deployment.input_cost_per_token or served_deployment.output_cost_per_token:
             from src.billing.cost import ModelPricing
             _deploy_pricing = ModelPricing(
-                input_cost_per_token=primary.input_cost_per_token,
-                output_cost_per_token=primary.output_cost_per_token,
+                input_cost_per_token=served_deployment.input_cost_per_token,
+                output_cost_per_token=served_deployment.output_cost_per_token,
             )
         request_cost = completion_cost(
             model=payload.model,
@@ -154,8 +158,8 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             team=auth.team_id,
             spend=request_cost,
         )
-        try:
-            await request.app.state.spend_tracking_service.log_spend(
+        fire_and_forget(
+            request.app.state.spend_tracking_service.log_spend(
                 request_id=request_id or "",
                 api_key=auth.api_key,
                 user_id=auth.user_id,
@@ -171,8 +175,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
                 start_time=callback_start,
                 end_time=datetime.now(tz=UTC),
             )
-        except Exception:
-            pass
+        )
         observe_request_latency(
             model=payload.model,
             api_provider=api_provider,

@@ -7,9 +7,15 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+
+from src.billing.cost import completion_cost
+from src.middleware.auth import authenticate_request
+from src.middleware.rate_limit import _check_and_acquire_rate_limits, _release_rate_limits
+from src.metrics import increment_request, increment_spend, increment_usage, infer_provider
+from src.routers.utils import enforce_budget_if_configured, fire_and_forget
 
 from .backends.base import CacheBackend, CacheEntry
 from .key_builder import CacheKeyBuilder
@@ -88,6 +94,8 @@ class CacheMiddleware(BaseHTTPMiddleware):
         self.default_ttl = default_ttl
         self.enabled_endpoints = enabled_endpoints or {
             "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/responses",
             "/v1/embeddings",
         }
 
@@ -103,65 +111,92 @@ class CacheMiddleware(BaseHTTPMiddleware):
         request_data = await self._read_request_data(request)
         if not request_data:
             return await call_next(request)
+        try:
+            await authenticate_request(request)
+            await _check_and_acquire_rate_limits(request)
+        except HTTPException as exc:
+            headers = getattr(exc, "headers", None) or {}
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=headers)
+        try:
+            await enforce_budget_if_configured(request, model=str(request_data.get("model") or ""))
 
-        cache_options = parse_cache_options(request_data, self._normalized_headers(request))
-        model = str(request_data.get("model") or "unknown")
-        endpoint = request.url.path
+            cache_options = parse_cache_options(request_data, self._normalized_headers(request))
+            model = str(request_data.get("model") or "unknown")
+            endpoint = request.url.path
 
-        if cache_options.control == CacheControl.BYPASS:
-            response = await call_next(request)
-            response.headers["x-deltallm-cache-hit"] = "false"
-            return response
+            if cache_options.control == CacheControl.BYPASS:
+                request.state.cache_hit = False
+                response = await call_next(request)
+                response.headers["x-deltallm-cache-hit"] = "false"
+                return response
 
-        cache_key = key_builder.build_key_from_payload(request_data, cache_options.custom_key)
-        request.state.cache_context = CacheContext(cache_key=cache_key, options=cache_options, model=model)
-
-        if bool(request_data.get("stream")) and streaming_handler is not None:
-            if cache_options.control != CacheControl.NO_CACHE:
-                cached = await backend.get(cache_key)
-                if cached is not None:
-                    metrics.hit(endpoint=endpoint, model=model)
-                    return StreamingResponse(
-                        streaming_handler.reconstruct_sse_stream(cached.response),
-                        media_type="text/event-stream",
-                        headers={
-                            "Cache-Control": "no-cache",
-                            "Connection": "keep-alive",
-                            "x-deltallm-cache-hit": "true",
-                        },
-                    )
-                metrics.miss(endpoint=endpoint, model=model)
-
+            cache_key = key_builder.build_key_from_payload(request_data, cache_options.custom_key)
+            cache_key = self._scoped_cache_key(cache_key, request)
             request.state.cache_context = CacheContext(cache_key=cache_key, options=cache_options, model=model)
+            request.state.cache_context.hit = False
+
+            if bool(request_data.get("stream")) and streaming_handler is not None:
+                if request.url.path != "/v1/chat/completions":
+                    response = await call_next(request)
+                    response.headers["x-deltallm-cache-hit"] = "false"
+                    return response
+                if cache_options.control != CacheControl.NO_CACHE:
+                    cached = await backend.get(cache_key)
+                    if cached is not None:
+                        metrics.hit(endpoint=endpoint, model=model)
+                        request.state.cache_context.hit = True
+                        request.state.cache_hit = True
+                        self._record_cache_hit_accounting(request, endpoint, model, cached.response)
+                        return StreamingResponse(
+                            streaming_handler.reconstruct_sse_stream(cached.response),
+                            media_type="text/event-stream",
+                            headers={
+                                "Cache-Control": "no-cache",
+                                "Connection": "keep-alive",
+                                "x-deltallm-cache-hit": "true",
+                            },
+                        )
+                    metrics.miss(endpoint=endpoint, model=model)
+
+                request.state.cache_context = CacheContext(cache_key=cache_key, options=cache_options, model=model)
+                request.state.cache_context.hit = False
+                request.state.cache_hit = False
+                response = await call_next(request)
+                response.headers["x-deltallm-cache-hit"] = "false"
+                return response
+
+            if cache_options.control != CacheControl.NO_CACHE:
+                cached_entry = await backend.get(cache_key)
+                if cached_entry is not None:
+                    metrics.hit(endpoint=endpoint, model=model)
+                    request.state.cache_context.hit = True
+                    request.state.cache_hit = True
+                    self._record_cache_hit_accounting(request, endpoint, model, cached_entry.response)
+                    return self._cached_json_response(cached_entry.response, cache_key)
+                metrics.miss(endpoint=endpoint, model=model)
+                request.state.cache_hit = False
+
             response = await call_next(request)
+            request.state.cache_hit = False
             response.headers["x-deltallm-cache-hit"] = "false"
+
+            if cache_options.control == CacheControl.NO_STORE:
+                return response
+
+            response, response_data = await self._materialize_response(response)
+            await self._maybe_store(
+                backend=backend,
+                response=response,
+                response_data=response_data,
+                cache_key=cache_key,
+                ttl=cache_options.ttl or self.default_ttl,
+                model=model,
+                metrics=metrics,
+                endpoint=endpoint,
+            )
             return response
-
-        if cache_options.control != CacheControl.NO_CACHE:
-            cached_entry = await backend.get(cache_key)
-            if cached_entry is not None:
-                metrics.hit(endpoint=endpoint, model=model)
-                return self._cached_json_response(cached_entry.response, cache_key)
-            metrics.miss(endpoint=endpoint, model=model)
-
-        response = await call_next(request)
-        response.headers["x-deltallm-cache-hit"] = "false"
-
-        if cache_options.control == CacheControl.NO_STORE:
-            return response
-
-        response, response_data = await self._materialize_response(response)
-        await self._maybe_store(
-            backend=backend,
-            response=response,
-            response_data=response_data,
-            cache_key=cache_key,
-            ttl=cache_options.ttl or self.default_ttl,
-            model=model,
-            metrics=metrics,
-            endpoint=endpoint,
-        )
-        return response
+        finally:
+            await _release_rate_limits(request)
 
     def _should_cache(self, request: Request) -> bool:
         return request.method.upper() == "POST" and request.url.path in self.enabled_endpoints
@@ -193,6 +228,64 @@ class CacheMiddleware(BaseHTTPMiddleware):
         response.headers["x-deltallm-cache-hit"] = "true"
         response.headers["x-deltallm-cache-key"] = cache_key
         return response
+
+    def _record_cache_hit_accounting(self, request: Request, endpoint: str, model: str, payload: dict[str, Any]) -> None:
+        auth = getattr(request.state, "user_api_key", None)
+        if auth is None:
+            return
+        call_type = "embedding" if endpoint == "/v1/embeddings" else "completion"
+        usage = payload.get("usage") if isinstance(payload, dict) else None
+        usage = usage if isinstance(usage, dict) else {}
+        api_provider = infer_provider(model)
+        request_cost = completion_cost(model=model, usage=usage, cache_hit=True)
+        increment_request(
+            model=model,
+            api_provider=api_provider,
+            api_key=auth.api_key,
+            user=auth.user_id,
+            team=auth.team_id,
+            status_code=200,
+        )
+        increment_usage(
+            model=model,
+            api_provider=api_provider,
+            api_key=auth.api_key,
+            user=auth.user_id,
+            team=auth.team_id,
+            prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
+            completion_tokens=int(usage.get("completion_tokens", 0) or 0),
+        )
+        increment_spend(
+            model=model,
+            api_provider=api_provider,
+            api_key=auth.api_key,
+            user=auth.user_id,
+            team=auth.team_id,
+            spend=request_cost,
+        )
+        fire_and_forget(
+            request.app.state.spend_tracking_service.log_spend(
+                request_id=request.headers.get("x-request-id") or "",
+                api_key=auth.api_key,
+                user_id=auth.user_id,
+                team_id=auth.team_id,
+                organization_id=getattr(auth, "organization_id", None),
+                end_user_id=None,
+                model=model,
+                call_type=call_type,
+                usage=usage,
+                cost=request_cost,
+                metadata={"api_base": "cache"},
+                cache_hit=True,
+            )
+        )
+
+    def _scoped_cache_key(self, cache_key: str, request: Request) -> str:
+        auth = getattr(request.state, "user_api_key", None)
+        if auth is None:
+            return f"scope:anonymous:{cache_key}"
+        scope_key = str(getattr(auth, "api_key", "") or "anonymous")
+        return f"scope:key:{scope_key}:{cache_key}"
 
     async def _maybe_store(
         self,

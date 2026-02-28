@@ -126,6 +126,7 @@ class GeneralSettings(BaseModel):
     redis_port: int = 6379
     redis_password: str | None = None
     redis_url: str | None = None
+    redis_degraded_mode: Literal["fail_open", "fail_closed"] = "fail_open"
     cache_enabled: bool = False
     cache_backend: Literal["memory", "redis", "s3"] = "memory"
     cache_ttl: int = 3600
@@ -156,6 +157,8 @@ class GeneralSettings(BaseModel):
     platform_bootstrap_admin_password: str | None = None
     auth_session_ttl_hours: int = 12
     api_key_auth_cache_ttl_seconds: int = 300
+    model_deployment_source: Literal["hybrid", "db_only", "config_only"] = "hybrid"
+    model_deployment_bootstrap_from_config: bool = True
 
 
 class AppConfig(BaseModel):
@@ -182,6 +185,7 @@ class Settings(BaseSettings):
     redis_host: str = "localhost"
     redis_port: int = 6379
     redis_password: str | None = None
+    redis_degraded_mode: Literal["fail_open", "fail_closed"] = "fail_open"
     salt_key: str = "change-me"
 
 

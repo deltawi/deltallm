@@ -55,4 +55,4 @@ Click the delete icon and confirm to remove a deployment. This removes the deplo
 
 ## Database Persistence
 
-Models added through the UI are stored in the database (not just in memory). They survive gateway restarts and are loaded alongside config-file models on startup.
+Models added through the UI are stored in the database (not just in memory). They survive gateway restarts. In `db_only` mode, deployments are loaded only from the database.

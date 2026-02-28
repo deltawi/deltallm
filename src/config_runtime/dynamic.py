@@ -73,6 +73,9 @@ class DynamicConfigManager:
             await self._reload_config()
             await self._publish_reload_event(event_type="config_updated")
 
+    async def publish_model_updated(self) -> None:
+        await self._publish_reload_event(event_type="model_updated")
+
     async def _listen_for_changes(self) -> None:
         if self.redis is None:
             return

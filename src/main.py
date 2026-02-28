@@ -29,7 +29,7 @@ from src.callbacks import CallbackManager
 from src.config import AppConfig, get_settings
 from src.config_runtime import DynamicConfigManager, ModelHotReloadManager, SecretResolver, build_app_config, load_yaml_dict
 from src.db.client import prisma_manager
-from src.db.repositories import KeyRepository
+from src.db.repositories import KeyRepository, ModelDeploymentRepository
 from src.auth import CustomAuthManager, InMemoryUserRepository, JWTAuthHandler, SSOAuthHandler, SSOConfig, SSOProvider
 from src.api.admin import admin_router
 from src.api.v1.router import v1_router
@@ -37,6 +37,8 @@ from src.guardrails.middleware import GuardrailMiddleware
 from src.guardrails.registry import GuardrailRegistry
 from src.middleware.errors import register_exception_handlers
 from src.middleware.platform_auth import attach_platform_auth_context
+from src.metrics import infer_provider
+from src.providers.anthropic import AnthropicAdapter
 from src.providers.openai import OpenAIAdapter
 from src.router import (
     BackgroundHealthChecker,
@@ -54,28 +56,11 @@ from src.router import (
 )
 from src.services.key_service import KeyService
 from src.services.limit_counter import LimitCounter
+from src.services.model_deployments import bootstrap_model_deployments_from_config, load_model_registry
 from src.services.platform_identity_service import PlatformIdentityService
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-def _build_model_registry(cfg: AppConfig, settings: Any) -> dict[str, list[dict[str, Any]]]:
-    model_registry: dict[str, list[dict[str, Any]]] = {}
-    for entry in cfg.model_list:
-        params = entry.deltallm_params.model_dump(exclude_none=True)
-        if not params.get("api_key") and settings.openai_api_key:
-            params["api_key"] = settings.openai_api_key
-        if not params.get("api_base"):
-            params["api_base"] = settings.openai_base_url
-        model_info = entry.model_info.model_dump(exclude_none=True) if entry.model_info else {}
-        model_registry.setdefault(entry.model_name, []).append(
-            {
-                "deltallm_params": params,
-                "model_info": model_info,
-            }
-        )
-    return model_registry
 
 
 def _normalize_fallbacks(items: list[dict[str, list[str]]]) -> dict[str, list[str]]:
@@ -120,6 +105,7 @@ async def lifespan(app: FastAPI):
 
     app.state.http_client = httpx.AsyncClient(timeout=60)
     app.state.openai_adapter = OpenAIAdapter(app.state.http_client)
+    app.state.anthropic_adapter = AnthropicAdapter(app.state.http_client)
     app.state.key_service = KeyService(
         repository=KeyRepository(prisma_manager.client),
         redis_client=redis_client,
@@ -135,8 +121,22 @@ async def lifespan(app: FastAPI):
         email=cfg.general_settings.platform_bootstrap_admin_email,
         password=cfg.general_settings.platform_bootstrap_admin_password,
     )
-    app.state.limit_counter = LimitCounter(redis_client=redis_client)
-    app.state.model_registry = _build_model_registry(cfg, settings)
+    app.state.limit_counter = LimitCounter(
+        redis_client=redis_client,
+        degraded_mode=str(cfg.general_settings.redis_degraded_mode or settings.redis_degraded_mode),
+    )
+    app.state.model_deployment_repository = ModelDeploymentRepository(prisma_manager.client)
+    if cfg.general_settings.model_deployment_bootstrap_from_config:
+        did_bootstrap = await bootstrap_model_deployments_from_config(app.state.model_deployment_repository, cfg)
+        if did_bootstrap:
+            logger.info("bootstrapped model deployments from config into database")
+    app.state.model_registry, model_registry_source = await load_model_registry(
+        app.state.model_deployment_repository,
+        cfg,
+        settings,
+        source_mode=cfg.general_settings.model_deployment_source,
+    )
+    logger.info("loaded model registry from %s source", model_registry_source)
     guardrail_registry = GuardrailRegistry()
     if cfg.deltallm_settings.guardrails:
         guardrail_registry.load_from_config(cfg.deltallm_settings.guardrails)
@@ -277,6 +277,9 @@ async def lifespan(app: FastAPI):
             app.state.cache_metrics = NoopCacheMetrics()
 
     async def _deployment_health_check(deployment) -> bool:
+        provider = infer_provider(deployment.deltallm_params.get("model"))
+        if provider == "anthropic":
+            return await app.state.anthropic_adapter.health_check(deployment.deltallm_params)
         return await app.state.openai_adapter.health_check(deployment.deltallm_params)
 
     health_checker = BackgroundHealthChecker(
@@ -293,6 +296,7 @@ async def lifespan(app: FastAPI):
     app.state.model_hot_reload_manager = ModelHotReloadManager(
         app=app,
         dynamic_config=dynamic_config_manager,
+        model_repository=app.state.model_deployment_repository,
     )
     health_task: Task[None] | None = None
     if cfg.general_settings.background_health_checks:

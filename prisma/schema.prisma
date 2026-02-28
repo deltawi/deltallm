@@ -229,3 +229,15 @@ model DeltaLLM_Config {
 
   @@map("deltallm_config")
 }
+
+model DeltaLLM_ModelDeployment {
+  deployment_id   String   @id
+  model_name      String
+  deltallm_params Json
+  model_info      Json?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@index([model_name])
+  @@map("deltallm_modeldeployment")
+}

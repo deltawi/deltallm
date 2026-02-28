@@ -30,6 +30,45 @@ class ChatCompletionResponse(BaseModel):
     system_fingerprint: str | None = None
 
 
+class CompletionChoice(BaseModel):
+    text: str
+    index: int
+    logprobs: dict[str, Any] | None = None
+    finish_reason: str | None = None
+
+
+class CompletionsResponse(BaseModel):
+    id: str
+    object: Literal["text_completion"] = "text_completion"
+    created: int
+    model: str
+    choices: list[CompletionChoice]
+    usage: Usage
+    system_fingerprint: str | None = None
+
+
+class ResponsesOutputText(BaseModel):
+    type: Literal["output_text"] = "output_text"
+    text: str
+
+
+class ResponsesOutputMessage(BaseModel):
+    id: str
+    type: Literal["message"] = "message"
+    role: Literal["assistant"] = "assistant"
+    content: list[ResponsesOutputText]
+
+
+class ResponsesResponse(BaseModel):
+    id: str
+    object: Literal["response"] = "response"
+    created_at: int
+    model: str
+    output: list[ResponsesOutputMessage]
+    usage: Usage
+    status: Literal["completed"] = "completed"
+
+
 class EmbeddingData(BaseModel):
     object: Literal["embedding"] = "embedding"
     embedding: list[float]

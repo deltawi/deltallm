@@ -7,10 +7,16 @@ from src.models.responses import UserAPIKeyAuth
 from src.services.key_service import KeyService
 
 
-async def require_api_key(
+async def authenticate_request(
     request: Request,
-    authorization: str | None = Header(default=None, alias="Authorization"),
-) -> None:
+    authorization: str | None = None,
+) -> UserAPIKeyAuth:
+    existing = getattr(request.state, "user_api_key", None)
+    if isinstance(existing, UserAPIKeyAuth):
+        return existing
+
+    if authorization is None:
+        authorization = request.headers.get("authorization")
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
 
@@ -26,7 +32,7 @@ async def require_api_key(
         )
         request.state.user_api_key = auth
         request.state.auth_context = auth
-        return
+        return auth
 
     key_service: KeyService | None = getattr(request.app.state, "key_service", None)
     if key_service is None:
@@ -41,6 +47,14 @@ async def require_api_key(
 
     request.state.user_api_key = auth
     request.state.auth_context = auth
+    return auth
+
+
+async def require_api_key(
+    request: Request,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> None:
+    await authenticate_request(request, authorization=authorization)
 
 
 def auth_dependency() -> Depends:
