@@ -80,7 +80,7 @@ export default function Models() {
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [pageOffset, setPageOffset] = useState(0);
-  const pageSize = 50;
+  const pageSize = 10;
   const { data: result, loading, refetch } = useApi(() => models.list({ search, limit: pageSize, offset: pageOffset }), [search, pageOffset]);
   const items = result?.data || [];
   const pagination = result?.pagination;

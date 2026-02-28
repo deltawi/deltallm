@@ -79,30 +79,32 @@ export default function DataTable<T extends Record<string, any>>({
           </tbody>
         </table>
       </div>
-      {pagination && pagination.total > 0 && totalPages > 1 && onPageChange && (
+      {pagination && pagination.total > 0 && onPageChange && (
         <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100">
           <span className="text-xs text-gray-500">
-            {pagination.offset + 1}–{Math.min(pagination.offset + pagination.limit, pagination.total)} of {pagination.total}
+            Showing {pagination.offset + 1}–{Math.min(pagination.offset + pagination.limit, pagination.total)} of {pagination.total}
           </span>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => onPageChange(Math.max(0, pagination.offset - pagination.limit))}
-              disabled={pagination.offset === 0}
-              className="p-1.5 rounded-lg hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <span className="text-xs text-gray-600 px-2">
-              Page {currentPage} of {totalPages}
-            </span>
-            <button
-              onClick={() => onPageChange(pagination.offset + pagination.limit)}
-              disabled={!pagination.has_more}
-              className="p-1.5 rounded-lg hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => onPageChange(Math.max(0, pagination.offset - pagination.limit))}
+                disabled={pagination.offset === 0}
+                className="p-1.5 rounded-lg hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <span className="text-xs text-gray-600 px-2">
+                Page {currentPage} of {totalPages}
+              </span>
+              <button
+                onClick={() => onPageChange(pagination.offset + pagination.limit)}
+                disabled={!pagination.has_more}
+                className="p-1.5 rounded-lg hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
