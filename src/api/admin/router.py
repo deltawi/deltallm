@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from src.api.admin.endpoints import (
+    batches_router,
     config_router,
     guardrails_router,
     keys_router,
@@ -18,6 +19,7 @@ admin_router.include_router(keys_router)
 admin_router.include_router(users_router)
 admin_router.include_router(teams_router)
 admin_router.include_router(organizations_router)
+admin_router.include_router(batches_router)
 admin_router.include_router(rbac_router)
 admin_router.include_router(guardrails_router)
 admin_router.include_router(config_router)
