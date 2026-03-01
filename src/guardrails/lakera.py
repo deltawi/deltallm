@@ -73,7 +73,17 @@ class LakeraGuardrail(CustomGuardrail):
         except GuardrailViolationError:
             raise
         except Exception as exc:
-            logger.error("lakera api error", extra={"guardrail": self.name, "error": str(exc)})
+            status_code = None
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+                status_code = exc.response.status_code
+            logger.error(
+                "lakera api error",
+                extra={
+                    "guardrail": self.name,
+                    "error_type": type(exc).__name__,
+                    "status_code": status_code,
+                },
+            )
             if not self.fail_open:
                 raise GuardrailViolationError(
                     guardrail_name=self.name,

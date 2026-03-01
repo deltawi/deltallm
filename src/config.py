@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import AliasChoices, BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -40,6 +40,9 @@ class ModelInfo(BaseModel):
     tags: list[str] = Field(default_factory=list)
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    batch_input_cost_per_token: float | None = None
+    batch_output_cost_per_token: float | None = None
+    batch_price_multiplier: float | None = None
     input_cost_per_character: float | None = None
     input_cost_per_second: float | None = None
     input_cost_per_image: float | None = None
@@ -114,11 +117,26 @@ class DeltaLLMSettings(BaseModel):
     turn_off_message_logging: bool = False
 
 
+def _validate_master_key_strength(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if len(normalized) < 32:
+        raise ValueError("master_key must be at least 32 characters long")
+    has_letter = any(char.isalpha() for char in normalized)
+    has_digit = any(char.isdigit() for char in normalized)
+    if not (has_letter and has_digit):
+        raise ValueError("master_key must include both letters and digits")
+    return normalized
+
+
 class GeneralSettings(BaseModel):
     instance_name: str = "DeltaLLM"
     master_key: str | None = None
     deltallm_key_header_name: str = "Authorization"
-    salt_key: str = "change-me"
+    salt_key: str | None = None
     database_url: str | None = None
     db_pool_size: int = 20
     db_pool_timeout: int = 30
@@ -159,6 +177,23 @@ class GeneralSettings(BaseModel):
     api_key_auth_cache_ttl_seconds: int = 300
     model_deployment_source: Literal["hybrid", "db_only", "config_only"] = "hybrid"
     model_deployment_bootstrap_from_config: bool = True
+    embeddings_batch_enabled: bool = False
+    embeddings_batch_worker_enabled: bool = True
+    embeddings_batch_storage_dir: str = ".deltallm/batch-artifacts"
+    embeddings_batch_poll_interval_seconds: float = 1.0
+    embeddings_batch_item_claim_limit: int = 20
+    embeddings_batch_max_attempts: int = 3
+    batch_completed_artifact_retention_days: int = 7
+    batch_failed_artifact_retention_days: int = 14
+    batch_metadata_retention_days: int = 30
+    embeddings_batch_gc_enabled: bool = True
+    embeddings_batch_gc_interval_seconds: float = 86400.0
+    embeddings_batch_gc_scan_limit: int = 200
+
+    @field_validator("master_key")
+    @classmethod
+    def validate_master_key(cls, value: str | None) -> str | None:
+        return _validate_master_key_strength(value)
 
 
 class AppConfig(BaseModel):
@@ -186,7 +221,22 @@ class Settings(BaseSettings):
     redis_port: int = 6379
     redis_password: str | None = None
     redis_degraded_mode: Literal["fail_open", "fail_closed"] = "fail_open"
-    salt_key: str = "change-me"
+    salt_key: str | None = None
+
+    @field_validator("master_key")
+    @classmethod
+    def validate_master_key(cls, value: str | None) -> str | None:
+        return _validate_master_key_strength(value)
+
+
+def resolve_salt_key(config: AppConfig, settings: Settings) -> str:
+    candidate = config.general_settings.salt_key or settings.salt_key
+    if candidate is None or not candidate.strip():
+        raise ValueError("Salt key is required. Set `general_settings.salt_key` or `DELTALLM_SALT_KEY`.")
+    normalized = candidate.strip()
+    if normalized == "change-me":
+        raise ValueError("Insecure salt key is not allowed. Configure a unique non-default salt key.")
+    return normalized
 
 
 def _resolve_env_token(value: Any) -> Any:
@@ -200,16 +250,31 @@ def _resolve_env_token(value: Any) -> Any:
     return value
 
 
-def load_yaml_config(path: str | Path) -> AppConfig:
+def resolve_app_config_with_secrets(raw_config: dict[str, Any], secret_resolver: Any | None = None) -> AppConfig:
     from src.config_runtime.secrets import SecretResolver
 
+    resolver = secret_resolver or SecretResolver()
+    resolved_input = _resolve_env_token(raw_config)
+    try:
+        resolved = resolver.resolve_tree(resolved_input)
+    except Exception as exc:
+        raise ValueError(
+            "Failed to resolve configuration secrets. Check secret references and provider availability."
+        ) from exc
+
+    try:
+        return AppConfig.model_validate(resolved)
+    except ValidationError as exc:
+        raise ValueError("Resolved configuration is invalid. Check config values and resolved secrets.") from exc
+
+
+def load_yaml_config(path: str | Path) -> AppConfig:
     cfg_path = Path(path)
     if not cfg_path.exists():
         return AppConfig()
 
     data = yaml.safe_load(cfg_path.read_text()) or {}
-    resolved = SecretResolver().resolve_tree(_resolve_env_token(data))
-    return AppConfig.model_validate(resolved)
+    return resolve_app_config_with_secrets(data)
 
 
 @lru_cache

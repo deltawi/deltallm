@@ -23,6 +23,18 @@ general_settings:
   api_key_auth_cache_ttl_seconds: 300
   model_deployment_source: db_only
   model_deployment_bootstrap_from_config: false
+  embeddings_batch_enabled: false
+  embeddings_batch_worker_enabled: true
+  embeddings_batch_storage_dir: .deltallm/batch-artifacts
+  embeddings_batch_poll_interval_seconds: 1.0
+  embeddings_batch_item_claim_limit: 20
+  embeddings_batch_max_attempts: 3
+  batch_completed_artifact_retention_days: 7
+  batch_failed_artifact_retention_days: 14
+  batch_metadata_retention_days: 30
+  embeddings_batch_gc_enabled: true
+  embeddings_batch_gc_interval_seconds: 86400
+  embeddings_batch_gc_scan_limit: 200
 ```
 
 ## Authentication Settings
@@ -98,3 +110,20 @@ Recommended steady state:
 |---------|---------|-------------|
 | `prometheus_endpoint` | `/metrics` | Path for Prometheus metrics endpoint |
 | `metrics_retention_days` | `30` | Days to retain spend log data |
+
+## Embeddings Batch Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `embeddings_batch_enabled` | `false` | Enable `/v1/files` and `/v1/batches` endpoints |
+| `embeddings_batch_worker_enabled` | `true` | Run internal batch executor worker loop |
+| `embeddings_batch_storage_dir` | `.deltallm/batch-artifacts` | Local artifact storage base directory |
+| `embeddings_batch_poll_interval_seconds` | `1.0` | Worker poll interval when queue is idle |
+| `embeddings_batch_item_claim_limit` | `20` | Max items claimed per worker iteration |
+| `embeddings_batch_max_attempts` | `3` | Max retry attempts per failed item |
+| `batch_completed_artifact_retention_days` | `7` | Retention for completed job artifacts |
+| `batch_failed_artifact_retention_days` | `14` | Retention for failed/cancelled job artifacts |
+| `batch_metadata_retention_days` | `30` | Retention horizon for batch metadata rows |
+| `embeddings_batch_gc_enabled` | `true` | Enable background retention cleanup for expired batch metadata/artifacts |
+| `embeddings_batch_gc_interval_seconds` | `86400` | Cleanup loop interval in seconds |
+| `embeddings_batch_gc_scan_limit` | `200` | Max expired jobs/files processed per cleanup pass |

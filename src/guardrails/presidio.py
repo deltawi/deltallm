@@ -71,31 +71,17 @@ class PresidioGuardrail(CustomGuardrail):
         if not isinstance(messages, list):
             return None
 
-        modified = []
+        modified: list[Any] = []
         changed = False
         for message in messages:
-            content = message.get("content") if isinstance(message, dict) else None
-            if not isinstance(content, str):
-                modified.append(message)
-                continue
-
-            entities = self._detect(content)
+            transformed, entities, did_change = self._inspect_message(message)
+            if did_change:
+                changed = True
+            modified.append(transformed)
             if not entities:
-                modified.append(message)
                 continue
 
-            if self.anonymize:
-                sanitized = self._anonymize(content, entities)
-                if sanitized != content:
-                    changed = True
-                    new_message = dict(message)
-                    new_message["content"] = sanitized
-                    modified.append(new_message)
-                else:
-                    modified.append(message)
-                continue
-
-            if self.action == GuardrailAction.BLOCK:
+            if not self.anonymize and self.action == GuardrailAction.BLOCK:
                 raise GuardrailViolationError(
                     guardrail_name=self.name,
                     message=f"PII detected: {', '.join(sorted(set(entities)))}",
@@ -104,7 +90,6 @@ class PresidioGuardrail(CustomGuardrail):
                 )
 
             logger.warning("presidio pii detected", extra={"guardrail": self.name, "entities": entities})
-            modified.append(message)
 
         if changed:
             next_data = dict(data)
@@ -150,6 +135,58 @@ class PresidioGuardrail(CustomGuardrail):
             if pattern is not None and pattern.search(text):
                 detected.append(entity)
         return detected
+
+    def _inspect_message(self, message: Any) -> tuple[Any, list[str], bool]:
+        if self.anonymize:
+            return self._scan_and_sanitize(message)
+        entities = self._collect_entities(message)
+        return message, entities, False
+
+    def _collect_entities(self, value: Any) -> list[str]:
+        detected: list[str] = []
+        if isinstance(value, str):
+            return self._detect(value)
+        if isinstance(value, list):
+            for item in value:
+                detected.extend(self._collect_entities(item))
+            return detected
+        if isinstance(value, dict):
+            for item in value.values():
+                detected.extend(self._collect_entities(item))
+            return detected
+        return detected
+
+    def _scan_and_sanitize(self, value: Any) -> tuple[Any, list[str], bool]:
+        if isinstance(value, str):
+            entities = self._detect(value)
+            if not entities:
+                return value, [], False
+            sanitized = self._anonymize(value, entities)
+            return sanitized, entities, sanitized != value
+
+        if isinstance(value, list):
+            changed = False
+            detected: list[str] = []
+            sanitized_list: list[Any] = []
+            for item in value:
+                transformed, entities, item_changed = self._scan_and_sanitize(item)
+                sanitized_list.append(transformed)
+                detected.extend(entities)
+                changed = changed or item_changed
+            return sanitized_list, detected, changed
+
+        if isinstance(value, dict):
+            changed = False
+            detected: list[str] = []
+            sanitized_dict: dict[str, Any] = {}
+            for key, item in value.items():
+                transformed, entities, item_changed = self._scan_and_sanitize(item)
+                sanitized_dict[key] = transformed
+                detected.extend(entities)
+                changed = changed or item_changed
+            return sanitized_dict, detected, changed
+
+        return value, [], False
 
     def _anonymize(self, text: str, entities: list[str]) -> str:
         if self.anonymizer is not None and self.analyzer is not None and OperatorConfig is not None:

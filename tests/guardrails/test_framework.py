@@ -22,6 +22,18 @@ class BlockingGuardrail(CustomGuardrail):
         raise GuardrailViolationError(self.name, "blocked", "policy")
 
 
+class ExplodingGuardrail(CustomGuardrail):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        del user_api_key_dict, cache, data, call_type
+        raise RuntimeError("boom")
+
+
+class ExplodingPostCallGuardrail(CustomGuardrail):
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+        del data, user_api_key_dict, response
+        raise RuntimeError("post-boom")
+
+
 @pytest.mark.asyncio
 async def test_registry_default_and_key_specific_resolution():
     registry = GuardrailRegistry()
@@ -64,6 +76,59 @@ async def test_middleware_blocks_on_violation_in_block_mode():
             user_api_key_dict={},
             call_type="completion",
         )
+
+
+@pytest.mark.asyncio
+async def test_middleware_maps_unexpected_pre_call_error_for_block_guardrail():
+    registry = GuardrailRegistry()
+    registry.register(ExplodingGuardrail(name="explode", action=GuardrailAction.BLOCK, default_on=True))
+    middleware = GuardrailMiddleware(registry=registry)
+
+    with pytest.raises(GuardrailViolationError) as exc_info:
+        await middleware.run_pre_call(
+            request_data={"messages": [{"role": "user", "content": "hello"}]},
+            user_api_key_dict={},
+            call_type="completion",
+        )
+    assert exc_info.value.code == "guardrail_execution_error"
+
+
+@pytest.mark.asyncio
+async def test_middleware_logs_unexpected_pre_call_error_for_log_guardrail():
+    registry = GuardrailRegistry()
+    registry.register(ExplodingGuardrail(name="explode-log", action=GuardrailAction.LOG, default_on=True))
+    middleware = GuardrailMiddleware(registry=registry)
+
+    modified = await middleware.run_pre_call(
+        request_data={"messages": [{"role": "user", "content": "hello"}]},
+        user_api_key_dict={},
+        call_type="completion",
+    )
+
+    assert modified["messages"][0]["content"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_middleware_maps_unexpected_post_call_error_for_block_guardrail():
+    registry = GuardrailRegistry()
+    registry.register(
+        ExplodingPostCallGuardrail(
+            name="explode-post",
+            mode=GuardrailMode.POST_CALL,
+            action=GuardrailAction.BLOCK,
+            default_on=True,
+        )
+    )
+    middleware = GuardrailMiddleware(registry=registry)
+
+    with pytest.raises(GuardrailViolationError) as exc_info:
+        await middleware.run_post_call_success(
+            request_data={"messages": [{"role": "user", "content": "hello"}]},
+            user_api_key_dict={},
+            response_data={"choices": [{"message": {"content": "ok"}}]},
+            call_type="completion",
+        )
+    assert exc_info.value.code == "guardrail_execution_error"
 
 
 def test_registry_loads_from_config():

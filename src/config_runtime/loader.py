@@ -6,7 +6,7 @@ from typing import Any
 
 import yaml
 
-from src.config import AppConfig
+from src.config import AppConfig, resolve_app_config_with_secrets
 from src.config_runtime.secrets import SecretResolver
 
 
@@ -41,5 +41,4 @@ def build_app_config(
 ) -> AppConfig:
     resolver = secret_resolver or SecretResolver()
     merged = deep_merge(file_config, db_config or {})
-    resolved = resolver.resolve_tree(merged)
-    return AppConfig.model_validate(resolved)
+    return resolve_app_config_with_secrets(merged, secret_resolver=resolver)

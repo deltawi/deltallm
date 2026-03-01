@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 
 @dataclass(frozen=True)
@@ -65,6 +65,52 @@ def get_model_pricing(
     return None
 
 
+def resolve_batch_pricing(
+    *,
+    sync_pricing: ModelPricing | None,
+    model_info: Mapping[str, Any] | None = None,
+) -> ModelPricing | None:
+    if sync_pricing is None:
+        return None
+    info = dict(model_info or {})
+    batch_input = info.get("batch_input_cost_per_token")
+    batch_output = info.get("batch_output_cost_per_token")
+    multiplier = info.get("batch_price_multiplier")
+
+    if batch_input is not None or batch_output is not None:
+        return ModelPricing(
+            input_cost_per_token=float(batch_input if batch_input is not None else sync_pricing.input_cost_per_token),
+            output_cost_per_token=float(batch_output if batch_output is not None else sync_pricing.output_cost_per_token),
+            input_cost_per_token_cache_hit=sync_pricing.input_cost_per_token_cache_hit,
+            output_cost_per_token_cache_hit=sync_pricing.output_cost_per_token_cache_hit,
+            cost_per_request=sync_pricing.cost_per_request,
+            context_window=sync_pricing.context_window,
+            max_output_tokens=sync_pricing.max_output_tokens,
+        )
+
+    if multiplier is not None:
+        factor = max(0.0, float(multiplier))
+        return ModelPricing(
+            input_cost_per_token=sync_pricing.input_cost_per_token * factor,
+            output_cost_per_token=sync_pricing.output_cost_per_token * factor,
+            input_cost_per_token_cache_hit=(
+                sync_pricing.input_cost_per_token_cache_hit * factor
+                if sync_pricing.input_cost_per_token_cache_hit is not None
+                else None
+            ),
+            output_cost_per_token_cache_hit=(
+                sync_pricing.output_cost_per_token_cache_hit * factor
+                if sync_pricing.output_cost_per_token_cache_hit is not None
+                else None
+            ),
+            cost_per_request=sync_pricing.cost_per_request * factor,
+            context_window=sync_pricing.context_window,
+            max_output_tokens=sync_pricing.max_output_tokens,
+        )
+
+    return sync_pricing
+
+
 def completion_cost(
     *,
     model: str,
@@ -72,8 +118,12 @@ def completion_cost(
     cache_hit: bool = False,
     cost_map: Mapping[str, ModelPricing] | None = None,
     custom_pricing: ModelPricing | None = None,
+    pricing_tier: Literal["sync", "batch"] = "sync",
+    model_info: Mapping[str, Any] | None = None,
 ) -> float:
     pricing = get_model_pricing(model, cost_map=cost_map, custom_pricing=custom_pricing)
+    if pricing_tier == "batch":
+        pricing = resolve_batch_pricing(sync_pricing=pricing, model_info=model_info)
     if pricing is None:
         return 0.0
 

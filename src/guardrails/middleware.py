@@ -41,6 +41,17 @@ class GuardrailMiddleware:
                     logger.warning("guardrail violation logged", extra={"guardrail": guardrail.name})
                     continue
                 raise
+            except Exception as exc:  # pragma: no cover - defensive branch
+                if guardrail.action == GuardrailAction.LOG:
+                    logger.exception("guardrail failed unexpectedly", extra={"guardrail": guardrail.name}, exc_info=exc)
+                    continue
+                raise GuardrailViolationError(
+                    guardrail_name=guardrail.name,
+                    message="Guardrail failed unexpectedly",
+                    violation_type="guardrail_execution_error",
+                    status_code=500,
+                    code="guardrail_execution_error",
+                ) from exc
 
         return modified
 
@@ -67,6 +78,17 @@ class GuardrailMiddleware:
                     logger.warning("guardrail violation logged", extra={"guardrail": guardrail.name})
                     continue
                 raise
+            except Exception as exc:  # pragma: no cover - defensive branch
+                if guardrail.action == GuardrailAction.LOG:
+                    logger.exception("guardrail failed unexpectedly", extra={"guardrail": guardrail.name}, exc_info=exc)
+                    continue
+                raise GuardrailViolationError(
+                    guardrail_name=guardrail.name,
+                    message="Guardrail failed unexpectedly",
+                    violation_type="guardrail_execution_error",
+                    status_code=500,
+                    code="guardrail_execution_error",
+                ) from exc
 
     async def run_post_call_failure(
         self,

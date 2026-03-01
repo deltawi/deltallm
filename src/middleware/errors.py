@@ -35,6 +35,6 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def unhandled_error_handler(_: Request, exc: Exception) -> JSONResponse:
-        logger.exception("unhandled exception", exc_info=exc)
+        logger.error("unhandled exception", extra={"error_type": type(exc).__name__})
         proxy_error = ProxyError()
         return JSONResponse(status_code=proxy_error.status_code, content=_serialize_error(proxy_error))
