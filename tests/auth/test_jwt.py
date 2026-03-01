@@ -85,3 +85,14 @@ async def test_jwt_validation_rejects_invalid_issuer():
         await handler.validate_token(token)
 
     assert "Invalid token" in str(exc.value)
+
+
+def test_jwt_handler_requires_issuer_configuration():
+    _, jwks = _build_token_and_jwks()
+    with pytest.raises(ValueError, match="issuer is required"):
+        JWTAuthHandler(
+            jwks_url="https://auth.example.com/.well-known/jwks.json",
+            audience="deltallm",
+            issuer=None,
+            http_client=MockJWKSHTTPClient(jwks),
+        )

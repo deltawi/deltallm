@@ -111,6 +111,28 @@ async def test_streaming_cache_hit(client, test_app):
 
 
 @pytest.mark.asyncio
+async def test_streaming_cache_miss_populates_cache_entry(client, test_app):
+    _enable_cache(test_app)
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "cache stream write"}],
+        "stream": True,
+    }
+
+    backend = test_app.state.cache_backend
+    assert len(backend._cache) == 0
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+    assert response.status_code == 200
+    assert response.headers["x-deltallm-cache-hit"] == "false"
+
+    assert len(backend._cache) == 1
+    stored = next(iter(backend._cache.values()))
+    assert stored.response.get("object") == "chat.completion"
+
+
+@pytest.mark.asyncio
 async def test_cache_hit_still_requires_auth(client, test_app):
     _enable_cache(test_app)
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}

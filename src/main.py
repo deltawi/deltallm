@@ -14,6 +14,10 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
 
+from src.batch import BatchCleanupConfig, BatchRepository, BatchRetentionCleanupWorker
+from src.batch.service import BatchService
+from src.batch.storage import LocalBatchArtifactStorage
+from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
 from src.cache import (
     CacheKeyBuilder,
     CacheMiddleware,
@@ -26,7 +30,7 @@ from src.cache import (
 )
 from src.billing import AlertService, BudgetEnforcementService, SpendLedgerService, SpendTrackingService
 from src.callbacks import CallbackManager
-from src.config import AppConfig, get_settings
+from src.config import AppConfig, get_settings, resolve_salt_key
 from src.config_runtime import DynamicConfigManager, ModelHotReloadManager, SecretResolver, build_app_config, load_yaml_dict
 from src.db.client import prisma_manager
 from src.db.repositories import KeyRepository, ModelDeploymentRepository
@@ -102,6 +106,7 @@ async def lifespan(app: FastAPI):
     cfg = dynamic_config_manager.get_app_config()
     app.state.dynamic_config_manager = dynamic_config_manager
     app.state.app_config = cfg
+    salt_key = resolve_salt_key(cfg, settings)
 
     app.state.http_client = httpx.AsyncClient(timeout=60)
     app.state.openai_adapter = OpenAIAdapter(app.state.http_client)
@@ -109,12 +114,12 @@ async def lifespan(app: FastAPI):
     app.state.key_service = KeyService(
         repository=KeyRepository(prisma_manager.client),
         redis_client=redis_client,
-        salt=cfg.general_settings.salt_key or settings.salt_key,
+        salt=salt_key,
         auth_cache_ttl_seconds=cfg.general_settings.api_key_auth_cache_ttl_seconds,
     )
     app.state.platform_identity_service = PlatformIdentityService(
         db_client=prisma_manager.client,
-        salt=cfg.general_settings.salt_key or settings.salt_key,
+        salt=salt_key,
         session_ttl_hours=cfg.general_settings.auth_session_ttl_hours,
     )
     await app.state.platform_identity_service.ensure_bootstrap_admin(
@@ -126,6 +131,7 @@ async def lifespan(app: FastAPI):
         degraded_mode=str(cfg.general_settings.redis_degraded_mode or settings.redis_degraded_mode),
     )
     app.state.model_deployment_repository = ModelDeploymentRepository(prisma_manager.client)
+    app.state.batch_repository = BatchRepository(prisma_manager.client)
     if cfg.general_settings.model_deployment_bootstrap_from_config:
         did_bootstrap = await bootstrap_model_deployments_from_config(app.state.model_deployment_repository, cfg)
         if did_bootstrap:
@@ -191,12 +197,15 @@ async def lifespan(app: FastAPI):
                 ),
                 user_repository=app.state.sso_user_repository,
                 http_client=app.state.http_client,
+                rate_limiter=app.state.limit_counter,
             )
         else:
             logger.warning("sso enabled but configuration is incomplete")
 
     app.state.jwt_auth_handler = None
     if cfg.general_settings.enable_jwt_auth and cfg.general_settings.jwt_public_key_url:
+        if not cfg.general_settings.jwt_issuer:
+            raise ValueError("JWT issuer must be configured when JWT auth is enabled")
         app.state.jwt_auth_handler = JWTAuthHandler(
             jwks_url=cfg.general_settings.jwt_public_key_url,
             audience=cfg.general_settings.jwt_audience,
@@ -269,7 +278,7 @@ async def lifespan(app: FastAPI):
             raise ValueError(f"Unsupported cache backend: {cache_settings.cache_backend}")
 
         app.state.cache_backend = cache_backend
-        app.state.cache_key_builder = CacheKeyBuilder(custom_salt=cfg.general_settings.salt_key or settings.salt_key)
+        app.state.cache_key_builder = CacheKeyBuilder(custom_salt=salt_key)
         app.state.streaming_cache_handler = StreamingCacheHandler(cache_backend)
         try:
             app.state.cache_metrics = PrometheusCacheMetrics(cache_type=cache_settings.cache_backend)
@@ -298,6 +307,46 @@ async def lifespan(app: FastAPI):
         dynamic_config=dynamic_config_manager,
         model_repository=app.state.model_deployment_repository,
     )
+    batch_worker: BatchExecutorWorker | None = None
+    batch_worker_task: Task[None] | None = None
+    batch_gc_worker: BatchRetentionCleanupWorker | None = None
+    batch_gc_task: Task[None] | None = None
+    if cfg.general_settings.embeddings_batch_enabled:
+        batch_storage = LocalBatchArtifactStorage(cfg.general_settings.embeddings_batch_storage_dir)
+        app.state.batch_storage = batch_storage
+        app.state.batch_service = BatchService(
+            repository=app.state.batch_repository,
+            storage=batch_storage,
+            metadata_retention_days=cfg.general_settings.batch_metadata_retention_days,
+        )
+        if cfg.general_settings.embeddings_batch_worker_enabled:
+            batch_worker = BatchExecutorWorker(
+                app=app,
+                repository=app.state.batch_repository,
+                storage=batch_storage,
+                config=BatchWorkerConfig(
+                    worker_id=f"worker-{id(app)}",
+                    poll_interval_seconds=cfg.general_settings.embeddings_batch_poll_interval_seconds,
+                    item_claim_limit=cfg.general_settings.embeddings_batch_item_claim_limit,
+                    max_attempts=cfg.general_settings.embeddings_batch_max_attempts,
+                    completed_artifact_retention_days=cfg.general_settings.batch_completed_artifact_retention_days,
+                    failed_artifact_retention_days=cfg.general_settings.batch_failed_artifact_retention_days,
+                ),
+            )
+            batch_worker_task = create_task(batch_worker.run())
+        if cfg.general_settings.embeddings_batch_gc_enabled:
+            batch_gc_worker = BatchRetentionCleanupWorker(
+                repository=app.state.batch_repository,
+                storage=batch_storage,
+                config=BatchCleanupConfig(
+                    interval_seconds=cfg.general_settings.embeddings_batch_gc_interval_seconds,
+                    scan_limit=cfg.general_settings.embeddings_batch_gc_scan_limit,
+                ),
+            )
+            batch_gc_task = create_task(batch_gc_worker.run())
+    else:
+        app.state.batch_storage = None
+        app.state.batch_service = None
     health_task: Task[None] | None = None
     if cfg.general_settings.background_health_checks:
         health_task = create_task(health_checker.start())
@@ -314,6 +363,18 @@ async def lifespan(app: FastAPI):
             health_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await health_task
+        if batch_worker is not None:
+            batch_worker.stop()
+        if batch_worker_task is not None:
+            batch_worker_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await batch_worker_task
+        if batch_gc_worker is not None:
+            batch_gc_worker.stop()
+        if batch_gc_task is not None:
+            batch_gc_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await batch_gc_task
         await app.state.http_client.aclose()
         if redis_client is not None:
             await redis_client.close()

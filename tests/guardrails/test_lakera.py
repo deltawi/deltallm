@@ -61,3 +61,21 @@ async def test_lakera_fail_open_on_api_error(monkeypatch):
 
     result = await guardrail.async_pre_call_hook({}, None, payload, "completion")
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_lakera_error_logging_does_not_include_exception_text(monkeypatch, caplog):
+    sensitive = "prompt=secret-user-data"
+    monkeypatch.setattr(
+        "src.guardrails.lakera.httpx.AsyncClient",
+        lambda *args, **kwargs: MockClient(RuntimeError(sensitive)),
+    )
+
+    guardrail = LakeraGuardrail(api_key="lakera-test", threshold=0.5, fail_open=True)
+    payload = {"messages": [{"role": "user", "content": "hello"}]}
+
+    with caplog.at_level("ERROR"):
+        result = await guardrail.async_pre_call_hook({}, None, payload, "completion")
+
+    assert result is None
+    assert sensitive not in caplog.text

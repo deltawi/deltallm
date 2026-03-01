@@ -34,3 +34,31 @@ def test_get_model_pricing_prefix_match() -> None:
 
 def test_completion_cost_unknown_model_returns_zero() -> None:
     assert completion_cost(model="unknown-model", usage={"prompt_tokens": 10, "completion_tokens": 1}) == 0.0
+
+
+def test_batch_cost_uses_batch_absolute_pricing_over_sync() -> None:
+    pricing = ModelPricing(input_cost_per_token=2.0, output_cost_per_token=3.0)
+    cost = completion_cost(
+        model="custom-model",
+        usage={"prompt_tokens": 5, "completion_tokens": 2},
+        custom_pricing=pricing,
+        pricing_tier="batch",
+        model_info={
+            "batch_input_cost_per_token": 1.0,
+            "batch_output_cost_per_token": 1.5,
+            "batch_price_multiplier": 0.2,
+        },
+    )
+    assert cost == 8.0
+
+
+def test_batch_cost_uses_multiplier_when_absolute_missing() -> None:
+    pricing = ModelPricing(input_cost_per_token=2.0, output_cost_per_token=1.0)
+    cost = completion_cost(
+        model="custom-model",
+        usage={"prompt_tokens": 10, "completion_tokens": 4},
+        custom_pricing=pricing,
+        pricing_tier="batch",
+        model_info={"batch_price_multiplier": 0.5},
+    )
+    assert cost == 12.0

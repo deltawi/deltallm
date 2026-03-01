@@ -241,3 +241,101 @@ model DeltaLLM_ModelDeployment {
   @@index([model_name])
   @@map("deltallm_modeldeployment")
 }
+
+model DeltaLLM_BatchFile {
+  file_id             String   @id @default(uuid())
+  purpose             String
+  filename            String
+  bytes               Int
+  status              String   @default("processed")
+  storage_backend     String   @default("local")
+  storage_key         String
+  checksum            String?
+  created_by_api_key  String?
+  created_by_user_id  String?
+  created_by_team_id  String?
+  created_at          DateTime @default(now())
+  expires_at          DateTime?
+
+  input_jobs          DeltaLLM_BatchJob[] @relation("BatchInputFile")
+  output_jobs         DeltaLLM_BatchJob[] @relation("BatchOutputFile")
+  error_jobs          DeltaLLM_BatchJob[] @relation("BatchErrorFile")
+
+  @@index([purpose])
+  @@index([created_at])
+  @@index([expires_at])
+  @@map("deltallm_batch_file")
+}
+
+model DeltaLLM_BatchJob {
+  batch_id                 String   @id @default(uuid())
+  endpoint                 String
+  status                   String
+  execution_mode           String   @default("managed_internal")
+  input_file_id            String
+  output_file_id           String?
+  error_file_id            String?
+  model                    String?
+  metadata                 Json?
+  provider_batch_id        String?
+  provider_status          String?
+  provider_error           String?
+  provider_last_sync_at    DateTime?
+  total_items              Int      @default(0)
+  in_progress_items        Int      @default(0)
+  completed_items          Int      @default(0)
+  failed_items             Int      @default(0)
+  cancelled_items          Int      @default(0)
+  locked_by                String?
+  lease_expires_at         DateTime?
+  cancel_requested_at      DateTime?
+  status_last_updated_at   DateTime @default(now())
+  created_by_api_key       String?
+  created_by_user_id       String?
+  created_by_team_id       String?
+  created_at               DateTime @default(now())
+  started_at               DateTime?
+  completed_at             DateTime?
+  expires_at               DateTime?
+
+  input_file DeltaLLM_BatchFile  @relation("BatchInputFile", fields: [input_file_id], references: [file_id])
+  output_file DeltaLLM_BatchFile? @relation("BatchOutputFile", fields: [output_file_id], references: [file_id])
+  error_file DeltaLLM_BatchFile? @relation("BatchErrorFile", fields: [error_file_id], references: [file_id])
+  items DeltaLLM_BatchItem[]
+
+  @@index([status, created_at])
+  @@index([lease_expires_at])
+  @@index([created_by_api_key, created_at])
+  @@index([created_by_team_id, created_at])
+  @@index([expires_at])
+  @@map("deltallm_batch_job")
+}
+
+model DeltaLLM_BatchItem {
+  item_id            String   @id @default(uuid())
+  batch_id           String
+  line_number        Int
+  custom_id          String
+  status             String
+  request_body       Json
+  response_body      Json?
+  error_body         Json?
+  usage              Json?
+  provider_cost      Float    @default(0)
+  billed_cost        Float    @default(0)
+  attempts           Int      @default(0)
+  last_error         String?
+  locked_by          String?
+  lease_expires_at   DateTime?
+  created_at         DateTime @default(now())
+  started_at         DateTime?
+  completed_at       DateTime?
+
+  batch DeltaLLM_BatchJob @relation(fields: [batch_id], references: [batch_id])
+
+  @@unique([batch_id, line_number])
+  @@unique([batch_id, custom_id])
+  @@index([batch_id, status])
+  @@index([lease_expires_at])
+  @@map("deltallm_batch_item")
+}

@@ -93,6 +93,29 @@ Create text embeddings.
 }
 ```
 
+## Files (Batch Inputs/Artifacts)
+
+```
+POST /v1/files
+GET /v1/files/{file_id}
+GET /v1/files/{file_id}/content
+```
+
+Upload JSONL input files and fetch input/output/error artifact files for batch jobs.
+
+## Batches (Embeddings Only)
+
+```
+POST /v1/batches
+GET /v1/batches
+GET /v1/batches/{batch_id}
+POST /v1/batches/{batch_id}/cancel
+```
+
+Compatibility notes:
+- Current implementation supports `endpoint: "/v1/embeddings"` only.
+- Batch endpoints are disabled unless `general_settings.embeddings_batch_enabled: true`.
+
 ## Image Generation
 
 ```

@@ -152,8 +152,37 @@ return {1, 0}
             raise ServiceUnavailableError(message="Rate limit backend unavailable")
 
     async def _check_rate_limits_fallback(self, checks: list[RateLimitCheck]) -> None:
-        for check in checks:
-            await self._check_rate_limit_fallback(check.scope, check.entity_id, check.limit, check.amount)
+        if self.degraded_mode == "fail_closed":
+            raise ServiceUnavailableError(message="Rate limit backend unavailable")
+
+        normalized = [check for check in checks if check.limit > 0 and check.amount > 0]
+        if not normalized:
+            return
+
+        window_seconds = 60
+        window_id = self._window_id(window_seconds)
+        now = int(time.time())
+        pending_updates: list[tuple[str, int, int]] = []
+
+        async with self._fallback_lock:
+            for check in normalized:
+                key = f"{check.scope}:{check.entity_id}:{window_id}"
+                expiry, current = self._fallback_counters.get(key, (now + window_seconds, 0))
+                if expiry <= now:
+                    expiry, current = now + window_seconds, 0
+                next_value = current + check.amount
+                if next_value > check.limit:
+                    retry_after = max(1, expiry - now)
+                    raise RateLimitError(
+                        message=f"Rate limit exceeded for scope '{check.scope}'",
+                        param=check.scope,
+                        code=f"{check.scope}_exceeded",
+                        retry_after=retry_after,
+                    )
+                pending_updates.append((key, expiry, next_value))
+
+            for key, expiry, next_value in pending_updates:
+                self._fallback_counters[key] = (expiry, next_value)
 
     async def _check_rate_limit_fallback(self, scope: str, entity_id: str, limit: int, amount: int) -> None:
         if self.degraded_mode == "fail_closed":

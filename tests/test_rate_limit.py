@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
+
+from src.middleware.rate_limit import _check_and_acquire_rate_limits
+from src.models.errors import InvalidRequestError
 
 
 @pytest.mark.asyncio
@@ -62,3 +67,37 @@ async def test_rate_limit_user_tpm_enforced(client, test_app):
     payload = blocked.json()
     assert payload["error"]["code"] == "user_tpm_exceeded"
     assert payload["error"]["param"] == "user_tpm"
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_rejects_unreadable_request_body():
+    class RaisingRequest:
+        def __init__(self) -> None:
+            self.state = SimpleNamespace(
+                _rate_limit_checked=False,
+                user_api_key=SimpleNamespace(
+                    key_rpm_limit=None,
+                    key_tpm_limit=None,
+                    rpm_limit=10,
+                    tpm_limit=1000,
+                    organization_id=None,
+                    org_rpm_limit=None,
+                    org_tpm_limit=None,
+                    team_id=None,
+                    team_rpm_limit=None,
+                    team_tpm_limit=None,
+                    user_id=None,
+                    user_rpm_limit=None,
+                    user_tpm_limit=None,
+                    api_key="sk-test",
+                    max_parallel_requests=5,
+                ),
+            )
+            self.app = SimpleNamespace(state=SimpleNamespace(limit_counter=SimpleNamespace()))
+
+        async def body(self) -> bytes:
+            raise RuntimeError("body stream failed")
+
+    request = RaisingRequest()
+    with pytest.raises(InvalidRequestError):
+        await _check_and_acquire_rate_limits(request)  # type: ignore[arg-type]

@@ -4,9 +4,11 @@ from src.api.v1.endpoints import (
     audio_speech_router,
     audio_transcription_router,
     auth_router,
+    batches_router,
     chat_router,
     completions_router,
     embeddings_router,
+    files_router,
     global_router,
     health_router,
     images_router,
@@ -21,6 +23,8 @@ v1_router = APIRouter()
 
 v1_router.include_router(health_router)
 v1_router.include_router(metrics_router)
+v1_router.include_router(files_router)
+v1_router.include_router(batches_router)
 v1_router.include_router(chat_router)
 v1_router.include_router(completions_router)
 v1_router.include_router(responses_router)

@@ -22,9 +22,12 @@ class JWTAuthHandler:
         jwks_cache_ttl: int = 3600,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
+        normalized_issuer = (issuer or "").strip()
+        if not normalized_issuer:
+            raise ValueError("JWT issuer is required for secure token validation")
         self.jwks_url = jwks_url
         self.audience = audience
-        self.issuer = issuer
+        self.issuer = normalized_issuer
         self.claims_mapping = claims_mapping or {
             "user_id": "sub",
             "email": "email",
