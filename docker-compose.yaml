@@ -13,6 +13,7 @@ services:
       DELTALLM_DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
       DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
       DELTALLM_REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://redis:6379/0
       DELTALLM_SALT_KEY: ${DELTALLM_SALT_KEY:-change-me}
     volumes:
       - ./config.example.yaml:/app/config/config.yaml:ro
@@ -40,6 +41,7 @@ services:
       DELTALLM_DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
       DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
       DELTALLM_REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://redis:6379/0
       DELTALLM_SALT_KEY: ${DELTALLM_SALT_KEY:-change-me}
       INSTANCE_ID: instance-1
     volumes:
@@ -62,6 +64,7 @@ services:
       DELTALLM_DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
       DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
       DELTALLM_REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://redis:6379/0
       DELTALLM_SALT_KEY: ${DELTALLM_SALT_KEY:-change-me}
       INSTANCE_ID: instance-2
     volumes:

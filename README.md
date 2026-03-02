@@ -24,7 +24,7 @@ An open-source LLM gateway and proxy that provides a unified OpenAI-compatible A
 - Python 3.11+
 - Node.js 20+
 - PostgreSQL 15+
-- Redis 7+
+- Redis 7+ (optional — enables distributed caching and rate limiting)
 
 ### 1. Clone the repository
 
@@ -48,11 +48,11 @@ Make sure PostgreSQL is running, then set the `DATABASE_URL` environment variabl
 export DATABASE_URL="postgresql://user:password@localhost:5432/deltallm"
 ```
 
-Generate the Prisma client and push the schema:
+Fetch the Prisma engine binaries and push the schema to the database:
 
 ```bash
-prisma generate --schema=prisma/schema.prisma
-prisma db push --schema=prisma/schema.prisma
+python -m prisma py fetch
+python -m prisma db push --schema=prisma/schema.prisma
 ```
 
 ### 4. Configure DeltaLLM
@@ -96,11 +96,15 @@ export DELTALLM_SALT_KEY="your-random-salt-key"
 export DATABASE_URL="postgresql://user:pass@localhost:5432/deltallm"
 ```
 
-### 5. Start Redis
+### 5. Start Redis (optional)
+
+If you have Redis installed, start it for distributed caching and rate limiting:
 
 ```bash
 redis-server --daemonize yes
 ```
+
+The app works without Redis — it falls back to in-memory caching and rate limiting.
 
 ### 6. Start the backend
 
@@ -176,7 +180,7 @@ DELTALLM_MASTER_KEY=sk-your-master-key
 DELTALLM_SALT_KEY=your-random-salt-key
 ```
 
-The `docker-compose.yaml` automatically sets `DATABASE_URL` and `REDIS_URL` to point at the companion PostgreSQL and Redis containers.
+The `docker-compose.yaml` automatically sets `DATABASE_URL` and `REDIS_URL` to point at the companion PostgreSQL and Redis containers. You do not need to configure those.
 
 ### Custom config with Docker
 
