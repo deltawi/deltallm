@@ -28,9 +28,9 @@ Assign accounts to organizations with specific roles:
 
 | Role | Description |
 |------|-------------|
-| `org_owner` | Full org management (includes audit log access) |
-| `org_admin` | Manage teams, keys, and users (includes audit log access) |
-| `org_billing` | View spend and key data |
+| `org_owner` | Full org management (includes audit log access via `Permission.AUDIT_READ`) |
+| `org_admin` | Manage teams, keys, and users (includes audit log access via `Permission.AUDIT_READ`) |
+| `org_billing` | View spend and key data (no audit log access) |
 | `org_auditor` | Read-only access (keys/users); no audit log access |
 | `org_member` | Basic membership |
 
@@ -53,4 +53,4 @@ When an `org_user` logs in, the UI automatically filters:
 - **API Keys** — Only shows keys belonging to accessible teams
 - **Users** — Only shows users within accessible teams
 - **Navigation** — Hides Guardrails, Settings, and Access Control pages
-- **Audit Log** — Visible only to `platform_admin`, `org_owner`, and `org_admin`
+- **Audit Log** — Visible only to `platform_admin`, `org_owner`, and `org_admin` (gated by `Permission.AUDIT_READ`)

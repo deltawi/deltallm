@@ -9,12 +9,20 @@ Audit events are designed for operational troubleshooting and security review, a
 
 ## API Access
 
-Audit read endpoints require an authenticated admin session or master key, and the `audit.read` permission.
+Audit read endpoints require an authenticated admin session or master key, and `Permission.AUDIT_READ` (`audit.read`).
 
-By default, `audit.read` is granted to:
+`Permission.AUDIT_READ` is granted to:
 
 - `platform_admin`
-- `org_admin` (and `org_owner`)
+- `org_owner`
+- `org_admin`
+
+Access is denied to:
+
+- `org_billing`
+- `org_auditor`
+- `org_member`
+- Team-only memberships (`team_admin`, `team_developer`, `team_viewer`) without org admin/owner membership.
 
 ## Admin Audit API
 
@@ -65,6 +73,9 @@ Returns all events in chronological order for a request/correlation.
 `GET /ui/api/audit/export?format=jsonl|csv`
 
 Supports the same filters as `GET /ui/api/audit/events`, with a higher default `limit` (and max `10000`).
+
+`action` values map to the centralized registry in `src/audit/actions.py` (`AuditAction`).
+Prefer referencing that registry over documenting scattered literal action strings.
 
 ## Event Fields
 

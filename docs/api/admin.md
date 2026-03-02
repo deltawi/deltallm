@@ -103,13 +103,15 @@ Query parameters for `/ui/api/spend/report`:
 | `GET` | `/ui/api/audit/timeline` | Timeline view by `request_id` or `correlation_id` |
 | `GET` | `/ui/api/audit/export` | Export events (`format=jsonl|csv`) |
 
-Audit endpoints require `audit.read` permission (granted to `org_owner`, `org_admin`, and `platform_admin`).
+Audit endpoints require `Permission.AUDIT_READ` (`audit.read`).
+Allowed roles: `platform_admin`, `org_owner`, `org_admin`.
+Denied roles: `org_billing`, `org_auditor`, `org_member`, and team-only memberships without org admin/owner scope.
 
 Common query parameters for `/ui/api/audit/events` and `/ui/api/audit/export`:
 
 | Parameter | Description |
 |-----------|-------------|
-| `action` | Filter by action name |
+| `action` | Filter by action name from `src/audit/actions.py` (`AuditAction`) |
 | `status` | Filter by status (`success`, `error`) |
 | `actor_id` | Filter by actor identifier |
 | `organization_id` | Filter by organization |
