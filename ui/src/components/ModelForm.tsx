@@ -1,6 +1,28 @@
 import { useState } from 'react';
 import Card from './Card';
-import { MessageSquare, FileText, Image, Mic, Volume2, ArrowUpDown, Plus, X } from 'lucide-react';
+import { MessageSquare, FileText, Image, Mic, Volume2, ArrowUpDown, Plus, X, ChevronDown } from 'lucide-react';
+
+let collapsibleIdCounter = 0;
+
+function CollapsibleCard({ title, defaultOpen = false, children }: { title: string; defaultOpen?: boolean; children: React.ReactNode }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const [id] = useState(() => `collapsible-${++collapsibleIdCounter}`);
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        aria-controls={id}
+        className="flex items-center justify-between w-full px-5 py-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset rounded-xl"
+      >
+        <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
+        <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && <div id={id} role="region" aria-label={title} className="px-5 pb-5">{children}</div>}
+    </div>
+  );
+}
 
 type ModelMode = 'chat' | 'embedding' | 'image_generation' | 'audio_speech' | 'audio_transcription' | 'rerank';
 
@@ -290,7 +312,7 @@ export default function ModelForm({
         </div>
       </Card>
 
-      <Card title="Rate Limits & Routing">
+      <CollapsibleCard title="Rate Limits & Routing">
         <div className="space-y-4">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div>
@@ -318,10 +340,10 @@ export default function ModelForm({
             <p className="text-xs text-gray-400 mt-1">Comma-separated, for tag-based routing</p>
           </div>
         </div>
-      </Card>
+      </CollapsibleCard>
 
       {mode === 'chat' && (
-        <Card title="Chat Settings">
+        <CollapsibleCard title="Chat Settings">
           <div className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
@@ -348,11 +370,11 @@ export default function ModelForm({
               </div>
             </div>
           </div>
-        </Card>
+        </CollapsibleCard>
       )}
 
       {mode === 'embedding' && (
-        <Card title="Embedding Settings">
+        <CollapsibleCard title="Embedding Settings">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Context Window</label>
@@ -363,10 +385,10 @@ export default function ModelForm({
               <input type="number" value={form.output_vector_size} onChange={(e) => setForm({ ...form, output_vector_size: e.target.value })} placeholder="1536" className={inputClass} />
             </div>
           </div>
-        </Card>
+        </CollapsibleCard>
       )}
 
-      <Card title="Cost Tracking">
+      <CollapsibleCard title="Cost Tracking">
         <div className="space-y-4">
           {mode === 'chat' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -452,9 +474,9 @@ export default function ModelForm({
             </>
           )}
         </div>
-      </Card>
+      </CollapsibleCard>
 
-      <Card title="Default Parameters">
+      <CollapsibleCard title="Default Parameters">
         <div className="space-y-3">
           <p className="text-xs text-gray-400">Default values injected into provider requests when not specified by the caller (e.g. voice, response_format)</p>
           {defaultParams.map((param, idx) => (
@@ -496,7 +518,7 @@ export default function ModelForm({
             <Plus className="w-3.5 h-3.5" /> Add Default Parameter
           </button>
         </div>
-      </Card>
+      </CollapsibleCard>
 
       {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>}
 
