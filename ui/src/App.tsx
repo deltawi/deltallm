@@ -14,9 +14,13 @@ import Usage from './pages/Usage';
 import Guardrails from './pages/Guardrails';
 import SettingsPage from './pages/SettingsPage';
 import RBACAccounts from './pages/RBACAccounts';
+import BatchJobs from './pages/BatchJobs';
+import BatchJobDetail from './pages/BatchJobDetail';
 import OrganizationDetail from './pages/OrganizationDetail';
 import TeamDetail from './pages/TeamDetail';
 import ModelDetail from './pages/ModelDetail';
+import ModelEdit from './pages/ModelEdit';
+import ModelCreate from './pages/ModelCreate';
 
 function AppRoutes() {
   const { isAuthenticated, isLoading, session, authMode, mfaSkipped } = useAuth();
@@ -48,7 +52,9 @@ function AppRoutes() {
       <Route element={<Layout />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/models" element={<Models />} />
+        <Route path="/models/new" element={<ModelCreate />} />
         <Route path="/models/:deploymentId" element={<ModelDetail />} />
+        <Route path="/models/:deploymentId/edit" element={<ModelEdit />} />
         <Route path="/keys" element={<ApiKeys />} />
         <Route path="/organizations" element={<Organizations />} />
         <Route path="/organizations/:orgId" element={<OrganizationDetail />} />
@@ -56,6 +62,8 @@ function AppRoutes() {
         <Route path="/teams/:teamId" element={<TeamDetail />} />
         <Route path="/users" element={<UsersPage />} />
         <Route path="/usage" element={<Usage />} />
+        <Route path="/batches" element={<BatchJobs />} />
+        <Route path="/batches/:batchId" element={<BatchJobDetail />} />
         <Route path="/guardrails" element={isPlatformAdmin ? <Guardrails /> : <Navigate to="/" replace />} />
         <Route path="/settings" element={isPlatformAdmin ? <SettingsPage /> : <Navigate to="/" replace />} />
         <Route path="/access-control" element={isPlatformAdmin ? <RBACAccounts /> : <Navigate to="/" replace />} />
