@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
@@ -34,7 +34,18 @@ export default function Organizations() {
   const { session, authMode } = useAuth();
   const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
   const isPlatformAdmin = userRole === 'platform_admin';
-  const { data, loading, refetch } = useApi(() => organizations.list(), []);
+  const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [pageOffset, setPageOffset] = useState(0);
+  const pageSize = 10;
+  const { data: result, loading, refetch } = useApi(() => organizations.list({ search, limit: pageSize, offset: pageOffset }), [search, pageOffset]);
+  const items = result?.data || [];
+  const pagination = result?.pagination;
+
+  useEffect(() => {
+    const t = setTimeout(() => { setSearch(searchInput); setPageOffset(0); }, 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
   const [showCreate, setShowCreate] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
   const [form, setForm] = useState({ organization_name: '', max_budget: '', rpm_limit: '', tpm_limit: '' });
@@ -102,7 +113,10 @@ export default function Organizations() {
         )}
       </div>
       <Card>
-        <DataTable columns={columns} data={data || []} loading={loading} emptyMessage="No organizations created yet" onRowClick={(r) => navigate(`/organizations/${r.organization_id}`)} />
+        <div className="px-4 pt-3 pb-2">
+          <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search organizations..." className="w-full sm:w-72 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        </div>
+        <DataTable columns={columns} data={items} loading={loading} emptyMessage="No organizations created yet" onRowClick={(r) => navigate(`/organizations/${r.organization_id}`)} pagination={pagination} onPageChange={setPageOffset} />
       </Card>
 
       <Modal open={showCreate || !!editItem} onClose={() => { setShowCreate(false); setEditItem(null); resetForm(); }} title={editItem ? 'Edit Organization' : 'Create Organization'}>

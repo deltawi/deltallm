@@ -4,7 +4,7 @@ import secrets
 from time import perf_counter
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 from src.auth.roles import Permission
 from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, optional_int, to_json_value, get_auth_scope, AuthScope
@@ -16,37 +16,58 @@ router = APIRouter(tags=["Admin Organizations"])
 @router.get("/ui/api/organizations")
 async def list_organizations(
     request: Request,
+    search: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_READ)
     db = db_or_503(request)
 
-    if scope.is_platform_admin:
-        rows = await db.query_raw(
-            """
-            SELECT o.organization_id, o.organization_name, o.max_budget, o.spend, o.rpm_limit, o.tpm_limit, o.created_at, o.updated_at,
-                   (SELECT COUNT(*) FROM deltallm_teamtable t WHERE t.organization_id = o.organization_id) AS team_count
-            FROM deltallm_organizationtable o
-            ORDER BY o.created_at DESC
-            """
-        )
-    elif scope.org_ids:
-        placeholders = ", ".join(f"${i+1}" for i in range(len(scope.org_ids)))
-        rows = await db.query_raw(
-            f"""
-            SELECT o.organization_id, o.organization_name, o.max_budget, o.spend, o.rpm_limit, o.tpm_limit, o.created_at, o.updated_at,
-                   (SELECT COUNT(*) FROM deltallm_teamtable t WHERE t.organization_id = o.organization_id) AS team_count
-            FROM deltallm_organizationtable o
-            WHERE o.organization_id IN ({placeholders})
-            ORDER BY o.created_at DESC
-            """,
-            *scope.org_ids,
-        )
-    else:
-        rows = []
+    clauses: list[str] = []
+    params: list[Any] = []
 
-    return [to_json_value(dict(row)) for row in rows]
+    if not scope.is_platform_admin:
+        if scope.org_ids:
+            ph = ", ".join(f"${len(params) + i + 1}" for i in range(len(scope.org_ids)))
+            params.extend(scope.org_ids)
+            clauses.append(f"o.organization_id IN ({ph})")
+        else:
+            return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
+
+    if search:
+        params.append(f"%{search}%")
+        clauses.append(f"(o.organization_name ILIKE ${len(params)} OR o.organization_id ILIKE ${len(params)})")
+
+    where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+
+    select_cols = """o.organization_id, o.organization_name, o.max_budget, o.spend, o.rpm_limit, o.tpm_limit, o.created_at, o.updated_at,
+                   (SELECT COUNT(*) FROM deltallm_teamtable t WHERE t.organization_id = o.organization_id) AS team_count"""
+
+    count_rows = await db.query_raw(
+        f"SELECT COUNT(*) AS total FROM deltallm_organizationtable o {where_sql}",
+        *params,
+    )
+    total = int((count_rows[0] if count_rows else {}).get("total") or 0)
+
+    params.append(limit)
+    params.append(offset)
+    rows = await db.query_raw(
+        f"""
+        SELECT {select_cols}
+        FROM deltallm_organizationtable o
+        {where_sql}
+        ORDER BY o.created_at DESC
+        LIMIT ${len(params) - 1} OFFSET ${len(params)}
+        """,
+        *params,
+    )
+
+    return {
+        "data": [to_json_value(dict(row)) for row in rows],
+        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+    }
 
 
 @router.get("/ui/api/organizations/{organization_id}", dependencies=[Depends(require_admin_permission(Permission.ORG_READ))])

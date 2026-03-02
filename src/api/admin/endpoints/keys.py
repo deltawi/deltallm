@@ -5,7 +5,7 @@ import logging
 from time import perf_counter
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Request, status
+from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
 from src.auth.roles import Permission
 from src.api.admin.endpoints.common import db_or_503, to_json_value, get_auth_scope, emit_admin_mutation_audit
@@ -17,36 +17,60 @@ logger = logging.getLogger(__name__)
 @router.get("/ui/api/keys")
 async def list_keys(
     request: Request,
+    search: str | None = Query(default=None),
+    team_id: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
     db = db_or_503(request)
 
-    if scope.is_platform_admin:
-        rows = await db.query_raw(
-            """
-            SELECT token, key_name, user_id, team_id, models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at
-            FROM deltallm_verificationtoken
-            ORDER BY created_at DESC
-            """
-        )
-    elif scope.org_ids:
-        placeholders = ", ".join(f"${i+1}" for i in range(len(scope.org_ids)))
-        rows = await db.query_raw(
-            f"""
-            SELECT vt.token, vt.key_name, vt.user_id, vt.team_id, vt.models, vt.spend, vt.max_budget, vt.rpm_limit, vt.tpm_limit, vt.expires, vt.created_at, vt.updated_at
-            FROM deltallm_verificationtoken vt
-            LEFT JOIN deltallm_teamtable t ON vt.team_id = t.team_id
-            WHERE t.organization_id IN ({placeholders})
-            ORDER BY vt.created_at DESC
-            """,
-            *scope.org_ids,
-        )
-    else:
-        rows = []
+    clauses: list[str] = []
+    params: list[Any] = []
 
-    return [to_json_value(dict(row)) for row in rows]
+    if not scope.is_platform_admin:
+        if scope.org_ids:
+            ph = ", ".join(f"${len(params) + i + 1}" for i in range(len(scope.org_ids)))
+            params.extend(scope.org_ids)
+            clauses.append(f"t.organization_id IN ({ph})")
+        else:
+            return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
+
+    if search:
+        params.append(f"%{search}%")
+        clauses.append(f"(vt.key_name ILIKE ${len(params)} OR vt.token ILIKE ${len(params)})")
+    if team_id:
+        params.append(team_id)
+        clauses.append(f"vt.team_id = ${len(params)}")
+
+    join_sql = "LEFT JOIN deltallm_teamtable t ON vt.team_id = t.team_id" if not scope.is_platform_admin else ""
+    where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+
+    count_rows = await db.query_raw(
+        f"SELECT COUNT(*) AS total FROM deltallm_verificationtoken vt {join_sql} {where_sql}",
+        *params,
+    )
+    total = int((count_rows[0] if count_rows else {}).get("total") or 0)
+
+    params.append(limit)
+    params.append(offset)
+    rows = await db.query_raw(
+        f"""
+        SELECT vt.token, vt.key_name, vt.user_id, vt.team_id, vt.models, vt.spend, vt.max_budget, vt.rpm_limit, vt.tpm_limit, vt.expires, vt.created_at, vt.updated_at
+        FROM deltallm_verificationtoken vt {join_sql}
+        {where_sql}
+        ORDER BY vt.created_at DESC
+        LIMIT ${len(params) - 1} OFFSET ${len(params)}
+        """,
+        *params,
+    )
+
+    return {
+        "data": [to_json_value(dict(row)) for row in rows],
+        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+    }
 
 
 @router.post("/ui/api/keys")

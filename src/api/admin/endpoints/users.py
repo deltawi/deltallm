@@ -22,12 +22,20 @@ router = APIRouter(tags=["Admin Users"])
 @router.get("/ui/api/users")
 async def list_users(
     request: Request,
+    search: str | None = Query(default=None),
     team_id: str | None = Query(default=None),
+    user_role: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.USER_READ)
     db = db_or_503(request)
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    needs_join = False
 
     if team_id:
         if not scope.is_platform_admin and scope.org_ids:
@@ -39,43 +47,53 @@ async def list_users(
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
         elif not scope.is_platform_admin:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+        params.append(team_id)
+        clauses.append(f"u.team_id = ${len(params)}")
+    elif not scope.is_platform_admin:
+        if scope.org_ids:
+            needs_join = True
+            ph = ", ".join(f"${len(params) + i + 1}" for i in range(len(scope.org_ids)))
+            params.extend(scope.org_ids)
+            clauses.append(f"t.organization_id IN ({ph})")
+        else:
+            return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
 
-        rows = await db.query_raw(
-            """
-            SELECT user_id, user_email, user_role, team_id, spend, max_budget, models, tpm_limit, rpm_limit,
-                   COALESCE((metadata->>'blocked')::boolean, false) AS blocked, created_at, updated_at
-            FROM deltallm_usertable
-            WHERE team_id = $1
-            ORDER BY created_at DESC
-            """,
-            team_id,
-        )
-    elif scope.is_platform_admin:
-        rows = await db.query_raw(
-            """
-            SELECT user_id, user_email, user_role, team_id, spend, max_budget, models, tpm_limit, rpm_limit,
-                   COALESCE((metadata->>'blocked')::boolean, false) AS blocked, created_at, updated_at
-            FROM deltallm_usertable
-            ORDER BY created_at DESC
-            """
-        )
-    elif scope.org_ids:
-        placeholders = ", ".join(f"${i+1}" for i in range(len(scope.org_ids)))
-        rows = await db.query_raw(
-            f"""
-            SELECT u.user_id, u.user_email, u.user_role, u.team_id, u.spend, u.max_budget, u.models, u.tpm_limit, u.rpm_limit,
-                   COALESCE((u.metadata->>'blocked')::boolean, false) AS blocked, u.created_at, u.updated_at
-            FROM deltallm_usertable u
-            LEFT JOIN deltallm_teamtable t ON u.team_id = t.team_id
-            WHERE t.organization_id IN ({placeholders})
-            ORDER BY u.created_at DESC
-            """,
-            *scope.org_ids,
-        )
-    else:
-        rows = []
+    if search:
+        params.append(f"%{search}%")
+        clauses.append(f"(u.user_id ILIKE ${len(params)} OR u.user_email ILIKE ${len(params)})")
+    if user_role:
+        params.append(user_role)
+        clauses.append(f"u.user_role = ${len(params)}")
 
-    return [to_json_value(dict(row)) for row in rows]
+    join_sql = "LEFT JOIN deltallm_teamtable t ON u.team_id = t.team_id" if needs_join else ""
+    where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+
+    select_cols = """u.user_id, u.user_email, u.user_role, u.team_id, u.spend, u.max_budget, u.models, u.tpm_limit, u.rpm_limit,
+                   COALESCE((u.metadata->>'blocked')::boolean, false) AS blocked, u.created_at, u.updated_at"""
+
+    count_rows = await db.query_raw(
+        f"SELECT COUNT(*) AS total FROM deltallm_usertable u {join_sql} {where_sql}",
+        *params,
+    )
+    total = int((count_rows[0] if count_rows else {}).get("total") or 0)
+
+    params.append(limit)
+    params.append(offset)
+    rows = await db.query_raw(
+        f"""
+        SELECT {select_cols}
+        FROM deltallm_usertable u {join_sql}
+        {where_sql}
+        ORDER BY u.created_at DESC
+        LIMIT ${len(params) - 1} OFFSET ${len(params)}
+        """,
+        *params,
+    )
+
+    return {
+        "data": [to_json_value(dict(row)) for row in rows],
+        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+    }
 
 
 @router.post("/ui/api/users", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
