@@ -27,9 +27,31 @@ hpa:
   targetMemoryUtilizationPercentage: 75
 
 config:
+  # masterKey: "your-production-master-key-min-32-chars"
+  # saltKey: "your-unique-production-salt-key"
+  # databaseUrl: "postgresql://user:pass@your-rds-host:5432/deltallm"
+  # asyncDatabaseUrl: "postgresql+asyncpg://user:pass@your-rds-host:5432/deltallm"
+  # redisUrl: "redis://your-elasticache-host:6379/0"
   general_settings:
     background_health_checks: true
     health_check_interval: 120
+    model_deployment_source: hybrid
+
+# s3:
+#   enabled: true
+#   bucket: "your-deltallm-logs-bucket"
+#   region: "us-east-1"
+#   prefix: "deltallm-logs/"
+#   compression: "gzip"
+#   accessKeyId: ""
+#   secretAccessKey: ""
+
+prometheus:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 15s
+    scrapeTimeout: 10s
 
 postgresql:
   enabled: false
