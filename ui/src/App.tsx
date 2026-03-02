@@ -19,6 +19,8 @@ import BatchJobDetail from './pages/BatchJobDetail';
 import OrganizationDetail from './pages/OrganizationDetail';
 import TeamDetail from './pages/TeamDetail';
 import ModelDetail from './pages/ModelDetail';
+import ModelEdit from './pages/ModelEdit';
+import ModelCreate from './pages/ModelCreate';
 
 function AppRoutes() {
   const { isAuthenticated, isLoading, session, authMode, mfaSkipped } = useAuth();
@@ -50,7 +52,9 @@ function AppRoutes() {
       <Route element={<Layout />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/models" element={<Models />} />
+        <Route path="/models/new" element={<ModelCreate />} />
         <Route path="/models/:deploymentId" element={<ModelDetail />} />
+        <Route path="/models/:deploymentId/edit" element={<ModelEdit />} />
         <Route path="/keys" element={<ApiKeys />} />
         <Route path="/organizations" element={<Organizations />} />
         <Route path="/organizations/:orgId" element={<OrganizationDetail />} />
