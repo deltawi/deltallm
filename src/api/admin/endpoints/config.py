@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -63,7 +64,11 @@ async def get_routing(request: Request) -> dict[str, Any]:
             "least-busy",
             "latency-based-routing",
             "cost-based-routing",
+            "usage-based-routing",
+            "tag-based-routing",
             "priority-based-routing",
+            "weighted",
+            "rate-limit-aware",
         ],
         "config": {
             "timeout": getattr(router_settings, "timeout", 600),
@@ -139,7 +144,12 @@ async def get_settings(
 
 
 @router.put("/ui/api/settings", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
-async def update_settings(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+async def update_settings(
+    request: Request,
+    payload: dict[str, Any],
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
     app_config = getattr(request.app.state, "app_config", None)
     if app_config is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="App config unavailable")
@@ -175,4 +185,9 @@ async def update_settings(request: Request, payload: dict[str, Any]) -> dict[str
     if settings is not None and "master_key" in general_updates:
         setattr(settings, "master_key", general_updates["master_key"])
 
-    return await get_settings(request)
+    if "log_level" in general_updates:
+        level = general_updates["log_level"].upper()
+        if level in ("DEBUG", "INFO", "WARNING", "ERROR"):
+            logging.getLogger().setLevel(getattr(logging, level))
+
+    return await get_settings(request, authorization=authorization, x_master_key=x_master_key)
