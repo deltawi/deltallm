@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import Request
 
+from src.audit.actions import AuditAction, normalize_audit_action
 from src.services.audit_service import AuditEventInput, AuditPayloadInput, AuditService
 
 
@@ -23,7 +24,7 @@ def emit_audit_event(
     *,
     request: Request,
     request_start: float,
-    action: str,
+    action: str | AuditAction,
     status: str,
     actor_type: str,
     actor_id: str | None = None,
@@ -52,7 +53,7 @@ def emit_audit_event(
 
     audit_service.record_event(
         AuditEventInput(
-            action=action,
+            action=normalize_audit_action(action),
             organization_id=organization_id,
             actor_type=actor_type,
             actor_id=actor_id,

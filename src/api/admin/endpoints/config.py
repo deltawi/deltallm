@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from src.auth.roles import Permission
+from src.audit.actions import AuditAction
 from src.api.admin.endpoints.common import emit_admin_mutation_audit, model_entries, to_json_value, get_auth_scope
 from src.config import GuardrailConfig
 from src.middleware.admin import require_admin_permission
@@ -119,7 +120,7 @@ async def update_routing(request: Request, payload: dict[str, Any]) -> dict[str,
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action="ADMIN_ROUTING_UPDATE",
+        action=AuditAction.ADMIN_ROUTING_UPDATE,
         resource_type="routing_config",
         request_payload=payload,
         response_payload=response,
@@ -195,7 +196,7 @@ async def update_settings(request: Request, payload: dict[str, Any]) -> dict[str
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action="ADMIN_SETTINGS_UPDATE",
+        action=AuditAction.ADMIN_SETTINGS_UPDATE,
         resource_type="app_settings",
         request_payload=payload,
         response_payload=response,

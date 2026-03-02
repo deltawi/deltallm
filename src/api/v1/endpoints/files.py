@@ -7,6 +7,7 @@ from fastapi.responses import Response
 
 from src.batch.access import can_access_owned_resource
 from src.middleware.auth import require_api_key
+from src.audit.actions import AuditAction
 from src.routers.audit_helpers import emit_audit_event
 
 router = APIRouter(prefix="/v1", tags=["files"])
@@ -33,7 +34,7 @@ async def create_file(
         emit_audit_event(
             request=request,
             request_start=request_start,
-            action="FILE_CREATE_REQUEST",
+            action=AuditAction.FILE_CREATE_REQUEST,
             status="success",
             actor_type="api_key",
             actor_id=auth.user_id or auth.api_key,
@@ -50,7 +51,7 @@ async def create_file(
         emit_audit_event(
             request=request,
             request_start=request_start,
-            action="FILE_CREATE_REQUEST",
+            action=AuditAction.FILE_CREATE_REQUEST,
             status="error",
             actor_type="api_key",
             actor_id=auth.user_id or auth.api_key,
@@ -83,7 +84,7 @@ async def get_file(request: Request, file_id: str):
         emit_audit_event(
             request=request,
             request_start=request_start,
-            action="FILE_READ_REQUEST",
+            action=AuditAction.FILE_READ_REQUEST,
             status="success",
             actor_type="api_key",
             actor_id=auth.user_id or auth.api_key,
@@ -100,7 +101,7 @@ async def get_file(request: Request, file_id: str):
         emit_audit_event(
             request=request,
             request_start=request_start,
-            action="FILE_READ_REQUEST",
+            action=AuditAction.FILE_READ_REQUEST,
             status="error",
             actor_type="api_key",
             actor_id=auth.user_id or auth.api_key,
@@ -125,7 +126,7 @@ async def get_file_content(request: Request, file_id: str):
         emit_audit_event(
             request=request,
             request_start=request_start,
-            action="FILE_CONTENT_READ_REQUEST",
+            action=AuditAction.FILE_CONTENT_READ_REQUEST,
             status="success",
             actor_type="api_key",
             actor_id=auth.user_id or auth.api_key,
@@ -142,7 +143,7 @@ async def get_file_content(request: Request, file_id: str):
         emit_audit_event(
             request=request,
             request_start=request_start,
-            action="FILE_CONTENT_READ_REQUEST",
+            action=AuditAction.FILE_CONTENT_READ_REQUEST,
             status="error",
             actor_type="api_key",
             actor_id=auth.user_id or auth.api_key,

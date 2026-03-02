@@ -26,6 +26,7 @@ from src.models.requests import EmbeddingRequest
 from src.router.router import Deployment
 from src.routers.utils import enforce_budget_if_configured, fire_and_forget
 from src.services.audit_service import AuditEventInput, AuditPayloadInput, AuditService
+from src.audit.actions import AuditAction
 
 router = APIRouter(prefix="/v1", tags=["embeddings"])
 
@@ -69,7 +70,7 @@ def _emit_embedding_audit_event(
 
     audit_service.record_event(
         AuditEventInput(
-            action="EMBEDDING_REQUEST",
+            action=AuditAction.EMBEDDING_REQUEST.value,
             organization_id=getattr(auth, "organization_id", None),
             actor_type="api_key",
             actor_id=getattr(auth, "user_id", None) or getattr(auth, "api_key", None),

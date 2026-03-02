@@ -5,6 +5,7 @@ from time import perf_counter
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
 
+from src.audit.actions import AuditAction
 from src.api.audit import emit_control_audit_event
 from src.middleware.platform_auth import SESSION_COOKIE_NAME, get_platform_auth_context
 from src.models.errors import RateLimitError
@@ -123,7 +124,7 @@ async def internal_login(request: Request, payload: InternalLoginRequest) -> Res
         await emit_control_audit_event(
             request=request,
             request_start=request_start,
-            action="AUTH_INTERNAL_LOGIN",
+            action=AuditAction.AUTH_INTERNAL_LOGIN,
             status="success",
             actor_id=login.context.account_id,
             resource_type="session",
@@ -136,7 +137,7 @@ async def internal_login(request: Request, payload: InternalLoginRequest) -> Res
         await emit_control_audit_event(
             request=request,
             request_start=request_start,
-            action="AUTH_INTERNAL_LOGIN",
+            action=AuditAction.AUTH_INTERNAL_LOGIN,
             status="error",
             resource_type="session",
             request_payload={"email": normalized_email},
@@ -161,7 +162,7 @@ async def internal_logout(request: Request) -> Response:
         await emit_control_audit_event(
             request=request,
             request_start=request_start,
-            action="AUTH_INTERNAL_LOGOUT",
+            action=AuditAction.AUTH_INTERNAL_LOGOUT,
             status="success",
             actor_id=context.account_id if context is not None else None,
             resource_type="session",
@@ -173,7 +174,7 @@ async def internal_logout(request: Request) -> Response:
         await emit_control_audit_event(
             request=request,
             request_start=request_start,
-            action="AUTH_INTERNAL_LOGOUT",
+            action=AuditAction.AUTH_INTERNAL_LOGOUT,
             status="error",
             actor_id=context.account_id if context is not None else None,
             resource_type="session",
@@ -221,7 +222,7 @@ async def mfa_enroll_start(request: Request) -> MFAStartResponse:
         await emit_control_audit_event(
             request=request,
             request_start=request_start,
-            action="AUTH_MFA_ENROLL_START",
+            action=AuditAction.AUTH_MFA_ENROLL_START,
             status="success",
             actor_id=context.account_id,
             resource_type="mfa",
@@ -233,7 +234,7 @@ async def mfa_enroll_start(request: Request) -> MFAStartResponse:
         await emit_control_audit_event(
             request=request,
             request_start=request_start,
-            action="AUTH_MFA_ENROLL_START",
+            action=AuditAction.AUTH_MFA_ENROLL_START,
             status="error",
             actor_id=context.account_id if context is not None else None,
             resource_type="mfa",
@@ -262,7 +263,7 @@ async def mfa_enroll_confirm(request: Request, payload: MFAVerifyRequest) -> dic
         await emit_control_audit_event(
             request=request,
             request_start=request_start,
-            action="AUTH_MFA_ENROLL_CONFIRM",
+            action=AuditAction.AUTH_MFA_ENROLL_CONFIRM,
             status="success",
             actor_id=context.account_id,
             resource_type="mfa",
@@ -274,7 +275,7 @@ async def mfa_enroll_confirm(request: Request, payload: MFAVerifyRequest) -> dic
         await emit_control_audit_event(
             request=request,
             request_start=request_start,
-            action="AUTH_MFA_ENROLL_CONFIRM",
+            action=AuditAction.AUTH_MFA_ENROLL_CONFIRM,
             status="error",
             actor_id=context.account_id if context is not None else None,
             resource_type="mfa",
@@ -310,7 +311,7 @@ async def internal_change_password(request: Request, payload: ChangePasswordRequ
         await emit_control_audit_event(
             request=request,
             request_start=request_start,
-            action="AUTH_PASSWORD_CHANGE",
+            action=AuditAction.AUTH_PASSWORD_CHANGE,
             status="success",
             actor_id=context.account_id,
             resource_type="account",
@@ -322,7 +323,7 @@ async def internal_change_password(request: Request, payload: ChangePasswordRequ
         await emit_control_audit_event(
             request=request,
             request_start=request_start,
-            action="AUTH_PASSWORD_CHANGE",
+            action=AuditAction.AUTH_PASSWORD_CHANGE,
             status="error",
             actor_id=context.account_id if context is not None else None,
             resource_type="account",
@@ -432,7 +433,7 @@ async def auth_callback(request: Request, code: str = Query(default=""), state: 
         await emit_control_audit_event(
             request=request,
             request_start=request_start,
-            action="AUTH_SSO_CALLBACK",
+            action=AuditAction.AUTH_SSO_CALLBACK,
             status="success",
             actor_id=getattr(getattr(login, "context", None), "account_id", None),
             resource_type="session",
@@ -445,7 +446,7 @@ async def auth_callback(request: Request, code: str = Query(default=""), state: 
         await emit_control_audit_event(
             request=request,
             request_start=request_start,
-            action="AUTH_SSO_CALLBACK",
+            action=AuditAction.AUTH_SSO_CALLBACK,
             status="error",
             resource_type="session",
             error=exc,

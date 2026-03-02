@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import Request
 
+from src.audit.actions import AuditAction, normalize_audit_action
 from src.auth.roles import Permission, has_platform_permission
 from src.middleware.platform_auth import get_platform_auth_context
 from src.services.audit_service import AuditEventInput, AuditPayloadInput, AuditService
@@ -71,7 +72,7 @@ async def emit_control_audit_event(
     *,
     request: Request,
     request_start: float,
-    action: str,
+    action: str | AuditAction,
     status: str,
     actor_type: str = "platform_account",
     actor_id: str | None = None,
@@ -104,7 +105,7 @@ async def emit_control_audit_event(
         payloads.append(AuditPayloadInput(kind="response", content_json=redact_sensitive(response_payload)))
 
     event = AuditEventInput(
-        action=action,
+        action=normalize_audit_action(action),
         organization_id=organization_id,
         actor_type=actor_type,
         actor_id=resolved_actor_id,

@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 from src.auth.roles import Permission
+from src.audit.actions import AuditAction
 from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, optional_int, to_json_value, get_auth_scope, AuthScope
 from src.db.repositories import AUDIT_METADATA_RETENTION_DAYS_KEY, AUDIT_PAYLOAD_RETENTION_DAYS_KEY
 from src.middleware.admin import require_admin_permission
@@ -169,7 +170,7 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action="ADMIN_ORGANIZATION_CREATE",
+        action=AuditAction.ADMIN_ORGANIZATION_CREATE,
         resource_type="organization",
         resource_id=organization_id,
         request_payload=payload,
@@ -234,7 +235,7 @@ async def update_organization(request: Request, organization_id: str, payload: d
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action="ADMIN_ORGANIZATION_UPDATE",
+        action=AuditAction.ADMIN_ORGANIZATION_UPDATE,
         resource_type="organization",
         resource_id=organization_id,
         request_payload=payload,

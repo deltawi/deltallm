@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.auth.roles import Permission
+from src.audit.actions import AuditAction
 from src.api.admin.endpoints.common import db_or_503, get_auth_scope, serialize_guardrail, emit_admin_mutation_audit
 from src.config import GuardrailConfig
 from src.middleware.admin import require_admin_permission
@@ -60,7 +61,7 @@ async def update_guardrails(request: Request, payload: dict[str, Any]) -> dict[s
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action="ADMIN_GUARDRAILS_UPDATE",
+        action=AuditAction.ADMIN_GUARDRAILS_UPDATE,
         resource_type="guardrails",
         request_payload=payload,
         response_payload=response,
@@ -154,7 +155,7 @@ async def update_scoped_guardrails(request: Request, scope: str, entity_id: str,
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action="ADMIN_GUARDRAILS_SCOPED_UPDATE",
+        action=AuditAction.ADMIN_GUARDRAILS_SCOPED_UPDATE,
         resource_type=scope,
         resource_id=entity_id,
         request_payload=payload,
@@ -190,7 +191,7 @@ async def delete_scoped_guardrails(request: Request, scope: str, entity_id: str)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action="ADMIN_GUARDRAILS_SCOPED_DELETE",
+        action=AuditAction.ADMIN_GUARDRAILS_SCOPED_DELETE,
         resource_type=scope,
         resource_id=entity_id,
         response_payload=response,

@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.auth.roles import OrganizationRole, Permission, PlatformRole, TeamRole
+from src.audit import AuditAction
 from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, to_json_value
 from src.middleware.admin import require_admin_permission
 
@@ -89,7 +90,7 @@ async def upsert_rbac_account(request: Request, payload: dict[str, Any]) -> dict
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action="ADMIN_RBAC_ACCOUNT_UPSERT",
+        action=AuditAction.ADMIN_RBAC_ACCOUNT_UPSERT,
         resource_type="platform_account",
         resource_id=str(rows[0].get("account_id") or ""),
         request_payload=payload,
@@ -174,7 +175,7 @@ async def upsert_org_membership(request: Request, payload: dict[str, Any]) -> di
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action="ADMIN_RBAC_ORG_MEMBERSHIP_UPSERT",
+        action=AuditAction.ADMIN_RBAC_ORG_MEMBERSHIP_UPSERT,
         resource_type="organization_membership",
         resource_id=str(rows[0].get("membership_id") or ""),
         request_payload=payload,
@@ -259,7 +260,7 @@ async def upsert_team_membership(request: Request, payload: dict[str, Any]) -> d
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action="ADMIN_RBAC_TEAM_MEMBERSHIP_UPSERT",
+        action=AuditAction.ADMIN_RBAC_TEAM_MEMBERSHIP_UPSERT,
         resource_type="team_membership",
         resource_id=str(rows[0].get("membership_id") or ""),
         request_payload=payload,

@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
 from src.auth.roles import Permission
+from src.audit.actions import AuditAction
 from src.api.admin.endpoints.common import db_or_503, to_json_value, get_auth_scope, emit_admin_mutation_audit
 
 router = APIRouter(tags=["Admin Keys"])
@@ -144,7 +145,7 @@ async def create_key(
         await emit_admin_mutation_audit(
             request=request,
             request_start=request_start,
-            action="ADMIN_KEY_CREATE",
+            action=AuditAction.ADMIN_KEY_CREATE,
             scope=scope,
             resource_type="api_key",
             resource_id=token_hash,
@@ -156,7 +157,7 @@ async def create_key(
         await emit_admin_mutation_audit(
             request=request,
             request_start=request_start,
-            action="ADMIN_KEY_CREATE",
+            action=AuditAction.ADMIN_KEY_CREATE,
             scope=scope,
             resource_type="api_key",
             resource_id=token_hash,
@@ -246,7 +247,7 @@ async def update_key(
         await emit_admin_mutation_audit(
             request=request,
             request_start=request_start,
-            action="ADMIN_KEY_UPDATE",
+            action=AuditAction.ADMIN_KEY_UPDATE,
             scope=scope,
             resource_type="api_key",
             resource_id=token_hash,
@@ -260,7 +261,7 @@ async def update_key(
         await emit_admin_mutation_audit(
             request=request,
             request_start=request_start,
-            action="ADMIN_KEY_UPDATE",
+            action=AuditAction.ADMIN_KEY_UPDATE,
             scope=scope,
             resource_type="api_key",
             resource_id=token_hash,
@@ -318,7 +319,7 @@ async def regenerate_key(
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action="ADMIN_KEY_REGENERATE",
+        action=AuditAction.ADMIN_KEY_REGENERATE,
         scope=scope,
         resource_type="api_key",
         resource_id=new_hash,
@@ -349,7 +350,7 @@ async def revoke_key(
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action="ADMIN_KEY_REVOKE",
+        action=AuditAction.ADMIN_KEY_REVOKE,
         scope=scope,
         resource_type="api_key",
         resource_id=token_hash,
@@ -379,7 +380,7 @@ async def delete_key(
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action="ADMIN_KEY_DELETE",
+        action=AuditAction.ADMIN_KEY_DELETE,
         scope=scope,
         resource_type="api_key",
         resource_id=token_hash,

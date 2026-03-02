@@ -23,6 +23,7 @@ from src.metrics import (
 from src.models.errors import InvalidRequestError, PermissionDeniedError
 from src.models.requests import RerankRequest
 from src.router.router import Deployment
+from src.audit.actions import AuditAction
 from src.routers.audit_helpers import emit_audit_event
 from src.routers.utils import enforce_budget_if_configured, fire_and_forget
 
@@ -151,7 +152,7 @@ async def rerank(request: Request, payload: RerankRequest):
         emit_audit_event(
             request=request,
             request_start=request_start,
-            action="RERANK_REQUEST",
+            action=AuditAction.RERANK_REQUEST,
             status="success",
             actor_type="api_key",
             actor_id=auth.user_id or auth.api_key,
@@ -180,7 +181,7 @@ async def rerank(request: Request, payload: RerankRequest):
         emit_audit_event(
             request=request,
             request_start=request_start,
-            action="RERANK_REQUEST",
+            action=AuditAction.RERANK_REQUEST,
             status="error",
             actor_type="api_key",
             actor_id=auth.user_id or auth.api_key,
@@ -198,7 +199,7 @@ async def rerank(request: Request, payload: RerankRequest):
         emit_audit_event(
             request=request,
             request_start=request_start,
-            action="RERANK_REQUEST",
+            action=AuditAction.RERANK_REQUEST,
             status="error",
             actor_type="api_key",
             actor_id=auth.user_id or auth.api_key,

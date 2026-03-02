@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse
 
+from src.audit.actions import AuditAction
 from src.middleware.admin import require_admin_permission, require_master_key, require_authenticated
 from src.api.audit import emit_control_audit_event
 from src.auth.roles import Permission
@@ -172,7 +173,7 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
     await emit_control_audit_event(
         request=request,
         request_start=request_start,
-        action="ADMIN_MODEL_CREATE",
+        action=AuditAction.ADMIN_MODEL_CREATE,
         status="success",
         resource_type="model_deployment",
         resource_id=deployment_id,
@@ -243,7 +244,7 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
     await emit_control_audit_event(
         request=request,
         request_start=request_start,
-        action="ADMIN_MODEL_UPDATE",
+        action=AuditAction.ADMIN_MODEL_UPDATE,
         status="success",
         resource_type="model_deployment",
         resource_id=deployment_id,
@@ -267,7 +268,7 @@ async def delete_model(request: Request, deployment_id: str) -> dict[str, bool]:
         await emit_control_audit_event(
             request=request,
             request_start=request_start,
-            action="ADMIN_MODEL_DELETE",
+            action=AuditAction.ADMIN_MODEL_DELETE,
             status="success",
             resource_type="model_deployment",
             resource_id=deployment_id,
@@ -297,7 +298,7 @@ async def delete_model(request: Request, deployment_id: str) -> dict[str, bool]:
             await emit_control_audit_event(
                 request=request,
                 request_start=request_start,
-                action="ADMIN_MODEL_DELETE",
+                action=AuditAction.ADMIN_MODEL_DELETE,
                 status="success",
                 resource_type="model_deployment",
                 resource_id=deployment_id,

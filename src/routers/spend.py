@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
+from src.audit import AuditAction
 from src.middleware.admin import require_master_key
 from src.routers.audit_helpers import emit_audit_event
 
@@ -18,7 +19,7 @@ def _emit_spend_audit(
     *,
     request: Request,
     request_start: float,
-    action: str,
+    action: str | AuditAction,
     status: str,
     request_payload: dict[str, Any] | None = None,
     response_payload: dict[str, Any] | None = None,
@@ -194,7 +195,7 @@ async def get_spend_logs(
         _emit_spend_audit(
             request=request,
             request_start=request_start,
-            action="SPEND_LOGS_READ",
+            action=AuditAction.SPEND_LOGS_READ,
             status="success",
             request_payload={
                 "api_key": api_key,
@@ -214,7 +215,7 @@ async def get_spend_logs(
         _emit_spend_audit(
             request=request,
             request_start=request_start,
-            action="SPEND_LOGS_READ",
+            action=AuditAction.SPEND_LOGS_READ,
             status="error",
             request_payload={
                 "api_key": api_key,
@@ -268,7 +269,7 @@ async def get_global_spend(
         _emit_spend_audit(
             request=request,
             request_start=request_start,
-            action="GLOBAL_SPEND_READ",
+            action=AuditAction.GLOBAL_SPEND_READ,
             status="success",
             request_payload={"start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
             response_payload=result if isinstance(result, dict) else None,
@@ -278,7 +279,7 @@ async def get_global_spend(
         _emit_spend_audit(
             request=request,
             request_start=request_start,
-            action="GLOBAL_SPEND_READ",
+            action=AuditAction.GLOBAL_SPEND_READ,
             status="error",
             request_payload={"start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
             error=exc,
@@ -336,7 +337,7 @@ async def get_spend_report(
         _emit_spend_audit(
             request=request,
             request_start=request_start,
-            action="GLOBAL_SPEND_REPORT_READ",
+            action=AuditAction.GLOBAL_SPEND_REPORT_READ,
             status="success",
             request_payload={"group_by": group_by, "start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
             response_payload={"groups": len(result["breakdown"])},
@@ -346,7 +347,7 @@ async def get_spend_report(
         _emit_spend_audit(
             request=request,
             request_start=request_start,
-            action="GLOBAL_SPEND_REPORT_READ",
+            action=AuditAction.GLOBAL_SPEND_REPORT_READ,
             status="error",
             request_payload={"group_by": group_by, "start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
             error=exc,
@@ -370,7 +371,7 @@ async def get_spend_per_key(request: Request, _: str = Depends(require_master_ke
         _emit_spend_audit(
             request=request,
             request_start=request_start,
-            action="GLOBAL_SPEND_KEYS_READ",
+            action=AuditAction.GLOBAL_SPEND_KEYS_READ,
             status="success",
             response_payload={"count": len(result)},
         )
@@ -379,7 +380,7 @@ async def get_spend_per_key(request: Request, _: str = Depends(require_master_ke
         _emit_spend_audit(
             request=request,
             request_start=request_start,
-            action="GLOBAL_SPEND_KEYS_READ",
+            action=AuditAction.GLOBAL_SPEND_KEYS_READ,
             status="error",
             error=exc,
         )
@@ -402,7 +403,7 @@ async def get_spend_per_team(request: Request, _: str = Depends(require_master_k
         _emit_spend_audit(
             request=request,
             request_start=request_start,
-            action="GLOBAL_SPEND_TEAMS_READ",
+            action=AuditAction.GLOBAL_SPEND_TEAMS_READ,
             status="success",
             response_payload={"count": len(result)},
         )
@@ -411,7 +412,7 @@ async def get_spend_per_team(request: Request, _: str = Depends(require_master_k
         _emit_spend_audit(
             request=request,
             request_start=request_start,
-            action="GLOBAL_SPEND_TEAMS_READ",
+            action=AuditAction.GLOBAL_SPEND_TEAMS_READ,
             status="error",
             error=exc,
         )
@@ -455,7 +456,7 @@ async def get_spend_per_end_user(
         _emit_spend_audit(
             request=request,
             request_start=request_start,
-            action="GLOBAL_SPEND_END_USERS_READ",
+            action=AuditAction.GLOBAL_SPEND_END_USERS_READ,
             status="success",
             request_payload={"start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
             response_payload={"count": len(result)},
@@ -465,7 +466,7 @@ async def get_spend_per_end_user(
         _emit_spend_audit(
             request=request,
             request_start=request_start,
-            action="GLOBAL_SPEND_END_USERS_READ",
+            action=AuditAction.GLOBAL_SPEND_END_USERS_READ,
             status="error",
             request_payload={"start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
             error=exc,
@@ -511,7 +512,7 @@ async def get_spend_per_model(
         _emit_spend_audit(
             request=request,
             request_start=request_start,
-            action="GLOBAL_SPEND_MODELS_READ",
+            action=AuditAction.GLOBAL_SPEND_MODELS_READ,
             status="success",
             request_payload={"start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
             response_payload={"count": len(result)},
@@ -521,7 +522,7 @@ async def get_spend_per_model(
         _emit_spend_audit(
             request=request,
             request_start=request_start,
-            action="GLOBAL_SPEND_MODELS_READ",
+            action=AuditAction.GLOBAL_SPEND_MODELS_READ,
             status="error",
             request_payload={"start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
             error=exc,

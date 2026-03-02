@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 from src.auth.roles import Permission
+from src.audit.actions import AuditAction
 from src.api.admin.endpoints.common import (
     db_or_503,
     emit_admin_mutation_audit,
@@ -164,7 +165,7 @@ async def create_user(request: Request, payload: dict[str, Any]) -> dict[str, An
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action="ADMIN_USER_CREATE",
+        action=AuditAction.ADMIN_USER_CREATE,
         resource_type="user",
         resource_id=user_id,
         request_payload=payload,
@@ -239,7 +240,7 @@ async def update_user(request: Request, user_id: str, payload: dict[str, Any]) -
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action="ADMIN_USER_UPDATE",
+        action=AuditAction.ADMIN_USER_UPDATE,
         resource_type="user",
         resource_id=user_id,
         request_payload=payload,
@@ -273,7 +274,7 @@ async def block_user(request: Request, user_id: str, payload: dict[str, Any]) ->
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action="ADMIN_USER_BLOCK",
+        action=AuditAction.ADMIN_USER_BLOCK,
         resource_type="user",
         resource_id=user_id,
         request_payload=payload,

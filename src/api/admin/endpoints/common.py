@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import Header, HTTPException, Request, status
 
 from src.api.audit import emit_control_audit_event
+from src.audit.actions import AuditAction
 
 @dataclass
 class AuthScope:
@@ -180,7 +181,7 @@ def changed_fields(before: dict[str, Any] | None, after: dict[str, Any] | None) 
 async def emit_admin_mutation_audit(
     *,
     request: Request,
-    action: str,
+    action: str | AuditAction,
     scope: AuthScope | None = None,
     resource_type: str,
     resource_id: str | None = None,

@@ -6,6 +6,7 @@ from time import perf_counter
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.middleware.auth import require_api_key
+from src.audit.actions import AuditAction
 from src.routers.audit_helpers import emit_audit_event
 
 router = APIRouter(prefix="/v1", tags=["batches"])
@@ -38,7 +39,7 @@ async def create_batch(request: Request, payload: dict[str, Any]):
         emit_audit_event(
             request=request,
             request_start=request_start,
-            action="BATCH_CREATE_REQUEST",
+            action=AuditAction.BATCH_CREATE_REQUEST,
             status="success",
             actor_type="api_key",
             actor_id=auth.user_id or auth.api_key,
@@ -55,7 +56,7 @@ async def create_batch(request: Request, payload: dict[str, Any]):
         emit_audit_event(
             request=request,
             request_start=request_start,
-            action="BATCH_CREATE_REQUEST",
+            action=AuditAction.BATCH_CREATE_REQUEST,
             status="error",
             actor_type="api_key",
             actor_id=auth.user_id or auth.api_key,
@@ -79,7 +80,7 @@ async def get_batch(request: Request, batch_id: str):
         emit_audit_event(
             request=request,
             request_start=request_start,
-            action="BATCH_READ_REQUEST",
+            action=AuditAction.BATCH_READ_REQUEST,
             status="success",
             actor_type="api_key",
             actor_id=auth.user_id or auth.api_key,
@@ -96,7 +97,7 @@ async def get_batch(request: Request, batch_id: str):
         emit_audit_event(
             request=request,
             request_start=request_start,
-            action="BATCH_READ_REQUEST",
+            action=AuditAction.BATCH_READ_REQUEST,
             status="error",
             actor_type="api_key",
             actor_id=auth.user_id or auth.api_key,
@@ -121,7 +122,7 @@ async def list_batches(request: Request, limit: int = 20):
         emit_audit_event(
             request=request,
             request_start=request_start,
-            action="BATCH_LIST_REQUEST",
+            action=AuditAction.BATCH_LIST_REQUEST,
             status="success",
             actor_type="api_key",
             actor_id=auth.user_id or auth.api_key,
@@ -137,7 +138,7 @@ async def list_batches(request: Request, limit: int = 20):
         emit_audit_event(
             request=request,
             request_start=request_start,
-            action="BATCH_LIST_REQUEST",
+            action=AuditAction.BATCH_LIST_REQUEST,
             status="error",
             actor_type="api_key",
             actor_id=auth.user_id or auth.api_key,
@@ -161,7 +162,7 @@ async def cancel_batch(request: Request, batch_id: str):
         emit_audit_event(
             request=request,
             request_start=request_start,
-            action="BATCH_CANCEL_REQUEST",
+            action=AuditAction.BATCH_CANCEL_REQUEST,
             status="success",
             actor_type="api_key",
             actor_id=auth.user_id or auth.api_key,
@@ -178,7 +179,7 @@ async def cancel_batch(request: Request, batch_id: str):
         emit_audit_event(
             request=request,
             request_start=request_start,
-            action="BATCH_CANCEL_REQUEST",
+            action=AuditAction.BATCH_CANCEL_REQUEST,
             status="error",
             actor_type="api_key",
             actor_id=auth.user_id or auth.api_key,

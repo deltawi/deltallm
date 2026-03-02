@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
 from src.auth.roles import Permission, ORG_ROLE_PERMISSIONS, TEAM_ROLE_PERMISSIONS
+from src.audit import AuditAction
 from src.api.admin.endpoints.common import (
     db_or_503,
     emit_admin_mutation_audit,
@@ -215,7 +216,7 @@ async def create_team(
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action="ADMIN_TEAM_CREATE",
+        action=AuditAction.ADMIN_TEAM_CREATE,
         scope=scope,
         resource_type="team",
         resource_id=team_id,
@@ -286,7 +287,7 @@ async def update_team(
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action="ADMIN_TEAM_UPDATE",
+        action=AuditAction.ADMIN_TEAM_UPDATE,
         scope=scope,
         resource_type="team",
         resource_id=team_id,
@@ -359,7 +360,7 @@ async def add_team_member(
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action="ADMIN_TEAM_MEMBER_ADD",
+        action=AuditAction.ADMIN_TEAM_MEMBER_ADD,
         scope=scope,
         resource_type="team_membership",
         resource_id=f"{team_id}:{user_id}",
@@ -398,7 +399,7 @@ async def delete_team(
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action="ADMIN_TEAM_DELETE",
+        action=AuditAction.ADMIN_TEAM_DELETE,
         scope=scope,
         resource_type="team",
         resource_id=team_id,
@@ -428,7 +429,7 @@ async def remove_team_member(
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action="ADMIN_TEAM_MEMBER_REMOVE",
+        action=AuditAction.ADMIN_TEAM_MEMBER_REMOVE,
         scope=scope,
         resource_type="team_membership",
         resource_id=f"{team_id}:{user_id}",
