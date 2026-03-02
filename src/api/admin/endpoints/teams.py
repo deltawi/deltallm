@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import secrets
+from time import perf_counter
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
 
 from src.auth.roles import Permission, ORG_ROLE_PERMISSIONS, TEAM_ROLE_PERMISSIONS
-from src.api.admin.endpoints.common import db_or_503, optional_int, to_json_value, get_auth_scope, AuthScope, normalize_user_profile_type
+from src.api.admin.endpoints.common import (
+    db_or_503,
+    emit_admin_mutation_audit,
+    optional_int,
+    to_json_value,
+    get_auth_scope,
+    AuthScope,
+    normalize_user_profile_type,
+)
 from src.middleware.platform_auth import get_platform_auth_context
 
 router = APIRouter(tags=["Admin Teams"])
@@ -116,6 +125,7 @@ async def create_team(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
+    request_start = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.TEAM_UPDATE)
     organization_id = payload.get("organization_id")
     if not organization_id:
@@ -168,7 +178,7 @@ async def create_team(
                 ctx.account_id,
             )
 
-    return {
+    response = {
         "team_id": team_id,
         "team_alias": team_alias,
         "organization_id": organization_id,
@@ -178,6 +188,17 @@ async def create_team(
         "models": models,
         "blocked": False,
     }
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action="ADMIN_TEAM_CREATE",
+        scope=scope,
+        resource_type="team",
+        resource_id=team_id,
+        request_payload=payload,
+        response_payload=response,
+    )
+    return response
 
 
 @router.put("/ui/api/teams/{team_id}")
@@ -188,6 +209,7 @@ async def update_team(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
+    request_start = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
     existing_team = await _require_team_access(request, scope, db, team_id, write=True)
@@ -236,7 +258,20 @@ async def update_team(
     )
     if not updated_rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
-    return to_json_value(dict(updated_rows[0]))
+    updated = to_json_value(dict(updated_rows[0]))
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action="ADMIN_TEAM_UPDATE",
+        scope=scope,
+        resource_type="team",
+        resource_id=team_id,
+        request_payload=payload,
+        response_payload=updated if isinstance(updated, dict) else None,
+        before=to_json_value(existing_team),
+        after=updated if isinstance(updated, dict) else None,
+    )
+    return updated
 
 
 @router.get("/ui/api/teams/{team_id}/members")
@@ -269,6 +304,7 @@ async def add_team_member(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
+    request_start = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
     await _require_team_access(request, scope, db, team_id, write=True)
@@ -290,12 +326,23 @@ async def add_team_member(
         user_role,
         team_id,
     )
-    return {
+    response = {
         "user_id": user_id,
         "user_email": user_email,
         "user_role": user_role,
         "team_id": team_id,
     }
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action="ADMIN_TEAM_MEMBER_ADD",
+        scope=scope,
+        resource_type="team_membership",
+        resource_id=f"{team_id}:{user_id}",
+        request_payload=payload,
+        response_payload=response,
+    )
+    return response
 
 
 @router.delete("/ui/api/teams/{team_id}")
@@ -305,6 +352,7 @@ async def delete_team(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, bool]:
+    request_start = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
     await _require_team_access(request, scope, db, team_id, write=True)
@@ -322,7 +370,17 @@ async def delete_team(
         "DELETE FROM deltallm_teamtable WHERE team_id = $1",
         team_id,
     )
-    return {"deleted": int(deleted or 0) > 0}
+    response = {"deleted": int(deleted or 0) > 0}
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action="ADMIN_TEAM_DELETE",
+        scope=scope,
+        resource_type="team",
+        resource_id=team_id,
+        response_payload=response,
+    )
+    return response
 
 
 @router.delete("/ui/api/teams/{team_id}/members/{user_id}")
@@ -333,6 +391,7 @@ async def remove_team_member(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, bool]:
+    request_start = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
     await _require_team_access(request, scope, db, team_id, write=True)
@@ -341,4 +400,14 @@ async def remove_team_member(
         team_id,
         user_id,
     )
-    return {"removed": int(updated or 0) > 0}
+    response = {"removed": int(updated or 0) > 0}
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action="ADMIN_TEAM_MEMBER_REMOVE",
+        scope=scope,
+        resource_type="team_membership",
+        resource_id=f"{team_id}:{user_id}",
+        response_payload=response,
+    )
+    return response

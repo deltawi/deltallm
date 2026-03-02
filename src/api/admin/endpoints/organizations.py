@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import secrets
+from time import perf_counter
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from src.auth.roles import Permission
-from src.api.admin.endpoints.common import db_or_503, optional_int, to_json_value, get_auth_scope, AuthScope
+from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, optional_int, to_json_value, get_auth_scope, AuthScope
 from src.middleware.admin import require_admin_permission
 
 router = APIRouter(tags=["Admin Organizations"])
@@ -67,6 +68,7 @@ async def get_organization(request: Request, organization_id: str) -> dict[str, 
 
 @router.post("/ui/api/organizations", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def create_organization(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    request_start = perf_counter()
     db = db_or_503(request)
     organization_id = str(payload.get("organization_id") or f"org-{secrets.token_hex(6)}")
     organization_name = payload.get("organization_name")
@@ -102,17 +104,28 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
         rpm_limit,
         tpm_limit,
     )
-    return {
+    response = {
         "organization_id": organization_id,
         "organization_name": organization_name,
         "max_budget": max_budget,
         "rpm_limit": rpm_limit,
         "tpm_limit": tpm_limit,
     }
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action="ADMIN_ORGANIZATION_CREATE",
+        resource_type="organization",
+        resource_id=organization_id,
+        request_payload=payload,
+        response_payload=response,
+    )
+    return response
 
 
 @router.put("/ui/api/organizations/{organization_id}", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
 async def update_organization(request: Request, organization_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    request_start = perf_counter()
     db = db_or_503(request)
     rows = await db.query_raw(
         """
@@ -159,7 +172,19 @@ async def update_organization(request: Request, organization_id: str, payload: d
     )
     if not updated_rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
-    return to_json_value(dict(updated_rows[0]))
+    updated = to_json_value(dict(updated_rows[0]))
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action="ADMIN_ORGANIZATION_UPDATE",
+        resource_type="organization",
+        resource_id=organization_id,
+        request_payload=payload,
+        response_payload=updated if isinstance(updated, dict) else None,
+        before=to_json_value(existing),
+        after=updated if isinstance(updated, dict) else None,
+    )
+    return updated
 
 
 @router.get("/ui/api/organizations/{organization_id}/members", dependencies=[Depends(require_admin_permission(Permission.ORG_READ))])

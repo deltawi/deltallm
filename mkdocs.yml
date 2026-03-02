@@ -65,6 +65,7 @@ nav:
       - Guardrails: features/guardrails.md
       - Rate Limiting: features/rate-limiting.md
       - Budgets & Spend: features/budgets.md
+      - Audit Log: features/audit-log.md
       - Observability: features/observability.md
   - Admin UI:
       - admin-ui/index.md

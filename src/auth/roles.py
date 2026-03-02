@@ -36,6 +36,7 @@ class Permission:
     KEY_UPDATE = "key.update"
     KEY_REVOKE = "key.revoke"
     SPEND_READ = "spend.read"
+    AUDIT_READ = "audit.read"
     CONFIG_READ = "config.read"
     CONFIG_UPDATE = "config.update"
 
@@ -51,7 +52,7 @@ LEGACY_PLATFORM_ROLE_ALIASES: dict[str, str] = {
 ORG_ROLE_PERMISSIONS: dict[str, set[str]] = {
     OrganizationRole.MEMBER: {Permission.ORG_READ, Permission.TEAM_READ},
     OrganizationRole.OWNER: {
-        Permission.ORG_READ, Permission.ORG_UPDATE, Permission.SPEND_READ,
+        Permission.ORG_READ, Permission.ORG_UPDATE, Permission.SPEND_READ, Permission.AUDIT_READ,
         Permission.TEAM_READ, Permission.TEAM_UPDATE,
         Permission.KEY_READ, Permission.KEY_UPDATE, Permission.KEY_REVOKE,
         Permission.USER_READ, Permission.USER_UPDATE,
@@ -60,7 +61,7 @@ ORG_ROLE_PERMISSIONS: dict[str, set[str]] = {
         Permission.ORG_READ, Permission.ORG_UPDATE,
         Permission.TEAM_READ, Permission.TEAM_UPDATE,
         Permission.KEY_READ, Permission.KEY_UPDATE, Permission.KEY_REVOKE,
-        Permission.USER_READ, Permission.USER_UPDATE,
+        Permission.USER_READ, Permission.USER_UPDATE, Permission.AUDIT_READ,
     },
     OrganizationRole.BILLING: {Permission.ORG_READ, Permission.SPEND_READ, Permission.TEAM_READ, Permission.KEY_READ},
     OrganizationRole.AUDITOR: {Permission.ORG_READ, Permission.SPEND_READ, Permission.TEAM_READ, Permission.KEY_READ, Permission.USER_READ},

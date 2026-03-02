@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from src.auth.roles import Permission
-from src.api.admin.endpoints.common import model_entries, to_json_value, get_auth_scope
+from src.api.admin.endpoints.common import emit_admin_mutation_audit, model_entries, to_json_value, get_auth_scope
 from src.config import GuardrailConfig
 from src.middleware.admin import require_admin_permission
 from src.router import RoutingStrategy
@@ -80,9 +81,11 @@ async def get_routing(request: Request) -> dict[str, Any]:
 
 @router.put("/ui/api/routing", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def update_routing(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    request_start = perf_counter()
     app_config = getattr(request.app.state, "app_config", None)
     if app_config is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="App config unavailable")
+    before = await get_routing(request)
 
     strategy = payload.get("strategy")
     if isinstance(strategy, str) and strategy:
@@ -112,7 +115,18 @@ async def update_routing(request: Request, payload: dict[str, Any]) -> dict[str,
         router_state.config.retry_after = app_config.router_settings.retry_after
         router_state._strategy_impl = router_state._load_strategy(router_state.strategy)
 
-    return await get_routing(request)
+    response = await get_routing(request)
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action="ADMIN_ROUTING_UPDATE",
+        resource_type="routing_config",
+        request_payload=payload,
+        response_payload=response,
+        before=before,
+        after=response,
+    )
+    return response
 
 
 @router.get("/ui/api/settings", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
@@ -140,9 +154,11 @@ async def get_settings(
 
 @router.put("/ui/api/settings", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def update_settings(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    request_start = perf_counter()
     app_config = getattr(request.app.state, "app_config", None)
     if app_config is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="App config unavailable")
+    before = await get_settings(request)
 
     general_updates = payload.get("general_settings") if isinstance(payload.get("general_settings"), dict) else {}
     router_updates = payload.get("router_settings") if isinstance(payload.get("router_settings"), dict) else {}
@@ -175,4 +191,15 @@ async def update_settings(request: Request, payload: dict[str, Any]) -> dict[str
     if settings is not None and "master_key" in general_updates:
         setattr(settings, "master_key", general_updates["master_key"])
 
-    return await get_settings(request)
+    response = await get_settings(request)
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action="ADMIN_SETTINGS_UPDATE",
+        resource_type="app_settings",
+        request_payload=payload,
+        response_payload=response,
+        before=before,
+        after=response,
+    )
+    return response

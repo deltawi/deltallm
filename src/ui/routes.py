@@ -4,12 +4,14 @@ from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from pathlib import Path
 import secrets
+from time import perf_counter
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse
 
 from src.middleware.admin import require_admin_permission, require_master_key, require_authenticated
+from src.api.audit import emit_control_audit_event
 from src.auth.roles import Permission
 from src.api.admin.endpoints.common import get_auth_scope
 from src.config_runtime.models import ModelHotReloadManager
@@ -111,6 +113,7 @@ async def get_model(request: Request, deployment_id: str) -> dict[str, Any]:
 
 @ui_router.post("/ui/api/models", dependencies=[Depends(require_master_key)])
 async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    request_start = perf_counter()
     model_name = str(payload.get("model_name") or "").strip()
     deltallm_params = payload.get("deltallm_params")
     if not model_name:
@@ -137,16 +140,29 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
         )
         _rebuild_runtime_registry(request.app)
 
-    return {
+    response = {
         "deployment_id": deployment_id,
         "model_name": model_name,
         "deltallm_params": deltallm_params,
         "model_info": model_info,
     }
+    await emit_control_audit_event(
+        request=request,
+        request_start=request_start,
+        action="ADMIN_MODEL_CREATE",
+        status="success",
+        resource_type="model_deployment",
+        resource_id=deployment_id,
+        request_payload=payload,
+        response_payload=response,
+        critical=True,
+    )
+    return response
 
 
 @ui_router.put("/ui/api/models/{deployment_id}", dependencies=[Depends(require_master_key)])
 async def update_model(request: Request, deployment_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    request_start = perf_counter()
     hot_reload: ModelHotReloadManager | None = getattr(request.app.state, "model_hot_reload_manager", None)
     registry: dict[str, list[dict[str, Any]]] = request.app.state.model_registry
 
@@ -195,23 +211,47 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
         )
         _rebuild_runtime_registry(request.app)
 
-    return {
+    response = {
         "deployment_id": deployment_id,
         "model_name": new_model_name,
         "deltallm_params": deltallm_params,
         "model_info": model_info,
     }
+    await emit_control_audit_event(
+        request=request,
+        request_start=request_start,
+        action="ADMIN_MODEL_UPDATE",
+        status="success",
+        resource_type="model_deployment",
+        resource_id=deployment_id,
+        request_payload=payload,
+        response_payload=response,
+        critical=True,
+    )
+    return response
 
 
 @ui_router.delete("/ui/api/models/{deployment_id}", dependencies=[Depends(require_master_key)])
 async def delete_model(request: Request, deployment_id: str) -> dict[str, bool]:
+    request_start = perf_counter()
     hot_reload: ModelHotReloadManager | None = getattr(request.app.state, "model_hot_reload_manager", None)
 
     if hot_reload is not None:
         removed = await hot_reload.remove_model(deployment_id, updated_by="admin_api")
         if not removed:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
-        return {"deleted": True}
+        response = {"deleted": True}
+        await emit_control_audit_event(
+            request=request,
+            request_start=request_start,
+            action="ADMIN_MODEL_DELETE",
+            status="success",
+            resource_type="model_deployment",
+            resource_id=deployment_id,
+            response_payload=response,
+            critical=True,
+        )
+        return response
 
     registry: dict[str, list[dict[str, Any]]] = request.app.state.model_registry
     for model_name, deployments in list(registry.items()):
@@ -230,7 +270,18 @@ async def delete_model(request: Request, deployment_id: str) -> dict[str, bool]:
             else:
                 registry.pop(model_name, None)
             _rebuild_runtime_registry(request.app)
-            return {"deleted": True}
+            response = {"deleted": True}
+            await emit_control_audit_event(
+                request=request,
+                request_start=request_start,
+                action="ADMIN_MODEL_DELETE",
+                status="success",
+                resource_type="model_deployment",
+                resource_id=deployment_id,
+                response_payload=response,
+                critical=True,
+            )
+            return response
 
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
 

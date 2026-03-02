@@ -189,6 +189,12 @@ class GeneralSettings(BaseModel):
     embeddings_batch_gc_enabled: bool = True
     embeddings_batch_gc_interval_seconds: float = 86400.0
     embeddings_batch_gc_scan_limit: int = 200
+    audit_enabled: bool = True
+    audit_retention_worker_enabled: bool = True
+    audit_retention_interval_seconds: float = 86400.0
+    audit_retention_scan_limit: int = 500
+    audit_metadata_retention_days: int = 365
+    audit_payload_retention_days: int = 90
 
     @field_validator("master_key")
     @classmethod

@@ -4,6 +4,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+.deltallm/
+docs/internal/
 
 # Distribution / packaging
 .Python
@@ -204,3 +206,5 @@ config.yaml
 replit.md
 attached_assets/
 scripts/run_backend_local.sh
+
+scripts/e2e_embeddings.sh

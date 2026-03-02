@@ -2,14 +2,41 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
+from time import perf_counter
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from src.middleware.admin import require_master_key
+from src.routers.audit_helpers import emit_audit_event
 
 spend_router = APIRouter(prefix="/spend", tags=["Spend"])
 global_router = APIRouter(prefix="/global", tags=["Global Spend"])
+
+
+def _emit_spend_audit(
+    *,
+    request: Request,
+    request_start: float,
+    action: str,
+    status: str,
+    request_payload: dict[str, Any] | None = None,
+    response_payload: dict[str, Any] | None = None,
+    error: Exception | None = None,
+) -> None:
+    emit_audit_event(
+        request=request,
+        request_start=request_start,
+        action=action,
+        status=status,
+        actor_type="master_key",
+        actor_id="master_key",
+        resource_type="spend",
+        request_payload=request_payload,
+        response_payload=response_payload,
+        error=error,
+        metadata={"route": request.url.path},
+    )
 
 
 def _db_or_503(request: Request) -> Any:
@@ -100,6 +127,7 @@ async def get_spend_logs(
     limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
+    request_start = perf_counter()
     db = _db_or_503(request)
     where_sql, params = _build_spendlog_where(
         api_key=api_key,
@@ -115,7 +143,8 @@ async def get_spend_logs(
     limit_idx = len(params) + 1
     offset_idx = len(params) + 2
 
-    logs = await db.query_raw(
+    try:
+        logs = await db.query_raw(
         f"""
         SELECT
             id,
@@ -143,7 +172,7 @@ async def get_spend_logs(
         *log_params,
     )
 
-    total_rows = await db.query_raw(
+        total_rows = await db.query_raw(
         f"""
         SELECT COUNT(*) AS total
         FROM deltallm_spendlogs
@@ -151,17 +180,56 @@ async def get_spend_logs(
         """,
         *params,
     )
-    total = int((total_rows[0] if total_rows else {}).get("total") or 0)
+        total = int((total_rows[0] if total_rows else {}).get("total") or 0)
 
-    return {
-        "logs": [_to_json_value(dict(row)) for row in logs],
-        "pagination": {
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-            "has_more": offset + limit < total,
-        },
-    }
+        result = {
+            "logs": [_to_json_value(dict(row)) for row in logs],
+            "pagination": {
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "has_more": offset + limit < total,
+            },
+        }
+        _emit_spend_audit(
+            request=request,
+            request_start=request_start,
+            action="SPEND_LOGS_READ",
+            status="success",
+            request_payload={
+                "api_key": api_key,
+                "user_id": user_id,
+                "team_id": team_id,
+                "model": model,
+                "start_date": str(start_date) if start_date else None,
+                "end_date": str(end_date) if end_date else None,
+                "tags": tags,
+                "limit": limit,
+                "offset": offset,
+            },
+            response_payload={"total": total},
+        )
+        return result
+    except Exception as exc:
+        _emit_spend_audit(
+            request=request,
+            request_start=request_start,
+            action="SPEND_LOGS_READ",
+            status="error",
+            request_payload={
+                "api_key": api_key,
+                "user_id": user_id,
+                "team_id": team_id,
+                "model": model,
+                "start_date": str(start_date) if start_date else None,
+                "end_date": str(end_date) if end_date else None,
+                "tags": tags,
+                "limit": limit,
+                "offset": offset,
+            },
+            error=exc,
+        )
+        raise
 
 
 @global_router.get("/spend")
@@ -171,6 +239,7 @@ async def get_global_spend(
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
 ) -> dict[str, Any]:
+    request_start = perf_counter()
     db = _db_or_503(request)
     where_sql, params = _build_spendlog_where(
         api_key=None,
@@ -181,7 +250,8 @@ async def get_global_spend(
         end_date=end_date,
         tags=None,
     )
-    rows = await db.query_raw(
+    try:
+        rows = await db.query_raw(
         f"""
         SELECT
             COALESCE(SUM(spend), 0) AS total_spend,
@@ -194,7 +264,26 @@ async def get_global_spend(
         """,
         *params,
     )
-    return _to_json_value(dict(rows[0] if rows else {}))
+        result = _to_json_value(dict(rows[0] if rows else {}))
+        _emit_spend_audit(
+            request=request,
+            request_start=request_start,
+            action="GLOBAL_SPEND_READ",
+            status="success",
+            request_payload={"start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
+            response_payload=result if isinstance(result, dict) else None,
+        )
+        return result
+    except Exception as exc:
+        _emit_spend_audit(
+            request=request,
+            request_start=request_start,
+            action="GLOBAL_SPEND_READ",
+            status="error",
+            request_payload={"start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
+            error=exc,
+        )
+        raise
 
 
 @global_router.get("/spend/report")
@@ -205,6 +294,7 @@ async def get_spend_report(
     end_date: date | None = Query(default=None),
     group_by: str = Query(pattern="^(model|provider|day|user|team)$", default="model"),
 ) -> dict[str, Any]:
+    request_start = perf_counter()
     db = _db_or_503(request)
     group_column = {
         "model": "model",
@@ -223,7 +313,8 @@ async def get_spend_report(
         end_date=end_date,
         tags=None,
     )
-    rows = await db.query_raw(
+    try:
+        rows = await db.query_raw(
         f"""
         SELECT
             {group_column} AS group_key,
@@ -238,36 +329,93 @@ async def get_spend_report(
         """,
         *params,
     )
-    return {
-        "group_by": group_by,
-        "breakdown": [_to_json_value(dict(row)) for row in rows],
-    }
+        result = {
+            "group_by": group_by,
+            "breakdown": [_to_json_value(dict(row)) for row in rows],
+        }
+        _emit_spend_audit(
+            request=request,
+            request_start=request_start,
+            action="GLOBAL_SPEND_REPORT_READ",
+            status="success",
+            request_payload={"group_by": group_by, "start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
+            response_payload={"groups": len(result["breakdown"])},
+        )
+        return result
+    except Exception as exc:
+        _emit_spend_audit(
+            request=request,
+            request_start=request_start,
+            action="GLOBAL_SPEND_REPORT_READ",
+            status="error",
+            request_payload={"group_by": group_by, "start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
+            error=exc,
+        )
+        raise
 
 
 @global_router.get("/spend/keys")
 async def get_spend_per_key(request: Request, _: str = Depends(require_master_key)) -> list[dict[str, Any]]:
+    request_start = perf_counter()
     db = _db_or_503(request)
-    rows = await db.query_raw(
+    try:
+        rows = await db.query_raw(
         """
         SELECT token, key_name, spend, max_budget, user_id, team_id
         FROM deltallm_verificationtoken
         ORDER BY spend DESC
         """
     )
-    return [_to_json_value(dict(row)) for row in rows]
+        result = [_to_json_value(dict(row)) for row in rows]
+        _emit_spend_audit(
+            request=request,
+            request_start=request_start,
+            action="GLOBAL_SPEND_KEYS_READ",
+            status="success",
+            response_payload={"count": len(result)},
+        )
+        return result
+    except Exception as exc:
+        _emit_spend_audit(
+            request=request,
+            request_start=request_start,
+            action="GLOBAL_SPEND_KEYS_READ",
+            status="error",
+            error=exc,
+        )
+        raise
 
 
 @global_router.get("/spend/teams")
 async def get_spend_per_team(request: Request, _: str = Depends(require_master_key)) -> list[dict[str, Any]]:
+    request_start = perf_counter()
     db = _db_or_503(request)
-    rows = await db.query_raw(
+    try:
+        rows = await db.query_raw(
         """
         SELECT team_id, team_alias, spend, max_budget
         FROM deltallm_teamtable
         ORDER BY spend DESC
         """
     )
-    return [_to_json_value(dict(row)) for row in rows]
+        result = [_to_json_value(dict(row)) for row in rows]
+        _emit_spend_audit(
+            request=request,
+            request_start=request_start,
+            action="GLOBAL_SPEND_TEAMS_READ",
+            status="success",
+            response_payload={"count": len(result)},
+        )
+        return result
+    except Exception as exc:
+        _emit_spend_audit(
+            request=request,
+            request_start=request_start,
+            action="GLOBAL_SPEND_TEAMS_READ",
+            status="error",
+            error=exc,
+        )
+        raise
 
 
 @global_router.get("/spend/end_users")
@@ -277,6 +425,7 @@ async def get_spend_per_end_user(
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
 ) -> list[dict[str, Any]]:
+    request_start = perf_counter()
     db = _db_or_503(request)
     where_sql, params = _build_spendlog_where(
         api_key=None,
@@ -288,7 +437,8 @@ async def get_spend_per_end_user(
         tags=None,
     )
 
-    rows = await db.query_raw(
+    try:
+        rows = await db.query_raw(
         f"""
         SELECT
             COALESCE(end_user, "user", 'anonymous') AS end_user_id,
@@ -301,7 +451,26 @@ async def get_spend_per_end_user(
         """,
         *params,
     )
-    return [_to_json_value(dict(row)) for row in rows]
+        result = [_to_json_value(dict(row)) for row in rows]
+        _emit_spend_audit(
+            request=request,
+            request_start=request_start,
+            action="GLOBAL_SPEND_END_USERS_READ",
+            status="success",
+            request_payload={"start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
+            response_payload={"count": len(result)},
+        )
+        return result
+    except Exception as exc:
+        _emit_spend_audit(
+            request=request,
+            request_start=request_start,
+            action="GLOBAL_SPEND_END_USERS_READ",
+            status="error",
+            request_payload={"start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
+            error=exc,
+        )
+        raise
 
 
 @global_router.get("/spend/models")
@@ -311,6 +480,7 @@ async def get_spend_per_model(
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
 ) -> list[dict[str, Any]]:
+    request_start = perf_counter()
     db = _db_or_503(request)
     where_sql, params = _build_spendlog_where(
         api_key=None,
@@ -322,7 +492,8 @@ async def get_spend_per_model(
         tags=None,
     )
 
-    rows = await db.query_raw(
+    try:
+        rows = await db.query_raw(
         f"""
         SELECT
             model,
@@ -336,4 +507,23 @@ async def get_spend_per_model(
         """,
         *params,
     )
-    return [_to_json_value(dict(row)) for row in rows]
+        result = [_to_json_value(dict(row)) for row in rows]
+        _emit_spend_audit(
+            request=request,
+            request_start=request_start,
+            action="GLOBAL_SPEND_MODELS_READ",
+            status="success",
+            request_payload={"start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
+            response_payload={"count": len(result)},
+        )
+        return result
+    except Exception as exc:
+        _emit_spend_audit(
+            request=request,
+            request_start=request_start,
+            action="GLOBAL_SPEND_MODELS_READ",
+            status="error",
+            request_payload={"start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None},
+            error=exc,
+        )
+        raise

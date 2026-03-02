@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
+from time import perf_counter
 from typing import Any
 
 from fastapi import Header, HTTPException, Request, status
 
+from src.api.audit import emit_control_audit_event
 
 @dataclass
 class AuthScope:
@@ -166,3 +168,44 @@ def serialize_guardrail(raw: Any) -> dict[str, Any]:
         "threshold": float(threshold) if threshold is not None else 0.5,
         "deltallm_params": to_json_value(deltallm_params),
     }
+
+
+def changed_fields(before: dict[str, Any] | None, after: dict[str, Any] | None) -> list[str]:
+    if before is None or after is None:
+        return []
+    keys = set(before.keys()) | set(after.keys())
+    return sorted([key for key in keys if before.get(key) != after.get(key)])
+
+
+async def emit_admin_mutation_audit(
+    *,
+    request: Request,
+    action: str,
+    scope: AuthScope | None = None,
+    resource_type: str,
+    resource_id: str | None = None,
+    request_payload: dict[str, Any] | None = None,
+    response_payload: dict[str, Any] | None = None,
+    before: dict[str, Any] | None = None,
+    after: dict[str, Any] | None = None,
+    status: str = "success",
+    error: Exception | None = None,
+    request_start: float | None = None,
+) -> None:
+    metadata: dict[str, Any] = {}
+    if before is not None and after is not None:
+        metadata["changed_fields"] = changed_fields(before, after)
+    await emit_control_audit_event(
+        request=request,
+        request_start=request_start if request_start is not None else perf_counter(),
+        action=action,
+        status=status,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        request_payload=request_payload,
+        response_payload=response_payload,
+        scope=scope,
+        metadata=metadata,
+        error=error,
+        critical=True,
+    )

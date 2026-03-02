@@ -138,10 +138,10 @@ DeltaLLM uses a three-level RBAC hierarchy:
 
 | Role | Permissions |
 |------|-------------|
-| `org_owner` | Full org management, keys, users |
-| `org_admin` | Manage teams, keys, and users within org |
+| `org_owner` | Full org management (includes audit log access) |
+| `org_admin` | Manage teams, keys, and users within org (includes audit log access) |
 | `org_billing` | View keys and spend data |
-| `org_auditor` | Read-only access to keys and users |
+| `org_auditor` | Read-only access to keys and users (no audit log access) |
 | `org_member` | Basic membership |
 
 ### Team Roles
