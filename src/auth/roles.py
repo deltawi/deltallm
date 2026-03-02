@@ -6,6 +6,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class PlatformRole:
     ADMIN: str = "platform_admin"
+    ORG_USER: str = "org_user"
 
 
 @dataclass(frozen=True)

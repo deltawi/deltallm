@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+AUDIT_METADATA_RETENTION_DAYS_KEY = "audit_metadata_retention_days"
+AUDIT_PAYLOAD_RETENTION_DAYS_KEY = "audit_payload_retention_days"
+
 
 def _parse_metadata(value: Any) -> dict[str, Any] | None:
     if value is None:
@@ -425,12 +428,12 @@ class AuditRepository:
         if self.prisma is None:
             return []
         rows = await self.prisma.query_raw(
-            """
+            f"""
             SELECT e.event_id
             FROM deltallm_auditevent e
             LEFT JOIN deltallm_organizationtable o ON o.organization_id = e.organization_id
             WHERE e.occurred_at < NOW() - make_interval(days => GREATEST(
-                COALESCE((o.metadata->>'audit_metadata_retention_days')::int, $1),
+                COALESCE((o.metadata->>'{AUDIT_METADATA_RETENTION_DAYS_KEY}')::int, $1),
                 1
             ))
             ORDER BY e.occurred_at ASC
@@ -445,13 +448,13 @@ class AuditRepository:
         if self.prisma is None:
             return []
         rows = await self.prisma.query_raw(
-            """
+            f"""
             SELECT p.payload_id
             FROM deltallm_auditpayload p
             JOIN deltallm_auditevent e ON e.event_id = p.event_id
             LEFT JOIN deltallm_organizationtable o ON o.organization_id = e.organization_id
             WHERE p.created_at < NOW() - make_interval(days => GREATEST(
-                COALESCE((o.metadata->>'audit_payload_retention_days')::int, $1),
+                COALESCE((o.metadata->>'{AUDIT_PAYLOAD_RETENTION_DAYS_KEY}')::int, $1),
                 1
             ))
             ORDER BY p.created_at ASC

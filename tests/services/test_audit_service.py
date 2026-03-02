@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from prometheus_client import generate_latest
 
 from src.db.repositories import AuditEventRecord, AuditPayloadRecord
+from src.metrics import get_prometheus_registry
 from src.services.audit_service import AuditEventInput, AuditPayloadInput, AuditService
 
 
@@ -84,3 +86,20 @@ async def test_audit_service_critical_fallback_when_queue_full():
 
     assert service.dropped_events == 0
     assert sorted(event.action for event in repo.events) == ["FIRST", "SECOND"]
+
+
+@pytest.mark.asyncio
+async def test_audit_service_emits_metrics():
+    repo = FakeAuditRepository()
+    repo.content_toggles = {"org-1": True}
+    service = AuditService(repo, queue_max_size=1)
+    await service.start()
+    service.record_event(AuditEventInput(action="FIRST", organization_id="org-1"), critical=False)
+    service.record_event(AuditEventInput(action="SECOND", organization_id="org-1"), critical=False)
+    await asyncio.sleep(0.05)
+    await service.shutdown()
+
+    metrics_text = generate_latest(get_prometheus_registry()).decode("utf-8")
+    assert "deltallm_audit_queue_depth" in metrics_text
+    assert "deltallm_audit_events_dropped_total" in metrics_text
+    assert "deltallm_audit_ingestion_latency_seconds" in metrics_text

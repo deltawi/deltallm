@@ -3,11 +3,31 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from enum import StrEnum
+from time import perf_counter
 from typing import Any
 
 from src.db.repositories import AuditEventRecord, AuditPayloadRecord, AuditRepository
+from src.metrics import (
+    increment_audit_events_dropped,
+    increment_audit_write_failure,
+    observe_audit_ingestion_latency,
+    set_audit_queue_depth,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class AuditIngestionPath(StrEnum):
+    SYNC = "sync"
+    QUEUE = "queue"
+    FALLBACK = "fallback"
+
+
+class AuditDropReason(StrEnum):
+    SERVICE_CLOSED = "service_closed"
+    QUEUE_FULL_NON_CRITICAL = "queue_full_non_critical"
+    FALLBACK_SCHEDULE_FAILED = "fallback_schedule_failed"
 
 
 @dataclass
@@ -69,6 +89,7 @@ class AuditService:
         if self._worker_task is not None and not self._worker_task.done():
             return
         self._closed = False
+        set_audit_queue_depth(self._queue.qsize())
         self._worker_task = asyncio.create_task(self._worker_loop())
 
     async def shutdown(self) -> None:
@@ -81,6 +102,7 @@ class AuditService:
             except asyncio.CancelledError:
                 pass
             self._worker_task = None
+        set_audit_queue_depth(0)
         if self._fallback_tasks:
             await asyncio.gather(*list(self._fallback_tasks), return_exceptions=True)
             self._fallback_tasks.clear()
@@ -89,16 +111,19 @@ class AuditService:
         if self._closed:
             logger.warning("audit service is closed; dropping event", extra={"action": event.action})
             self.dropped_events += 1
+            increment_audit_events_dropped(reason=AuditDropReason.SERVICE_CLOSED.value)
             return
 
         item = _QueueItem(event=event, payloads=list(payloads or []), critical=critical)
         try:
             self._queue.put_nowait(item)
+            set_audit_queue_depth(self._queue.qsize())
         except asyncio.QueueFull:
             if critical:
                 self._schedule_fallback(item)
             else:
                 self.dropped_events += 1
+                increment_audit_events_dropped(reason=AuditDropReason.QUEUE_FULL_NON_CRITICAL.value)
                 logger.warning("audit queue full; dropping non-critical event", extra={"action": event.action})
 
     async def record_event_sync(
@@ -113,9 +138,10 @@ class AuditService:
         while True:
             item = await self._queue.get()
             try:
-                await self._persist(item)
+                await self._persist(item, path=AuditIngestionPath.QUEUE)
             except Exception:
                 self.failed_events += 1
+                increment_audit_write_failure(path=AuditIngestionPath.QUEUE.value)
                 logger.exception(
                     "failed to persist audit event",
                     extra={"action": item.event.action, "critical": item.critical},
@@ -124,8 +150,10 @@ class AuditService:
                     self._schedule_fallback(item)
             finally:
                 self._queue.task_done()
+                set_audit_queue_depth(self._queue.qsize())
 
-    async def _persist(self, item: _QueueItem) -> None:
+    async def _persist(self, item: _QueueItem, *, path: AuditIngestionPath = AuditIngestionPath.SYNC) -> None:
+        started = perf_counter()
         content_enabled = await self.repository.is_content_storage_enabled_for_org(item.event.organization_id)
         payload_records: list[AuditPayloadRecord] = []
         content_stored = False
@@ -192,12 +220,14 @@ class AuditService:
         for payload_record in payload_records:
             payload_record.event_id = stored_event.event_id
             await self.repository.create_payload(payload_record)
+        observe_audit_ingestion_latency(path=path.value, latency_seconds=perf_counter() - started)
 
     def _schedule_fallback(self, item: _QueueItem) -> None:
         try:
-            task = asyncio.create_task(self._persist(item))
+            task = asyncio.create_task(self._persist(item, path=AuditIngestionPath.FALLBACK))
         except RuntimeError:
             self.dropped_events += 1
+            increment_audit_events_dropped(reason=AuditDropReason.FALLBACK_SCHEDULE_FAILED.value)
             logger.warning("unable to schedule fallback audit write", extra={"action": item.event.action})
             return
         self._fallback_tasks.add(task)

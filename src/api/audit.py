@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import Request
 
+from src.auth.roles import Permission, has_platform_permission
 from src.middleware.platform_auth import get_platform_auth_context
 from src.services.audit_service import AuditEventInput, AuditPayloadInput, AuditService
 
@@ -60,7 +61,7 @@ def _permission_context(request: Request, scope: Any | None = None) -> dict[str,
     if auth_ctx is None:
         return {"is_platform_admin": False, "org_ids": [], "team_ids": []}
     return {
-        "is_platform_admin": str(getattr(auth_ctx, "role", "")) == "platform_admin",
+        "is_platform_admin": has_platform_permission(getattr(auth_ctx, "role", None), Permission.PLATFORM_ADMIN),
         "org_ids": [str(item.get("organization_id")) for item in auth_ctx.organization_memberships if item.get("organization_id")],
         "team_ids": [str(item.get("team_id")) for item in auth_ctx.team_memberships if item.get("team_id")],
     }

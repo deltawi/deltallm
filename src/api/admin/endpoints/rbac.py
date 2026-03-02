@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from src.auth.roles import OrganizationRole, Permission, TeamRole
+from src.auth.roles import OrganizationRole, Permission, PlatformRole, TeamRole
 from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, to_json_value
 from src.middleware.admin import require_admin_permission
 
@@ -43,10 +43,10 @@ async def upsert_rbac_account(request: Request, payload: dict[str, Any]) -> dict
     if not email:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="email is required")
 
-    role = str(payload.get("role") or "org_user")
+    role = str(payload.get("role") or PlatformRole.ORG_USER)
     role = _require_valid_role(
         role,
-        {"platform_admin", "org_user"},
+        {PlatformRole.ADMIN, PlatformRole.ORG_USER},
         "role",
     )
     is_active = bool(payload.get("is_active", True))

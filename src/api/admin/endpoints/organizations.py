@@ -8,9 +8,37 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 
 from src.auth.roles import Permission
 from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, optional_int, to_json_value, get_auth_scope, AuthScope
+from src.db.repositories import AUDIT_METADATA_RETENTION_DAYS_KEY, AUDIT_PAYLOAD_RETENTION_DAYS_KEY
 from src.middleware.admin import require_admin_permission
 
 router = APIRouter(tags=["Admin Organizations"])
+
+
+def _audit_retention_metadata(payload: dict[str, Any], existing: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    metadata: dict[str, Any] = {}
+    raw_metadata = payload.get("metadata")
+    if isinstance(raw_metadata, dict):
+        metadata.update(raw_metadata)
+    if isinstance(existing, dict):
+        metadata = {**existing, **metadata}
+
+    metadata_changed = False
+    for field_name in (AUDIT_METADATA_RETENTION_DAYS_KEY, AUDIT_PAYLOAD_RETENTION_DAYS_KEY):
+        if field_name not in payload:
+            continue
+        value = optional_int(payload.get(field_name), field_name)
+        if value is None:
+            metadata.pop(field_name, None)
+            metadata_changed = True
+            continue
+        if value < 1:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be >= 1")
+        metadata[field_name] = value
+        metadata_changed = True
+
+    if not metadata and not metadata_changed:
+        return None
+    return metadata
 
 
 @router.get("/ui/api/organizations")
@@ -42,7 +70,8 @@ async def list_organizations(
 
     where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 
-    select_cols = """o.organization_id, o.organization_name, o.max_budget, o.spend, o.rpm_limit, o.tpm_limit, o.created_at, o.updated_at,
+    select_cols = """o.organization_id, o.organization_name, o.max_budget, o.spend, o.rpm_limit, o.tpm_limit,
+                   o.audit_content_storage_enabled, o.metadata, o.created_at, o.updated_at,
                    (SELECT COUNT(*) FROM deltallm_teamtable t WHERE t.organization_id = o.organization_id) AS team_count"""
 
     count_rows = await db.query_raw(
@@ -75,7 +104,7 @@ async def get_organization(request: Request, organization_id: str) -> dict[str, 
     db = db_or_503(request)
     rows = await db.query_raw(
         """
-        SELECT organization_id, organization_name, max_budget, spend, rpm_limit, tpm_limit, created_at, updated_at
+        SELECT organization_id, organization_name, max_budget, spend, rpm_limit, tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
         FROM deltallm_organizationtable
         WHERE organization_id = $1
         LIMIT 1
@@ -96,6 +125,7 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
     max_budget = payload.get("max_budget")
     rpm_limit = optional_int(payload.get("rpm_limit"), "rpm_limit")
     tpm_limit = optional_int(payload.get("tpm_limit"), "tpm_limit")
+    metadata = _audit_retention_metadata(payload)
 
     await db.execute_raw(
         """
@@ -107,16 +137,18 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
             spend,
             rpm_limit,
             tpm_limit,
+            metadata,
             created_at,
             updated_at
         )
-        VALUES (gen_random_uuid(), $1, $2, $3, 0, $4, $5, NOW(), NOW())
+        VALUES (gen_random_uuid(), $1, $2, $3, 0, $4, $5, $6::jsonb, NOW(), NOW())
         ON CONFLICT (organization_id)
         DO UPDATE SET
             organization_name = EXCLUDED.organization_name,
             max_budget = EXCLUDED.max_budget,
             rpm_limit = EXCLUDED.rpm_limit,
             tpm_limit = EXCLUDED.tpm_limit,
+            metadata = COALESCE(EXCLUDED.metadata, deltallm_organizationtable.metadata),
             updated_at = NOW()
         """,
         organization_id,
@@ -124,6 +156,7 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
         max_budget,
         rpm_limit,
         tpm_limit,
+        metadata if metadata is not None else None,
     )
     response = {
         "organization_id": organization_id,
@@ -131,6 +164,7 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
         "max_budget": max_budget,
         "rpm_limit": rpm_limit,
         "tpm_limit": tpm_limit,
+        "metadata": metadata or {},
     }
     await emit_admin_mutation_audit(
         request=request,
@@ -150,7 +184,7 @@ async def update_organization(request: Request, organization_id: str, payload: d
     db = db_or_503(request)
     rows = await db.query_raw(
         """
-        SELECT organization_id, organization_name, max_budget, spend, rpm_limit, tpm_limit, created_at, updated_at
+        SELECT organization_id, organization_name, max_budget, spend, rpm_limit, tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
         FROM deltallm_organizationtable
         WHERE organization_id = $1
         LIMIT 1
@@ -165,6 +199,7 @@ async def update_organization(request: Request, organization_id: str, payload: d
     max_budget = payload.get("max_budget", existing.get("max_budget"))
     rpm_limit = optional_int(payload.get("rpm_limit", existing.get("rpm_limit")), "rpm_limit")
     tpm_limit = optional_int(payload.get("tpm_limit", existing.get("tpm_limit")), "tpm_limit")
+    metadata = _audit_retention_metadata(payload, existing.get("metadata") if isinstance(existing.get("metadata"), dict) else None)
 
     await db.execute_raw(
         """
@@ -173,18 +208,20 @@ async def update_organization(request: Request, organization_id: str, payload: d
             max_budget = $2,
             rpm_limit = $3,
             tpm_limit = $4,
+            metadata = COALESCE($5::jsonb, metadata),
             updated_at = NOW()
-        WHERE organization_id = $5
+        WHERE organization_id = $6
         """,
         organization_name,
         max_budget,
         rpm_limit,
         tpm_limit,
+        metadata if metadata is not None else None,
         organization_id,
     )
     updated_rows = await db.query_raw(
         """
-        SELECT organization_id, organization_name, max_budget, spend, rpm_limit, tpm_limit, created_at, updated_at
+        SELECT organization_id, organization_name, max_budget, spend, rpm_limit, tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
         FROM deltallm_organizationtable
         WHERE organization_id = $1
         LIMIT 1
