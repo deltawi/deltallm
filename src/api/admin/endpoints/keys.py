@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import secrets
 import logging
+from time import perf_counter
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
 from src.auth.roles import Permission
-from src.api.admin.endpoints.common import db_or_503, to_json_value, get_auth_scope
+from src.audit.actions import AuditAction
+from src.api.admin.endpoints.common import db_or_503, to_json_value, get_auth_scope, emit_admin_mutation_audit
 
 router = APIRouter(tags=["Admin Keys"])
 logger = logging.getLogger(__name__)
@@ -79,6 +81,7 @@ async def create_key(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
+    request_start = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
     db = db_or_503(request)
 
@@ -110,36 +113,59 @@ async def create_key(
     key_service = request.app.state.key_service
     token_hash = key_service.hash_key(raw_key)
 
-    await db.execute_raw(
-        """
-        INSERT INTO deltallm_verificationtoken (id, token, key_name, user_id, team_id, models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at)
-        VALUES (gen_random_uuid(), $1, $2, $3, $4, $5::text[], 0, $6, $7, $8, $9::timestamp, NOW(), NOW())
-        """,
-        token_hash,
-        key_name,
-        user_id,
-        team_id,
-        models,
-        max_budget,
-        rpm_limit,
-        tpm_limit,
-        expires,
-    )
+    try:
+        await db.execute_raw(
+            """
+            INSERT INTO deltallm_verificationtoken (id, token, key_name, user_id, team_id, models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at)
+            VALUES (gen_random_uuid(), $1, $2, $3, $4, $5::text[], 0, $6, $7, $8, $9::timestamp, NOW(), NOW())
+            """,
+            token_hash,
+            key_name,
+            user_id,
+            team_id,
+            models,
+            max_budget,
+            rpm_limit,
+            tpm_limit,
+            expires,
+        )
 
-    return {
-        "token": token_hash,
-        "raw_key": raw_key,
-        "key_name": key_name,
-        "user_id": user_id,
-        "team_id": team_id,
-        "models": models,
-        "max_budget": max_budget,
-        "rpm_limit": rpm_limit,
-        "tpm_limit": tpm_limit,
-        "expires": expires,
-    }
-
-
+        response = {
+            "token": token_hash,
+            "raw_key": raw_key,
+            "key_name": key_name,
+            "user_id": user_id,
+            "team_id": team_id,
+            "models": models,
+            "max_budget": max_budget,
+            "rpm_limit": rpm_limit,
+            "tpm_limit": tpm_limit,
+            "expires": expires,
+        }
+        await emit_admin_mutation_audit(
+            request=request,
+            request_start=request_start,
+            action=AuditAction.ADMIN_KEY_CREATE,
+            scope=scope,
+            resource_type="api_key",
+            resource_id=token_hash,
+            request_payload=payload,
+            response_payload=response,
+        )
+        return response
+    except Exception as exc:
+        await emit_admin_mutation_audit(
+            request=request,
+            request_start=request_start,
+            action=AuditAction.ADMIN_KEY_CREATE,
+            scope=scope,
+            resource_type="api_key",
+            resource_id=token_hash,
+            request_payload=payload,
+            status="error",
+            error=exc,
+        )
+        raise
 @router.put("/ui/api/keys/{token_hash}")
 async def update_key(
     request: Request,
@@ -148,6 +174,7 @@ async def update_key(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
+    request_start = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
     db = db_or_503(request)
     await _require_key_access(scope, db, token_hash)
@@ -179,43 +206,70 @@ async def update_key(
     rpm_limit = payload.get("rpm_limit", existing.get("rpm_limit"))
     tpm_limit = payload.get("tpm_limit", existing.get("tpm_limit"))
 
-    await db.execute_raw(
-        """
-        UPDATE deltallm_verificationtoken
-        SET key_name = $1,
-            user_id = $2,
-            team_id = $3,
-            models = $4::text[],
-            max_budget = $5,
-            rpm_limit = $6,
-            tpm_limit = $7,
-            expires = $8::timestamp,
-            updated_at = NOW()
-        WHERE token = $9
-        """,
-        key_name,
-        user_id,
-        team_id,
-        models,
-        max_budget,
-        rpm_limit,
-        tpm_limit,
-        expires,
-        token_hash,
-    )
+    try:
+        await db.execute_raw(
+            """
+            UPDATE deltallm_verificationtoken
+            SET key_name = $1,
+                user_id = $2,
+                team_id = $3,
+                models = $4::text[],
+                max_budget = $5,
+                rpm_limit = $6,
+                tpm_limit = $7,
+                expires = $8::timestamp,
+                updated_at = NOW()
+            WHERE token = $9
+            """,
+            key_name,
+            user_id,
+            team_id,
+            models,
+            max_budget,
+            rpm_limit,
+            tpm_limit,
+            expires,
+            token_hash,
+        )
 
-    updated_rows = await db.query_raw(
-        """
-        SELECT token, key_name, user_id, team_id, models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at
-        FROM deltallm_verificationtoken
-        WHERE token = $1
-        LIMIT 1
-        """,
-        token_hash,
-    )
-    if not updated_rows:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
-    return to_json_value(dict(updated_rows[0]))
+        updated_rows = await db.query_raw(
+            """
+            SELECT token, key_name, user_id, team_id, models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at
+            FROM deltallm_verificationtoken
+            WHERE token = $1
+            LIMIT 1
+            """,
+            token_hash,
+        )
+        if not updated_rows:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
+        updated = to_json_value(dict(updated_rows[0]))
+        await emit_admin_mutation_audit(
+            request=request,
+            request_start=request_start,
+            action=AuditAction.ADMIN_KEY_UPDATE,
+            scope=scope,
+            resource_type="api_key",
+            resource_id=token_hash,
+            request_payload=payload,
+            before=to_json_value(existing),
+            after=updated if isinstance(updated, dict) else None,
+            response_payload=updated if isinstance(updated, dict) else None,
+        )
+        return updated
+    except Exception as exc:
+        await emit_admin_mutation_audit(
+            request=request,
+            request_start=request_start,
+            action=AuditAction.ADMIN_KEY_UPDATE,
+            scope=scope,
+            resource_type="api_key",
+            resource_id=token_hash,
+            request_payload=payload,
+            status="error",
+            error=exc,
+        )
+        raise
 
 
 async def _require_key_access(scope, db, token_hash: str) -> None:
@@ -240,6 +294,7 @@ async def regenerate_key(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
+    request_start = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
     db = db_or_503(request)
     await _require_key_access(scope, db, token_hash)
@@ -260,7 +315,18 @@ async def regenerate_key(
         await request.app.state.key_service.invalidate_key_cache_by_hash(new_hash)
     except Exception:
         logger.exception("failed to invalidate key auth cache after regenerate")
-    return {"token": new_hash, "raw_key": raw_key}
+    response = {"token": new_hash, "raw_key": raw_key}
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_KEY_REGENERATE,
+        scope=scope,
+        resource_type="api_key",
+        resource_id=new_hash,
+        request_payload={"previous_token": token_hash},
+        response_payload=response,
+    )
+    return response
 
 
 @router.post("/ui/api/keys/{token_hash}/revoke")
@@ -270,6 +336,7 @@ async def revoke_key(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, bool]:
+    request_start = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_REVOKE)
     db = db_or_503(request)
     await _require_key_access(scope, db, token_hash)
@@ -279,7 +346,17 @@ async def revoke_key(
             await request.app.state.key_service.invalidate_key_cache_by_hash(token_hash)
         except Exception:
             logger.exception("failed to invalidate key auth cache after revoke")
-    return {"revoked": int(deleted or 0) > 0}
+    response = {"revoked": int(deleted or 0) > 0}
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_KEY_REVOKE,
+        scope=scope,
+        resource_type="api_key",
+        resource_id=token_hash,
+        response_payload=response,
+    )
+    return response
 
 
 @router.delete("/ui/api/keys/{token_hash}")
@@ -289,6 +366,7 @@ async def delete_key(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, bool]:
+    request_start = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
     db = db_or_503(request)
     await _require_key_access(scope, db, token_hash)
@@ -298,4 +376,14 @@ async def delete_key(
             await request.app.state.key_service.invalidate_key_cache_by_hash(token_hash)
         except Exception:
             logger.exception("failed to invalidate key auth cache after delete")
-    return {"deleted": int(deleted or 0) > 0}
+    response = {"deleted": int(deleted or 0) > 0}
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_KEY_DELETE,
+        scope=scope,
+        resource_type="api_key",
+        resource_id=token_hash,
+        response_payload=response,
+    )
+    return response

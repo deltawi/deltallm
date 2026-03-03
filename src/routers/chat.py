@@ -27,8 +27,82 @@ from src.models.errors import InvalidRequestError, PermissionDeniedError, Servic
 from src.models.requests import ChatCompletionRequest
 from src.providers.base import ProviderAdapter
 from src.router.router import Deployment
+from src.services.audit_service import AuditEventInput, AuditPayloadInput, AuditService
 
 router = APIRouter(prefix="/v1", tags=["chat"])
+
+
+def _audit_action_for_path(path: str) -> str:
+    if path == "/v1/chat/completions":
+        return "CHAT_COMPLETION_REQUEST"
+    if path == "/v1/completions":
+        return "COMPLETION_REQUEST"
+    if path == "/v1/responses":
+        return "RESPONSES_REQUEST"
+    return "TEXT_GENERATION_REQUEST"
+
+
+def _request_client_ip(request: Request) -> str | None:
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        first_hop = forwarded_for.split(",", 1)[0].strip()
+        if first_hop:
+            return first_hop
+    if request.client and request.client.host:
+        return request.client.host
+    return None
+
+
+def _emit_text_audit_event(
+    *,
+    request: Request,
+    auth: Any,
+    action: str,
+    model: str,
+    status: str,
+    request_start: float,
+    request_data: dict[str, Any] | None,
+    response_data: dict[str, Any] | None,
+    error: Exception | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    audit_service: AuditService | None = getattr(request.app.state, "audit_service", None)
+    if audit_service is None:
+        return
+
+    request_id = request.headers.get("x-request-id")
+    payloads = [
+        AuditPayloadInput(kind="request", content_json=request_data),
+        AuditPayloadInput(kind="response", content_json=response_data),
+    ]
+    if response_data is None:
+        payloads = [AuditPayloadInput(kind="request", content_json=request_data)]
+    audit_service.record_event(
+        AuditEventInput(
+            action=action,
+            organization_id=getattr(auth, "organization_id", None),
+            actor_type="api_key",
+            actor_id=getattr(auth, "user_id", None) or getattr(auth, "api_key", None),
+            api_key=getattr(auth, "api_key", None),
+            resource_type="model",
+            resource_id=model,
+            request_id=request_id,
+            correlation_id=request_id,
+            ip=_request_client_ip(request),
+            user_agent=request.headers.get("user-agent"),
+            status=status,
+            latency_ms=int((perf_counter() - request_start) * 1000),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            error_type=error.__class__.__name__ if error is not None else None,
+            error_code=getattr(getattr(error, "response", None), "status_code", None) if error is not None else None,
+            metadata=metadata or {},
+        ),
+        payloads=payloads,
+        critical=True,
+    )
 
 
 @dataclass
@@ -207,6 +281,7 @@ async def handle_chat_like_request(
     cache_context = getattr(request.state, "cache_context", None)
     cache_hit = bool(getattr(cache_context, "hit", False)) if cache_context is not None else False
     cache_key = getattr(cache_context, "cache_key", None) if cache_context is not None else None
+    audit_action = _audit_action_for_path(request.url.path)
 
     try:
         if payload.stream:
@@ -296,6 +371,25 @@ async def handle_chat_like_request(
                             response_data={"object": stream_response_object},
                             call_type="completion",
                         )
+                        _emit_text_audit_event(
+                            request=request,
+                            auth=auth,
+                            action=audit_action,
+                            model=payload.model,
+                            status="success",
+                            request_start=request_start,
+                            request_data=request_data,
+                            response_data={"object": stream_response_object},
+                            metadata={
+                                "route": request.url.path,
+                                "stream": True,
+                                "cache_hit": cache_hit,
+                                "cache_key": cache_key,
+                                "api_base": api_base_local,
+                                "provider": infer_provider(params.get("model")),
+                                "deployment_model": params.get("model"),
+                            },
+                        )
                     except Exception:
                         if stream_id is not None and stream_handler is not None:
                             stream_handler.discard_stream(stream_id)
@@ -328,6 +422,26 @@ async def handle_chat_like_request(
                             user_api_key_dict=auth.model_dump(mode="python"),
                             original_exception=stream_exc,
                             call_type="completion",
+                        )
+                        _emit_text_audit_event(
+                            request=request,
+                            auth=auth,
+                            action=audit_action,
+                            model=payload.model,
+                            status="error",
+                            request_start=request_start,
+                            request_data=request_data,
+                            response_data=None,
+                            error=stream_exc,
+                            metadata={
+                                "route": request.url.path,
+                                "stream": True,
+                                "cache_hit": cache_hit,
+                                "cache_key": cache_key,
+                                "api_base": api_base_local,
+                                "provider": infer_provider(params.get("model")),
+                                "deployment_model": params.get("model"),
+                            },
                         )
                         raise
                 finally:
@@ -418,6 +532,8 @@ async def handle_chat_like_request(
             latency_seconds=perf_counter() - request_start,
         )
         observe_api_latency(model=payload.model, api_provider=api_provider, latency_seconds=api_latency_ms / 1000)
+        prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+        completion_tokens = int(usage.get("completion_tokens", 0) or 0)
         callback_payload = build_standard_logging_payload(
             call_type="completion",
             request_id=request_id,
@@ -446,6 +562,27 @@ async def handle_chat_like_request(
             user_api_key_dict=auth.model_dump(mode="python"),
             response_data=response_payload,
             call_type="completion",
+        )
+        _emit_text_audit_event(
+            request=request,
+            auth=auth,
+            action=audit_action,
+            model=payload.model,
+            status="success",
+            request_start=request_start,
+            request_data=request_data,
+            response_data=response_payload,
+            input_tokens=prompt_tokens,
+            output_tokens=completion_tokens,
+            metadata={
+                "route": request.url.path,
+                "stream": False,
+                "cache_hit": cache_hit,
+                "cache_key": cache_key,
+                "api_base": api_base,
+                "provider": api_provider,
+                "deployment_model": served_deployment.deltallm_params.get("model"),
+            },
         )
         return JSONResponse(status_code=200, content=response_payload)
     except httpx.HTTPError as exc:
@@ -502,6 +639,26 @@ async def handle_chat_like_request(
             original_exception=exc,
             user_api_key_dict=auth.model_dump(mode="json"),
         )
+        _emit_text_audit_event(
+            request=request,
+            auth=auth,
+            action=audit_action,
+            model=payload.model,
+            status="error",
+            request_start=request_start,
+            request_data=request_data,
+            response_data=None,
+            error=exc,
+            metadata={
+                "route": request.url.path,
+                "stream": False,
+                "cache_hit": cache_hit,
+                "cache_key": cache_key,
+                "api_base": api_base,
+                "provider": api_provider,
+                "deployment_model": primary.deltallm_params.get("model"),
+            },
+        )
         adapter: OpenAIAdapter = request.app.state.openai_adapter
         raise adapter.map_error(exc) from exc
     except Exception as exc:
@@ -556,6 +713,26 @@ async def handle_chat_like_request(
             request_data=request_data,
             original_exception=exc,
             user_api_key_dict=auth.model_dump(mode="json"),
+        )
+        _emit_text_audit_event(
+            request=request,
+            auth=auth,
+            action=audit_action,
+            model=payload.model,
+            status="error",
+            request_start=request_start,
+            request_data=request_data,
+            response_data=None,
+            error=exc,
+            metadata={
+                "route": request.url.path,
+                "stream": False,
+                "cache_hit": cache_hit,
+                "cache_key": cache_key,
+                "api_base": api_base,
+                "provider": api_provider,
+                "deployment_model": primary.deltallm_params.get("model"),
+            },
         )
         raise
 

@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from src.api.admin.endpoints import (
+    audit_router,
     batches_router,
     config_router,
     guardrails_router,
@@ -23,6 +24,7 @@ admin_router.include_router(batches_router)
 admin_router.include_router(rbac_router)
 admin_router.include_router(guardrails_router)
 admin_router.include_router(config_router)
+admin_router.include_router(audit_router)
 
 # Include remaining UI endpoints not yet split (models, spend/logs, auth, static files).
 admin_router.include_router(legacy_ui_router)

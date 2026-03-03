@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from src.auth.roles import OrganizationRole, Permission, TeamRole
-from src.api.admin.endpoints.common import db_or_503, to_json_value
+from src.auth.roles import OrganizationRole, Permission, PlatformRole, TeamRole
+from src.audit import AuditAction
+from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, to_json_value
 from src.middleware.admin import require_admin_permission
 
 router = APIRouter(tags=["Admin RBAC"])
@@ -32,6 +34,7 @@ async def list_rbac_accounts(request: Request) -> list[dict[str, Any]]:
 
 @router.post("/ui/api/rbac/accounts", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def upsert_rbac_account(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    request_start = perf_counter()
     db = db_or_503(request)
     service = getattr(request.app.state, "platform_identity_service", None)
     if service is None:
@@ -41,10 +44,10 @@ async def upsert_rbac_account(request: Request, payload: dict[str, Any]) -> dict
     if not email:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="email is required")
 
-    role = str(payload.get("role") or "org_user")
+    role = str(payload.get("role") or PlatformRole.ORG_USER)
     role = _require_valid_role(
         role,
-        {"platform_admin", "org_user"},
+        {PlatformRole.ADMIN, PlatformRole.ORG_USER},
         "role",
     )
     is_active = bool(payload.get("is_active", True))
@@ -83,7 +86,17 @@ async def upsert_rbac_account(request: Request, payload: dict[str, Any]) -> dict
     )
     if not rows:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="account upsert failed")
-    return to_json_value(dict(rows[0]))
+    response = to_json_value(dict(rows[0]))
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_RBAC_ACCOUNT_UPSERT,
+        resource_type="platform_account",
+        resource_id=str(rows[0].get("account_id") or ""),
+        request_payload=payload,
+        response_payload=response if isinstance(response, dict) else None,
+    )
+    return response
 
 
 @router.get("/ui/api/rbac/organization-memberships", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
@@ -112,6 +125,7 @@ async def list_org_memberships(request: Request, account_id: str | None = None) 
 
 @router.post("/ui/api/rbac/organization-memberships", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def upsert_org_membership(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    request_start = perf_counter()
     db = db_or_503(request)
     account_id = payload.get("account_id")
     email = payload.get("email")
@@ -157,7 +171,17 @@ async def upsert_org_membership(request: Request, payload: dict[str, Any]) -> di
     )
     if not rows:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="membership upsert failed")
-    return to_json_value(dict(rows[0]))
+    response = to_json_value(dict(rows[0]))
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_RBAC_ORG_MEMBERSHIP_UPSERT,
+        resource_type="organization_membership",
+        resource_id=str(rows[0].get("membership_id") or ""),
+        request_payload=payload,
+        response_payload=response if isinstance(response, dict) else None,
+    )
+    return response
 
 
 @router.get("/ui/api/rbac/team-memberships", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
@@ -186,6 +210,7 @@ async def list_team_memberships(request: Request, account_id: str | None = None)
 
 @router.post("/ui/api/rbac/team-memberships", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def upsert_team_membership(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    request_start = perf_counter()
     db = db_or_503(request)
     account_id = payload.get("account_id")
     email = payload.get("email")
@@ -231,4 +256,14 @@ async def upsert_team_membership(request: Request, payload: dict[str, Any]) -> d
     )
     if not rows:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="membership upsert failed")
-    return to_json_value(dict(rows[0]))
+    response = to_json_value(dict(rows[0]))
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_RBAC_TEAM_MEMBERSHIP_UPSERT,
+        resource_type="team_membership",
+        resource_id=str(rows[0].get("membership_id") or ""),
+        request_payload=payload,
+        response_payload=response if isinstance(response, dict) else None,
+    )
+    return response

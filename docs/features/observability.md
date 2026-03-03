@@ -26,6 +26,10 @@ Metrics are exposed at the `/metrics` endpoint in Prometheus format.
 | `deltallm_deployment_state` | Gauge | Deployment health (0=healthy, 1=partial, 2=degraded) |
 | `deltallm_deployment_active_requests` | Gauge | In-flight requests per deployment |
 | `deltallm_deployment_cooldown` | Gauge | Whether a deployment is in cooldown (0/1) |
+| `deltallm_audit_queue_depth` | Gauge | Current audit event queue depth |
+| `deltallm_audit_write_failures_total` | Counter | Failed audit write attempts |
+| `deltallm_audit_events_dropped_total` | Counter | Dropped audit events (by reason) |
+| `deltallm_audit_ingestion_latency_seconds` | Histogram | Audit persistence latency |
 
 ### Prometheus Configuration
 

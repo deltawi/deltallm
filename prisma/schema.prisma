@@ -121,6 +121,7 @@ model DeltaLLM_OrganizationTable {
   id                String   @id @default(uuid())
   organization_id   String   @unique
   organization_name String?
+  audit_content_storage_enabled Boolean @default(false)
   max_budget        Float?
   rpm_limit         Int?
   tpm_limit         Int?
@@ -132,6 +133,62 @@ model DeltaLLM_OrganizationTable {
   updated_at        DateTime @updatedAt
 
   @@map("deltallm_organizationtable")
+}
+
+model DeltaLLM_AuditEvent {
+  event_id       String   @id @default(uuid())
+  occurred_at    DateTime @default(now())
+  organization_id String?
+  actor_type     String?
+  actor_id       String?
+  api_key        String?
+  action         String
+  resource_type  String?
+  resource_id    String?
+  request_id     String?
+  correlation_id String?
+  ip             String?
+  user_agent     String?
+  status         String?
+  latency_ms     Int?
+  input_tokens   Int?
+  output_tokens  Int?
+  error_type     String?
+  error_code     String?
+  metadata       Json?
+  content_stored Boolean  @default(false)
+  prev_hash      String?
+  event_hash     String?
+
+  payloads DeltaLLM_AuditPayload[]
+
+  @@index([occurred_at])
+  @@index([organization_id])
+  @@index([actor_id])
+  @@index([action])
+  @@index([request_id])
+  @@index([correlation_id])
+  @@map("deltallm_auditevent")
+}
+
+model DeltaLLM_AuditPayload {
+  payload_id      String   @id @default(uuid())
+  event_id        String
+  kind            String
+  storage_mode    String   @default("inline")
+  content_json    Json?
+  storage_uri     String?
+  content_sha256  String?
+  size_bytes      Int?
+  redacted        Boolean  @default(false)
+  created_at      DateTime @default(now())
+
+  event DeltaLLM_AuditEvent @relation(fields: [event_id], references: [event_id], onDelete: Cascade)
+
+  @@index([event_id])
+  @@index([kind])
+  @@index([created_at])
+  @@map("deltallm_auditpayload")
 }
 
 model DeltaLLM_PlatformAccount {

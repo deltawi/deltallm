@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 from src.auth.roles import Permission
-from src.api.admin.endpoints.common import db_or_503, optional_int, to_json_value, get_auth_scope, normalize_user_profile_type
+from src.audit.actions import AuditAction
+from src.api.admin.endpoints.common import (
+    db_or_503,
+    emit_admin_mutation_audit,
+    optional_int,
+    to_json_value,
+    get_auth_scope,
+    normalize_user_profile_type,
+)
 from src.middleware.admin import require_admin_permission
 
 router = APIRouter(tags=["Admin Users"])
@@ -90,6 +99,7 @@ async def list_users(
 
 @router.post("/ui/api/users", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def create_user(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    request_start = perf_counter()
     db = db_or_503(request)
     user_id = str(payload.get("user_id") or "").strip()
     if not user_id:
@@ -141,7 +151,7 @@ async def create_user(request: Request, payload: dict[str, Any]) -> dict[str, An
         tpm_limit,
     )
 
-    return {
+    response = {
         "user_id": user_id,
         "user_email": user_email,
         "user_role": user_role,
@@ -152,10 +162,21 @@ async def create_user(request: Request, payload: dict[str, Any]) -> dict[str, An
         "models": models,
         "blocked": False,
     }
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_USER_CREATE,
+        resource_type="user",
+        resource_id=user_id,
+        request_payload=payload,
+        response_payload=response,
+    )
+    return response
 
 
 @router.put("/ui/api/users/{user_id}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def update_user(request: Request, user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    request_start = perf_counter()
     db = db_or_503(request)
     rows = await db.query_raw(
         """
@@ -215,11 +236,24 @@ async def update_user(request: Request, user_id: str, payload: dict[str, Any]) -
     )
     if not updated_rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    return to_json_value(dict(updated_rows[0]))
+    updated = to_json_value(dict(updated_rows[0]))
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_USER_UPDATE,
+        resource_type="user",
+        resource_id=user_id,
+        request_payload=payload,
+        response_payload=updated if isinstance(updated, dict) else None,
+        before=to_json_value(existing),
+        after=updated if isinstance(updated, dict) else None,
+    )
+    return updated
 
 
 @router.post("/ui/api/users/{user_id}/block", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def block_user(request: Request, user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    request_start = perf_counter()
     db = db_or_503(request)
     blocked = bool(payload.get("blocked", True))
 
@@ -236,4 +270,14 @@ async def block_user(request: Request, user_id: str, payload: dict[str, Any]) ->
     if int(updated or 0) <= 0:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    return {"user_id": user_id, "blocked": blocked}
+    response = {"user_id": user_id, "blocked": blocked}
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_USER_BLOCK,
+        resource_type="user",
+        resource_id=user_id,
+        request_payload=payload,
+        response_payload=response,
+    )
+    return response

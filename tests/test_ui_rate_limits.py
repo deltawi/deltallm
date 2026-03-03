@@ -14,7 +14,8 @@ class FakeAdminDB:
 
     async def execute_raw(self, query: str, *params):
         if "INSERT INTO deltallm_organizationtable" in query:
-            organization_id, organization_name, max_budget, rpm_limit, tpm_limit = params
+            # The organizations endpoint now also upserts a JSONB metadata column.
+            organization_id, organization_name, max_budget, rpm_limit, tpm_limit, metadata = params
             self.organizations[organization_id] = {
                 "organization_id": organization_id,
                 "organization_name": organization_name,
@@ -22,13 +23,14 @@ class FakeAdminDB:
                 "spend": 0.0,
                 "rpm_limit": rpm_limit,
                 "tpm_limit": tpm_limit,
+                "metadata": metadata or {},
                 "created_at": datetime.now(tz=UTC),
                 "updated_at": datetime.now(tz=UTC),
             }
             return 1
 
         if "UPDATE deltallm_organizationtable" in query:
-            organization_name, max_budget, rpm_limit, tpm_limit, organization_id = params
+            organization_name, max_budget, rpm_limit, tpm_limit, metadata, organization_id = params
             row = self.organizations[organization_id]
             row.update(
                 {
@@ -36,6 +38,7 @@ class FakeAdminDB:
                     "max_budget": max_budget,
                     "rpm_limit": rpm_limit,
                     "tpm_limit": tpm_limit,
+                    "metadata": metadata or row.get("metadata") or {},
                     "updated_at": datetime.now(tz=UTC),
                 }
             )

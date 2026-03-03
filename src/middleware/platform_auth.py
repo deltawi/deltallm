@@ -64,6 +64,20 @@ def has_scoped_permission(
     if has_platform_permission(context.role, Permission.PLATFORM_ADMIN):
         return True
 
+    # If no scope is provided, allow if the permission is present in any
+    # org/team membership. Endpoints that aren't platform-admin-only should
+    # still apply server-side filtering based on the caller's accessible scopes.
+    if not organization_id and not team_id:
+        for membership in context.organization_memberships:
+            role = str(membership.get("role") or "")
+            if permission in ORG_ROLE_PERMISSIONS.get(role, set()):
+                return True
+        for membership in context.team_memberships:
+            role = str(membership.get("role") or "")
+            if permission in TEAM_ROLE_PERMISSIONS.get(role, set()):
+                return True
+        return False
+
     if organization_id:
         for membership in context.organization_memberships:
             if str(membership.get("organization_id")) != organization_id:
