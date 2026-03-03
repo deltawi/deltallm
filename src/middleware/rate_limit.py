@@ -41,9 +41,16 @@ async def _check_and_acquire_rate_limits(request: Request) -> None:
     try:
         body = await request.body()
         request._body = body  # noqa: SLF001 - FastAPI-compatible caching of request body
+        tokens = estimate_tokens(body)
     except RuntimeError as exc:
-        raise InvalidRequestError(message="Could not parse request body for rate limiting") from exc
-    tokens = estimate_tokens(body)
+        if "Stream consumed" in str(exc):
+            # For multipart/form-data requests (file uploads), FastAPI may have already
+            # consumed the request stream while parsing `UploadFile`/`Form` params.
+            # Fall back to a minimal TPM estimate so we can still enforce RPM and
+            # max-parallel limits without failing the request.
+            tokens = 1
+        else:
+            raise InvalidRequestError(message="Could not parse request body for rate limiting") from exc
 
     key_rpm_limit = auth.key_rpm_limit if auth.key_rpm_limit is not None else auth.rpm_limit
     key_tpm_limit = auth.key_tpm_limit if auth.key_tpm_limit is not None else auth.tpm_limit

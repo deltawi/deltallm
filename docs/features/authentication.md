@@ -138,10 +138,10 @@ DeltaLLM uses a three-level RBAC hierarchy:
 
 | Role | Permissions |
 |------|-------------|
-| `org_owner` | Full org management, keys, users |
-| `org_admin` | Manage teams, keys, and users within org |
-| `org_billing` | View keys and spend data |
-| `org_auditor` | Read-only access to keys and users |
+| `org_owner` | Full org management (includes audit log access via `Permission.AUDIT_READ`) |
+| `org_admin` | Manage teams, keys, and users within org (includes audit log access via `Permission.AUDIT_READ`) |
+| `org_billing` | View keys and spend data (no audit log access) |
+| `org_auditor` | Read-only access to keys and users (no audit log access) |
 | `org_member` | Basic membership |
 
 ### Team Roles
@@ -165,4 +165,5 @@ Canonical values are:
 
 - **Platform admins** see all resources across the entire platform
 - **Org users** see only organizations, teams, keys, and users within their assigned organizations
+- Audit log read access is limited to org users with `org_owner` or `org_admin` memberships (or `platform_admin`).
 - Resources are filtered automatically based on the user's role and assignments

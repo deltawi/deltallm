@@ -94,6 +94,34 @@ Query parameters for `/ui/api/spend/report`:
 | `GET` | `/ui/api/settings` | Get current gateway settings |
 | `PUT` | `/ui/api/settings` | Update gateway settings (platform admin only) |
 
+## Audit
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/ui/api/audit/events` | List audit events (filterable + paginated) |
+| `GET` | `/ui/api/audit/events/{event_id}` | Fetch one audit event (includes payloads) |
+| `GET` | `/ui/api/audit/timeline` | Timeline view by `request_id` or `correlation_id` |
+| `GET` | `/ui/api/audit/export` | Export events (`format=jsonl|csv`) |
+
+Audit endpoints require `Permission.AUDIT_READ` (`audit.read`).
+Allowed roles: `platform_admin`, `org_owner`, `org_admin`.
+Denied roles: `org_billing`, `org_auditor`, `org_member`, and team-only memberships without org admin/owner scope.
+
+Common query parameters for `/ui/api/audit/events` and `/ui/api/audit/export`:
+
+| Parameter | Description |
+|-----------|-------------|
+| `action` | Filter by action name from `src/audit/actions.py` (`AuditAction`) |
+| `status` | Filter by status (`success`, `error`) |
+| `actor_id` | Filter by actor identifier |
+| `organization_id` | Filter by organization |
+| `request_id` | Filter by `X-Request-Id` |
+| `correlation_id` | Filter by correlation id |
+| `start_date` | Inclusive start date (UTC) |
+| `end_date` | Inclusive end date (UTC) |
+| `limit` | Max results per page/export |
+| `offset` | Pagination offset (events endpoint only) |
+
 ## RBAC
 
 | Method | Endpoint | Description |

@@ -33,7 +33,7 @@ from src.callbacks import CallbackManager
 from src.config import AppConfig, get_settings, resolve_salt_key
 from src.config_runtime import DynamicConfigManager, ModelHotReloadManager, SecretResolver, build_app_config, load_yaml_dict
 from src.db.client import prisma_manager
-from src.db.repositories import KeyRepository, ModelDeploymentRepository
+from src.db.repositories import AuditRepository, KeyRepository, ModelDeploymentRepository
 from src.auth import CustomAuthManager, InMemoryUserRepository, JWTAuthHandler, SSOAuthHandler, SSOConfig, SSOProvider
 from src.api.admin import admin_router
 from src.api.v1.router import v1_router
@@ -59,6 +59,8 @@ from src.router import (
     build_deployment_registry,
 )
 from src.services.key_service import KeyService
+from src.services.audit_retention import AuditRetentionConfig, AuditRetentionWorker
+from src.services.audit_service import AuditService
 from src.services.limit_counter import LimitCounter
 from src.services.model_deployments import bootstrap_model_deployments_from_config, load_model_registry
 from src.services.platform_identity_service import PlatformIdentityService
@@ -117,6 +119,25 @@ async def lifespan(app: FastAPI):
         salt=salt_key,
         auth_cache_ttl_seconds=cfg.general_settings.api_key_auth_cache_ttl_seconds,
     )
+    app.state.audit_repository = None
+    app.state.audit_service = None
+    audit_retention_worker: AuditRetentionWorker | None = None
+    audit_retention_task: Task[None] | None = None
+    if cfg.general_settings.audit_enabled:
+        app.state.audit_repository = AuditRepository(prisma_manager.client)
+        app.state.audit_service = AuditService(app.state.audit_repository)
+        await app.state.audit_service.start()
+        if cfg.general_settings.audit_retention_worker_enabled:
+            audit_retention_worker = AuditRetentionWorker(
+                repository=app.state.audit_repository,
+                config=AuditRetentionConfig(
+                    interval_seconds=cfg.general_settings.audit_retention_interval_seconds,
+                    scan_limit=cfg.general_settings.audit_retention_scan_limit,
+                    metadata_retention_days=cfg.general_settings.audit_metadata_retention_days,
+                    payload_retention_days=cfg.general_settings.audit_payload_retention_days,
+                ),
+            )
+            audit_retention_task = create_task(audit_retention_worker.run())
     app.state.platform_identity_service = PlatformIdentityService(
         db_client=prisma_manager.client,
         salt=salt_key,
@@ -357,6 +378,15 @@ async def lifespan(app: FastAPI):
     finally:
         callback_manager: CallbackManager = getattr(app.state, "callback_manager", CallbackManager())
         await callback_manager.shutdown()
+        if audit_retention_worker is not None:
+            audit_retention_worker.stop()
+        if audit_retention_task is not None:
+            audit_retention_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await audit_retention_task
+        audit_service: AuditService | None = getattr(app.state, "audit_service", None)
+        if audit_service is not None:
+            await audit_service.shutdown()
         await dynamic_config_manager.close()
         health_checker.stop()
         if health_task is not None:

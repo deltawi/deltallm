@@ -23,6 +23,8 @@ from src.metrics import (
 from src.models.errors import InvalidRequestError, PermissionDeniedError
 from src.models.requests import ImageGenerationRequest
 from src.router.router import Deployment
+from src.audit.actions import AuditAction
+from src.routers.audit_helpers import emit_audit_event
 from src.routers.utils import enforce_budget_if_configured, fire_and_forget
 
 router = APIRouter(prefix="/v1", tags=["images"])
@@ -146,6 +148,27 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
             turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
         )
         callback_manager.dispatch_success_callbacks(callback_payload)
+        emit_audit_event(
+            request=request,
+            request_start=request_start,
+            action=AuditAction.IMAGE_GENERATION_REQUEST,
+            status="success",
+            actor_type="api_key",
+            actor_id=auth.user_id or auth.api_key,
+            organization_id=getattr(auth, "organization_id", None),
+            api_key=auth.api_key,
+            resource_type="model",
+            resource_id=payload.model,
+            request_payload=request_data,
+            response_payload=data,
+            metadata={
+                "route": request.url.path,
+                "provider": api_provider,
+                "api_base": api_base,
+                "deployment_model": deployment_model,
+                "images": num_images,
+            },
+        )
         return JSONResponse(status_code=200, content=data)
     except httpx.HTTPError as exc:
         await request.app.state.passive_health_tracker.record_request_outcome(primary.deployment_id, success=False, error=str(exc))
@@ -153,7 +176,37 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
         increment_request(model=payload.model, api_provider=api_provider, api_key=auth.api_key, user=auth.user_id, team=auth.team_id, status_code=status_code)
         increment_request_failure(model=payload.model, api_provider=api_provider, error_type=exc.__class__.__name__)
         observe_request_latency(model=payload.model, api_provider=api_provider, status_code=status_code, latency_seconds=perf_counter() - request_start)
+        emit_audit_event(
+            request=request,
+            request_start=request_start,
+            action=AuditAction.IMAGE_GENERATION_REQUEST,
+            status="error",
+            actor_type="api_key",
+            actor_id=auth.user_id or auth.api_key,
+            organization_id=getattr(auth, "organization_id", None),
+            api_key=auth.api_key,
+            resource_type="model",
+            resource_id=payload.model,
+            request_payload=request_data,
+            error=exc,
+            metadata={"route": request.url.path, "provider": api_provider},
+        )
         raise InvalidRequestError(message=f"Image generation request failed: {exc}") from exc
     except Exception as exc:
         await request.app.state.passive_health_tracker.record_request_outcome(primary.deployment_id, success=False, error=str(exc))
+        emit_audit_event(
+            request=request,
+            request_start=request_start,
+            action=AuditAction.IMAGE_GENERATION_REQUEST,
+            status="error",
+            actor_type="api_key",
+            actor_id=auth.user_id or auth.api_key,
+            organization_id=getattr(auth, "organization_id", None),
+            api_key=auth.api_key,
+            resource_type="model",
+            resource_id=payload.model,
+            request_payload=request_data,
+            error=exc,
+            metadata={"route": request.url.path, "provider": api_provider},
+        )
         raise

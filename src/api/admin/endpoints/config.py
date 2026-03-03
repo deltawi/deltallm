@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+from time import perf_counter
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from src.auth.roles import Permission
-from src.api.admin.endpoints.common import model_entries, to_json_value, get_auth_scope
+from src.audit.actions import AuditAction
+from src.api.admin.endpoints.common import emit_admin_mutation_audit, model_entries, to_json_value, get_auth_scope
 from src.middleware.admin import require_admin_permission
 
 router = APIRouter(tags=["Admin Config"])
@@ -83,9 +85,11 @@ async def get_routing(request: Request) -> dict[str, Any]:
 
 @router.put("/ui/api/routing", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def update_routing(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    request_start = perf_counter()
     dynamic_config = getattr(request.app.state, "dynamic_config_manager", None)
     if dynamic_config is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Config manager unavailable")
+    before = await get_routing(request)
 
     config_update: dict[str, Any] = {}
     router_updates: dict[str, Any] = {}
@@ -118,7 +122,18 @@ async def update_routing(request: Request, payload: dict[str, Any]) -> dict[str,
     if config_update:
         await dynamic_config.update_config(config_update, updated_by="admin_api")
 
-    return await get_routing(request)
+    response = await get_routing(request)
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_ROUTING_UPDATE,
+        resource_type="routing_config",
+        request_payload=payload,
+        response_payload=response,
+        before=before,
+        after=response,
+    )
+    return response
 
 
 @router.get("/ui/api/settings", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
@@ -151,9 +166,11 @@ async def update_settings(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
+    request_start = perf_counter()
     dynamic_config = getattr(request.app.state, "dynamic_config_manager", None)
     if dynamic_config is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Config manager unavailable")
+    before = await get_settings(request, authorization=authorization, x_master_key=x_master_key)
 
     config_update: dict[str, Any] = {}
 
@@ -186,4 +203,15 @@ async def update_settings(
         if level in ("DEBUG", "INFO", "WARNING", "ERROR"):
             logging.getLogger().setLevel(getattr(logging, level))
 
-    return await get_settings(request, authorization=authorization, x_master_key=x_master_key)
+    response = await get_settings(request, authorization=authorization, x_master_key=x_master_key)
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_SETTINGS_UPDATE,
+        resource_type="app_settings",
+        request_payload=payload,
+        response_payload=response,
+        before=before,
+        after=response,
+    )
+    return response

@@ -1,4 +1,4 @@
 from .client import PrismaClientManager
-from .repositories import KeyRepository
+from .repositories import AuditRepository, KeyRepository
 
-__all__ = ["PrismaClientManager", "KeyRepository"]
+__all__ = ["PrismaClientManager", "KeyRepository", "AuditRepository"]

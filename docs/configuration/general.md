@@ -35,6 +35,12 @@ general_settings:
   embeddings_batch_gc_enabled: true
   embeddings_batch_gc_interval_seconds: 86400
   embeddings_batch_gc_scan_limit: 200
+  audit_enabled: true
+  audit_retention_worker_enabled: true
+  audit_retention_interval_seconds: 86400
+  audit_retention_scan_limit: 500
+  audit_metadata_retention_days: 365
+  audit_payload_retention_days: 90
 ```
 
 ## Authentication Settings
@@ -127,3 +133,16 @@ Recommended steady state:
 | `embeddings_batch_gc_enabled` | `true` | Enable background retention cleanup for expired batch metadata/artifacts |
 | `embeddings_batch_gc_interval_seconds` | `86400` | Cleanup loop interval in seconds |
 | `embeddings_batch_gc_scan_limit` | `200` | Max expired jobs/files processed per cleanup pass |
+
+## Audit Settings
+
+Audit events are written to Postgres and can be queried via the Admin Audit API.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `audit_enabled` | `true` | Enable audit logging (audit events + payload metadata) |
+| `audit_retention_worker_enabled` | `true` | Enable background audit retention cleanup loop |
+| `audit_retention_interval_seconds` | `86400` | Cleanup loop interval in seconds |
+| `audit_retention_scan_limit` | `500` | Max expired rows processed per cleanup pass |
+| `audit_metadata_retention_days` | `365` | Default retention for audit events (metadata) |
+| `audit_payload_retention_days` | `90` | Default retention for audit payloads (request/response bodies when stored) |

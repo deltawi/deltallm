@@ -1,3 +1,9 @@
+from src.metrics.audit import (
+    increment_audit_events_dropped,
+    increment_audit_write_failure,
+    observe_audit_ingestion_latency,
+    set_audit_queue_depth,
+)
 from src.metrics.counters import (
     increment_cache_hit,
     increment_cache_miss,
@@ -18,6 +24,10 @@ from src.metrics.prometheus import get_prometheus_registry, infer_provider
 __all__ = [
     "get_prometheus_registry",
     "infer_provider",
+    "set_audit_queue_depth",
+    "increment_audit_write_failure",
+    "increment_audit_events_dropped",
+    "observe_audit_ingestion_latency",
     "increment_request",
     "increment_request_failure",
     "increment_usage",

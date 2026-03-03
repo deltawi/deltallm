@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+from time import perf_counter
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.auth.roles import Permission
-from src.api.admin.endpoints.common import db_or_503, get_auth_scope, serialize_guardrail
+from src.audit.actions import AuditAction
+from src.api.admin.endpoints.common import db_or_503, get_auth_scope, serialize_guardrail, emit_admin_mutation_audit
 from src.config import GuardrailConfig
 from src.middleware.admin import require_admin_permission
 
@@ -25,6 +27,7 @@ async def get_guardrails(request: Request) -> dict[str, Any]:
 
 @router.put("/ui/api/guardrails", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def update_guardrails(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    request_start = perf_counter()
     app_config = getattr(request.app.state, "app_config", None)
     if app_config is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="App config unavailable")
@@ -33,6 +36,7 @@ async def update_guardrails(request: Request, payload: dict[str, Any]) -> dict[s
     if not isinstance(raw_guardrails, list):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="guardrails must be an array")
 
+    previous = [serialize_guardrail(guardrail) for guardrail in app_config.deltallm_settings.guardrails]
     updated: list[GuardrailConfig] = []
     for raw in raw_guardrails:
         if not isinstance(raw, dict):
@@ -53,7 +57,18 @@ async def update_guardrails(request: Request, payload: dict[str, Any]) -> dict[s
                 registry._by_mode[mode] = []
         registry.load_from_config(updated)
 
-    return await get_guardrails(request)
+    response = await get_guardrails(request)
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_GUARDRAILS_UPDATE,
+        resource_type="guardrails",
+        request_payload=payload,
+        response_payload=response,
+        before={"guardrails": previous},
+        after=response,
+    )
+    return response
 
 
 _SCOPE_TABLE_MAP = {
@@ -103,6 +118,7 @@ async def get_scoped_guardrails(request: Request, scope: str, entity_id: str) ->
 
 @router.put("/ui/api/guardrails/scope/{scope}/{entity_id}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def update_scoped_guardrails(request: Request, scope: str, entity_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    request_start = perf_counter()
     _validate_scope(scope)
     db = db_or_503(request)
     table = _SCOPE_TABLE_MAP[scope]
@@ -117,6 +133,7 @@ async def update_scoped_guardrails(request: Request, scope: str, entity_id: str,
         metadata = json.loads(metadata)
 
     guardrails_config = payload.get("guardrails_config")
+    before_cfg = metadata.get("guardrails_config")
     if guardrails_config is None:
         metadata.pop("guardrails_config", None)
     else:
@@ -134,11 +151,24 @@ async def update_scoped_guardrails(request: Request, scope: str, entity_id: str,
     meta_json = json.dumps(metadata)
     await db.execute_raw(f"UPDATE {table} SET metadata = $1::jsonb WHERE {id_col} = $2", meta_json, entity_id)
 
-    return await get_scoped_guardrails(request, scope, entity_id)
+    response = await get_scoped_guardrails(request, scope, entity_id)
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_GUARDRAILS_SCOPED_UPDATE,
+        resource_type=scope,
+        resource_id=entity_id,
+        request_payload=payload,
+        response_payload=response,
+        before={"guardrails_config": before_cfg},
+        after={"guardrails_config": response.get("guardrails_config")},
+    )
+    return response
 
 
 @router.delete("/ui/api/guardrails/scope/{scope}/{entity_id}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def delete_scoped_guardrails(request: Request, scope: str, entity_id: str) -> dict[str, Any]:
+    request_start = perf_counter()
     _validate_scope(scope)
     db = db_or_503(request)
     table = _SCOPE_TABLE_MAP[scope]
@@ -151,9 +181,21 @@ async def delete_scoped_guardrails(request: Request, scope: str, entity_id: str)
     metadata = rows[0].get("metadata") or {}
     if isinstance(metadata, str):
         metadata = json.loads(metadata)
+    before_cfg = metadata.get("guardrails_config")
 
     metadata.pop("guardrails_config", None)
     meta_json = json.dumps(metadata)
     await db.execute_raw(f"UPDATE {table} SET metadata = $1::jsonb WHERE {id_col} = $2", meta_json, entity_id)
 
-    return {"status": "ok", "scope": scope, "entity_id": entity_id}
+    response = {"status": "ok", "scope": scope, "entity_id": entity_id}
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_GUARDRAILS_SCOPED_DELETE,
+        resource_type=scope,
+        resource_id=entity_id,
+        response_payload=response,
+        before={"guardrails_config": before_cfg},
+        after={"guardrails_config": None},
+    )
+    return response
