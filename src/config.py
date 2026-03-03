@@ -134,6 +134,7 @@ def _validate_master_key_strength(value: str | None) -> str | None:
 
 class GeneralSettings(BaseModel):
     instance_name: str = "DeltaLLM"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     master_key: str | None = None
     deltallm_key_header_name: str = "Authorization"
     salt_key: str | None = None

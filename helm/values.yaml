@@ -68,7 +68,9 @@ probes:
 
 config:
   masterKey: ""
+  saltKey: ""
   databaseUrl: ""
+  asyncDatabaseUrl: ""
   redisUrl: ""
   model_list: []
   router_settings:
@@ -92,7 +94,7 @@ config:
     turn_off_message_logging: false
   general_settings:
     deltallm_key_header_name: Authorization
-    salt_key: change-me
+    salt_key: ""
     cache_enabled: false
     cache_backend: memory
     cache_ttl: 3600
@@ -100,6 +102,25 @@ config:
     background_health_checks: true
     health_check_interval: 300
     health_check_model: gpt-3.5-turbo
+    model_deployment_source: hybrid
+
+s3:
+  enabled: false
+  bucket: ""
+  region: us-east-1
+  prefix: "deltallm-logs/"
+  compression: ""
+  accessKeyId: ""
+  secretAccessKey: ""
+
+prometheus:
+  enabled: true
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
 
 postgresql:
   enabled: true

@@ -4,16 +4,17 @@ DeltaLLM can be deployed in multiple ways depending on your infrastructure.
 
 | Method | Best For |
 |--------|----------|
-| [Docker](docker.md) | Most production deployments |
-| [Kubernetes](kubernetes.md) | Large-scale, multi-instance setups |
+| [Docker](docker.md) | Single-instance and small team deployments |
+| [Kubernetes](kubernetes.md) | Large-scale, multi-instance production setups |
 
 ## Requirements
 
 All deployment methods require:
 
 - **PostgreSQL** database for storing keys, teams, users, and spend data
-- **Redis** for rate limiting, caching, and deployment state
-- A `config.yaml` file with model and gateway configuration
+- **Redis** (recommended) for rate limiting, caching, distributed config propagation, and deployment state coordination
+- A **master key** (min 32 characters) for admin authentication
+- A **salt key** (unique per deployment) for API key hashing
 
 ## Production Considerations
 
@@ -30,20 +31,15 @@ general_settings:
 
 ### Port Configuration
 
-DeltaLLM listens on port 5000 by default in production. The backend serves both the API and the built frontend from a single process.
+DeltaLLM listens on port 4000 by default. The backend serves both the API and the built frontend from a single process.
 
 ### Database Migrations
 
-Run Prisma migrations before starting:
-
-```bash
-prisma generate
-prisma db push
-```
+The database schema is migrated automatically on startup via Prisma. No manual migration step is needed.
 
 ### Health Checks
 
 Use the built-in health endpoints for load balancer and orchestrator probes:
 
-- Liveness: `GET /health/liveliness`
-- Readiness: `GET /health/readiness`
+- **Liveness:** `GET /health/liveliness` — Returns OK if the process is running
+- **Readiness:** `GET /health/readiness` — Returns OK if PostgreSQL and Redis are reachable

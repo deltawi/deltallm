@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from time import perf_counter
 from typing import Any
 
@@ -8,9 +9,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from src.auth.roles import Permission
 from src.audit.actions import AuditAction
 from src.api.admin.endpoints.common import emit_admin_mutation_audit, model_entries, to_json_value, get_auth_scope
-from src.config import GuardrailConfig
 from src.middleware.admin import require_admin_permission
-from src.router import RoutingStrategy
 
 router = APIRouter(tags=["Admin Config"])
 
@@ -65,7 +64,11 @@ async def get_routing(request: Request) -> dict[str, Any]:
             "least-busy",
             "latency-based-routing",
             "cost-based-routing",
+            "usage-based-routing",
+            "tag-based-routing",
             "priority-based-routing",
+            "weighted",
+            "rate-limit-aware",
         ],
         "config": {
             "timeout": getattr(router_settings, "timeout", 600),
@@ -83,38 +86,41 @@ async def get_routing(request: Request) -> dict[str, Any]:
 @router.put("/ui/api/routing", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def update_routing(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     request_start = perf_counter()
-    app_config = getattr(request.app.state, "app_config", None)
-    if app_config is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="App config unavailable")
+    dynamic_config = getattr(request.app.state, "dynamic_config_manager", None)
+    if dynamic_config is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Config manager unavailable")
     before = await get_routing(request)
+
+    config_update: dict[str, Any] = {}
+    router_updates: dict[str, Any] = {}
+    general_updates: dict[str, Any] = {}
 
     strategy = payload.get("strategy")
     if isinstance(strategy, str) and strategy:
-        app_config.router_settings.routing_strategy = strategy
+        router_updates["routing_strategy"] = strategy
 
-    config_updates = payload.get("config")
-    if isinstance(config_updates, dict):
-        if "timeout" in config_updates:
-            app_config.router_settings.timeout = float(config_updates["timeout"])
-        if "retries" in config_updates:
-            app_config.router_settings.num_retries = int(config_updates["retries"])
-        if "cooldown" in config_updates:
-            app_config.router_settings.cooldown_time = int(config_updates["cooldown"])
-        if "retry_after" in config_updates:
-            app_config.router_settings.retry_after = float(config_updates["retry_after"])
-        if "health_check_enabled" in config_updates:
-            app_config.general_settings.background_health_checks = bool(config_updates["health_check_enabled"])
-        if "health_check_interval" in config_updates:
-            app_config.general_settings.health_check_interval = int(config_updates["health_check_interval"])
+    config_fields = payload.get("config")
+    if isinstance(config_fields, dict):
+        if "timeout" in config_fields:
+            router_updates["timeout"] = float(config_fields["timeout"])
+        if "retries" in config_fields:
+            router_updates["num_retries"] = int(config_fields["retries"])
+        if "cooldown" in config_fields:
+            router_updates["cooldown_time"] = int(config_fields["cooldown"])
+        if "retry_after" in config_fields:
+            router_updates["retry_after"] = float(config_fields["retry_after"])
+        if "health_check_enabled" in config_fields:
+            general_updates["background_health_checks"] = bool(config_fields["health_check_enabled"])
+        if "health_check_interval" in config_fields:
+            general_updates["health_check_interval"] = int(config_fields["health_check_interval"])
 
-    router_state = getattr(request.app.state, "router", None)
-    if router_state is not None:
-        router_state.strategy = RoutingStrategy(app_config.router_settings.routing_strategy)
-        router_state.config.timeout = app_config.router_settings.timeout
-        router_state.config.num_retries = app_config.router_settings.num_retries
-        router_state.config.cooldown_time = app_config.router_settings.cooldown_time
-        router_state.config.retry_after = app_config.router_settings.retry_after
-        router_state._strategy_impl = router_state._load_strategy(router_state.strategy)
+    if router_updates:
+        config_update["router_settings"] = router_updates
+    if general_updates:
+        config_update["general_settings"] = general_updates
+
+    if config_update:
+        await dynamic_config.update_config(config_update, updated_by="admin_api")
 
     response = await get_routing(request)
     await emit_admin_mutation_audit(
@@ -154,45 +160,50 @@ async def get_settings(
 
 
 @router.put("/ui/api/settings", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
-async def update_settings(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+async def update_settings(
+    request: Request,
+    payload: dict[str, Any],
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
     request_start = perf_counter()
-    app_config = getattr(request.app.state, "app_config", None)
-    if app_config is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="App config unavailable")
-    before = await get_settings(request)
+    dynamic_config = getattr(request.app.state, "dynamic_config_manager", None)
+    if dynamic_config is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Config manager unavailable")
+    before = await get_settings(request, authorization=authorization, x_master_key=x_master_key)
+
+    config_update: dict[str, Any] = {}
 
     general_updates = payload.get("general_settings") if isinstance(payload.get("general_settings"), dict) else {}
     router_updates = payload.get("router_settings") if isinstance(payload.get("router_settings"), dict) else {}
     deltallm_updates = payload.get("deltallm_settings") if isinstance(payload.get("deltallm_settings"), dict) else {}
 
-    for key, value in general_updates.items():
-        if hasattr(app_config.general_settings, key):
-            setattr(app_config.general_settings, key, value)
-    for key, value in router_updates.items():
-        if hasattr(app_config.router_settings, key):
-            setattr(app_config.router_settings, key, value)
-    for key, value in deltallm_updates.items():
-        if key == "guardrails" and isinstance(value, list):
-            app_config.deltallm_settings.guardrails = [
-                GuardrailConfig(guardrail_name=str(item.get("guardrail_name")), deltallm_params=item.get("deltallm_params", {}))
-                for item in value
+    if general_updates:
+        config_update["general_settings"] = general_updates
+    if router_updates:
+        config_update["router_settings"] = router_updates
+    if deltallm_updates:
+        if "guardrails" in deltallm_updates and isinstance(deltallm_updates["guardrails"], list):
+            deltallm_updates["guardrails"] = [
+                {"guardrail_name": str(item.get("guardrail_name")), "deltallm_params": item.get("deltallm_params", {})}
+                for item in deltallm_updates["guardrails"]
                 if isinstance(item, dict) and isinstance(item.get("deltallm_params"), dict)
             ]
-            continue
-        if hasattr(app_config.deltallm_settings, key):
-            setattr(app_config.deltallm_settings, key, value)
+        config_update["deltallm_settings"] = deltallm_updates
 
-    if "routing_strategy" in router_updates:
-        router_state = getattr(request.app.state, "router", None)
-        if router_state is not None:
-            router_state.strategy = RoutingStrategy(app_config.router_settings.routing_strategy)
-            router_state._strategy_impl = router_state._load_strategy(router_state.strategy)
+    if config_update:
+        await dynamic_config.update_config(config_update, updated_by="admin_api")
 
     settings = getattr(request.app.state, "settings", None)
     if settings is not None and "master_key" in general_updates:
         setattr(settings, "master_key", general_updates["master_key"])
 
-    response = await get_settings(request)
+    if "log_level" in general_updates:
+        level = str(general_updates["log_level"]).upper()
+        if level in ("DEBUG", "INFO", "WARNING", "ERROR"):
+            logging.getLogger().setLevel(getattr(logging, level))
+
+    response = await get_settings(request, authorization=authorization, x_master_key=x_master_key)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,

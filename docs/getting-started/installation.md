@@ -5,7 +5,7 @@
 - Python 3.11 or later
 - Node.js 20 or later
 - PostgreSQL database
-- Redis server
+- Redis server (optional — enables distributed caching and rate limiting)
 
 ## Clone the Repository
 
@@ -31,11 +31,11 @@ Set the `DATABASE_URL` environment variable to your PostgreSQL connection string
 export DATABASE_URL="postgresql://user:password@localhost:5432/deltallm"
 ```
 
-Generate the Prisma client and push the schema:
+Fetch the Prisma engine binaries and push the schema to the database:
 
 ```bash
-prisma generate
-prisma db push
+python -m prisma py fetch
+python -m prisma db push --schema=prisma/schema.prisma
 ```
 
 ### 3. Configure DeltaLLM
@@ -48,18 +48,23 @@ cp config.example.yaml config.yaml
 
 Edit `config.yaml` with your LLM provider credentials. At minimum, set:
 
-- Your master key in `general_settings.master_key`
+- `general_settings.master_key` — required for API authentication
+- `general_settings.salt_key` — required for API key hashing
 - At least one deployment source:
   - Recommended: `general_settings.model_deployment_source: db_only` and add models via Admin UI/API after startup
   - Optional one-time seed: set `model_deployment_bootstrap_from_config: true` with `model_list`, start once, then switch it back to `false`
 
 See the [Configuration Reference](../configuration/index.md) for full details.
 
-### 4. Start Redis
+### 4. Start Redis (optional)
+
+If you have Redis installed, start it for distributed caching and rate limiting:
 
 ```bash
 redis-server --daemonize yes
 ```
+
+The app works without Redis — it falls back to in-memory caching and rate limiting.
 
 ### 5. Start the Backend
 
@@ -100,6 +105,7 @@ The backend serves the built frontend from `ui/dist/` alongside the API.
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
-| `DELTALLM_MASTER_KEY` | Recommended | Master API key (can also be set in config.yaml) |
-| `DELTALLM_SALT_KEY` | Recommended | Salt for hashing API keys |
+| `DELTALLM_MASTER_KEY` | Yes (or set in config.yaml) | Master API key for admin access |
+| `DELTALLM_SALT_KEY` | Yes (or set in config.yaml) | Salt for hashing API keys |
 | `DELTALLM_CONFIG_PATH` | No | Path to config.yaml (default: `./config.yaml`) |
+| `REDIS_URL` | No | Redis connection string (enables distributed caching and rate limiting) |

@@ -13,7 +13,56 @@ data:
 {{ toYaml .Values.config.router_settings | indent 6 }}
 
     deltallm_settings:
-{{ toYaml .Values.config.deltallm_settings | indent 6 }}
+      fallbacks:
+{{ toYaml .Values.config.deltallm_settings.fallbacks | indent 8 }}
+      context_window_fallbacks:
+{{ toYaml .Values.config.deltallm_settings.context_window_fallbacks | indent 8 }}
+      content_policy_fallbacks:
+{{ toYaml .Values.config.deltallm_settings.content_policy_fallbacks | indent 8 }}
+      guardrails:
+{{ toYaml .Values.config.deltallm_settings.guardrails | indent 8 }}
+      turn_off_message_logging: {{ .Values.config.deltallm_settings.turn_off_message_logging }}
+      success_callback:
+        {{- $successCallbacks := .Values.config.deltallm_settings.success_callback }}
+        {{- if and .Values.prometheus.enabled (not (has "prometheus" $successCallbacks)) }}
+        {{- $successCallbacks = append $successCallbacks "prometheus" }}
+        {{- end }}
+        {{- if and .Values.s3.enabled (not (has "s3" $successCallbacks)) }}
+        {{- $successCallbacks = append $successCallbacks "s3" }}
+        {{- end }}
+{{ toYaml $successCallbacks | indent 8 }}
+      failure_callback:
+        {{- $failureCallbacks := .Values.config.deltallm_settings.failure_callback }}
+        {{- if and .Values.prometheus.enabled (not (has "prometheus" $failureCallbacks)) }}
+        {{- $failureCallbacks = append $failureCallbacks "prometheus" }}
+        {{- end }}
+        {{- if and .Values.s3.enabled (not (has "s3" $failureCallbacks)) }}
+        {{- $failureCallbacks = append $failureCallbacks "s3" }}
+        {{- end }}
+{{ toYaml $failureCallbacks | indent 8 }}
+      callbacks:
+        {{- $callbacks := .Values.config.deltallm_settings.callbacks }}
+        {{- if and .Values.prometheus.enabled (not (has "prometheus" $callbacks)) }}
+        {{- $callbacks = append $callbacks "prometheus" }}
+        {{- end }}
+{{ toYaml $callbacks | indent 8 }}
+      callback_settings:
+        {{- $callbackSettings := .Values.config.deltallm_settings.callback_settings }}
+        {{- if .Values.s3.enabled }}
+        s3:
+          bucket: {{ .Values.s3.bucket | quote }}
+          region: {{ .Values.s3.region | quote }}
+          prefix: {{ .Values.s3.prefix | quote }}
+          {{- if .Values.s3.compression }}
+          compression: {{ .Values.s3.compression | quote }}
+          {{- end }}
+        {{- end }}
+        {{- range $key, $val := $callbackSettings }}
+        {{- if ne $key "s3" }}
+        {{ $key }}:
+{{ toYaml $val | indent 10 }}
+        {{- end }}
+        {{- end }}
 
     general_settings:
 {{ toYaml .Values.config.general_settings | indent 6 }}

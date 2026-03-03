@@ -7,28 +7,23 @@ Get DeltaLLM running and make your first proxied LLM request in under 5 minutes.
 After completing [installation](installation.md), make sure the backend is running:
 
 ```bash
+# Optional: start Redis for distributed caching and rate limiting
 redis-server --daemonize yes
+
 python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ## 2. Verify It's Running
 
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8000/health/liveliness
 ```
 
 Expected response:
 
 ```json
 {
-  "liveliness": "ok",
-  "readiness": {
-    "status": "ok",
-    "checks": {
-      "redis": true,
-      "database": true
-    }
-  }
+  "status": "ok"
 }
 ```
 

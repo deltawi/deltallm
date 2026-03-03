@@ -169,6 +169,8 @@ export default function SettingsPage() {
                 <option value="latency-based-routing">Latency Based</option>
                 <option value="cost-based-routing">Cost Based</option>
                 <option value="usage-based-routing">Usage Based</option>
+                <option value="tag-based-routing">Tag Based</option>
+                <option value="priority-based-routing">Priority Based</option>
                 <option value="weighted">Weighted</option>
                 <option value="rate-limit-aware">Rate Limit Aware</option>
               </select>
