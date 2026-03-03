@@ -195,6 +195,12 @@ class GeneralSettings(BaseModel):
     audit_retention_scan_limit: int = 500
     audit_metadata_retention_days: int = 365
     audit_payload_retention_days: int = 90
+    # If enabled, control-plane audit events marked critical are written synchronously.
+    # If disabled, critical events are queued unless explicitly allowlisted below.
+    audit_control_sync_enabled: bool = True
+    # Optional list of control-plane audit actions that must remain synchronous
+    # even when audit_control_sync_enabled is false.
+    audit_control_sync_actions: list[str] = Field(default_factory=list)
 
     @field_validator("master_key")
     @classmethod

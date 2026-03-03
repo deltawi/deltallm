@@ -68,6 +68,27 @@ def _permission_context(request: Request, scope: Any | None = None) -> dict[str,
     }
 
 
+def _should_sync_control_audit(request: Request, action: str | AuditAction, *, critical: bool) -> bool:
+    if not critical:
+        return False
+
+    general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+    if general_settings is None:
+        return True
+
+    sync_enabled = bool(getattr(general_settings, "audit_control_sync_enabled", True))
+    if sync_enabled:
+        return True
+
+    action_name = normalize_audit_action(action)
+    allowlist = {
+        str(item).strip()
+        for item in (getattr(general_settings, "audit_control_sync_actions", None) or [])
+        if str(item).strip()
+    }
+    return action_name in allowlist
+
+
 async def emit_control_audit_event(
     *,
     request: Request,
@@ -122,7 +143,7 @@ async def emit_control_audit_event(
         error_code=getattr(getattr(error, "response", None), "status_code", None) if error is not None else None,
         metadata=event_metadata,
     )
-    if critical:
+    if _should_sync_control_audit(request, action, critical=critical):
         await audit_service.record_event_sync(event, payloads=payloads)
     else:
-        audit_service.record_event(event, payloads=payloads, critical=False)
+        audit_service.record_event(event, payloads=payloads, critical=critical)
