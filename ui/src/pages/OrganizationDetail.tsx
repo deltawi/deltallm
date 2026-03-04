@@ -48,7 +48,13 @@ export default function OrganizationDetail() {
   const { data: orgMembers, loading: membersLoading, refetch: refetchMembers } = useApi(() => organizations.members(orgId!), [orgId]);
 
   const [showEdit, setShowEdit] = useState(false);
-  const [form, setForm] = useState({ organization_name: '', max_budget: '', rpm_limit: '', tpm_limit: '' });
+  const [form, setForm] = useState({
+    organization_name: '',
+    max_budget: '',
+    rpm_limit: '',
+    tpm_limit: '',
+    audit_content_storage_enabled: false,
+  });
   const [showCreateTeam, setShowCreateTeam] = useState(false);
   const [teamForm, setTeamForm] = useState({ team_alias: '', max_budget: '', rpm_limit: '', tpm_limit: '', models: '' });
   const [showAddMember, setShowAddMember] = useState(false);
@@ -72,6 +78,7 @@ export default function OrganizationDetail() {
       max_budget: org.max_budget != null ? String(org.max_budget) : '',
       rpm_limit: org.rpm_limit != null ? String(org.rpm_limit) : '',
       tpm_limit: org.tpm_limit != null ? String(org.tpm_limit) : '',
+      audit_content_storage_enabled: !!org.audit_content_storage_enabled,
     });
     setShowEdit(true);
   };
@@ -85,6 +92,7 @@ export default function OrganizationDetail() {
         max_budget: form.max_budget ? Number(form.max_budget) : undefined,
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
+        audit_content_storage_enabled: !!form.audit_content_storage_enabled,
       });
       setShowEdit(false);
       refetchOrg();
@@ -297,6 +305,17 @@ export default function OrganizationDetail() {
               <input type="number" value={form.tpm_limit} onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
           </div>
+          <label className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg bg-gray-50">
+            <input
+              type="checkbox"
+              checked={!!form.audit_content_storage_enabled}
+              onChange={(e) => setForm({ ...form, audit_content_storage_enabled: e.target.checked })}
+              className="mt-0.5"
+            />
+            <span className="text-sm text-gray-700">
+              Store request and response payload content in audit logs for this organization.
+            </span>
+          </label>
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setShowEdit(false)} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
             <button onClick={handleSaveOrg} disabled={saving} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">{saving ? 'Saving...' : 'Save Changes'}</button>

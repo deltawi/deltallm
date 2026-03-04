@@ -65,7 +65,14 @@ ORG_ROLE_PERMISSIONS: dict[str, set[str]] = {
         Permission.USER_READ, Permission.USER_UPDATE, Permission.AUDIT_READ,
     },
     OrganizationRole.BILLING: {Permission.ORG_READ, Permission.SPEND_READ, Permission.TEAM_READ, Permission.KEY_READ},
-    OrganizationRole.AUDITOR: {Permission.ORG_READ, Permission.SPEND_READ, Permission.TEAM_READ, Permission.KEY_READ, Permission.USER_READ},
+    OrganizationRole.AUDITOR: {
+        Permission.ORG_READ,
+        Permission.SPEND_READ,
+        Permission.TEAM_READ,
+        Permission.KEY_READ,
+        Permission.USER_READ,
+        Permission.AUDIT_READ,
+    },
 }
 
 TEAM_ROLE_PERMISSIONS: dict[str, set[str]] = {

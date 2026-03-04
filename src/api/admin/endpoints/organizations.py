@@ -15,6 +15,14 @@ from src.middleware.admin import require_admin_permission
 router = APIRouter(tags=["Admin Organizations"])
 
 
+def _optional_bool(value: Any, field_name: str) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be a boolean")
+
+
 def _audit_retention_metadata(payload: dict[str, Any], existing: dict[str, Any] | None = None) -> dict[str, Any] | None:
     metadata: dict[str, Any] = {}
     raw_metadata = payload.get("metadata")
@@ -126,6 +134,10 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
     max_budget = payload.get("max_budget")
     rpm_limit = optional_int(payload.get("rpm_limit"), "rpm_limit")
     tpm_limit = optional_int(payload.get("tpm_limit"), "tpm_limit")
+    audit_content_storage_enabled = _optional_bool(
+        payload.get("audit_content_storage_enabled"),
+        "audit_content_storage_enabled",
+    )
     metadata = _audit_retention_metadata(payload)
 
     await db.execute_raw(
@@ -138,17 +150,19 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
             spend,
             rpm_limit,
             tpm_limit,
+            audit_content_storage_enabled,
             metadata,
             created_at,
             updated_at
         )
-        VALUES (gen_random_uuid(), $1, $2, $3, 0, $4, $5, $6::jsonb, NOW(), NOW())
+        VALUES (gen_random_uuid(), $1, $2, $3, 0, $4, $5, $6, $7::jsonb, NOW(), NOW())
         ON CONFLICT (organization_id)
         DO UPDATE SET
             organization_name = EXCLUDED.organization_name,
             max_budget = EXCLUDED.max_budget,
             rpm_limit = EXCLUDED.rpm_limit,
             tpm_limit = EXCLUDED.tpm_limit,
+            audit_content_storage_enabled = EXCLUDED.audit_content_storage_enabled,
             metadata = COALESCE(EXCLUDED.metadata, deltallm_organizationtable.metadata),
             updated_at = NOW()
         """,
@@ -157,6 +171,7 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
         max_budget,
         rpm_limit,
         tpm_limit,
+        bool(audit_content_storage_enabled) if audit_content_storage_enabled is not None else False,
         metadata if metadata is not None else None,
     )
     response = {
@@ -165,6 +180,7 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
         "max_budget": max_budget,
         "rpm_limit": rpm_limit,
         "tpm_limit": tpm_limit,
+        "audit_content_storage_enabled": bool(audit_content_storage_enabled) if audit_content_storage_enabled is not None else False,
         "metadata": metadata or {},
     }
     await emit_admin_mutation_audit(
@@ -200,6 +216,10 @@ async def update_organization(request: Request, organization_id: str, payload: d
     max_budget = payload.get("max_budget", existing.get("max_budget"))
     rpm_limit = optional_int(payload.get("rpm_limit", existing.get("rpm_limit")), "rpm_limit")
     tpm_limit = optional_int(payload.get("tpm_limit", existing.get("tpm_limit")), "tpm_limit")
+    audit_content_storage_enabled = _optional_bool(
+        payload.get("audit_content_storage_enabled", existing.get("audit_content_storage_enabled")),
+        "audit_content_storage_enabled",
+    )
     metadata = _audit_retention_metadata(payload, existing.get("metadata") if isinstance(existing.get("metadata"), dict) else None)
 
     await db.execute_raw(
@@ -209,14 +229,16 @@ async def update_organization(request: Request, organization_id: str, payload: d
             max_budget = $2,
             rpm_limit = $3,
             tpm_limit = $4,
-            metadata = COALESCE($5::jsonb, metadata),
+            audit_content_storage_enabled = $5,
+            metadata = COALESCE($6::jsonb, metadata),
             updated_at = NOW()
-        WHERE organization_id = $6
+        WHERE organization_id = $7
         """,
         organization_name,
         max_budget,
         rpm_limit,
         tpm_limit,
+        bool(audit_content_storage_enabled),
         metadata if metadata is not None else None,
         organization_id,
     )

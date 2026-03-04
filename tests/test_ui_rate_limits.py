@@ -13,7 +13,11 @@ class FakeAdminDB:
 
     async def execute_raw(self, query: str, *params):
         if "INSERT INTO deltallm_organizationtable" in query:
-            organization_id, organization_name, max_budget, rpm_limit, tpm_limit, metadata = params
+            if len(params) == 7:
+                organization_id, organization_name, max_budget, rpm_limit, tpm_limit, audit_content_storage_enabled, metadata = params
+            else:
+                organization_id, organization_name, max_budget, rpm_limit, tpm_limit, metadata = params
+                audit_content_storage_enabled = False
             self.organizations[organization_id] = {
                 "organization_id": organization_id,
                 "organization_name": organization_name,
@@ -21,6 +25,7 @@ class FakeAdminDB:
                 "spend": 0.0,
                 "rpm_limit": rpm_limit,
                 "tpm_limit": tpm_limit,
+                "audit_content_storage_enabled": bool(audit_content_storage_enabled),
                 "metadata": metadata or {},
                 "created_at": datetime.now(tz=UTC),
                 "updated_at": datetime.now(tz=UTC),
@@ -28,7 +33,11 @@ class FakeAdminDB:
             return 1
 
         if "UPDATE deltallm_organizationtable" in query:
-            organization_name, max_budget, rpm_limit, tpm_limit, metadata, organization_id = params
+            if len(params) == 7:
+                organization_name, max_budget, rpm_limit, tpm_limit, audit_content_storage_enabled, metadata, organization_id = params
+            else:
+                organization_name, max_budget, rpm_limit, tpm_limit, metadata, organization_id = params
+                audit_content_storage_enabled = self.organizations[organization_id].get("audit_content_storage_enabled", False)
             row = self.organizations[organization_id]
             row.update(
                 {
@@ -36,6 +45,7 @@ class FakeAdminDB:
                     "max_budget": max_budget,
                     "rpm_limit": rpm_limit,
                     "tpm_limit": tpm_limit,
+                    "audit_content_storage_enabled": bool(audit_content_storage_enabled),
                     "metadata": metadata or row.get("metadata") or {},
                     "updated_at": datetime.now(tz=UTC),
                 }
