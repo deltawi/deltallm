@@ -21,6 +21,8 @@ export default function Guardrails() {
   const [showCreate, setShowCreate] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
   const [scopeTarget, setScopeTarget] = useState<ScopeTarget>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({
     guardrail_name: '',
     guardrail: '',
@@ -48,30 +50,38 @@ export default function Guardrails() {
   };
 
   const handleSave = async () => {
-    const current = data || [];
-    const newItem = {
-      guardrail_name: form.guardrail_name,
-      deltallm_params: {
-        guardrail: form.guardrail,
-        mode: form.mode,
-        default_action: form.default_action,
-        threshold: Number(form.threshold),
-        default_on: form.default_on,
-      },
-    };
+    setError(null);
+    setSaving(true);
+    try {
+      const current = data || [];
+      const newItem = {
+        guardrail_name: form.guardrail_name,
+        deltallm_params: {
+          guardrail: form.guardrail,
+          mode: form.mode,
+          default_action: form.default_action,
+          threshold: Number(form.threshold),
+          default_on: form.default_on,
+        },
+      };
 
-    let updated;
-    if (editItem) {
-      updated = current.map((g: any) =>
-        g.guardrail_name === editItem.guardrail_name ? newItem : g
-      );
-    } else {
-      updated = [...current, newItem];
+      let updated;
+      if (editItem) {
+        updated = current.map((g: any) =>
+          g.guardrail_name === editItem.guardrail_name ? newItem : g
+        );
+      } else {
+        updated = [...current, newItem];
+      }
+      await saveAll(updated);
+      setShowCreate(false);
+      setEditItem(null);
+      setForm({ guardrail_name: '', guardrail: '', mode: 'pre_call', default_action: 'block', threshold: '0.5', default_on: true });
+    } catch (err: any) {
+      setError(err?.message || 'Failed to save guardrail');
+    } finally {
+      setSaving(false);
     }
-    await saveAll(updated);
-    setShowCreate(false);
-    setEditItem(null);
-    setForm({ guardrail_name: '', guardrail: '', mode: 'pre_call', default_action: 'block', threshold: '0.5', default_on: true });
   };
 
   const handleDelete = async (name: string) => {
@@ -122,7 +132,7 @@ export default function Guardrails() {
           <h1 className="text-2xl font-bold text-gray-900">Guardrails</h1>
           <p className="text-sm text-gray-500 mt-1">Configure content safety and security policies</p>
         </div>
-        <button onClick={() => { setForm({ guardrail_name: '', guardrail: '', mode: 'pre_call', default_action: 'block', threshold: '0.5', default_on: true }); setShowCreate(true); }} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
+        <button onClick={() => { setForm({ guardrail_name: '', guardrail: '', mode: 'pre_call', default_action: 'block', threshold: '0.5', default_on: true }); setError(null); setShowCreate(true); }} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
           <Plus className="w-4 h-4" /> Add Guardrail
         </button>
       </div>
@@ -130,8 +140,11 @@ export default function Guardrails() {
         <DataTable columns={columns} data={data || []} loading={loading} emptyMessage="No guardrails configured" />
       </Card>
 
-      <Modal open={showCreate || !!editItem} onClose={() => { setShowCreate(false); setEditItem(null); }} title={editItem ? 'Edit Guardrail' : 'Add Guardrail'}>
+      <Modal open={showCreate || !!editItem} onClose={() => { setShowCreate(false); setEditItem(null); setError(null); }} title={editItem ? 'Edit Guardrail' : 'Add Guardrail'}>
         <div className="space-y-4">
+          {error && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>
+          )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Guardrail Name</label>
             <input value={form.guardrail_name} onChange={(e) => setForm({ ...form, guardrail_name: e.target.value })} placeholder="pii-detection" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" disabled={!!editItem} />
@@ -167,8 +180,8 @@ export default function Guardrails() {
             <label htmlFor="default_on" className="text-sm text-gray-700">Enabled by default</label>
           </div>
           <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => { setShowCreate(false); setEditItem(null); }} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-            <button onClick={handleSave} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">{editItem ? 'Save Changes' : 'Create'}</button>
+            <button onClick={() => { setShowCreate(false); setEditItem(null); setError(null); }} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
+            <button onClick={handleSave} disabled={saving} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">{saving ? 'Saving...' : editItem ? 'Save Changes' : 'Create'}</button>
           </div>
         </div>
       </Modal>

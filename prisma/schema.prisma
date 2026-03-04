@@ -225,7 +225,7 @@ model DeltaLLM_PlatformSession {
   updated_at          DateTime @updatedAt
   last_seen_at        DateTime @default(now())
 
-  account DeltaLLM_PlatformAccount @relation(fields: [account_id], references: [account_id])
+  account DeltaLLM_PlatformAccount @relation(fields: [account_id], references: [account_id], onDelete: Cascade)
 
   @@index([account_id])
   @@index([expires_at])
@@ -241,7 +241,7 @@ model DeltaLLM_PlatformIdentity {
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
-  account DeltaLLM_PlatformAccount @relation(fields: [account_id], references: [account_id])
+  account DeltaLLM_PlatformAccount @relation(fields: [account_id], references: [account_id], onDelete: Cascade)
 
   @@unique([provider, subject])
   @@index([account_id])
@@ -256,7 +256,7 @@ model DeltaLLM_OrganizationMembership {
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
-  account DeltaLLM_PlatformAccount @relation(fields: [account_id], references: [account_id])
+  account DeltaLLM_PlatformAccount @relation(fields: [account_id], references: [account_id], onDelete: Cascade)
 
   @@unique([account_id, organization_id])
   @@index([organization_id])
@@ -271,7 +271,7 @@ model DeltaLLM_TeamMembership {
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
-  account DeltaLLM_PlatformAccount @relation(fields: [account_id], references: [account_id])
+  account DeltaLLM_PlatformAccount @relation(fields: [account_id], references: [account_id], onDelete: Cascade)
 
   @@unique([account_id, team_id])
   @@index([team_id])

@@ -1,118 +1,158 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
-from datetime import UTC, datetime
+
+class DummyIdentityService:
+    async def change_password(self, account_id: str, new_password: str, current_password: str | None = None):
+        return None
 
 
 class FakeDB:
     def __init__(self) -> None:
-        self.organizations: dict[str, dict] = {}
-        self.teams: dict[str, dict] = {}
-        self.users: dict[str, dict] = {}
+        now = datetime.now(tz=UTC)
+        self.accounts: dict[str, dict] = {
+            "acct-1": {
+                "account_id": "acct-1",
+                "email": "owner@example.com",
+                "role": "org_user",
+                "is_active": True,
+                "force_password_change": False,
+                "mfa_enabled": False,
+                "created_at": now,
+                "updated_at": now,
+                "last_login_at": None,
+            }
+        }
+        self.org_memberships: dict[str, dict] = {}
+        self.team_memberships: dict[str, dict] = {}
 
     async def execute_raw(self, query: str, *params):
-        if "INSERT INTO deltallm_organizationtable" in query:
-            organization_id = str(params[0])
-            self.organizations[organization_id] = {"organization_id": organization_id}
-            return 1
-
-        if "INSERT INTO deltallm_teamtable" in query:
-            team_id = str(params[0])
-            organization_id = str(params[2])
-            self.teams[team_id] = {"team_id": team_id, "organization_id": organization_id}
-            return 1
-
-        if "INSERT INTO deltallm_usertable" in query:
-            if len(params) == 8:
-                user_id, user_email, user_role, models, team_id, max_budget, rpm_limit, tpm_limit = params
+        if "INSERT INTO deltallm_platformaccount" in query:
+            email, role, is_active = params
+            account = next((a for a in self.accounts.values() if a["email"].lower() == str(email).lower()), None)
+            now = datetime.now(tz=UTC)
+            if account is None:
+                account_id = f"acct-{len(self.accounts) + 1}"
+                self.accounts[account_id] = {
+                    "account_id": account_id,
+                    "email": str(email),
+                    "role": str(role),
+                    "is_active": bool(is_active),
+                    "force_password_change": False,
+                    "mfa_enabled": False,
+                    "created_at": now,
+                    "updated_at": now,
+                    "last_login_at": None,
+                }
             else:
-                user_id, user_email, user_role, team_id = params
-                models, max_budget, rpm_limit, tpm_limit = [], None, None, None
-            self.users[str(user_id)] = {
-                "user_id": user_id,
-                "user_email": user_email,
-                "user_role": user_role,
-                "models": models,
-                "team_id": team_id,
-                "max_budget": max_budget,
-                "rpm_limit": rpm_limit,
-                "tpm_limit": tpm_limit,
-                "spend": 0.0,
-                "blocked": False,
+                account["role"] = str(role)
+                account["is_active"] = bool(is_active)
+                account["updated_at"] = now
+            return 1
+
+        if "INSERT INTO deltallm_organizationmembership" in query:
+            account_id, organization_id, role = params
+            self.org_memberships[f"om-{len(self.org_memberships) + 1}"] = {
+                "membership_id": f"om-{len(self.org_memberships) + 1}",
+                "account_id": str(account_id),
+                "organization_id": str(organization_id),
+                "role": str(role),
                 "created_at": datetime.now(tz=UTC),
                 "updated_at": datetime.now(tz=UTC),
             }
             return 1
+
+        if "INSERT INTO deltallm_teammembership" in query:
+            account_id, team_id, role = params
+            self.team_memberships[f"tm-{len(self.team_memberships) + 1}"] = {
+                "membership_id": f"tm-{len(self.team_memberships) + 1}",
+                "account_id": str(account_id),
+                "team_id": str(team_id),
+                "role": str(role),
+                "created_at": datetime.now(tz=UTC),
+                "updated_at": datetime.now(tz=UTC),
+            }
+            return 1
+
         return 1
 
     async def query_raw(self, query: str, *params):
-        if "SELECT team_id, team_alias, organization_id" in query and "FROM deltallm_teamtable" in query:
-            row = self.teams.get(str(params[0]))
-            return [row] if row else []
-        if "SELECT organization_id FROM deltallm_teamtable WHERE team_id = $1" in query:
-            row = self.teams.get(str(params[0]))
-            return [{"organization_id": row["organization_id"]}] if row else []
-        if "SELECT user_id, user_email, user_role" in query and "FROM deltallm_usertable" in query:
-            return list(self.users.values())
+        if "FROM deltallm_platformaccount" in query and "WHERE lower(email)=lower($1)" in query:
+            email = str(params[0]).lower()
+            for row in self.accounts.values():
+                if str(row.get("email") or "").lower() == email:
+                    return [row]
+            return []
+
+        if "FROM deltallm_platformaccount" in query:
+            return list(self.accounts.values())
+
+        if "FROM deltallm_organizationmembership" in query and "WHERE account_id = $1" in query:
+            account_id = str(params[0])
+            return [m for m in self.org_memberships.values() if m["account_id"] == account_id]
+
+        if "FROM deltallm_organizationmembership" in query:
+            return list(self.org_memberships.values())
+
+        if "FROM deltallm_teammembership" in query and "WHERE account_id = $1" in query:
+            account_id = str(params[0])
+            return [m for m in self.team_memberships.values() if m["account_id"] == account_id]
+
+        if "FROM deltallm_teammembership" in query:
+            return list(self.team_memberships.values())
+
         return []
 
 
 @pytest.mark.asyncio
-async def test_create_user_profile_type_alias_is_normalized(client, test_app):
+async def test_create_rbac_account_invalid_role_rejected(client, test_app):
     fake_db = FakeDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    test_app.state.platform_identity_service = DummyIdentityService()
     setattr(test_app.state.settings, "master_key", "mk-test")
-    headers = {"Authorization": "Bearer mk-test"}
 
     response = await client.post(
-        "/ui/api/users",
-        headers=headers,
-        json={"user_id": "user-1", "user_role": "admin"},
-    )
-
-    assert response.status_code == 200
-    assert response.json()["user_role"] == "team_admin"
-
-
-@pytest.mark.asyncio
-async def test_create_user_profile_type_invalid_rejected(client, test_app):
-    fake_db = FakeDB()
-    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
-    setattr(test_app.state.settings, "master_key", "mk-test")
-    headers = {"Authorization": "Bearer mk-test"}
-
-    response = await client.post(
-        "/ui/api/users",
-        headers=headers,
-        json={"user_id": "user-2", "user_role": "platform_admin"},
+        "/ui/api/rbac/accounts",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"email": "test@example.com", "role": "team_admin"},
     )
 
     assert response.status_code == 400
-    assert "user_role must be one of" in response.text
+    assert "invalid role" in response.text
 
 
 @pytest.mark.asyncio
-async def test_add_team_member_profile_type_alias_is_normalized(client, test_app):
+async def test_create_org_membership_invalid_role_rejected(client, test_app):
     fake_db = FakeDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    test_app.state.platform_identity_service = DummyIdentityService()
     setattr(test_app.state.settings, "master_key", "mk-test")
-    headers = {"Authorization": "Bearer mk-test"}
-
-    org = await client.post("/ui/api/organizations", headers=headers, json={"organization_id": "org-1"})
-    assert org.status_code == 200
-    team = await client.post(
-        "/ui/api/teams",
-        headers=headers,
-        json={"team_id": "team-1", "organization_id": "org-1"},
-    )
-    assert team.status_code == 200
 
     response = await client.post(
-        "/ui/api/teams/team-1/members",
-        headers=headers,
-        json={"user_id": "member-1", "user_role": "user"},
+        "/ui/api/rbac/organization-memberships",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"account_id": "acct-1", "organization_id": "org-1", "role": "team_viewer"},
     )
 
-    assert response.status_code == 200
-    assert response.json()["user_role"] == "internal_user"
+    assert response.status_code == 400
+    assert "invalid organization role" in response.text
+
+
+@pytest.mark.asyncio
+async def test_create_team_membership_invalid_role_rejected(client, test_app):
+    fake_db = FakeDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    test_app.state.platform_identity_service = DummyIdentityService()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.post(
+        "/ui/api/rbac/team-memberships",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"account_id": "acct-1", "team_id": "team-1", "role": "org_owner"},
+    )
+
+    assert response.status_code == 400
+    assert "invalid team role" in response.text

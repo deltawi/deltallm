@@ -141,6 +141,12 @@ export const organizations = {
   update: (orgId: string, payload: any) =>
     apiFetch<any>(`/ui/api/organizations/${encodeURIComponent(orgId)}`, { method: 'PUT', json: payload }),
   members: (orgId: string) => apiFetch<any[]>(`/ui/api/organizations/${encodeURIComponent(orgId)}/members`),
+  memberCandidates: (orgId: string, params?: { search?: string; limit?: number }) =>
+    apiFetch<any[]>(withQuery(`/ui/api/organizations/${encodeURIComponent(orgId)}/member-candidates`, params as any)),
+  addMember: (orgId: string, payload: any) =>
+    apiFetch<any>(`/ui/api/organizations/${encodeURIComponent(orgId)}/members`, { method: 'POST', json: payload }),
+  removeMember: (orgId: string, membershipId: string) =>
+    apiFetch<any>(`/ui/api/organizations/${encodeURIComponent(orgId)}/members/${encodeURIComponent(membershipId)}`, { method: 'DELETE' }),
   teams: (orgId: string) => apiFetch<any[]>(`/ui/api/organizations/${encodeURIComponent(orgId)}/teams`),
 };
 
@@ -152,18 +158,11 @@ export const teams = {
   update: (teamId: string, payload: any) => apiFetch<any>(`/ui/api/teams/${encodeURIComponent(teamId)}`, { method: 'PUT', json: payload }),
   delete: (teamId: string) => apiFetch<any>(`/ui/api/teams/${encodeURIComponent(teamId)}`, { method: 'DELETE' }),
   members: (teamId: string) => apiFetch<any[]>(`/ui/api/teams/${encodeURIComponent(teamId)}/members`),
+  memberCandidates: (teamId: string, params?: { search?: string; limit?: number }) =>
+    apiFetch<any[]>(withQuery(`/ui/api/teams/${encodeURIComponent(teamId)}/member-candidates`, params as any)),
   addMember: (teamId: string, payload: any) => apiFetch<any>(`/ui/api/teams/${encodeURIComponent(teamId)}/members`, { method: 'POST', json: payload }),
   removeMember: (teamId: string, userId: string) =>
     apiFetch<any>(`/ui/api/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
-};
-
-export const users = {
-  list: (params?: { search?: string; team_id?: string; user_role?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<any>>(withQuery('/ui/api/users', params as any)),
-  create: (payload: any) => apiFetch<any>('/ui/api/users', { method: 'POST', json: payload }),
-  update: (userId: string, payload: any) => apiFetch<any>(`/ui/api/users/${encodeURIComponent(userId)}`, { method: 'PUT', json: payload }),
-  block: (userId: string, blocked: boolean) =>
-    apiFetch<any>(`/ui/api/users/${encodeURIComponent(userId)}/block`, { method: 'POST', json: { blocked } }),
 };
 
 export const keys = {
@@ -233,18 +232,32 @@ export interface TeamMembership {
   updated_at?: string;
 }
 
+export interface Principal extends RBACAccount {
+  organization_memberships: OrgMembership[];
+  team_memberships: TeamMembership[];
+}
+
 export const rbac = {
+  principals: {
+    list: (params?: { search?: string; limit?: number; offset?: number }) =>
+      apiFetch<Paginated<Principal>>(withQuery('/ui/api/principals', params as any)),
+  },
   accounts: {
-    list: () => apiFetch<RBACAccount[]>('/ui/api/rbac/accounts'),
     upsert: (payload: any) => apiFetch<any>('/ui/api/rbac/accounts', { method: 'POST', json: payload }),
+    delete: (accountId: string) =>
+      apiFetch<any>(`/ui/api/rbac/accounts/${encodeURIComponent(accountId)}`, { method: 'DELETE' }),
   },
   orgMemberships: {
     list: () => apiFetch<OrgMembership[]>('/ui/api/rbac/organization-memberships'),
     upsert: (payload: any) => apiFetch<any>('/ui/api/rbac/organization-memberships', { method: 'POST', json: payload }),
+    delete: (membershipId: string) =>
+      apiFetch<any>(`/ui/api/rbac/organization-memberships/${encodeURIComponent(membershipId)}`, { method: 'DELETE' }),
   },
   teamMemberships: {
     list: () => apiFetch<TeamMembership[]>('/ui/api/rbac/team-memberships'),
     upsert: (payload: any) => apiFetch<any>('/ui/api/rbac/team-memberships', { method: 'POST', json: payload }),
+    delete: (membershipId: string) =>
+      apiFetch<any>(`/ui/api/rbac/team-memberships/${encodeURIComponent(membershipId)}`, { method: 'DELETE' }),
   },
 };
 

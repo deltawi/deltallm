@@ -13,7 +13,6 @@ import UsersPage from './pages/UsersPage';
 import Usage from './pages/Usage';
 import Guardrails from './pages/Guardrails';
 import SettingsPage from './pages/SettingsPage';
-import RBACAccounts from './pages/RBACAccounts';
 import BatchJobs from './pages/BatchJobs';
 import BatchJobDetail from './pages/BatchJobDetail';
 import OrganizationDetail from './pages/OrganizationDetail';
@@ -66,7 +65,7 @@ function AppRoutes() {
         <Route path="/batches/:batchId" element={<BatchJobDetail />} />
         <Route path="/guardrails" element={isPlatformAdmin ? <Guardrails /> : <Navigate to="/" replace />} />
         <Route path="/settings" element={isPlatformAdmin ? <SettingsPage /> : <Navigate to="/" replace />} />
-        <Route path="/access-control" element={isPlatformAdmin ? <RBACAccounts /> : <Navigate to="/" replace />} />
+        <Route path="/access-control" element={<Navigate to="/users" replace />} />
       </Route>
     </Routes>
   );

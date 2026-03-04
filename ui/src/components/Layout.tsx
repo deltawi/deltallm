@@ -14,7 +14,6 @@ import {
   Settings,
   LogOut,
   Zap,
-  UserCog,
   Menu,
   X,
 } from 'lucide-react';
@@ -26,11 +25,10 @@ const navItems = [
   { to: '/keys', icon: Key, label: 'API Keys' },
   { to: '/organizations', icon: Building2, label: 'Organizations' },
   { to: '/teams', icon: UsersRound, label: 'Teams' },
-  { to: '/users', icon: Users, label: 'Users' },
+  { to: '/users', icon: Users, label: 'People & Access' },
   { to: '/usage', icon: BarChart3, label: 'Usage' },
   { to: '/batches', icon: Layers, label: 'Batch Jobs' },
   { to: '/guardrails', icon: Shield, label: 'Guardrails', adminOnly: true },
-  { to: '/access-control', icon: UserCog, label: 'Access Control', adminOnly: true },
   { to: '/settings', icon: Settings, label: 'Settings', adminOnly: true },
 ];
 

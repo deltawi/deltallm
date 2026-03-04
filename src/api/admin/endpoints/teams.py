@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
-from src.auth.roles import Permission, ORG_ROLE_PERMISSIONS, TEAM_ROLE_PERMISSIONS
+from src.auth.roles import Permission, ORG_ROLE_PERMISSIONS, TEAM_ROLE_PERMISSIONS, TeamRole
 from src.audit import AuditAction
 from src.api.admin.endpoints.common import (
     db_or_503,
@@ -15,7 +15,6 @@ from src.api.admin.endpoints.common import (
     to_json_value,
     get_auth_scope,
     AuthScope,
-    normalize_user_profile_type,
 )
 from src.middleware.platform_auth import get_platform_auth_context
 
@@ -103,7 +102,7 @@ async def list_teams(
 
     select_cols = """t.team_id, t.team_alias, t.organization_id, t.max_budget, t.spend, t.models, t.rpm_limit, t.tpm_limit, t.blocked,
                    t.created_at, t.updated_at,
-                   (SELECT COUNT(*) FROM deltallm_usertable u WHERE u.team_id = t.team_id) AS member_count"""
+                   (SELECT COUNT(*) FROM deltallm_teammembership tm WHERE tm.team_id = t.team_id) AS member_count"""
 
     count_rows = await db.query_raw(
         f"SELECT COUNT(*) AS total FROM deltallm_teamtable t {where_sql}",
@@ -311,12 +310,75 @@ async def list_team_members(
     await _require_team_access(request, scope, db, team_id)
     rows = await db.query_raw(
         """
-        SELECT user_id, user_email, user_role, spend, max_budget, team_id, created_at, updated_at
-        FROM deltallm_usertable
-        WHERE team_id = $1
-        ORDER BY created_at DESC
+        SELECT
+            tm.membership_id,
+            tm.account_id AS user_id,
+            pa.email AS user_email,
+            tm.role AS user_role,
+            tm.team_id,
+            tm.created_at,
+            tm.updated_at
+        FROM deltallm_teammembership tm
+        JOIN deltallm_platformaccount pa
+          ON pa.account_id = tm.account_id
+        WHERE tm.team_id = $1
+        ORDER BY tm.created_at DESC
         """,
         team_id,
+    )
+    return [to_json_value(dict(row)) for row in rows]
+
+
+@router.get("/ui/api/teams/{team_id}/member-candidates")
+async def list_team_member_candidates(
+    request: Request,
+    team_id: str,
+    search: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> list[dict[str, Any]]:
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.TEAM_READ)
+    db = db_or_503(request)
+    team = await _require_team_access(request, scope, db, team_id)
+    organization_id = team.get("organization_id")
+    if not organization_id:
+        return []
+
+    clauses = [
+        "om.organization_id = $1",
+    ]
+    params: list[Any] = [organization_id, team_id]
+    if search and search.strip():
+        params.append(f"%{search.strip()}%")
+        clauses.append(f"(pa.email ILIKE ${len(params)} OR pa.account_id::text ILIKE ${len(params)})")
+    params.append(limit)
+
+    where_sql = " AND ".join(clauses)
+    rows = await db.query_raw(
+        f"""
+        SELECT
+            pa.account_id,
+            pa.email,
+            pa.role,
+            pa.is_active,
+            pa.created_at,
+            pa.updated_at,
+            om.role AS organization_role,
+            tm.membership_id AS team_membership_id,
+            tm.role AS team_role,
+            (tm.membership_id IS NOT NULL) AS already_member
+        FROM deltallm_platformaccount pa
+        JOIN deltallm_organizationmembership om
+          ON om.account_id = pa.account_id
+        LEFT JOIN deltallm_teammembership tm
+          ON tm.account_id = pa.account_id
+         AND tm.team_id = $2
+        WHERE {where_sql}
+        ORDER BY pa.email ASC, pa.account_id ASC
+        LIMIT ${len(params)}
+        """,
+        *params,
     )
     return [to_json_value(dict(row)) for row in rows]
 
@@ -332,28 +394,46 @@ async def add_team_member(
     request_start = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
-    await _require_team_access(request, scope, db, team_id, write=True)
-    user_id = str(payload.get("user_id") or "").strip()
-    user_email = payload.get("user_email")
-    user_role = normalize_user_profile_type(payload.get("user_role"), default="internal_user")
-    if not user_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id is required")
+    team = await _require_team_access(request, scope, db, team_id, write=True)
+    account_id = str(payload.get("account_id") or payload.get("user_id") or "").strip()
+    user_role = str(payload.get("user_role") or TeamRole.VIEWER).strip()
+    allowed_roles = {TeamRole.ADMIN, TeamRole.DEVELOPER, TeamRole.VIEWER}
+    if user_role not in allowed_roles:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid team role")
+    if not account_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="account_id is required")
+
+    account_rows = await db.query_raw(
+        "SELECT account_id, email FROM deltallm_platformaccount WHERE account_id = $1 LIMIT 1",
+        account_id,
+    )
+    if not account_rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+
+    organization_id = team.get("organization_id")
+    if organization_id:
+        org_membership_rows = await db.query_raw(
+            "SELECT membership_id FROM deltallm_organizationmembership WHERE organization_id = $1 AND account_id = $2 LIMIT 1",
+            organization_id,
+            account_id,
+        )
+        if not org_membership_rows:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Account is not a member of this team's organization")
 
     await db.execute_raw(
         """
-        INSERT INTO deltallm_usertable (user_id, user_email, user_role, spend, models, team_id, created_at, updated_at)
-        VALUES ($1, $2, $3, 0, '{}'::text[], $4, NOW(), NOW())
-        ON CONFLICT (user_id)
-        DO UPDATE SET user_email = EXCLUDED.user_email, user_role = EXCLUDED.user_role, team_id = EXCLUDED.team_id, updated_at = NOW()
+        INSERT INTO deltallm_teammembership (membership_id, account_id, team_id, role, created_at, updated_at)
+        VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
+        ON CONFLICT (account_id, team_id)
+        DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
         """,
-        user_id,
-        user_email,
-        user_role,
+        account_id,
         team_id,
+        user_role,
     )
     response = {
-        "user_id": user_id,
-        "user_email": user_email,
+        "user_id": account_id,
+        "user_email": account_rows[0].get("email"),
         "user_role": user_role,
         "team_id": team_id,
     }
@@ -363,7 +443,7 @@ async def add_team_member(
         action=AuditAction.ADMIN_TEAM_MEMBER_ADD,
         scope=scope,
         resource_type="team_membership",
-        resource_id=f"{team_id}:{user_id}",
+        resource_id=f"{team_id}:{account_id}",
         request_payload=payload,
         response_payload=response,
     )
@@ -387,6 +467,10 @@ async def delete_team(
     )
     if key_count and int(key_count[0].get("cnt", 0)) > 0:
         raise HTTPException(status_code=409, detail=f"Cannot delete team: {key_count[0]['cnt']} API key(s) still assigned. Reassign or revoke them first.")
+    await db.execute_raw(
+        "DELETE FROM deltallm_teammembership WHERE team_id = $1",
+        team_id,
+    )
     await db.execute_raw(
         "UPDATE deltallm_usertable SET team_id = NULL, updated_at = NOW() WHERE team_id = $1",
         team_id,
@@ -420,12 +504,12 @@ async def remove_team_member(
     scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
     await _require_team_access(request, scope, db, team_id, write=True)
-    updated = await db.execute_raw(
-        "UPDATE deltallm_usertable SET team_id = NULL, updated_at = NOW() WHERE team_id = $1 AND user_id = $2",
+    removed = await db.execute_raw(
+        "DELETE FROM deltallm_teammembership WHERE team_id = $1 AND account_id = $2",
         team_id,
         user_id,
     )
-    response = {"removed": int(updated or 0) > 0}
+    response = {"removed": int(removed or 0) > 0}
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,

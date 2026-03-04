@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 AUDIT_METADATA_RETENTION_DAYS_KEY = "audit_metadata_retention_days"
 AUDIT_PAYLOAD_RETENTION_DAYS_KEY = "audit_payload_retention_days"
@@ -335,19 +336,23 @@ class AuditRepository:
         if self.prisma is None:
             return record
 
+        event_id = record.event_id.strip() if record.event_id else ""
+        if not event_id:
+            event_id = str(uuid4())
+
         rows = await self.prisma.query_raw(
             """
             INSERT INTO deltallm_auditevent (
-                organization_id, actor_type, actor_id, api_key, action,
+                event_id, organization_id, actor_type, actor_id, api_key, action,
                 resource_type, resource_id, request_id, correlation_id,
                 ip, user_agent, status, latency_ms, input_tokens, output_tokens,
                 error_type, error_code, metadata, content_stored, prev_hash, event_hash
             )
             VALUES (
-                $1, $2, $3, $4, $5,
-                $6, $7, $8, $9,
-                $10, $11, $12, $13, $14, $15,
-                $16, $17, $18::jsonb, $19, $20, $21
+                $1, $2, $3, $4, $5, $6,
+                $7, $8, $9, $10,
+                $11, $12, $13, $14, $15, $16,
+                $17, $18, $19::jsonb, $20, $21, $22
             )
             RETURNING
                 event_id, occurred_at, organization_id, actor_type, actor_id, api_key, action,
@@ -355,6 +360,7 @@ class AuditRepository:
                 latency_ms, input_tokens, output_tokens, error_type, error_code, metadata,
                 content_stored, prev_hash, event_hash
             """,
+            event_id,
             record.organization_id,
             record.actor_type,
             record.actor_id,
@@ -385,16 +391,21 @@ class AuditRepository:
         if self.prisma is None:
             return record
 
+        payload_id = record.payload_id.strip() if record.payload_id else ""
+        if not payload_id:
+            payload_id = str(uuid4())
+
         rows = await self.prisma.query_raw(
             """
             INSERT INTO deltallm_auditpayload (
-                event_id, kind, storage_mode, content_json, storage_uri,
+                payload_id, event_id, kind, storage_mode, content_json, storage_uri,
                 content_sha256, size_bytes, redacted
             )
-            VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)
             RETURNING payload_id, event_id, kind, storage_mode, content_json, storage_uri,
                       content_sha256, size_bytes, redacted, created_at
             """,
+            payload_id,
             record.event_id,
             record.kind,
             record.storage_mode,
