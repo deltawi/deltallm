@@ -8,6 +8,9 @@ export interface SessionInfo {
   account_id?: string | null;
   email?: string | null;
   role?: string | null;
+  effective_permissions?: string[];
+  organization_memberships?: Array<Record<string, unknown>>;
+  team_memberships?: Array<Record<string, unknown>>;
   mfa_enabled?: boolean;
   mfa_prompt?: boolean;
   force_password_change?: boolean;
@@ -191,4 +194,3 @@ export function useAuth() {
   if (!ctx) throw new Error('useAuth must be used within AuthProvider');
   return ctx;
 }
-

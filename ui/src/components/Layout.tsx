@@ -26,6 +26,7 @@ const navItems = [
   { to: '/organizations', icon: Building2, label: 'Organizations' },
   { to: '/teams', icon: UsersRound, label: 'Teams' },
   { to: '/users', icon: Users, label: 'People & Access' },
+  { to: '/audit', icon: Shield, label: 'Audit Logs', requiredPermission: 'audit.read' },
   { to: '/usage', icon: BarChart3, label: 'Usage' },
   { to: '/batches', icon: Layers, label: 'Batch Jobs' },
   { to: '/guardrails', icon: Shield, label: 'Guardrails', adminOnly: true },
@@ -108,8 +109,13 @@ export default function Layout() {
   const displayEmail = authMode === 'master_key' ? 'Master Key' : (session?.email || 'Unknown');
   const displayRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
   const isPlatformAdmin = displayRole === 'platform_admin';
+  const permissions = new Set((session?.effective_permissions || []).map((item) => String(item)));
 
-  const visibleNavItems = navItems.filter(item => !item.adminOnly || isPlatformAdmin);
+  const visibleNavItems = navItems.filter((item) => {
+    if (item.adminOnly && !isPlatformAdmin) return false;
+    if (item.requiredPermission && !isPlatformAdmin && !permissions.has(item.requiredPermission)) return false;
+    return true;
+  });
 
   return (
     <div className="flex h-screen bg-gray-50">

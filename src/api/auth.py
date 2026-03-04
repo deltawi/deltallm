@@ -9,7 +9,7 @@ from src.audit.actions import AuditAction
 from src.api.audit import emit_control_audit_event
 from src.middleware.platform_auth import SESSION_COOKIE_NAME, get_platform_auth_context
 from src.models.errors import RateLimitError
-from src.auth.roles import TeamRole
+from src.auth.roles import ORG_ROLE_PERMISSIONS, PLATFORM_ROLE_PERMISSIONS, TEAM_ROLE_PERMISSIONS, TeamRole
 from src.models.platform_auth import (
     ChangePasswordRequest,
     CurrentSessionResponse,
@@ -52,6 +52,21 @@ def _client_ip(request: Request) -> str:
     if request.client and request.client.host:
         return request.client.host
     return "unknown"
+
+
+def _effective_permissions(context: Any) -> list[str]:
+    permissions: set[str] = set()
+    role = str(getattr(context, "role", "") or "")
+    permissions.update(PLATFORM_ROLE_PERMISSIONS.get(role, set()))
+
+    for membership in list(getattr(context, "organization_memberships", []) or []):
+        org_role = str(membership.get("role") or "")
+        permissions.update(ORG_ROLE_PERMISSIONS.get(org_role, set()))
+
+    for membership in list(getattr(context, "team_memberships", []) or []):
+        team_role = str(membership.get("role") or "")
+        permissions.update(TEAM_ROLE_PERMISSIONS.get(team_role, set()))
+    return sorted(permissions)
 
 
 async def _enforce_auth_rate_limit(
@@ -195,6 +210,9 @@ async def auth_me(request: Request) -> CurrentSessionResponse:
         account_id=context.account_id,
         email=context.email,
         role=context.role,
+        effective_permissions=_effective_permissions(context),
+        organization_memberships=[dict(item) for item in (context.organization_memberships or [])],
+        team_memberships=[dict(item) for item in (context.team_memberships or [])],
         mfa_enabled=context.mfa_enabled,
         mfa_verified=context.mfa_verified,
         mfa_prompt=not context.mfa_enabled,

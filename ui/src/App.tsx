@@ -20,11 +20,13 @@ import TeamDetail from './pages/TeamDetail';
 import ModelDetail from './pages/ModelDetail';
 import ModelEdit from './pages/ModelEdit';
 import ModelCreate from './pages/ModelCreate';
+import AuditLogs from './pages/AuditLogs';
 
 function AppRoutes() {
   const { isAuthenticated, isLoading, session, authMode, mfaSkipped } = useAuth();
   const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
   const isPlatformAdmin = userRole === 'platform_admin';
+  const canReadAudit = isPlatformAdmin || (session?.effective_permissions || []).includes('audit.read');
 
   if (isLoading) {
     return (
@@ -60,6 +62,7 @@ function AppRoutes() {
         <Route path="/teams" element={<Teams />} />
         <Route path="/teams/:teamId" element={<TeamDetail />} />
         <Route path="/users" element={<UsersPage />} />
+        <Route path="/audit" element={canReadAudit ? <AuditLogs /> : <Navigate to="/" replace />} />
         <Route path="/usage" element={<Usage />} />
         <Route path="/batches" element={<BatchJobs />} />
         <Route path="/batches/:batchId" element={<BatchJobDetail />} />

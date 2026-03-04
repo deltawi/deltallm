@@ -54,6 +54,9 @@ class CurrentSessionResponse(BaseModel):
     account_id: str | None = None
     email: str | None = None
     role: str | None = None
+    effective_permissions: list[str] = Field(default_factory=list)
+    organization_memberships: list[dict[str, Any]] = Field(default_factory=list)
+    team_memberships: list[dict[str, Any]] = Field(default_factory=list)
     mfa_enabled: bool = False
     mfa_verified: bool = False
     mfa_prompt: bool = False

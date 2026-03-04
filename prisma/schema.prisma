@@ -34,7 +34,11 @@ model DeltaLLM_SpendLogs {
   @@index([user])
   @@index([start_time])
   @@index([model])
-  @@index([request_tags])
+  @@index([team_id, start_time], map: "deltallm_spendlogs_team_time_idx")
+  @@index([api_key, start_time], map: "deltallm_spendlogs_api_key_time_idx")
+  @@index([user, start_time], map: "deltallm_spendlogs_user_time_idx")
+  @@index([model, start_time], map: "deltallm_spendlogs_model_time_idx")
+  @@index([request_tags], type: Gin, map: "deltallm_spendlogs_request_tags_gin_idx")
   @@map("deltallm_spendlogs")
 }
 
@@ -168,6 +172,9 @@ model DeltaLLM_AuditEvent {
   @@index([action])
   @@index([request_id])
   @@index([correlation_id])
+  @@index([organization_id, occurred_at], map: "deltallm_auditevent_org_occurred_at_idx")
+  @@index([action, occurred_at], map: "deltallm_auditevent_action_occurred_at_idx")
+  @@index([status, occurred_at], map: "deltallm_auditevent_status_occurred_at_idx")
   @@map("deltallm_auditevent")
 }
 

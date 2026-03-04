@@ -48,11 +48,26 @@ export default function Organizations() {
   }, [searchInput]);
   const [showCreate, setShowCreate] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
-  const [form, setForm] = useState({ organization_name: '', max_budget: '', rpm_limit: '', tpm_limit: '' });
+  const [form, setForm] = useState({
+    organization_name: '',
+    max_budget: '',
+    rpm_limit: '',
+    tpm_limit: '',
+    audit_content_storage_enabled: false,
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const resetForm = () => { setForm({ organization_name: '', max_budget: '', rpm_limit: '', tpm_limit: '' }); setError(null); };
+  const resetForm = () => {
+    setForm({
+      organization_name: '',
+      max_budget: '',
+      rpm_limit: '',
+      tpm_limit: '',
+      audit_content_storage_enabled: false,
+    });
+    setError(null);
+  };
 
   const handleSave = async () => {
     setError(null);
@@ -63,6 +78,7 @@ export default function Organizations() {
         max_budget: form.max_budget ? Number(form.max_budget) : undefined,
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
+        audit_content_storage_enabled: !!form.audit_content_storage_enabled,
       };
       if (editItem) {
         await organizations.update(editItem.organization_id, payload);
@@ -86,6 +102,7 @@ export default function Organizations() {
       max_budget: row.max_budget != null ? String(row.max_budget) : '',
       rpm_limit: row.rpm_limit != null ? String(row.rpm_limit) : '',
       tpm_limit: row.tpm_limit != null ? String(row.tpm_limit) : '',
+      audit_content_storage_enabled: !!row.audit_content_storage_enabled,
     });
     setEditItem(row);
   };
@@ -154,6 +171,17 @@ export default function Organizations() {
               <p className="text-xs text-gray-400 mt-1">Tokens per minute</p>
             </div>
           </div>
+          <label className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg bg-gray-50">
+            <input
+              type="checkbox"
+              checked={!!form.audit_content_storage_enabled}
+              onChange={(e) => setForm({ ...form, audit_content_storage_enabled: e.target.checked })}
+              className="mt-0.5"
+            />
+            <span className="text-sm text-gray-700">
+              Store request and response payload content in audit logs for this organization.
+            </span>
+          </label>
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => { setShowCreate(false); setEditItem(null); resetForm(); }} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
             <button onClick={handleSave} disabled={saving} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">{saving ? 'Saving...' : editItem ? 'Save Changes' : 'Create'}</button>
