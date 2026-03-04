@@ -5,6 +5,7 @@ import { teams } from '../lib/api';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import Modal from '../components/Modal';
+import UserSearchSelect from '../components/UserSearchSelect';
 import { ArrowLeft, UsersRound, Users, DollarSign, Gauge, Box, Pencil, UserPlus, Trash2 } from 'lucide-react';
 
 function StatCard({ icon: Icon, label, value, subValue, color }: { icon: any; label: string; value: string; subValue?: string; color: string }) {
@@ -32,8 +33,13 @@ export default function TeamDetail() {
   const [showEdit, setShowEdit] = useState(false);
   const [form, setForm] = useState({ team_alias: '', organization_id: '', max_budget: '', rpm_limit: '', tpm_limit: '', models: '' });
   const [showAddMember, setShowAddMember] = useState(false);
-  const [memberForm, setMemberForm] = useState({ user_id: '', user_email: '', user_role: 'internal_user' });
+  const [memberSearch, setMemberSearch] = useState('');
+  const [memberForm, setMemberForm] = useState({ user_id: '', user_email: '', user_role: 'team_viewer' });
   const [saving, setSaving] = useState(false);
+  const { data: memberCandidates, loading: memberCandidatesLoading } = useApi(
+    () => showAddMember ? teams.memberCandidates(teamId!, { search: memberSearch, limit: 50 }) : Promise.resolve([]),
+    [teamId, showAddMember, memberSearch],
+  );
 
   const openEdit = () => {
     if (!team) return;
@@ -76,7 +82,7 @@ export default function TeamDetail() {
         user_role: memberForm.user_role,
       });
       setShowAddMember(false);
-      setMemberForm({ user_id: '', user_email: '', user_role: 'internal_user' });
+      setMemberForm({ user_id: '', user_email: '', user_role: 'team_viewer' });
       refetchMembers();
     } finally {
       setSaving(false);
@@ -111,7 +117,7 @@ export default function TeamDetail() {
   const memberColumns = [
     { key: 'user_id', header: 'User ID', render: (r: any) => <span className="font-medium font-mono text-xs">{r.user_id}</span> },
     { key: 'user_email', header: 'Email', render: (r: any) => r.user_email || <span className="text-gray-400">--</span> },
-    { key: 'user_role', header: 'Profile Type', render: (r: any) => (
+    { key: 'user_role', header: 'Team Role', render: (r: any) => (
       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">{r.user_role}</span>
     ) },
     { key: 'spend', header: 'Spend', render: (r: any) => <span className="text-sm">${(r.spend || 0).toFixed(2)}</span> },
@@ -164,7 +170,7 @@ export default function TeamDetail() {
       <Card
         title="Members"
         action={
-          <button onClick={() => setShowAddMember(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+          <button onClick={() => { setMemberSearch(''); setMemberForm({ user_id: '', user_email: '', user_role: 'team_viewer' }); setShowAddMember(true); }} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
             <UserPlus className="w-3.5 h-3.5" /> Add Member
           </button>
         }
@@ -218,21 +224,27 @@ export default function TeamDetail() {
       <Modal open={showAddMember} onClose={() => setShowAddMember(false)} title="Add Member">
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">User ID</label>
-            <input value={memberForm.user_id} onChange={(e) => setMemberForm({ ...memberForm, user_id: e.target.value })} placeholder="user-abc123" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <label className="block text-sm font-medium text-gray-700 mb-1">Search Organization Members</label>
+            <UserSearchSelect
+              search={memberSearch}
+              onSearchChange={setMemberSearch}
+              options={(memberCandidates || []) as any[]}
+              loading={memberCandidatesLoading}
+              selectedAccountId={memberForm.user_id}
+              onSelect={(a: any) => setMemberForm({ ...memberForm, user_id: a.account_id, user_email: a.email || '' })}
+              searchPlaceholder="Search by email or account ID"
+              helperText="Results are restricted to users who already belong to this organization."
+              emptyText="No organization members match your search."
+            />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Email (optional)</label>
-            <input value={memberForm.user_email} onChange={(e) => setMemberForm({ ...memberForm, user_email: e.target.value })} placeholder="user@example.com" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Profile Type</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Team Role</label>
             <select value={memberForm.user_role} onChange={(e) => setMemberForm({ ...memberForm, user_role: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-              <option value="internal_user">Internal User</option>
-              <option value="internal_user_viewer">Viewer</option>
-              <option value="team_admin">Team Admin</option>
+              <option value="team_viewer">Viewer</option>
+              <option value="team_developer">Developer</option>
+              <option value="team_admin">Admin</option>
             </select>
-            <p className="text-xs text-gray-400 mt-1">Authorization is managed via Access Control memberships.</p>
+            <p className="text-xs text-gray-400 mt-1">Authorization and scope are managed via RBAC memberships.</p>
           </div>
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setShowAddMember(false)} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>

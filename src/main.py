@@ -10,7 +10,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
 
@@ -430,6 +430,9 @@ def create_app() -> FastAPI:
 
         @app.get("/{full_path:path}")
         async def serve_spa(request: Request, full_path: str):
+            del request
+            if full_path.startswith(("ui/api/", "v1/", "auth/", "health/")):
+                return JSONResponse(status_code=404, content={"detail": "Not Found"})
             file_path = ui_dist / full_path
             if file_path.is_file():
                 return FileResponse(str(file_path))

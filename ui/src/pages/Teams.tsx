@@ -5,6 +5,7 @@ import { teams, organizations } from '../lib/api';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import Modal from '../components/Modal';
+import UserSearchSelect from '../components/UserSearchSelect';
 import { Plus, Users, Trash2, UserPlus, Pencil } from 'lucide-react';
 
 function BudgetBar({ spend, max_budget }: { spend: number; max_budget: number | null }) {
@@ -48,11 +49,16 @@ export default function Teams() {
   const [editItem, setEditItem] = useState<any>(null);
   const [selectedTeam, setSelectedTeam] = useState<any>(null);
   const [form, setForm] = useState({ team_alias: '', organization_id: '', max_budget: '', rpm_limit: '', tpm_limit: '', models: '' });
-  const [memberForm, setMemberForm] = useState({ user_id: '', user_email: '', user_role: 'internal_user' });
+  const [memberSearch, setMemberSearch] = useState('');
+  const [memberForm, setMemberForm] = useState({ user_id: '', user_email: '', user_role: 'team_viewer' });
 
   const { data: members, refetch: refetchMembers } = useApi(
     () => selectedTeam ? teams.members(selectedTeam.team_id) : Promise.resolve([]),
     [selectedTeam?.team_id]
+  );
+  const { data: memberCandidates, loading: memberCandidatesLoading } = useApi(
+    () => selectedTeam ? teams.memberCandidates(selectedTeam.team_id, { search: memberSearch, limit: 50 }) : Promise.resolve([]),
+    [selectedTeam?.team_id, memberSearch]
   );
 
   const [saving, setSaving] = useState(false);
@@ -106,7 +112,7 @@ export default function Teams() {
       user_email: memberForm.user_email || undefined,
       user_role: memberForm.user_role,
     });
-    setMemberForm({ user_id: '', user_email: '', user_role: 'internal_user' });
+    setMemberForm({ user_id: '', user_email: '', user_role: 'team_viewer' });
     refetchMembers();
   };
 
@@ -139,7 +145,7 @@ export default function Teams() {
       key: 'actions', header: '', render: (r: any) => (
         <div className="flex gap-1">
           <button onClick={(e) => { e.stopPropagation(); openEdit(r); }} className="p-1.5 hover:bg-gray-100 rounded-lg" title="Edit"><Pencil className="w-4 h-4 text-gray-500" /></button>
-          <button onClick={(e) => { e.stopPropagation(); setSelectedTeam(r); }} className="p-1.5 hover:bg-gray-100 rounded-lg" title="Members"><Users className="w-4 h-4 text-gray-500" /></button>
+          <button onClick={(e) => { e.stopPropagation(); setSelectedTeam(r); setMemberSearch(''); setMemberForm({ user_id: '', user_email: '', user_role: 'team_viewer' }); }} className="p-1.5 hover:bg-gray-100 rounded-lg" title="Members"><Users className="w-4 h-4 text-gray-500" /></button>
           <button onClick={(e) => { e.stopPropagation(); handleDelete(r); }} className="p-1.5 hover:bg-red-50 rounded-lg" title="Delete"><Trash2 className="w-4 h-4 text-red-500" /></button>
         </div>
       ),
@@ -149,7 +155,7 @@ export default function Teams() {
   const memberColumns = [
     { key: 'user_id', header: 'User ID', render: (r: any) => <span className="font-medium">{r.user_id}</span> },
     { key: 'user_email', header: 'Email', render: (r: any) => r.user_email || <span className="text-gray-400">—</span> },
-    { key: 'user_role', header: 'Profile Type' },
+    { key: 'user_role', header: 'Team Role' },
     { key: 'actions', header: '', render: (r: any) => (
       <button onClick={() => handleRemoveMember(r.user_id)} className="p-1.5 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4 text-red-500" /></button>
     ) },
@@ -225,19 +231,30 @@ export default function Teams() {
           <div className="flex items-center justify-between mb-4">
             <h4 className="text-sm font-semibold text-gray-700">Members</h4>
           </div>
-          <div className="flex gap-2 mb-4">
-            <input value={memberForm.user_id} onChange={(e) => setMemberForm({ ...memberForm, user_id: e.target.value })} placeholder="User ID" className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            <input value={memberForm.user_email} onChange={(e) => setMemberForm({ ...memberForm, user_email: e.target.value })} placeholder="Email (optional)" className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            <select value={memberForm.user_role} onChange={(e) => setMemberForm({ ...memberForm, user_role: e.target.value })} className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-              <option value="internal_user">Internal User</option>
-              <option value="internal_user_viewer">Viewer</option>
-              <option value="team_admin">Team Admin</option>
-            </select>
-            <button onClick={handleAddMember} className="flex items-center gap-1 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition-colors">
-              <UserPlus className="w-4 h-4" /> Add
-            </button>
+          <div className="mb-4 space-y-3">
+            <UserSearchSelect
+              search={memberSearch}
+              onSearchChange={setMemberSearch}
+              options={(memberCandidates || []) as any[]}
+              loading={memberCandidatesLoading}
+              selectedAccountId={memberForm.user_id}
+              onSelect={(a: any) => setMemberForm({ ...memberForm, user_id: a.account_id, user_email: a.email || '' })}
+              searchPlaceholder="Search by email or account ID"
+              helperText="Results include users that already belong to this team's organization."
+              emptyText="No organization members match your search."
+            />
+            <div className="flex flex-col sm:flex-row gap-2">
+              <select value={memberForm.user_role} onChange={(e) => setMemberForm({ ...memberForm, user_role: e.target.value })} className="sm:w-56 px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="team_viewer">Viewer</option>
+                <option value="team_developer">Developer</option>
+                <option value="team_admin">Admin</option>
+              </select>
+              <button onClick={handleAddMember} disabled={!memberForm.user_id.trim()} className="flex items-center justify-center gap-1 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                <UserPlus className="w-4 h-4" /> Add
+              </button>
+            </div>
           </div>
-          <p className="text-xs text-gray-400 mb-4">Authorization is managed via Access Control memberships.</p>
+          <p className="text-xs text-gray-400 mb-4">Authorization and scope are managed via RBAC memberships.</p>
           <DataTable columns={memberColumns} data={members || []} emptyMessage="No members in this team" />
         </div>
       </Modal>

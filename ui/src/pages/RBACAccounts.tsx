@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { rbac, organizations, teams, type RBACAccount, type OrgMembership, type TeamMembership } from '../lib/api';
-import { Plus, UserCog, ShieldCheck, Search, ChevronDown, ChevronRight, Building2, UsersRound } from 'lucide-react';
+import { rbac, organizations, teams, type Principal } from '../lib/api';
+import { Plus, UserCog, ShieldCheck, Search, ChevronDown, ChevronRight, Building2, UsersRound, Trash2 } from 'lucide-react';
 import Modal from '../components/Modal';
 
 const PLATFORM_ROLES = [
@@ -49,16 +49,14 @@ function RoleBadge({ role }: { role: string }) {
 }
 
 export default function RBACAccounts() {
-  const [accounts, setAccounts] = useState<RBACAccount[]>([]);
-  const [orgMemberships, setOrgMemberships] = useState<OrgMembership[]>([]);
-  const [teamMemberships, setTeamMemberships] = useState<TeamMembership[]>([]);
+  const [principals, setPrincipals] = useState<Principal[]>([]);
   const [orgList, setOrgList] = useState<any[]>([]);
   const [teamList, setTeamList] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
 
   const [showAccountModal, setShowAccountModal] = useState(false);
-  const [editAccount, setEditAccount] = useState<RBACAccount | null>(null);
+  const [editAccount, setEditAccount] = useState<Principal | null>(null);
   const [formEmail, setFormEmail] = useState('');
   const [formRole, setFormRole] = useState('org_user');
   const [formPassword, setFormPassword] = useState('');
@@ -81,16 +79,12 @@ export default function RBACAccounts() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [accts, orgMs, teamMs, orgs, tms] = await Promise.all([
-        rbac.accounts.list(),
-        rbac.orgMemberships.list(),
-        rbac.teamMemberships.list(),
+      const [allPrincipals, orgs, tms] = await Promise.all([
+        rbac.principals.list(),
         organizations.list({ limit: 500 }).catch(() => ({ data: [], pagination: { total: 0, limit: 500, offset: 0, has_more: false } })),
         teams.list({ limit: 500 }).catch(() => ({ data: [], pagination: { total: 0, limit: 500, offset: 0, has_more: false } })),
       ]);
-      setAccounts(accts);
-      setOrgMemberships(orgMs);
-      setTeamMemberships(teamMs);
+      setPrincipals(allPrincipals);
       setOrgList(orgs?.data || orgs || []);
       setTeamList(tms?.data || tms || []);
     } catch (err: any) {
@@ -112,7 +106,7 @@ export default function RBACAccounts() {
     setShowAccountModal(true);
   };
 
-  const openEditAccount = (acct: RBACAccount) => {
+  const openEditAccount = (acct: Principal) => {
     setEditAccount(acct);
     setFormEmail(acct.email);
     setFormRole(acct.role);
@@ -193,16 +187,52 @@ export default function RBACAccounts() {
     }
   };
 
-  const filteredAccounts = accounts.filter(a =>
+  const deleteAccount = async (accountId: string, email: string) => {
+    if (!confirm(`Delete account "${email}" and all memberships?`)) return;
+    setSaving(true);
+    setError('');
+    try {
+      await rbac.accounts.delete(accountId);
+      await loadData();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to delete account');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteOrgMembership = async (membershipId: string) => {
+    if (!confirm('Remove this organization membership?')) return;
+    setSaving(true);
+    setError('');
+    try {
+      await rbac.orgMemberships.delete(membershipId);
+      await loadData();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to delete organization membership');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteTeamMembership = async (membershipId: string) => {
+    if (!confirm('Remove this team membership?')) return;
+    setSaving(true);
+    setError('');
+    try {
+      await rbac.teamMemberships.delete(membershipId);
+      await loadData();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to delete team membership');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const filteredAccounts = principals.filter(a =>
     a.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
     a.role.toLowerCase().includes(searchTerm.toLowerCase())
   );
-
-  const getAccountOrgMemberships = (accountId: string) =>
-    orgMemberships.filter(m => m.account_id === accountId);
-
-  const getAccountTeamMemberships = (accountId: string) =>
-    teamMemberships.filter(m => m.account_id === accountId);
 
   const getOrgName = (orgId: string) => {
     const org = orgList.find(o => o.organization_id === orgId);
@@ -218,15 +248,15 @@ export default function RBACAccounts() {
     <div className="p-4 sm:p-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Access Control</h1>
-          <p className="text-sm text-gray-500 mt-1">Manage platform accounts, organization and team memberships</p>
+          <h1 className="text-2xl font-bold text-gray-900">People & Access</h1>
+          <p className="text-sm text-gray-500 mt-1">Manage people, RBAC roles, and organization/team memberships</p>
         </div>
         <button
           onClick={openCreateAccount}
           className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
         >
           <Plus className="w-4 h-4" />
-          Add Account
+          Add User
         </button>
       </div>
 
@@ -256,8 +286,8 @@ export default function RBACAccounts() {
         <div className="space-y-2">
           {filteredAccounts.map((acct) => {
             const isExpanded = expandedAccount === acct.account_id;
-            const acctOrgMs = getAccountOrgMemberships(acct.account_id);
-            const acctTeamMs = getAccountTeamMemberships(acct.account_id);
+            const acctOrgMs = acct.organization_memberships || [];
+            const acctTeamMs = acct.team_memberships || [];
 
             return (
               <div key={acct.account_id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -290,12 +320,20 @@ export default function RBACAccounts() {
                       </span>
                     </div>
                   </div>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); openEditAccount(acct); }}
-                    className="text-sm text-blue-600 hover:text-blue-800 font-medium"
-                  >
-                    Edit
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); openEditAccount(acct); }}
+                      className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); deleteAccount(acct.account_id, acct.email); }}
+                      className="text-sm text-red-600 hover:text-red-800 font-medium"
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </div>
 
                 {isExpanded && (
@@ -323,7 +361,16 @@ export default function RBACAccounts() {
                                 <div>
                                   <span className="text-sm text-gray-900">{getOrgName(m.organization_id)}</span>
                                 </div>
-                                <RoleBadge role={m.role} />
+                                <div className="flex items-center gap-2">
+                                  <RoleBadge role={m.role} />
+                                  <button
+                                    onClick={() => deleteOrgMembership(m.membership_id)}
+                                    className="p-1 hover:bg-red-50 rounded"
+                                    title="Remove organization membership"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                                  </button>
+                                </div>
                               </div>
                             ))}
                           </div>
@@ -352,7 +399,16 @@ export default function RBACAccounts() {
                                 <div>
                                   <span className="text-sm text-gray-900">{getTeamName(m.team_id)}</span>
                                 </div>
-                                <RoleBadge role={m.role} />
+                                <div className="flex items-center gap-2">
+                                  <RoleBadge role={m.role} />
+                                  <button
+                                    onClick={() => deleteTeamMembership(m.membership_id)}
+                                    className="p-1 hover:bg-red-50 rounded"
+                                    title="Remove team membership"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                                  </button>
+                                </div>
                               </div>
                             ))}
                           </div>

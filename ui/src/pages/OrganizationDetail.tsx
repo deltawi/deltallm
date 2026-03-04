@@ -5,7 +5,8 @@ import { organizations, teams as teamsApi } from '../lib/api';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import Modal from '../components/Modal';
-import { ArrowLeft, Building2, Users, DollarSign, Gauge, Pencil, Plus, User } from 'lucide-react';
+import UserSearchSelect from '../components/UserSearchSelect';
+import { ArrowLeft, Building2, Users, DollarSign, Gauge, Pencil, Plus, User, UserPlus, Trash2 } from 'lucide-react';
 
 function StatCard({ icon: Icon, label, value, subValue, color }: { icon: any; label: string; value: string; subValue?: string; color: string }) {
   return (
@@ -44,15 +45,28 @@ export default function OrganizationDetail() {
 
   const { data: org, loading: orgLoading, refetch: refetchOrg } = useApi(() => organizations.get(orgId!), [orgId]);
   const { data: orgTeams, loading: teamsLoading, refetch: refetchTeams } = useApi(() => organizations.teams(orgId!), [orgId]);
-  const { data: orgMembers, loading: membersLoading } = useApi(() => organizations.members(orgId!), [orgId]);
+  const { data: orgMembers, loading: membersLoading, refetch: refetchMembers } = useApi(() => organizations.members(orgId!), [orgId]);
 
   const [showEdit, setShowEdit] = useState(false);
   const [form, setForm] = useState({ organization_name: '', max_budget: '', rpm_limit: '', tpm_limit: '' });
   const [showCreateTeam, setShowCreateTeam] = useState(false);
   const [teamForm, setTeamForm] = useState({ team_alias: '', max_budget: '', rpm_limit: '', tpm_limit: '', models: '' });
+  const [showAddMember, setShowAddMember] = useState(false);
+  const [memberSearch, setMemberSearch] = useState('');
+  const [memberForm, setMemberForm] = useState({ account_id: '', role: 'org_member' });
+  const [saving, setSaving] = useState(false);
+  const [pageError, setPageError] = useState<string | null>(null);
+  const [orgError, setOrgError] = useState<string | null>(null);
+  const [teamError, setTeamError] = useState<string | null>(null);
+  const [memberError, setMemberError] = useState<string | null>(null);
+  const { data: memberCandidates, loading: memberCandidatesLoading } = useApi(
+    () => showAddMember ? organizations.memberCandidates(orgId!, { search: memberSearch, limit: 50 }) : Promise.resolve([]),
+    [orgId, showAddMember, memberSearch],
+  );
 
   const openEdit = () => {
     if (!org) return;
+    setOrgError(null);
     setForm({
       organization_name: org.organization_name || '',
       max_budget: org.max_budget != null ? String(org.max_budget) : '',
@@ -63,28 +77,88 @@ export default function OrganizationDetail() {
   };
 
   const handleSaveOrg = async () => {
-    await organizations.update(orgId!, {
-      organization_name: form.organization_name || undefined,
-      max_budget: form.max_budget ? Number(form.max_budget) : undefined,
-      rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
-      tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
-    });
-    setShowEdit(false);
-    refetchOrg();
+    setSaving(true);
+    setOrgError(null);
+    try {
+      await organizations.update(orgId!, {
+        organization_name: form.organization_name || undefined,
+        max_budget: form.max_budget ? Number(form.max_budget) : undefined,
+        rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
+        tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
+      });
+      setShowEdit(false);
+      refetchOrg();
+    } catch (err: any) {
+      setOrgError(err?.message || 'Failed to update organization');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleCreateTeam = async () => {
-    await teamsApi.create({
-      team_alias: teamForm.team_alias || undefined,
-      organization_id: orgId,
-      max_budget: teamForm.max_budget ? Number(teamForm.max_budget) : undefined,
-      rpm_limit: teamForm.rpm_limit ? Number(teamForm.rpm_limit) : undefined,
-      tpm_limit: teamForm.tpm_limit ? Number(teamForm.tpm_limit) : undefined,
-      models: teamForm.models ? teamForm.models.split(',').map(m => m.trim()).filter(Boolean) : [],
-    });
-    setShowCreateTeam(false);
-    setTeamForm({ team_alias: '', max_budget: '', rpm_limit: '', tpm_limit: '', models: '' });
-    refetchTeams();
+    setSaving(true);
+    setTeamError(null);
+    try {
+      await teamsApi.create({
+        team_alias: teamForm.team_alias || undefined,
+        organization_id: orgId,
+        max_budget: teamForm.max_budget ? Number(teamForm.max_budget) : undefined,
+        rpm_limit: teamForm.rpm_limit ? Number(teamForm.rpm_limit) : undefined,
+        tpm_limit: teamForm.tpm_limit ? Number(teamForm.tpm_limit) : undefined,
+        models: teamForm.models ? teamForm.models.split(',').map(m => m.trim()).filter(Boolean) : [],
+      });
+      setShowCreateTeam(false);
+      setTeamForm({ team_alias: '', max_budget: '', rpm_limit: '', tpm_limit: '', models: '' });
+      refetchTeams();
+    } catch (err: any) {
+      setTeamError(err?.message || 'Failed to create team');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openAddMember = () => {
+    setMemberError(null);
+    setMemberSearch('');
+    setMemberForm({ account_id: '', role: 'org_member' });
+    setShowAddMember(true);
+  };
+
+  const handleAddMember = async () => {
+    if (!memberForm.account_id) {
+      setMemberError('Select an account to add.');
+      return;
+    }
+    setSaving(true);
+    setMemberError(null);
+    try {
+      await organizations.addMember(orgId!, {
+        account_id: memberForm.account_id,
+        role: memberForm.role,
+      });
+      setShowAddMember(false);
+      setMemberForm({ account_id: '', role: 'org_member' });
+      setMemberSearch('');
+      refetchMembers();
+    } catch (err: any) {
+      setMemberError(err?.message || 'Failed to add member');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRemoveMember = async (membershipId: string) => {
+    if (!confirm('Remove this organization member?')) return;
+    setSaving(true);
+    setPageError(null);
+    try {
+      await organizations.removeMember(orgId!, membershipId);
+      refetchMembers();
+    } catch (err: any) {
+      setPageError(err?.message || 'Failed to remove member');
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (orgLoading) {
@@ -117,15 +191,20 @@ export default function OrganizationDetail() {
   ];
 
   const memberColumns = [
-    { key: 'user_email', header: 'Email', render: (r: any) => r.user_email || <span className="text-gray-400">--</span> },
-    { key: 'user_id', header: 'User ID', render: (r: any) => <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded font-mono">{r.user_id}</code> },
-    { key: 'team_alias', header: 'Team', render: (r: any) => (
-      <Link to={`/teams/${r.team_id}`} className="text-sm text-blue-600 hover:text-blue-700">{r.team_alias || r.team_id}</Link>
+    { key: 'email', header: 'Email', render: (r: any) => r.email || <span className="text-gray-400">--</span> },
+    { key: 'account_id', header: 'Account ID', render: (r: any) => <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded font-mono">{r.account_id}</code> },
+    { key: 'org_role', header: 'Org Role', render: (r: any) => (
+      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">{r.org_role}</span>
     ) },
-    { key: 'user_role', header: 'Profile Type', render: (r: any) => (
-      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">{r.user_role}</span>
+    { key: 'team_count', header: 'Teams', render: (r: any) => <span className="text-sm">{r.team_count || 0}</span> },
+    { key: 'teams', header: 'Team Memberships', render: (r: any) => (
+      r.teams?.length ? <span className="text-xs">{r.teams.join(', ')}</span> : <span className="text-gray-400 text-xs">None</span>
     ) },
-    { key: 'spend', header: 'Spend', render: (r: any) => <span className="text-sm">${(r.spend || 0).toFixed(2)}</span> },
+    { key: 'actions', header: '', render: (r: any) => (
+      <button onClick={() => handleRemoveMember(r.membership_id)} className="p-1.5 hover:bg-red-50 rounded-lg" title="Remove member">
+        <Trash2 className="w-4 h-4 text-red-500" />
+      </button>
+    ) },
   ];
 
   return (
@@ -149,6 +228,9 @@ export default function OrganizationDetail() {
           <Pencil className="w-4 h-4" /> Edit
         </button>
       </div>
+      {pageError && (
+        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{pageError}</div>
+      )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard icon={DollarSign} label="Spend" value={`$${(org.spend || 0).toFixed(2)}`} subValue={org.max_budget ? `of $${org.max_budget} budget` : 'No budget limit'} color="bg-green-50 text-green-600" />
@@ -161,7 +243,7 @@ export default function OrganizationDetail() {
         <Card
           title="Teams"
           action={
-            <button onClick={() => setShowCreateTeam(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+            <button onClick={() => { setTeamError(null); setShowCreateTeam(true); }} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
               <Plus className="w-3.5 h-3.5" /> Add Team
             </button>
           }
@@ -175,18 +257,28 @@ export default function OrganizationDetail() {
           />
         </Card>
 
-        <Card title="Members">
+        <Card
+          title="Members"
+          action={
+            <button onClick={openAddMember} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+              <UserPlus className="w-3.5 h-3.5" /> Add Member
+            </button>
+          }
+        >
           <DataTable
             columns={memberColumns}
             data={orgMembers || []}
             loading={membersLoading}
-            emptyMessage="No members in this organization's teams"
+            emptyMessage="No organization members yet"
           />
         </Card>
       </div>
 
       <Modal open={showEdit} onClose={() => setShowEdit(false)} title="Edit Organization">
         <div className="space-y-4">
+          {orgError && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{orgError}</div>
+          )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Organization Name</label>
             <input value={form.organization_name} onChange={(e) => setForm({ ...form, organization_name: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
@@ -207,13 +299,16 @@ export default function OrganizationDetail() {
           </div>
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setShowEdit(false)} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-            <button onClick={handleSaveOrg} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">Save Changes</button>
+            <button onClick={handleSaveOrg} disabled={saving} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">{saving ? 'Saving...' : 'Save Changes'}</button>
           </div>
         </div>
       </Modal>
 
       <Modal open={showCreateTeam} onClose={() => setShowCreateTeam(false)} title="Add Team to Organization">
         <div className="space-y-4">
+          {teamError && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{teamError}</div>
+          )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Team Name</label>
             <input value={teamForm.team_alias} onChange={(e) => setTeamForm({ ...teamForm, team_alias: e.target.value })} placeholder="Engineering" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
@@ -240,7 +335,47 @@ export default function OrganizationDetail() {
           </div>
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setShowCreateTeam(false)} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-            <button onClick={handleCreateTeam} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">Create Team</button>
+            <button onClick={handleCreateTeam} disabled={saving} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">{saving ? 'Creating...' : 'Create Team'}</button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={showAddMember} onClose={() => setShowAddMember(false)} title="Add Organization Member">
+        <div className="space-y-4">
+          {memberError && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{memberError}</div>
+          )}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Search Account</label>
+            <UserSearchSelect
+              search={memberSearch}
+              onSearchChange={setMemberSearch}
+              options={(memberCandidates || []) as any[]}
+              loading={memberCandidatesLoading}
+              selectedAccountId={memberForm.account_id}
+              onSelect={(a: any) => setMemberForm({ ...memberForm, account_id: a.account_id })}
+              searchPlaceholder="Type full email or exact account ID"
+              helperText="For privacy, only exact match (case-insensitive) results are shown."
+              emptyText={memberSearch.trim() ? 'No exact account match found.' : 'Start typing a full user email or account ID.'}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Organization Role</label>
+            <select
+              value={memberForm.role}
+              onChange={(e) => setMemberForm({ ...memberForm, role: e.target.value })}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="org_member">Member</option>
+              <option value="org_admin">Admin</option>
+              <option value="org_owner">Owner</option>
+              <option value="org_billing">Billing</option>
+              <option value="org_auditor">Auditor</option>
+            </select>
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <button onClick={() => setShowAddMember(false)} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
+            <button onClick={handleAddMember} disabled={saving} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">{saving ? 'Adding...' : 'Add Member'}</button>
           </div>
         </div>
       </Modal>

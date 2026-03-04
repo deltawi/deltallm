@@ -6,7 +6,6 @@ from src.api.admin.endpoints.keys import router as keys_router
 from src.api.admin.endpoints.organizations import router as organizations_router
 from src.api.admin.endpoints.rbac import router as rbac_router
 from src.api.admin.endpoints.teams import router as teams_router
-from src.api.admin.endpoints.users import router as users_router
 
 __all__ = [
     "audit_router",
@@ -17,5 +16,4 @@ __all__ = [
     "organizations_router",
     "rbac_router",
     "teams_router",
-    "users_router",
 ]

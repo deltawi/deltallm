@@ -49,25 +49,35 @@ export default function Organizations() {
   const [showCreate, setShowCreate] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
   const [form, setForm] = useState({ organization_name: '', max_budget: '', rpm_limit: '', tpm_limit: '' });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const resetForm = () => setForm({ organization_name: '', max_budget: '', rpm_limit: '', tpm_limit: '' });
+  const resetForm = () => { setForm({ organization_name: '', max_budget: '', rpm_limit: '', tpm_limit: '' }); setError(null); };
 
   const handleSave = async () => {
-    const payload = {
-      organization_name: form.organization_name || undefined,
-      max_budget: form.max_budget ? Number(form.max_budget) : undefined,
-      rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
-      tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
-    };
-    if (editItem) {
-      await organizations.update(editItem.organization_id, payload);
-    } else {
-      await organizations.create(payload);
+    setError(null);
+    setSaving(true);
+    try {
+      const payload = {
+        organization_name: form.organization_name || undefined,
+        max_budget: form.max_budget ? Number(form.max_budget) : undefined,
+        rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
+        tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
+      };
+      if (editItem) {
+        await organizations.update(editItem.organization_id, payload);
+      } else {
+        await organizations.create(payload);
+      }
+      setShowCreate(false);
+      setEditItem(null);
+      resetForm();
+      refetch();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to save organization');
+    } finally {
+      setSaving(false);
     }
-    setShowCreate(false);
-    setEditItem(null);
-    resetForm();
-    refetch();
   };
 
   const openEdit = (row: any) => {
@@ -121,6 +131,9 @@ export default function Organizations() {
 
       <Modal open={showCreate || !!editItem} onClose={() => { setShowCreate(false); setEditItem(null); resetForm(); }} title={editItem ? 'Edit Organization' : 'Create Organization'}>
         <div className="space-y-4">
+          {error && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>
+          )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Organization Name</label>
             <input value={form.organization_name} onChange={(e) => setForm({ ...form, organization_name: e.target.value })} placeholder="Acme Corp" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
@@ -143,7 +156,7 @@ export default function Organizations() {
           </div>
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => { setShowCreate(false); setEditItem(null); resetForm(); }} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-            <button onClick={handleSave} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">{editItem ? 'Save Changes' : 'Create'}</button>
+            <button onClick={handleSave} disabled={saving} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">{saving ? 'Saving...' : editItem ? 'Save Changes' : 'Create'}</button>
           </div>
         </div>
       </Modal>

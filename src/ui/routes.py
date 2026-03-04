@@ -523,6 +523,8 @@ async def serve_ui_root() -> Response:
 
 @ui_router.get("/ui/{path:path}")
 async def serve_ui(path: str) -> Response:
+    if path.startswith("api/"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
     dist = _dist_dir()
     if not dist.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="UI bundle not found. Run: npm --prefix ui run build")

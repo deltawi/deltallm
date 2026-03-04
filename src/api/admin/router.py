@@ -9,7 +9,6 @@ from src.api.admin.endpoints import (
     organizations_router,
     rbac_router,
     teams_router,
-    users_router,
 )
 from src.ui.routes import ui_router as legacy_ui_router
 
@@ -17,7 +16,6 @@ admin_router = APIRouter()
 
 # Keep explicit order for predictable route registration.
 admin_router.include_router(keys_router)
-admin_router.include_router(users_router)
 admin_router.include_router(teams_router)
 admin_router.include_router(organizations_router)
 admin_router.include_router(batches_router)
