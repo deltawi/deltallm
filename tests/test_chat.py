@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+import httpx
 import pytest
 
 from src.callbacks import CallbackManager, CustomLogger
@@ -193,3 +194,126 @@ async def test_stream_retries_before_first_token_with_failover(client, test_app)
     assert response.status_code == 200
     assert "data: [DONE]" in response.text
     assert calls["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_rejects_unsupported_provider(client, test_app):
+    registry = test_app.state.router.deployment_registry["gpt-4o-mini"]
+    registry[0].deltallm_params["provider"] = "xai"
+
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+    assert response.status_code == 400
+    payload = response.json()
+    assert "Unsupported provider" in payload.get("error", {}).get("message", "")
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_uses_azure_api_key_header_when_provider_is_azure(client, test_app):
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.deltallm_params["provider"] = "azure_openai"
+    deployment.deltallm_params["api_base"] = "https://azure.example/openai/v1"
+    deployment.deltallm_params["api_key"] = "azure-provider-key"
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del timeout
+        assert url.endswith("/chat/completions")
+        assert headers.get("api-key") == "azure-provider-key"
+        assert "Authorization" not in headers
+        payload = {
+            "id": "chatcmpl-azure",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": json["model"],
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+        return httpx.Response(200, json=payload)
+
+    test_app.state.http_client.post = post
+
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_uses_gemini_native_endpoint(client, test_app):
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.deltallm_params["provider"] = "gemini"
+    deployment.deltallm_params["model"] = "gemini/gemini-2.5-flash"
+    deployment.deltallm_params["api_base"] = "https://generativelanguage.googleapis.com/v1beta"
+    deployment.deltallm_params["api_key"] = "gemini-key"
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del timeout, headers
+        assert "/models/gemini-2.5-flash:generateContent?key=gemini-key" in url
+        assert "contents" in json
+        payload = {
+            "responseId": "resp_123",
+            "candidates": [{"content": {"parts": [{"text": "ok"}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+        }
+        return httpx.Response(200, json=payload)
+
+    test_app.state.http_client.post = post
+
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_rejects_gemini_streaming_for_now(client, test_app):
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.deltallm_params["provider"] = "gemini"
+    deployment.deltallm_params["model"] = "gemini/gemini-2.5-flash"
+    deployment.deltallm_params["api_key"] = "gemini-key"
+
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": True}
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+    assert response.status_code == 400
+    assert "not supported yet" in response.text
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_uses_bedrock_sigv4_headers(client, test_app):
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.deltallm_params["provider"] = "bedrock"
+    deployment.deltallm_params["model"] = "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
+    deployment.deltallm_params["region"] = "us-east-1"
+    deployment.deltallm_params["aws_access_key_id"] = "AKIDEXAMPLE"
+    deployment.deltallm_params["aws_secret_access_key"] = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+
+    async def post(url, headers, json=None, content=None, timeout=0):  # noqa: ANN001, ANN201
+        del timeout, json
+        assert "/model/anthropic.claude-3-5-sonnet-20240620-v1:0/converse" in url
+        assert content is not None
+        assert headers.get("Authorization", "").startswith("AWS4-HMAC-SHA256 ")
+        assert headers.get("X-Amz-Date")
+        assert headers.get("X-Amz-Content-Sha256")
+        payload = {
+            "requestId": "req_123",
+            "output": {"message": {"content": [{"text": "ok"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        }
+        return httpx.Response(200, json=payload)
+
+    test_app.state.http_client.post = post
+
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "ok"

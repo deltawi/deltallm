@@ -10,6 +10,7 @@ from fastapi import Header, HTTPException, Request, status
 
 from src.api.audit import emit_control_audit_event
 from src.audit.actions import AuditAction
+from src.providers.resolution import resolve_provider
 
 @dataclass
 class AuthScope:
@@ -133,7 +134,7 @@ def model_entries(app: Any) -> list[dict[str, Any]]:
                 {
                     "deployment_id": deployment_id,
                     "model_name": model_name,
-                    "provider": str(params.get("model", "")).split("/")[0] or "unknown",
+                    "provider": resolve_provider(params),
                     "deltallm_params": params,
                     "model_info": model_info,
                 }

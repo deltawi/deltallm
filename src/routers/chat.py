@@ -19,13 +19,14 @@ from src.metrics import (
     increment_request_failure,
     increment_spend,
     increment_usage,
-    infer_provider,
     observe_api_latency,
     observe_request_latency,
 )
-from src.models.errors import InvalidRequestError, PermissionDeniedError, ServiceUnavailableError
+from src.models.errors import PermissionDeniedError, ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
-from src.providers.base import ProviderAdapter
+from src.providers.registry import resolve_chat_upstream
+from src.providers.resolution import resolve_provider
+from src.providers.signing import apply_request_signing
 from src.router.router import Deployment
 from src.services.audit_service import AuditEventInput, AuditPayloadInput, AuditService
 
@@ -122,41 +123,20 @@ class _OpenedStream:
             await self.context_manager.__aexit__(type(exc), exc, exc.__traceback__)
 
 
-def _resolve_chat_upstream(
-    request: Request,
-    params: dict[str, Any],
-) -> tuple[ProviderAdapter, str, str, dict[str, str], int]:
-    api_key = params.get("api_key")
-    if not api_key:
-        raise InvalidRequestError(message="Provider API key is missing for selected model")
-
-    provider = infer_provider(params.get("model"))
-    timeout = int(params.get("timeout") or 300)
-    if provider == "anthropic":
-        adapter: ProviderAdapter = request.app.state.anthropic_adapter
-        api_base = str(params.get("api_base") or "https://api.anthropic.com/v1").rstrip("/")
-        endpoint = "/messages"
-        headers = {
-            "x-api-key": str(api_key),
-            "anthropic-version": str(params.get("api_version") or "2023-06-01"),
-            "Content-Type": "application/json",
-        }
-        return adapter, api_base, endpoint, headers, timeout
-
-    adapter = request.app.state.openai_adapter
-    api_base = str(params.get("api_base", request.app.state.settings.openai_base_url)).rstrip("/")
-    endpoint = "/chat/completions"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    return adapter, api_base, endpoint, headers, timeout
-
-
 async def _execute_chat(
     request: Request,
     payload: ChatCompletionRequest,
     deployment: Deployment,
 ) -> tuple[dict[str, Any], float]:
     params = deployment.deltallm_params
-    adapter, api_base, endpoint, headers, timeout = _resolve_chat_upstream(request, params)
+    upstream = resolve_chat_upstream(request, params, is_stream=bool(payload.stream))
+    adapter, api_base, endpoint, headers, timeout = (
+        upstream.adapter,
+        upstream.api_base,
+        upstream.endpoint,
+        upstream.headers,
+        upstream.timeout,
+    )
     upstream_payload = await adapter.translate_request(payload, params)
 
     from src.routers.utils import apply_default_params
@@ -165,16 +145,32 @@ async def _execute_chat(
     await request.app.state.router_state_backend.increment_active(deployment.deployment_id)
     upstream_start = perf_counter()
     try:
-        response = await request.app.state.http_client.post(
-            f"{api_base}{endpoint}",
+        request_url = f"{api_base}{endpoint}"
+        signed_headers, body_override = apply_request_signing(
+            params=params,
+            method="POST",
+            url=request_url,
             headers=headers,
-            json=upstream_payload,
-            timeout=timeout,
+            json_body=upstream_payload,
         )
+        if body_override is not None:
+            response = await request.app.state.http_client.post(
+                request_url,
+                headers=signed_headers,
+                content=body_override,
+                timeout=timeout,
+            )
+        else:
+            response = await request.app.state.http_client.post(
+                request_url,
+                headers=signed_headers,
+                json=upstream_payload,
+                timeout=timeout,
+            )
         if response.status_code >= 400:
             status_exc = httpx.HTTPStatusError(
                 f"Upstream chat call failed with status {response.status_code}",
-                request=httpx.Request("POST", f"{api_base}{endpoint}"),
+                request=httpx.Request("POST", request_url),
                 response=response,
             )
             raise adapter.map_error(status_exc)
@@ -199,25 +195,49 @@ async def _open_stream_with_first_chunk(
     deployment: Deployment,
 ) -> _OpenedStream:
     params = deployment.deltallm_params
-    adapter, api_base, endpoint, headers, timeout = _resolve_chat_upstream(request, params)
+    upstream = resolve_chat_upstream(request, params, is_stream=bool(payload.stream))
+    adapter, api_base, endpoint, headers, timeout = (
+        upstream.adapter,
+        upstream.api_base,
+        upstream.endpoint,
+        upstream.headers,
+        upstream.timeout,
+    )
     upstream_payload = await adapter.translate_request(payload, params)
 
     from src.routers.utils import apply_default_params
     apply_default_params(upstream_payload, deployment.model_info)
 
-    context_manager = request.app.state.http_client.stream(
-        "POST",
-        f"{api_base}{endpoint}",
+    request_url = f"{api_base}{endpoint}"
+    signed_headers, body_override = apply_request_signing(
+        params=params,
+        method="POST",
+        url=request_url,
         headers=headers,
-        json=upstream_payload,
-        timeout=timeout,
+        json_body=upstream_payload,
     )
+    if body_override is not None:
+        context_manager = request.app.state.http_client.stream(
+            "POST",
+            request_url,
+            headers=signed_headers,
+            content=body_override,
+            timeout=timeout,
+        )
+    else:
+        context_manager = request.app.state.http_client.stream(
+            "POST",
+            request_url,
+            headers=signed_headers,
+            json=upstream_payload,
+            timeout=timeout,
+        )
     response = await context_manager.__aenter__()
     try:
         if response.status_code >= 400:
             status_exc = httpx.HTTPStatusError(
                 f"Upstream chat call failed with status {response.status_code}",
-                request=httpx.Request("POST", f"{api_base}{endpoint}"),
+                request=httpx.Request("POST", request_url),
                 response=response,
             )
             raise adapter.map_error(status_exc)
@@ -275,7 +295,7 @@ async def handle_chat_like_request(
         model_group=model_group,
         deployment=await router.select_deployment(model_group, request_context),
     )
-    api_provider = infer_provider(primary.deltallm_params.get("model"))
+    api_provider = resolve_provider(primary.deltallm_params)
     request_id = request.headers.get("x-request-id")
     api_base = primary.deltallm_params.get("api_base", request.app.state.settings.openai_base_url).rstrip("/")
     cache_context = getattr(request.state, "cache_context", None)
@@ -285,6 +305,10 @@ async def handle_chat_like_request(
 
     try:
         if payload.stream:
+            # Validate provider+mode before starting the streaming response,
+            # so unsupported stream providers fail as a normal HTTP error.
+            resolve_chat_upstream(request, primary.deltallm_params, is_stream=True)
+
             async def stream_sse():
                 cache_context = getattr(request.state, "cache_context", None)
                 stream_handler = getattr(request.app.state, "streaming_cache_handler", None)
@@ -386,7 +410,7 @@ async def handle_chat_like_request(
                                 "cache_hit": cache_hit,
                                 "cache_key": cache_key,
                                 "api_base": api_base_local,
-                                "provider": infer_provider(params.get("model")),
+                                "provider": resolve_provider(params),
                                 "deployment_model": params.get("model"),
                             },
                         )
@@ -439,7 +463,7 @@ async def handle_chat_like_request(
                                 "cache_hit": cache_hit,
                                 "cache_key": cache_key,
                                 "api_base": api_base_local,
-                                "provider": infer_provider(params.get("model")),
+                                "provider": resolve_provider(params),
                                 "deployment_model": params.get("model"),
                             },
                         )
@@ -465,7 +489,7 @@ async def handle_chat_like_request(
         )
         response_payload = response_transform(payload_data) if response_transform is not None else payload_data
         await request.app.state.passive_health_tracker.record_request_outcome(served_deployment.deployment_id, success=True)
-        api_provider = infer_provider(served_deployment.deltallm_params.get("model"))
+        api_provider = resolve_provider(served_deployment.deltallm_params)
         api_base = str(served_deployment.deltallm_params.get("api_base", request.app.state.settings.openai_base_url)).rstrip("/")
         usage = payload_data.get("usage") or {}
         _deploy_pricing = None

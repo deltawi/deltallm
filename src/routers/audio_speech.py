@@ -16,12 +16,12 @@ from src.metrics import (
     increment_request,
     increment_request_failure,
     increment_spend,
-    infer_provider,
     observe_api_latency,
     observe_request_latency,
 )
 from src.models.errors import InvalidRequestError, PermissionDeniedError
 from src.models.requests import AudioSpeechRequest
+from src.providers.resolution import resolve_provider
 from src.router.router import Deployment
 from src.audit.actions import AuditAction
 from src.routers.audit_helpers import emit_audit_event
@@ -103,7 +103,7 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
         model_group=model_group,
         deployment=await app_router.select_deployment(model_group, request_context),
     )
-    api_provider = infer_provider(primary.deltallm_params.get("model"))
+    api_provider = resolve_provider(primary.deltallm_params)
     request_id = request.headers.get("x-request-id")
 
     try:
@@ -114,7 +114,7 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
             return_deployment=True,
         )
         await request.app.state.passive_health_tracker.record_request_outcome(served_deployment.deployment_id, success=True)
-        api_provider = infer_provider(served_deployment.deltallm_params.get("model"))
+        api_provider = resolve_provider(served_deployment.deltallm_params)
 
         audio_bytes = result["_audio_bytes"]
         api_latency_ms = result["_api_latency_ms"]

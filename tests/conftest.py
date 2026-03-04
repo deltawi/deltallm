@@ -12,6 +12,9 @@ from src.db.repositories import KeyRecord
 from src.guardrails.middleware import GuardrailMiddleware
 from src.guardrails.registry import GuardrailRegistry
 from src.main import create_app
+from src.providers.bedrock import BedrockAdapter
+from src.providers.azure import AzureOpenAIAdapter
+from src.providers.gemini import GeminiAdapter
 from src.providers.openai import OpenAIAdapter
 from src.router import (
     CooldownManager,
@@ -275,6 +278,9 @@ async def test_app() -> FastAPI:
     }
     app.state.http_client = mock_http
     app.state.openai_adapter = OpenAIAdapter(mock_http)  # type: ignore[arg-type]
+    app.state.azure_openai_adapter = AzureOpenAIAdapter(mock_http)  # type: ignore[arg-type]
+    app.state.gemini_adapter = GeminiAdapter(mock_http)  # type: ignore[arg-type]
+    app.state.bedrock_adapter = BedrockAdapter(mock_http)  # type: ignore[arg-type]
     app.state.app_config = type("Cfg", (), {"router_settings": type("RouterCfg", (), {"num_retries": 0})()})()
 
     state_backend = RedisStateBackend(redis)
