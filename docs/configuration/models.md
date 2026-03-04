@@ -116,13 +116,50 @@ model_list:
 
 ## Supported Providers
 
+The backend source of truth is `src/providers/resolution.py` (`PROVIDER_CAPABILITIES` and `PROVIDER_PRESETS`).
+
+### Provider Prefixes
+
 | Provider | Model Prefix | Example |
 |----------|-------------|---------|
 | OpenAI | `openai/` | `openai/gpt-4o` |
-| Anthropic | `anthropic/` | `anthropic/claude-3-sonnet-20240229` |
-| Azure OpenAI | `azure/` | `azure/gpt-4o-deployment` |
+| Anthropic | `anthropic/` | `anthropic/claude-3-5-sonnet-latest` |
+| Azure OpenAI | `azure/` or `azure_openai/` | `azure/gpt-4o-deployment` |
+| OpenRouter | `openrouter/` | `openrouter/openai/gpt-4o-mini` |
 | Groq | `groq/` | `groq/llama-3.1-8b-instant` |
-| AWS Bedrock | `bedrock/` | `bedrock/anthropic.claude-3-sonnet` |
-| Google Vertex AI | `vertex_ai/` | `vertex_ai/gemini-pro` |
-| Cohere | `cohere/` | `cohere/command-r-plus` |
-| Mistral | `mistral/` | `mistral/mistral-large-latest` |
+| Together AI | `together/` | `together/meta-llama/Llama-3.1-8B-Instruct-Turbo` |
+| Fireworks AI | `fireworks/` | `fireworks/accounts/fireworks/models/llama-v3p1-8b-instruct` |
+| DeepInfra | `deepinfra/` | `deepinfra/meta-llama/Meta-Llama-3.1-8B-Instruct` |
+| Perplexity | `perplexity/` | `perplexity/sonar` |
+| Gemini | `gemini/` | `gemini/gemini-2.0-flash` |
+| AWS Bedrock | `bedrock/` | `bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0` |
+| vLLM | `vllm/` | `vllm/meta-llama/Llama-3.1-8B-Instruct` |
+| LM Studio | `lmstudio/` | `lmstudio/qwen2.5-7b-instruct` |
+| Ollama | `ollama/` | `ollama/llama3.1` |
+
+### Capability Matrix
+
+Legend: `Y` = supported, `N` = not supported in backend compatibility matrix.
+
+| Provider | Chat | Embedding | Image | TTS (`audio_speech`) | STT (`audio_transcription`) | Rerank |
+|----------|------|-----------|-------|----------------------|-----------------------------|--------|
+| OpenAI | Y | Y | Y | Y | Y | N |
+| Anthropic | Y | N | N | N | N | N |
+| Azure OpenAI | Y | Y | Y | Y | Y | N |
+| OpenRouter | Y | Y | Y | N | N | N |
+| Groq | Y | Y | N | Y | Y | N |
+| Together AI | Y | Y | Y | N | N | N |
+| Fireworks AI | Y | Y | Y | N | N | N |
+| DeepInfra | Y | Y | Y | N | N | N |
+| Perplexity | Y | N | N | N | N | N |
+| Gemini | Y | N | N | N | N | N |
+| AWS Bedrock | Y | N | N | N | N | N |
+| vLLM | Y | Y | Y | Y | Y | N |
+| LM Studio | Y | Y | N | N | N | N |
+| Ollama | Y | Y | N | N | N | N |
+
+!!! note
+    `rerank` mode is available in DeltaLLM, but no provider is explicitly marked as `rerank`-capable in the current backend provider matrix.
+
+!!! note
+    Unknown/custom providers are allowed by default at validation time (`provider_supports_mode()` returns true when provider is not listed), so custom integrations can still be configured.
