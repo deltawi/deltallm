@@ -1,6 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Card from './Card';
 import { MessageSquare, FileText, Image, Mic, Volume2, ArrowUpDown, Plus, X, ChevronDown } from 'lucide-react';
+import ProviderBadge from './ProviderBadge';
+import { useApi } from '../lib/hooks';
+import { models } from '../lib/api';
+import { normalizeProvider } from '../lib/providers';
 
 let collapsibleIdCounter = 0;
 
@@ -245,10 +249,30 @@ export default function ModelForm({
 }: ModelFormProps) {
   const [form, setForm] = useState<ModelFormValues>(initialValues || { ...EMPTY_FORM });
   const [defaultParams, setDefaultParams] = useState<{ key: string; value: string }[]>(initialDefaultParams || []);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const { data: providerPresetResponse } = useApi(() => models.providerPresets(), []);
 
   const mode = form.mode;
+  const inferredProvider = normalizeProvider(undefined, form.model);
+  const providerPresets = providerPresetResponse?.data || [];
+  const selectedProviderPreset = providerPresets.find((preset) => preset.provider === inferredProvider);
+
+  useEffect(() => {
+    if (validationError) setValidationError(null);
+  }, [form.model, mode]);
 
   const handleSubmit = async () => {
+    setValidationError(null);
+    if (selectedProviderPreset && !selectedProviderPreset.supported_modes.includes(mode)) {
+      const modeLabel = MODE_OPTIONS.find((m) => m.value === mode)?.label || mode;
+      const supported = selectedProviderPreset.supported_modes
+        .map((m) => MODE_OPTIONS.find((opt) => opt.value === m)?.label || m)
+        .join(', ');
+      setValidationError(
+        `Provider "${selectedProviderPreset.provider}" does not support "${modeLabel}". Supported types: ${supported || 'none'}.`,
+      );
+      return;
+    }
     const payload = buildModelPayload(form, defaultParams);
     await onSubmit(payload);
   };
@@ -287,7 +311,27 @@ export default function ModelForm({
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Provider / Model</label>
-            <input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} placeholder={mode === 'image_generation' ? 'openai/dall-e-3' : mode === 'audio_speech' ? 'openai/tts-1' : mode === 'audio_transcription' ? 'openai/whisper-1' : mode === 'embedding' ? 'openai/text-embedding-3-large' : mode === 'rerank' ? 'cohere/rerank-english-v3.0' : 'openai/gpt-4o'} className={inputClass} />
+            <input
+              value={form.model}
+              onChange={(e) => setForm({ ...form, model: e.target.value })}
+              placeholder={mode === 'image_generation' ? 'openai/dall-e-3' : mode === 'audio_speech' ? 'openai/tts-1' : mode === 'audio_transcription' ? 'openai/whisper-1' : mode === 'embedding' ? 'openai/text-embedding-3-large' : mode === 'rerank' ? 'cohere/rerank-english-v3.0' : 'openai/gpt-4o'}
+              list="provider-model-presets"
+              className={inputClass}
+            />
+            <div className="mt-2 flex items-center gap-2">
+              <span className="text-xs text-gray-500">Detected provider:</span>
+              <ProviderBadge provider={inferredProvider} />
+            </div>
+            {selectedProviderPreset && (
+              <p className="text-xs text-gray-500 mt-1">
+                Supported model types: {selectedProviderPreset.supported_modes.join(', ')}
+              </p>
+            )}
+            <datalist id="provider-model-presets">
+              {providerPresets.map((preset) => (
+                <option key={preset.provider} value={`${preset.provider}/`} />
+              ))}
+            </datalist>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -520,6 +564,7 @@ export default function ModelForm({
         </div>
       </CollapsibleCard>
 
+      {validationError && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{validationError}</div>}
       {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>}
 
       <div className="flex justify-end gap-3">

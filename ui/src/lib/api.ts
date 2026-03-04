@@ -80,6 +80,13 @@ export interface Paginated<T> {
   pagination: Pagination;
 }
 
+export interface ProviderPreset {
+  provider: string;
+  api_base: string;
+  compat: string;
+  supported_modes: string[];
+}
+
 function withQuery(path: string, params?: Record<string, unknown>): string {
   if (!params) return path;
   const qs = new URLSearchParams();
@@ -121,6 +128,7 @@ export const spend = {
 export const models = {
   list: (params?: { search?: string; provider?: string; mode?: string; limit?: number; offset?: number }) =>
     apiFetch<Paginated<any>>(withQuery('/ui/api/models', params as any)),
+  providerPresets: () => apiFetch<{ data: ProviderPreset[] }>('/ui/api/provider-presets'),
   get: (deploymentId: string) => apiFetch<any>(`/ui/api/models/${encodeURIComponent(deploymentId)}`),
   create: (payload: any) => apiFetch<any>('/ui/api/models', { method: 'POST', json: payload }),
   update: (deploymentId: string, payload: any) =>
