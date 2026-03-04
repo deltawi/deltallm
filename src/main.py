@@ -43,6 +43,9 @@ from src.middleware.errors import register_exception_handlers
 from src.middleware.platform_auth import attach_platform_auth_context
 from src.metrics import infer_provider
 from src.providers.anthropic import AnthropicAdapter
+from src.providers.bedrock import BedrockAdapter
+from src.providers.azure import AzureOpenAIAdapter
+from src.providers.gemini import GeminiAdapter
 from src.providers.openai import OpenAIAdapter
 from src.router import (
     BackgroundHealthChecker,
@@ -112,7 +115,10 @@ async def lifespan(app: FastAPI):
 
     app.state.http_client = httpx.AsyncClient(timeout=60)
     app.state.openai_adapter = OpenAIAdapter(app.state.http_client)
+    app.state.azure_openai_adapter = AzureOpenAIAdapter(app.state.http_client)
     app.state.anthropic_adapter = AnthropicAdapter(app.state.http_client)
+    app.state.gemini_adapter = GeminiAdapter(app.state.http_client)
+    app.state.bedrock_adapter = BedrockAdapter(app.state.http_client)
     app.state.key_service = KeyService(
         repository=KeyRepository(prisma_manager.client),
         redis_client=redis_client,

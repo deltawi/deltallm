@@ -106,6 +106,41 @@ async def test_chat_fallback_uses_served_deployment_api_base_in_spend_log(client
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "body", "registry_key"),
+    [
+        (
+            "/v1/chat/completions",
+            {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False},
+            "gpt-4o-mini",
+        ),
+        (
+            "/v1/embeddings",
+            {"model": "text-embedding-3-small", "input": "hello"},
+            "text-embedding-3-small",
+        ),
+    ],
+)
+async def test_explicit_provider_keeps_spend_logging_intact(client, test_app, path, body, registry_key):
+    test_app.state.spend_tracking_service = _SpendRecorder()
+
+    deployment = test_app.state.router.deployment_registry[registry_key][0]
+    deployment.deltallm_params["provider"] = "openrouter"
+    deployment.deltallm_params["api_base"] = "https://openrouter.ai/api/v1"
+
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    response = await client.post(path, headers=headers, json=body)
+    assert response.status_code == 200
+
+    await asyncio.sleep(0.05)
+    assert test_app.state.spend_tracking_service.events
+    last = test_app.state.spend_tracking_service.events[-1]
+    assert last.get("model") == body["model"]
+    assert (last.get("metadata") or {}).get("api_base") == "https://openrouter.ai/api/v1"
+    assert "cost" in last
+
+
+@pytest.mark.asyncio
 async def test_limit_counter_fail_open_uses_in_memory_fallback():
     limiter = LimitCounter(redis_client=None, degraded_mode="fail_open")
     checks = [RateLimitCheck(scope="key_rpm", entity_id="k1", limit=1, amount=1)]

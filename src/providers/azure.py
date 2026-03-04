@@ -1,29 +1,62 @@
 from __future__ import annotations
 
+import json
 from typing import Any, AsyncIterator
 
-from src.models.errors import ServiceUnavailableError
+import httpx
+
+from src.models.errors import InvalidRequestError, ServiceUnavailableError, TimeoutError
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
 from src.providers.base import ProviderAdapter
 
 
 class AzureOpenAIAdapter(ProviderAdapter):
-    provider_name = "azure"
+    provider_name = "azure_openai"
+
+    def __init__(self, http_client: httpx.AsyncClient) -> None:
+        self.http_client = http_client
 
     async def translate_request(self, canonical_request: ChatCompletionRequest, provider_config: dict[str, Any]) -> dict[str, Any]:
-        raise ServiceUnavailableError(message="Azure adapter not implemented yet")
+        payload = canonical_request.model_dump(exclude_none=True)
+        if payload.get("tool_choice") is not None and not payload.get("tools"):
+            payload.pop("tool_choice", None)
+        upstream_model = provider_config.get("model")
+        if upstream_model and "/" in str(upstream_model):
+            payload["model"] = str(upstream_model).split("/", 1)[1]
+        return payload
 
     async def translate_response(self, provider_response: Any, model_name: str) -> ChatCompletionResponse:
-        raise ServiceUnavailableError(message="Azure adapter not implemented yet")
+        data = provider_response if isinstance(provider_response, dict) else json.loads(provider_response)
+        if "model" not in data:
+            data["model"] = model_name
+        return ChatCompletionResponse.model_validate(data)
 
     async def translate_stream(self, provider_stream: AsyncIterator[str]) -> AsyncIterator[str]:
-        if False:
-            yield ""
-        raise ServiceUnavailableError(message="Azure adapter not implemented yet")
+        async for chunk in provider_stream:
+            yield chunk
 
     def map_error(self, provider_error: Exception) -> Exception:
+        if isinstance(provider_error, httpx.TimeoutException):
+            return TimeoutError()
+        if isinstance(provider_error, httpx.HTTPStatusError):
+            status = provider_error.response.status_code
+            if status >= 500:
+                return ServiceUnavailableError(message=f"Provider error: {status}")
+            return InvalidRequestError(message=f"Provider rejected request: {status}")
         return ServiceUnavailableError(message=str(provider_error))
 
     async def health_check(self, provider_config: dict[str, Any]) -> bool:
-        return False
+        api_base = str(provider_config.get("api_base") or "").rstrip("/")
+        api_key = provider_config.get("api_key")
+        if not api_base or not api_key:
+            return False
+        try:
+            response = await self.http_client.get(
+                f"{api_base}/models",
+                headers={"api-key": str(api_key)},
+                timeout=10.0,
+            )
+            return response.status_code < 500
+        except Exception:
+            return False

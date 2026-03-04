@@ -4,6 +4,7 @@ import { useApi } from '../lib/hooks';
 import { models } from '../lib/api';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
+import ProviderBadge from '../components/ProviderBadge';
 import StatusBadge from '../components/StatusBadge';
 import { MODE_OPTIONS, MODE_BADGE_COLORS } from '../components/ModelForm';
 import { Plus, Pencil, Trash2 } from 'lucide-react';
@@ -44,7 +45,7 @@ export default function Models() {
       const mode = r.mode || r.model_info?.mode || 'chat';
       return <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${MODE_BADGE_COLORS[mode] || 'bg-gray-100 text-gray-700'}`}>{modeLabel(mode)}</span>;
     }},
-    { key: 'provider', header: 'Provider', render: (r: any) => <span className="text-gray-500">{r.provider}</span> },
+    { key: 'provider', header: 'Provider', render: (r: any) => <ProviderBadge provider={r.provider} model={r.deltallm_params?.model} /> },
     { key: 'deployment_id', header: 'Deployment ID', render: (r: any) => <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{r.deployment_id}</code> },
     { key: 'healthy', header: 'Health', render: (r: any) => <StatusBadge status={r.healthy ? 'healthy' : 'unhealthy'} /> },
     {

@@ -3,6 +3,7 @@ import { useApi } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
 import { models } from '../lib/api';
 import Card from '../components/Card';
+import ProviderBadge from '../components/ProviderBadge';
 import StatusBadge from '../components/StatusBadge';
 import { MODE_OPTIONS, MODE_BADGE_COLORS } from '../components/ModelForm';
 import {
@@ -148,7 +149,7 @@ export default function ModelDetail() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <DetailSection icon={Server} title="Provider Connection" color="bg-slate-100 text-slate-600">
-          <InfoRow label="Provider" value={model.provider} />
+          <InfoRow label="Provider" value={<ProviderBadge provider={model.provider} model={lp.model} />} />
           <InfoRow label="Provider Model" value={lp.model} mono />
           <InfoRow label="API Base" value={lp.api_base} mono />
           <InfoRow label="API Key" value={maskedKey} mono />

@@ -3,9 +3,10 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-from src.config import AppConfig, ModelDeployment, RouterSettings
+from src.config import AppConfig, RouterSettings
 from src.config_runtime.dynamic import DynamicConfigManager
 from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
+from src.providers.resolution import validate_provider_mode_compatibility
 from src.router import RouterConfig, RoutingStrategy, build_deployment_registry
 from src.services.model_deployments import load_model_registry
 
@@ -187,4 +188,4 @@ class ModelHotReloadManager:
         if "model_name" not in config or not has_params:
             raise ValueError("Missing required model fields: model_name, deltallm_params")
 
-        ModelDeployment.model_validate(config)
+        validate_provider_mode_compatibility(config)

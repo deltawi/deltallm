@@ -5,6 +5,8 @@ import pytest
 
 from src.models.requests import ChatCompletionRequest
 from src.providers.anthropic import AnthropicAdapter
+from src.providers.bedrock import BedrockAdapter
+from src.providers.gemini import GeminiAdapter
 from src.providers.openai import OpenAIAdapter
 
 
@@ -95,5 +97,79 @@ async def test_anthropic_adapter_translate_stream_to_openai_chunks() -> None:
         assert any('"content":"Hello"' in line for line in out)
         assert any('"content":" world"' in line for line in out)
         assert out[-1] == "data: [DONE]"
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_gemini_adapter_translate_request_and_response() -> None:
+    adapter = GeminiAdapter(httpx.AsyncClient())
+    try:
+        req = ChatCompletionRequest(
+            model="gemini-2.5-flash",
+            messages=[
+                {"role": "system", "content": "be concise"},
+                {"role": "user", "content": "Say hi"},
+            ],
+            max_tokens=32,
+        )
+        upstream = await adapter.translate_request(req, {"model": "gemini/gemini-2.5-flash"})
+        assert upstream["systemInstruction"]["parts"][0]["text"] == "be concise"
+        assert upstream["contents"][0]["role"] == "user"
+        assert upstream["generationConfig"]["maxOutputTokens"] == 32
+
+        canonical = await adapter.translate_response(
+            {
+                "responseId": "resp_123",
+                "candidates": [
+                    {
+                        "content": {"parts": [{"text": "Hello"}]},
+                        "finishReason": "STOP",
+                    }
+                ],
+                "usageMetadata": {"promptTokenCount": 4, "candidatesTokenCount": 2, "totalTokenCount": 6},
+            },
+            model_name="gemini/gemini-2.5-flash",
+        )
+        payload = canonical.model_dump(mode="json")
+        assert payload["choices"][0]["message"]["content"] == "Hello"
+        assert payload["usage"]["total_tokens"] == 6
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_bedrock_adapter_translate_request_and_response() -> None:
+    adapter = BedrockAdapter(httpx.AsyncClient())
+    try:
+        req = ChatCompletionRequest(
+            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            messages=[
+                {"role": "system", "content": "be concise"},
+                {"role": "user", "content": "Say hi"},
+            ],
+            max_tokens=32,
+        )
+        upstream = await adapter.translate_request(req, {"model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"})
+        assert upstream["system"][0]["text"] == "be concise"
+        assert upstream["messages"][0]["role"] == "user"
+        assert upstream["inferenceConfig"]["maxTokens"] == 32
+
+        canonical = await adapter.translate_response(
+            {
+                "requestId": "req_123",
+                "output": {
+                    "message": {
+                        "content": [{"text": "Hello"}],
+                    }
+                },
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 4, "outputTokens": 2, "totalTokens": 6},
+            },
+            model_name="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        )
+        payload = canonical.model_dump(mode="json")
+        assert payload["choices"][0]["message"]["content"] == "Hello"
+        assert payload["usage"]["total_tokens"] == 6
     finally:
         await adapter.http_client.aclose()

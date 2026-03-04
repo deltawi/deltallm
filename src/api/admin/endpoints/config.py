@@ -10,6 +10,7 @@ from src.auth.roles import Permission
 from src.audit.actions import AuditAction
 from src.api.admin.endpoints.common import emit_admin_mutation_audit, model_entries, to_json_value, get_auth_scope
 from src.middleware.admin import require_admin_permission
+from src.providers.resolution import resolve_provider
 
 router = APIRouter(tags=["Admin Config"])
 
@@ -39,7 +40,7 @@ async def get_routing(request: Request) -> dict[str, Any]:
                 {
                     "deployment_id": deployment_id,
                     "model": model_name,
-                    "provider": str(params.get("model", "")).split("/")[0] or "unknown",
+                    "provider": resolve_provider(params),
                     "status": "healthy" if bool(health.get("healthy", True)) else "degraded",
                     "latency_ms": health.get("avg_latency_ms"),
                     "last_check": health.get("last_success_at") or health.get("last_error_at"),

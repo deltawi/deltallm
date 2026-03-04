@@ -16,6 +16,7 @@ from src.api.audit import emit_control_audit_event
 from src.auth.roles import Permission
 from src.api.admin.endpoints.common import get_auth_scope
 from src.config_runtime.models import ModelHotReloadManager
+from src.providers.resolution import provider_presets, resolve_provider, validate_provider_mode_compatibility
 from src.router import build_deployment_registry
 
 ui_router = APIRouter(tags=["UI"])
@@ -56,7 +57,7 @@ def _model_entries(app: Any) -> list[dict[str, Any]]:
                 {
                     "deployment_id": deployment_id,
                     "model_name": model_name,
-                    "provider": str(params.get("model", "")).split("/")[0] or "unknown",
+                    "provider": resolve_provider(params),
                     "mode": model_info.get("mode", "chat"),
                     "deltallm_params": params,
                     "model_info": model_info,
@@ -80,6 +81,13 @@ def _rebuild_runtime_registry(app: Any) -> None:
         if isinstance(registry, dict) and registry is not runtime_registry:
             registry.clear()
             registry.update(rebuilt)
+
+
+def _validate_model_config_or_400(model_config: dict[str, Any]) -> None:
+    try:
+        validate_provider_mode_compatibility(model_config)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @ui_router.get("/ui/api/models", dependencies=[Depends(require_authenticated)])
@@ -120,6 +128,11 @@ async def list_models(
     }
 
 
+@ui_router.get("/ui/api/provider-presets", dependencies=[Depends(require_authenticated)])
+async def list_provider_presets() -> dict[str, Any]:
+    return {"data": provider_presets()}
+
+
 @ui_router.get("/ui/api/models/{deployment_id}", dependencies=[Depends(require_authenticated)])
 async def get_model(request: Request, deployment_id: str) -> dict[str, Any]:
     health_backend = getattr(request.app.state, "router_state_backend", None)
@@ -154,6 +167,7 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
         "deltallm_params": deltallm_params,
         "model_info": model_info,
     }
+    _validate_model_config_or_400(model_config)
 
     hot_reload: ModelHotReloadManager | None = getattr(request.app.state, "model_hot_reload_manager", None)
     if hot_reload is not None:
@@ -208,16 +222,18 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
     new_model_name = str(payload.get("model_name") or found_model_name)
     deltallm_params = payload.get("deltallm_params") if isinstance(payload.get("deltallm_params"), dict) else found_deployment.get("deltallm_params", {})
     model_info = payload.get("model_info") if isinstance(payload.get("model_info"), dict) else found_deployment.get("model_info", {})
+    model_config = {
+        "deployment_id": deployment_id,
+        "model_name": new_model_name,
+        "deltallm_params": deltallm_params,
+        "model_info": model_info,
+    }
+    _validate_model_config_or_400(model_config)
 
     if hot_reload is not None:
         updated = await hot_reload.update_model(
             deployment_id,
-            {
-                "deployment_id": deployment_id,
-                "model_name": new_model_name,
-                "deltallm_params": deltallm_params,
-                "model_info": model_info,
-            },
+            model_config,
             updated_by="admin_api",
         )
         if not updated:
