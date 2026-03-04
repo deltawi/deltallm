@@ -50,10 +50,14 @@ function RoleBadge({ role }: { role: string }) {
 
 export default function RBACAccounts() {
   const [principals, setPrincipals] = useState<Principal[]>([]);
+  const [principalPagination, setPrincipalPagination] = useState({ total: 0, limit: 20, offset: 0, has_more: false });
   const [orgList, setOrgList] = useState<any[]>([]);
   const [teamList, setTeamList] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchInput, setSearchInput] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  const [pageOffset, setPageOffset] = useState(0);
+  const pageSize = 20;
 
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [editAccount, setEditAccount] = useState<Principal | null>(null);
@@ -80,11 +84,12 @@ export default function RBACAccounts() {
     setLoading(true);
     try {
       const [allPrincipals, orgs, tms] = await Promise.all([
-        rbac.principals.list(),
+        rbac.principals.list({ search: searchTerm, limit: pageSize, offset: pageOffset }),
         organizations.list({ limit: 500 }).catch(() => ({ data: [], pagination: { total: 0, limit: 500, offset: 0, has_more: false } })),
         teams.list({ limit: 500 }).catch(() => ({ data: [], pagination: { total: 0, limit: 500, offset: 0, has_more: false } })),
       ]);
-      setPrincipals(allPrincipals);
+      setPrincipals(allPrincipals?.data || []);
+      setPrincipalPagination(allPrincipals?.pagination || { total: 0, limit: pageSize, offset: pageOffset, has_more: false });
       setOrgList(orgs?.data || orgs || []);
       setTeamList(tms?.data || tms || []);
     } catch (err: any) {
@@ -92,9 +97,16 @@ export default function RBACAccounts() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [pageOffset, pageSize, searchTerm]);
 
   useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setSearchTerm(searchInput);
+      setPageOffset(0);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 
   const openCreateAccount = () => {
     setEditAccount(null);
@@ -229,11 +241,6 @@ export default function RBACAccounts() {
     }
   };
 
-  const filteredAccounts = principals.filter(a =>
-    a.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    a.role.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
   const getOrgName = (orgId: string) => {
     const org = orgList.find(o => o.organization_id === orgId);
     return org?.organization_name || orgId.slice(0, 12) + '...';
@@ -265,8 +272,8 @@ export default function RBACAccounts() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
             type="text"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
             placeholder="Search accounts..."
             className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           />
@@ -277,14 +284,14 @@ export default function RBACAccounts() {
         <div className="flex items-center justify-center py-12">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
         </div>
-      ) : filteredAccounts.length === 0 ? (
+      ) : principals.length === 0 ? (
         <div className="text-center py-12 bg-white rounded-xl border border-gray-200">
           <UserCog className="w-12 h-12 text-gray-300 mx-auto mb-3" />
           <p className="text-gray-500">No accounts found</p>
         </div>
       ) : (
         <div className="space-y-2">
-          {filteredAccounts.map((acct) => {
+          {principals.map((acct) => {
             const isExpanded = expandedAccount === acct.account_id;
             const acctOrgMs = acct.organization_memberships || [];
             const acctTeamMs = acct.team_memberships || [];
@@ -427,6 +434,27 @@ export default function RBACAccounts() {
           })}
         </div>
       )}
+      <div className="mt-4 flex items-center justify-between text-xs text-gray-500">
+        <span>
+          Showing {principals.length} of {principalPagination.total}
+        </span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setPageOffset(Math.max(0, pageOffset - pageSize))}
+            disabled={pageOffset === 0 || loading}
+            className="px-3 py-1.5 border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+          >
+            Previous
+          </button>
+          <button
+            onClick={() => setPageOffset(pageOffset + pageSize)}
+            disabled={!principalPagination.has_more || loading}
+            className="px-3 py-1.5 border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+          >
+            Next
+          </button>
+        </div>
+      </div>
 
       <Modal open={showAccountModal} onClose={() => setShowAccountModal(false)} title={editAccount ? 'Edit Account' : 'Create Account'}>
         <div className="space-y-4">

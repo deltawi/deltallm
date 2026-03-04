@@ -239,11 +239,10 @@ export interface Principal extends RBACAccount {
 
 export const rbac = {
   principals: {
-    list: (params?: { search?: string }) =>
-      apiFetch<Principal[]>(withQuery('/ui/api/principals', params as any)),
+    list: (params?: { search?: string; limit?: number; offset?: number }) =>
+      apiFetch<Paginated<Principal>>(withQuery('/ui/api/principals', params as any)),
   },
   accounts: {
-    list: () => apiFetch<RBACAccount[]>('/ui/api/rbac/accounts'),
     upsert: (payload: any) => apiFetch<any>('/ui/api/rbac/accounts', { method: 'POST', json: payload }),
     delete: (accountId: string) =>
       apiFetch<any>(`/ui/api/rbac/accounts/${encodeURIComponent(accountId)}`, { method: 'DELETE' }),
