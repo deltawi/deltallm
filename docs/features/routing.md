@@ -2,7 +2,7 @@
 
 DeltaLLM routes requests across multiple model deployments with automatic failover, retries, and intelligent error handling.
 
-For runtime operations in the Admin UI, the preferred workflow is to create explicit [Model Groups](../admin-ui/model-groups.md) and manage routing policy there. Configuration-based routing remains available and is still documented below.
+For runtime operations in the Admin UI, the preferred workflow is to create explicit [Route Groups](../admin-ui/route-groups.md) and manage routing policy there. Configuration-based routing remains available and is still documented below.
 
 ## Routing Strategies
 

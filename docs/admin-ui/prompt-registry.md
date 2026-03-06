@@ -1,89 +1,40 @@
 # Prompt Registry
 
-The Prompt Registry page lets platform admins manage prompts as first-class versioned objects. Each prompt template can have immutable versions, movable labels such as `production`, scoped bindings, and render or precedence testing.
+Prompt Registry manages prompts as first-class versioned assets.
 
-## What to do first
+![Prompt Registry List](images/prompt-registry-list.png)
 
-The recommended setup order in the UI is:
+![Prompt Template Detail](images/prompt-template-detail.png)
+
+## Recommended flow
 
 1. Create the prompt shell
-2. Author the first version
-3. Promote a label to that version
-4. Bind the label to the right scope
-5. Run render and resolution tests
+2. Write the system prompt
+3. Declare the required variables
+4. Register a stable label such as `production`
+5. Run a render test before rollout
 
-The page is structured around that order so users do not have to understand every advanced control before getting the first prompt into service.
+The detail page is intentionally structured in that order.
 
-## Creating a prompt
+## What the registry owns
 
-Click **Create Prompt** and start with the minimum required fields:
+- Prompt identity (`template_key`)
+- Immutable prompt versions
+- Stable labels that move between versions
+- Render validation and history
 
-- **Template Key** — Stable identifier used by labels, bindings, and requests
-- **Prompt Name** — Human-readable name
+## What the registry does not own
 
-Optional metadata such as description and owner scope is grouped separately so the first step stays lightweight.
+Prompt binding belongs to the consuming surface.
 
-## Detail page flow
+For example, a route group binds a prompt from the [Route Groups](route-groups.md) page rather than from the prompt detail page. This keeps ownership clear:
 
-The detail page is organized as a rollout workflow:
+- **Prompt Registry** defines what the prompt is
+- **Route Groups** decide where it applies
 
-### 1. Template
+## Versioning and testing
 
-Use this section for low-frequency metadata updates:
-
-- Name
-- Description
-- Optional owner scope
-
-### 2. Author Version
-
-Start with the prompt body only. This is the main authoring step.
-
-Advanced version settings are available when needed:
-
-- **Variables Schema** for structured input validation
-- **Model Hints** for runtime guidance
-- **Route Preferences** for optional routing influence
-- **Publish immediately** for already-reviewed versions
-
-### 3. Promote and Bind
-
-This section groups two related tasks:
-
-- **Promote label** — Move a stable label such as `production` or `staging` onto a chosen version
-- **Bind label to scope** — Decide which key, team, org, or model group should resolve that prompt
-
-The UI shows current labels and bindings so operators can confirm rollout state at a glance.
-
-### 4. Test Resolution
-
-Use tests before relying on a prompt in production:
-
-- **Render test** validates variables and shows the rendered output
-- **Binding precedence preview** shows which prompt would resolve for a given request context
-
-Render actions stay disabled until at least one version exists.
-
-### 5. History
-
-Use the history view to:
-
-- Review immutable prompt versions
-- Publish a previous version
-- Compare two versions side-by-side
-
-History is intentionally separated from authoring so the main rollout flow stays focused.
-
-## UI guidance
-
-The page includes:
-
-- Summary cards for version, label, and binding counts
-- A rollout-progress checklist so operators know the next required step
-- Empty-state guidance when labels, bindings, or versions do not yet exist
-- Prerequisite-aware actions that reduce dead-end interactions
-
-## Related docs
-
-- [Model Groups](model-groups.md)
-- [Routing & Failover](../features/routing.md)
+- Versions are immutable once created
+- Labels provide a stable reference for rollout
+- Dry-run render validates the required variables and shows the resolved prompt body
+- History is the place to review older versions and compare changes
