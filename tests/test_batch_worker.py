@@ -66,8 +66,16 @@ async def test_batch_worker_logs_batch_pricing_and_spend(monkeypatch):
             return deployment_obj
 
     class _Failover:
-        async def execute_with_failover(self, *, primary_deployment, model_group, execute, return_deployment=False):
-            del model_group
+        async def execute_with_failover(
+            self,
+            *,
+            primary_deployment,
+            model_group,
+            execute,
+            return_deployment=False,
+            **kwargs,
+        ):
+            del model_group, kwargs
             data = await execute(primary_deployment)
             if return_deployment:
                 return data, primary_deployment
@@ -185,8 +193,16 @@ async def test_batch_worker_keeps_completed_state_when_side_effects_fail(monkeyp
             return deployment_obj
 
     class _Failover:
-        async def execute_with_failover(self, *, primary_deployment, model_group, execute, return_deployment=False):
-            del model_group
+        async def execute_with_failover(
+            self,
+            *,
+            primary_deployment,
+            model_group,
+            execute,
+            return_deployment=False,
+            **kwargs,
+        ):
+            del model_group, kwargs
             data = await execute(primary_deployment)
             if return_deployment:
                 return data, primary_deployment

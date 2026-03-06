@@ -226,8 +226,14 @@ class FailoverManager:
         request_tokens: int = 0,
         *,
         return_deployment: bool = False,
+        timeout_seconds: float | None = None,
+        retry_max_attempts: int | None = None,
+        retryable_error_classes: list[str] | set[str] | None = None,
     ) -> Any:
         chain = self._build_fallback_chain(primary_deployment, model_group, request_tokens)
+        effective_timeout = self._effective_timeout(timeout_seconds)
+        effective_retries = self._effective_retry_count(retry_max_attempts)
+        effective_retry_classes = self._normalize_retryable_error_classes(retryable_error_classes)
         last_error: Exception | None = None
         previous_deployment_id = primary_deployment.deployment_id
 
@@ -238,13 +244,13 @@ class FailoverManager:
             if health.get("healthy", "true") == "false":
                 continue
 
-            for attempt in range(self.config.num_retries + 1):
+            for attempt in range(effective_retries + 1):
                 started = time.monotonic()
                 try:
                     await self.state.increment_active(deployment.deployment_id)
                     result = await asyncio.wait_for(
                         execute(deployment),
-                        timeout=self.config.timeout,
+                        timeout=effective_timeout,
                     )
                     latency_ms = (time.monotonic() - started) * 1000
                     await self.state.record_latency(deployment.deployment_id, latency_ms)
@@ -281,7 +287,7 @@ class FailoverManager:
                         success=False,
                     )
 
-                    if attempt < self.config.num_retries:
+                    if self._should_retry(classification, last_error, effective_retry_classes) and attempt < effective_retries:
                         await asyncio.sleep(self._compute_backoff(attempt))
                 except ProxyError as exc:
                     last_error = exc
@@ -302,7 +308,12 @@ class FailoverManager:
                     extra_chain = self._get_classified_fallbacks(classification, model_group)
                     if extra_chain:
                         extra_result = await self._try_classified_fallbacks(
-                            extra_chain, model_group, execute, deployment.deployment_id, classification,
+                            extra_chain,
+                            model_group,
+                            execute,
+                            deployment.deployment_id,
+                            classification,
+                            timeout_seconds=effective_timeout,
                         )
                         if extra_result is not None:
                             if return_deployment:
@@ -310,7 +321,7 @@ class FailoverManager:
                                 return result, served
                             return extra_result[0]
 
-                    if RetryPolicy.is_retryable(exc) and attempt < self.config.num_retries:
+                    if self._should_retry(classification, exc, effective_retry_classes) and attempt < effective_retries:
                         await asyncio.sleep(self._compute_backoff(attempt))
                         continue
                     break
@@ -333,7 +344,12 @@ class FailoverManager:
                     extra_chain = self._get_classified_fallbacks(classification, model_group)
                     if extra_chain:
                         extra_result = await self._try_classified_fallbacks(
-                            extra_chain, model_group, execute, deployment.deployment_id, classification,
+                            extra_chain,
+                            model_group,
+                            execute,
+                            deployment.deployment_id,
+                            classification,
+                            timeout_seconds=effective_timeout,
                         )
                         if extra_result is not None:
                             if return_deployment:
@@ -341,7 +357,7 @@ class FailoverManager:
                                 return result, served
                             return extra_result[0]
 
-                    if RetryPolicy.is_retryable(exc) and attempt < self.config.num_retries:
+                    if self._should_retry(classification, exc, effective_retry_classes) and attempt < effective_retries:
                         await asyncio.sleep(self._compute_backoff(attempt))
                         continue
                     break
@@ -364,7 +380,12 @@ class FailoverManager:
                     extra_chain = self._get_classified_fallbacks(classification, model_group)
                     if extra_chain:
                         extra_result = await self._try_classified_fallbacks(
-                            extra_chain, model_group, execute, deployment.deployment_id, classification,
+                            extra_chain,
+                            model_group,
+                            execute,
+                            deployment.deployment_id,
+                            classification,
+                            timeout_seconds=effective_timeout,
                         )
                         if extra_result is not None:
                             if return_deployment:
@@ -372,7 +393,7 @@ class FailoverManager:
                                 return result, served
                             return extra_result[0]
 
-                    if RetryPolicy.is_retryable(exc) and attempt < self.config.num_retries:
+                    if self._should_retry(classification, exc, effective_retry_classes) and attempt < effective_retries:
                         await asyncio.sleep(self._compute_backoff(attempt))
                         continue
                     break
@@ -419,6 +440,8 @@ class FailoverManager:
         execute: Callable[[Deployment], Awaitable[Any]],
         from_deployment_id: str,
         classification: str,
+        *,
+        timeout_seconds: float,
     ) -> tuple[Any, Deployment] | None:
         for deployment in chain:
             if await self.state.is_cooled_down(deployment.deployment_id):
@@ -432,7 +455,7 @@ class FailoverManager:
                 started = time.monotonic()
                 result = await asyncio.wait_for(
                     execute(deployment),
-                    timeout=self.config.timeout,
+                    timeout=timeout_seconds,
                 )
                 latency_ms = (time.monotonic() - started) * 1000
                 await self.state.record_latency(deployment.deployment_id, latency_ms)
@@ -466,6 +489,43 @@ class FailoverManager:
                 await self.state.decrement_active(deployment.deployment_id)
 
         return None
+
+    def _effective_timeout(self, timeout_seconds: float | None) -> float:
+        if timeout_seconds is None:
+            return self.config.timeout
+        try:
+            parsed = float(timeout_seconds)
+        except (TypeError, ValueError):
+            return self.config.timeout
+        return parsed if parsed > 0 else self.config.timeout
+
+    def _effective_retry_count(self, retry_max_attempts: int | None) -> int:
+        if retry_max_attempts is None:
+            return max(0, int(self.config.num_retries))
+        try:
+            parsed = int(retry_max_attempts)
+        except (TypeError, ValueError):
+            return max(0, int(self.config.num_retries))
+        return max(0, parsed)
+
+    @staticmethod
+    def _normalize_retryable_error_classes(
+        retryable_error_classes: list[str] | set[str] | None,
+    ) -> set[str] | None:
+        if retryable_error_classes is None:
+            return None
+        normalized = {str(item).strip().lower() for item in retryable_error_classes if str(item).strip()}
+        return normalized or None
+
+    @staticmethod
+    def _should_retry(
+        classification: str,
+        error: Exception,
+        retryable_error_classes: set[str] | None,
+    ) -> bool:
+        if retryable_error_classes is None:
+            return RetryPolicy.is_retryable(error)
+        return classification.lower() in retryable_error_classes
 
     def _build_fallback_chain(
         self,

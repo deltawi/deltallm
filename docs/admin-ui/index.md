@@ -24,6 +24,8 @@ When SSO is configured, a third tab appears for single sign-on.
 |------|-------------|--------|
 | [Dashboard](dashboard.md) | Overview stats and charts | All authenticated users |
 | [Models](models.md) | Model deployment management | All authenticated users |
+| [Model Groups](model-groups.md) | First-class routing pools with member management and policy lifecycle | Platform admins only |
+| [Prompt Registry](prompt-registry.md) | Prompt templates, versions, labels, bindings, and rollout testing | Platform admins only |
 | [API Keys](keys.md) | Virtual key management | Scoped by role |
 | [Organizations & Teams](orgs-teams.md) | Org and team management | Scoped by role |
 | Users | User management | Scoped by role |
@@ -51,6 +53,14 @@ Monitor costs, tokens, and request analytics with daily trends and per-model/key
 Configure routing strategy, caching, health checks, retry policies, and fallback chains.
 
 ![Settings Page](images/settings.png)
+
+## Model Groups
+
+Use the Model Groups page to create an explicit routing pool, attach deployments, and publish routing policy in a guided order.
+
+## Prompt Registry
+
+Use the Prompt Registry page to create a prompt shell, author versions, promote labels, bind scopes, and test prompt resolution before rollout.
 
 ## Role-Based Visibility
 

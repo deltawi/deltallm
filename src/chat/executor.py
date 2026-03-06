@@ -45,7 +45,8 @@ async def execute_chat(
         upstream.headers,
         upstream.timeout,
     )
-    upstream_payload = await adapter.translate_request(payload, params)
+    upstream_request = payload.model_copy(update={"metadata": None})
+    upstream_payload = await adapter.translate_request(upstream_request, params)
 
     from src.routers.utils import apply_default_params
 
@@ -112,7 +113,8 @@ async def open_stream_with_first_chunk(
         upstream.headers,
         upstream.timeout,
     )
-    upstream_payload = await adapter.translate_request(payload, params)
+    upstream_request = payload.model_copy(update={"metadata": None})
+    upstream_payload = await adapter.translate_request(upstream_request, params)
 
     from src.routers.utils import apply_default_params
 

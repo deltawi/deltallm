@@ -19,6 +19,18 @@ ModelMode = Literal[
     "rerank",
 ]
 
+RoutingStrategyName = Literal[
+    "simple-shuffle",
+    "least-busy",
+    "latency-based-routing",
+    "cost-based-routing",
+    "usage-based-routing",
+    "tag-based-routing",
+    "priority-based-routing",
+    "weighted",
+    "rate-limit-aware",
+]
+
 
 class DeltaLLMParams(BaseModel):
     model: str
@@ -72,18 +84,22 @@ class ModelDeployment(BaseModel):
     deployment_id: str | None = None
 
 
+class RouteGroupMember(BaseModel):
+    deployment_id: str
+    enabled: bool = True
+    weight: int | None = None
+    priority: int | None = None
+
+
+class RouteGroupConfig(BaseModel):
+    key: str
+    enabled: bool = True
+    strategy: RoutingStrategyName | None = None
+    members: list[RouteGroupMember] = Field(default_factory=list)
+
+
 class RouterSettings(BaseModel):
-    routing_strategy: Literal[
-        "simple-shuffle",
-        "least-busy",
-        "latency-based-routing",
-        "cost-based-routing",
-        "usage-based-routing",
-        "tag-based-routing",
-        "priority-based-routing",
-        "weighted",
-        "rate-limit-aware",
-    ] = "simple-shuffle"
+    routing_strategy: RoutingStrategyName = "simple-shuffle"
     num_retries: int = 0
     retry_after: float = 0
     timeout: float = 600
@@ -91,6 +107,7 @@ class RouterSettings(BaseModel):
     allowed_fails: int = 0
     enable_pre_call_checks: bool = False
     model_group_alias: dict[str, str] = Field(default_factory=dict)
+    route_groups: list[RouteGroupConfig] = Field(default_factory=list)
 
 
 class GuardrailConfig(BaseModel):

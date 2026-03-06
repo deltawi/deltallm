@@ -24,6 +24,13 @@ from src.providers.resolution import resolve_provider
 from src.router.router import Deployment
 from src.audit.actions import AuditAction
 from src.routers.audit_helpers import emit_audit_event
+from src.routers.routing_decision import (
+    attach_route_decision,
+    capture_initial_route_decision,
+    route_failover_kwargs,
+    route_decision_headers,
+    update_served_route_decision,
+)
 from src.routers.utils import enforce_budget_if_configured, fire_and_forget
 
 router = APIRouter(prefix="/v1", tags=["audio"])
@@ -121,6 +128,8 @@ async def audio_transcriptions(
         model_group=model_group,
         deployment=await app_router.select_deployment(model_group, request_context),
     )
+    failover_kwargs = route_failover_kwargs(request_context)
+    capture_initial_route_decision(request, request_context)
     api_provider = resolve_provider(primary.deltallm_params)
     request_id = request.headers.get("x-request-id")
 
@@ -133,6 +142,12 @@ async def audio_transcriptions(
                 model, language, prompt, response_format, temperature, dep,
             ),
             return_deployment=True,
+            **failover_kwargs,
+        )
+        update_served_route_decision(
+            request,
+            primary_deployment_id=primary.deployment_id,
+            served_deployment_id=served_deployment.deployment_id,
         )
         await request.app.state.passive_health_tracker.record_request_outcome(served_deployment.deployment_id, success=True)
         api_provider = resolve_provider(served_deployment.deltallm_params)
@@ -165,7 +180,7 @@ async def audio_transcriptions(
                 call_type="audio_transcription",
                 usage=usage,
                 cost=request_cost,
-                metadata={"api_base": api_base},
+                metadata=attach_route_decision({"api_base": api_base}, request),
                 cache_hit=False,
                 start_time=callback_start,
                 end_time=datetime.now(tz=UTC),
@@ -194,15 +209,18 @@ async def audio_transcriptions(
             resource_id=model,
             request_payload=request_data,
             response_payload=data,
-            metadata={
-                "route": request.url.path,
-                "provider": api_provider,
-                "api_base": api_base,
-                "deployment_model": deployment_model,
-                "file_size_bytes": len(file_content),
-            },
+            metadata=attach_route_decision(
+                {
+                    "route": request.url.path,
+                    "provider": api_provider,
+                    "api_base": api_base,
+                    "deployment_model": deployment_model,
+                    "file_size_bytes": len(file_content),
+                },
+                request,
+            ),
         )
-        return JSONResponse(status_code=200, content=data)
+        return JSONResponse(status_code=200, content=data, headers=route_decision_headers(request))
     except httpx.HTTPError as exc:
         await request.app.state.passive_health_tracker.record_request_outcome(primary.deployment_id, success=False, error=str(exc))
         status_code = getattr(getattr(exc, "response", None), "status_code", 502)
@@ -222,7 +240,10 @@ async def audio_transcriptions(
             resource_id=model,
             request_payload=request_data,
             error=exc,
-            metadata={"route": request.url.path, "provider": api_provider, "file_size_bytes": len(file_content)},
+            metadata=attach_route_decision(
+                {"route": request.url.path, "provider": api_provider, "file_size_bytes": len(file_content)},
+                request,
+            ),
         )
         raise InvalidRequestError(message=f"Audio transcription request failed: {exc}") from exc
     except Exception as exc:
@@ -240,6 +261,9 @@ async def audio_transcriptions(
             resource_id=model,
             request_payload=request_data,
             error=exc,
-            metadata={"route": request.url.path, "provider": api_provider, "file_size_bytes": len(file_content)},
+            metadata=attach_route_decision(
+                {"route": request.url.path, "provider": api_provider, "file_size_bytes": len(file_content)},
+                request,
+            ),
         )
         raise

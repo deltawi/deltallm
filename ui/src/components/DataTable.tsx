@@ -66,7 +66,16 @@ export default function DataTable<T extends Record<string, any>>({
                 <tr
                   key={i}
                   onClick={() => onRowClick?.(row)}
-                  className={`border-b border-gray-100 ${onRowClick ? 'cursor-pointer hover:bg-gray-50' : ''}`}
+                  onKeyDown={(event) => {
+                    if (!onRowClick) return;
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      onRowClick(row);
+                    }
+                  }}
+                  tabIndex={onRowClick ? 0 : undefined}
+                  aria-label={onRowClick ? 'Open row details' : undefined}
+                  className={`border-b border-gray-100 ${onRowClick ? 'cursor-pointer hover:bg-gray-50 focus:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-inset' : ''}`}
                 >
                   {columns.map((col) => (
                     <td key={col.key} className={`py-3 px-4 text-sm text-gray-700 ${col.className || ''}`}>

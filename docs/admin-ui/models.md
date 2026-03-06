@@ -2,6 +2,8 @@
 
 The Models page lets you add, edit, and remove LLM model deployments through the web UI.
 
+Deployments created here are the building blocks used by the [Model Groups](model-groups.md) page.
+
 ![Models Page](images/models.png)
 
 ## Listing Models
@@ -52,6 +54,8 @@ Click the edit icon on any model row to update its configuration. Changes are pe
 ## Deleting a Model
 
 Click the delete icon and confirm to remove a deployment. This removes the deployment from the routing pool immediately.
+
+If the deployment is also used by a model group, remove or replace it from that group as part of the same change.
 
 ## Database Persistence
 

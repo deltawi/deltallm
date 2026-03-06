@@ -22,6 +22,14 @@ deltallm_llm_api_latency_metric = Histogram(
     registry=get_prometheus_registry(),
 )
 
+deltallm_prompt_resolution_latency_metric = Histogram(
+    "deltallm_prompt_resolution_latency_seconds",
+    "Prompt registry resolution and render latency",
+    ["source", "status"],
+    buckets=LATENCY_BUCKETS,
+    registry=get_prometheus_registry(),
+)
+
 
 def observe_request_latency(*, model: str, api_provider: str, status_code: int, latency_seconds: float) -> None:
     deltallm_request_total_latency_metric.labels(
@@ -35,4 +43,11 @@ def observe_api_latency(*, model: str, api_provider: str, latency_seconds: float
     deltallm_llm_api_latency_metric.labels(
         model=sanitize_label(model),
         api_provider=sanitize_label(api_provider),
+    ).observe(max(0.0, float(latency_seconds)))
+
+
+def observe_prompt_resolution_latency(*, source: str, status: str, latency_seconds: float) -> None:
+    deltallm_prompt_resolution_latency_metric.labels(
+        source=sanitize_label(source),
+        status=sanitize_label(status),
     ).observe(max(0.0, float(latency_seconds)))

@@ -6,9 +6,11 @@ from uuid import uuid4
 from src.config import AppConfig, RouterSettings
 from src.config_runtime.dynamic import DynamicConfigManager
 from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
+from src.db.route_groups import RouteGroupRepository
 from src.providers.resolution import validate_provider_mode_compatibility
-from src.router import RouterConfig, RoutingStrategy, build_deployment_registry
+from src.router import RouterConfig, RoutingStrategy, build_deployment_registry, build_route_group_policies
 from src.services.model_deployments import load_model_registry
+from src.services.route_groups import RouteGroupRuntimeCache, load_route_groups
 
 
 def _normalize_fallbacks(items: list[dict[str, list[str]]]) -> dict[str, list[str]]:
@@ -27,10 +29,14 @@ class ModelHotReloadManager:
         app: Any,
         dynamic_config: DynamicConfigManager,
         model_repository: ModelDeploymentRepository | None = None,
+        route_group_repository: RouteGroupRepository | None = None,
+        route_group_cache: RouteGroupRuntimeCache | None = None,
     ) -> None:
         self.app = app
         self.dynamic_config = dynamic_config
         self.model_repository = model_repository
+        self.route_group_repository = route_group_repository
+        self.route_group_cache = route_group_cache
         self.dynamic_config.subscribe(self._on_config_change)
 
     async def add_model(self, model_config: dict[str, Any], updated_by: str = "admin_api") -> str:
@@ -53,6 +59,7 @@ class ModelHotReloadManager:
                     model_info=dict(deployment.get("model_info", {})),
                 )
             )
+            await self._invalidate_route_group_cache()
             await self._reload_runtime()
         return deployment_id
 
@@ -83,6 +90,7 @@ class ModelHotReloadManager:
         )
         if updated_record is None:
             return False
+        await self._invalidate_route_group_cache()
         await self._reload_runtime()
         return True
 
@@ -99,6 +107,7 @@ class ModelHotReloadManager:
         removed = await self.model_repository.delete(deployment_id)
         if not removed:
             return False
+        await self._invalidate_route_group_cache()
         await self._reload_runtime()
         return True
 
@@ -121,7 +130,13 @@ class ModelHotReloadManager:
         )
         app.state.model_registry = model_registry
 
-        new_deployments = build_deployment_registry(app.state.model_registry)
+        route_groups, _ = await load_route_groups(
+            self.route_group_repository,
+            app_config,
+            route_group_cache=self.route_group_cache,
+        )
+        app.state.route_groups = route_groups
+        new_deployments = build_deployment_registry(app.state.model_registry, route_groups=route_groups)
         registries = [
             getattr(app.state.router, "deployment_registry", None),
             getattr(app.state.failover_manager, "registry", None),
@@ -136,7 +151,7 @@ class ModelHotReloadManager:
         router_settings = app_config.router_settings
         app.state.router.strategy = RoutingStrategy(router_settings.routing_strategy)
         app.state.router._strategy_impl = app.state.router._load_strategy(app.state.router.strategy)
-        app.state.router.config = self._build_router_config(router_settings)
+        app.state.router.config = self._build_router_config(router_settings, route_groups)
 
         app.state.cooldown_manager.cooldown_time = router_settings.cooldown_time
         app.state.cooldown_manager.allowed_fails = router_settings.allowed_fails
@@ -162,8 +177,16 @@ class ModelHotReloadManager:
         await self._apply_runtime_config(app_config)
         await self.dynamic_config.publish_model_updated()
 
+    async def reload_runtime(self) -> None:
+        await self._reload_runtime()
+
+    async def _invalidate_route_group_cache(self) -> None:
+        if self.route_group_cache is None:
+            return
+        await self.route_group_cache.invalidate()
+
     @staticmethod
-    def _build_router_config(router_settings: RouterSettings) -> RouterConfig:
+    def _build_router_config(router_settings: RouterSettings, route_groups: list[dict[str, Any]] | None = None) -> RouterConfig:
         data = router_settings.model_dump()
         allowed = {
             "num_retries",
@@ -174,7 +197,11 @@ class ModelHotReloadManager:
             "enable_pre_call_checks",
             "model_group_alias",
         }
-        return RouterConfig(**{key: value for key, value in data.items() if key in allowed})
+        effective_route_groups = route_groups if route_groups is not None else data.get("route_groups", [])
+        return RouterConfig(
+            **{key: value for key, value in data.items() if key in allowed},
+            route_group_policies=build_route_group_policies(effective_route_groups),
+        )
 
     @staticmethod
     def _has_runtime_changes(changes: dict[str, list[str]]) -> bool:

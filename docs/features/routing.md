@@ -2,6 +2,8 @@
 
 DeltaLLM routes requests across multiple model deployments with automatic failover, retries, and intelligent error handling.
 
+For runtime operations in the Admin UI, the preferred workflow is to create explicit [Model Groups](../admin-ui/model-groups.md) and manage routing policy there. Configuration-based routing remains available and is still documented below.
+
 ## Routing Strategies
 
 Configure the strategy in `router_settings`:
@@ -20,6 +22,8 @@ router_settings:
 | `usage-based-routing` | Proportional to weights | Controlled distribution |
 | `priority-based-routing` | Highest priority first | Primary/fallback setups |
 
+In the Admin UI, these strategies are surfaced through the Model Group policy workflow rather than requiring direct config edits.
+
 ## Automatic Retries
 
 When a request fails, DeltaLLM automatically retries on other deployments in the same model group:
@@ -31,6 +35,8 @@ router_settings:
 ```
 
 Retries use exponential backoff with a configurable base delay and optional jitter.
+
+When using explicit Model Groups in the Admin UI, the effective retry and timeout controls come from the published route policy for that group.
 
 ## Deployment Cooldowns
 

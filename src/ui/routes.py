@@ -68,7 +68,8 @@ def _model_entries(app: Any) -> list[dict[str, Any]]:
 
 def _rebuild_runtime_registry(app: Any) -> None:
     model_registry = getattr(app.state, "model_registry", {})
-    rebuilt = build_deployment_registry(model_registry)
+    route_groups = list(getattr(app.state, "route_groups", []))
+    rebuilt = build_deployment_registry(model_registry, route_groups=route_groups)
 
     runtime_registry = getattr(getattr(app.state, "router", None), "deployment_registry", None)
     if isinstance(runtime_registry, dict):
@@ -81,6 +82,13 @@ def _rebuild_runtime_registry(app: Any) -> None:
         if isinstance(registry, dict) and registry is not runtime_registry:
             registry.clear()
             registry.update(rebuilt)
+
+
+async def _invalidate_route_group_runtime_cache(app: Any) -> None:
+    cache = getattr(app.state, "route_group_runtime_cache", None)
+    invalidate = getattr(cache, "invalidate", None)
+    if callable(invalidate):
+        await invalidate()
 
 
 def _validate_model_config_or_400(model_config: dict[str, Any]) -> None:
@@ -176,6 +184,7 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
         request.app.state.model_registry.setdefault(model_name, []).append(
             {"deployment_id": deployment_id, "deltallm_params": deltallm_params, "model_info": model_info}
         )
+        await _invalidate_route_group_runtime_cache(request.app)
         _rebuild_runtime_registry(request.app)
 
     response = {
@@ -249,6 +258,7 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
         registry.setdefault(new_model_name, []).append(
             {"deployment_id": deployment_id, "deltallm_params": deltallm_params, "model_info": model_info}
         )
+        await _invalidate_route_group_runtime_cache(request.app)
         _rebuild_runtime_registry(request.app)
 
     response = {
@@ -309,6 +319,7 @@ async def delete_model(request: Request, deployment_id: str) -> dict[str, bool]:
                 registry[model_name] = kept
             else:
                 registry.pop(model_name, None)
+            await _invalidate_route_group_runtime_cache(request.app)
             _rebuild_runtime_registry(request.app)
             response = {"deleted": True}
             await emit_control_audit_event(

@@ -444,9 +444,9 @@ class AuditRepository:
             FROM deltallm_auditevent e
             LEFT JOIN deltallm_organizationtable o ON o.organization_id = e.organization_id
             WHERE e.occurred_at < NOW() - make_interval(days => GREATEST(
-                COALESCE((o.metadata->>'{AUDIT_METADATA_RETENTION_DAYS_KEY}')::int, $1),
+                COALESCE((o.metadata->>'{AUDIT_METADATA_RETENTION_DAYS_KEY}')::int, $1::int),
                 1
-            ))
+            )::int)
             ORDER BY e.occurred_at ASC
             LIMIT $2
             """,
@@ -465,9 +465,9 @@ class AuditRepository:
             JOIN deltallm_auditevent e ON e.event_id = p.event_id
             LEFT JOIN deltallm_organizationtable o ON o.organization_id = e.organization_id
             WHERE p.created_at < NOW() - make_interval(days => GREATEST(
-                COALESCE((o.metadata->>'{AUDIT_PAYLOAD_RETENTION_DAYS_KEY}')::int, $1),
+                COALESCE((o.metadata->>'{AUDIT_PAYLOAD_RETENTION_DAYS_KEY}')::int, $1::int),
                 1
-            ))
+            )::int)
             ORDER BY p.created_at ASC
             LIMIT $2
             """,

@@ -18,6 +18,11 @@ from src.metrics import (
     observe_request_latency,
 )
 from src.providers.resolution import resolve_provider
+from src.routers.routing_decision import attach_route_decision
+
+
+def _append_route_decision_metadata(request: Request, metadata: dict[str, Any]) -> dict[str, Any]:
+    return attach_route_decision(metadata, request)
 
 
 async def emit_stream_success(
@@ -74,15 +79,18 @@ async def emit_stream_success(
         request_start=request_start,
         request_data=request_data,
         response_data={"object": stream_response_object},
-        metadata={
-            "route": request.url.path,
-            "stream": True,
-            "cache_hit": cache_hit,
-            "cache_key": cache_key,
-            "api_base": api_base,
-            "provider": resolve_provider(params),
-            "deployment_model": params.get("model"),
-        },
+        metadata=_append_route_decision_metadata(
+            request,
+            {
+                "route": request.url.path,
+                "stream": True,
+                "cache_hit": cache_hit,
+                "cache_key": cache_key,
+                "api_base": api_base,
+                "provider": resolve_provider(params),
+                "deployment_model": params.get("model"),
+            },
+        ),
     )
 
 
@@ -142,15 +150,18 @@ async def emit_stream_failure(
         request_data=request_data,
         response_data=None,
         error=stream_exc,
-        metadata={
-            "route": request.url.path,
-            "stream": True,
-            "cache_hit": cache_hit,
-            "cache_key": cache_key,
-            "api_base": api_base,
-            "provider": resolve_provider(params),
-            "deployment_model": params.get("model"),
-        },
+        metadata=_append_route_decision_metadata(
+            request,
+            {
+                "route": request.url.path,
+                "stream": True,
+                "cache_hit": cache_hit,
+                "cache_key": cache_key,
+                "api_base": api_base,
+                "provider": resolve_provider(params),
+                "deployment_model": params.get("model"),
+            },
+        ),
     )
 
 
@@ -228,7 +239,7 @@ async def emit_nonstream_success(
             call_type="completion",
             usage=usage,
             cost=request_cost,
-            metadata={"api_base": api_base},
+            metadata=_append_route_decision_metadata(request, {"api_base": api_base}),
             cache_hit=cache_hit,
             start_time=callback_start,
             end_time=datetime.now(tz=UTC),
@@ -283,15 +294,18 @@ async def emit_nonstream_success(
         response_data=response_payload,
         input_tokens=prompt_tokens,
         output_tokens=completion_tokens,
-        metadata={
-            "route": request.url.path,
-            "stream": False,
-            "cache_hit": cache_hit,
-            "cache_key": cache_key,
-            "api_base": api_base,
-            "provider": api_provider,
-            "deployment_model": served_deployment.deltallm_params.get("model"),
-        },
+        metadata=_append_route_decision_metadata(
+            request,
+            {
+                "route": request.url.path,
+                "stream": False,
+                "cache_hit": cache_hit,
+                "cache_key": cache_key,
+                "api_base": api_base,
+                "provider": api_provider,
+                "deployment_model": served_deployment.deltallm_params.get("model"),
+            },
+        ),
     )
 
 
@@ -377,13 +391,16 @@ async def emit_nonstream_failure(
         request_data=request_data,
         response_data=None,
         error=exc,
-        metadata={
-            "route": request.url.path,
-            "stream": False,
-            "cache_hit": cache_hit,
-            "cache_key": cache_key,
-            "api_base": api_base,
-            "provider": api_provider,
-            "deployment_model": primary_deployment.deltallm_params.get("model"),
-        },
+        metadata=_append_route_decision_metadata(
+            request,
+            {
+                "route": request.url.path,
+                "stream": False,
+                "cache_hit": cache_hit,
+                "cache_key": cache_key,
+                "api_base": api_base,
+                "provider": api_provider,
+                "deployment_model": primary_deployment.deltallm_params.get("model"),
+            },
+        ),
     )
