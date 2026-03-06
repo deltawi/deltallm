@@ -20,10 +20,17 @@ from src.metrics import (
     observe_api_latency,
     observe_request_latency,
 )
-from src.models.errors import InvalidRequestError, ModelNotFoundError, PermissionDeniedError
+from src.models.errors import InvalidRequestError, PermissionDeniedError
 from src.models.requests import EmbeddingRequest
 from src.providers.resolution import resolve_provider
 from src.router.router import Deployment
+from src.routers.routing_decision import (
+    capture_initial_route_decision,
+    route_failover_kwargs,
+    route_decision_headers,
+    route_decision_metadata,
+    update_served_route_decision,
+)
 from src.routers.utils import enforce_budget_if_configured, fire_and_forget
 from src.services.audit_service import AuditEventInput, AuditPayloadInput, AuditService
 from src.audit.actions import AuditAction
@@ -167,6 +174,8 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         model_group=model_group,
         deployment=await app_router.select_deployment(model_group, request_context),
     )
+    failover_kwargs = route_failover_kwargs(request_context)
+    capture_initial_route_decision(request, request_context)
     api_provider = resolve_provider(primary.deltallm_params)
     request_id = request.headers.get("x-request-id")
 
@@ -176,7 +185,14 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             model_group=model_group,
             execute=lambda dep: _execute_embedding(request, payload, dep),
             return_deployment=True,
+            **failover_kwargs,
         )
+        update_served_route_decision(
+            request,
+            primary_deployment_id=primary.deployment_id,
+            served_deployment_id=served_deployment.deployment_id,
+        )
+        route_meta = route_decision_metadata(request)
         await request.app.state.passive_health_tracker.record_request_outcome(served_deployment.deployment_id, success=True)
         api_provider = resolve_provider(served_deployment.deltallm_params)
 
@@ -223,6 +239,9 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             team=auth.team_id,
             spend=request_cost,
         )
+        spend_metadata: dict[str, Any] = {"api_base": api_base}
+        if route_meta is not None:
+            spend_metadata["routing_decision"] = route_meta
         fire_and_forget(
             request.app.state.spend_tracking_service.log_spend(
                 request_id=request_id or "",
@@ -235,7 +254,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
                 call_type="embedding",
                 usage=usage,
                 cost=request_cost,
-                metadata={"api_base": api_base},
+                metadata=spend_metadata,
                 cache_hit=getattr(request.state, "cache_hit", False),
                 start_time=callback_start,
                 end_time=datetime.now(tz=UTC),
@@ -279,6 +298,14 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             response_data=data,
             call_type="embedding",
         )
+        audit_metadata: dict[str, Any] = {
+            "route": request.url.path,
+            "api_base": api_base,
+            "provider": api_provider,
+            "deployment_model": deployment_model,
+        }
+        if route_meta is not None:
+            audit_metadata["routing_decision"] = route_meta
         _emit_embedding_audit_event(
             request=request,
             auth=auth,
@@ -289,14 +316,9 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             status="success",
             prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
             completion_tokens=int(usage.get("completion_tokens", 0) or 0),
-            metadata={
-                "route": request.url.path,
-                "api_base": api_base,
-                "provider": api_provider,
-                "deployment_model": deployment_model,
-            },
+            metadata=audit_metadata,
         )
-        return JSONResponse(status_code=200, content=data)
+        return JSONResponse(status_code=200, content=data, headers=route_decision_headers(request))
     except httpx.HTTPError as exc:
         await request.app.state.passive_health_tracker.record_request_outcome(primary.deployment_id, success=False, error=str(exc))
         status_code = getattr(getattr(exc, "response", None), "status_code", 502)
@@ -319,6 +341,14 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             request_data=request_data, user_api_key_dict=auth.model_dump(mode="python"),
             original_exception=exc, call_type="embedding",
         )
+        error_route_meta = route_decision_metadata(request)
+        error_metadata: dict[str, Any] = {
+            "route": request.url.path,
+            "provider": api_provider,
+            "deployment_model": primary.deltallm_params.get("model"),
+        }
+        if error_route_meta is not None:
+            error_metadata["routing_decision"] = error_route_meta
         _emit_embedding_audit_event(
             request=request,
             auth=auth,
@@ -328,11 +358,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             response_data=None,
             status="error",
             error=exc,
-            metadata={
-                "route": request.url.path,
-                "provider": api_provider,
-                "deployment_model": primary.deltallm_params.get("model"),
-            },
+            metadata=error_metadata,
         )
         raise InvalidRequestError(message=f"Embedding request failed: {exc}") from exc
     except Exception as exc:
@@ -350,6 +376,14 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             request_data=request_data, user_api_key_dict=auth.model_dump(mode="python"),
             original_exception=exc, call_type="embedding",
         )
+        error_route_meta = route_decision_metadata(request)
+        error_metadata: dict[str, Any] = {
+            "route": request.url.path,
+            "provider": api_provider,
+            "deployment_model": primary.deltallm_params.get("model"),
+        }
+        if error_route_meta is not None:
+            error_metadata["routing_decision"] = error_route_meta
         _emit_embedding_audit_event(
             request=request,
             auth=auth,
@@ -359,10 +393,6 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             response_data=None,
             status="error",
             error=exc,
-            metadata={
-                "route": request.url.path,
-                "provider": api_provider,
-                "deployment_model": primary.deltallm_params.get("model"),
-            },
+            metadata=error_metadata,
         )
         raise

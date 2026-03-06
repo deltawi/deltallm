@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import Request
 
+from src.audit.actions import AuditAction
 from src.services.audit_service import AuditEventInput, AuditPayloadInput, AuditService
 
 
@@ -78,4 +79,42 @@ def emit_text_audit_event(
         ),
         payloads=payloads,
         critical=True,
+    )
+
+
+def emit_prompt_resolution_audit_event(
+    *,
+    request: Request,
+    auth: Any,
+    status: str,
+    request_start: float,
+    prompt_key: str | None,
+    metadata: dict[str, Any] | None = None,
+    error: Exception | None = None,
+) -> None:
+    audit_service: AuditService | None = getattr(request.app.state, "audit_service", None)
+    if audit_service is None:
+        return
+
+    request_id = request.headers.get("x-request-id")
+    audit_service.record_event(
+        AuditEventInput(
+            action=AuditAction.PROMPT_RESOLUTION_REQUEST.value,
+            organization_id=getattr(auth, "organization_id", None),
+            actor_type="api_key",
+            actor_id=getattr(auth, "user_id", None) or getattr(auth, "api_key", None),
+            api_key=getattr(auth, "api_key", None),
+            resource_type="prompt",
+            resource_id=prompt_key,
+            request_id=request_id,
+            correlation_id=request_id,
+            ip=request_client_ip(request),
+            user_agent=request.headers.get("user-agent"),
+            status=status,
+            latency_ms=int((perf_counter() - request_start) * 1000),
+            error_type=error.__class__.__name__ if error is not None else None,
+            error_code=getattr(getattr(error, "response", None), "status_code", None) if error is not None else None,
+            metadata=metadata or {},
+        ),
+        critical=False,
     )

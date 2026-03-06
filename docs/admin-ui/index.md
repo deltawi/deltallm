@@ -1,60 +1,50 @@
 # Admin UI
 
-DeltaLLM includes a full-featured web dashboard for managing the gateway. The admin UI is built with React and communicates with the backend through the admin API.
+The DeltaLLM admin UI is the control plane for model deployments, route groups, prompt rollout, access management, and runtime operations.
 
-## Accessing the UI
+![Login](images/login.png)
 
-- **Development**: `http://localhost:5000` (Vite dev server)
-- **Production**: Same URL as the API (backend serves the built frontend)
+## Access and authentication
 
-## Authentication
+- **Development**: `http://localhost:5000`
+- **Single-port / Docker**: `http://localhost:4000`
+- **Email login** uses the platform account directory and session cookies
+- **Master key login** gives platform-admin access for local operations
+- **SSO** appears automatically when an identity provider is configured
 
-The admin UI supports two login methods:
+## Navigation model
 
-- **Email Login**: Session-based authentication with email and password
-- **Master Key**: Direct authentication with the master API key
+The current UI is organized by operator intent:
 
-When SSO is configured, a third tab appears for single sign-on.
+- **Dashboard**: health and spend overview
+- **API Keys**: credential issuance and limits
+- **AI Gateway**: [Models](models.md), [Route Groups](route-groups.md), and [Prompt Registry](prompt-registry.md)
+- **Access**: [Organizations](organizations.md), [Teams](teams.md), and [People & Access](people-and-access.md)
+- **Operations**: [Usage & Spend](usage.md), [Audit Logs](audit-logs.md), [Batch Jobs](batch-jobs.md), [Guardrails](guardrails.md), and [Settings](settings.md)
 
-![Login Page](images/login.png)
+Parent menu sections start collapsed by default and expand only when the operator chooses them.
 
-## Pages Overview
+## Role-based visibility
 
-| Page | Description | Access |
-|------|-------------|--------|
-| [Dashboard](dashboard.md) | Overview stats and charts | All authenticated users |
-| [Models](models.md) | Model deployment management | All authenticated users |
-| [API Keys](keys.md) | Virtual key management | Scoped by role |
-| [Organizations & Teams](orgs-teams.md) | Org and team management | Scoped by role |
-| Users | User management | Scoped by role |
-| Usage | Spend analytics and request logs | All authenticated users |
-| [Guardrails](../features/guardrails.md) | Content safety configuration | Platform admins only |
-| [Access Control](access-control.md) | RBAC account and membership management | Platform admins only |
-| Settings | Gateway configuration | Platform admins (write), all (read) |
+- **Platform admins** can access the full UI
+- **Organization users** see only the organizations, teams, keys, and users they are allowed to manage
+- **Audit logs** require audit-read access
+- **Guardrails**, **Prompt Registry**, **Route Groups**, and **Settings** are admin surfaces
 
-## Users
+## Page guide
 
-Manage users, their profile types, team assignments, and rate limits.
-
-User profile types (`internal_user`, `internal_user_viewer`, `team_admin`) are metadata labels for user/team management views. Authorization is enforced via Access Control memberships and platform account roles.
-
-![Users Page](images/users.png)
-
-## Usage & Spend
-
-Monitor costs, tokens, and request analytics with daily trends and per-model/key breakdowns.
-
-![Usage Page](images/usage.png)
-
-## Settings
-
-Configure routing strategy, caching, health checks, retry policies, and fallback chains.
-
-![Settings Page](images/settings.png)
-
-## Role-Based Visibility
-
-The sidebar navigation adapts based on the user's role:
-
-- **Platform admins** see all pages including Guardrails, Settings, and Access Control
-- **Organization users** see Dashboard, Models, Keys, Orgs, Teams, Users, and Usage — but scoped to their assigned organizations
+| Area | Purpose |
+| --- | --- |
+| [Dashboard](dashboard.md) | Spend, request, and model activity overview |
+| [Models](models.md) | Provider-backed deployments and health |
+| [Route Groups](route-groups.md) | Group-level routing, membership, prompt binding, and usage |
+| [Prompt Registry](prompt-registry.md) | Prompt shells, versions, labels, tests, and history |
+| [API Keys](api-keys.md) | Key issuance, budgets, rate limits, and allowlists |
+| [Organizations](organizations.md) | Top-level ownership, budgets, and limits |
+| [Teams](teams.md) | Team-level budgets, models, and memberships |
+| [People & Access](people-and-access.md) | Platform accounts plus org and team memberships |
+| [Usage & Spend](usage.md) | Trends, breakdowns, and request logs |
+| [Audit Logs](audit-logs.md) | Control-plane and data-plane audit history |
+| [Batch Jobs](batch-jobs.md) | Batch processing status and progress |
+| [Guardrails](guardrails.md) | Safety policy definitions and scoped assignment |
+| [Settings](settings.md) | Global runtime, fallback, and cache behavior |

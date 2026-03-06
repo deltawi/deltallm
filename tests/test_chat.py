@@ -46,6 +46,10 @@ async def test_chat_completion_success(client, test_app):
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200
+    assert response.headers.get("x-deltallm-route-group") == "gpt-4o-mini"
+    assert response.headers.get("x-deltallm-route-strategy") == "simple-shuffle"
+    assert response.headers.get("x-deltallm-route-deployment")
+    assert response.headers.get("x-deltallm-route-fallback-used") == "false"
     payload = response.json()
     assert payload["object"] == "chat.completion"
     assert payload["choices"][0]["message"]["content"] == "ok"
@@ -63,6 +67,8 @@ async def test_chat_completion_streaming_success(client, test_app):
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers.get("x-deltallm-route-group") == "gpt-4o-mini"
+    assert response.headers.get("x-deltallm-route-strategy") == "simple-shuffle"
     assert "data: [DONE]" in response.text
 
 
@@ -240,6 +246,34 @@ async def test_chat_completion_uses_azure_api_key_header_when_provider_is_azure(
 
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
     body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_does_not_forward_internal_metadata_upstream(client, test_app):
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del url, headers, timeout
+        assert "metadata" not in json
+        payload = {
+            "id": "chatcmpl-no-metadata",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": json["model"],
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+        return httpx.Response(200, json=payload)
+
+    test_app.state.http_client.post = post
+
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+        "metadata": {"prompt_ref": {"template_key": "support.prompt", "label": "production"}},
+    }
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200
 

@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import {
   LayoutDashboard,
@@ -10,28 +10,81 @@ import {
   Building2,
   BarChart3,
   Layers,
+  Workflow,
+  FileText,
   Shield,
   Settings,
   LogOut,
   Zap,
   Menu,
   X,
+  ChevronDown,
+  ChevronRight,
+  type LucideIcon,
 } from 'lucide-react';
 import clsx from 'clsx';
 
-const navItems = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/models', icon: Box, label: 'Models' },
-  { to: '/keys', icon: Key, label: 'API Keys' },
-  { to: '/organizations', icon: Building2, label: 'Organizations' },
-  { to: '/teams', icon: UsersRound, label: 'Teams' },
-  { to: '/users', icon: Users, label: 'People & Access' },
-  { to: '/audit', icon: Shield, label: 'Audit Logs', requiredPermission: 'audit.read' },
-  { to: '/usage', icon: BarChart3, label: 'Usage' },
-  { to: '/batches', icon: Layers, label: 'Batch Jobs' },
-  { to: '/guardrails', icon: Shield, label: 'Guardrails', adminOnly: true },
-  { to: '/settings', icon: Settings, label: 'Settings', adminOnly: true },
+type NavItem = {
+  type: 'item';
+  to: string;
+  icon: LucideIcon;
+  label: string;
+  adminOnly?: boolean;
+  requiredPermission?: string;
+};
+
+type NavGroup = {
+  type: 'group';
+  key: string;
+  label: string;
+  icon: LucideIcon;
+  children: NavItem[];
+};
+
+type NavEntry = NavItem | NavGroup;
+
+const navEntries: NavEntry[] = [
+  { type: 'item', to: '/', icon: LayoutDashboard, label: 'Dashboard' },
+  { type: 'item', to: '/keys', icon: Key, label: 'API Keys' },
+  {
+    type: 'group',
+    key: 'ai-gateway',
+    label: 'AI Gateway',
+    icon: Workflow,
+    children: [
+      { type: 'item', to: '/models', icon: Box, label: 'Models' },
+      { type: 'item', to: '/route-groups', icon: Workflow, label: 'Route Groups', adminOnly: true },
+      { type: 'item', to: '/prompts', icon: FileText, label: 'Prompt Registry', adminOnly: true },
+    ],
+  },
+  {
+    type: 'group',
+    key: 'access',
+    label: 'Access',
+    icon: UsersRound,
+    children: [
+      { type: 'item', to: '/organizations', icon: Building2, label: 'Organizations' },
+      { type: 'item', to: '/teams', icon: UsersRound, label: 'Teams' },
+      { type: 'item', to: '/users', icon: Users, label: 'People & Access' },
+    ],
+  },
+  { type: 'item', to: '/usage', icon: BarChart3, label: 'Usage' },
+  { type: 'item', to: '/audit', icon: Shield, label: 'Audit Logs', requiredPermission: 'audit.read' },
+  { type: 'item', to: '/batches', icon: Layers, label: 'Batch Jobs' },
+  { type: 'item', to: '/guardrails', icon: Shield, label: 'Guardrails', adminOnly: true },
+  { type: 'item', to: '/settings', icon: Settings, label: 'Settings', adminOnly: true },
 ];
+
+function isRouteActive(pathname: string, to: string) {
+  if (to === '/') return pathname === '/';
+  return pathname === to || pathname.startsWith(`${to}/`);
+}
+
+function canViewItem(item: NavItem, isPlatformAdmin: boolean, permissions: Set<string>) {
+  if (item.adminOnly && !isPlatformAdmin) return false;
+  if (item.requiredPermission && !isPlatformAdmin && !permissions.has(item.requiredPermission)) return false;
+  return true;
+}
 
 function RoleBadge({ role }: { role: string }) {
   const colors: Record<string, string> = {
@@ -46,11 +99,50 @@ function RoleBadge({ role }: { role: string }) {
   );
 }
 
-function SidebarContent({ visibleNavItems, displayEmail, displayRole, logout, onNavClick }: {
-  visibleNavItems: typeof navItems;
+function topLevelNavClass(isActive: boolean) {
+  return clsx(
+    'mx-3 flex items-center gap-3 rounded-xl px-4 py-2.5 text-sm transition-colors',
+    isActive
+      ? 'bg-gray-800 text-white ring-1 ring-inset ring-gray-700'
+      : 'text-gray-400 hover:bg-gray-800/60 hover:text-white'
+  );
+}
+
+function childNavClass(isActive: boolean) {
+  return clsx(
+    'flex items-center gap-3 rounded-lg px-4 py-2.5 text-sm transition-colors',
+    isActive
+      ? 'bg-gray-800 text-white ring-1 ring-inset ring-gray-700'
+      : 'text-gray-400 hover:bg-gray-800/60 hover:text-white'
+  );
+}
+
+function parentNavClass(isActive: boolean) {
+  return clsx(
+    'mx-3 flex w-full items-center gap-3 rounded-xl px-4 py-2.5 text-sm transition-colors',
+    isActive
+      ? 'bg-gray-800 text-white ring-1 ring-inset ring-gray-700'
+      : 'text-gray-400 hover:bg-gray-800/60 hover:text-white'
+  );
+}
+
+function SidebarContent({
+  visibleEntries,
+  displayEmail,
+  displayRole,
+  logout,
+  expandedGroups,
+  onToggleGroup,
+  pathname,
+  onNavClick,
+}: {
+  visibleEntries: NavEntry[];
   displayEmail: string;
   displayRole: string;
   logout: () => void;
+  expandedGroups: Record<string, boolean>;
+  onToggleGroup: (groupKey: string) => void;
+  pathname: string;
   onNavClick?: () => void;
 }) {
   return (
@@ -63,25 +155,62 @@ function SidebarContent({ visibleNavItems, displayEmail, displayRole, logout, on
         <p className="text-xs text-gray-400 mt-1">Admin Dashboard</p>
       </div>
       <nav className="flex-1 py-4 overflow-y-auto">
-        {visibleNavItems.map(({ to, icon: Icon, label }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to === '/'}
-            onClick={onNavClick}
-            className={({ isActive }) =>
-              clsx(
-                'flex items-center gap-3 px-5 py-2.5 text-sm transition-colors',
-                isActive
-                  ? 'bg-gray-800 text-white border-r-2 border-blue-400'
-                  : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
-              )
-            }
-          >
-            <Icon className="w-4 h-4" />
-            {label}
-          </NavLink>
-        ))}
+        {visibleEntries.map((entry) => {
+          if (entry.type === 'item') {
+            const Icon = entry.icon;
+            return (
+              <NavLink
+                key={entry.to}
+                to={entry.to}
+                end={entry.to === '/'}
+                onClick={onNavClick}
+                className={({ isActive }) => topLevelNavClass(isActive)}
+              >
+                <Icon className="w-4 h-4" />
+                {entry.label}
+              </NavLink>
+            );
+          }
+
+          const Icon = entry.icon;
+          const isExpanded = expandedGroups[entry.key] ?? false;
+          const isGroupActive = entry.children.some((child) => isRouteActive(pathname, child.to));
+          const groupPanelId = `${entry.key}-nav-group`;
+          return (
+            <section key={entry.key} className="my-1">
+              <button
+                type="button"
+                onClick={() => onToggleGroup(entry.key)}
+                aria-expanded={isExpanded}
+                aria-controls={groupPanelId}
+                className={parentNavClass(isGroupActive || isExpanded)}
+              >
+                <Icon className="h-4 w-4" />
+                <span className="flex-1 text-left">{entry.label}</span>
+                {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+              </button>
+              {isExpanded && (
+                <div id={groupPanelId} className="mt-1 ml-6 border-l border-gray-800 pl-2" role="group" aria-label={entry.label}>
+                  {entry.children.map((child) => {
+                    const ChildIcon = child.icon;
+                    return (
+                      <NavLink
+                        key={child.to}
+                        to={child.to}
+                        end={child.to === '/'}
+                        onClick={onNavClick}
+                        className={({ isActive }) => childNavClass(isActive)}
+                      >
+                        <ChildIcon className="h-4 w-4" />
+                        {child.label}
+                      </NavLink>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          );
+        })}
       </nav>
       <div className="p-4 border-t border-gray-800">
         <div className="mb-3">
@@ -104,27 +233,55 @@ function SidebarContent({ visibleNavItems, displayEmail, displayRole, logout, on
 
 export default function Layout() {
   const { logout, session, authMode } = useAuth();
+  const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
+    'ai-gateway': false,
+    access: false,
+  });
 
   const displayEmail = authMode === 'master_key' ? 'Master Key' : (session?.email || 'Unknown');
   const displayRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
   const isPlatformAdmin = displayRole === 'platform_admin';
   const permissions = new Set((session?.effective_permissions || []).map((item) => String(item)));
 
-  const visibleNavItems = navItems.filter((item) => {
-    if (item.adminOnly && !isPlatformAdmin) return false;
-    if (item.requiredPermission && !isPlatformAdmin && !permissions.has(item.requiredPermission)) return false;
-    return true;
-  });
+  const visibleEntries = useMemo(
+    () =>
+      navEntries.reduce<NavEntry[]>((items, entry) => {
+        if (entry.type === 'item') {
+          if (canViewItem(entry, isPlatformAdmin, permissions)) items.push(entry);
+          return items;
+        }
+        const children = entry.children.filter((child) => canViewItem(child, isPlatformAdmin, permissions));
+        if (children.length > 0) items.push({ ...entry, children });
+        return items;
+      }, []),
+    [isPlatformAdmin, permissions]
+  );
+
+  useEffect(() => {
+    const activeGroup = visibleEntries.find(
+      (entry): entry is NavGroup => entry.type === 'group' && entry.children.some((child) => isRouteActive(location.pathname, child.to))
+    );
+    if (!activeGroup) return;
+    setExpandedGroups((current) => (current[activeGroup.key] ? current : { ...current, [activeGroup.key]: true }));
+  }, [location.pathname, visibleEntries]);
+
+  const toggleGroup = (groupKey: string) => {
+    setExpandedGroups((current) => ({ ...current, [groupKey]: !current[groupKey] }));
+  };
 
   return (
     <div className="flex h-screen bg-gray-50">
       <aside className="hidden md:flex w-64 bg-gray-900 text-white flex-col shrink-0">
         <SidebarContent
-          visibleNavItems={visibleNavItems}
+          visibleEntries={visibleEntries}
           displayEmail={displayEmail}
           displayRole={displayRole}
           logout={logout}
+          expandedGroups={expandedGroups}
+          onToggleGroup={toggleGroup}
+          pathname={location.pathname}
         />
       </aside>
 
@@ -139,10 +296,13 @@ export default function Layout() {
               <X className="w-5 h-5" />
             </button>
             <SidebarContent
-              visibleNavItems={visibleNavItems}
+              visibleEntries={visibleEntries}
               displayEmail={displayEmail}
               displayRole={displayRole}
               logout={logout}
+              expandedGroups={expandedGroups}
+              onToggleGroup={toggleGroup}
+              pathname={location.pathname}
               onNavClick={() => setMobileOpen(false)}
             />
           </aside>

@@ -120,6 +120,14 @@ class InMemoryModelRepository:
         return len(self.records) < original_len
 
 
+class FakeRouteGroupCache:
+    def __init__(self) -> None:
+        self.invalidate_calls = 0
+
+    async def invalidate(self) -> None:
+        self.invalidate_calls += 1
+
+
 @pytest.mark.asyncio
 async def test_dynamic_config_merges_db_and_notifies_subscribers(monkeypatch):
     monkeypatch.setenv("MASTER", "ResolvedMasterKey2026SecureValue123")
@@ -324,7 +332,13 @@ async def test_model_hot_reload_manager_model_crud_refreshes_runtime_registry():
             )
         ]
     )
-    manager = ModelHotReloadManager(app=app, dynamic_config=dynamic, model_repository=repo)
+    route_group_cache = FakeRouteGroupCache()
+    manager = ModelHotReloadManager(
+        app=app,
+        dynamic_config=dynamic,
+        model_repository=repo,
+        route_group_cache=route_group_cache,
+    )
 
     new_id = await manager.add_model(
         {
@@ -351,5 +365,6 @@ async def test_model_hot_reload_manager_model_crud_refreshes_runtime_registry():
     removed = await manager.remove_model("new-dep")
     assert removed is True
     assert "gpt-4.1-mini" not in app.state.model_registry
+    assert route_group_cache.invalidate_calls == 3
 
     await dynamic.close()

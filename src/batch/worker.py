@@ -15,6 +15,7 @@ from src.batch.storage import BatchArtifactStorage
 from src.billing.cost import ModelPricing, completion_cost
 from src.metrics import increment_request, increment_spend, increment_usage, infer_provider
 from src.models.requests import EmbeddingRequest
+from src.routers.routing_decision import route_failover_kwargs
 from src.routers.embeddings import _execute_embedding
 
 logger = logging.getLogger(__name__)
@@ -104,12 +105,14 @@ class BatchExecutorWorker:
             model_group=model_group,
             deployment=await app_router.select_deployment(model_group, request_context),
         )
+        failover_kwargs = route_failover_kwargs(request_context)
         try:
             data, served_deployment = await self.app.state.failover_manager.execute_with_failover(
                 primary_deployment=primary,
                 model_group=model_group,
                 execute=lambda dep: _execute_embedding(request_shim, payload, dep),
                 return_deployment=True,
+                **failover_kwargs,
             )
             api_provider = infer_provider(served_deployment.deltallm_params.get("model"))
             usage = data.get("usage") or {}

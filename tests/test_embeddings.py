@@ -34,6 +34,10 @@ async def test_embeddings_runs_success_callback(client, test_app):
 
     response = await client.post("/v1/embeddings", headers=headers, json=body)
     assert response.status_code == 200
+    assert response.headers.get("x-deltallm-route-group") == "text-embedding-3-small"
+    assert response.headers.get("x-deltallm-route-strategy") == "simple-shuffle"
+    assert response.headers.get("x-deltallm-route-deployment")
+    assert response.headers.get("x-deltallm-route-fallback-used") == "false"
     await asyncio.sleep(0.05)
     assert recorder.success == 1
 

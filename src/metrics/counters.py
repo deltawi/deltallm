@@ -59,6 +59,20 @@ deltallm_cache_miss_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_prompt_cache_lookup_metric = Counter(
+    "deltallm_prompt_cache_lookups_total",
+    "Prompt registry cache lookups by entity and tier",
+    ["entity", "tier"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_prompt_resolution_metric = Counter(
+    "deltallm_prompt_resolutions_total",
+    "Prompt resolution outcomes",
+    ["source", "status", "binding_scope", "label"],
+    registry=get_prometheus_registry(),
+)
+
 
 def increment_request(
     *,
@@ -137,4 +151,26 @@ def increment_cache_miss(*, model: str, cache_type: str) -> None:
     deltallm_cache_miss_metric.labels(
         model=sanitize_label(model),
         cache_type=sanitize_label(cache_type),
+    ).inc()
+
+
+def increment_prompt_cache_lookup(*, entity: str, tier: str) -> None:
+    deltallm_prompt_cache_lookup_metric.labels(
+        entity=sanitize_label(entity),
+        tier=sanitize_label(tier),
+    ).inc()
+
+
+def increment_prompt_resolution(
+    *,
+    source: str,
+    status: str,
+    binding_scope: str | None,
+    label: str | None,
+) -> None:
+    deltallm_prompt_resolution_metric.labels(
+        source=sanitize_label(source),
+        status=sanitize_label(status),
+        binding_scope=sanitize_label(binding_scope, "none"),
+        label=sanitize_label(label, "none"),
     ).inc()

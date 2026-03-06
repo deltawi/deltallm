@@ -24,6 +24,12 @@ from src.middleware.rate_limit import enforce_rate_limits
 from src.models.requests import ChatCompletionRequest
 from src.providers.registry import resolve_chat_upstream
 from src.providers.resolution import resolve_provider
+from src.routers.routing_decision import (
+    capture_initial_route_decision,
+    route_failover_kwargs,
+    route_decision_headers,
+    update_served_route_decision,
+)
 
 router = APIRouter(prefix="/v1", tags=["chat"])
 
@@ -58,6 +64,8 @@ async def handle_chat_like_request(
         model_group=model_group,
         deployment=await router.select_deployment(model_group, request_context),
     )
+    failover_kwargs = route_failover_kwargs(request_context)
+    capture_initial_route_decision(request, request_context)
     api_provider = resolve_provider(primary.deltallm_params)
     request_id = request.headers.get("x-request-id")
     api_base = primary.deltallm_params.get("api_base", request.app.state.settings.openai_base_url).rstrip("/")
@@ -81,7 +89,14 @@ async def handle_chat_like_request(
                     primary_deployment=primary,
                     model_group=model_group,
                     execute=lambda dep: open_stream_with_first_chunk(request, payload, dep),
-                    return_deployment=False,
+                    return_deployment=True,
+                    **failover_kwargs,
+                )
+                opened_stream, served_deployment = opened_stream
+                update_served_route_decision(
+                    request,
+                    primary_deployment_id=primary.deployment_id,
+                    served_deployment_id=served_deployment.deployment_id,
                 )
                 params = opened_stream.params
                 api_base_local = opened_stream.api_base
@@ -178,6 +193,7 @@ async def handle_chat_like_request(
                     "Cache-Control": "no-cache",
                     "Connection": "keep-alive",
                     "x-deltallm-cache-hit": "false",
+                    **route_decision_headers(request),
                 },
             )
 
@@ -186,6 +202,12 @@ async def handle_chat_like_request(
             model_group=model_group,
             execute=lambda deployment: execute_chat(request, payload, deployment),
             return_deployment=True,
+            **failover_kwargs,
+        )
+        update_served_route_decision(
+            request,
+            primary_deployment_id=primary.deployment_id,
+            served_deployment_id=served_deployment.deployment_id,
         )
         response_payload = response_transform(payload_data) if response_transform is not None else payload_data
         api_provider = resolve_provider(served_deployment.deltallm_params)
@@ -207,7 +229,7 @@ async def handle_chat_like_request(
             cache_key=cache_key,
             audit_action=audit_action,
         )
-        return JSONResponse(status_code=200, content=response_payload)
+        return JSONResponse(status_code=200, content=response_payload, headers=route_decision_headers(request))
     except httpx.HTTPError as exc:
         status_code = getattr(getattr(exc, "response", None), "status_code", 502)
         await emit_nonstream_failure(

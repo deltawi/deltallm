@@ -34,6 +34,8 @@ from src.config import AppConfig, get_settings, resolve_salt_key
 from src.config_runtime import DynamicConfigManager, ModelHotReloadManager, SecretResolver, build_app_config, load_yaml_dict
 from src.db.client import prisma_manager
 from src.db.repositories import AuditRepository, KeyRepository, ModelDeploymentRepository
+from src.db.prompt_registry import PromptRegistryRepository
+from src.db.route_groups import RouteGroupRepository
 from src.auth import CustomAuthManager, InMemoryUserRepository, JWTAuthHandler, SSOAuthHandler, SSOConfig, SSOProvider
 from src.api.admin import admin_router
 from src.api.v1.router import v1_router
@@ -60,12 +62,15 @@ from src.router import (
     RouterConfig,
     RoutingStrategy,
     build_deployment_registry,
+    build_route_group_policies,
 )
 from src.services.key_service import KeyService
 from src.services.audit_retention import AuditRetentionConfig, AuditRetentionWorker
 from src.services.audit_service import AuditService
 from src.services.limit_counter import LimitCounter
 from src.services.model_deployments import bootstrap_model_deployments_from_config, load_model_registry
+from src.services.prompt_registry import PromptRegistryService
+from src.services.route_groups import RouteGroupRuntimeCache, load_route_groups
 from src.services.platform_identity_service import PlatformIdentityService
 
 logging.basicConfig(level=logging.INFO)
@@ -99,6 +104,7 @@ async def lifespan(app: FastAPI):
         redis_client = Redis(host=host, port=port, password=password, decode_responses=True)
 
     app.state.redis = redis_client
+    app.state.route_group_runtime_cache = RouteGroupRuntimeCache(redis_client=redis_client)
 
     await prisma_manager.connect()
     app.state.prisma_manager = prisma_manager
@@ -158,6 +164,13 @@ async def lifespan(app: FastAPI):
         degraded_mode=str(cfg.general_settings.redis_degraded_mode or settings.redis_degraded_mode),
     )
     app.state.model_deployment_repository = ModelDeploymentRepository(prisma_manager.client)
+    app.state.route_group_repository = RouteGroupRepository(prisma_manager.client)
+    app.state.prompt_registry_repository = PromptRegistryRepository(prisma_manager.client)
+    app.state.prompt_registry_service = PromptRegistryService(
+        repository=app.state.prompt_registry_repository,
+        route_group_repository=app.state.route_group_repository,
+        redis_client=redis_client,
+    )
     app.state.batch_repository = BatchRepository(prisma_manager.client)
     if cfg.general_settings.model_deployment_bootstrap_from_config:
         did_bootstrap = await bootstrap_model_deployments_from_config(app.state.model_deployment_repository, cfg)
@@ -170,6 +183,12 @@ async def lifespan(app: FastAPI):
         source_mode=cfg.general_settings.model_deployment_source,
     )
     logger.info("loaded model registry from %s source", model_registry_source)
+    app.state.route_groups, route_group_source = await load_route_groups(
+        app.state.route_group_repository,
+        cfg,
+        route_group_cache=app.state.route_group_runtime_cache,
+    )
+    logger.info("loaded route groups from %s source", route_group_source)
     guardrail_registry = GuardrailRegistry()
     if cfg.deltallm_settings.guardrails:
         guardrail_registry.load_from_config(cfg.deltallm_settings.guardrails)
@@ -249,7 +268,8 @@ async def lifespan(app: FastAPI):
 
     state_backend = RedisStateBackend(redis_client)
     routing_strategy = RoutingStrategy(cfg.router_settings.routing_strategy)
-    deployment_registry = build_deployment_registry(app.state.model_registry)
+    route_groups = list(getattr(app.state, "route_groups", []))
+    deployment_registry = build_deployment_registry(app.state.model_registry, route_groups=route_groups)
     router_config = RouterConfig(
         num_retries=cfg.router_settings.num_retries,
         retry_after=cfg.router_settings.retry_after,
@@ -258,6 +278,7 @@ async def lifespan(app: FastAPI):
         allowed_fails=cfg.router_settings.allowed_fails,
         enable_pre_call_checks=cfg.router_settings.enable_pre_call_checks,
         model_group_alias=cfg.router_settings.model_group_alias,
+        route_group_policies=build_route_group_policies(route_groups),
     )
     app.state.router = Router(
         strategy=routing_strategy,
@@ -333,6 +354,8 @@ async def lifespan(app: FastAPI):
         app=app,
         dynamic_config=dynamic_config_manager,
         model_repository=app.state.model_deployment_repository,
+        route_group_repository=app.state.route_group_repository,
+        route_group_cache=app.state.route_group_runtime_cache,
     )
     batch_worker: BatchExecutorWorker | None = None
     batch_worker_task: Task[None] | None = None

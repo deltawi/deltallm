@@ -4,7 +4,7 @@ DeltaLLM provides comprehensive observability through Prometheus metrics, struct
 
 The Usage page in the admin UI provides visual analytics including daily spend trends, per-model and per-key breakdowns, and detailed request logs.
 
-![Usage & Spend](../admin-ui/images/usage.png)
+![Usage & Spend](../admin-ui/images/usage-and-spend.png)
 
 ## Prometheus Metrics
 

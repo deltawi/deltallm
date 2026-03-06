@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+from src.services.prompt_registry import PromptProvenance, PromptRenderOutput
+
 
 class _RecordingAuditService:
     def __init__(self) -> None:
@@ -13,6 +15,16 @@ class _RecordingAuditService:
 
     def record_event(self, event, *, payloads=None, critical=False):  # noqa: ANN001, ANN201
         self.records.append((event, list(payloads or []), critical))
+
+
+class _InjectingPromptService:
+    async def resolve_and_render(self, **kwargs):  # noqa: ANN003, ANN201
+        del kwargs
+        return PromptRenderOutput(
+            messages=[{"role": "system", "content": "Route via support prompt."}],
+            provenance=PromptProvenance(source="binding", template_key="support.prompt", version=2, label="production"),
+            rendered_prompt={"text": "Route via support prompt."},
+        )
 
 
 class _BatchFileRecord:
@@ -169,6 +181,28 @@ async def test_audio_transcriptions_emits_audit_success(client, test_app):
     assert event.action == "AUDIO_TRANSCRIPTION_REQUEST"
     assert event.status == "success"
     test_app.dependency_overrides.pop(enforce_rate_limits, None)
+
+
+@pytest.mark.asyncio
+async def test_chat_prompt_resolution_emits_dedicated_audit_event(client, test_app):
+    audit = _RecordingAuditService()
+    test_app.state.audit_service = audit
+    test_app.state.prompt_registry_service = _InjectingPromptService()
+
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": "req-prompt-audit"}
+    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+    assert response.status_code == 200
+
+    matching = [event for event, _, critical in audit.records if event.action == "PROMPT_RESOLUTION_REQUEST" and critical is False]
+    assert matching
+    event = matching[-1]
+    assert event.request_id == "req-prompt-audit"
+    assert event.status == "success"
+    assert event.resource_type == "prompt"
+    assert event.resource_id == "support.prompt"
+    assert (event.metadata or {}).get("prompt_provenance", {}).get("version") == 2
 
 
 @pytest.mark.asyncio

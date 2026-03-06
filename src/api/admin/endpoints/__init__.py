@@ -4,7 +4,9 @@ from src.api.admin.endpoints.config import router as config_router
 from src.api.admin.endpoints.guardrails import router as guardrails_router
 from src.api.admin.endpoints.keys import router as keys_router
 from src.api.admin.endpoints.organizations import router as organizations_router
+from src.api.admin.endpoints.prompt_registry import router as prompt_registry_router
 from src.api.admin.endpoints.rbac import router as rbac_router
+from src.api.admin.endpoints.route_groups import router as route_groups_router
 from src.api.admin.endpoints.teams import router as teams_router
 
 __all__ = [
@@ -14,6 +16,8 @@ __all__ = [
     "guardrails_router",
     "keys_router",
     "organizations_router",
+    "prompt_registry_router",
     "rbac_router",
+    "route_groups_router",
     "teams_router",
 ]

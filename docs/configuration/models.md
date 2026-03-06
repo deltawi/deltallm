@@ -41,7 +41,14 @@ model_list:
 
 ## Model Groups
 
-Multiple deployments can share the same `model_name` to create a model group. Requests are distributed across the group based on the configured [routing strategy](router.md).
+DeltaLLM supports two ways to group multiple deployments behind a single runtime target:
+
+1. **Implicit config grouping** — multiple deployments share the same `model_name`
+2. **Explicit Model Groups in the Admin UI** — preferred for operational management, member lifecycle, and routing policy
+
+Implicit config grouping is still supported and works as described below. For day-to-day runtime operations, prefer the explicit [Route Groups](../admin-ui/route-groups.md) workflow.
+
+Multiple deployments can share the same `model_name` to create a config-defined group. Requests are distributed across the group based on the configured [routing strategy](router.md).
 
 ```yaml
 model_list:

@@ -302,8 +302,168 @@ model DeltaLLM_ModelDeployment {
   created_at      DateTime @default(now())
   updated_at      DateTime @updatedAt
 
+  route_group_members DeltaLLM_RouteGroupMember[]
+
   @@index([model_name])
   @@map("deltallm_modeldeployment")
+}
+
+model DeltaLLM_RouteGroup {
+  route_group_id String   @id @default(uuid())
+  group_key      String   @unique
+  name           String?
+  mode           String   @default("chat")
+  routing_strategy String?
+  enabled        Boolean  @default(true)
+  metadata       Json?
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+
+  members  DeltaLLM_RouteGroupMember[]
+  policies DeltaLLM_RoutePolicy[]
+
+  @@index([enabled])
+  @@map("deltallm_routegroup")
+}
+
+model DeltaLLM_PromptTemplate {
+  prompt_template_id String   @id @default(uuid())
+  template_key       String   @unique
+  name               String
+  description        String?
+  owner_scope        String?
+  metadata           Json?
+  created_at         DateTime @default(now())
+  updated_at         DateTime @updatedAt
+
+  versions DeltaLLM_PromptVersion[]
+  labels   DeltaLLM_PromptLabel[]
+  bindings DeltaLLM_PromptBinding[]
+
+  @@index([created_at], map: "deltallm_prompttemplate_created_at_idx")
+  @@map("deltallm_prompttemplate")
+}
+
+model DeltaLLM_PromptVersion {
+  prompt_version_id  String   @id @default(uuid())
+  prompt_template_id String
+  version            Int
+  status             String   @default("draft")
+  template_body      Json
+  variables_schema   Json?
+  model_hints        Json?
+  route_preferences  Json?
+  published_at       DateTime?
+  published_by       String?
+  archived_at        DateTime?
+  created_at         DateTime @default(now())
+  updated_at         DateTime @updatedAt
+
+  template DeltaLLM_PromptTemplate @relation(fields: [prompt_template_id], references: [prompt_template_id], onDelete: Cascade)
+  labels   DeltaLLM_PromptLabel[]
+
+  @@unique([prompt_template_id, version], map: "deltallm_promptversion_template_version_key")
+  @@index([prompt_template_id, status], map: "deltallm_promptversion_template_status_idx")
+  @@map("deltallm_promptversion")
+}
+
+model DeltaLLM_PromptLabel {
+  prompt_label_id    String   @id @default(uuid())
+  prompt_template_id String
+  label              String
+  prompt_version_id  String
+  created_at         DateTime @default(now())
+  updated_at         DateTime @updatedAt
+
+  template DeltaLLM_PromptTemplate @relation(fields: [prompt_template_id], references: [prompt_template_id], onDelete: Cascade)
+  version  DeltaLLM_PromptVersion  @relation(fields: [prompt_version_id], references: [prompt_version_id], onDelete: Cascade)
+
+  @@unique([prompt_template_id, label], map: "deltallm_promptlabel_template_label_key")
+  @@index([prompt_version_id], map: "deltallm_promptlabel_version_idx")
+  @@map("deltallm_promptlabel")
+}
+
+model DeltaLLM_PromptBinding {
+  prompt_binding_id  String   @id @default(uuid())
+  scope_type         String
+  scope_id           String
+  prompt_template_id String
+  label              String
+  priority           Int      @default(100)
+  enabled            Boolean  @default(true)
+  metadata           Json?
+  created_at         DateTime @default(now())
+  updated_at         DateTime @updatedAt
+
+  template DeltaLLM_PromptTemplate @relation(fields: [prompt_template_id], references: [prompt_template_id], onDelete: Cascade)
+
+  @@index([scope_type, scope_id, enabled, priority], map: "deltallm_promptbinding_scope_idx")
+  @@index([prompt_template_id], map: "deltallm_promptbinding_template_idx")
+  @@unique([scope_type, scope_id, prompt_template_id, label], map: "deltallm_promptbinding_scope_target_key")
+  @@map("deltallm_promptbinding")
+}
+
+model DeltaLLM_PromptRenderLog {
+  prompt_render_log_id String   @id @default(uuid())
+  request_id           String?
+  api_key              String?
+  user_id              String?
+  team_id              String?
+  organization_id      String?
+  route_group_key      String?
+  model                String?
+  prompt_template_id   String?
+  prompt_version_id    String?
+  prompt_key           String?
+  label                String?
+  status               String
+  latency_ms           Int?
+  error_code           String?
+  error_message        String?
+  variables            Json?
+  metadata             Json?
+  created_at           DateTime @default(now())
+
+  @@index([created_at], map: "deltallm_promptrenderlog_created_at_idx")
+  @@index([prompt_key, label, created_at], map: "deltallm_promptrenderlog_prompt_lookup_idx")
+  @@index([request_id], map: "deltallm_promptrenderlog_request_idx")
+  @@map("deltallm_promptrenderlog")
+}
+
+model DeltaLLM_RouteGroupMember {
+  membership_id   String   @id @default(uuid())
+  route_group_id  String
+  deployment_id   String
+  enabled         Boolean  @default(true)
+  weight          Int?
+  priority        Int?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  route_group DeltaLLM_RouteGroup @relation(fields: [route_group_id], references: [route_group_id], onDelete: Cascade)
+  deployment  DeltaLLM_ModelDeployment @relation(fields: [deployment_id], references: [deployment_id], onDelete: Cascade)
+
+  @@unique([route_group_id, deployment_id], map: "deltallm_routegroupmember_route_group_id_deployment_id_key")
+  @@index([deployment_id], map: "deltallm_routegroupmember_deployment_id_idx")
+  @@map("deltallm_routegroupmember")
+}
+
+model DeltaLLM_RoutePolicy {
+  route_policy_id String   @id @default(uuid())
+  route_group_id  String
+  version         Int
+  status          String   @default("draft")
+  policy_json     Json
+  published_at    DateTime?
+  published_by    String?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  route_group DeltaLLM_RouteGroup @relation(fields: [route_group_id], references: [route_group_id], onDelete: Cascade)
+
+  @@unique([route_group_id, version], map: "deltallm_routepolicy_route_group_id_version_key")
+  @@index([route_group_id, status], map: "deltallm_routepolicy_group_status_idx")
+  @@map("deltallm_routepolicy")
 }
 
 model DeltaLLM_BatchFile {

@@ -7,7 +7,9 @@ from src.api.admin.endpoints import (
     guardrails_router,
     keys_router,
     organizations_router,
+    prompt_registry_router,
     rbac_router,
+    route_groups_router,
     teams_router,
 )
 from src.ui.routes import ui_router as legacy_ui_router
@@ -21,6 +23,8 @@ admin_router.include_router(organizations_router)
 admin_router.include_router(batches_router)
 admin_router.include_router(rbac_router)
 admin_router.include_router(guardrails_router)
+admin_router.include_router(route_groups_router)
+admin_router.include_router(prompt_registry_router)
 admin_router.include_router(config_router)
 admin_router.include_router(audit_router)
 

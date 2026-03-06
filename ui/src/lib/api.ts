@@ -191,6 +191,181 @@ export const models = {
   delete: (deploymentId: string) => apiFetch<any>(`/ui/api/models/${encodeURIComponent(deploymentId)}`, { method: 'DELETE' }),
 };
 
+export interface RouteGroup {
+  route_group_id: string;
+  group_key: string;
+  name: string | null;
+  mode: string;
+  routing_strategy: string | null;
+  enabled: boolean;
+  member_count: number;
+  metadata: Record<string, unknown> | null;
+  default_prompt?: { template_key: string; label?: string | null } | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface RouteGroupMember {
+  membership_id: string;
+  route_group_id: string;
+  deployment_id: string;
+  enabled: boolean;
+  weight: number | null;
+  priority: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface RoutePolicy {
+  route_policy_id: string;
+  route_group_id: string;
+  version: number;
+  status: string;
+  policy_json: Record<string, unknown>;
+  published_at: string | null;
+  published_by: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export const routeGroups = {
+  list: (params?: { search?: string; limit?: number; offset?: number }) =>
+    apiFetch<Paginated<RouteGroup>>(withQuery('/ui/api/route-groups', params as any)),
+  get: (groupKey: string) =>
+    apiFetch<{ group: RouteGroup; members: RouteGroupMember[]; policy: RoutePolicy | null }>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}`),
+  create: (payload: any) => apiFetch<RouteGroup>('/ui/api/route-groups', { method: 'POST', json: payload }),
+  update: (groupKey: string, payload: any) =>
+    apiFetch<RouteGroup>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}`, { method: 'PUT', json: payload }),
+  delete: (groupKey: string) => apiFetch<{ deleted: boolean }>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}`, { method: 'DELETE' }),
+  members: (groupKey: string) =>
+    apiFetch<RouteGroupMember[]>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}/members`),
+  upsertMember: (groupKey: string, payload: any) =>
+    apiFetch<RouteGroupMember>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}/members`, { method: 'POST', json: payload }),
+  removeMember: (groupKey: string, deploymentId: string) =>
+    apiFetch<{ deleted: boolean }>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}/members/${encodeURIComponent(deploymentId)}`, { method: 'DELETE' }),
+  getPolicy: (groupKey: string) =>
+    apiFetch<{ group_key: string; policy: RoutePolicy | null }>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy`),
+  listPolicies: (groupKey: string) =>
+    apiFetch<{ group_key: string; policies: RoutePolicy[] }>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}/policies`),
+  validatePolicy: (groupKey: string, payload: any) =>
+    apiFetch<{ group_key: string; valid: boolean; policy: Record<string, unknown>; warnings: string[] }>(
+      `/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy/validate`,
+      { method: 'POST', json: payload }
+    ),
+  savePolicyDraft: (groupKey: string, payload: any) =>
+    apiFetch<{ group_key: string; policy: RoutePolicy; warnings: string[] }>(
+      `/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy/draft`,
+      { method: 'POST', json: payload }
+    ),
+  publishPolicy: (groupKey: string, payload?: any) =>
+    apiFetch<{ group_key: string; policy: RoutePolicy; warnings: string[] }>(
+      `/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy/publish`,
+      { method: 'POST', json: payload ?? {} }
+    ),
+  rollbackPolicy: (groupKey: string, version: number) =>
+    apiFetch<{ group_key: string; policy: RoutePolicy; rolled_back_from_version: number }>(
+      `/ui/api/route-groups/${encodeURIComponent(groupKey)}/policy/rollback`,
+      { method: 'POST', json: { version } }
+  ),
+};
+
+export interface PromptTemplate {
+  prompt_template_id: string;
+  template_key: string;
+  name: string;
+  description: string | null;
+  owner_scope: string | null;
+  metadata: Record<string, unknown> | null;
+  version_count: number;
+  label_count: number;
+  binding_count: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface PromptVersion {
+  prompt_version_id: string;
+  prompt_template_id: string;
+  template_key: string;
+  version: number;
+  status: string;
+  template_body: Record<string, unknown>;
+  variables_schema: Record<string, unknown> | null;
+  model_hints: Record<string, unknown> | null;
+  route_preferences: Record<string, unknown> | null;
+  published_at?: string | null;
+  published_by?: string | null;
+  archived_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface PromptLabel {
+  prompt_label_id: string;
+  prompt_template_id: string;
+  template_key: string;
+  label: string;
+  prompt_version_id: string;
+  version: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface PromptBinding {
+  prompt_binding_id: string;
+  scope_type: 'key' | 'team' | 'org' | 'group';
+  scope_id: string;
+  prompt_template_id: string;
+  template_key: string;
+  label: string;
+  priority: number;
+  enabled: boolean;
+  metadata: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export const promptRegistry = {
+  listTemplates: (params?: { search?: string; limit?: number; offset?: number }) =>
+    apiFetch<Paginated<PromptTemplate>>(withQuery('/ui/api/prompt-registry/templates', params as any)),
+  getTemplate: (templateKey: string) =>
+    apiFetch<{ template: PromptTemplate; versions: PromptVersion[]; labels: PromptLabel[]; bindings: PromptBinding[] }>(
+      `/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}`
+    ),
+  createTemplate: (payload: any) =>
+    apiFetch<PromptTemplate>('/ui/api/prompt-registry/templates', { method: 'POST', json: payload }),
+  updateTemplate: (templateKey: string, payload: any) =>
+    apiFetch<PromptTemplate>(`/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}`, { method: 'PUT', json: payload }),
+  deleteTemplate: (templateKey: string) =>
+    apiFetch<{ deleted: boolean }>(`/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}`, { method: 'DELETE' }),
+  createVersion: (templateKey: string, payload: any) =>
+    apiFetch<PromptVersion>(`/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}/versions`, { method: 'POST', json: payload }),
+  publishVersion: (templateKey: string, version: number) =>
+    apiFetch<PromptVersion>(
+      `/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}/versions/${encodeURIComponent(String(version))}/publish`,
+      { method: 'POST' }
+    ),
+  listLabels: (templateKey: string) =>
+    apiFetch<PromptLabel[]>(`/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}/labels`),
+  assignLabel: (templateKey: string, payload: any) =>
+    apiFetch<PromptLabel>(`/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}/labels`, { method: 'POST', json: payload }),
+  deleteLabel: (templateKey: string, label: string) =>
+    apiFetch<{ deleted: boolean }>(
+      `/ui/api/prompt-registry/templates/${encodeURIComponent(templateKey)}/labels/${encodeURIComponent(label)}`,
+      { method: 'DELETE' }
+    ),
+  listBindings: (params?: { scope_type?: string; scope_id?: string; template_key?: string; limit?: number; offset?: number }) =>
+    apiFetch<Paginated<PromptBinding>>(withQuery('/ui/api/prompt-registry/bindings', params as any)),
+  upsertBinding: (payload: any) =>
+    apiFetch<PromptBinding>('/ui/api/prompt-registry/bindings', { method: 'POST', json: payload }),
+  deleteBinding: (bindingId: string) =>
+    apiFetch<{ deleted: boolean }>(`/ui/api/prompt-registry/bindings/${encodeURIComponent(bindingId)}`, { method: 'DELETE' }),
+  dryRunRender: (payload: any) =>
+    apiFetch<any>('/ui/api/prompt-registry/render', { method: 'POST', json: payload }),
+  previewResolution: (payload: any) =>
+    apiFetch<{ winner: any; candidates: any[] }>('/ui/api/prompt-registry/preview-resolution', { method: 'POST', json: payload }),
+};
+
 export const settings = {
   get: () => apiFetch<any>('/ui/api/settings'),
   update: (payload: any) => apiFetch<any>('/ui/api/settings', { method: 'PUT', json: payload }),

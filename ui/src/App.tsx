@@ -21,6 +21,11 @@ import ModelDetail from './pages/ModelDetail';
 import ModelEdit from './pages/ModelEdit';
 import ModelCreate from './pages/ModelCreate';
 import AuditLogs from './pages/AuditLogs';
+import RouteGroups from './pages/RouteGroups';
+import RouteGroupDetail from './pages/RouteGroupDetail';
+import PromptRegistry from './pages/PromptRegistry';
+import PromptTemplateDetail from './pages/PromptTemplateDetail';
+import { ToastProvider } from './components/ToastProvider';
 
 function AppRoutes() {
   const { isAuthenticated, isLoading, session, authMode, mfaSkipped } = useAuth();
@@ -56,6 +61,10 @@ function AppRoutes() {
         <Route path="/models/new" element={<ModelCreate />} />
         <Route path="/models/:deploymentId" element={<ModelDetail />} />
         <Route path="/models/:deploymentId/edit" element={<ModelEdit />} />
+        <Route path="/route-groups" element={isPlatformAdmin ? <RouteGroups /> : <Navigate to="/" replace />} />
+        <Route path="/route-groups/:groupKey" element={isPlatformAdmin ? <RouteGroupDetail /> : <Navigate to="/" replace />} />
+        <Route path="/prompts" element={isPlatformAdmin ? <PromptRegistry /> : <Navigate to="/" replace />} />
+        <Route path="/prompts/:templateKey" element={isPlatformAdmin ? <PromptTemplateDetail /> : <Navigate to="/" replace />} />
         <Route path="/keys" element={<ApiKeys />} />
         <Route path="/organizations" element={<Organizations />} />
         <Route path="/organizations/:orgId" element={<OrganizationDetail />} />
@@ -77,7 +86,9 @@ function AppRoutes() {
 export default function App() {
   return (
     <AuthProvider>
-      <AppRoutes />
+      <ToastProvider>
+        <AppRoutes />
+      </ToastProvider>
     </AuthProvider>
   );
 }

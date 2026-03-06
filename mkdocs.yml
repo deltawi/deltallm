@@ -68,12 +68,23 @@ nav:
       - Audit Log: features/audit-log.md
       - Observability: features/observability.md
   - Admin UI:
-      - admin-ui/index.md
+      - Overview: admin-ui/index.md
       - Dashboard: admin-ui/dashboard.md
-      - Managing Models: admin-ui/models.md
-      - Managing Keys: admin-ui/keys.md
-      - Organizations & Teams: admin-ui/orgs-teams.md
-      - Access Control: admin-ui/access-control.md
+      - AI Gateway:
+          - Models: admin-ui/models.md
+          - Route Groups: admin-ui/route-groups.md
+          - Prompt Registry: admin-ui/prompt-registry.md
+      - Access:
+          - API Keys: admin-ui/api-keys.md
+          - Organizations: admin-ui/organizations.md
+          - Teams: admin-ui/teams.md
+          - People & Access: admin-ui/people-and-access.md
+      - Operations:
+          - Usage & Spend: admin-ui/usage.md
+          - Audit Logs: admin-ui/audit-logs.md
+          - Batch Jobs: admin-ui/batch-jobs.md
+          - Guardrails: admin-ui/guardrails.md
+          - Settings: admin-ui/settings.md
   - API Reference:
       - api/index.md
       - Proxy Endpoints: api/proxy.md
