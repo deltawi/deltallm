@@ -1,45 +1,88 @@
 # Route Groups
 
-Route Groups are the runtime surface for grouping deployments behind one stable model key.
+Route Groups let you place multiple deployments behind one stable runtime target.
+
+Use a route group when one public model name should:
+
+- balance across several deployments
+- fail over in a controlled way
+- carry its own routing policy
+- bind to a prompt at the group level
 
 ![Route Groups List](images/route-groups-list.png)
 
 ![Route Group Detail](images/route-group-detail.png)
 
-## Recommended flow
+## Quick Success Workflow
 
-1. Create the group shell
-2. Add member deployments
-3. Keep the default shuffle unless you truly need an override
-4. Optionally bind a prompt
-5. Turn on live traffic
+1. Create the route group shell
+2. Add one or more member deployments
+3. Keep the default routing behavior at first
+4. Mark the group live
+5. Use the generated call example to test traffic
 
-This is the intended first-run path in the current UI.
+For most teams, this is the right first path. You do not need an advanced policy on day one.
 
-## What the list page tells you
+## What the Group Owns
 
-- Group key and display name
-- Workload type
-- Effective routing state
-- Member count
-- Whether the group is live
+A route group defines:
 
-## What the detail page covers
+- a stable group key
+- the workload type, such as chat or embeddings
+- which deployments are members
+- whether the group is live
+- optional prompt binding
+- optional routing policy history and overrides
 
-- **Basics**: name, workload type, and live-traffic toggle
-- **Members**: eligible deployments for the group
-- **How to call this group**: generated curl example based on the group key and prompt variables
-- **Advanced**: routing override, prompt binding, and policy history
+## What the List Page Shows
 
-## Prompt binding
+- group key and display name
+- workload type
+- whether the group is live
+- member count
+- current routing state
 
-Prompt binding now lives on the route-group page. If a prompt is bound, the usage example includes the required prompt variables so the request example is immediately usable.
+## What the Detail Page Lets You Do
 
-## Routing policy
+- edit the basic group metadata
+- add and remove member deployments
+- see the current usage example for calling the group
+- bind a prompt
+- inspect and publish routing policy changes
 
-Groups work with default shuffle out of the box. Advanced routing override is only needed for:
+## When You Need an Advanced Policy
 
-- ordered fallback
-- weighted splits
-- explicit strategy control
-- advanced JSON-only policy fields
+Start with the default behavior unless you need one of these:
+
+- ordered failover
+- weighted traffic splits
+- a specific routing strategy
+- a draft, publish, rollback, or simulation workflow for routing changes
+
+## Prompt Binding
+
+Prompt binding belongs on the route group because the group decides where a prompt is applied.
+
+That means:
+
+- Prompt Registry defines the prompt template and its versions
+- Route Groups decide which prompt is active for live traffic
+
+If a prompt is bound, the usage example on the page should include the variables needed to call it correctly.
+
+## Related API Surface
+
+The backend exposes route-group endpoints for:
+
+- listing and editing groups
+- managing group members
+- reading and publishing routing policy
+- validating and simulating policy changes
+
+See [Admin Endpoints](../api/admin.md) for the route-group API reference.
+
+## Related Pages
+
+- [Models](models.md)
+- [Prompt Registry](prompt-registry.md)
+- [Routing & Failover](../features/routing.md)

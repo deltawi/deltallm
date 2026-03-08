@@ -39,6 +39,8 @@ The fastest way to get everything running:
 docker compose --profile single up -d
 ```
 
+On startup, the DeltaLLM container runs the shared database bootstrap script before launching the API. It prefers `prisma migrate deploy` and falls back to `prisma db push` for legacy or unbaselined databases.
+
 This starts:
 - DeltaLLM on port **4000**
 - PostgreSQL 15 database
@@ -55,6 +57,8 @@ Run two DeltaLLM instances behind an Nginx load balancer:
 ```bash
 docker compose --profile ha up -d
 ```
+
+Each DeltaLLM container runs the shared database bootstrap script before starting the API.
 
 This starts:
 - 2 DeltaLLM instances (load balanced)
@@ -100,6 +104,8 @@ The `docker-compose.yaml` automatically sets these for the bundled services:
 
 You do not need to configure them manually for the default Compose setup.
 
+The container also runs the shared database bootstrap script automatically on boot, so you do not need a separate schema initialization step for the default Compose setup.
+
 ## Custom Config
 
 By default, Compose mounts `./config.yaml` into the container:
@@ -120,6 +126,8 @@ docker run -p 4000:4000 \
   -v ./config.yaml:/app/config/config.yaml:ro \
   deltallm
 ```
+
+The image runs the shared database bootstrap script before starting `uvicorn`, so the target database must be reachable when the container starts.
 
 ## Health Check
 

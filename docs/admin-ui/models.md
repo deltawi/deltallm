@@ -1,34 +1,72 @@
 # Models
 
-The Models page is the deployment registry for concrete provider-backed model endpoints.
+The Models page is where operators create and manage concrete provider-backed deployments.
 
-Deployments created here are the building blocks used by [Route Groups](route-groups.md).
+Each deployment defines:
+
+- the public model name clients will call
+- the upstream provider model ID
+- credentials and connection details
+- the workload type, such as chat or embeddings
+- optional pricing and default request parameters
 
 ![Models](images/models-list.png)
 
-## What operators manage here
+## Quick Success Workflow
 
-- Provider model identity, such as `gpt-4o-mini` or `llama-3.1-8b-instant`
-- Provider connection details and credentials
-- Workload type (`chat`, `embedding`, `image_generation`, `audio_speech`, `audio_transcription`, `rerank`)
-- Pricing metadata for spend calculation
-- Default parameters injected into requests
+1. Open **AI Gateway > Models**
+2. Add one deployment for a model you already have provider access to
+3. Confirm the deployment becomes healthy
+4. Verify the model appears in `GET /v1/models`
+5. Send a test proxy request
 
-## Table columns
+## What You Manage Here
 
-- **Model Name**: the provider-facing model name operators recognize
-- **Type**: workload mode
-- **Provider**: OpenAI, Groq, and other configured backends
-- **Deployment ID**: stable internal identifier used by route groups
-- **Health**: current runtime availability
+- `model_name`: the public name clients use
+- `deployment_id`: the stable internal identifier for this deployment
+- provider settings in `deltallm_params`
+- workload mode in `model_info.mode`
+- pricing metadata for spend tracking
+- default request parameters
 
-## Recommended workflow
+## Recommended First Deployment
 
-1. Add the deployment with the correct provider model ID and credentials
-2. Verify the deployment becomes healthy
-3. Reuse the deployment inside one or more route groups
+For a simple first deployment:
 
-## Operational notes
+1. Set `model_name` to the public name you want clients to use
+2. Set `deltallm_params.model` to the provider-prefixed upstream model ID
+3. Add the provider API key
+4. Keep the default mode as `chat` unless this is an embeddings, image, audio, or rerank model
 
-- Prefer readable deployment IDs because route-group membership uses them directly
-- If you rename or delete a deployment, update any dependent route groups in the same change window
+If you do not set a `deployment_id`, DeltaLLM creates one automatically.
+
+## What the Table Tells You
+
+- **Model Name**: the public runtime model name
+- **Provider**: resolved provider type such as OpenAI or Groq
+- **Type**: runtime mode such as `chat` or `embedding`
+- **Deployment ID**: the internal ID used by route groups and policies
+- **Health**: whether the runtime currently sees the deployment as healthy
+
+## When You Need Route Groups
+
+You do not need a route group for a single deployment.
+
+Create a route group when:
+
+- you want multiple deployments behind one logical target
+- you want explicit routing policy
+- you want controlled failover behavior
+- you want to bind prompt behavior at the route-group level
+
+## Operational Notes
+
+- DeltaLLM validates provider and mode compatibility when you create or update a deployment
+- Creating, updating, and deleting deployments requires admin access
+- Readable deployment IDs make later route-group work easier
+
+## Related Pages
+
+- [Route Groups](route-groups.md)
+- [Model Deployments config reference](../configuration/models.md)
+- [Quick Start](../getting-started/quickstart.md)

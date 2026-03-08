@@ -1,196 +1,253 @@
 # Proxy Endpoints
 
-These endpoints are fully compatible with the OpenAI API. Point any OpenAI SDK or client library at DeltaLLM by changing the `base_url`.
+DeltaLLM's proxy API is OpenAI-compatible. In most clients, you only change the `base_url` and API key.
 
-## Chat Completions
+## Quick Start
 
+Use the same auth header for every proxy endpoint: `Authorization: Bearer YOUR_API_KEY`
+
+Check which models are available:
+
+```bash
+curl http://localhost:8000/v1/models \
+  -H "Authorization: Bearer YOUR_API_KEY"
 ```
+
+Send a chat request:
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "messages": [
+      {"role": "user", "content": "Hello from DeltaLLM"}
+    ]
+  }'
+```
+
+## Endpoint Map
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /v1/chat/completions` | Chat completions, including streaming |
+| `POST /v1/completions` | Legacy prompt-style completions |
+| `POST /v1/responses` | Responses API compatible subset |
+| `POST /v1/embeddings` | Text embeddings |
+| `POST /v1/images/generations` | Image generation |
+| `POST /v1/audio/speech` | Text-to-speech |
+| `POST /v1/audio/transcriptions` | Speech-to-text |
+| `POST /v1/rerank` | Reranking |
+| `GET /v1/models` | Available public model names |
+| `POST /v1/files` | Upload batch input files |
+| `GET /v1/files/{file_id}` | Inspect batch files |
+| `GET /v1/files/{file_id}/content` | Download batch file content |
+| `POST /v1/batches` | Create embeddings batches |
+| `GET /v1/batches` | List batches |
+| `GET /v1/batches/{batch_id}` | Inspect one batch |
+| `POST /v1/batches/{batch_id}/cancel` | Cancel a batch |
+
+## Text Endpoints
+
+### Chat Completions
+
+```text
 POST /v1/chat/completions
 ```
 
-Create a chat completion. Supports streaming.
+This is the main endpoint most applications should start with.
 
-## Completions (Legacy)
+### Completions (Legacy)
 
-```
+```text
 POST /v1/completions
 ```
 
-Legacy prompt-based completions API. Supports streaming.
+Use this only if you still have prompt-based clients. DeltaLLM translates `prompt` into a chat-style user message internally.
 
-Compatibility notes:
-- `prompt` is mapped to a chat `user` message.
-- Unsupported fields currently return `400`: `echo`, `best_of > 1`, `logprobs`, `suffix`.
+Unsupported request fields currently return `400`:
 
-## Responses
+- `echo`
+- `best_of > 1`
+- `logprobs`
+- `suffix`
 
-```
+### Responses
+
+```text
 POST /v1/responses
 ```
 
-Unified Responses API (compatible subset) with `input` and optional `instructions`.
+DeltaLLM supports a compatible subset of the Responses API and translates these requests into chat completions internally.
 
-Compatibility notes:
-- Requests are translated to chat completions internally.
-- Supported input forms: plain text and simple message/text blocks.
-- Advanced Responses item/tool state graph features are not fully implemented yet.
-
-**Request:**
-
-```json
-{
-  "model": "gpt-4o-mini",
-  "messages": [
-    {"role": "system", "content": "You are a helpful assistant."},
-    {"role": "user", "content": "Hello!"}
-  ],
-  "temperature": 0.7,
-  "max_tokens": 1024,
-  "stream": false
-}
+```bash
+curl http://localhost:8000/v1/responses \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "input": "Write a one-line summary of DeltaLLM.",
+    "stream": false
+  }'
 ```
 
-**Response:**
+### Embeddings
 
-```json
-{
-  "id": "chatcmpl-abc123",
-  "object": "chat.completion",
-  "created": 1700000000,
-  "model": "gpt-4o-mini",
-  "choices": [
-    {
-      "index": 0,
-      "message": {
-        "role": "assistant",
-        "content": "Hello! How can I help you today?"
-      },
-      "finish_reason": "stop"
-    }
-  ],
-  "usage": {
-    "prompt_tokens": 20,
-    "completion_tokens": 10,
-    "total_tokens": 30
-  }
-}
-```
-
-## Embeddings
-
-```
+```text
 POST /v1/embeddings
 ```
 
-Create text embeddings.
-
-**Request:**
-
-```json
-{
-  "model": "text-embedding-ada-002",
-  "input": "The quick brown fox"
-}
+```bash
+curl http://localhost:8000/v1/embeddings \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "text-embedding-3-small",
+    "input": "The quick brown fox"
+  }'
 ```
 
-## Files (Batch Inputs/Artifacts)
+## Multimodal and Specialized Endpoints
 
+### Image Generation
+
+```text
+POST /v1/images/generations
 ```
+
+```bash
+curl http://localhost:8000/v1/images/generations \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "dall-e-3",
+    "prompt": "A sunset over mountains",
+    "size": "1024x1024"
+  }'
+```
+
+### Audio Speech
+
+```text
+POST /v1/audio/speech
+```
+
+This endpoint returns audio bytes, not JSON.
+
+```bash
+curl http://localhost:8000/v1/audio/speech \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "tts-1",
+    "input": "Hello world",
+    "voice": "alloy",
+    "response_format": "mp3"
+  }' \
+  --output speech.mp3
+```
+
+### Audio Transcription
+
+```text
+POST /v1/audio/transcriptions
+```
+
+This endpoint accepts multipart form data.
+
+```bash
+curl http://localhost:8000/v1/audio/transcriptions \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -F "file=@sample.wav" \
+  -F "model=whisper-large" \
+  -F "response_format=json"
+```
+
+### Rerank
+
+```text
+POST /v1/rerank
+```
+
+```bash
+curl http://localhost:8000/v1/rerank \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "rerank-english-v2.0",
+    "query": "What is machine learning?",
+    "documents": [
+      "Machine learning is a subset of AI.",
+      "The weather is sunny today.",
+      "Deep learning uses neural networks."
+    ],
+    "top_n": 2
+  }'
+```
+
+## Batch Endpoints
+
+### Files
+
+```text
 POST /v1/files
 GET /v1/files/{file_id}
 GET /v1/files/{file_id}/content
 ```
 
-Upload JSONL input files and fetch input/output/error artifact files for batch jobs.
+Use files as the input and output artifacts for batch jobs.
 
-## Batches (Embeddings Only)
-
+```bash
+curl http://localhost:8000/v1/files \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -F "purpose=batch" \
+  -F "file=@input.jsonl"
 ```
+
+### Batches
+
+```text
 POST /v1/batches
 GET /v1/batches
 GET /v1/batches/{batch_id}
 POST /v1/batches/{batch_id}/cancel
 ```
 
-Compatibility notes:
-- Current implementation supports `endpoint: "/v1/embeddings"` only.
-- Batch endpoints are disabled unless `general_settings.embeddings_batch_enabled: true`.
+Create a batch:
 
-## Image Generation
-
-```
-POST /v1/images/generations
-```
-
-Generate images from text prompts.
-
-**Request:**
-
-```json
-{
-  "model": "dall-e-3",
-  "prompt": "A sunset over mountains",
-  "size": "1024x1024"
-}
+```bash
+curl http://localhost:8000/v1/batches \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input_file_id": "file_123",
+    "endpoint": "/v1/embeddings",
+    "completion_window": "24h"
+  }'
 ```
 
-## Audio Speech (TTS)
+Inspect a batch:
 
-```
-POST /v1/audio/speech
-```
-
-Convert text to speech.
-
-**Request:**
-
-```json
-{
-  "model": "tts-1",
-  "input": "Hello world",
-  "voice": "alloy"
-}
+```bash
+curl http://localhost:8000/v1/batches/batch_123 \
+  -H "Authorization: Bearer YOUR_API_KEY"
 ```
 
-## Audio Transcription (STT)
+Current behavior:
 
-```
-POST /v1/audio/transcriptions
-```
+- batch endpoints are available only when `general_settings.embeddings_batch_enabled: true`
+- the current implementation supports `endpoint: "/v1/embeddings"` only
 
-Transcribe audio to text. Accepts multipart form data with an audio file.
+## Model Discovery
 
-## Rerank
+### List Models
 
-```
-POST /v1/rerank
-```
-
-Rerank a list of documents by relevance to a query.
-
-**Request:**
-
-```json
-{
-  "model": "rerank-english-v2.0",
-  "query": "What is machine learning?",
-  "documents": [
-    "Machine learning is a subset of AI.",
-    "The weather is sunny today.",
-    "Deep learning uses neural networks."
-  ]
-}
-```
-
-## List Models
-
-```
+```text
 GET /v1/models
 ```
 
-List all available models. Returns an OpenAI-compatible model list.
-
-**Response:**
+DeltaLLM returns the public model names that clients can request. This list is built from the current runtime model registry.
 
 ```json
 {
@@ -199,7 +256,6 @@ List all available models. Returns an OpenAI-compatible model list.
     {
       "id": "gpt-4o-mini",
       "object": "model",
-      "created": 1700000000,
       "owned_by": "deltallm"
     }
   ]

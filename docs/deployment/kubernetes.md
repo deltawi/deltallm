@@ -1,187 +1,175 @@
 # Kubernetes Deployment
 
-Deploy DeltaLLM on Kubernetes using the included Helm chart. The chart packages everything you need: the DeltaLLM proxy server, optional in-cluster PostgreSQL and Redis, health probes, autoscaling, Prometheus metrics, and S3 request logging.
+Deploy DeltaLLM on Kubernetes with the Helm chart in [`helm/`](/Users/mehditantaoui/Documents/Challenges/deltallm/helm). The chart supports the common deployment shapes:
+
+- In-cluster PostgreSQL and Redis for evaluation or small installs
+- External PostgreSQL and Redis for production
+- Existing Kubernetes Secrets for the master key, salt key, provider API keys, SSO, and JWT settings
+- Optional Ingress, HPA, ServiceMonitor, and S3 request logging
 
 ## Prerequisites
 
-- Kubernetes cluster (1.24+)
+- Kubernetes 1.24+
 - Helm 3.10+
-- `kubectl` configured for your cluster
+- `kubectl` access to the target cluster
 
-## Quick Start
+## Fetch chart dependencies
 
-### 1. Add Dependencies
-
-The chart includes optional Bitnami subcharts for PostgreSQL and Redis. Pull them first:
+The chart uses Bitnami PostgreSQL and Redis as optional subcharts.
 
 ```bash
-cd helm
-helm dependency update
+helm dependency build ./helm
 ```
 
-### 2. Install
+## Quick start
+
+This path uses the bundled PostgreSQL and Redis subcharts.
 
 ```bash
 helm install deltallm ./helm \
   --namespace deltallm \
   --create-namespace \
-  --set config.masterKey="sk-your-master-key-at-least-32-chars-long1" \
-  --set config.saltKey="your-unique-random-salt-string"
+  --set config.masterKey="StrongMasterKey2026SecureValue99" \
+  --set config.saltKey="unique-salt-2026"
 ```
 
-This deploys DeltaLLM with in-cluster PostgreSQL and Redis using default credentials. The gateway is available on port 4000 inside the cluster.
-
-!!! warning "Change default credentials"
-    The default PostgreSQL password is `deltallm`. Always override it for non-development deployments:
-
-    ```bash
-    --set postgresql.auth.password="strong-random-password"
-    ```
-
-### 3. Verify
+Ingress is disabled by default. Access the service with port-forwarding:
 
 ```bash
-kubectl get pods -n deltallm
-kubectl logs -l app.kubernetes.io/name=deltallm -n deltallm
-```
-
-Test the health endpoint:
-
-```bash
-kubectl port-forward svc/deltallm 4000:4000 -n deltallm
+kubectl port-forward -n deltallm svc/deltallm 4000:4000
 curl http://localhost:4000/health/liveliness
 ```
 
-### 4. Access the Admin UI
+Open the admin UI at `http://localhost:4000`.
 
-The admin dashboard is served at the root path. After port-forwarding:
+## Recommended secret layout
 
-1. Open `http://localhost:4000` in your browser
-2. Enter your master key to log in
-3. Add model deployments through the Models page
+For real deployments, do not keep secrets inline in Helm values.
 
----
-
-## Configuration Reference
-
-All configuration is managed through Helm values. Create a `values-custom.yaml` file for your deployment:
+Create one secret for the DeltaLLM control-plane secrets:
 
 ```bash
-helm install deltallm ./helm \
+kubectl create secret generic deltallm-app-secrets \
   --namespace deltallm \
-  --create-namespace \
-  -f values-custom.yaml
+  --from-literal=master-key='StrongMasterKey2026SecureValue99' \
+  --from-literal=salt-key='unique-salt-2026'
 ```
 
-### Required Values
+Create a separate runtime secret for environment-backed settings such as `DATABASE_URL`, `REDIS_URL`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, SSO secrets, or JWT settings:
 
-These must be set for every deployment:
+```bash
+kubectl create secret generic deltallm-runtime-secrets \
+  --namespace deltallm \
+  --from-literal=DATABASE_URL='postgresql://user:pass@postgres:5432/deltallm' \
+  --from-literal=REDIS_URL='redis://redis:6379/0' \
+  --from-literal=OPENAI_API_KEY='sk-...'
+```
 
-| Value | Description |
-|-------|-------------|
-| `config.masterKey` | Admin master key (min 32 characters, must contain letters and digits) |
-| `config.saltKey` | Salt for API key hashing (must be unique per deployment) |
+Then reference those secrets from Helm:
 
-When using external databases (with `postgresql.enabled: false`), you must also set:
+```yaml
+secret:
+  existingSecret: deltallm-app-secrets
 
-| Value | Description |
-|-------|-------------|
-| `config.databaseUrl` | PostgreSQL connection string (`postgresql://user:pass@host:5432/db`) |
-| `config.redisUrl` | Redis connection string (required for multi-replica coordination) |
+envFrom:
+  - secretRef:
+      name: deltallm-runtime-secrets
+```
 
-### Core Settings
+This is the preferred pattern when your `config.model_list` or `general_settings` use `os.environ/...` tokens.
 
-| Value | Default | Description |
-|-------|---------|-------------|
-| `replicaCount` | `2` | Number of DeltaLLM pods (ignored when HPA is enabled) |
-| `image.repository` | `deltallm/deltallm` | Container image |
-| `image.tag` | `latest` | Image tag |
-| `image.pullPolicy` | `IfNotPresent` | Container image pull policy |
-| `service.type` | `ClusterIP` | Kubernetes Service type |
-| `service.port` | `4000` | Port the gateway listens on |
-| `serviceAccount.create` | `true` | Create a dedicated ServiceAccount |
-| `serviceAccount.annotations` | `{}` | Annotations for the ServiceAccount (useful for IRSA) |
-| `nodeSelector` | `{}` | Node selector constraints |
-| `tolerations` | `[]` | Pod tolerations |
-| `affinity` | `{}` | Pod affinity/anti-affinity rules |
+## Configuration patterns
 
-### Database
+### 1. Bundled PostgreSQL and Redis
 
-DeltaLLM requires PostgreSQL. You can use the bundled Bitnami subchart or provide an external database.
+This is the default.
 
-=== "In-Cluster PostgreSQL (default)"
+```yaml
+postgresql:
+  enabled: true
+  auth:
+    username: deltallm
+    password: change-this
+    database: deltallm
 
-    ```yaml
-    postgresql:
-      enabled: true
-      auth:
-        username: deltallm
-        password: strong-random-password
-        database: deltallm
-      primary:
-        persistence:
-          enabled: true
-          size: 10Gi
-    ```
+redis:
+  enabled: true
+  auth:
+    enabled: false
+```
 
-=== "External PostgreSQL"
+If you enable Redis auth with the bundled subchart, you must also set `redis.auth.password` so the DeltaLLM deployment can build the correct connection URL:
 
-    ```yaml
-    postgresql:
-      enabled: false
+```yaml
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    password: strong-redis-password
+```
 
-    config:
-      databaseUrl: "postgresql://user:pass@your-rds-host:5432/deltallm"
-      asyncDatabaseUrl: "postgresql+asyncpg://user:pass@your-rds-host:5432/deltallm"
-    ```
+### 2. External PostgreSQL and Redis
 
-!!! note "Dual database URLs"
-    DeltaLLM uses two database connections internally:
+Disable the bundled subcharts and inject connection strings through values or `envFrom`.
 
-    - `DATABASE_URL` — Used by Prisma ORM (`postgresql://` prefix)
-    - `DELTALLM_DATABASE_URL` — Used by SQLAlchemy async engine (`postgresql+asyncpg://` prefix)
+```yaml
+postgresql:
+  enabled: false
 
-    When using the in-cluster PostgreSQL subchart, both are generated automatically with the correct prefixes. When providing an external URL via `config.databaseUrl`, the chart auto-converts the prefix for the async connection. You can also set `config.asyncDatabaseUrl` explicitly if your async connection differs.
+redis:
+  enabled: false
 
-### Redis
+config:
+  databaseUrl: "postgresql://user:pass@postgres:5432/deltallm"
+  redisUrl: "redis://redis:6379/0"
+```
 
-Redis is used for distributed caching, rate limiting coordination, and config propagation across replicas. It is optional but recommended for multi-replica deployments.
+Using `envFrom` is usually better:
 
-=== "In-Cluster Redis (default)"
+```yaml
+postgresql:
+  enabled: false
 
-    ```yaml
-    redis:
-      enabled: true
-      auth:
-        enabled: false
-      master:
-        persistence:
-          enabled: true
-          size: 5Gi
-    ```
+redis:
+  enabled: false
 
-=== "External Redis"
+secret:
+  existingSecret: deltallm-app-secrets
 
-    ```yaml
-    redis:
-      enabled: false
+envFrom:
+  - secretRef:
+      name: deltallm-runtime-secrets
+```
 
-    config:
-      redisUrl: "redis://your-elasticache-host:6379/0"
-    ```
+The chart no longer emits empty `DATABASE_URL` or `REDIS_URL` values, so secret-based injection works cleanly.
 
-=== "No Redis"
+### 3. Provider credentials and auth settings
 
-    ```yaml
-    redis:
-      enabled: false
-    ```
+Use `envFrom` or `env` for provider keys and identity settings:
 
-    Without Redis, DeltaLLM falls back to in-memory caching and per-instance rate limiting. Settings changes will not propagate across replicas.
+```yaml
+envFrom:
+  - secretRef:
+      name: deltallm-runtime-secrets
 
-### Model Deployments
+env:
+  - name: PLATFORM_BOOTSTRAP_ADMIN_EMAIL
+    value: admin@example.com
+```
 
-Models are configured in the `config.model_list` array. Each entry maps a virtual model name to a provider backend:
+This covers:
+
+- `OPENAI_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `AZURE_OPENAI_API_KEY`
+- `PLATFORM_BOOTSTRAP_ADMIN_EMAIL`
+- `PLATFORM_BOOTSTRAP_ADMIN_PASSWORD`
+- SSO client credentials
+- JWT / JWKS settings
+
+### 4. Model bootstrap from config
+
+You can still seed deployments from `config.model_list`:
 
 ```yaml
 config:
@@ -194,56 +182,15 @@ config:
         timeout: 300
       model_info:
         mode: chat
-        input_cost_per_token: 0.0000025
-        output_cost_per_token: 0.00001
-
-    - model_name: claude-3-5-sonnet
-      deltallm_params:
-        model: anthropic/claude-3-5-sonnet-20241022
-        api_key: os.environ/ANTHROPIC_API_KEY
-        timeout: 300
-      model_info:
-        mode: chat
-        input_cost_per_token: 0.000003
-        output_cost_per_token: 0.000015
-```
-
-!!! tip "Runtime model management"
-    With `model_deployment_source: hybrid` (the default), you can add and remove models through the Admin UI or API without redeploying the Helm chart. Models defined in the config are bootstrapped on startup, and runtime changes are persisted to the database.
-
-### Router Settings
-
-Control how requests are distributed across model deployments:
-
-```yaml
-config:
-  router_settings:
-    routing_strategy: simple-shuffle   # round-robin, weighted, least-busy, latency-based, cost-based
-    num_retries: 3                     # Retry count on provider failure
-    retry_after: 1                     # Seconds between retries
-    timeout: 300                       # Request timeout in seconds
-    cooldown_time: 60                  # Seconds to exclude a failing deployment
-    allowed_fails: 0                   # Failures before cooldown triggers
-```
-
-### General Settings
-
-```yaml
-config:
   general_settings:
-    cache_enabled: false
-    cache_backend: memory              # memory, redis
-    cache_ttl: 3600
-    background_health_checks: true
-    health_check_interval: 300
-    model_deployment_source: hybrid    # hybrid, db_only, config_only
+    model_deployment_source: hybrid
 ```
 
----
+With `hybrid`, Helm can bootstrap initial models and the Admin UI/API can manage them afterward.
 
-## Ingress
+## Ingress and service exposure
 
-The chart includes an Ingress resource, enabled by default:
+Ingress is opt-in.
 
 ```yaml
 ingress:
@@ -253,357 +200,152 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
   hosts:
-    - host: deltallm.example.com
+    - host: api.example.com
       paths:
         - path: /
           pathType: Prefix
   tls:
     - secretName: deltallm-tls
       hosts:
-        - deltallm.example.com
+        - api.example.com
 ```
 
-!!! tip "Long timeouts"
-    LLM requests can take 30+ seconds. Set proxy timeouts to at least 600 seconds to avoid premature disconnects during streaming responses.
-
----
-
-## Autoscaling
-
-Horizontal Pod Autoscaling is enabled by default:
+For a `LoadBalancer` service instead:
 
 ```yaml
-hpa:
-  enabled: true
-  minReplicas: 2
-  maxReplicas: 10
-  targetCPUUtilizationPercentage: 70
-  targetMemoryUtilizationPercentage: 80
+service:
+  type: LoadBalancer
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
 ```
 
-DeltaLLM is stateless — all persistent state lives in PostgreSQL and Redis. This makes horizontal scaling straightforward. When running multiple replicas:
+## S3 request logging
 
-- Settings changes propagate across instances via Redis pub/sub
-- Rate limiting is coordinated through Redis
-- Cache is shared when using Redis as the cache backend
-
----
-
-## Health Checks
-
-The chart configures Kubernetes liveness and readiness probes automatically:
-
-| Probe | Endpoint | Purpose |
-|-------|----------|---------|
-| Liveness | `/health/liveliness` | Restarts the pod if the process is hung |
-| Readiness | `/health/readiness` | Removes the pod from the Service if PostgreSQL or Redis is unreachable |
-
-Default probe timing:
-
-```yaml
-probes:
-  liveness:
-    path: /health/liveliness
-    initialDelaySeconds: 30
-    periodSeconds: 10
-    timeoutSeconds: 5
-    failureThreshold: 3
-  readiness:
-    path: /health/readiness
-    initialDelaySeconds: 5
-    periodSeconds: 5
-    timeoutSeconds: 3
-    failureThreshold: 3
-```
-
----
-
-## Prometheus Metrics
-
-DeltaLLM exposes Prometheus metrics at `/metrics`. The chart can automatically configure scraping.
-
-### Pod Annotations
-
-When `prometheus.enabled` is `true` (the default), standard Prometheus scrape annotations are added to the pod template:
-
-```yaml
-prometheus:
-  enabled: true
-```
-
-This adds:
-
-```yaml
-annotations:
-  prometheus.io/scrape: "true"
-  prometheus.io/port: "4000"
-  prometheus.io/path: "/metrics"
-```
-
-The `prometheus` callback is also automatically injected into the DeltaLLM callback list, activating metric collection for requests, tokens, spend, latency, and cache performance.
-
-### ServiceMonitor (Prometheus Operator)
-
-If you use the Prometheus Operator, enable the ServiceMonitor CRD:
-
-```yaml
-prometheus:
-  enabled: true
-  serviceMonitor:
-    enabled: true
-    interval: 30s
-    scrapeTimeout: 10s
-    labels:
-      release: prometheus    # Match your Prometheus Operator's selector
-```
-
-The ServiceMonitor is created in the same namespace as the release by default. To place it in a different namespace:
-
-```yaml
-prometheus:
-  serviceMonitor:
-    namespace: monitoring
-```
-
-### Available Metrics
-
-| Metric | Type | Labels |
-|--------|------|--------|
-| `deltallm_requests_total` | Counter | model, api_provider, user, team, status_code |
-| `deltallm_request_failures_total` | Counter | model, api_provider, error_type |
-| `deltallm_input_tokens_total` | Counter | model, api_provider |
-| `deltallm_output_tokens_total` | Counter | model, api_provider |
-| `deltallm_spend_total` | Counter | model, api_provider |
-| `deltallm_request_total_latency_seconds` | Histogram | model, api_provider |
-| `deltallm_llm_api_latency_seconds` | Histogram | model, api_provider |
-| `deltallm_deployment_state` | Gauge | deployment_id |
-| `deltallm_deployment_active_requests` | Gauge | deployment_id |
-| `deltallm_deployment_cooldown` | Gauge | deployment_id |
-| `deltallm_cache_hit_total` | Counter | model |
-| `deltallm_cache_miss_total` | Counter | model |
-
----
-
-## S3 Request Logging
-
-DeltaLLM can log request and response payloads to an S3 bucket for auditing and analytics. Logs are partitioned by date (`year=YYYY/month=MM/day=DD/`) for easy querying with Athena or similar tools.
-
-### Enable S3 Logging
+Enable S3 logging with IRSA/workload identity or with an existing secret.
 
 ```yaml
 s3:
   enabled: true
-  bucket: "your-deltallm-logs-bucket"
-  region: "us-east-1"
-  prefix: "deltallm-logs/"
-  compression: "gzip"        # Optional: compress logs with gzip
+  bucket: company-deltallm-logs
+  region: us-east-1
+  compression: gzip
 ```
 
-When enabled, the chart:
+### IRSA / workload identity
 
-1. Adds `s3` to both `success_callback` and `failure_callback` lists
-2. Configures the S3 callback settings in the config file
-3. Sets `DELTALLM_S3_BUCKET` and `AWS_DEFAULT_REGION` environment variables
-
-### Authentication
-
-=== "IAM Role (recommended)"
-
-    If your pods use IAM Roles for Service Accounts (IRSA) or a similar mechanism, no additional credentials are needed:
-
-    ```yaml
-    s3:
-      enabled: true
-      bucket: "your-bucket"
-      region: "us-east-1"
-
-    serviceAccount:
-      create: true
-      annotations:
-        eks.amazonaws.com/role-arn: "arn:aws:iam::123456789012:role/deltallm-s3-role"
-    ```
-
-=== "Access Keys"
-
-    Provide AWS credentials directly. The `secretAccessKey` is stored in a Kubernetes Secret; `accessKeyId` is set as a plain environment variable:
-
-    ```yaml
-    s3:
-      enabled: true
-      bucket: "your-bucket"
-      region: "us-east-1"
-      accessKeyId: "AKIAIOSFODNN7EXAMPLE"
-      secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-    ```
-
-    !!! tip "Use existing secrets"
-        For tighter control, create a Kubernetes Secret manually and reference it via environment variable overrides in `podAnnotations` or an init container, rather than storing credentials in Helm values.
-
-### S3 Bucket Policy
-
-The IAM role or user needs `s3:PutObject` permission on the target bucket:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "s3:PutObject",
-      "Resource": "arn:aws:s3:::your-deltallm-logs-bucket/deltallm-logs/*"
-    }
-  ]
-}
+```yaml
+serviceAccount:
+  create: true
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/deltallm-s3-role
 ```
 
----
+`serviceAccount.automountServiceAccountToken` defaults to `true` so workload identity works out of the box. If you do not rely on workload identity, you can disable it.
 
-## Production Deployment
+### Existing AWS credentials secret
 
-The chart includes a `values-production.yaml` overlay with production-appropriate defaults. Use it as a starting point:
+```yaml
+s3:
+  enabled: true
+  bucket: company-deltallm-logs
+  region: us-east-1
+  existingSecret: deltallm-aws-creds
+  accessKeyIdKey: aws-access-key-id
+  secretAccessKeyKey: aws-secret-access-key
+```
+
+## Production baseline
+
+Use [`helm/values-production.yaml`](/Users/mehditantaoui/Documents/Challenges/deltallm/helm/values-production.yaml) as the starting point:
 
 ```bash
-helm install deltallm ./helm \
+helm upgrade --install deltallm ./helm \
   --namespace deltallm \
   --create-namespace \
   -f helm/values-production.yaml \
   -f values-custom.yaml
 ```
 
-### Recommended Production Configuration
+A reasonable production overlay looks like this:
 
 ```yaml
-# values-custom.yaml
-replicaCount: 3
+secret:
+  existingSecret: deltallm-app-secrets
 
-image:
-  tag: "v0.1.0"     # Pin to a specific version
-
-config:
-  masterKey: "sk-your-production-master-key-min-32-chars"
-  saltKey: "your-unique-production-salt-key"
-  databaseUrl: "postgresql://deltallm:password@your-rds-host:5432/deltallm"
-  redisUrl: "redis://your-elasticache-host:6379/0"
-
-  general_settings:
-    background_health_checks: true
-    health_check_interval: 120
-    cache_enabled: true
-    cache_backend: redis
-    model_deployment_source: hybrid
+envFrom:
+  - secretRef:
+      name: deltallm-runtime-secrets
 
 postgresql:
-  enabled: false     # Use external managed database
+  enabled: false
 
 redis:
-  enabled: false     # Use external managed Redis
-
-prometheus:
-  enabled: true
-  serviceMonitor:
-    enabled: true
-    interval: 15s
-
-s3:
-  enabled: true
-  bucket: "company-deltallm-logs"
-  region: "us-east-1"
-  compression: "gzip"
-
-hpa:
-  enabled: true
-  minReplicas: 3
-  maxReplicas: 20
-
-resources:
-  requests:
-    cpu: 500m
-    memory: 1Gi
-  limits:
-    cpu: 2000m
-    memory: 2Gi
+  enabled: false
 
 ingress:
   enabled: true
   className: nginx
   hosts:
-    - host: llm-gateway.company.com
+    - host: llm-gateway.example.com
       paths:
         - path: /
           pathType: Prefix
   tls:
     - secretName: llm-gateway-tls
       hosts:
-        - llm-gateway.company.com
+        - llm-gateway.example.com
+
+hpa:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 20
+
+prometheus:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 15s
 ```
 
-### Production Checklist
+## Operational behavior
 
-- [ ] Master key is at least 32 characters with letters and digits
-- [ ] Salt key is unique and not the default value
-- [ ] Using external managed PostgreSQL with backups enabled
-- [ ] Using external managed Redis (e.g., ElastiCache, Memorystore)
-- [ ] Image tag pinned to a specific version (not `latest`)
-- [ ] TLS configured on the Ingress
-- [ ] Resource requests and limits set appropriately
-- [ ] HPA configured with sensible min/max replicas
-- [ ] Prometheus scraping enabled for monitoring
-- [ ] S3 logging enabled for audit trail (if required)
+The chart now includes a few defaults that matter operationally:
 
----
+- The container runs the shared database bootstrap script before starting the API, preferring `prisma migrate deploy` and falling back to `prisma db push` for legacy or unbaselined databases
+- `startupProbe` protects the pod while Prisma schema setup and app startup complete
+- Config and generated secret checksums are added to the pod template so Helm-triggered config changes roll pods automatically
+- Ingress is disabled by default to avoid shipping a fake hostname into clusters that do not want it
+- `env` and `envFrom` are passed directly into the container for provider keys and platform integrations
 
-## Upgrading
+## Validation
+
+Render and lint before deploying:
 
 ```bash
-helm upgrade deltallm ./helm \
-  --namespace deltallm \
-  -f values-custom.yaml
+helm lint ./helm \
+  --set config.masterKey=StrongMasterKey2026SecureValue99 \
+  --set config.saltKey=unique-salt-2026
+
+helm template deltallm ./helm \
+  --set config.masterKey=StrongMasterKey2026SecureValue99 \
+  --set config.saltKey=unique-salt-2026 > /tmp/deltallm-rendered.yaml
 ```
 
-Database schema migrations run automatically on pod startup via Prisma. Configuration changes stored in the database (model deployments, settings) are preserved across upgrades.
-
-## Uninstalling
+After deploy:
 
 ```bash
-helm uninstall deltallm --namespace deltallm
+kubectl get pods -n deltallm
+kubectl logs -n deltallm deploy/deltallm --tail=100
+kubectl get ingress,svc -n deltallm
 ```
-
-!!! warning "Persistent data"
-    If using in-cluster PostgreSQL or Redis with persistence enabled, the PersistentVolumeClaims are **not** deleted by `helm uninstall`. Delete them manually if you want to remove all data:
-
-    ```bash
-    kubectl delete pvc -l app.kubernetes.io/instance=deltallm -n deltallm
-    ```
 
 ## Troubleshooting
 
-### Pod not starting
-
-Check the logs for startup errors:
-
-```bash
-kubectl logs -l app.kubernetes.io/name=deltallm -n deltallm --tail=50
-```
-
-Common issues:
-
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `Salt key is required` | Missing `config.saltKey` | Set `config.saltKey` in your values |
-| `master_key must be at least 32 characters` | Master key too short | Use a longer key |
-| `Connection refused` on database | PostgreSQL not ready | Wait for the PostgreSQL pod to be ready, or check `config.databaseUrl` |
-| Readiness probe failing | Redis or PostgreSQL unavailable | Check connectivity to backing services |
-
-### Checking configuration
-
-View the generated config file:
-
-```bash
-kubectl get configmap -l app.kubernetes.io/name=deltallm -n deltallm -o yaml
-```
-
-View environment variables:
-
-```bash
-kubectl exec deploy/deltallm -n deltallm -- env | grep -E "DATABASE|REDIS|DELTALLM"
-```
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Pod exits during startup | Missing `master-key` or `salt-key` | Set `config.masterKey` / `config.saltKey`, or use `secret.existingSecret` |
+| Pod cannot connect to PostgreSQL | Wrong `DATABASE_URL` or bundled PostgreSQL disabled unexpectedly | Check `config.databaseUrl` or `envFrom` secret contents |
+| Pod cannot connect to Redis | Wrong `REDIS_URL` or Redis auth enabled without password | Set `config.redisUrl`, or set `redis.auth.password` when using bundled Redis auth |
+| Provider calls fail immediately | Provider API key missing from env | Add `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or similar via `envFrom` / `env` |
+| S3 logging does not work | Missing IAM permissions or AWS creds | Use IRSA/workload identity or set `s3.existingSecret` |
+| Config update did not apply | Existing external secret changed without a rollout | Restart the deployment after changing externally managed secrets |

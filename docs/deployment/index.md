@@ -1,45 +1,55 @@
 # Deployment
 
-DeltaLLM can be deployed in multiple ways depending on your infrastructure.
+Use this section when you are moving from local evaluation to a repeatable environment.
 
-| Method | Best For |
-|--------|----------|
-| [Docker](docker.md) | Single-instance and small team deployments |
-| [Kubernetes](kubernetes.md) | Large-scale, multi-instance production setups |
+## Choose a Deployment Path
 
-## Requirements
+| Path | Best for | Start here |
+|------|----------|------------|
+| Docker Compose | Single instance, demos, small teams, simple self-hosting | [Docker](docker.md) |
+| Kubernetes | Multi-instance production, autoscaling, managed infrastructure | [Kubernetes](kubernetes.md) |
 
-All deployment methods require:
+## Quick Path to Success
 
-- **PostgreSQL** database for storing keys, teams, users, and spend data
-- **Redis** (recommended) for rate limiting, caching, distributed config propagation, and deployment state coordination
-- A **master key** (min 32 characters) for admin authentication
-- A **salt key** (unique per deployment) for API key hashing
+1. Choose Docker if you want the fastest production-style setup
+2. Choose Kubernetes if you need replicas, ingress, and cluster-native operations
+3. Generate a valid `DELTALLM_MASTER_KEY` and `DELTALLM_SALT_KEY`
+4. Keep secrets in environment variables, not in `config.yaml`
+5. Verify `/health/liveliness` and `/health/readiness` after startup
 
-## Production Considerations
+## Shared Requirements
 
-### Environment Variables
+All deployment methods rely on the same core services:
 
-Store all secrets as environment variables, not in config files:
+- PostgreSQL for persistent runtime data such as keys, accounts, spend logs, and model records
+- Redis for distributed coordination, rate limiting, cache sharing, and runtime state
+- A master key for admin access
+- A salt key for API key hashing
+
+## Shared Best Practices
+
+### Store Secrets in Environment Variables
 
 ```yaml
 general_settings:
   master_key: os.environ/DELTALLM_MASTER_KEY
   salt_key: os.environ/DELTALLM_SALT_KEY
   database_url: os.environ/DATABASE_URL
+  redis_url: os.environ/REDIS_URL
 ```
 
-### Port Configuration
+### Use the Built-In Health Endpoints
 
-DeltaLLM listens on port 4000 by default. The backend serves both the API and the built frontend from a single process.
+- `GET /health/liveliness` for process liveness
+- `GET /health/readiness` for dependency readiness
+- `GET /metrics` for Prometheus scraping
 
-### Database Migrations
+### Expect Schema Setup on Startup
 
-The database schema is migrated automatically on startup via Prisma. No manual migration step is needed.
+The application runs Prisma schema setup automatically during container startup. You do not need a separate manual migration step for the default deployment paths documented here.
 
-### Health Checks
+## Next Steps
 
-Use the built-in health endpoints for load balancer and orchestrator probes:
-
-- **Liveness:** `GET /health/liveliness` — Returns OK if the process is running
-- **Readiness:** `GET /health/readiness` — Returns OK if PostgreSQL and Redis are reachable
+- [Docker deployment guide](docker.md)
+- [Kubernetes deployment guide](kubernetes.md)
+- [Observability](../features/observability.md)

@@ -1,22 +1,23 @@
 # Model Deployments
 
-The `model_list` section defines which LLM models are available through the gateway. Each entry maps a public model name to a specific provider deployment.
+Model deployments tell DeltaLLM how to reach a real provider-backed model.
 
-## Storage Source
+In simple terms:
 
-Runtime deployments are persisted in the `deltallm_modeldeployment` database table.
+- clients call a public model name such as `gpt-4o-mini`
+- DeltaLLM resolves that name to one or more concrete deployments
+- each deployment contains the provider details, credentials, mode, and optional pricing metadata
 
-- `general_settings.model_deployment_source: db_only` — read deployments only from DB (recommended)
-- `general_settings.model_deployment_source: hybrid` — prefer DB, fallback to `model_list` when DB is empty/unavailable
-- `general_settings.model_deployment_source: config_only` — read only from `model_list`
+## Quick Success Path
 
-### Bootstrap Behavior
+For most teams, use this model lifecycle:
 
-Use `general_settings.model_deployment_bootstrap_from_config: true` only to seed DB from `model_list` when the deployment table is empty.
+1. Keep `general_settings.model_deployment_source: db_only`
+2. Create deployments through the Admin UI or Admin API
+3. Use one-time config bootstrap only to seed the first models into the database
+4. After models exist in the database, manage them there instead of editing `config.yaml`
 
-After startup, runtime model lifecycle is managed via Admin UI/API (`/ui/api/models`). Changes to `config.yaml` are not the primary runtime write path in `db_only`.
-
-## Basic Model Definition
+## First Working Example
 
 ```yaml
 model_list:
@@ -28,27 +29,49 @@ model_list:
       timeout: 60
 ```
 
-### Fields
+This creates one public model name, `gpt-4o-mini`, backed by one OpenAI deployment.
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `model_name` | Yes | Public name clients use to request this model |
-| `deltallm_params.model` | Yes | Provider-prefixed model identifier (e.g., `openai/gpt-4o`, `anthropic/claude-3-sonnet`) |
-| `deltallm_params.api_key` | Yes | Provider API key (use `os.environ/` for env vars) |
-| `deltallm_params.api_base` | No | Override the provider API base URL |
-| `deltallm_params.timeout` | No | Request timeout in seconds (default: 600) |
-| `deltallm_params.weight` | No | Routing weight for load balancing (default: 1) |
+## Choose a Storage Mode
 
-## Model Groups
+Runtime deployments are stored in the `deltallm_modeldeployment` table. DeltaLLM can read model definitions from the database, from `config.yaml`, or both.
 
-DeltaLLM supports two ways to group multiple deployments behind a single runtime target:
+| Mode | What it does | When to use it |
+|------|--------------|----------------|
+| `db_only` | Read deployments only from the database | Recommended for normal runtime operations |
+| `hybrid` | Prefer database, fall back to `model_list` if the DB is empty or unavailable | Transitional setups |
+| `config_only` | Read only from `model_list` | Static or file-managed setups |
 
-1. **Implicit config grouping** — multiple deployments share the same `model_name`
-2. **Explicit Model Groups in the Admin UI** — preferred for operational management, member lifecycle, and routing policy
+```yaml
+general_settings:
+  model_deployment_source: db_only
+```
 
-Implicit config grouping is still supported and works as described below. For day-to-day runtime operations, prefer the explicit [Route Groups](../admin-ui/route-groups.md) workflow.
+### Bootstrap Behavior
 
-Multiple deployments can share the same `model_name` to create a config-defined group. Requests are distributed across the group based on the configured [routing strategy](router.md).
+Use config bootstrap only when you want to seed `model_list` into an empty database.
+
+```yaml
+general_settings:
+  model_deployment_source: db_only
+  model_deployment_bootstrap_from_config: true
+```
+
+After the initial seed, set `model_deployment_bootstrap_from_config` back to `false`.
+
+## Fields You Usually Need
+
+| Field | Required | What it means |
+|-------|----------|---------------|
+| `model_name` | Yes | Public model name clients send in API requests |
+| `deltallm_params.model` | Yes | Provider-prefixed upstream model ID, such as `openai/gpt-4o-mini` |
+| `deltallm_params.api_key` | Yes | Provider API key |
+| `deltallm_params.api_base` | No | Custom provider base URL |
+| `deltallm_params.timeout` | No | Upstream timeout in seconds |
+| `deltallm_params.weight` | No | Relative weight when multiple deployments share one public model |
+
+## Multiple Deployments Behind One Public Model
+
+You can attach more than one deployment to the same public model name by repeating `model_name`.
 
 ```yaml
 model_list:
@@ -64,20 +87,22 @@ model_list:
       api_base: https://your-resource.openai.azure.com
 ```
 
-In this example, requests for `gpt-4o` are routed across both OpenAI and Azure deployments.
+DeltaLLM then routes requests for `gpt-4o` across those deployments using the active routing strategy.
 
-## Model Types
+For day-to-day operations, the preferred workflow is still to manage explicit route groups in the Admin UI.
 
-DeltaLLM supports multiple model types. Set the `mode` in `model_info` to specify the type:
+## Set the Workload Type
 
-| Mode | Description | Endpoints |
-|------|-------------|-----------|
-| `chat` | Chat completion models (default) | `/v1/chat/completions` |
-| `embedding` | Text embedding models | `/v1/embeddings` |
-| `image_generation` | Image generation models | `/v1/images/generations` |
-| `audio_speech` | Text-to-speech models | `/v1/audio/speech` |
-| `audio_transcription` | Speech-to-text models | `/v1/audio/transcriptions` |
-| `rerank` | Reranking models | `/v1/rerank` |
+DeltaLLM supports several runtime modes. Use `model_info.mode` when the deployment is not a standard chat model.
+
+| Mode | Used by |
+|------|---------|
+| `chat` | `/v1/chat/completions`, `/v1/completions`, `/v1/responses` |
+| `embedding` | `/v1/embeddings` |
+| `image_generation` | `/v1/images/generations` |
+| `audio_speech` | `/v1/audio/speech` |
+| `audio_transcription` | `/v1/audio/transcriptions` |
+| `rerank` | `/v1/rerank` |
 
 ```yaml
 model_list:
@@ -89,9 +114,9 @@ model_list:
       mode: audio_transcription
 ```
 
-## Pricing Configuration
+## Add Pricing and Defaults
 
-Set per-token costs for spend tracking:
+Pricing metadata powers spend tracking.
 
 ```yaml
 model_list:
@@ -102,12 +127,9 @@ model_list:
     model_info:
       input_cost_per_token: 0.00000015
       output_cost_per_token: 0.0000006
-      max_tokens: 128000
 ```
 
-## Default Parameters
-
-Inject default parameters into every request for a deployment. User-provided values always take precedence.
+Default parameters let you inject request defaults for a deployment.
 
 ```yaml
 model_list:
@@ -121,14 +143,14 @@ model_list:
         max_tokens: 1024
 ```
 
-## Supported Providers
+User-supplied request values still take priority over these defaults.
 
-The backend source of truth is `src/providers/resolution.py` (`PROVIDER_CAPABILITIES` and `PROVIDER_PRESETS`).
+## Provider Prefixes
 
-### Provider Prefixes
+Use a provider prefix in `deltallm_params.model`.
 
-| Provider | Model Prefix | Example |
-|----------|-------------|---------|
+| Provider | Prefix | Example |
+|----------|--------|---------|
 | OpenAI | `openai/` | `openai/gpt-4o` |
 | Anthropic | `anthropic/` | `anthropic/claude-3-5-sonnet-latest` |
 | Azure OpenAI | `azure/` or `azure_openai/` | `azure/gpt-4o-deployment` |
@@ -144,12 +166,10 @@ The backend source of truth is `src/providers/resolution.py` (`PROVIDER_CAPABILI
 | LM Studio | `lmstudio/` | `lmstudio/qwen2.5-7b-instruct` |
 | Ollama | `ollama/` | `ollama/llama3.1` |
 
-### Capability Matrix
+## Capability Matrix
 
-Legend: `Y` = supported, `N` = not supported in backend compatibility matrix.
-
-| Provider | Chat | Embedding | Image | TTS (`audio_speech`) | STT (`audio_transcription`) | Rerank |
-|----------|------|-----------|-------|----------------------|-----------------------------|--------|
+| Provider | Chat | Embedding | Image | TTS | STT | Rerank |
+|----------|------|-----------|-------|-----|-----|--------|
 | OpenAI | Y | Y | Y | Y | Y | N |
 | Anthropic | Y | N | N | N | N | N |
 | Azure OpenAI | Y | Y | Y | Y | Y | N |
@@ -166,7 +186,10 @@ Legend: `Y` = supported, `N` = not supported in backend compatibility matrix.
 | Ollama | Y | Y | N | N | N | N |
 
 !!! note
-    `rerank` mode is available in DeltaLLM, but no provider is explicitly marked as `rerank`-capable in the current backend provider matrix.
+    `rerank` exists as a DeltaLLM mode, but no provider is currently marked as rerank-capable in the backend capability matrix.
 
-!!! note
-    Unknown/custom providers are allowed by default at validation time (`provider_supports_mode()` returns true when provider is not listed), so custom integrations can still be configured.
+## Related Pages
+
+- [Router Settings](router.md)
+- [Quick Start](../getting-started/quickstart.md)
+- [Models UI](../admin-ui/models.md)

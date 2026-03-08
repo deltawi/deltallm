@@ -1,21 +1,55 @@
 # Batch Jobs
 
-Batch Jobs are the operational view for long-running asynchronous workloads such as embedding batches.
+Batch Jobs is the operations view for long-running asynchronous work.
+
+Today, the public batch API is focused on embeddings batches, and this page helps operators inspect job progress, failures, and cost after submission.
 
 ![Batch Jobs](images/batch-jobs.png)
 
-## What this page shows
+## Quick Success Workflow
 
-- Total, active, completed, and failed job counts
-- Job status tabs for quick filtering
-- Per-job progress, cost, team, creation time, and runtime
+1. Submit a batch through the API
+2. Open **Operations > Batch Jobs**
+3. Filter by status or search by batch ID
+4. Open the batch detail to inspect progress and failures
+5. Cancel the batch if needed
 
-## Typical workflow
+## What This Page Shows
 
-1. Filter by status or search by batch ID or model
-2. Open a batch to inspect line-item progress and failures
-3. Use the status badges and progress bar to track completion
+- queue summary counts
+- status-based filtering
+- per-batch progress
+- total and failed item counts
+- team ownership
+- estimated or accumulated cost
+- timestamps for creation, start, and completion
 
-## When to use it
+## When To Use It
 
-Use this page when the workload is not request/response interactive and you need queue visibility, retry tracking, or post-run review.
+Use this page when work is not request-response interactive and you need:
+
+- visibility into queued or running jobs
+- failure review at the item level
+- cancellation controls
+- operational reporting after a batch finishes
+
+## Related API Surface
+
+The admin backend exposes endpoints for:
+
+- batch summary
+- batch list
+- batch detail with items
+- batch cancellation
+
+The public data-plane API also exposes:
+
+- `/v1/files`
+- `/v1/batches`
+
+See [Proxy Endpoints](../api/proxy.md) and [Admin Endpoints](../api/admin.md) for the API reference.
+
+## Related Pages
+
+- [Proxy Endpoints](../api/proxy.md)
+- [Admin Endpoints](../api/admin.md)

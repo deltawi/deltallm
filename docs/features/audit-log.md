@@ -1,126 +1,116 @@
 # Audit Log
 
-DeltaLLM writes an append-only audit log to Postgres for:
+DeltaLLM writes audit events to Postgres for admin actions and selected runtime operations so operators can investigate changes, access, and failures later.
 
-- Control-plane actions (Admin UI + `/ui/api/*` endpoints)
-- Selected data-plane actions (for example: batch/files, rerank, images, audio, spend)
+## Quick Path
 
-Audit events are designed for operational troubleshooting and security review, and can be filtered/exported via the Admin Audit API.
+Audit logging is enabled by default. To confirm it is working:
 
-## API Access
+1. Sign in to the Admin UI or use the master key
+2. Perform an action such as creating a key or running a batch job
+3. Open [Audit Logs](../admin-ui/audit-logs.md) or call the audit API
+4. Filter by `request_id`, actor, or action
 
-Audit read endpoints require an authenticated admin session or master key, and `Permission.AUDIT_READ` (`audit.read`).
+List recent events:
 
-`Permission.AUDIT_READ` is granted to:
-
-- `platform_admin`
-- `org_owner`
-- `org_admin`
-
-Access is denied to:
-
-- `org_billing`
-- `org_auditor`
-- `org_member`
-- Team-only memberships (`team_admin`, `team_developer`, `team_viewer`) without org admin/owner membership.
-
-## Admin Audit API
-
-All endpoints are under `/ui/api/audit/*`.
-
-### List Events
-
-`GET /ui/api/audit/events`
-
-Query parameters:
-
-| Parameter | Notes |
-|----------|-------|
-| `action` | Filter by action name (example: `BATCH_CREATE_REQUEST`) |
-| `status` | Filter by status (example: `success`, `error`) |
-| `actor_id` | Filter by actor identifier |
-| `organization_id` | Filter to one organization |
-| `request_id` | Filter by request id (from `X-Request-Id`) |
-| `correlation_id` | Filter by correlation id (currently equals `request_id`) |
-| `start_date` | Inclusive (UTC date) |
-| `end_date` | Inclusive (UTC date) |
-| `limit` | Default `100`, max `500` |
-| `offset` | Default `0` |
-
-Response shape:
-
-```json
-{
-  "events": [{ "...": "..." }],
-  "pagination": { "total": 0, "limit": 100, "offset": 0, "has_more": false }
-}
+```bash
+curl http://localhost:8000/ui/api/audit/events \
+  -H "Authorization: Bearer YOUR_MASTER_KEY"
 ```
 
-### Fetch One Event (With Payloads)
+## What Gets Audited
 
-`GET /ui/api/audit/events/{event_id}`
+DeltaLLM records:
 
-Returns a single event plus `payloads` (request/response payloads, if stored).
+- control-plane actions from the Admin UI and `/ui/api/*`
+- selected data-plane actions such as files, batches, rerank, images, audio, and spend access
 
-### Timeline View
+The audit log is meant for operational review, security investigations, and compliance workflows.
 
-`GET /ui/api/audit/timeline?request_id=...` (or `correlation_id=...`)
+## Who Can Read It
 
-Returns all events in chronological order for a request/correlation.
+Audit access requires the master key or an authenticated admin session with `audit.read`.
 
-### Export
+That includes:
 
-`GET /ui/api/audit/export?format=jsonl|csv`
+- platform admins
+- org owners
+- org admins
+- org auditors
 
-Supports the same filters as `GET /ui/api/audit/events`, with a higher default `limit` (and max `10000`).
+Team-only roles do not get audit access by themselves.
 
-`action` values map to the centralized registry in `src/audit/actions.py` (`AuditAction`).
-Prefer referencing that registry over documenting scattered literal action strings.
+## Main Endpoints
 
-## Event Fields
+All audit endpoints are under `/ui/api/audit/*`.
 
-Common fields include:
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /ui/api/audit/events` | List events with filters and pagination |
+| `GET /ui/api/audit/events/{event_id}` | Get one event, including stored payload records |
+| `GET /ui/api/audit/timeline` | Show all events for a request or correlation id |
+| `GET /ui/api/audit/export?format=jsonl|csv` | Export filtered results |
 
-- `event_id`, `occurred_at`
-- `organization_id`
-- `actor_type`, `actor_id`, `api_key`
+Useful filters on `GET /ui/api/audit/events` include:
+
 - `action`
-- `resource_type`, `resource_id`
-- `request_id`, `correlation_id`
-- `ip`, `user_agent`
-- `status`, `latency_ms`
-- `input_tokens`, `output_tokens`
-- `error_type`, `error_code`
+- `status`
+- `actor_id`
+- `organization_id`
+- `request_id`
+- `correlation_id`
+- `start_date`
+- `end_date`
+
+## Event Shape
+
+Common event fields include:
+
+- `event_id`
+- `occurred_at`
+- `organization_id`
+- `actor_type`
+- `actor_id`
+- `action`
+- `resource_type`
+- `resource_id`
+- `request_id`
+- `correlation_id`
+- `status`
+- `latency_ms`
+- `input_tokens`
+- `output_tokens`
+- `error_type`
+- `error_code`
 - `metadata`
-- `content_stored` (whether any request/response payload content was stored)
+- `content_stored`
 
-When fetching a single event, you also get:
+When you fetch one event directly, DeltaLLM also returns any stored `payloads`.
 
-- `prev_hash`, `event_hash` (reserved for future tamper-evidence)
-- `payloads[]` with:
-  - `kind` (`request` or `response`)
-  - `storage_mode` (currently `inline`)
-  - `content_json` (may be `null` if content is not stored)
-  - `storage_uri`, `content_sha256`, `size_bytes`
-  - `redacted` (true when content was intentionally omitted)
+## Payload Storage and Redaction
 
-## Payload Storage + Redaction
+Audit payloads are handled differently depending on the event type:
 
-- Control-plane audit payloads (Admin UI and authentication flows) are stored with sensitive fields redacted (passwords, tokens, secrets, etc).
-- Data-plane payload storage is gated per organization:
-  - If the organization has `audit_content_storage_enabled = true`, request/response payloads may be stored.
-  - If it is `false` (default), payloads are recorded as metadata-only and `content_json` is omitted/redacted.
+- control-plane payloads are redacted for sensitive values such as passwords, tokens, and secrets
+- data-plane payload content is stored only when the organization has `audit_content_storage_enabled = true`
+- when content storage is disabled, the event is still recorded but request and response bodies are omitted or marked redacted
 
 ## Retention
 
-Audit retention is enforced by a background cleanup loop.
+Audit retention runs in the background.
 
-Global defaults are configured in `general_settings`:
+Global defaults:
 
-- `audit_metadata_retention_days`
-- `audit_payload_retention_days`
+- `general_settings.audit_metadata_retention_days`
+- `general_settings.audit_payload_retention_days`
 
-These can be overridden per organization via org metadata keys:
+Per-organization overrides:
 
 - `metadata.audit_metadata_retention_days`
 - `metadata.audit_payload_retention_days`
+
+## Related Pages
+
+- [Admin UI: Audit Logs](../admin-ui/audit-logs.md)
+- [Admin Endpoints](../api/admin.md)
+- [Observability](observability.md)

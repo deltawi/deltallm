@@ -108,15 +108,17 @@ After your first successful startup, you can set `model_deployment_bootstrap_fro
 
 If you want to route to a different model or provider, edit `config.yaml` now. See the [model configuration guide](../configuration/models.md) for the full reference.
 
-## 5. Initialize Prisma and create the database schema
+## 5. Initialize Prisma and apply the database migrations
 
-Generate the Prisma client artifacts, fetch the required binaries, and create the database tables:
+Generate the Prisma client artifacts, fetch the required binaries, and run the shared database bootstrap step:
 
 ```bash
 uv run prisma generate --schema=./prisma/schema.prisma
 uv run prisma py fetch
-uv run prisma db push --schema=./prisma/schema.prisma
+./scripts/bootstrap_db.sh
 ```
+
+The bootstrap script prefers `prisma migrate deploy` and falls back to `prisma db push` for legacy or unbaselined databases so local first-run stays simple.
 
 ## 6. Start the backend API
 

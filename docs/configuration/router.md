@@ -1,75 +1,73 @@
 # Router Settings
 
-The `router_settings` section controls how DeltaLLM routes requests across model deployments, handles failures, and manages retries.
+Use `router_settings` for the gateway-wide defaults that control deployment selection, retries, timeouts, and aliases.
 
-## Basic Configuration
+## Quick Path
+
+Start with a small, predictable config:
 
 ```yaml
 router_settings:
   routing_strategy: simple-shuffle
-  num_retries: 3
+  num_retries: 1
   retry_after: 1
   timeout: 600
   cooldown_time: 60
   allowed_fails: 0
 ```
 
-## Settings Reference
+That is enough for most first deployments.
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `routing_strategy` | `simple-shuffle` | How to select a deployment from a model group |
-| `num_retries` | `3` | Number of retry attempts on failure |
-| `retry_after` | `1` | Base delay between retries (seconds) |
-| `timeout` | `600` | Global request timeout (seconds) |
-| `cooldown_time` | `60` | How long to cool down a failed deployment (seconds) |
-| `allowed_fails` | `0` | Number of failures before cooling down a deployment |
-| `enable_pre_call_checks` | `false` | Run health checks before routing |
-| `model_group_alias` | `{}` | Map alias names to model groups |
+## Reference
 
-## Routing Strategies
+| Setting | Default | What it controls |
+| --- | --- | --- |
+| `routing_strategy` | `simple-shuffle` | Global default strategy for choosing a deployment |
+| `num_retries` | `0` | Extra retry attempts after the first failure |
+| `retry_after` | `0` | Base backoff delay in seconds |
+| `timeout` | `600` | Request timeout in seconds |
+| `cooldown_time` | `60` | Seconds a failing deployment stays out of rotation |
+| `allowed_fails` | `0` | Failures allowed before cooldown starts |
+| `enable_pre_call_checks` | `false` | Skip deployments already over configured RPM or TPM metadata |
+| `model_group_alias` | `{}` | Friendly names that map to real model groups |
+| `route_groups` | `[]` | File-defined route groups and membership |
 
-### `simple-shuffle`
-Randomly distributes requests across healthy deployments. Good default for most use cases.
+## Supported Strategies
 
-### `least-busy`
-Routes to the deployment with the fewest in-flight requests. Best for uneven workloads.
+These strategy names are valid today:
 
-### `latency-based-routing`
-Routes to the deployment with the lowest observed latency. Requires a warm-up period to gather metrics.
+- `simple-shuffle`
+- `least-busy`
+- `latency-based-routing`
+- `cost-based-routing`
+- `usage-based-routing`
+- `tag-based-routing`
+- `priority-based-routing`
+- `weighted`
+- `rate-limit-aware`
 
-### `cost-based-routing`
-Routes to the cheapest deployment first. Requires `input_cost_per_token` and `output_cost_per_token` in `model_info`.
+See [Routing & Failover](../features/routing.md) for when to use each one.
 
-### `usage-based-routing`
-Distributes requests proportionally based on configured `weight` values.
+## Fallback Configuration
 
-### `priority-based-routing`
-Routes to the highest-priority deployment (lowest `priority` value). Lower priority deployments are only used as fallbacks.
-
-## Fallback Chains
-
-Configure fallback behavior for different error types:
+Fallback chains live under `deltallm_settings`, not `router_settings`:
 
 ```yaml
 deltallm_settings:
   fallbacks:
-    - ["gpt-4o", "gpt-4o-mini"]
+    - gpt-4o:
+        - gpt-4o-mini
   context_window_fallbacks:
-    - ["gpt-4o-mini", "gpt-4o"]
+    - gpt-4o-mini:
+        - gpt-4o
   content_policy_fallbacks:
-    - ["gpt-4o", "claude-3-sonnet"]
+    - gpt-4o:
+        - claude-3-sonnet
 ```
 
-| Chain | Triggered When |
-|-------|---------------|
-| `fallbacks` | General failures (timeouts, 5xx errors, rate limits) |
-| `context_window_fallbacks` | Input exceeds the model's context window |
-| `content_policy_fallbacks` | Content policy violations |
+## Model Aliases
 
-## Model Group Aliases
-
-Map alternative names to existing model groups:
+Aliases let clients request a stable name while you map it to the real group:
 
 ```yaml
 router_settings:
@@ -78,4 +76,7 @@ router_settings:
     fast-model: gpt-4o-mini
 ```
 
-Clients can request `best-model` and it routes to `gpt-4o` deployments.
+## Related Pages
+
+- [Routing & Failover](../features/routing.md)
+- [Model Deployments](models.md)

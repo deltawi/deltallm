@@ -1,17 +1,38 @@
 # Configuration Reference
 
-DeltaLLM is configured through a YAML file (`config.yaml` by default). The config file has four main sections:
+DeltaLLM reads a YAML config file, usually `config.yaml`. For most teams, this file should stay small: connection settings, auth settings, and only the defaults you want to manage centrally.
+
+## Quick Path
+
+If you want the simplest runtime model:
+
+1. Keep secrets in environment variables
+2. Point DeltaLLM at Postgres and Redis
+3. Use `db_only` model deployment mode
+4. Manage models from the Admin UI after startup
+
+```yaml
+general_settings:
+  master_key: os.environ/DELTALLM_MASTER_KEY
+  salt_key: os.environ/DELTALLM_SALT_KEY
+  database_url: os.environ/DATABASE_URL
+  redis_url: os.environ/REDIS_URL
+  model_deployment_source: db_only
+  model_deployment_bootstrap_from_config: false
+```
+
+## Main Sections
 
 | Section | Purpose |
-|---------|---------|
-| [`model_list`](models.md) | Define bootstrap/file-based model deployments and providers |
-| [`router_settings`](router.md) | Configure routing strategy, retries, and timeouts |
-| [`general_settings`](general.md) | Authentication, database, Redis, and platform settings |
-| `deltallm_settings` | Callbacks, guardrails, and logging |
+| --- | --- |
+| [`model_list`](models.md) | File-based model definitions and bootstrap data |
+| [`router_settings`](router.md) | Routing, retry, timeout, and alias behavior |
+| [`general_settings`](general.md) | Auth, database, Redis, cache, health, sessions, and platform defaults |
+| `deltallm_settings` | Fallbacks, callbacks, guardrails, and logging behavior |
 
 ## Config File Location
 
-By default, DeltaLLM looks for `config.yaml` in the working directory. Override with the `DELTALLM_CONFIG_PATH` environment variable:
+By default, DeltaLLM reads `config.yaml` from the working directory. Override that with:
 
 ```bash
 export DELTALLM_CONFIG_PATH=/etc/deltallm/config.yaml
@@ -19,7 +40,7 @@ export DELTALLM_CONFIG_PATH=/etc/deltallm/config.yaml
 
 ## Environment Variable Interpolation
 
-Reference environment variables in any config value using the `os.environ/` prefix:
+Any config value can reference an environment variable with the `os.environ/` prefix:
 
 ```yaml
 general_settings:
@@ -27,24 +48,12 @@ general_settings:
   database_url: os.environ/DATABASE_URL
 ```
 
-This keeps secrets out of the config file.
-
-## Minimal Configuration (DB-Only Runtime)
-
-```yaml
-general_settings:
-  master_key: os.environ/DELTALLM_MASTER_KEY
-  database_url: os.environ/DATABASE_URL
-  model_deployment_source: db_only
-  model_deployment_bootstrap_from_config: false
-```
-
-Add deployments at runtime via Admin UI/API (`/ui/api/models`). If you need initial seeding from file, enable bootstrap temporarily.
+This is the recommended way to handle secrets.
 
 ## Full Example
 
-See [`config.example.yaml`](https://github.com/your-org/deltallm/blob/main/config.example.yaml) for a complete annotated example.
+See [`config.example.yaml`](https://github.com/deltawi/deltallm/blob/main/config.example.yaml) for a complete sample.
 
-## Backward Compatibility
+## Compatibility Note
 
-Config files using the legacy `litellm_params` and `litellm_settings` keys are still accepted. DeltaLLM automatically maps them to their `deltallm_*` equivalents.
+Legacy `litellm_params` and `litellm_settings` keys are still accepted. DeltaLLM maps them to the `deltallm_*` names automatically.

@@ -1,40 +1,76 @@
 # Prompt Registry
 
-Prompt Registry manages prompts as first-class versioned assets.
+Prompt Registry manages prompts as versioned runtime assets.
+
+Use it when you want prompts to be treated like managed configuration instead of hardcoded strings in applications.
 
 ![Prompt Registry List](images/prompt-registry-list.png)
 
 ![Prompt Template Detail](images/prompt-template-detail.png)
 
-## Recommended flow
+## Quick Success Workflow
 
-1. Create the prompt shell
-2. Write the system prompt
-3. Declare the required variables
-4. Register a stable label such as `production`
-5. Run a render test before rollout
+1. Create a prompt template
+2. Add the first version of the template body
+3. Define the variables it expects
+4. Publish or label the version you want to use
+5. Bind that prompt from a consuming surface such as a route group
 
-The detail page is intentionally structured in that order.
+## What the Registry Owns
 
-## What the registry owns
+The registry owns:
 
-- Prompt identity (`template_key`)
-- Immutable prompt versions
-- Stable labels that move between versions
-- Render validation and history
+- prompt identity through `template_key`
+- immutable prompt versions
+- stable labels such as `production`
+- render and resolution testing
+- binding records at supported scopes
 
-## What the registry does not own
+## What the Registry Does Not Own
 
-Prompt binding belongs to the consuming surface.
+The registry defines the prompt itself, but it does not decide live traffic on its own.
 
-For example, a route group binds a prompt from the [Route Groups](route-groups.md) page rather than from the prompt detail page. This keeps ownership clear:
+In practice:
 
-- **Prompt Registry** defines what the prompt is
-- **Route Groups** decide where it applies
+- Prompt Registry defines the prompt
+- Route Groups or other supported scopes decide where it applies
 
-## Versioning and testing
+## Why Versions and Labels Both Exist
 
-- Versions are immutable once created
-- Labels provide a stable reference for rollout
-- Dry-run render validates the required variables and shows the resolved prompt body
-- History is the place to review older versions and compare changes
+- a version is immutable and good for review
+- a label is movable and good for rollout
+
+This gives operators a stable promotion flow:
+
+1. create a new version
+2. test it
+3. move a label such as `production`
+4. let the bound consumer resolve the new labeled version
+
+## Validation and Safety
+
+The prompt registry validates template keys and rejects secret-like content in template bodies before they are saved.
+
+It also supports:
+
+- render previews
+- resolution previews
+- binding inspection
+
+## Related API Surface
+
+The backend exposes endpoints for:
+
+- templates
+- versions
+- labels
+- bindings
+- render preview
+- resolution preview
+
+See [Admin Endpoints](../api/admin.md) for the prompt-registry API reference.
+
+## Related Pages
+
+- [Route Groups](route-groups.md)
+- [Admin API reference](../api/admin.md)

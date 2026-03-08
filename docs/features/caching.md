@@ -1,8 +1,13 @@
 # Caching
 
-DeltaLLM can cache LLM responses to reduce latency and costs for repeated or similar requests.
+DeltaLLM can cache repeat requests to reduce latency and provider cost.
 
-## Enabling Cache
+## Quick Success Path
+
+1. Turn caching on
+2. Start with the in-memory backend
+3. Send the same request twice
+4. Check `x-deltallm-cache-hit` in the response headers
 
 ```yaml
 general_settings:
@@ -12,11 +17,26 @@ general_settings:
   cache_max_size: 10000
 ```
 
-## Cache Backends
+## What Gets Cached
 
-### Memory Cache
+The cache middleware is currently applied to these POST endpoints:
 
-In-process cache with LRU eviction. No external dependencies required.
+- `/v1/chat/completions`
+- `/v1/completions`
+- `/v1/responses`
+- `/v1/embeddings`
+
+Streaming cache replay is currently supported only for `/v1/chat/completions`.
+
+## Choose a Backend
+
+| Backend | Best for | Notes |
+|---------|----------|-------|
+| `memory` | Local development or a single instance | No external dependency |
+| `redis` | Shared cache across multiple instances | Best production default |
+| `s3` | Long-lived object-backed cache | Use when you need object storage instead of RAM or Redis |
+
+### Memory
 
 ```yaml
 general_settings:
@@ -24,63 +44,83 @@ general_settings:
   cache_max_size: 10000
 ```
 
-Best for single-instance deployments or development.
-
-### Redis Cache
-
-Distributed cache shared across multiple DeltaLLM instances.
+### Redis
 
 ```yaml
 general_settings:
   cache_backend: redis
-  redis_host: localhost
-  redis_port: 6379
+  redis_url: os.environ/REDIS_URL
 ```
 
-Best for production multi-instance deployments.
-
-### S3 Cache
-
-Long-term cache storage using S3-compatible object storage.
+### S3
 
 ```yaml
 general_settings:
   cache_backend: s3
 ```
 
-Configure S3 settings in `deltallm_settings.callback_settings.s3`.
+When you use `s3`, also configure the S3 callback settings under `deltallm_settings.callback_settings.s3`.
 
-## Cache Key Composition
+## How Cache Keys Work
 
-Cache keys are generated from:
+DeltaLLM builds cache keys from:
 
-- The model name
-- The complete message payload
-- Relevant request parameters (temperature, max_tokens, etc.)
+- the full request payload
+- the target model
+- relevant request parameters
+- an optional custom cache key
+- the authenticated request scope
 
-Two identical requests produce the same cache key and return the cached response.
+This means two different API keys do not share cache entries by default.
 
-## Cache Headers
+## Verify Cache Hits
 
-Cached responses include headers to indicate a cache hit:
+Cached responses include:
 
-| Header | Description |
-|--------|-------------|
-| `x-deltallm-cache-hit` | `true` if the response was served from cache |
-| `x-deltallm-cache-key` | The cache key used for this request |
+| Header | Meaning |
+|--------|---------|
+| `x-deltallm-cache-hit` | `true` when the response came from cache |
+| `x-deltallm-cache-key` | The cache key used for this response |
 
-## Per-Request Cache Control
+## Control Caching Per Request
 
-Clients can control caching on a per-request basis using metadata:
+### Disable or Relax Caching Through Metadata
 
 ```json
 {
   "model": "gpt-4o-mini",
   "messages": [{"role": "user", "content": "Hello"}],
   "metadata": {
-    "cache": {
-      "no-cache": true
-    }
+    "cache": "no-cache",
+    "cache_ttl": 120,
+    "cache_key": "my-shared-key"
   }
 }
 ```
+
+Supported request-level controls:
+
+- `metadata.cache: false` skips cache lookup and cache write
+- `metadata.cache: "no-cache"` skips lookup but allows a fresh write
+- `metadata.cache: "no-store"` allows lookup but skips write
+- `metadata.cache_ttl` overrides TTL
+- `metadata.cache_key` provides a custom logical key
+
+### Use HTTP Headers
+
+The cache middleware also reads:
+
+- `Cache-Control: no-cache`
+- `Cache-Control: no-store`
+- `Cache-TTL: <seconds>`
+
+## Advanced Notes
+
+- Cache accounting still updates request, usage, and spend metrics on cache hits
+- Budget enforcement and auth still happen before a cached response is returned
+- If caching is disabled globally, request-level cache metadata has no effect
+
+## Related Pages
+
+- [Observability](observability.md)
+- [Configuration Reference](../configuration/general.md)

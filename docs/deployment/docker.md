@@ -13,9 +13,11 @@ services:
   deltallm:
     build: .
     ports:
-      - "5000:5000"
+      - "4000:4000"
     environment:
       - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/deltallm
+      - REDIS_URL=redis://redis:6379/0
+      - DELTALLM_CONFIG_PATH=/app/config/config.yaml
       - DELTALLM_MASTER_KEY=${DELTALLM_MASTER_KEY}
       - DELTALLM_SALT_KEY=${DELTALLM_SALT_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -27,10 +29,10 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./config.yaml:/app/config.yaml:ro
+      - ./config.yaml:/app/config/config.yaml:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health/liveliness"]
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -99,4 +101,4 @@ docker compose pull
 docker compose up -d --build
 ```
 
-The database schema is automatically migrated on startup.
+The application container runs the shared database bootstrap script on startup before launching the API. It prefers `prisma migrate deploy` and falls back to `prisma db push` for legacy or unbaselined databases.

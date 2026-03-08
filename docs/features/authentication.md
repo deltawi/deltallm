@@ -1,12 +1,27 @@
 # Authentication & SSO
 
-DeltaLLM supports multiple authentication methods that can be used independently or combined.
+DeltaLLM supports API authentication, browser-based admin sessions, MFA, SSO, and RBAC.
 
-## Authentication Methods
+## Choose the Simplest Working Method
 
-### Master Key
+| Need | Start with |
+|------|------------|
+| Call the proxy API quickly | Master key |
+| Give an app limited access | Virtual API key |
+| Sign in to the Admin UI | Bootstrap admin account |
+| Use company identity | SSO |
 
-The simplest auth method. Set a master key in your config and pass it as a Bearer token:
+## Quick Success Path
+
+1. Set a valid `DELTALLM_MASTER_KEY`
+2. Start the gateway
+3. Use the master key to make one successful API call
+4. Create a scoped virtual API key for real applications
+5. Add session login, MFA, or SSO only when you need them
+
+## Master Key
+
+The master key is the fastest way to get started. It has full access to proxy and admin endpoints.
 
 ```yaml
 general_settings:
@@ -15,43 +30,46 @@ general_settings:
 
 ```bash
 curl http://localhost:8000/v1/chat/completions \
-  -H "Authorization: Bearer sk-your-master-key" \
+  -H "Authorization: Bearer YOUR_MASTER_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
-The master key has full access to all endpoints, including admin operations.
+## Virtual API Keys
 
-### Virtual API Keys
-
-Create scoped keys with budgets and rate limits through the admin UI or API. Virtual keys are hashed and stored in the database.
+Virtual keys are the right choice for applications because they can be scoped and limited.
 
 ```bash
 curl -X POST http://localhost:8000/ui/api/keys \
-  -H "Authorization: Bearer MASTER_KEY" \
+  -H "Authorization: Bearer YOUR_MASTER_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"key_name": "production-app", "max_budget": 50.00, "models": ["gpt-4o-mini"]}'
+  -d '{
+    "key_name": "production-app",
+    "max_budget": 50.00,
+    "models": ["gpt-4o-mini"]
+  }'
 ```
 
-#### Key Rotation, Revocation, and Auth Cache
+Virtual keys can include:
 
-DeltaLLM caches API key authentication lookups in Redis using a per-key cache entry (`key:{token_hash}`).
+- model allowlists
+- spend limits
+- RPM and TPM limits
+- team or organization ownership
 
-- **Regenerate** (`POST /ui/api/keys/{token_hash}/regenerate`) replaces the stored key hash in-place and invalidates the old key cache entry immediately.
-- **Revoke** (`POST /ui/api/keys/{token_hash}/revoke`) deletes the key record and invalidates that key cache entry immediately.
-- **Delete** (`DELETE /ui/api/keys/{token_hash}`) deletes the key record and invalidates that key cache entry immediately.
+### Rotation and Revocation
 
-Invalidation is targeted to the affected key only; DeltaLLM does not flush unrelated Redis cache data for key lifecycle operations.
+DeltaLLM stores virtual keys hashed in the database and caches auth lookups in Redis.
 
-### Session-Based Login
+- regenerate replaces the current key and invalidates the old cache entry
+- revoke removes the key and invalidates that cache entry
+- delete removes the key record and invalidates that cache entry
 
-The admin UI uses session-based authentication with email and password. On login, a secure `deltallm_session` cookie is set.
+## Session-Based Login for the Admin UI
 
-![Login Page](../admin-ui/images/login.png)
+The Admin UI uses a secure `deltallm_session` cookie.
 
-#### Bootstrap Admin Account
-
-Set the initial admin credentials in your config:
+To create the first admin account, set:
 
 ```yaml
 general_settings:
@@ -59,42 +77,42 @@ general_settings:
   platform_bootstrap_admin_password: os.environ/ADMIN_PASSWORD
 ```
 
-The admin account is created on first startup.
+That bootstrap account is created automatically on first startup when both values are present.
 
-#### Force Password Change
+### Login Endpoint
 
-New accounts can be flagged to require a password change on first login:
-
+```text
+POST /auth/internal/login
 ```
+
+The login response sets the session cookie used by the UI.
+
+### Password Change
+
+```text
 POST /auth/internal/change-password
-{
-  "current_password": "temporary",
-  "new_password": "secure-new-password"
-}
 ```
 
-### Multi-Factor Authentication (MFA)
+Use this when an account is marked to change its password after first login.
 
-Users can enroll in TOTP-based MFA for additional security.
+## Multi-Factor Authentication
 
-1. **Start enrollment**: `POST /auth/mfa/enroll/start` — returns a TOTP secret and QR code URI
-2. **Confirm enrollment**: `POST /auth/mfa/enroll/confirm` — verify with a TOTP code to activate
-3. **Login with MFA**: Include the `mfa_code` field in the login request
+DeltaLLM supports TOTP-based MFA for session logins.
 
-## Single Sign-On (SSO)
+1. `POST /auth/mfa/enroll/start`
+2. `POST /auth/mfa/enroll/confirm`
+3. Include `mfa_code` during `/auth/internal/login`
 
-DeltaLLM supports SSO with multiple identity providers.
+## Single Sign-On
 
-### Supported Providers
+DeltaLLM supports:
 
-| Provider | Config Value | Notes |
-|----------|-------------|-------|
-| Microsoft Entra (Azure AD) | `microsoft` | Uses Microsoft identity platform |
-| Google Workspace | `google` | Uses Google OAuth 2.0 |
-| Okta | `okta` | Uses Okta OIDC |
-| Generic OIDC | `oidc` | Any OpenID Connect provider |
+- Microsoft Entra
+- Google
+- Okta
+- generic OIDC
 
-### SSO Configuration
+### Minimal SSO Configuration
 
 ```yaml
 general_settings:
@@ -106,64 +124,54 @@ general_settings:
   sso_token_url: https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token
   sso_userinfo_url: https://graph.microsoft.com/oidc/userinfo
   sso_redirect_uri: https://your-domain.com/auth/callback
-  sso_scope: "openid email profile"
-  sso_admin_email_list:
-    - admin@company.com
 ```
 
-### SSO Flow
+### How the SSO Flow Works
 
-1. User clicks "Sign in with SSO" on the login page
-2. Redirected to the identity provider for authentication
-3. After authentication, redirected back to `/auth/callback`
-4. DeltaLLM validates the token, creates/links the account, and sets a session cookie
-5. User is redirected to the dashboard
+1. The user starts login from the UI
+2. DeltaLLM redirects to the identity provider
+3. The provider redirects back to `/auth/callback`
+4. DeltaLLM creates or updates the platform account and sets a session cookie
 
-### Admin Auto-Assignment
+### Auto-Assign Platform Admins
 
-Emails listed in `sso_admin_email_list` are automatically assigned the `platform_admin` role on their first SSO login.
+Add emails to `sso_admin_email_list` to grant `platform_admin` on first SSO login.
 
-## Role-Based Access Control (RBAC)
+## Role-Based Access Control
 
-DeltaLLM uses a three-level RBAC hierarchy:
+DeltaLLM separates platform roles, organization roles, and team roles.
 
 ### Platform Roles
 
-| Role | Description |
-|------|-------------|
-| `platform_admin` | Full access to all resources and settings |
-| `org_user` | Access scoped to assigned organizations only |
+| Role | Meaning |
+|------|---------|
+| `platform_admin` | Full platform access |
+| `org_user` | Access limited to assigned organizations |
 
 ### Organization Roles
 
-| Role | Permissions |
-|------|-------------|
-| `org_owner` | Full org management (includes audit log access via `Permission.AUDIT_READ`) |
-| `org_admin` | Manage teams, keys, and users within org (includes audit log access via `Permission.AUDIT_READ`) |
-| `org_billing` | View keys and spend data (no audit log access) |
-| `org_auditor` | Read-only access to keys and users (no audit log access) |
-| `org_member` | Basic membership |
+| Role | Typical access |
+|------|----------------|
+| `org_owner` | Full organization control |
+| `org_admin` | Manage teams, users, and keys |
+| `org_billing` | Spend-focused visibility |
+| `org_auditor` | Read-only operational visibility |
+| `org_member` | Basic organization membership |
 
 ### Team Roles
 
-| Role | Permissions |
-|------|-------------|
-| `team_admin` | Manage team members and keys |
-| `team_developer` | Create and use API keys |
+| Role | Typical access |
+|------|----------------|
+| `team_admin` | Manage the team and its keys |
+| `team_developer` | Use and create keys |
 | `team_viewer` | Read-only access |
 
-### User Profile Types (Non-RBAC)
+### Important Note on `user_role`
 
-`deltallm_usertable.user_role` is treated as a user profile type label for UI/member management metadata, not as an authorization source of truth.
+`deltallm_usertable.user_role` is metadata for user profile types in the UI. It is not the main authorization source of truth.
 
-Canonical values are:
-- `internal_user`
-- `internal_user_viewer`
-- `team_admin`
+## Related Pages
 
-### Scope Resolution
-
-- **Platform admins** see all resources across the entire platform
-- **Org users** see only organizations, teams, keys, and users within their assigned organizations
-- Audit log read access is limited to org users with `org_owner` or `org_admin` memberships (or `platform_admin`).
-- Resources are filtered automatically based on the user's role and assignments
+- [Admin UI](../admin-ui/index.md)
+- [API Reference](../api/index.md)
+- [Rate Limiting](rate-limiting.md)

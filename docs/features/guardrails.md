@@ -1,12 +1,17 @@
 # Guardrails
 
-DeltaLLM includes a guardrail framework for content safety, running checks before or after LLM calls.
+Guardrails let DeltaLLM inspect requests or responses and block, warn, or sanitize content before it reaches the client.
 
-## Built-in Guardrails
+## Quick Path
 
-### Presidio PII Detection
+For a fast first rollout:
 
-Detects and optionally anonymizes personally identifiable information (PII) in requests.
+1. Start with one pre-call guardrail
+2. Keep `default_on: true` so it protects every request
+3. Use `default_action: block` for strict enforcement or `warn` while evaluating impact
+4. Add scoped overrides later for specific organizations, teams, or API keys
+
+Example with built-in PII detection:
 
 ```yaml
 deltallm_settings:
@@ -23,21 +28,28 @@ deltallm_settings:
           - EMAIL_ADDRESS
           - PHONE_NUMBER
           - US_SSN
-          - CREDIT_CARD
 ```
 
-| Setting | Description |
-|---------|-------------|
-| `mode` | `pre_call` (check input) or `post_call` (check output) |
-| `default_on` | Apply to all requests by default |
-| `default_action` | `block` (reject request) or `warn` (log only) |
-| `anonymize` | Replace PII with placeholders instead of blocking |
-| `threshold` | Confidence threshold (0.0-1.0) for entity detection |
-| `entities` | List of PII entity types to detect |
+## Built-In Guardrails
+
+DeltaLLM currently ships with two built-in guardrail integrations.
+
+### Presidio PII Detection
+
+Use this when you want to detect or redact sensitive personal data in prompts or outputs.
+
+Common settings:
+
+- `mode`: `pre_call`, `post_call`, or `during_call`
+- `default_on`: enable by default for all traffic
+- `default_action`: `block` or `warn`
+- `anonymize`: replace detected PII instead of failing the request
+- `threshold`: detection confidence threshold
+- `entities`: specific PII types to inspect
 
 ### Lakera Prompt Injection
 
-Detects prompt injection attacks using the Lakera Guard API.
+Use this when you want to detect prompt injection or jailbreak-style content.
 
 ```yaml
 deltallm_settings:
@@ -53,68 +65,75 @@ deltallm_settings:
         fail_open: false
 ```
 
-| Setting | Description |
-|---------|-------------|
-| `api_key` | Lakera Guard API key |
-| `threshold` | Score threshold for blocking (0.0-1.0) |
-| `fail_open` | If `true`, allow requests when Lakera is unreachable |
+Common settings:
 
-## Managing Guardrails in the Admin UI
+- `api_key`: Lakera Guard API key
+- `threshold`: score threshold for blocking
+- `fail_open`: allow traffic through if the external guardrail service is unavailable
 
-The Guardrails page lets you configure content safety policies and manage scoped assignments through the web interface.
+## How Scope Resolution Works
+
+Guardrails can be assigned at these levels:
+
+```text
+Global -> Organization -> Team -> API Key
+```
+
+DeltaLLM starts with the global default set, then applies scoped changes from top to bottom.
+
+Each scope can use one of two modes:
+
+| Mode | Meaning |
+| --- | --- |
+| `inherit` | Start from the parent scope, then add or remove guardrails |
+| `override` | Replace the parent result with the local list |
+
+This makes it easy to keep one safe platform default while giving a specific team or key a narrower or broader policy.
+
+## Admin UI and Admin API
+
+The [Guardrails](../admin-ui/guardrails.md) page is the easiest way to manage policy. The same capability is available through the admin API and requires platform-admin access.
 
 ![Guardrails Page](../admin-ui/images/guardrails.png)
 
-## Scoped Guardrail Assignments
-
-Guardrails can be assigned at different scope levels, allowing fine-grained control over which guardrails apply to specific organizations, teams, or API keys.
-
-### Scope Hierarchy
-
-```
-Global → Organization → Team → API Key
-```
-
-Each scope can either **inherit** from its parent or **override** with its own configuration.
-
-### Assignment Modes
-
-| Mode | Behavior |
-|------|----------|
-| `inherit` | Use parent scope's guardrails plus any additions |
-| `override` | Replace parent scope's guardrails entirely |
-
-### Managing Scoped Assignments
-
-Use the admin API to manage guardrail assignments:
+Read a scoped assignment:
 
 ```bash
-# Set guardrails for an organization
-curl -X PUT http://localhost:8000/ui/api/guardrails/scope/organization/org-123 \
-  -H "Authorization: Bearer MASTER_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "mode": "override",
-    "include": ["presidio-pii"],
-    "exclude": ["lakera-prompt-injection"]
-  }'
-
-# View current assignments
 curl http://localhost:8000/ui/api/guardrails/scope/organization/org-123 \
-  -H "Authorization: Bearer MASTER_KEY"
-
-# Remove scope assignment (reverts to inherit)
-curl -X DELETE http://localhost:8000/ui/api/guardrails/scope/organization/org-123 \
-  -H "Authorization: Bearer MASTER_KEY"
+  -H "Authorization: Bearer YOUR_MASTER_KEY"
 ```
 
-### Resolution Order
+Set a scoped assignment:
 
-When a request arrives, DeltaLLM resolves the active guardrails by walking up the scope chain:
+```bash
+curl -X PUT http://localhost:8000/ui/api/guardrails/scope/organization/org-123 \
+  -H "Authorization: Bearer YOUR_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "guardrails_config": {
+      "mode": "inherit",
+      "include": ["presidio-pii"],
+      "exclude": []
+    }
+  }'
+```
 
-1. Check the API key's guardrail config
-2. If inheriting, check the team's config
-3. If inheriting, check the organization's config
-4. If inheriting, use the global config
+Remove a scoped assignment:
 
-The first scope with `override` mode stops the chain and uses only its configuration.
+```bash
+curl -X DELETE http://localhost:8000/ui/api/guardrails/scope/organization/org-123 \
+  -H "Authorization: Bearer YOUR_MASTER_KEY"
+```
+
+## Advanced Notes
+
+- If no org, team, or key override exists, DeltaLLM uses only the global defaults marked `default_on: true`.
+- A key can still use a direct guardrail list, but scoped config is the clearer long-term pattern.
+- Guardrail violations are returned as structured proxy errors, including the guardrail name.
+- Use `warn` during rollout if you want visibility before enforcement.
+
+## Related Pages
+
+- [Admin UI: Guardrails](../admin-ui/guardrails.md)
+- [Admin Endpoints](../api/admin.md)
+- [Authentication & SSO](authentication.md)
