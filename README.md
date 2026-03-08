@@ -31,7 +31,6 @@ An open-source LLM gateway and proxy that provides a unified OpenAI-compatible A
 ```bash
 git clone https://github.com/deltawi/deltallm.git
 cd deltallm
-git checkout v2-revamp
 ```
 
 ### 2. Set up the backend
