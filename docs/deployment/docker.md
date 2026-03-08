@@ -70,12 +70,21 @@ Create a `.env` file alongside `docker-compose.yml`:
 
 ```bash
 POSTGRES_PASSWORD=strong-random-password
-DELTALLM_MASTER_KEY=sk-your-production-master-key
-DELTALLM_SALT_KEY=random-salt-string
+DELTALLM_MASTER_KEY=replace-me
+DELTALLM_SALT_KEY=replace-me
 OPENAI_API_KEY=sk-...
 ADMIN_EMAIL=admin@company.com
 ADMIN_PASSWORD=initial-admin-password
 ```
+
+Generate working values for the master key and salt key with:
+
+```bash
+python3 -c 'import secrets; print("DELTALLM_MASTER_KEY=sk-" + secrets.token_hex(20) + "A1")'
+python3 -c 'import secrets; print("DELTALLM_SALT_KEY=" + secrets.token_hex(32))'
+```
+
+The generated master key always satisfies DeltaLLM's validator: it is longer than 32 characters and includes both letters and numbers.
 
 ## Starting
 

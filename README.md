@@ -68,6 +68,13 @@ Set required environment variables:
 export DELTALLM_CONFIG_PATH=./config.yaml
 ```
 
+Generate a valid master key and salt key before you start. These commands always produce values that satisfy DeltaLLM's startup requirements:
+
+```bash
+export DELTALLM_MASTER_KEY="$(python3 -c 'import secrets; print(\"sk-\" + secrets.token_hex(20) + \"A1\")')"
+export DELTALLM_SALT_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+```
+
 Edit `config.yaml` and set the values under `general_settings`. You can either hardcode them or reference environment variables with the `os.environ/VAR_NAME` syntax:
 
 ```yaml
@@ -90,8 +97,6 @@ For Redis, you can provide either `redis_url` (recommended) or `redis_host` + `r
 If using environment variable references, export them before starting:
 
 ```bash
-export DELTALLM_MASTER_KEY="sk-your-master-key"
-export DELTALLM_SALT_KEY="your-random-salt-key"
 export DATABASE_URL="postgresql://user:pass@localhost:5432/deltallm"
 ```
 
@@ -174,10 +179,19 @@ DeltaLLM will be available at `http://localhost`.
 Create a `.env` file in the project root. These are passed into the container and referenced by `config.yaml`:
 
 ```env
-DELTALLM_OPENAI_API_KEY=sk-your-openai-key
-DELTALLM_MASTER_KEY=sk-your-master-key
-DELTALLM_SALT_KEY=your-random-salt-key
+OPENAI_API_KEY=sk-your-openai-key
+DELTALLM_MASTER_KEY=replace-me
+DELTALLM_SALT_KEY=replace-me
 ```
+
+Generate working values for the master key and salt key with:
+
+```bash
+python3 -c 'import secrets; print("DELTALLM_MASTER_KEY=sk-" + secrets.token_hex(20) + "A1")'
+python3 -c 'import secrets; print("DELTALLM_SALT_KEY=" + secrets.token_hex(32))'
+```
+
+The generated master key always exceeds 32 characters and always contains both letters and numbers.
 
 The `docker-compose.yaml` automatically sets `DATABASE_URL` and `REDIS_URL` to point at the companion PostgreSQL and Redis containers. You do not need to configure those.
 
@@ -189,7 +203,7 @@ Mount your own config file:
 docker compose --profile single up -d
 ```
 
-By default, `config.example.yaml` is mounted as the config. To use a custom config, update the volume mount in `docker-compose.yaml`:
+By default, `config.yaml` is mounted as the config:
 
 ```yaml
 volumes:
