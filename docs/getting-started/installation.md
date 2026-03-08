@@ -1,111 +1,206 @@
 # Installation
 
-## Prerequisites
+Use this guide to run DeltaLLM locally for development, evaluation, or contribution. It covers the backend API, PostgreSQL schema, optional Redis, and the admin UI.
+
+## Choose your path
+
+- Use [Docker Compose](docker.md) if you want the fastest working setup with PostgreSQL and Redis included.
+- Use this page if you want a full local installation for development, debugging, or contributing.
+
+!!! tip "Most developers should start with Docker Compose"
+    The Docker setup is the quickest route to a working DeltaLLM instance. This page is intentionally focused on the manual local install path.
+
+## Requirements
+
+Before you begin, make sure you have:
 
 - Python 3.11 or later
 - Node.js 20 or later
-- PostgreSQL database
-- Redis server (optional — enables distributed caching and rate limiting)
+- PostgreSQL 15 or later
+- Redis 7 or later (optional for local development, recommended for production)
+- At least one provider API key such as OpenAI, Anthropic, Azure OpenAI, or Groq
 
-## Clone the Repository
+## 1. Clone the repository
 
 ```bash
-git clone https://github.com/your-org/deltallm.git
+git clone https://github.com/deltawi/deltallm.git
 cd deltallm
-git checkout v2-revamp
 ```
 
-## Backend Setup
+## 2. Install backend dependencies
 
-### 1. Install Python Dependencies
+The project includes a `uv.lock` file, so `uv` is the recommended installer.
+
+=== "uv (recommended)"
+
+    ```bash
+    uv sync --dev
+    ```
+
+=== "pip"
+
+    ```bash
+    python3 -m venv .venv
+    source .venv/bin/activate
+    pip install -r requirements.txt
+    ```
+
+!!! note
+    The backend commands below use `uv run ...`. If you installed with `pip`, run the same commands without the `uv run` prefix.
+
+## 3. Configure environment variables
+
+Create an empty PostgreSQL database first, then export the variables DeltaLLM needs to start.
 
 ```bash
-pip install -r requirements.txt
+export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/deltallm"
+export DELTALLM_MASTER_KEY="sk-local-1234567890abcdefghijklmnop"
+export DELTALLM_SALT_KEY="$(openssl rand -hex 32)"
+export OPENAI_API_KEY="sk-your-provider-key"
+export PLATFORM_BOOTSTRAP_ADMIN_EMAIL="admin@example.com"
+export PLATFORM_BOOTSTRAP_ADMIN_PASSWORD="ChangeMe123!"
 ```
 
-### 2. Set Up the Database
+!!! warning
+    `DELTALLM_MASTER_KEY` must be at least 32 characters long and include both letters and numbers.
 
-Set the `DATABASE_URL` environment variable to your PostgreSQL connection string:
+`OPENAI_API_KEY` is used by the sample model in `config.example.yaml`. If you plan to use a different provider, update `config.yaml` in the next step to match that provider's credentials and base URL.
+
+Redis is optional for local development. If Redis is available, also export:
 
 ```bash
-export DATABASE_URL="postgresql://user:password@localhost:5432/deltallm"
+export REDIS_URL="redis://localhost:6379/0"
 ```
 
-Fetch the Prisma engine binaries and push the schema to the database:
+Without Redis, DeltaLLM can still start locally, but readiness checks may report a degraded status until Redis is configured.
 
-```bash
-python -m prisma py fetch
-python -m prisma db push --schema=prisma/schema.prisma
-```
+## 4. Create your local config
 
-### 3. Configure DeltaLLM
-
-Copy the example configuration:
+Copy the example config and point the application at it:
 
 ```bash
 cp config.example.yaml config.yaml
+export DELTALLM_CONFIG_PATH=./config.yaml
 ```
 
-Edit `config.yaml` with your LLM provider credentials. At minimum, set:
+The example config is ready for a quick local start:
 
-- `general_settings.master_key` — required for API authentication
-- `general_settings.salt_key` — required for API key hashing
-- At least one deployment source:
-  - Recommended: `general_settings.model_deployment_source: db_only` and add models via Admin UI/API after startup
-  - Optional one-time seed: set `model_deployment_bootstrap_from_config: true` with `model_list`, start once, then switch it back to `false`
+- It defines a sample `gpt-4o-mini` deployment
+- It reads secrets from environment variables instead of hardcoding them
+- It uses `model_deployment_source: db_only`, which is the recommended steady-state mode
 
-See the [Configuration Reference](../configuration/index.md) for full details.
+### Choose how to load your first models
 
-### 4. Start Redis (optional)
+For the getting-started flow, model bootstrap is optional:
 
-If you have Redis installed, start it for distributed caching and rate limiting:
+- Recommended for the quickest first request: set `model_deployment_bootstrap_from_config: true` so DeltaLLM seeds the sample `model_list` into the database on first startup.
+- Recommended for steady-state operations: leave it at `false` and create model deployments later from the Admin UI or API.
+
+If you want the quickest path, update `config.yaml` before starting:
+
+```yaml
+general_settings:
+  model_deployment_source: db_only
+  model_deployment_bootstrap_from_config: true
+```
+
+After your first successful startup, you can set `model_deployment_bootstrap_from_config` back to `false`.
+
+If you want to route to a different model or provider, edit `config.yaml` now. See the [model configuration guide](../configuration/models.md) for the full reference.
+
+## 5. Initialize Prisma and create the database schema
+
+Generate the Prisma client artifacts, fetch the required binaries, and create the database tables:
 
 ```bash
-redis-server --daemonize yes
+uv run prisma generate --schema=./prisma/schema.prisma
+uv run prisma py fetch
+uv run prisma db push --schema=./prisma/schema.prisma
 ```
 
-The app works without Redis — it falls back to in-memory caching and rate limiting.
-
-### 5. Start the Backend
+## 6. Start the backend API
 
 ```bash
-python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+uv run uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-## Frontend Setup
+DeltaLLM is now available at `http://localhost:8000`.
 
-### 1. Install Dependencies
+Useful endpoints:
+
+- Liveliness: `http://localhost:8000/health/liveliness`
+- Readiness: `http://localhost:8000/health/readiness`
+- OpenAI-compatible API: `http://localhost:8000/v1`
+
+## 7. Start the admin UI
+
+In a second terminal:
 
 ```bash
 cd ui
-npm install
-```
-
-### 2. Start the Dev Server
-
-```bash
+npm ci
 npm run dev
 ```
 
-The admin UI is available at `http://localhost:5000`. It proxies API requests to the backend on port 8000.
+The admin UI runs at `http://localhost:5000` and proxies API requests to the backend on port `8000`.
 
-## Production Build
+## 8. Verify the installation
 
-For production, build the frontend and let the backend serve it:
+Check that the service is live:
 
 ```bash
-cd ui && npm run build && cd ..
-python -m uvicorn src.main:app --host 0.0.0.0 --port 5000
+curl http://localhost:8000/health/liveliness
 ```
 
-The backend serves the built frontend from `ui/dist/` alongside the API.
+You should receive:
 
-## Environment Variables
+```json
+{
+  "status": "ok"
+}
+```
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `DATABASE_URL` | Yes | PostgreSQL connection string |
-| `DELTALLM_MASTER_KEY` | Yes (or set in config.yaml) | Master API key for admin access |
-| `DELTALLM_SALT_KEY` | Yes (or set in config.yaml) | Salt for hashing API keys |
-| `DELTALLM_CONFIG_PATH` | No | Path to config.yaml (default: `./config.yaml`) |
-| `REDIS_URL` | No | Redis connection string (enables distributed caching and rate limiting) |
+List the available models:
+
+```bash
+curl http://localhost:8000/v1/models \
+  -H "Authorization: Bearer $DELTALLM_MASTER_KEY"
+```
+
+If this list is empty, you likely skipped model bootstrap. Either enable `model_deployment_bootstrap_from_config: true` and restart once, or create a deployment from the Admin UI before sending chat requests.
+
+For complete usage examples after a model is available, continue to [Quick Start](quickstart.md).
+
+Send a test chat completion:
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Authorization: Bearer $DELTALLM_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "messages": [
+      {"role": "user", "content": "Hello from DeltaLLM"}
+    ]
+  }'
+```
+
+## Optional: serve the built UI from the backend
+
+For a single-process local preview, build the UI and let the backend serve it:
+
+```bash
+cd ui
+npm run build
+cd ..
+uv run uvicorn src.main:app --host 0.0.0.0 --port 5000
+```
+
+In this mode, the backend serves both the API and the built frontend on `http://localhost:5000`.
+
+## Next steps
+
+- [Quick Start](quickstart.md)
+- [Configure models and providers](../configuration/models.md)
+- [General settings reference](../configuration/general.md)
+- [Authentication and SSO](../features/authentication.md)

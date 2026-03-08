@@ -1,6 +1,8 @@
 # Quick Start
 
-Get DeltaLLM running and make your first proxied LLM request in under 5 minutes.
+Use the gateway with `curl`, Python, or JavaScript once DeltaLLM is running and at least one model is available.
+
+This page is the main "how do I call the gateway?" guide for first-time users.
 
 ## 1. Start the Gateway
 
@@ -33,6 +35,11 @@ Expected response:
 curl http://localhost:8000/v1/models \
   -H "Authorization: Bearer YOUR_MASTER_KEY"
 ```
+
+!!! note
+    If the response contains no models, either:
+    1. enable `general_settings.model_deployment_bootstrap_from_config: true` in `config.yaml` and restart once, or
+    2. create a model deployment from the Admin UI first.
 
 ## 4. Make a Chat Request
 

@@ -8,15 +8,21 @@ services:
       - "4000:4000"
     environment:
       DELTALLM_CONFIG_PATH: /app/config/config.yaml
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       DELTALLM_OPENAI_API_KEY: ${DELTALLM_OPENAI_API_KEY:-}
       DELTALLM_MASTER_KEY: ${DELTALLM_MASTER_KEY:-}
+      PLATFORM_BOOTSTRAP_ADMIN_EMAIL: ${PLATFORM_BOOTSTRAP_ADMIN_EMAIL:-}
+      PLATFORM_BOOTSTRAP_ADMIN_PASSWORD: ${PLATFORM_BOOTSTRAP_ADMIN_PASSWORD:-}
+      LAKERA_API_KEY: ${LAKERA_API_KEY:-}
+      DELTALLM_S3_BUCKET: ${DELTALLM_S3_BUCKET:-}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       DELTALLM_DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
       DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
       DELTALLM_REDIS_URL: redis://redis:6379/0
       REDIS_URL: redis://redis:6379/0
       DELTALLM_SALT_KEY: ${DELTALLM_SALT_KEY:-change-me}
     volumes:
-      - ./config.example.yaml:/app/config/config.yaml:ro
+      - ./config.yaml:/app/config/config.yaml:ro
     depends_on:
       db:
         condition: service_healthy
@@ -36,8 +42,14 @@ services:
     profiles: ["ha"]
     environment:
       DELTALLM_CONFIG_PATH: /app/config/config.yaml
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       DELTALLM_OPENAI_API_KEY: ${DELTALLM_OPENAI_API_KEY:-}
       DELTALLM_MASTER_KEY: ${DELTALLM_MASTER_KEY:-}
+      PLATFORM_BOOTSTRAP_ADMIN_EMAIL: ${PLATFORM_BOOTSTRAP_ADMIN_EMAIL:-}
+      PLATFORM_BOOTSTRAP_ADMIN_PASSWORD: ${PLATFORM_BOOTSTRAP_ADMIN_PASSWORD:-}
+      LAKERA_API_KEY: ${LAKERA_API_KEY:-}
+      DELTALLM_S3_BUCKET: ${DELTALLM_S3_BUCKET:-}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       DELTALLM_DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
       DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
       DELTALLM_REDIS_URL: redis://redis:6379/0
@@ -45,7 +57,7 @@ services:
       DELTALLM_SALT_KEY: ${DELTALLM_SALT_KEY:-change-me}
       INSTANCE_ID: instance-1
     volumes:
-      - ./config.example.yaml:/app/config/config.yaml:ro
+      - ./config.yaml:/app/config/config.yaml:ro
     depends_on:
       db:
         condition: service_healthy
@@ -59,8 +71,14 @@ services:
     profiles: ["ha"]
     environment:
       DELTALLM_CONFIG_PATH: /app/config/config.yaml
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       DELTALLM_OPENAI_API_KEY: ${DELTALLM_OPENAI_API_KEY:-}
       DELTALLM_MASTER_KEY: ${DELTALLM_MASTER_KEY:-}
+      PLATFORM_BOOTSTRAP_ADMIN_EMAIL: ${PLATFORM_BOOTSTRAP_ADMIN_EMAIL:-}
+      PLATFORM_BOOTSTRAP_ADMIN_PASSWORD: ${PLATFORM_BOOTSTRAP_ADMIN_PASSWORD:-}
+      LAKERA_API_KEY: ${LAKERA_API_KEY:-}
+      DELTALLM_S3_BUCKET: ${DELTALLM_S3_BUCKET:-}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       DELTALLM_DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
       DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
       DELTALLM_REDIS_URL: redis://redis:6379/0
@@ -68,7 +86,7 @@ services:
       DELTALLM_SALT_KEY: ${DELTALLM_SALT_KEY:-change-me}
       INSTANCE_ID: instance-2
     volumes:
-      - ./config.example.yaml:/app/config/config.yaml:ro
+      - ./config.yaml:/app/config/config.yaml:ro
     depends_on:
       db:
         condition: service_healthy

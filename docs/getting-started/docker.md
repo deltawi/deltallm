@@ -11,12 +11,29 @@ Run DeltaLLM with Docker for a quick, reproducible setup.
 
 The project includes a `docker-compose.yaml` with two deployment profiles: **single** (one instance) and **ha** (high availability with load balancing).
 
+## Before You Start
+
+Copy the example config:
+
+```bash
+cp config.example.yaml config.yaml
+```
+
+For the quickest first successful request, set this in `config.yaml` before starting:
+
+```yaml
+general_settings:
+  model_deployment_source: db_only
+  model_deployment_bootstrap_from_config: true
+```
+
+That seeds the sample `model_list` into the database on first startup. After the first successful boot, you can set `model_deployment_bootstrap_from_config` back to `false`.
+
 ### Single instance
 
 The fastest way to get everything running:
 
 ```bash
-cp config.example.yaml config.yaml
 # Edit config.yaml with your API keys and settings
 
 docker compose --profile single up -d
@@ -28,6 +45,8 @@ This starts:
 - Redis 7 cache
 
 DeltaLLM is available at `http://localhost:4000`.
+
+Once a model is available, see [Quick Start](quickstart.md) for `curl`, Python, and JavaScript usage examples.
 
 ### High availability (multi-instance)
 
@@ -45,21 +64,45 @@ This starts:
 
 DeltaLLM is available at `http://localhost`.
 
+Once a model is available, see [Quick Start](quickstart.md) for `curl`, Python, and JavaScript usage examples.
+
 ## Environment Variables
 
-Create a `.env` file in the project root. These are passed into the container and referenced by `config.yaml`:
+Create a `.env` file in the project root.
+
+Required for the sample `config.yaml`:
 
 ```env
 DELTALLM_MASTER_KEY=sk-your-master-key
 DELTALLM_SALT_KEY=your-random-salt-key
-DELTALLM_OPENAI_API_KEY=sk-your-openai-key
+OPENAI_API_KEY=sk-your-openai-key
 ```
 
-The `docker-compose.yaml` automatically sets `DATABASE_URL` and `DELTALLM_REDIS_URL` to point at the companion PostgreSQL and Redis containers. You do not need to configure those.
+Recommended if you want to log into the Admin UI with an initial platform admin account:
+
+```env
+PLATFORM_BOOTSTRAP_ADMIN_EMAIL=admin@example.com
+PLATFORM_BOOTSTRAP_ADMIN_PASSWORD=ChangeMe123!
+```
+
+Optional, only if you enable the related features in `config.yaml`:
+
+```env
+LAKERA_API_KEY=
+DELTALLM_S3_BUCKET=
+REDIS_PASSWORD=
+```
+
+The `docker-compose.yaml` automatically sets these for the bundled services:
+
+- `DATABASE_URL`
+- `REDIS_URL`
+
+You do not need to configure them manually for the default Compose setup.
 
 ## Custom Config
 
-By default, `config.example.yaml` is mounted as the config file inside the container. To use your own config, update the volume mount in `docker-compose.yaml`:
+By default, Compose mounts `./config.yaml` into the container:
 
 ```yaml
 volumes:

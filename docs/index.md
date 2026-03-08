@@ -35,8 +35,9 @@ Your applications use the standard OpenAI SDK — just change the `base_url` to 
 
 ## Quick Links
 
-- [Installation](getting-started/installation.md) — Set up DeltaLLM locally or with Docker
-- [Quick Start](getting-started/quickstart.md) — Get running in under 5 minutes
+- [Docker Compose](getting-started/docker.md) — Fastest way to run DeltaLLM locally
+- [Installation](getting-started/installation.md) — Full local setup for development and contribution
+- [Quick Start](getting-started/quickstart.md) — Use the gateway with curl, Python, and JavaScript
 - [Configuration Reference](configuration/index.md) — Full config.yaml documentation
 - [API Reference](api/index.md) — OpenAI-compatible and admin API endpoints
 - [Admin UI Guide](admin-ui/index.md) — Managing the gateway through the web dashboard
