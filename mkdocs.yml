@@ -1,7 +1,7 @@
 site_name: DeltaLLM Documentation
 site_description: Open-source LLM gateway with unified API, RBAC, guardrails, and observability
 site_url: https://deltallm.readthedocs.io
-repo_url: https://github.com/your-org/deltallm
+repo_url: https://github.com/deltawi/deltallm
 repo_name: deltallm
 
 theme:
@@ -98,4 +98,4 @@ nav:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/your-org/deltallm
+      link: https://github.com/deltawi/deltallm

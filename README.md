@@ -47,11 +47,11 @@ Make sure PostgreSQL is running, then set the `DATABASE_URL` environment variabl
 export DATABASE_URL="postgresql://user:password@localhost:5432/deltallm"
 ```
 
-Fetch the Prisma engine binaries and push the schema to the database:
+Fetch the Prisma engine binaries and run the shared database bootstrap step:
 
 ```bash
 python -m prisma py fetch
-python -m prisma db push --schema=prisma/schema.prisma
+./scripts/bootstrap_db.sh
 ```
 
 ### 4. Configure DeltaLLM
@@ -193,7 +193,7 @@ python3 -c 'import secrets; print("DELTALLM_SALT_KEY=" + secrets.token_hex(32))'
 
 The generated master key always exceeds 32 characters and always contains both letters and numbers.
 
-The `docker-compose.yaml` automatically sets `DATABASE_URL` and `REDIS_URL` to point at the companion PostgreSQL and Redis containers. You do not need to configure those.
+The `docker-compose.yaml` automatically sets `DATABASE_URL` and `REDIS_URL` to point at the companion PostgreSQL and Redis containers. You do not need to configure those. The container also runs the shared database bootstrap script on startup, preferring `prisma migrate deploy` and falling back to `prisma db push` for legacy or unbaselined databases.
 
 ### Custom config with Docker
 
