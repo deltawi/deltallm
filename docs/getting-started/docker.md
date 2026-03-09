@@ -74,6 +74,21 @@ Once a model is available, see [Quick Start](quickstart.md) for `curl`, Python, 
 
 Create a `.env` file in the project root.
 
+!!! warning "Generate the master key and salt key before you start"
+    DeltaLLM will not start with placeholder values such as `change-me`.
+    You must generate both a unique `DELTALLM_MASTER_KEY` and a unique `DELTALLM_SALT_KEY`.
+
+    Copy and run:
+
+    ```bash
+    python3 -c 'import secrets; print("DELTALLM_MASTER_KEY=sk-" + secrets.token_hex(20) + "A1")'
+    python3 -c 'import secrets; print("DELTALLM_SALT_KEY=" + secrets.token_hex(32))'
+    ```
+
+    Then paste the generated values into your `.env` file.
+    `DELTALLM_MASTER_KEY` must be at least 32 characters long and include both letters and numbers.
+    `DELTALLM_SALT_KEY` must be a real secret value and must not be `change-me`.
+
 Required for the sample `config.yaml`:
 
 ```env
