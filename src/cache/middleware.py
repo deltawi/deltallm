@@ -189,7 +189,7 @@ class CacheMiddleware(BaseHTTPMiddleware):
                 response=response,
                 response_data=response_data,
                 cache_key=cache_key,
-                ttl=cache_options.ttl or self.default_ttl,
+                ttl=cache_options.ttl or self._effective_default_ttl(request),
                 model=model,
                 metrics=metrics,
                 endpoint=endpoint,
@@ -222,6 +222,14 @@ class CacheMiddleware(BaseHTTPMiddleware):
 
     def _normalized_headers(self, request: Request) -> dict[str, str]:
         return {k.lower(): v for k, v in request.headers.items()}
+
+    def _effective_default_ttl(self, request: Request) -> int:
+        general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+        configured = getattr(general_settings, "cache_ttl", None)
+        try:
+            return int(configured) if configured is not None else self.default_ttl
+        except (TypeError, ValueError):
+            return self.default_ttl
 
     def _cached_json_response(self, payload: dict[str, Any], cache_key: str) -> JSONResponse:
         response = JSONResponse(status_code=200, content=payload)

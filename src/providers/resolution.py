@@ -39,7 +39,7 @@ PROVIDER_CAPABILITIES: dict[str, set[ModelMode]] = {
     "ollama": {"chat", "embedding"},
 }
 
-PROVIDER_PRESETS: dict[str, dict[str, str]] = {
+PROVIDER_PRESETS: dict[str, dict[str, str | None]] = {
     "openai": {"provider": "openai", "api_base": "https://api.openai.com/v1", "compat": "openai"},
     "anthropic": {"provider": "anthropic", "api_base": "https://api.anthropic.com/v1", "compat": "anthropic"},
     "azure_openai": {"provider": "azure_openai", "api_base": "https://{resource}.openai.azure.com/openai/v1", "compat": "openai"},
@@ -51,6 +51,9 @@ PROVIDER_PRESETS: dict[str, dict[str, str]] = {
     "perplexity": {"provider": "perplexity", "api_base": "https://api.perplexity.ai", "compat": "openai"},
     "gemini": {"provider": "gemini", "api_base": "https://generativelanguage.googleapis.com/v1beta", "compat": "native"},
     "bedrock": {"provider": "bedrock", "api_base": "https://bedrock-runtime.{region}.amazonaws.com", "compat": "native"},
+    "vllm": {"provider": "vllm", "api_base": None, "compat": "openai"},
+    "lmstudio": {"provider": "lmstudio", "api_base": None, "compat": "openai"},
+    "ollama": {"provider": "ollama", "api_base": None, "compat": "openai"},
 }
 
 
@@ -84,8 +87,8 @@ def is_openai_compatible_provider(provider: str) -> bool:
     return (provider or "").strip().lower() in OPENAI_COMPATIBLE_PROVIDERS
 
 
-def provider_presets() -> list[dict[str, str | list[str]]]:
-    items: list[dict[str, str | list[str]]] = []
+def provider_presets() -> list[dict[str, str | None | list[str]]]:
+    items: list[dict[str, str | None | list[str]]] = []
     for key in sorted(PROVIDER_PRESETS.keys()):
         preset = PROVIDER_PRESETS[key]
         items.append(

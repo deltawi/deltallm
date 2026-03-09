@@ -114,7 +114,7 @@ export interface ApiKey {
 
 export interface ProviderPreset {
   provider: string;
-  api_base: string;
+  api_base: string | null;
   compat: string;
   supported_modes: string[];
 }

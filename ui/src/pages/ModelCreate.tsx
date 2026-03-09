@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { models } from '../lib/api';
+import { modelDetailPath } from '../lib/modelRoutes';
 import ModelForm, { EMPTY_FORM, buildModelPayload } from '../components/ModelForm';
 import { ArrowLeft } from 'lucide-react';
 
@@ -16,7 +17,7 @@ export default function ModelCreate() {
       const result = await models.create(payload);
       const deploymentId = result?.deployment_id || result?.id;
       if (deploymentId) {
-        navigate(`/models/${deploymentId}`);
+        navigate(modelDetailPath(deploymentId));
       } else {
         navigate('/models');
       }
