@@ -52,6 +52,20 @@ The project includes a `uv.lock` file, so `uv` is the recommended installer.
 
 Create an empty PostgreSQL database first, then export the variables DeltaLLM needs to start.
 
+!!! warning "Generate the master key and salt key before you start"
+    DeltaLLM will not start with placeholder values such as `change-me`.
+    You must generate both a unique `DELTALLM_MASTER_KEY` and a unique `DELTALLM_SALT_KEY`.
+
+    Copy and run:
+
+    ```bash
+    export DELTALLM_MASTER_KEY="$(python3 -c 'import secrets; print(\"sk-\" + secrets.token_hex(20) + \"A1\")')"
+    export DELTALLM_SALT_KEY="$(openssl rand -hex 32)"
+    ```
+
+    `DELTALLM_MASTER_KEY` must be at least 32 characters long and include both letters and numbers.
+    `DELTALLM_SALT_KEY` must be a real secret value and must not be `change-me`.
+
 ```bash
 export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/deltallm"
 export DELTALLM_MASTER_KEY="sk-local-1234567890abcdefghijklmnop"
@@ -60,9 +74,6 @@ export OPENAI_API_KEY="sk-your-provider-key"
 export PLATFORM_BOOTSTRAP_ADMIN_EMAIL="admin@example.com"
 export PLATFORM_BOOTSTRAP_ADMIN_PASSWORD="ChangeMe123!"
 ```
-
-!!! warning
-    `DELTALLM_MASTER_KEY` must be at least 32 characters long and include both letters and numbers.
 
 `OPENAI_API_KEY` is used by the sample model in `config.example.yaml`. If you plan to use a different provider, update `config.yaml` in the next step to match that provider's credentials and base URL.
 
