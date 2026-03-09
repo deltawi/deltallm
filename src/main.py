@@ -19,18 +19,12 @@ from src.batch.service import BatchService
 from src.batch.storage import LocalBatchArtifactStorage
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
 from src.cache import (
-    CacheKeyBuilder,
     CacheMiddleware,
-    InMemoryBackend,
-    NoopCacheMetrics,
-    PrometheusCacheMetrics,
-    RedisBackend,
-    S3Backend,
-    StreamingCacheHandler,
+    configure_cache_runtime,
 )
 from src.billing import AlertService, BudgetEnforcementService, SpendLedgerService, SpendTrackingService
 from src.callbacks import CallbackManager
-from src.config import AppConfig, get_settings, resolve_salt_key
+from src.config import get_settings, resolve_salt_key
 from src.config_runtime import DynamicConfigManager, ModelHotReloadManager, SecretResolver, build_app_config, load_yaml_dict
 from src.db.client import prisma_manager
 from src.db.repositories import AuditRepository, KeyRepository, ModelDeploymentRepository
@@ -310,28 +304,12 @@ async def lifespan(app: FastAPI):
         deployment_registry=deployment_registry,
         state_backend=state_backend,
     )
-    cache_settings = cfg.general_settings
-    app.state.cache_backend = None
-    app.state.cache_key_builder = None
-    app.state.cache_metrics = NoopCacheMetrics()
-    app.state.streaming_cache_handler = None
-    if cache_settings.cache_enabled:
-        if cache_settings.cache_backend == "memory":
-            cache_backend = InMemoryBackend(max_size=cache_settings.cache_max_size)
-        elif cache_settings.cache_backend == "redis":
-            cache_backend = RedisBackend(redis_client)
-        elif cache_settings.cache_backend == "s3":
-            cache_backend = S3Backend()
-        else:
-            raise ValueError(f"Unsupported cache backend: {cache_settings.cache_backend}")
-
-        app.state.cache_backend = cache_backend
-        app.state.cache_key_builder = CacheKeyBuilder(custom_salt=salt_key)
-        app.state.streaming_cache_handler = StreamingCacheHandler(cache_backend)
-        try:
-            app.state.cache_metrics = PrometheusCacheMetrics(cache_type=cache_settings.cache_backend)
-        except Exception:
-            app.state.cache_metrics = NoopCacheMetrics()
+    configure_cache_runtime(
+        app,
+        app_config=cfg,
+        redis_client=redis_client,
+        salt_key=salt_key,
+    )
 
     async def _deployment_health_check(deployment) -> bool:
         provider = infer_provider(deployment.deltallm_params.get("model"))

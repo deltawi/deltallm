@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import Card from './Card';
 import { MessageSquare, FileText, Image, Mic, Volume2, ArrowUpDown, Plus, X, ChevronDown } from 'lucide-react';
 import ProviderBadge from './ProviderBadge';
 import { useApi } from '../lib/hooks';
 import { models } from '../lib/api';
-import { normalizeProvider } from '../lib/providers';
+import { normalizeProvider, providerDisplayName } from '../lib/providers';
 
 let collapsibleIdCounter = 0;
 
@@ -51,6 +51,7 @@ export const MODE_BADGE_COLORS: Record<string, string> = {
 export interface ModelFormValues {
   mode: ModelMode;
   model_name: string;
+  provider: string;
   model: string;
   api_key: string;
   api_base: string;
@@ -82,6 +83,7 @@ export interface ModelFormValues {
 export const EMPTY_FORM: ModelFormValues = {
   mode: 'chat',
   model_name: '',
+  provider: '',
   model: '',
   api_key: '',
   api_base: '',
@@ -120,10 +122,11 @@ export function strOrEmpty(val: any): string {
 
 export function buildModelPayload(form: ModelFormValues, defaultParams: { key: string; value: string }[]) {
   const deltallm_params: Record<string, any> = {
-    model: form.model,
+    provider: form.provider.trim() || undefined,
+    model: form.model.trim(),
     api_key: form.api_key || undefined,
-    api_base: form.api_base || undefined,
-    api_version: form.api_version || undefined,
+    api_base: form.api_base.trim() || undefined,
+    api_version: form.api_version.trim() || undefined,
     rpm: numOrUndef(form.rpm),
     tpm: numOrUndef(form.tpm),
     timeout: numOrUndef(form.timeout),
@@ -182,16 +185,25 @@ export function buildModelPayload(form: ModelFormValues, defaultParams: { key: s
   }
   model_info.default_params = Object.keys(dp).length > 0 ? dp : {};
 
-  return { model_name: form.model_name, deltallm_params, model_info };
+  return { model_name: form.model_name.trim(), deltallm_params, model_info };
 }
 
 export function formFromModel(model: any): { form: ModelFormValues; defaultParams: { key: string; value: string }[] } {
   const lp = model.deltallm_params || {};
   const mi = model.model_info || {};
+  const explicitProvider = strOrEmpty(lp.provider).trim();
+  const inferredProvider = normalizeProvider(undefined, lp.model);
+  const provider = explicitProvider || (inferredProvider !== 'unknown' ? inferredProvider : '');
+  const normalizedModel = explicitProvider
+    ? strOrEmpty(lp.model)
+    : provider && strOrEmpty(lp.model).startsWith(`${provider}/`)
+      ? strOrEmpty(lp.model).slice(provider.length + 1)
+      : strOrEmpty(lp.model);
   const form: ModelFormValues = {
     mode: (mi.mode || model.mode || 'chat') as ModelMode,
     model_name: model.model_name || '',
-    model: lp.model || '',
+    provider,
+    model: normalizedModel,
     api_key: lp.api_key || '',
     api_base: lp.api_base || '',
     api_version: lp.api_version || '',
@@ -237,6 +249,20 @@ interface ModelFormProps {
 }
 
 const inputClass = "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500";
+type RequiredField = 'model_name' | 'provider' | 'model' | 'api_base';
+
+function inputClasses(hasError = false): string {
+  return `${inputClass} ${hasError ? 'border-red-300 bg-red-50/40 focus:ring-red-500' : ''}`;
+}
+
+function FieldLabel({ label, required = false }: { label: string; required?: boolean }) {
+  return (
+    <label className="mb-1 block text-sm font-medium text-gray-700">
+      {label}
+      {required ? <span className="ml-1 text-red-500">*</span> : null}
+    </label>
+  );
+}
 
 export default function ModelForm({
   initialValues,
@@ -250,30 +276,72 @@ export default function ModelForm({
   const [form, setForm] = useState<ModelFormValues>(initialValues || { ...EMPTY_FORM });
   const [defaultParams, setDefaultParams] = useState<{ key: string; value: string }[]>(initialDefaultParams || []);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<RequiredField, string>>>({});
   const { data: providerPresetResponse } = useApi(() => models.providerPresets(), []);
 
   const mode = form.mode;
-  const inferredProvider = normalizeProvider(undefined, form.model);
   const providerPresets = providerPresetResponse?.data || [];
-  const selectedProviderPreset = providerPresets.find((preset) => preset.provider === inferredProvider);
+  const selectedProviderPreset = providerPresets.find((preset) => preset.provider === form.provider);
 
-  useEffect(() => {
+  const clearValidation = (field?: RequiredField) => {
     if (validationError) setValidationError(null);
-  }, [form.model, mode]);
+    if (field && fieldErrors[field]) {
+      setFieldErrors((current) => {
+        const next = { ...current };
+        delete next[field];
+        return next;
+      });
+    }
+  };
+
+  const applyProvider = (provider: string) => {
+    const preset = providerPresets.find((item) => item.provider === provider);
+    setForm((current) => ({
+      ...current,
+      provider,
+      api_base: preset?.api_base || '',
+    }));
+    clearValidation('provider');
+    clearValidation('api_base');
+  };
 
   const handleSubmit = async () => {
     setValidationError(null);
+    const nextFieldErrors: Partial<Record<RequiredField, string>> = {};
+    const modelName = form.model_name.trim();
+    const provider = form.provider.trim();
+    const upstreamModel = form.model.trim();
+    const apiBase = form.api_base.trim();
+
+    if (!modelName) {
+      nextFieldErrors.model_name = 'Model Name is required.';
+    }
+    if (!provider) {
+      nextFieldErrors.provider = 'Provider is required.';
+    }
+    if (!upstreamModel) {
+      nextFieldErrors.model = 'Provider Model is required.';
+    }
+    if (!apiBase) {
+      nextFieldErrors.api_base = 'API Base URL is required.';
+    }
+    if (Object.keys(nextFieldErrors).length > 0) {
+      setFieldErrors(nextFieldErrors);
+      setValidationError('Fill in the required fields highlighted below.');
+      return;
+    }
+    setFieldErrors({});
     if (selectedProviderPreset && !selectedProviderPreset.supported_modes.includes(mode)) {
       const modeLabel = MODE_OPTIONS.find((m) => m.value === mode)?.label || mode;
       const supported = selectedProviderPreset.supported_modes
         .map((m) => MODE_OPTIONS.find((opt) => opt.value === m)?.label || m)
         .join(', ');
       setValidationError(
-        `Provider "${selectedProviderPreset.provider}" does not support "${modeLabel}". Supported types: ${supported || 'none'}.`,
+        `Provider "${providerDisplayName(selectedProviderPreset.provider)}" does not support "${modeLabel}". Supported types: ${supported || 'none'}.`,
       );
       return;
     }
-    const payload = buildModelPayload(form, defaultParams);
+    const payload = buildModelPayload({ ...form, model_name: modelName, provider, model: upstreamModel, api_base: apiBase }, defaultParams);
     await onSubmit(payload);
   };
 
@@ -304,52 +372,74 @@ export default function ModelForm({
 
       <Card title="Provider Connection">
         <div className="space-y-4">
+          <p className="text-xs text-gray-500">Fields marked <span className="text-red-500">*</span> are required.</p>
+          {validationError ? <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{validationError}</div> : null}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Model Name</label>
-            <input value={form.model_name} onChange={(e) => setForm({ ...form, model_name: e.target.value })} placeholder={mode === 'image_generation' ? 'dall-e-3' : mode === 'audio_speech' ? 'tts-1' : mode === 'audio_transcription' ? 'whisper-1' : mode === 'embedding' ? 'text-embedding-3-large' : mode === 'rerank' ? 'rerank-english-v3' : 'gpt-4o'} className={inputClass} />
+            <FieldLabel label="Model Name" required />
+            <input value={form.model_name} onChange={(e) => { setForm({ ...form, model_name: e.target.value }); clearValidation('model_name'); }} placeholder={mode === 'image_generation' ? 'dall-e-3' : mode === 'audio_speech' ? 'tts-1' : mode === 'audio_transcription' ? 'whisper-1' : mode === 'embedding' ? 'text-embedding-3-large' : mode === 'rerank' ? 'rerank-english-v3' : 'gpt-4o'} className={inputClasses(Boolean(fieldErrors.model_name))} />
+            {fieldErrors.model_name ? <p className="mt-1 text-xs text-red-600">{fieldErrors.model_name}</p> : null}
             <p className="text-xs text-gray-400 mt-1">Public name users will reference in API calls</p>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Provider / Model</label>
-            <input
-              value={form.model}
-              onChange={(e) => setForm({ ...form, model: e.target.value })}
-              placeholder={mode === 'image_generation' ? 'openai/dall-e-3' : mode === 'audio_speech' ? 'openai/tts-1' : mode === 'audio_transcription' ? 'openai/whisper-1' : mode === 'embedding' ? 'openai/text-embedding-3-large' : mode === 'rerank' ? 'cohere/rerank-english-v3.0' : 'openai/gpt-4o'}
-              list="provider-model-presets"
-              className={inputClass}
-            />
+            <FieldLabel label="Provider and Provider Model" required />
+            <div className={`flex overflow-hidden rounded-lg border bg-white focus-within:ring-2 ${fieldErrors.provider || fieldErrors.model ? 'border-red-300 focus-within:ring-red-500' : 'border-gray-300 focus-within:ring-blue-500'}`}>
+              <select
+                value={form.provider}
+                onChange={(e) => applyProvider(e.target.value)}
+                className="w-40 shrink-0 border-r border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:outline-none"
+              >
+                <option value="">Select provider</option>
+                {providerPresets.map((preset) => (
+                  <option key={preset.provider} value={preset.provider}>
+                    {providerDisplayName(preset.provider)}
+                  </option>
+                ))}
+              </select>
+              <input
+                value={form.model}
+                onChange={(e) => { setForm({ ...form, model: e.target.value }); clearValidation('model'); }}
+                placeholder={mode === 'image_generation' ? 'dall-e-3' : mode === 'audio_speech' ? 'tts-1' : mode === 'audio_transcription' ? 'whisper-1' : mode === 'embedding' ? 'text-embedding-3-large' : mode === 'rerank' ? 'rerank-english-v3.0' : 'gpt-4o'}
+                className="min-w-0 flex-1 px-3 py-2 text-sm text-gray-900 focus:outline-none"
+              />
+            </div>
+            {fieldErrors.provider ? <p className="mt-1 text-xs text-red-600">{fieldErrors.provider}</p> : null}
+            {!fieldErrors.provider && fieldErrors.model ? <p className="mt-1 text-xs text-red-600">{fieldErrors.model}</p> : null}
             <div className="mt-2 flex items-center gap-2">
-              <span className="text-xs text-gray-500">Detected provider:</span>
-              <ProviderBadge provider={inferredProvider} />
+              <span className="text-xs text-gray-500">Selected provider:</span>
+              {form.provider ? <ProviderBadge provider={form.provider} model={form.model} /> : <span className="text-xs text-gray-400">Choose a provider first</span>}
             </div>
             {selectedProviderPreset && (
               <p className="text-xs text-gray-500 mt-1">
                 Supported model types: {selectedProviderPreset.supported_modes.join(', ')}
               </p>
             )}
-            <datalist id="provider-model-presets">
-              {providerPresets.map((preset) => (
-                <option key={preset.provider} value={`${preset.provider}/`} />
-              ))}
-            </datalist>
+            <p className="text-xs text-gray-400 mt-1">Enter the upstream model name only. Example for Groq: <code>openai/gpt-oss-120b</code>.</p>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+              <FieldLabel label="API Key" />
               <input type="password" value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })} placeholder="sk-..." className={inputClass} />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">API Base URL</label>
-              <input value={form.api_base} onChange={(e) => setForm({ ...form, api_base: e.target.value })} placeholder="https://api.openai.com/v1" className={inputClass} />
+              <FieldLabel label="API Base URL" required />
+              <input value={form.api_base} onChange={(e) => { setForm({ ...form, api_base: e.target.value }); clearValidation('api_base'); }} placeholder={selectedProviderPreset?.api_base || 'https://your-provider.example/v1'} className={inputClasses(Boolean(fieldErrors.api_base))} />
+              {fieldErrors.api_base ? <p className="mt-1 text-xs text-red-600">{fieldErrors.api_base}</p> : null}
+              <p className="mt-1 text-xs text-gray-400">
+                {selectedProviderPreset?.api_base
+                  ? 'Filled from the selected provider. Override it if your deployment uses a custom endpoint.'
+                  : form.provider
+                    ? 'This provider has no built-in default. You must enter the API base URL.'
+                    : 'Choose a provider to auto-fill its default API base URL when one is available.'}
+              </p>
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">API Version</label>
+              <FieldLabel label="API Version" />
               <input value={form.api_version} onChange={(e) => setForm({ ...form, api_version: e.target.value })} placeholder="e.g. 2024-02-01 (Azure)" className={inputClass} />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Timeout (s)</label>
+              <FieldLabel label="Timeout (s)" />
               <input type="number" value={form.timeout} onChange={(e) => setForm({ ...form, timeout: e.target.value })} placeholder="300" className={inputClass} />
             </div>
           </div>
@@ -564,7 +654,6 @@ export default function ModelForm({
         </div>
       </CollapsibleCard>
 
-      {validationError && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{validationError}</div>}
       {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>}
 
       <div className="flex justify-end gap-3">

@@ -3,7 +3,8 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-from src.config import AppConfig, RouterSettings
+from src.cache import configure_cache_runtime
+from src.config import AppConfig, RouterSettings, resolve_salt_key
 from src.config_runtime.dynamic import DynamicConfigManager
 from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
 from src.db.route_groups import RouteGroupRepository
@@ -122,6 +123,7 @@ class ModelHotReloadManager:
         settings = app.state.settings
 
         app.state.app_config = app_config
+        salt_key = resolve_salt_key(app_config, settings)
         model_registry, _ = await load_model_registry(
             self.model_repository,
             app_config,
@@ -171,6 +173,12 @@ class ModelHotReloadManager:
             callback_settings=app_config.deltallm_settings.callback_settings,
         )
         app.state.turn_off_message_logging = app_config.deltallm_settings.turn_off_message_logging
+        configure_cache_runtime(
+            app,
+            app_config=app_config,
+            redis_client=getattr(app.state, "redis", None),
+            salt_key=salt_key,
+        )
 
     async def _reload_runtime(self) -> None:
         app_config = self.dynamic_config.get_app_config()

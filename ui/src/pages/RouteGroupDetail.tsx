@@ -462,6 +462,7 @@ export default function RouteGroupDetail() {
         />
         <RouteGroupUsageCard
           groupKey={detail.data.group.group_key}
+          mode={form.mode}
           liveTrafficEnabled={detail.data.group.enabled}
           boundPrompt={promptSummary}
         />

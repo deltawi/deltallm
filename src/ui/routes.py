@@ -98,6 +98,56 @@ def _validate_model_config_or_400(model_config: dict[str, Any]) -> None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
+def _normalized_model_payload_or_400(
+    payload: dict[str, Any],
+    *,
+    existing_model_name: str | None = None,
+    existing_params: dict[str, Any] | None = None,
+    existing_model_info: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    model_name = str(payload.get("model_name") or existing_model_name or "").strip()
+    if not model_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="model_name is required")
+
+    raw_params = payload.get("deltallm_params")
+    if raw_params is None:
+        params = dict(existing_params or {})
+    elif isinstance(raw_params, dict):
+        params = dict(raw_params)
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params must be an object")
+
+    provider = str(params.get("provider") or "").strip().lower()
+    model = str(params.get("model") or "").strip()
+    api_base = str(params.get("api_base") or "").strip()
+
+    if not provider:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="provider is required")
+    if not model:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params.model is required")
+    if not api_base:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params.api_base is required")
+
+    params["provider"] = provider
+    params["model"] = model
+    params["api_base"] = api_base
+
+    api_version = params.get("api_version")
+    if api_version is not None:
+        normalized_api_version = str(api_version).strip()
+        params["api_version"] = normalized_api_version or None
+
+    raw_model_info = payload.get("model_info")
+    if raw_model_info is None:
+        model_info = dict(existing_model_info or {})
+    elif isinstance(raw_model_info, dict):
+        model_info = dict(raw_model_info)
+    else:
+        model_info = dict(existing_model_info or {})
+
+    return model_name, params, model_info
+
+
 @ui_router.get("/ui/api/models", dependencies=[Depends(require_authenticated)])
 async def list_models(
     request: Request,
@@ -141,7 +191,7 @@ async def list_provider_presets() -> dict[str, Any]:
     return {"data": provider_presets()}
 
 
-@ui_router.get("/ui/api/models/{deployment_id}", dependencies=[Depends(require_authenticated)])
+@ui_router.get("/ui/api/models/{deployment_id:path}", dependencies=[Depends(require_authenticated)])
 async def get_model(request: Request, deployment_id: str) -> dict[str, Any]:
     health_backend = getattr(request.app.state, "router_state_backend", None)
     entries = _model_entries(request.app)
@@ -159,16 +209,8 @@ async def get_model(request: Request, deployment_id: str) -> dict[str, Any]:
 @ui_router.post("/ui/api/models", dependencies=[Depends(require_master_key)])
 async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     request_start = perf_counter()
-    model_name = str(payload.get("model_name") or "").strip()
-    deltallm_params = payload.get("deltallm_params")
-    if not model_name:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="model_name is required")
-    if not isinstance(deltallm_params, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params must be an object")
-
+    model_name, deltallm_params, model_info = _normalized_model_payload_or_400(payload)
     deployment_id = str(payload.get("deployment_id") or f"{model_name}-{secrets.token_hex(4)}")
-    model_info = payload.get("model_info") if isinstance(payload.get("model_info"), dict) else {}
-
     model_config = {
         "deployment_id": deployment_id,
         "model_name": model_name,
@@ -207,7 +249,7 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
     return response
 
 
-@ui_router.put("/ui/api/models/{deployment_id}", dependencies=[Depends(require_master_key)])
+@ui_router.put("/ui/api/models/{deployment_id:path}", dependencies=[Depends(require_master_key)])
 async def update_model(request: Request, deployment_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     request_start = perf_counter()
     hot_reload: ModelHotReloadManager | None = getattr(request.app.state, "model_hot_reload_manager", None)
@@ -228,9 +270,12 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
     if found_deployment is None or found_model_name is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
 
-    new_model_name = str(payload.get("model_name") or found_model_name)
-    deltallm_params = payload.get("deltallm_params") if isinstance(payload.get("deltallm_params"), dict) else found_deployment.get("deltallm_params", {})
-    model_info = payload.get("model_info") if isinstance(payload.get("model_info"), dict) else found_deployment.get("model_info", {})
+    new_model_name, deltallm_params, model_info = _normalized_model_payload_or_400(
+        payload,
+        existing_model_name=found_model_name,
+        existing_params=found_deployment.get("deltallm_params", {}),
+        existing_model_info=found_deployment.get("model_info", {}),
+    )
     model_config = {
         "deployment_id": deployment_id,
         "model_name": new_model_name,
@@ -281,7 +326,7 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
     return response
 
 
-@ui_router.delete("/ui/api/models/{deployment_id}", dependencies=[Depends(require_master_key)])
+@ui_router.delete("/ui/api/models/{deployment_id:path}", dependencies=[Depends(require_master_key)])
 async def delete_model(request: Request, deployment_id: str) -> dict[str, bool]:
     request_start = perf_counter()
     hot_reload: ModelHotReloadManager | None = getattr(request.app.state, "model_hot_reload_manager", None)

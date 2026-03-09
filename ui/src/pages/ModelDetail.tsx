@@ -1,57 +1,160 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
+import {
+  ArrowLeft,
+  Clock3,
+  DollarSign,
+  Gauge,
+  Layers,
+  Pencil,
+  Server,
+  ShieldCheck,
+  Trash2,
+  type LucideIcon,
+} from 'lucide-react';
 import { useApi } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
 import { models } from '../lib/api';
+import { modelEditPath } from '../lib/modelRoutes';
 import Card from '../components/Card';
+import ModelUsageExamplesCard from '../components/ModelUsageExamplesCard';
 import ProviderBadge from '../components/ProviderBadge';
 import StatusBadge from '../components/StatusBadge';
-import { MODE_OPTIONS, MODE_BADGE_COLORS } from '../components/ModelForm';
-import {
-  ArrowLeft, Pencil, Trash2, MessageSquare, FileText,
-  Server, Gauge, DollarSign, Settings2, Layers
-} from 'lucide-react';
+import { MODE_BADGE_COLORS, MODE_OPTIONS } from '../components/ModelForm';
 
-const MODE_ICON_COLORS: Record<string, string> = {
-  chat: 'bg-blue-50 text-blue-600',
-  embedding: 'bg-purple-50 text-purple-600',
-  image_generation: 'bg-pink-50 text-pink-600',
-  audio_speech: 'bg-green-50 text-green-600',
-  audio_transcription: 'bg-yellow-50 text-yellow-600',
-  rerank: 'bg-orange-50 text-orange-600',
-};
-
-function InfoRow({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) {
-  if (value === null || value === undefined || value === '' || value === 'N/A') return null;
+function MetricTile({
+  icon: Icon,
+  label,
+  value,
+  hint,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: React.ReactNode;
+  hint?: string;
+}) {
   return (
-    <div className="flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-4 py-2.5 border-b border-gray-50 last:border-0">
-      <span className="text-sm text-gray-500 sm:w-44 shrink-0">{label}</span>
-      <span className={`text-sm text-gray-900 ${mono ? 'font-mono bg-gray-50 px-2 py-0.5 rounded' : ''}`}>{value}</span>
+    <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+      <div className="mb-2 flex items-center gap-2">
+        <div className="rounded-lg bg-white p-1.5 text-blue-600 shadow-sm">
+          <Icon className="h-4 w-4" />
+        </div>
+        <span className="text-xs font-medium uppercase tracking-wide text-gray-500">{label}</span>
+      </div>
+      <div className="text-sm font-semibold text-gray-900">{value}</div>
+      {hint ? <div className="mt-1 text-xs text-gray-500">{hint}</div> : null}
     </div>
   );
 }
 
-function DetailSection({ icon: Icon, title, color, children }: { icon: any; title: string; color: string; children: React.ReactNode }) {
+function SectionTitle({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
-    <Card>
-      <div className="p-5">
-        <div className="flex items-center gap-3 mb-4">
-          <div className={`p-2 rounded-lg ${color}`}>
-            <Icon className="w-4 h-4" />
-          </div>
-          <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
-        </div>
-        <div>{children}</div>
-      </div>
-    </Card>
+    <div className="mb-4">
+      <h2 className="text-base font-semibold text-gray-900">{title}</h2>
+      {subtitle ? <p className="mt-1 text-sm text-gray-500">{subtitle}</p> : null}
+    </div>
   );
 }
 
-function formatCost(val: any): string | null {
-  if (val == null) return null;
-  const n = Number(val);
-  if (n === 0) return '$0';
-  if (n < 0.0001) return `$${n.toExponential(2)}`;
-  return `$${n.toFixed(6)}`;
+function FieldGrid({
+  items,
+  columns = 2,
+}: {
+  items: Array<{ label: string; value: React.ReactNode; mono?: boolean }>;
+  columns?: 1 | 2;
+}) {
+  const visible = items.filter((item) => item.value !== null && item.value !== undefined && item.value !== '');
+  if (visible.length === 0) {
+    return <p className="text-sm text-gray-500">Nothing configured.</p>;
+  }
+
+  return (
+    <div className={`grid gap-3 ${columns === 2 ? 'md:grid-cols-2' : 'grid-cols-1'}`}>
+      {visible.map((item) => (
+        <div key={item.label} className="rounded-xl border border-gray-200 bg-white px-4 py-3">
+          <div className="text-xs font-medium uppercase tracking-wide text-gray-500">{item.label}</div>
+          <div className={`mt-1 break-words text-sm text-gray-900 ${item.mono ? 'font-mono text-xs' : ''}`}>{item.value}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function formatInteger(value: unknown): string | null {
+  if (value == null || value === '') return null;
+  const num = Number(value);
+  if (Number.isNaN(num)) return null;
+  return num.toLocaleString();
+}
+
+function formatDurationSeconds(value: unknown): string | null {
+  const formatted = formatInteger(value);
+  return formatted ? `${formatted}s` : null;
+}
+
+function formatCost(value: unknown): string | null {
+  if (value == null || value === '') return null;
+  const num = Number(value);
+  if (Number.isNaN(num)) return null;
+  if (num === 0) return '$0';
+  if (num < 0.0001) return `$${num.toExponential(2)}`;
+  return `$${num.toFixed(6)}`;
+}
+
+function summarizeLimits(rpm: unknown, tpm: unknown): string {
+  const rpmValue = formatInteger(rpm);
+  const tpmValue = formatInteger(tpm);
+  if (!rpmValue && !tpmValue) return 'No limits';
+  if (rpmValue && tpmValue) return `${rpmValue} RPM · ${tpmValue} TPM`;
+  if (rpmValue) return `${rpmValue} RPM`;
+  return `${tpmValue} TPM`;
+}
+
+function primaryCost(mode: string, modelInfo: Record<string, any>): string | null {
+  if (mode === 'image_generation') return formatCost(modelInfo.input_cost_per_image);
+  if (mode === 'audio_speech') return formatCost(modelInfo.input_cost_per_character) || formatCost(modelInfo.input_cost_per_audio_token);
+  if (mode === 'audio_transcription') return formatCost(modelInfo.input_cost_per_second);
+  return formatCost(modelInfo.input_cost_per_token);
+}
+
+function modeSpecificItems(mode: string, model: any): Array<{ label: string; value: string | null }> {
+  const lp = model.deltallm_params || {};
+  const mi = model.model_info || {};
+
+  switch (mode) {
+    case 'chat':
+      return [
+        { label: 'Context Window', value: formatInteger(mi.max_tokens) },
+        { label: 'Max Input Tokens', value: formatInteger(mi.max_input_tokens) },
+        { label: 'Max Output Tokens', value: formatInteger(mi.max_output_tokens) },
+        { label: 'Per Request Cap', value: formatInteger(lp.max_tokens) },
+        { label: 'Stream Timeout', value: formatDurationSeconds(lp.stream_timeout) },
+      ];
+    case 'embedding':
+      return [
+        { label: 'Context Window', value: formatInteger(mi.max_tokens) },
+        { label: 'Vector Size', value: formatInteger(mi.output_vector_size) },
+      ];
+    case 'image_generation':
+      return [{ label: 'Cost / Image', value: formatCost(mi.input_cost_per_image) }];
+    case 'audio_speech':
+      return [
+        { label: 'Cost / Character', value: formatCost(mi.input_cost_per_character) },
+        { label: 'Input Audio Token', value: formatCost(mi.input_cost_per_audio_token) },
+        { label: 'Output Audio Token', value: formatCost(mi.output_cost_per_audio_token) },
+      ];
+    case 'audio_transcription':
+      return [{ label: 'Cost / Second', value: formatCost(mi.input_cost_per_second) }];
+    case 'rerank':
+      return [{ label: 'Cost / Token', value: formatCost(mi.input_cost_per_token) }];
+    default:
+      return [];
+  }
+}
+
+function formatDefaultParamValue(value: unknown): string {
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'number') return String(value);
+  return String(value);
 }
 
 export default function ModelDetail() {
@@ -64,8 +167,8 @@ export default function ModelDetail() {
 
   if (loading) {
     return (
-      <div className="p-6 flex items-center justify-center min-h-[400px]">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+      <div className="flex min-h-[400px] items-center justify-center p-6">
+        <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-blue-600" />
       </div>
     );
   }
@@ -73,8 +176,8 @@ export default function ModelDetail() {
   if (!model) {
     return (
       <div className="p-6">
-        <button onClick={() => navigate('/models')} className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700 mb-4">
-          <ArrowLeft className="w-4 h-4" /> Back to Models
+        <button onClick={() => navigate('/models')} className="mb-4 flex items-center gap-2 text-sm text-gray-500 transition-colors hover:text-gray-700">
+          <ArrowLeft className="h-4 w-4" /> Back to Models
         </button>
         <p className="text-gray-500">Model not found.</p>
       </div>
@@ -83,11 +186,31 @@ export default function ModelDetail() {
 
   const lp = model.deltallm_params || {};
   const mi = model.model_info || {};
-  const mode: string = mi.mode || model.mode || 'chat';
-  const modeOpt = MODE_OPTIONS.find(o => o.value === mode);
-  const modeLabel = modeOpt ? modeOpt.label : mode;
-  const modeIcon = modeOpt ? modeOpt.icon : <Layers className="w-4 h-4" />;
-  const maskedKey = lp.api_key ? `${lp.api_key.slice(0, 8)}${'•'.repeat(20)}${lp.api_key.slice(-4)}` : null;
+  const mode = mi.mode || model.mode || 'chat';
+  const modeOpt = MODE_OPTIONS.find((option) => option.value === mode);
+  const modeLabel = modeOpt?.label || mode;
+  const modeDescription = modeOpt?.description || 'Model deployment';
+  const modeIcon = modeOpt?.icon || <Layers className="h-4 w-4" />;
+  const maskedKey = lp.api_key ? `${lp.api_key.slice(0, 8)}${'•'.repeat(12)}${lp.api_key.slice(-4)}` : null;
+  const rpmLimit = lp.rpm ?? mi.rpm_limit;
+  const tpmLimit = lp.tpm ?? mi.tpm_limit;
+  const tags = Array.isArray(mi.tags) ? mi.tags : [];
+  const defaults = mi.default_params && typeof mi.default_params === 'object' ? Object.entries(mi.default_params) : [];
+  const modeItems = modeSpecificItems(mode, model)
+    .filter((item) => item.value)
+    .map((item) => ({ label: item.label, value: item.value as string }));
+  const costItems = [
+    { label: 'Input Cost / Token', value: formatCost(mi.input_cost_per_token) },
+    { label: 'Output Cost / Token', value: formatCost(mi.output_cost_per_token) },
+    { label: 'Cost / Image', value: formatCost(mi.input_cost_per_image) },
+    { label: 'Cost / Character', value: formatCost(mi.input_cost_per_character) },
+    { label: 'Cost / Second', value: formatCost(mi.input_cost_per_second) },
+    { label: 'Input Audio Token', value: formatCost(mi.input_cost_per_audio_token) },
+    { label: 'Output Audio Token', value: formatCost(mi.output_cost_per_audio_token) },
+    { label: 'Batch Multiplier', value: mi.batch_price_multiplier != null ? String(mi.batch_price_multiplier) : null },
+    { label: 'Batch Input Cost / Token', value: formatCost(mi.batch_input_cost_per_token) },
+    { label: 'Batch Output Cost / Token', value: formatCost(mi.batch_output_cost_per_token) },
+  ].filter((item) => item.value);
 
   const handleDelete = async () => {
     if (!confirm('Are you sure you want to delete this model deployment? This cannot be undone.')) return;
@@ -99,113 +222,153 @@ export default function ModelDetail() {
     }
   };
 
-  const costItems: { label: string; value: string | null }[] = [];
-  if (mi.input_cost_per_token != null) costItems.push({ label: 'Input Cost / Token', value: formatCost(mi.input_cost_per_token) });
-  if (mi.output_cost_per_token != null) costItems.push({ label: 'Output Cost / Token', value: formatCost(mi.output_cost_per_token) });
-  if (mi.input_cost_per_image != null) costItems.push({ label: 'Cost / Image', value: formatCost(mi.input_cost_per_image) });
-  if (mi.input_cost_per_character != null) costItems.push({ label: 'Cost / Character', value: formatCost(mi.input_cost_per_character) });
-  if (mi.input_cost_per_second != null) costItems.push({ label: 'Cost / Second', value: formatCost(mi.input_cost_per_second) });
-  if (mi.input_cost_per_audio_token != null) costItems.push({ label: 'Input Audio Token Cost', value: formatCost(mi.input_cost_per_audio_token) });
-  if (mi.output_cost_per_audio_token != null) costItems.push({ label: 'Output Audio Token Cost', value: formatCost(mi.output_cost_per_audio_token) });
-  if (mi.batch_price_multiplier != null) costItems.push({ label: 'Batch Price Multiplier', value: String(mi.batch_price_multiplier) });
-  if (mi.batch_input_cost_per_token != null) costItems.push({ label: 'Batch Input Cost / Token', value: formatCost(mi.batch_input_cost_per_token) });
-  if (mi.batch_output_cost_per_token != null) costItems.push({ label: 'Batch Output Cost / Token', value: formatCost(mi.batch_output_cost_per_token) });
-
-  const dpEntries = mi.default_params ? Object.entries(mi.default_params) : [];
-
   return (
-    <div className="p-4 sm:p-6 max-w-5xl mx-auto">
-      <button onClick={() => navigate('/models')} className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700 mb-5 transition-colors">
-        <ArrowLeft className="w-4 h-4" /> Back to Models
+    <div className="mx-auto max-w-6xl p-4 sm:p-6">
+      <button onClick={() => navigate('/models')} className="mb-4 flex items-center gap-2 text-sm text-gray-500 transition-colors hover:text-gray-700">
+        <ArrowLeft className="h-4 w-4" /> Back to Models
       </button>
 
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
-        <div className="flex items-center gap-4">
-          <div className={`p-3 rounded-xl ${MODE_ICON_COLORS[mode] || 'bg-gray-50 text-gray-600'}`}>
-            {modeIcon}
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">{model.model_name}</h1>
-            <div className="flex items-center gap-3 mt-1.5">
-              <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${MODE_BADGE_COLORS[mode] || 'bg-gray-100 text-gray-700'}`}>
+      <div className="mb-6 flex flex-col gap-4 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${MODE_BADGE_COLORS[mode] || 'bg-gray-100 text-gray-700'}`}>
+                {modeIcon}
                 {modeLabel}
               </span>
               <StatusBadge status={model.healthy ? 'healthy' : 'unhealthy'} />
-              <code className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded">{model.deployment_id}</code>
+              <ProviderBadge provider={model.provider} model={lp.model} />
             </div>
+            <h1 className="break-words text-2xl font-bold text-gray-900">{model.model_name}</h1>
+            <p className="mt-1 text-sm text-gray-500">{modeDescription}</p>
           </div>
+
+          {canEdit ? (
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button onClick={() => navigate(modelEditPath(deploymentId!))} className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700">
+                <Pencil className="h-4 w-4" /> Edit
+              </button>
+              <button onClick={handleDelete} className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50">
+                <Trash2 className="h-4 w-4" /> Delete
+              </button>
+            </div>
+          ) : null}
         </div>
-        {canEdit && (
-          <div className="flex items-center gap-2">
-            <button onClick={() => navigate(`/models/${deploymentId}/edit`)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
-              <Pencil className="w-4 h-4" /> Edit Settings
-            </button>
-            <button onClick={handleDelete} className="flex items-center gap-2 px-4 py-2 border border-red-200 text-red-600 rounded-lg text-sm font-medium hover:bg-red-50 transition-colors">
-              <Trash2 className="w-4 h-4" /> Delete
-            </button>
-          </div>
-        )}
+
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <MetricTile
+            icon={ShieldCheck}
+            label="Status"
+            value={model.healthy ? 'Healthy' : 'Unhealthy'}
+            hint="Current router health"
+          />
+          <MetricTile
+            icon={Server}
+            label="Provider Model"
+            value={<code className="break-all text-xs font-mono text-gray-900">{lp.model || 'Not set'}</code>}
+            hint={model.provider || 'Provider inferred from model string'}
+          />
+          <MetricTile
+            icon={Gauge}
+            label="Limits"
+            value={summarizeLimits(rpmLimit, tpmLimit)}
+            hint="Per-deployment capacity"
+          />
+          <MetricTile
+            icon={DollarSign}
+            label="Primary Cost"
+            value={primaryCost(mode, mi) || 'Not configured'}
+            hint="Main reporting field"
+          />
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <DetailSection icon={Server} title="Provider Connection" color="bg-slate-100 text-slate-600">
-          <InfoRow label="Provider" value={<ProviderBadge provider={model.provider} model={lp.model} />} />
-          <InfoRow label="Provider Model" value={lp.model} mono />
-          <InfoRow label="API Base" value={lp.api_base} mono />
-          <InfoRow label="API Key" value={maskedKey} mono />
-          {lp.api_version && <InfoRow label="API Version" value={lp.api_version} />}
-          <InfoRow label="Timeout" value={lp.timeout ? `${lp.timeout}s` : null} />
-        </DetailSection>
+      <div className="mb-6">
+        <ModelUsageExamplesCard modelName={model.model_name} mode={mode} />
+      </div>
 
-        <DetailSection icon={Gauge} title="Rate Limits & Routing" color="bg-indigo-50 text-indigo-600">
-          <InfoRow label="Weight" value={mi.weight ?? lp.weight} />
-          <InfoRow label="Priority" value={mi.priority} />
-          <InfoRow label="RPM Limit" value={lp.rpm || mi.rpm_limit ? String(lp.rpm || mi.rpm_limit) : null} />
-          <InfoRow label="TPM Limit" value={lp.tpm || mi.tpm_limit ? String(lp.tpm || mi.tpm_limit) : null} />
-          {Array.isArray(mi.tags) && mi.tags.length > 0 && (
-            <InfoRow label="Tags" value={
-              <div className="flex flex-wrap gap-1.5">
-                {mi.tags.map((t: string) => (
-                  <span key={t} className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">{t}</span>
-                ))}
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+        <div className="space-y-6">
+          <Card>
+            <SectionTitle title="Overview" subtitle="The identifiers and provider settings operators need most often." />
+            <FieldGrid
+              items={[
+                { label: 'Public Model Name', value: model.model_name },
+                { label: 'Deployment ID', value: model.deployment_id, mono: true },
+                { label: 'Provider', value: <ProviderBadge provider={model.provider} model={lp.model} /> },
+                { label: 'Provider Model', value: lp.model, mono: true },
+                { label: 'API Base', value: lp.api_base, mono: true },
+                { label: 'API Version', value: lp.api_version },
+                { label: 'API Key', value: maskedKey || 'Managed outside this deployment', mono: true },
+                { label: 'Timeout', value: formatDurationSeconds(lp.timeout) },
+              ]}
+            />
+          </Card>
+
+          <Card>
+            <SectionTitle title="Runtime Settings" subtitle="Mode-specific limits and defaults used when forwarding requests." />
+            <FieldGrid items={modeItems} />
+            {defaults.length > 0 ? (
+              <div className="mt-4 border-t border-gray-100 pt-4">
+                <div className="mb-3 text-sm font-medium text-gray-900">Default Parameters</div>
+                <FieldGrid
+                  items={defaults.map(([key, value]) => ({
+                    label: key,
+                    value: formatDefaultParamValue(value),
+                    mono: true,
+                  }))}
+                />
               </div>
-            } />
-          )}
-        </DetailSection>
+            ) : null}
+          </Card>
+        </div>
 
-        {mode === 'chat' && (
-          <DetailSection icon={MessageSquare} title="Chat Settings" color="bg-blue-50 text-blue-600">
-            <InfoRow label="Context Window" value={mi.max_tokens ? Number(mi.max_tokens).toLocaleString() : null} />
-            <InfoRow label="Max Input Tokens" value={mi.max_input_tokens ? Number(mi.max_input_tokens).toLocaleString() : null} />
-            <InfoRow label="Max Output Tokens" value={mi.max_output_tokens ? Number(mi.max_output_tokens).toLocaleString() : null} />
-            <InfoRow label="Max Tokens / Request" value={lp.max_tokens ? Number(lp.max_tokens).toLocaleString() : null} />
-            <InfoRow label="Stream Timeout" value={lp.stream_timeout ? `${lp.stream_timeout}s` : null} />
-          </DetailSection>
-        )}
+        <div className="space-y-6">
+          <Card>
+            <SectionTitle title="Routing" subtitle="How this deployment participates in traffic distribution." />
+            <FieldGrid
+              columns={1}
+              items={[
+                { label: 'Weight', value: formatInteger(mi.weight ?? lp.weight) },
+                { label: 'Priority', value: formatInteger(mi.priority) },
+                { label: 'RPM Limit', value: formatInteger(rpmLimit) },
+                { label: 'TPM Limit', value: formatInteger(tpmLimit) },
+                {
+                  label: 'Tags',
+                  value: tags.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {tags.map((tag: string) => (
+                        <span key={tag} className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null,
+                },
+              ]}
+            />
+          </Card>
 
-        {mode === 'embedding' && (
-          <DetailSection icon={FileText} title="Embedding Settings" color="bg-purple-50 text-purple-600">
-            <InfoRow label="Context Window" value={mi.max_tokens ? Number(mi.max_tokens).toLocaleString() : null} />
-            <InfoRow label="Output Vector Size" value={mi.output_vector_size ? Number(mi.output_vector_size).toLocaleString() : null} />
-          </DetailSection>
-        )}
+          <Card>
+            <SectionTitle title="Cost Tracking" subtitle="Pricing fields used by spend reporting and billing." />
+            <FieldGrid columns={1} items={costItems.map((item) => ({ label: item.label, value: item.value }))} />
+          </Card>
 
-        {costItems.length > 0 && (
-          <DetailSection icon={DollarSign} title="Cost Tracking" color="bg-emerald-50 text-emerald-600">
-            {costItems.map(c => c.value && <InfoRow key={c.label} label={c.label} value={c.value} />)}
-          </DetailSection>
-        )}
-
-        {dpEntries.length > 0 && (
-          <DetailSection icon={Settings2} title="Default Parameters" color="bg-amber-50 text-amber-600">
-            <p className="text-xs text-gray-400 mb-3">Injected into provider requests when not specified by the caller</p>
-            {dpEntries.map(([key, value]) => (
-              <InfoRow key={key} label={key} value={
-                <code className="text-xs bg-gray-50 px-2 py-0.5 rounded">{String(value)}</code>
-              } />
-            ))}
-          </DetailSection>
-        )}
+          <Card>
+            <SectionTitle title="Quick Reference" subtitle="What this deployment means to callers and operators." />
+            <div className="space-y-3 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+              <div className="flex items-start gap-3">
+                <div className="rounded-lg bg-white p-1.5 text-blue-600 shadow-sm">
+                  <Clock3 className="h-4 w-4" />
+                </div>
+                <div className="leading-6">
+                  Clients call <code className="rounded bg-white px-1.5 py-0.5 text-xs text-blue-900">{model.model_name}</code>. DeltaLLM forwards that traffic to{' '}
+                  <code className="rounded bg-white px-1.5 py-0.5 text-xs text-blue-900">{lp.model || 'the configured provider model'}</code>.
+                </div>
+              </div>
+            </div>
+          </Card>
+        </div>
       </div>
     </div>
   );

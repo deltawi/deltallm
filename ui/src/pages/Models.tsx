@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { models } from '../lib/api';
+import { modelDetailPath, modelEditPath } from '../lib/modelRoutes';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import ProviderBadge from '../components/ProviderBadge';
@@ -51,7 +52,7 @@ export default function Models() {
     {
       key: 'actions', header: '', render: (r: any) => (
         <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-          <button onClick={() => navigate(`/models/${r.deployment_id}/edit`)} className="p-1.5 hover:bg-gray-100 rounded-lg"><Pencil className="w-4 h-4 text-gray-500" /></button>
+          <button onClick={() => navigate(modelEditPath(r.deployment_id))} className="p-1.5 hover:bg-gray-100 rounded-lg"><Pencil className="w-4 h-4 text-gray-500" /></button>
           <button onClick={() => handleDelete(r.deployment_id)} className="p-1.5 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4 text-red-500" /></button>
         </div>
       ),
@@ -73,7 +74,7 @@ export default function Models() {
         <div className="px-4 pt-3 pb-2">
           <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search models..." className="w-full sm:w-72 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
         </div>
-        <DataTable columns={columns} data={items} loading={loading} emptyMessage="No models configured" onRowClick={(row) => navigate(`/models/${row.deployment_id}`)} pagination={pagination} onPageChange={setPageOffset} />
+        <DataTable columns={columns} data={items} loading={loading} emptyMessage="No models configured" onRowClick={(row) => navigate(modelDetailPath(row.deployment_id))} pagination={pagination} onPageChange={setPageOffset} />
       </Card>
     </div>
   );
