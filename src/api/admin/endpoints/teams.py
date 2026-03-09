@@ -179,29 +179,6 @@ async def create_team(
         models,
     )
 
-    ctx = get_platform_auth_context(request)
-    if ctx:
-        existing = await db.query_raw(
-            "SELECT user_id, team_id FROM deltallm_usertable WHERE user_id = $1 LIMIT 1",
-            ctx.account_id,
-        )
-        if not existing:
-            await db.execute_raw(
-                """
-                INSERT INTO deltallm_usertable (user_id, user_email, user_role, spend, models, team_id, created_at, updated_at)
-                VALUES ($1, $2, 'team_admin', 0, '{}'::text[], $3, NOW(), NOW())
-                """,
-                ctx.account_id,
-                ctx.email,
-                team_id,
-            )
-        elif not existing[0].get("team_id"):
-            await db.execute_raw(
-                "UPDATE deltallm_usertable SET team_id = $1, user_role = 'team_admin', updated_at = NOW() WHERE user_id = $2",
-                team_id,
-                ctx.account_id,
-            )
-
     response = {
         "team_id": team_id,
         "team_alias": team_alias,
