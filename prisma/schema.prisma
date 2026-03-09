@@ -48,6 +48,8 @@ model DeltaLLM_VerificationToken {
   key_name              String?
   user_id               String?
   team_id               String?
+  owner_account_id      String?
+  owner_service_account_id String?
   models                String[]
   max_budget            Float?
   soft_budget           Float?
@@ -65,9 +67,13 @@ model DeltaLLM_VerificationToken {
 
   user       DeltaLLM_UserTable? @relation(fields: [user_id], references: [user_id])
   team       DeltaLLM_TeamTable? @relation(fields: [team_id], references: [team_id])
+  owner_account DeltaLLM_PlatformAccount? @relation("verificationtoken_account_owner", fields: [owner_account_id], references: [account_id])
+  owner_service_account DeltaLLM_ServiceAccount? @relation("verificationtoken_service_account_owner", fields: [owner_service_account_id], references: [service_account_id])
   @@index([token])
   @@index([user_id])
   @@index([team_id])
+  @@index([owner_account_id])
+  @@index([owner_service_account_id])
   @@index([expires])
   @@map("deltallm_verificationtoken")
 }
@@ -116,9 +122,31 @@ model DeltaLLM_TeamTable {
 
   members DeltaLLM_UserTable[]
   keys    DeltaLLM_VerificationToken[]
+  service_accounts DeltaLLM_ServiceAccount[]
 
   @@index([organization_id])
   @@map("deltallm_teamtable")
+}
+
+model DeltaLLM_ServiceAccount {
+  service_account_id    String   @id @default(uuid())
+  team_id               String
+  name                  String
+  description           String?
+  is_active             Boolean  @default(true)
+  metadata              Json?
+  created_by_account_id String?
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
+
+  team       DeltaLLM_TeamTable @relation(fields: [team_id], references: [team_id], onDelete: Cascade)
+  created_by DeltaLLM_PlatformAccount? @relation("created_service_accounts", fields: [created_by_account_id], references: [account_id], onDelete: SetNull)
+  keys       DeltaLLM_VerificationToken[] @relation("verificationtoken_service_account_owner")
+
+  @@unique([team_id, name])
+  @@index([team_id])
+  @@index([created_by_account_id])
+  @@map("deltallm_serviceaccount")
 }
 
 model DeltaLLM_OrganizationTable {
@@ -217,6 +245,8 @@ model DeltaLLM_PlatformAccount {
   identities          DeltaLLM_PlatformIdentity[]
   organization_memberships DeltaLLM_OrganizationMembership[]
   team_memberships    DeltaLLM_TeamMembership[]
+  owned_keys          DeltaLLM_VerificationToken[] @relation("verificationtoken_account_owner")
+  created_service_accounts DeltaLLM_ServiceAccount[] @relation("created_service_accounts")
 
   @@map("deltallm_platformaccount")
 }

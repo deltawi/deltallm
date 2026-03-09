@@ -104,6 +104,13 @@ Some endpoints require specific admin permissions, so a valid session does not a
 | `POST` | `/ui/api/keys/{token_hash}/revoke` | Revoke a key |
 | `DELETE` | `/ui/api/keys/{token_hash}` | Delete a key |
 
+### Service Accounts
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/ui/api/service-accounts` | List service accounts |
+| `POST` | `/ui/api/service-accounts` | Create a service account |
+
 ### Teams
 
 | Method | Endpoint | Purpose |

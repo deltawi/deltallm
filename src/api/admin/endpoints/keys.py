@@ -10,9 +10,94 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 from src.auth.roles import Permission
 from src.audit.actions import AuditAction
 from src.api.admin.endpoints.common import db_or_503, to_json_value, get_auth_scope, emit_admin_mutation_audit
+from src.middleware.platform_auth import get_platform_auth_context
 
 router = APIRouter(tags=["Admin Keys"])
 logger = logging.getLogger(__name__)
+
+
+async def _get_team_row(db: Any, team_id: str) -> dict[str, Any]:
+    rows = await db.query_raw(
+        """
+        SELECT team_id, team_alias, organization_id
+        FROM deltallm_teamtable
+        WHERE team_id = $1
+        LIMIT 1
+        """,
+        team_id,
+    )
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+    return dict(rows[0])
+
+
+async def _validate_runtime_user(db: Any, user_id: str, team_id: str | None) -> None:
+    rows = await db.query_raw(
+        """
+        SELECT user_id, team_id
+        FROM deltallm_usertable
+        WHERE user_id = $1
+        LIMIT 1
+        """,
+        user_id,
+    )
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id not found")
+    user_team_id = rows[0].get("team_id")
+    if team_id and user_team_id and str(user_team_id) != team_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id does not belong to team_id")
+
+
+async def _validate_owner_references(
+    request: Request,
+    db: Any,
+    *,
+    team_id: str,
+    owner_account_id: str | None,
+    owner_service_account_id: str | None,
+    require_owner: bool,
+) -> tuple[str | None, str | None]:
+    if owner_account_id and owner_service_account_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Select either 'You' or a service account, not both")
+
+    ctx = get_platform_auth_context(request)
+    if owner_account_id:
+        rows = await db.query_raw(
+            "SELECT account_id FROM deltallm_platformaccount WHERE account_id = $1 LIMIT 1",
+            owner_account_id,
+        )
+        if not rows:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="owner_account_id not found")
+        if ctx is not None and str(ctx.account_id) != owner_account_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="owner_account_id must match the current account")
+        return owner_account_id, None
+
+    if owner_service_account_id:
+        rows = await db.query_raw(
+            """
+            SELECT service_account_id, team_id, is_active
+            FROM deltallm_serviceaccount
+            WHERE service_account_id = $1
+            LIMIT 1
+            """,
+            owner_service_account_id,
+        )
+        if not rows:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="owner_service_account_id not found")
+        row = rows[0]
+        if str(row.get("team_id") or "") != team_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Service account must belong to the selected team")
+        if not bool(row.get("is_active", True)):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selected service account is inactive")
+        return None, owner_service_account_id
+
+    if not require_owner:
+        return None, None
+
+    if ctx is not None:
+        return str(ctx.account_id), None
+
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="owner is required")
 
 
 @router.get("/ui/api/keys")
@@ -46,7 +131,11 @@ async def list_keys(
         params.append(team_id)
         clauses.append(f"vt.team_id = ${len(params)}")
 
-    join_sql = "LEFT JOIN deltallm_teamtable t ON vt.team_id = t.team_id" if not scope.is_platform_admin else ""
+    join_sql = """
+        LEFT JOIN deltallm_teamtable t ON vt.team_id = t.team_id
+        LEFT JOIN deltallm_platformaccount pa ON vt.owner_account_id = pa.account_id
+        LEFT JOIN deltallm_serviceaccount sa ON vt.owner_service_account_id = sa.service_account_id
+    """
     where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 
     count_rows = await db.query_raw(
@@ -59,7 +148,24 @@ async def list_keys(
     params.append(offset)
     rows = await db.query_raw(
         f"""
-        SELECT vt.token, vt.key_name, vt.user_id, vt.team_id, vt.models, vt.spend, vt.max_budget, vt.rpm_limit, vt.tpm_limit, vt.expires, vt.created_at, vt.updated_at
+        SELECT
+            vt.token,
+            vt.key_name,
+            vt.user_id,
+            vt.team_id,
+            t.team_alias,
+            vt.owner_account_id,
+            pa.email AS owner_account_email,
+            vt.owner_service_account_id,
+            sa.name AS owner_service_account_name,
+            vt.models,
+            vt.spend,
+            vt.max_budget,
+            vt.rpm_limit,
+            vt.tpm_limit,
+            vt.expires,
+            vt.created_at,
+            vt.updated_at
         FROM deltallm_verificationtoken vt {join_sql}
         {where_sql}
         ORDER BY vt.created_at DESC
@@ -85,9 +191,11 @@ async def create_key(
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
     db = db_or_503(request)
 
-    key_name = payload.get("key_name")
-    user_id = payload.get("user_id")
-    team_id = payload.get("team_id")
+    key_name = str(payload.get("key_name") or "").strip()
+    user_id = str(payload.get("user_id") or "").strip() or None
+    team_id = str(payload.get("team_id") or "").strip()
+    owner_account_id = str(payload.get("owner_account_id") or "").strip() or None
+    owner_service_account_id = str(payload.get("owner_service_account_id") or "").strip() or None
     models = payload.get("models") if isinstance(payload.get("models"), list) else []
     max_budget = payload.get("max_budget")
     rpm_limit = payload.get("rpm_limit")
@@ -96,18 +204,27 @@ async def create_key(
     if expires is not None and not isinstance(expires, str):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="expires must be a string datetime")
 
+    if not key_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="key_name is required")
+
+    if not team_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="team_id is required")
+
+    team = await _get_team_row(db, team_id)
+    team_org = team.get("organization_id")
     if not scope.is_platform_admin:
-        if not team_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A team must be selected when creating a key")
-        rows = await db.query_raw(
-            "SELECT organization_id FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
-            team_id,
-        )
-        if not rows:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
-        team_org = rows[0].get("organization_id")
         if not team_org or team_org not in scope.org_ids:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only create keys for teams in your organizations")
+    if user_id:
+        await _validate_runtime_user(db, user_id, team_id)
+    owner_account_id, owner_service_account_id = await _validate_owner_references(
+        request,
+        db,
+        team_id=team_id,
+        owner_account_id=owner_account_id,
+        owner_service_account_id=owner_service_account_id,
+        require_owner=True,
+    )
 
     raw_key = f"sk-{secrets.token_urlsafe(24)}"
     key_service = request.app.state.key_service
@@ -116,13 +233,18 @@ async def create_key(
     try:
         await db.execute_raw(
             """
-            INSERT INTO deltallm_verificationtoken (id, token, key_name, user_id, team_id, models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at)
-            VALUES (gen_random_uuid(), $1, $2, $3, $4, $5::text[], 0, $6, $7, $8, $9::timestamp, NOW(), NOW())
+            INSERT INTO deltallm_verificationtoken (
+                id, token, key_name, user_id, team_id, owner_account_id, owner_service_account_id,
+                models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at
+            )
+            VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7::text[], 0, $8, $9, $10, $11::timestamp, NOW(), NOW())
             """,
             token_hash,
             key_name,
             user_id,
             team_id,
+            owner_account_id,
+            owner_service_account_id,
             models,
             max_budget,
             rpm_limit,
@@ -136,6 +258,9 @@ async def create_key(
             "key_name": key_name,
             "user_id": user_id,
             "team_id": team_id,
+            "team_alias": team.get("team_alias"),
+            "owner_account_id": owner_account_id,
+            "owner_service_account_id": owner_service_account_id,
             "models": models,
             "max_budget": max_budget,
             "rpm_limit": rpm_limit,
@@ -166,6 +291,8 @@ async def create_key(
             error=exc,
         )
         raise
+
+
 @router.put("/ui/api/keys/{token_hash}")
 async def update_key(
     request: Request,
@@ -180,7 +307,7 @@ async def update_key(
     await _require_key_access(scope, db, token_hash)
     rows = await db.query_raw(
         """
-        SELECT token, key_name, user_id, team_id, models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at
+        SELECT token, key_name, user_id, team_id, owner_account_id, owner_service_account_id, models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at
         FROM deltallm_verificationtoken
         WHERE token = $1
         LIMIT 1
@@ -199,12 +326,35 @@ async def update_key(
     if expires is not None and not isinstance(expires, str):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="expires must be a string datetime")
 
-    key_name = payload.get("key_name", existing.get("key_name"))
-    user_id = payload.get("user_id", existing.get("user_id"))
-    team_id = payload.get("team_id", existing.get("team_id"))
+    key_name = str(payload.get("key_name", existing.get("key_name")) or "").strip()
+    user_id = str(payload.get("user_id", existing.get("user_id")) or "").strip() or None
+    team_id = str(payload.get("team_id", existing.get("team_id")) or "").strip()
+    owner_account_id = str(payload.get("owner_account_id", existing.get("owner_account_id")) or "").strip() or None
+    owner_service_account_id = str(payload.get("owner_service_account_id", existing.get("owner_service_account_id")) or "").strip() or None
     max_budget = payload.get("max_budget", existing.get("max_budget"))
     rpm_limit = payload.get("rpm_limit", existing.get("rpm_limit"))
     tpm_limit = payload.get("tpm_limit", existing.get("tpm_limit"))
+
+    if not key_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="key_name is required")
+
+    if not team_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="team_id is required")
+    team = await _get_team_row(db, team_id)
+    if not scope.is_platform_admin:
+        team_org = team.get("organization_id")
+        if not team_org or team_org not in scope.org_ids:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only manage keys for teams in your organizations")
+    if user_id:
+        await _validate_runtime_user(db, user_id, team_id)
+    owner_account_id, owner_service_account_id = await _validate_owner_references(
+        request,
+        db,
+        team_id=team_id,
+        owner_account_id=owner_account_id,
+        owner_service_account_id=owner_service_account_id,
+        require_owner=False,
+    )
 
     try:
         await db.execute_raw(
@@ -213,17 +363,21 @@ async def update_key(
             SET key_name = $1,
                 user_id = $2,
                 team_id = $3,
-                models = $4::text[],
-                max_budget = $5,
-                rpm_limit = $6,
-                tpm_limit = $7,
-                expires = $8::timestamp,
+                owner_account_id = $4,
+                owner_service_account_id = $5,
+                models = $6::text[],
+                max_budget = $7,
+                rpm_limit = $8,
+                tpm_limit = $9,
+                expires = $10::timestamp,
                 updated_at = NOW()
-            WHERE token = $9
+            WHERE token = $11
             """,
             key_name,
             user_id,
             team_id,
+            owner_account_id,
+            owner_service_account_id,
             models,
             max_budget,
             rpm_limit,
@@ -234,8 +388,28 @@ async def update_key(
 
         updated_rows = await db.query_raw(
             """
-            SELECT token, key_name, user_id, team_id, models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at
-            FROM deltallm_verificationtoken
+            SELECT
+                vt.token,
+                vt.key_name,
+                vt.user_id,
+                vt.team_id,
+                t.team_alias,
+                vt.owner_account_id,
+                pa.email AS owner_account_email,
+                vt.owner_service_account_id,
+                sa.name AS owner_service_account_name,
+                vt.models,
+                vt.spend,
+                vt.max_budget,
+                vt.rpm_limit,
+                vt.tpm_limit,
+                vt.expires,
+                vt.created_at,
+                vt.updated_at
+            FROM deltallm_verificationtoken vt
+            LEFT JOIN deltallm_teamtable t ON vt.team_id = t.team_id
+            LEFT JOIN deltallm_platformaccount pa ON vt.owner_account_id = pa.account_id
+            LEFT JOIN deltallm_serviceaccount sa ON vt.owner_service_account_id = sa.service_account_id
             WHERE token = $1
             LIMIT 1
             """,

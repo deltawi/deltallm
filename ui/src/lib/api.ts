@@ -80,6 +80,38 @@ export interface Paginated<T> {
   pagination: Pagination;
 }
 
+export interface ServiceAccount {
+  service_account_id: string;
+  team_id: string;
+  team_alias?: string | null;
+  name: string;
+  description?: string | null;
+  is_active: boolean;
+  created_by_account_id?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ApiKey {
+  token: string;
+  key_name: string | null;
+  user_id: string | null;
+  team_id: string;
+  team_alias?: string | null;
+  owner_account_id?: string | null;
+  owner_account_email?: string | null;
+  owner_service_account_id?: string | null;
+  owner_service_account_name?: string | null;
+  models: string[];
+  spend: number;
+  max_budget: number | null;
+  rpm_limit: number | null;
+  tpm_limit: number | null;
+  expires: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
 export interface ProviderPreset {
   provider: string;
   api_base: string;
@@ -403,15 +435,22 @@ export const teams = {
     apiFetch<any>(`/ui/api/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
 };
 
+export const serviceAccounts = {
+  list: (params?: { team_id?: string; search?: string; limit?: number; offset?: number }) =>
+    apiFetch<Paginated<ServiceAccount>>(withQuery('/ui/api/service-accounts', params as any)),
+  create: (payload: { team_id: string; name: string; description?: string }) =>
+    apiFetch<ServiceAccount>('/ui/api/service-accounts', { method: 'POST', json: payload }),
+};
+
 export const keys = {
   list: (params?: { search?: string; team_id?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<any>>(withQuery('/ui/api/keys', params as any)),
-  create: (payload: any) => apiFetch<any>('/ui/api/keys', { method: 'POST', json: payload }),
+    apiFetch<Paginated<ApiKey>>(withQuery('/ui/api/keys', params as any)),
+  create: (payload: any) => apiFetch<ApiKey & { raw_key: string }>('/ui/api/keys', { method: 'POST', json: payload }),
   update: (tokenHash: string, payload: any) =>
-    apiFetch<any>(`/ui/api/keys/${encodeURIComponent(tokenHash)}`, { method: 'PUT', json: payload }),
-  regenerate: (tokenHash: string) => apiFetch<any>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/regenerate`, { method: 'POST' }),
-  revoke: (tokenHash: string) => apiFetch<any>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/revoke`, { method: 'POST' }),
-  delete: (tokenHash: string) => apiFetch<any>(`/ui/api/keys/${encodeURIComponent(tokenHash)}`, { method: 'DELETE' }),
+    apiFetch<ApiKey>(`/ui/api/keys/${encodeURIComponent(tokenHash)}`, { method: 'PUT', json: payload }),
+  regenerate: (tokenHash: string) => apiFetch<{ token: string; raw_key: string }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/regenerate`, { method: 'POST' }),
+  revoke: (tokenHash: string) => apiFetch<{ revoked: boolean }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/revoke`, { method: 'POST' }),
+  delete: (tokenHash: string) => apiFetch<{ deleted: boolean }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}`, { method: 'DELETE' }),
 };
 
 export const batches = {
