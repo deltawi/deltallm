@@ -310,11 +310,10 @@ general_settings:
 
 ```bash
 pytest tests/
-
-
-**[Website](https://deltallm.io)**
 ```
 
 ## License
 
 Open source. See [LICENSE](LICENSE) for details.
+
+**[Website](https://deltallm.io)**
