@@ -95,6 +95,91 @@ async def test_spend_report_not_scoped_for_platform_admin(client, test_app, monk
 
 
 @pytest.mark.asyncio
+async def test_grouped_spend_report_applies_org_scope_for_non_platform(client, test_app, monkeypatch):
+    fake_db = FakeSpendDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    monkeypatch.setattr(
+        "src.ui.routes.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
+            is_platform_admin=False,
+            org_ids=["org-1"],
+            team_ids=[],
+        ),
+    )
+
+    response = await client.get(
+        "/ui/api/spend/report?group_by=organization&limit=5&offset=0",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+    assert response.status_code == 200
+
+    assert len(fake_db.calls) == 1
+    query, params = fake_db.calls[0]
+    assert "s.team_id IN (SELECT team_id FROM deltallm_teamtable WHERE organization_id IN" in query
+    assert "LEFT JOIN deltallm_teamtable t ON t.team_id = s.team_id" in query
+    assert "COUNT(*) OVER()" in query
+    assert "org-1" in params
+
+
+@pytest.mark.asyncio
+async def test_grouped_spend_report_supports_api_key_search(client, test_app, monkeypatch):
+    fake_db = FakeSpendDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    monkeypatch.setattr(
+        "src.ui.routes.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
+            is_platform_admin=True,
+            org_ids=[],
+            team_ids=[],
+        ),
+    )
+
+    response = await client.get(
+        "/ui/api/spend/report?group_by=api_key&search=sk-test&limit=5&offset=0",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+    assert response.status_code == 200
+
+    assert len(fake_db.calls) == 1
+    query, params = fake_db.calls[0]
+    assert "LEFT JOIN deltallm_verificationtoken vt ON vt.token = s.api_key" in query
+    assert "vt.key_name" in query
+    assert "ILIKE" in query
+    assert "%sk-test%" in params
+    assert "ORDER BY total_spend DESC" in query
+
+
+@pytest.mark.asyncio
+async def test_grouped_spend_report_for_model_does_not_group_by_null_constant(client, test_app, monkeypatch):
+    fake_db = FakeSpendDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    monkeypatch.setattr(
+        "src.ui.routes.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
+            is_platform_admin=True,
+            org_ids=[],
+            team_ids=[],
+        ),
+    )
+
+    response = await client.get(
+        "/ui/api/spend/report?group_by=model&limit=5&offset=0",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+    assert response.status_code == 200
+
+    query, _ = fake_db.calls[0]
+    assert "GROUP BY s.model" in query
+    assert "GROUP BY s.model, NULL" not in query
+
+
+@pytest.mark.asyncio
 async def test_spend_endpoints_cast_date_filters_to_timestamp(client, test_app, monkeypatch):
     fake_db = FakeSpendDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()

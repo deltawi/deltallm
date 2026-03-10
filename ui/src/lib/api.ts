@@ -104,6 +104,22 @@ export interface SpendLog {
   request_tags?: string[];
 }
 
+export type SpendGroupBy = 'model' | 'organization' | 'team' | 'api_key';
+
+export interface SpendGroupRow {
+  group_key: string;
+  display_name?: string | null;
+  total_spend: number;
+  total_tokens: number;
+  request_count: number;
+}
+
+export interface SpendGroupReport {
+  group_by: SpendGroupBy | 'provider' | 'user';
+  data: SpendGroupRow[];
+  pagination: Pagination;
+}
+
 export interface ServiceAccount {
   service_account_id: string;
   team_id: string;
@@ -238,6 +254,18 @@ export const spend = {
     if (start_date) qs.set('start_date', start_date);
     if (end_date) qs.set('end_date', end_date);
     return apiFetch<any>(`/ui/api/spend/report?${qs.toString()}`);
+  },
+  groupedReport: (
+    group_by: SpendGroupBy,
+    params?: { start_date?: string; end_date?: string; search?: string; limit?: number; offset?: number }
+  ) => {
+    const qs = new URLSearchParams({ group_by });
+    if (params?.start_date) qs.set('start_date', params.start_date);
+    if (params?.end_date) qs.set('end_date', params.end_date);
+    if (params?.search) qs.set('search', params.search);
+    if (params?.limit != null) qs.set('limit', String(params.limit));
+    if (params?.offset != null) qs.set('offset', String(params.offset));
+    return apiFetch<SpendGroupReport>(`/ui/api/spend/report?${qs.toString()}`);
   },
   logs: (params?: Record<string, string>) => {
     const qs = new URLSearchParams(params || {});
