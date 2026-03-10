@@ -16,6 +16,7 @@ import {
   Settings,
   LogOut,
   Zap,
+  Sparkles,
   Menu,
   X,
   ChevronDown,
@@ -50,7 +51,7 @@ const navEntries: NavEntry[] = [
     type: 'group',
     key: 'ai-gateway',
     label: 'AI Gateway',
-    icon: Workflow,
+    icon: Sparkles,
     children: [
       { type: 'item', to: '/models', icon: Box, label: 'Models' },
       { type: 'item', to: '/route-groups', icon: Workflow, label: 'Route Groups', adminOnly: true },
@@ -126,6 +127,10 @@ function parentNavClass(isActive: boolean) {
   );
 }
 
+function childNavPanelClass() {
+  return 'mx-3 mt-1 border-l border-gray-800 pl-5';
+}
+
 function SidebarContent({
   visibleEntries,
   displayEmail,
@@ -190,7 +195,7 @@ function SidebarContent({
                 {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
               </button>
               {isExpanded && (
-                <div id={groupPanelId} className="mt-1 ml-6 border-l border-gray-800 pl-2" role="group" aria-label={entry.label}>
+                <div id={groupPanelId} className={childNavPanelClass()} role="group" aria-label={entry.label}>
                   {entry.children.map((child) => {
                     const ChildIcon = child.icon;
                     return (
@@ -243,7 +248,11 @@ export default function Layout() {
   const displayEmail = authMode === 'master_key' ? 'Master Key' : (session?.email || 'Unknown');
   const displayRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
   const isPlatformAdmin = displayRole === 'platform_admin';
-  const permissions = new Set((session?.effective_permissions || []).map((item) => String(item)));
+  const permissionKeys = useMemo(
+    () => (session?.effective_permissions || []).map((item) => String(item)).sort(),
+    [session?.effective_permissions]
+  );
+  const permissions = useMemo(() => new Set(permissionKeys), [permissionKeys]);
 
   const visibleEntries = useMemo(
     () =>

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
+import logging
 from pathlib import Path
 import secrets
 from time import perf_counter
@@ -21,6 +22,7 @@ from src.providers.resolution import provider_presets, resolve_provider, validat
 from src.router import build_deployment_registry
 
 ui_router = APIRouter(tags=["UI"])
+logger = logging.getLogger(__name__)
 
 
 def _dist_dir() -> Path:
@@ -44,6 +46,22 @@ def _db_or_503(request: Request) -> Any:
     if db is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable")
     return db
+
+
+def _log_admin_query_timing(name: str, started_at: float, **context: Any) -> None:
+    elapsed_ms = int((perf_counter() - started_at) * 1000)
+    if not logger.isEnabledFor(logging.DEBUG) and elapsed_ms < 500:
+        return
+
+    details = " ".join(f"{key}={value}" for key, value in context.items() if value not in (None, "", []))
+    message = f"Admin query completed: name={name} latency_ms={elapsed_ms}"
+    if details:
+        message = f"{message} {details}"
+
+    if elapsed_ms >= 500:
+        logger.info(message)
+    else:
+        logger.debug(message)
 
 
 def _model_entries(app: Any) -> list[dict[str, Any]]:
@@ -466,13 +484,77 @@ def _apply_org_scope_to_spendlogs(
     clauses: list[str],
     params: list[Any],
     org_ids: list[str],
+    *,
+    table_alias: str | None = None,
 ) -> None:
     if not org_ids:
         clauses.append("1 = 0")
         return
+    team_column = f"{table_alias}.team_id" if table_alias else "team_id"
     placeholders = ", ".join(f"${len(params) + i + 1}" for i in range(len(org_ids)))
     params.extend(org_ids)
-    clauses.append(f"team_id IN (SELECT team_id FROM deltallm_teamtable WHERE organization_id IN ({placeholders}))")
+    clauses.append(
+        f"{team_column} IN (SELECT team_id FROM deltallm_teamtable WHERE organization_id IN ({placeholders}))"
+    )
+
+
+def _grouped_spend_config(group_by: str) -> dict[str, Any]:
+    if group_by == "model":
+        return {
+            "group_expr": "s.model",
+            "display_expr": "NULL",
+            "group_by_exprs": ["s.model"],
+            "search_clause": "s.model ILIKE ${i}",
+        }
+    if group_by == "organization":
+        return {
+            "joins": [
+                "LEFT JOIN deltallm_teamtable t ON t.team_id = s.team_id",
+                "LEFT JOIN deltallm_organizationtable o ON o.organization_id = t.organization_id",
+            ],
+            "group_expr": "COALESCE(t.organization_id, 'none')",
+            "display_expr": "NULLIF(TRIM(COALESCE(o.organization_name, '')), '')",
+            "group_by_exprs": [
+                "COALESCE(t.organization_id, 'none')",
+                "NULLIF(TRIM(COALESCE(o.organization_name, '')), '')",
+            ],
+            "search_clause": "(COALESCE(t.organization_id, 'none') ILIKE ${i} OR COALESCE(o.organization_name, '') ILIKE ${i})",
+        }
+    if group_by == "team":
+        return {
+            "joins": ["LEFT JOIN deltallm_teamtable t ON t.team_id = s.team_id"],
+            "group_expr": "COALESCE(s.team_id, 'none')",
+            "display_expr": "NULLIF(TRIM(COALESCE(t.team_alias, '')), '')",
+            "group_by_exprs": [
+                "COALESCE(s.team_id, 'none')",
+                "NULLIF(TRIM(COALESCE(t.team_alias, '')), '')",
+            ],
+            "search_clause": "(COALESCE(s.team_id, 'none') ILIKE ${i} OR COALESCE(t.team_alias, '') ILIKE ${i})",
+        }
+    if group_by == "api_key":
+        return {
+            "joins": ["LEFT JOIN deltallm_verificationtoken vt ON vt.token = s.api_key"],
+            "group_expr": "s.api_key",
+            "display_expr": "NULLIF(TRIM(COALESCE(vt.key_name, '')), '')",
+            "group_by_exprs": [
+                "s.api_key",
+                "NULLIF(TRIM(COALESCE(vt.key_name, '')), '')",
+            ],
+            "search_clause": "(s.api_key ILIKE ${i} OR COALESCE(vt.key_name, '') ILIKE ${i})",
+        }
+    if group_by == "provider":
+        return {
+            "group_expr": "COALESCE(s.api_base, 'unknown')",
+            "display_expr": "NULL",
+            "group_by_exprs": ["COALESCE(s.api_base, 'unknown')"],
+            "search_clause": "COALESCE(s.api_base, 'unknown') ILIKE ${i}",
+        }
+    return {
+        "group_expr": "COALESCE(s.\"user\", 'anonymous')",
+        "display_expr": "NULL",
+        "group_by_exprs": ["COALESCE(s.\"user\", 'anonymous')"],
+        "search_clause": "COALESCE(s.\"user\", 'anonymous') ILIKE ${i}",
+    }
 
 
 @ui_router.get("/ui/api/spend/summary", dependencies=[Depends(require_admin_permission(Permission.SPEND_READ))])
@@ -483,6 +565,7 @@ async def spend_summary(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
+    started_at = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.SPEND_READ)
     db = _db_or_503(request)
     clauses: list[str] = []
@@ -514,61 +597,152 @@ async def spend_summary(
         """,
         *params,
     )
+    _log_admin_query_timing(
+        "spend_summary",
+        started_at,
+        start_date=start_date.isoformat() if start_date else None,
+        end_date=end_date.isoformat() if end_date else None,
+        scoped=not scope.is_platform_admin,
+    )
     return _to_json_value(dict(rows[0] if rows else {}))
 
 
 @ui_router.get("/ui/api/spend/report", dependencies=[Depends(require_admin_permission(Permission.SPEND_READ))])
 async def spend_report(
     request: Request,
-    group_by: str = Query(default="day", pattern="^(model|provider|day|user|team)$"),
+    group_by: str = Query(default="day", pattern="^(model|provider|day|user|team|organization|api_key)$"),
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
+    search: str | None = Query(default=None),
+    limit: int = Query(default=5, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
+    started_at = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.SPEND_READ)
     db = _db_or_503(request)
-    group_column = {
-        "model": "model",
-        "provider": "api_base",
-        "day": "DATE(start_time)",
-        "user": "COALESCE(\"user\", 'anonymous')",
-        "team": "COALESCE(team_id, 'none')",
-    }[group_by]
+    if group_by == "day":
+        clauses: list[str] = []
+        params: list[Any] = []
+        if start_date is not None:
+            params.append(_date_start(start_date))
+            clauses.append(f"start_time >= ${len(params)}::timestamp")
+        if end_date is not None:
+            params.append(_date_end(end_date))
+            clauses.append(f"start_time <= ${len(params)}::timestamp")
+        if not scope.is_platform_admin:
+            _apply_org_scope_to_spendlogs(clauses, params, scope.org_ids)
 
+        where_sql = ""
+        if clauses:
+            where_sql = " WHERE " + " AND ".join(clauses)
+
+        rows = await db.query_raw(
+            f"""
+            SELECT
+                DATE(start_time) AS group_key,
+                COALESCE(SUM(spend), 0) AS total_spend,
+                COUNT(*) AS request_count,
+                COALESCE(SUM(total_tokens), 0) AS total_tokens
+            FROM deltallm_spendlogs
+            {where_sql}
+            GROUP BY DATE(start_time)
+            ORDER BY group_key ASC
+            """,
+            *params,
+        )
+        _log_admin_query_timing(
+            "spend_report_day",
+            started_at,
+            start_date=start_date.isoformat() if start_date else None,
+            end_date=end_date.isoformat() if end_date else None,
+            scoped=not scope.is_platform_admin,
+        )
+        return {
+            "group_by": group_by,
+            "breakdown": [_to_json_value(dict(row)) for row in rows],
+        }
+
+    config = _grouped_spend_config(group_by)
     clauses: list[str] = []
     params: list[Any] = []
+    joins = list(config.get("joins", []))
+    group_expr = config["group_expr"]
+    display_expr = config["display_expr"]
+    group_by_sql = ", ".join(config.get("group_by_exprs", [group_expr]))
+
     if start_date is not None:
         params.append(_date_start(start_date))
-        clauses.append(f"start_time >= ${len(params)}::timestamp")
+        clauses.append(f"s.start_time >= ${len(params)}::timestamp")
     if end_date is not None:
         params.append(_date_end(end_date))
-        clauses.append(f"start_time <= ${len(params)}::timestamp")
+        clauses.append(f"s.start_time <= ${len(params)}::timestamp")
+    if search:
+        params.append(f"%{search.strip()}%")
+        clauses.append(config["search_clause"].format(i=len(params)))
     if not scope.is_platform_admin:
-        _apply_org_scope_to_spendlogs(clauses, params, scope.org_ids)
+        _apply_org_scope_to_spendlogs(clauses, params, scope.org_ids, table_alias="s")
+
+    join_sql = ""
+    if joins:
+        join_sql = "\n        " + "\n        ".join(joins)
 
     where_sql = ""
     if clauses:
         where_sql = " WHERE " + " AND ".join(clauses)
 
+    page_params = [*params, limit, offset]
+    limit_idx = len(params) + 1
+    offset_idx = len(params) + 2
     rows = await db.query_raw(
         f"""
+        WITH grouped AS (
+            SELECT
+                {group_expr} AS group_key,
+                {display_expr} AS display_name,
+                COALESCE(SUM(s.spend), 0) AS total_spend,
+                COUNT(*) AS request_count,
+                COALESCE(SUM(s.total_tokens), 0) AS total_tokens
+            FROM deltallm_spendlogs s
+            {join_sql}
+            {where_sql}
+            GROUP BY {group_by_sql}
+        )
         SELECT
-            {group_column} AS group_key,
-            COALESCE(SUM(spend), 0) AS total_spend,
-            COUNT(*) AS request_count,
-            COALESCE(SUM(total_tokens), 0) AS total_tokens
-        FROM deltallm_spendlogs
-        {where_sql}
-        GROUP BY {group_column}
-        ORDER BY group_key ASC
+            group_key,
+            display_name,
+            total_spend,
+            request_count,
+            total_tokens,
+            COUNT(*) OVER() AS total_count
+        FROM grouped
+        ORDER BY total_spend DESC, group_key ASC
+        LIMIT ${limit_idx}
+        OFFSET ${offset_idx}
         """,
-        *params,
+        *page_params,
+    )
+    total = int((rows[0] if rows else {}).get("total_count") or 0)
+    _log_admin_query_timing(
+        "spend_report_grouped",
+        started_at,
+        group_by=group_by,
+        search=search.strip() if search else None,
+        limit=limit,
+        offset=offset,
+        scoped=not scope.is_platform_admin,
     )
 
     return {
         "group_by": group_by,
-        "breakdown": [_to_json_value(dict(row)) for row in rows],
+        "data": [_to_json_value({k: v for k, v in dict(row).items() if k != "total_count"}) for row in rows],
+        "pagination": {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
+        },
     }
 
 
@@ -585,6 +759,7 @@ async def request_logs(
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
+    started_at = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.SPEND_READ)
     db = _db_or_503(request)
 
@@ -637,6 +812,16 @@ async def request_logs(
     )
 
     total = int((total_rows[0] if total_rows else {}).get("total") or 0)
+    _log_admin_query_timing(
+        "request_logs",
+        started_at,
+        model=model,
+        team_id=team_id,
+        user_id=user_id,
+        limit=limit,
+        offset=offset,
+        scoped=not scope.is_platform_admin,
+    )
 
     return {
         "logs": [_to_json_value(dict(row)) for row in logs],

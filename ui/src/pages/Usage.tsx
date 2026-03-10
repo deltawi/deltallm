@@ -1,13 +1,34 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useApi } from '../lib/hooks';
-import { spend, type SpendLog } from '../lib/api';
+import { spend, type SpendGroupBy, type SpendGroupRow, type SpendLog } from '../lib/api';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import StatCard from '../components/StatCard';
 import Modal from '../components/Modal';
 import { DollarSign, Zap, Hash, Calendar } from 'lucide-react';
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
+
+const SPEND_GROUP_OPTIONS: Array<{ value: SpendGroupBy; label: string }> = [
+  { value: 'model', label: 'Model' },
+  { value: 'organization', label: 'Organization' },
+  { value: 'team', label: 'Team' },
+  { value: 'api_key', label: 'API Key' },
+];
+
+const SPEND_GROUP_LABELS: Record<SpendGroupBy, string> = {
+  model: 'Model',
+  organization: 'Organization',
+  team: 'Team',
+  api_key: 'API Key',
+};
+
+const SPEND_SEARCH_PLACEHOLDERS: Record<SpendGroupBy, string> = {
+  model: 'Filter models...',
+  organization: 'Filter organizations...',
+  team: 'Filter teams...',
+  api_key: 'Filter API keys...',
+};
 
 function fmt(n: number | null | undefined): string {
   if (n == null) return '$0.00';
@@ -37,42 +58,97 @@ function DetailItem({ label, value, mono = false }: { label: string; value: Reac
   );
 }
 
+function renderSpendGroupValue(groupBy: SpendGroupBy, row: SpendGroupRow) {
+  if (groupBy === 'model') {
+    return <span className="font-medium">{row.group_key}</span>;
+  }
+  if (groupBy === 'api_key') {
+    return (
+      <div>
+        <div className="font-medium">{row.display_name || 'Unnamed key'}</div>
+        <code className="text-xs text-gray-500">
+          {row.group_key.length > 18 ? `${row.group_key.slice(0, 18)}...` : row.group_key}
+        </code>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div className="font-medium">{row.display_name || row.group_key}</div>
+      {row.display_name && <div className="text-xs text-gray-500">{row.group_key}</div>}
+    </div>
+  );
+}
+
 export default function Usage() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [tab, setTab] = useState<'overview' | 'logs'>('overview');
   const [selectedLog, setSelectedLog] = useState<SpendLog | null>(null);
+  const [spendBy, setSpendBy] = useState<SpendGroupBy>('model');
+  const [spendSearchInput, setSpendSearchInput] = useState('');
+  const [spendSearch, setSpendSearch] = useState('');
+  const [spendOffset, setSpendOffset] = useState(0);
+  const [logsOffset, setLogsOffset] = useState(0);
+  const spendPageSize = 5;
+  const logsPageSize = 25;
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSpendSearch(spendSearchInput.trim());
+      setSpendOffset(0);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [spendSearchInput]);
+
+  useEffect(() => {
+    setSpendOffset(0);
+  }, [spendBy, startDate, endDate]);
+
+  useEffect(() => {
+    setLogsOffset(0);
+  }, [startDate, endDate]);
 
   const { data: summary } = useApi(() => spend.summary(startDate, endDate), [startDate, endDate]);
   const { data: dailyReport } = useApi(() => spend.report('day', startDate, endDate), [startDate, endDate]);
-  const { data: modelReport } = useApi(() => spend.report('model', startDate, endDate), [startDate, endDate]);
-  const { data: userReport } = useApi(() => spend.report('user', startDate, endDate), [startDate, endDate]);
-  const { data: teamReport } = useApi(() => spend.report('team', startDate, endDate), [startDate, endDate]);
-  const { data: logsData, loading: logsLoading } = useApi(() => spend.logs({ limit: '50' }), []);
+  const { data: spendGroupsData, loading: spendGroupsLoading } = useApi(
+    () =>
+      spend.groupedReport(spendBy, {
+        start_date: startDate || undefined,
+        end_date: endDate || undefined,
+        search: spendSearch || undefined,
+        limit: spendPageSize,
+        offset: spendOffset,
+      }),
+    [spendBy, startDate, endDate, spendSearch, spendOffset]
+  );
+  const { data: logsData, loading: logsLoading } = useApi(
+    () => {
+      const params: Record<string, string> = {
+        limit: String(logsPageSize),
+        offset: String(logsOffset),
+      };
+      if (startDate) params.start_date = startDate;
+      if (endDate) params.end_date = endDate;
+      return spend.logs(params);
+    },
+    [startDate, endDate, logsOffset]
+  );
 
   const daily = (dailyReport?.breakdown || []).map((r: any) => ({ date: r.group_key, total_spend: r.total_spend }));
-  const perModel = (modelReport?.breakdown || []).map((r: any) => ({ model: r.group_key, total_spend: r.total_spend, total_tokens: r.total_tokens, request_count: r.request_count }));
-  const perKey = (userReport?.breakdown || []).map((r: any) => ({ api_key: r.group_key, total_spend: r.total_spend, request_count: r.request_count }));
-  const perTeam = (teamReport?.breakdown || []).map((r: any) => ({ team_id: r.group_key, total_spend: r.total_spend, request_count: r.request_count }));
+  const spendGroups = spendGroupsData?.data || [];
+  const spendGroupsPagination = spendGroupsData?.pagination;
   const logs = logsData?.logs || [];
+  const logsPagination = logsData?.pagination;
 
-  const modelColumns = [
-    { key: 'model', header: 'Model', render: (r: any) => <span className="font-medium">{r.model}</span> },
+  const spendGroupColumns = [
+    {
+      key: 'group_key',
+      header: SPEND_GROUP_LABELS[spendBy],
+      render: (row: SpendGroupRow) => renderSpendGroupValue(spendBy, row),
+    },
     { key: 'total_spend', header: 'Spend', render: (r: any) => fmt(r.total_spend) },
     { key: 'total_tokens', header: 'Tokens', render: (r: any) => fmtNum(r.total_tokens) },
-    { key: 'request_count', header: 'Requests', render: (r: any) => fmtNum(r.request_count) },
-  ];
-
-  const keyColumns = [
-    { key: 'api_key', header: 'API Key', render: (r: any) => <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{(r.api_key || '').substring(0, 12)}...</code> },
-    { key: 'key_name', header: 'Name', render: (r: any) => r.key_name || <span className="text-gray-400">—</span> },
-    { key: 'total_spend', header: 'Spend', render: (r: any) => fmt(r.total_spend) },
-    { key: 'request_count', header: 'Requests', render: (r: any) => fmtNum(r.request_count) },
-  ];
-
-  const teamColumns = [
-    { key: 'team_id', header: 'Team', render: (r: any) => <span className="font-medium">{r.team_id}</span> },
-    { key: 'total_spend', header: 'Spend', render: (r: any) => fmt(r.total_spend) },
     { key: 'request_count', header: 'Requests', render: (r: any) => fmtNum(r.request_count) },
   ];
 
@@ -137,17 +213,36 @@ export default function Usage() {
             )}
           </Card>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-            <Card title="Spend by Model">
-              <DataTable columns={modelColumns} data={perModel || []} emptyMessage="No model data" />
-            </Card>
-            <Card title="Spend by API Key">
-              <DataTable columns={keyColumns} data={perKey || []} emptyMessage="No key data" />
-            </Card>
-          </div>
-
-          <Card title="Spend by Team">
-            <DataTable columns={teamColumns} data={perTeam || []} emptyMessage="No team data" />
+          <Card title="Spend by">
+            <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="inline-flex w-full flex-wrap rounded-lg border border-gray-200 bg-gray-50 p-1 lg:w-auto">
+                {SPEND_GROUP_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    onClick={() => setSpendBy(option.value)}
+                    className={`rounded-md px-3 py-2 text-sm transition-colors ${
+                      spendBy === option.value ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <input
+                value={spendSearchInput}
+                onChange={(e) => setSpendSearchInput(e.target.value)}
+                placeholder={SPEND_SEARCH_PLACEHOLDERS[spendBy]}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 lg:w-72"
+              />
+            </div>
+            <DataTable
+              columns={spendGroupColumns}
+              data={spendGroups}
+              loading={spendGroupsLoading}
+              emptyMessage={`No ${SPEND_GROUP_LABELS[spendBy].toLowerCase()} spend data`}
+              pagination={spendGroupsPagination}
+              onPageChange={setSpendOffset}
+            />
           </Card>
         </>
       ) : (
@@ -161,6 +256,8 @@ export default function Usage() {
             loading={logsLoading}
             emptyMessage="No request logs yet"
             onRowClick={setSelectedLog}
+            pagination={logsPagination}
+            onPageChange={setLogsOffset}
           />
         </Card>
       )}
