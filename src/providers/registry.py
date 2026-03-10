@@ -7,7 +7,7 @@ from fastapi import Request
 
 from src.models.errors import InvalidRequestError
 from src.providers.base import ProviderAdapter
-from src.providers.resolution import is_openai_compatible_provider, resolve_provider
+from src.providers.resolution import is_openai_compatible_provider, resolve_provider, resolve_upstream_model
 
 
 @dataclass
@@ -61,9 +61,7 @@ def resolve_chat_upstream(
             raise InvalidRequestError(message="Provider API key is missing for selected model")
         if is_stream:
             raise InvalidRequestError(message="Gemini streaming is not supported yet")
-        upstream_model = str(params.get("model") or "")
-        if "/" in upstream_model:
-            upstream_model = upstream_model.split("/", 1)[1]
+        upstream_model = resolve_upstream_model(params)
         return ChatUpstream(
             adapter=request.app.state.gemini_adapter,
             api_base=str(params.get("api_base") or "https://generativelanguage.googleapis.com/v1beta").rstrip("/"),
@@ -76,9 +74,7 @@ def resolve_chat_upstream(
         if is_stream:
             raise InvalidRequestError(message="Bedrock streaming is not supported yet")
         region = str(params.get("region") or "us-east-1")
-        upstream_model = str(params.get("model") or "")
-        if "/" in upstream_model:
-            upstream_model = upstream_model.split("/", 1)[1]
+        upstream_model = resolve_upstream_model(params)
         return ChatUpstream(
             adapter=request.app.state.bedrock_adapter,
             api_base=str(params.get("api_base") or f"https://bedrock-runtime.{region}.amazonaws.com").rstrip("/"),

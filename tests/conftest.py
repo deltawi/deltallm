@@ -90,6 +90,17 @@ class FakeRedis:
     async def hset(self, key: str, mapping: dict[str, str]):
         self.hash_store.setdefault(key, {}).update(mapping)
 
+    async def hdel(self, key: str, *fields: str):
+        entry = self.hash_store.get(key)
+        if entry is None:
+            return 0
+        removed = 0
+        for field in fields:
+            if field in entry:
+                entry.pop(field, None)
+                removed += 1
+        return removed
+
     async def hgetall(self, key: str):
         return self.hash_store.get(key, {})
 
@@ -168,6 +179,10 @@ class FakePipeline:
 
     def hset(self, *args, **kwargs):
         self.ops.append(("hset", args, kwargs))
+        return self
+
+    def hdel(self, *args, **kwargs):
+        self.ops.append(("hdel", args, kwargs))
         return self
 
     async def execute(self):

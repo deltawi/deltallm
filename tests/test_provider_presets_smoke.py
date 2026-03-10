@@ -8,15 +8,20 @@ import pytest
 from src.providers.anthropic import AnthropicAdapter
 from src.providers.resolution import provider_presets, provider_supports_mode
 
+_PROVIDER_API_BASES = {
+    str(preset["provider"]): str(preset["api_base"] or f"https://{preset['provider']}.example.test/v1")
+    for preset in provider_presets()
+}
+
 
 def _deployment_payload(*, model_name: str, provider: str, mode: str, upstream_model: str) -> dict[str, Any]:
     deltallm_params: dict[str, Any] = {
         "provider": provider,
         "model": upstream_model,
         "api_key": "provider-key",
+        "api_base": _PROVIDER_API_BASES[provider],
     }
     if provider == "bedrock":
-        deltallm_params.pop("api_key", None)
         deltallm_params["region"] = "us-east-1"
         deltallm_params["aws_access_key_id"] = "AKIDEXAMPLE"
         deltallm_params["aws_secret_access_key"] = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"

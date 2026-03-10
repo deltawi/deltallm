@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from src.auth.roles import Permission
 from src.audit.actions import AuditAction
-from src.api.admin.endpoints.common import emit_admin_mutation_audit, to_json_value
+from src.api.admin.endpoints.common import emit_admin_mutation_audit, model_entries, to_json_value
 from src.db.prompt_registry import PromptRegistryRepository
 from src.db.route_groups import RouteGroupRepository
 from src.middleware.admin import require_admin_permission
@@ -161,6 +161,39 @@ async def _resolve_member_ids(repository: RouteGroupRepository, group_key: str) 
     }
 
 
+async def _serialize_group_members(request: Request, members: list[Any]) -> list[dict[str, Any]]:
+    entries_by_id = {
+        str(entry.get("deployment_id") or ""): entry
+        for entry in model_entries(request.app)
+        if str(entry.get("deployment_id") or "")
+    }
+    health_backend = getattr(request.app.state, "router_state_backend", None)
+
+    payloads: list[dict[str, Any]] = []
+    for member in members:
+        item = to_json_value(asdict(member))
+        runtime_entry = entries_by_id.get(member.deployment_id)
+        if runtime_entry is None:
+            item["model_name"] = None
+            item["provider"] = None
+            item["mode"] = None
+            item["healthy"] = None
+            payloads.append(item)
+            continue
+
+        healthy = True
+        if health_backend is not None:
+            health = await health_backend.get_health(member.deployment_id)
+            healthy = str(health.get("healthy", "true")) != "false"
+
+        item["model_name"] = runtime_entry.get("model_name")
+        item["provider"] = runtime_entry.get("provider")
+        item["mode"] = runtime_entry.get("model_info", {}).get("mode") or "chat"
+        item["healthy"] = healthy
+        payloads.append(item)
+    return payloads
+
+
 async def _reload_runtime(request: Request) -> None:
     reloader = getattr(request.app.state, "model_hot_reload_manager", None)
     if reloader is None:
@@ -277,7 +310,7 @@ async def get_route_group(request: Request, group_key: str) -> dict[str, Any]:
     policy = await repository.get_published_policy(group_key)
     return {
         "group": to_json_value(asdict(group)),
-        "members": [to_json_value(asdict(member)) for member in members],
+        "members": await _serialize_group_members(request, members),
         "policy": to_json_value(asdict(policy)) if policy is not None else None,
     }
 

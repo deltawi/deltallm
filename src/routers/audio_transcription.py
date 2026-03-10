@@ -20,7 +20,7 @@ from src.metrics import (
     observe_request_latency,
 )
 from src.models.errors import InvalidRequestError, PermissionDeniedError
-from src.providers.resolution import resolve_provider
+from src.providers.resolution import resolve_provider, resolve_upstream_model
 from src.router.router import Deployment
 from src.audit.actions import AuditAction
 from src.routers.audit_helpers import emit_audit_event
@@ -56,8 +56,7 @@ async def _execute_stt(
     api_base = params.get("api_base", request.app.state.settings.openai_base_url).rstrip("/")
     headers = {"Authorization": f"Bearer {api_key}"}
 
-    upstream_model = params.get("model")
-    form_model = upstream_model.split("/", 1)[1] if upstream_model and "/" in upstream_model else model
+    form_model = resolve_upstream_model(params, fallback_model=model) or model
 
     from src.routers.utils import apply_default_params
     _stt_defaults: dict[str, Any] = {"model": form_model}

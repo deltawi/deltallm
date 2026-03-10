@@ -10,6 +10,7 @@ from src.models.errors import InvalidRequestError, ServiceUnavailableError, Time
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
 from src.providers.base import ProviderAdapter
+from src.providers.resolution import resolve_upstream_model
 
 
 class AnthropicAdapter(ProviderAdapter):
@@ -36,9 +37,7 @@ class AnthropicAdapter(ProviderAdapter):
                 role = "user"
             anthropic_messages.append({"role": role, "content": text})
 
-        upstream_model = provider_config.get("model")
-        if upstream_model and "/" in upstream_model:
-            upstream_model = upstream_model.split("/", 1)[1]
+        upstream_model = resolve_upstream_model(provider_config)
 
         payload: dict[str, Any] = {
             "model": upstream_model or canonical_request.model,

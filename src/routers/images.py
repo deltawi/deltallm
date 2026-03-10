@@ -21,7 +21,7 @@ from src.metrics import (
 )
 from src.models.errors import InvalidRequestError, PermissionDeniedError
 from src.models.requests import ImageGenerationRequest
-from src.providers.resolution import resolve_provider
+from src.providers.resolution import resolve_provider, resolve_upstream_model
 from src.router.router import Deployment
 from src.audit.actions import AuditAction
 from src.routers.audit_helpers import emit_audit_event
@@ -51,9 +51,9 @@ async def _execute_image_generation(
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
     upstream_payload = payload.model_dump(exclude_none=True)
-    upstream_model = params.get("model")
-    if upstream_model and "/" in upstream_model:
-        upstream_payload["model"] = upstream_model.split("/", 1)[1]
+    upstream_model = resolve_upstream_model(params)
+    if upstream_model:
+        upstream_payload["model"] = upstream_model
 
     from src.routers.utils import apply_default_params
     apply_default_params(upstream_payload, deployment.model_info)

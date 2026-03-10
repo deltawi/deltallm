@@ -9,6 +9,7 @@ from src.models.errors import InvalidRequestError, ServiceUnavailableError, Time
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
 from src.providers.base import ProviderAdapter
+from src.providers.resolution import resolve_upstream_model
 
 
 class AzureOpenAIAdapter(ProviderAdapter):
@@ -21,9 +22,9 @@ class AzureOpenAIAdapter(ProviderAdapter):
         payload = canonical_request.model_dump(exclude_none=True)
         if payload.get("tool_choice") is not None and not payload.get("tools"):
             payload.pop("tool_choice", None)
-        upstream_model = provider_config.get("model")
-        if upstream_model and "/" in str(upstream_model):
-            payload["model"] = str(upstream_model).split("/", 1)[1]
+        upstream_model = resolve_upstream_model(provider_config)
+        if upstream_model:
+            payload["model"] = upstream_model
         return payload
 
     async def translate_response(self, provider_response: Any, model_name: str) -> ChatCompletionResponse:

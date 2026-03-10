@@ -24,7 +24,7 @@ export default function RouteGroupUsageCard({ groupKey, mode, liveTrafficEnabled
 
   return (
     <UsageExamplesCard
-      title="3. How To Call This Group"
+      title="Test This Group"
       description="Use the group key as the model. The example stays aligned with this group and includes required prompt variables when applicable."
       modelName={groupKey}
       mode={mode}

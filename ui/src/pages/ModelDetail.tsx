@@ -1,11 +1,14 @@
+import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
+  AlertTriangle,
   ArrowLeft,
   Clock3,
   DollarSign,
   Gauge,
   Layers,
   Pencil,
+  RefreshCw,
   Server,
   ShieldCheck,
   Trash2,
@@ -13,7 +16,7 @@ import {
 } from 'lucide-react';
 import { useApi } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
-import { models } from '../lib/api';
+import { ApiError, models } from '../lib/api';
 import { modelEditPath } from '../lib/modelRoutes';
 import Card from '../components/Card';
 import ModelUsageExamplesCard from '../components/ModelUsageExamplesCard';
@@ -157,13 +160,24 @@ function formatDefaultParamValue(value: unknown): string {
   return String(value);
 }
 
+function formatUnixTimestamp(value: number | null | undefined): string | null {
+  if (!value) return null;
+  const date = new Date(value * 1000);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleString();
+}
+
 export default function ModelDetail() {
   const { deploymentId } = useParams<{ deploymentId: string }>();
   const navigate = useNavigate();
   const { session, authMode } = useAuth();
   const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
   const canEdit = userRole === 'platform_admin' || authMode === 'master_key';
-  const { data: model, loading } = useApi(() => models.get(deploymentId!), [deploymentId]);
+  const detail = useApi(() => models.get(deploymentId!), [deploymentId]);
+  const { data: model, loading, refetch } = detail;
+  const [checkingHealth, setCheckingHealth] = useState(false);
+  const [healthActionMessage, setHealthActionMessage] = useState<string | null>(null);
+  const [healthActionError, setHealthActionError] = useState<string | null>(null);
 
   if (loading) {
     return (
@@ -194,6 +208,7 @@ export default function ModelDetail() {
   const maskedKey = lp.api_key ? `${lp.api_key.slice(0, 8)}${'•'.repeat(12)}${lp.api_key.slice(-4)}` : null;
   const rpmLimit = lp.rpm ?? mi.rpm_limit;
   const tpmLimit = lp.tpm ?? mi.tpm_limit;
+  const health = model.health;
   const tags = Array.isArray(mi.tags) ? mi.tags : [];
   const defaults = mi.default_params && typeof mi.default_params === 'object' ? Object.entries(mi.default_params) : [];
   const modeItems = modeSpecificItems(mode, model)
@@ -222,6 +237,25 @@ export default function ModelDetail() {
     }
   };
 
+  const handleCheckHealth = async () => {
+    setCheckingHealth(true);
+    setHealthActionMessage(null);
+    setHealthActionError(null);
+    try {
+      const result = await models.checkHealth(deploymentId!);
+      setHealthActionMessage(result.message);
+      await refetch();
+    } catch (err: unknown) {
+      if (err instanceof ApiError) {
+        setHealthActionError(err.message);
+      } else {
+        setHealthActionError('Failed to run health check');
+      }
+    } finally {
+      setCheckingHealth(false);
+    }
+  };
+
   return (
     <div className="mx-auto max-w-6xl p-4 sm:p-6">
       <button onClick={() => navigate('/models')} className="mb-4 flex items-center gap-2 text-sm text-gray-500 transition-colors hover:text-gray-700">
@@ -243,24 +277,56 @@ export default function ModelDetail() {
             <p className="mt-1 text-sm text-gray-500">{modeDescription}</p>
           </div>
 
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <button
+              type="button"
+              onClick={handleCheckHealth}
+              disabled={checkingHealth}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-200 px-4 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <RefreshCw className={`h-4 w-4 ${checkingHealth ? 'animate-spin' : ''}`} /> Check Health
+            </button>
           {canEdit ? (
-            <div className="flex flex-col gap-2 sm:flex-row">
+            <>
               <button onClick={() => navigate(modelEditPath(deploymentId!))} className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700">
                 <Pencil className="h-4 w-4" /> Edit
               </button>
               <button onClick={handleDelete} className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50">
                 <Trash2 className="h-4 w-4" /> Delete
               </button>
-            </div>
+            </>
           ) : null}
+          </div>
         </div>
+
+        {!model.healthy && (health?.last_error || healthActionError) ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <div className="font-medium">Why this deployment is unhealthy</div>
+                <div className="mt-1">{health?.last_error || healthActionError}</div>
+                <div className="mt-1 text-xs text-red-700">
+                  {health?.last_error_at ? `Last failed check: ${formatUnixTimestamp(health.last_error_at)}` : 'Run Check Health after changing provider settings.'}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {healthActionMessage ? (
+          <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">{healthActionMessage}</div>
+        ) : null}
+        {healthActionError && model.healthy ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{healthActionError}</div>
+        ) : null}
 
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <MetricTile
             icon={ShieldCheck}
             label="Status"
             value={model.healthy ? 'Healthy' : 'Unhealthy'}
-            hint="Current router health"
+            hint={health?.in_cooldown ? 'Unavailable while cooldown is active' : 'Current router health'}
           />
           <MetricTile
             icon={Server}
@@ -301,6 +367,9 @@ export default function ModelDetail() {
                 { label: 'API Version', value: lp.api_version },
                 { label: 'API Key', value: maskedKey || 'Managed outside this deployment', mono: true },
                 { label: 'Timeout', value: formatDurationSeconds(lp.timeout) },
+                { label: 'Consecutive Failures', value: health?.consecutive_failures ? String(health.consecutive_failures) : null },
+                { label: 'Last Success', value: formatUnixTimestamp(health?.last_success_at) },
+                { label: 'Last Failure', value: formatUnixTimestamp(health?.last_error_at) },
               ]}
             />
           </Card>
