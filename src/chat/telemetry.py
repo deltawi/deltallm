@@ -6,7 +6,8 @@ from typing import Any
 
 from fastapi import Request
 
-from src.billing.cost import ModelPricing, completion_cost
+from src.billing.cost import completion_cost
+from src.billing.pricing import pricing_from_model_info
 from src.callbacks import build_standard_logging_payload
 from src.chat.audit import emit_text_audit_event
 from src.metrics import (
@@ -188,12 +189,11 @@ async def emit_nonstream_success(
     api_provider = resolve_provider(served_deployment.deltallm_params)
     api_base = str(served_deployment.deltallm_params.get("api_base", request.app.state.settings.openai_base_url)).rstrip("/")
     usage = payload_data.get("usage") or {}
-    deploy_pricing = None
-    if served_deployment.input_cost_per_token or served_deployment.output_cost_per_token:
-        deploy_pricing = ModelPricing(
-            input_cost_per_token=served_deployment.input_cost_per_token,
-            output_cost_per_token=served_deployment.output_cost_per_token,
-        )
+    deploy_pricing = pricing_from_model_info(
+        served_deployment.model_info,
+        fallback_input_cost_per_token=served_deployment.input_cost_per_token,
+        fallback_output_cost_per_token=served_deployment.output_cost_per_token,
+    )
     request_cost = completion_cost(
         model=payload.model,
         usage=usage,

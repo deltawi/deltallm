@@ -66,6 +66,8 @@ export interface ModelFormValues {
   tags: string;
   input_cost_per_token: string;
   output_cost_per_token: string;
+  input_cost_per_token_cache_hit: string;
+  output_cost_per_token_cache_hit: string;
   max_context_window: string;
   max_input_tokens: string;
   max_output_tokens: string;
@@ -98,6 +100,8 @@ export const EMPTY_FORM: ModelFormValues = {
   tags: '',
   input_cost_per_token: '',
   output_cost_per_token: '',
+  input_cost_per_token_cache_hit: '',
+  output_cost_per_token_cache_hit: '',
   max_context_window: '',
   max_input_tokens: '',
   max_output_tokens: '',
@@ -148,11 +152,14 @@ export function buildModelPayload(form: ModelFormValues, defaultParams: { key: s
   if (form.mode === 'chat') {
     model_info.input_cost_per_token = numOrUndef(form.input_cost_per_token);
     model_info.output_cost_per_token = numOrUndef(form.output_cost_per_token);
+    model_info.input_cost_per_token_cache_hit = numOrUndef(form.input_cost_per_token_cache_hit);
+    model_info.output_cost_per_token_cache_hit = numOrUndef(form.output_cost_per_token_cache_hit);
     model_info.max_tokens = numOrUndef(form.max_context_window);
     model_info.max_input_tokens = numOrUndef(form.max_input_tokens);
     model_info.max_output_tokens = numOrUndef(form.max_output_tokens);
   } else if (form.mode === 'embedding') {
     model_info.input_cost_per_token = numOrUndef(form.input_cost_per_token);
+    model_info.input_cost_per_token_cache_hit = numOrUndef(form.input_cost_per_token_cache_hit);
     model_info.output_vector_size = numOrUndef(form.output_vector_size);
     model_info.max_tokens = numOrUndef(form.max_context_window);
   } else if (form.mode === 'image_generation') {
@@ -217,6 +224,8 @@ export function formFromModel(model: any): { form: ModelFormValues; defaultParam
     tags: Array.isArray(mi.tags) ? mi.tags.join(', ') : '',
     input_cost_per_token: strOrEmpty(mi.input_cost_per_token),
     output_cost_per_token: strOrEmpty(mi.output_cost_per_token),
+    input_cost_per_token_cache_hit: strOrEmpty(mi.input_cost_per_token_cache_hit),
+    output_cost_per_token_cache_hit: strOrEmpty(mi.output_cost_per_token_cache_hit),
     max_context_window: strOrEmpty(mi.max_tokens),
     max_input_tokens: strOrEmpty(mi.max_input_tokens),
     max_output_tokens: strOrEmpty(mi.max_output_tokens),
@@ -534,13 +543,27 @@ export default function ModelForm({
                 <label className="block text-sm font-medium text-gray-700 mb-1">Output Cost / Token ($)</label>
                 <input type="number" step="any" value={form.output_cost_per_token} onChange={(e) => setForm({ ...form, output_cost_per_token: e.target.value })} placeholder="0.000015" className={inputClass} />
               </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Cached Input Cost / Token ($)</label>
+                <input type="number" step="any" value={form.input_cost_per_token_cache_hit} onChange={(e) => setForm({ ...form, input_cost_per_token_cache_hit: e.target.value })} placeholder="Optional override" className={inputClass} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Cached Output Cost / Token ($)</label>
+                <input type="number" step="any" value={form.output_cost_per_token_cache_hit} onChange={(e) => setForm({ ...form, output_cost_per_token_cache_hit: e.target.value })} placeholder="Optional override" className={inputClass} />
+              </div>
             </div>
           )}
 
           {mode === 'embedding' && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Input Cost / Token ($)</label>
-              <input type="number" step="any" value={form.input_cost_per_token} onChange={(e) => setForm({ ...form, input_cost_per_token: e.target.value })} placeholder="0.0000001" className={inputClass} />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Input Cost / Token ($)</label>
+                <input type="number" step="any" value={form.input_cost_per_token} onChange={(e) => setForm({ ...form, input_cost_per_token: e.target.value })} placeholder="0.0000001" className={inputClass} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Cached Input Cost / Token ($)</label>
+                <input type="number" step="any" value={form.input_cost_per_token_cache_hit} onChange={(e) => setForm({ ...form, input_cost_per_token_cache_hit: e.target.value })} placeholder="Optional override" className={inputClass} />
+              </div>
             </div>
           )}
 

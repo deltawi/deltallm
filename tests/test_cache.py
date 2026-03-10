@@ -8,6 +8,7 @@ import pytest
 
 from src.db.repositories import KeyRecord
 from src.cache import CacheKeyBuilder, InMemoryBackend, NoopCacheMetrics, StreamingCacheHandler
+from src.router import build_deployment_registry
 
 
 class _SpendRecorder:
@@ -24,6 +25,16 @@ def _enable_cache(test_app):
     test_app.state.cache_key_builder = CacheKeyBuilder(custom_salt="test-cache")
     test_app.state.cache_metrics = NoopCacheMetrics()
     test_app.state.streaming_cache_handler = StreamingCacheHandler(backend)
+
+
+def _refresh_runtime_registry(test_app) -> None:
+    rebuilt = build_deployment_registry(test_app.state.model_registry)
+    test_app.state.router.deployment_registry.clear()
+    test_app.state.router.deployment_registry.update(rebuilt)
+    test_app.state.failover_manager.registry.clear()
+    test_app.state.failover_manager.registry.update(rebuilt)
+    test_app.state.router_health_handler.registry.clear()
+    test_app.state.router_health_handler.registry.update(rebuilt)
 
 
 @pytest.mark.asyncio
@@ -201,3 +212,68 @@ async def test_cache_hit_records_cache_pricing_signal(client, test_app):
     assert r2.status_code == 200
     await asyncio.sleep(0.05)
     assert any(bool(evt.get("cache_hit")) for evt in recorder.events)
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_uses_deployment_cache_hit_pricing(client, test_app):
+    _enable_cache(test_app)
+    recorder = _SpendRecorder()
+    test_app.state.spend_tracking_service = recorder
+    test_app.state.model_registry["gpt-4o-mini"][0]["model_info"] = {
+        "mode": "chat",
+        "input_cost_per_token": 1.0,
+        "output_cost_per_token": 2.0,
+        "input_cost_per_token_cache_hit": 0.25,
+    }
+    _refresh_runtime_registry(test_app)
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "cache priced"}],
+        "stream": False,
+    }
+
+    r1 = await client.post("/v1/chat/completions", headers=headers, json=body)
+    r2 = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    await asyncio.sleep(0.05)
+    assert len(recorder.events) == 2
+    assert recorder.events[0]["cost"] == 3.0
+    assert recorder.events[1]["cache_hit"] is True
+    assert recorder.events[1]["usage"]["prompt_tokens_cached"] == 1
+    assert recorder.events[1]["cost"] == 2.25
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_recovers_pricing_when_cached_entry_lacks_metadata(client, test_app):
+    _enable_cache(test_app)
+    recorder = _SpendRecorder()
+    test_app.state.spend_tracking_service = recorder
+    test_app.state.model_registry["gpt-4o-mini"][0]["model_info"] = {
+        "mode": "chat",
+        "input_cost_per_token": 1.0,
+        "output_cost_per_token": 2.0,
+        "input_cost_per_token_cache_hit": 0.25,
+    }
+    _refresh_runtime_registry(test_app)
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "cache priced"}],
+        "stream": False,
+    }
+
+    warm = await client.post("/v1/chat/completions", headers=headers, json=body)
+    assert warm.status_code == 200
+
+    cached_entry = next(iter(test_app.state.cache_backend._cache.values()))
+    cached_entry.pricing = None
+    cached_entry.deployment_id = None
+
+    hit = await client.post("/v1/chat/completions", headers=headers, json=body)
+    assert hit.status_code == 200
+    await asyncio.sleep(0.05)
+    assert recorder.events[-1]["cache_hit"] is True
+    assert recorder.events[-1]["cost"] == 2.25

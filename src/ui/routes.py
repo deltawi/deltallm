@@ -618,7 +618,8 @@ async def request_logs(
     logs = await db.query_raw(
         f"""
         SELECT id, request_id, call_type, model, api_base, api_key, spend, total_tokens,
-               prompt_tokens, completion_tokens, start_time, end_time, "user", team_id, cache_hit
+               prompt_tokens, completion_tokens, prompt_tokens_cached, completion_tokens_cached,
+               start_time, end_time, "user", team_id, end_user, metadata, cache_hit, cache_key, request_tags
         FROM deltallm_spendlogs
         {where_sql}
         ORDER BY start_time DESC

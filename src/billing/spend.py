@@ -51,6 +51,8 @@ class SpendTrackingService:
             "total_tokens": int(usage_data.get("total_tokens") or 0),
             "prompt_tokens": int(usage_data.get("prompt_tokens") or 0),
             "completion_tokens": int(usage_data.get("completion_tokens") or 0),
+            "prompt_tokens_cached": int(usage_data.get("prompt_tokens_cached") or 0),
+            "completion_tokens_cached": int(usage_data.get("completion_tokens_cached") or 0),
             "start_time": start_time or now,
             "end_time": end_time or now,
             "model": model,
@@ -82,6 +84,8 @@ class SpendTrackingService:
                     total_tokens,
                     prompt_tokens,
                     completion_tokens,
+                    prompt_tokens_cached,
+                    completion_tokens_cached,
                     start_time,
                     end_time,
                     model,
@@ -94,7 +98,7 @@ class SpendTrackingService:
                     cache_key,
                     request_tags
                 ) VALUES (
-                    $1,$2,$3,$4,$5,$6,$7,$8,$9::timestamp,$10::timestamp,$11,$12,$13,$14,$15,$16::jsonb,$17,$18,$19
+                    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::timestamp,$12::timestamp,$13,$14,$15,$16,$17,$18::jsonb,$19,$20,$21
                 )
                 """,
                 row_id,
@@ -105,6 +109,8 @@ class SpendTrackingService:
                 log_entry["total_tokens"],
                 log_entry["prompt_tokens"],
                 log_entry["completion_tokens"],
+                log_entry["prompt_tokens_cached"],
+                log_entry["completion_tokens_cached"],
                 start_iso,
                 end_iso,
                 log_entry["model"],

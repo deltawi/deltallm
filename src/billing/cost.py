@@ -133,7 +133,7 @@ def completion_cost(
     cached_prompt_tokens = max(0, int(data.get("prompt_tokens_cached", 0) or 0))
     uncached_prompt_tokens = max(0, prompt_tokens - cached_prompt_tokens)
 
-    if cache_hit and pricing.input_cost_per_token_cache_hit is not None:
+    if pricing.input_cost_per_token_cache_hit is not None and (cache_hit or cached_prompt_tokens > 0):
         prompt_cost = (
             cached_prompt_tokens * pricing.input_cost_per_token_cache_hit
             + uncached_prompt_tokens * pricing.input_cost_per_token

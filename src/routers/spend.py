@@ -158,6 +158,8 @@ async def get_spend_logs(
             total_tokens,
             prompt_tokens,
             completion_tokens,
+            prompt_tokens_cached,
+            completion_tokens_cached,
             start_time,
             end_time,
             "user",

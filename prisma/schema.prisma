@@ -17,6 +17,8 @@ model DeltaLLM_SpendLogs {
   total_tokens      Int
   prompt_tokens     Int
   completion_tokens Int
+  prompt_tokens_cached Int      @default(0)
+  completion_tokens_cached Int  @default(0)
   start_time        DateTime
   end_time          DateTime
   model             String

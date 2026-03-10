@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from src.billing.cost import completion_cost
+from src.billing.pricing import pricing_from_model_info
 from src.callbacks import CallbackManager, build_standard_logging_payload
 from src.middleware.auth import require_api_key
 from src.middleware.rate_limit import enforce_rate_limits
@@ -192,6 +193,8 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             primary_deployment_id=primary.deployment_id,
             served_deployment_id=served_deployment.deployment_id,
         )
+        request.state.cache_store_pricing = dict(served_deployment.model_info or {})
+        request.state.cache_store_deployment_id = served_deployment.deployment_id
         route_meta = route_decision_metadata(request)
         await request.app.state.passive_health_tracker.record_request_outcome(served_deployment.deployment_id, success=True)
         api_provider = resolve_provider(served_deployment.deltallm_params)
@@ -201,13 +204,11 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         deployment_model = data.pop("_deployment_model", None)
 
         usage = data.get("usage") or {}
-        _deploy_pricing = None
-        if served_deployment.input_cost_per_token or served_deployment.output_cost_per_token:
-            from src.billing.cost import ModelPricing
-            _deploy_pricing = ModelPricing(
-                input_cost_per_token=served_deployment.input_cost_per_token,
-                output_cost_per_token=served_deployment.output_cost_per_token,
-            )
+        _deploy_pricing = pricing_from_model_info(
+            served_deployment.model_info,
+            fallback_input_cost_per_token=served_deployment.input_cost_per_token,
+            fallback_output_cost_per_token=served_deployment.output_cost_per_token,
+        )
         request_cost = completion_cost(
             model=payload.model,
             usage=usage,

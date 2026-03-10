@@ -121,6 +121,8 @@ async def handle_chat_like_request(
                         cache_key=cache_context.cache_key,
                         ttl=cache_ttl,
                         model=payload.model,
+                        pricing=dict(served_deployment.model_info or {}),
+                        deployment_id=served_deployment.deployment_id,
                     )
                     stream_handler.start_stream(stream_id)
 
@@ -209,6 +211,8 @@ async def handle_chat_like_request(
             primary_deployment_id=primary.deployment_id,
             served_deployment_id=served_deployment.deployment_id,
         )
+        request.state.cache_store_pricing = dict(served_deployment.model_info or {})
+        request.state.cache_store_deployment_id = served_deployment.deployment_id
         response_payload = response_transform(payload_data) if response_transform is not None else payload_data
         api_provider = resolve_provider(served_deployment.deltallm_params)
         await emit_nonstream_success(
