@@ -66,6 +66,8 @@ class SpendQueryDB:
                     "total_tokens": 20,
                     "prompt_tokens": 10,
                     "completion_tokens": 10,
+                    "prompt_tokens_cached": 10,
+                    "completion_tokens_cached": 0,
                     "start_time": "2026-02-13T00:00:00+00:00",
                     "end_time": "2026-02-13T00:00:01+00:00",
                     "user": "u1",
@@ -101,6 +103,37 @@ async def test_spend_tracking_writes_log_and_ledger_updates():
     assert any("update deltallm_usertable" in q.lower() for q, _ in db.calls)
     assert any("update deltallm_teamtable" in q.lower() for q, _ in db.calls)
     assert any("update deltallm_organizationtable" in q.lower() for q, _ in db.calls)
+
+
+@pytest.mark.asyncio
+async def test_spend_tracking_persists_cached_token_counts():
+    db = RecordingDB()
+    service = SpendTrackingService(db_client=db)
+
+    await service.log_spend(
+        request_id="req_cached",
+        api_key="key_hash",
+        user_id="user_1",
+        team_id="team_1",
+        organization_id="org_1",
+        end_user_id=None,
+        model="gpt-4o-mini",
+        call_type="completion",
+        usage={
+            "total_tokens": 10,
+            "prompt_tokens": 6,
+            "completion_tokens": 4,
+            "prompt_tokens_cached": 6,
+            "completion_tokens_cached": 0,
+        },
+        cost=0.01,
+        metadata={"api_base": "cache"},
+        cache_hit=True,
+    )
+
+    insert_call = next(args for query, args in db.calls if "insert into deltallm_spendlogs" in query.lower())
+    assert insert_call[8] == 6
+    assert insert_call[9] == 0
 
 
 @pytest.mark.asyncio

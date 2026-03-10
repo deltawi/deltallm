@@ -12,6 +12,8 @@ class CacheEntry:
     cached_at: float
     ttl: int
     token_count: int = 0
+    pricing: dict[str, Any] | None = None
+    deployment_id: str | None = None
 
 
 class CacheBackend(ABC):

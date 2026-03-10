@@ -40,6 +40,8 @@ class RedisBackend(CacheBackend):
             cached_at=float(payload.get("cached_at", 0)),
             ttl=int(payload.get("ttl", 0)),
             token_count=int(payload.get("token_count", 0)),
+            pricing=payload.get("pricing"),
+            deployment_id=payload.get("deployment_id"),
         )
 
     async def set(self, key: str, entry: CacheEntry, ttl: int | None = None) -> None:

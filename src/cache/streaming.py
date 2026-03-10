@@ -14,6 +14,8 @@ class StreamWriteContext:
     cache_key: str
     ttl: int
     model: str
+    pricing: dict[str, Any] | None = None
+    deployment_id: str | None = None
 
 
 class StreamingCacheHandler:
@@ -56,6 +58,8 @@ class StreamingCacheHandler:
             cached_at=time.time(),
             ttl=ctx.ttl,
             token_count=token_count,
+            pricing=ctx.pricing,
+            deployment_id=ctx.deployment_id,
         )
         await self.backend.set(ctx.cache_key, entry, ctx.ttl)
 

@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.billing.cost import completion_cost
+from src.billing.pricing import normalize_gateway_cache_hit_usage, pricing_from_model_info
 from src.middleware.auth import authenticate_request
 from src.middleware.rate_limit import _check_and_acquire_rate_limits, _release_rate_limits
 from src.metrics import increment_request, increment_spend, increment_usage, infer_provider
@@ -146,7 +147,7 @@ class CacheMiddleware(BaseHTTPMiddleware):
                         metrics.hit(endpoint=endpoint, model=model)
                         request.state.cache_context.hit = True
                         request.state.cache_hit = True
-                        self._record_cache_hit_accounting(request, endpoint, model, cached.response)
+                        await self._record_cache_hit_accounting(request, endpoint, model, cache_key, cached)
                         return StreamingResponse(
                             streaming_handler.reconstruct_sse_stream(cached.response),
                             media_type="text/event-stream",
@@ -171,7 +172,7 @@ class CacheMiddleware(BaseHTTPMiddleware):
                     metrics.hit(endpoint=endpoint, model=model)
                     request.state.cache_context.hit = True
                     request.state.cache_hit = True
-                    self._record_cache_hit_accounting(request, endpoint, model, cached_entry.response)
+                    await self._record_cache_hit_accounting(request, endpoint, model, cache_key, cached_entry)
                     return self._cached_json_response(cached_entry.response, cache_key)
                 metrics.miss(endpoint=endpoint, model=model)
                 request.state.cache_hit = False
@@ -185,6 +186,7 @@ class CacheMiddleware(BaseHTTPMiddleware):
 
             response, response_data = await self._materialize_response(response)
             await self._maybe_store(
+                request=request,
                 backend=backend,
                 response=response,
                 response_data=response_data,
@@ -237,15 +239,31 @@ class CacheMiddleware(BaseHTTPMiddleware):
         response.headers["x-deltallm-cache-key"] = cache_key
         return response
 
-    def _record_cache_hit_accounting(self, request: Request, endpoint: str, model: str, payload: dict[str, Any]) -> None:
+    async def _record_cache_hit_accounting(
+        self,
+        request: Request,
+        endpoint: str,
+        model: str,
+        cache_key: str,
+        entry: CacheEntry,
+    ) -> None:
         auth = getattr(request.state, "user_api_key", None)
         if auth is None:
             return
         call_type = "embedding" if endpoint == "/v1/embeddings" else "completion"
+        payload = entry.response if isinstance(entry.response, dict) else {}
         usage = payload.get("usage") if isinstance(payload, dict) else None
-        usage = usage if isinstance(usage, dict) else {}
+        usage = normalize_gateway_cache_hit_usage(usage if isinstance(usage, dict) else {})
         api_provider = infer_provider(model)
-        request_cost = completion_cost(model=model, usage=usage, cache_hit=True)
+        custom_pricing = pricing_from_model_info(entry.pricing)
+        if custom_pricing is None:
+            custom_pricing = await self._resolve_cache_hit_pricing(request, model, entry)
+        request_cost = completion_cost(
+            model=model,
+            usage=usage,
+            cache_hit=True,
+            custom_pricing=custom_pricing,
+        )
         increment_request(
             model=model,
             api_provider=api_provider,
@@ -283,9 +301,21 @@ class CacheMiddleware(BaseHTTPMiddleware):
                 call_type=call_type,
                 usage=usage,
                 cost=request_cost,
-                metadata={"api_base": "cache"},
+                metadata={"api_base": "cache", "cache_key": cache_key},
                 cache_hit=True,
             )
+        )
+
+    async def _resolve_cache_hit_pricing(self, request: Request, model: str, entry: CacheEntry):
+        deployment = _find_runtime_deployment(request, entry.deployment_id)
+        if deployment is None:
+            deployment = await _select_runtime_deployment_for_pricing(request, model)
+        if deployment is None:
+            return None
+        return pricing_from_model_info(
+            deployment.model_info,
+            fallback_input_cost_per_token=deployment.input_cost_per_token,
+            fallback_output_cost_per_token=deployment.output_cost_per_token,
         )
 
     def _scoped_cache_key(self, cache_key: str, request: Request) -> str:
@@ -298,6 +328,7 @@ class CacheMiddleware(BaseHTTPMiddleware):
     async def _maybe_store(
         self,
         *,
+        request: Request,
         backend: CacheBackend,
         response: Response,
         response_data: dict[str, Any] | None,
@@ -321,6 +352,8 @@ class CacheMiddleware(BaseHTTPMiddleware):
             cached_at=time.time(),
             ttl=ttl,
             token_count=int((response_data.get("usage") or {}).get("total_tokens") or 0),
+            pricing=_pricing_for_cache_entry(request),
+            deployment_id=_deployment_id_for_cache_entry(request),
         )
 
         try:
@@ -360,3 +393,36 @@ class CacheMiddleware(BaseHTTPMiddleware):
             return json.loads(body)
         except Exception:
             return None
+
+
+def _pricing_for_cache_entry(request: Request) -> dict[str, Any] | None:
+    pricing = getattr(request.state, "cache_store_pricing", None)
+    return dict(pricing) if isinstance(pricing, dict) else None
+
+
+def _deployment_id_for_cache_entry(request: Request) -> str | None:
+    deployment_id = getattr(request.state, "cache_store_deployment_id", None)
+    return str(deployment_id) if deployment_id else None
+
+
+def _find_runtime_deployment(request: Request, deployment_id: str | None):
+    if not deployment_id:
+        return None
+    registry = getattr(getattr(request.app.state, "router", None), "deployment_registry", {}) or {}
+    for deployments in registry.values():
+        for deployment in deployments:
+            if deployment.deployment_id == deployment_id:
+                return deployment
+    return None
+
+
+async def _select_runtime_deployment_for_pricing(request: Request, model: str):
+    router = getattr(request.app.state, "router", None)
+    auth = getattr(request.state, "user_api_key", None)
+    if router is None or auth is None:
+        return None
+    request_data = getattr(request.state, "request_data", None)
+    metadata = request_data.get("metadata") if isinstance(request_data, dict) else None
+    request_context = {"metadata": metadata or {}, "user_id": auth.user_id or auth.api_key}
+    model_group = router.resolve_model_group(model)
+    return await router.select_deployment(model_group, request_context)

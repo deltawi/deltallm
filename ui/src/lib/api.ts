@@ -80,6 +80,30 @@ export interface Paginated<T> {
   pagination: Pagination;
 }
 
+export interface SpendLog {
+  id: string;
+  request_id: string;
+  call_type: string;
+  model: string;
+  api_base?: string | null;
+  api_key: string;
+  spend: number;
+  total_tokens: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  prompt_tokens_cached?: number;
+  completion_tokens_cached?: number;
+  start_time?: string | null;
+  end_time?: string | null;
+  user?: string | null;
+  team_id?: string | null;
+  end_user?: string | null;
+  metadata?: Record<string, unknown> | null;
+  cache_hit: boolean;
+  cache_key?: string | null;
+  request_tags?: string[];
+}
+
 export interface ServiceAccount {
   service_account_id: string;
   team_id: string;
@@ -218,7 +242,7 @@ export const spend = {
   logs: (params?: Record<string, string>) => {
     const qs = new URLSearchParams(params || {});
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
-    return apiFetch<any>(`/ui/api/logs${suffix}`);
+    return apiFetch<{ logs: SpendLog[]; pagination: Pagination }>(`/ui/api/logs${suffix}`);
   },
 };
 

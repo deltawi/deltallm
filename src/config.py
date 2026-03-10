@@ -57,6 +57,8 @@ class ModelInfo(BaseModel):
     tags: list[str] = Field(default_factory=list)
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    input_cost_per_token_cache_hit: float | None = None
+    output_cost_per_token_cache_hit: float | None = None
     batch_input_cost_per_token: float | None = None
     batch_output_cost_per_token: float | None = None
     batch_price_multiplier: float | None = None
