@@ -16,6 +16,7 @@ from src.api.audit import emit_control_audit_event
 from src.auth.roles import Permission
 from src.api.admin.endpoints.common import get_auth_scope
 from src.config_runtime.models import ModelHotReloadManager
+from src.providers.healthcheck import probe_provider_health
 from src.providers.resolution import provider_presets, resolve_provider, validate_provider_mode_compatibility
 from src.router import build_deployment_registry
 
@@ -64,6 +65,49 @@ def _model_entries(app: Any) -> list[dict[str, Any]]:
                 }
             )
     return entries
+
+
+def _find_runtime_deployment(app: Any, deployment_id: str) -> Any | None:
+    registry = getattr(getattr(app.state, "router", None), "deployment_registry", {}) or {}
+    for deployments in registry.values():
+        for deployment in deployments:
+            if deployment.deployment_id == deployment_id:
+                return deployment
+    return None
+
+
+def _to_int_or_none(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _serialize_deployment_health(app: Any, deployment_id: str) -> dict[str, Any]:
+    health_backend = getattr(app.state, "router_state_backend", None)
+    if health_backend is None:
+        return {
+            "healthy": True,
+            "in_cooldown": False,
+            "consecutive_failures": 0,
+            "last_error": None,
+            "last_error_at": None,
+            "last_success_at": None,
+        }
+
+    health = await health_backend.get_health(deployment_id)
+    in_cooldown = await health_backend.is_cooled_down(deployment_id)
+    healthy = str(health.get("healthy", "true")) != "false" and not in_cooldown
+    return {
+        "healthy": healthy,
+        "in_cooldown": in_cooldown,
+        "consecutive_failures": _to_int_or_none(health.get("consecutive_failures")) or 0,
+        "last_error": health.get("last_error") or None,
+        "last_error_at": _to_int_or_none(health.get("last_error_at")),
+        "last_success_at": _to_int_or_none(health.get("last_success_at")),
+    }
 
 
 def _rebuild_runtime_registry(app: Any) -> None:
@@ -193,17 +237,41 @@ async def list_provider_presets() -> dict[str, Any]:
 
 @ui_router.get("/ui/api/models/{deployment_id:path}", dependencies=[Depends(require_authenticated)])
 async def get_model(request: Request, deployment_id: str) -> dict[str, Any]:
-    health_backend = getattr(request.app.state, "router_state_backend", None)
     entries = _model_entries(request.app)
     for entry in entries:
         if entry["deployment_id"] == deployment_id:
-            healthy = True
-            if health_backend is not None:
-                health = await health_backend.get_health(deployment_id)
-                healthy = str(health.get("healthy", "true")) != "false"
-            entry["healthy"] = healthy
+            health = await _serialize_deployment_health(request.app, deployment_id)
+            entry["healthy"] = health["healthy"]
+            entry["health"] = health
             return entry
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
+
+
+@ui_router.post("/ui/api/models/{deployment_id:path}/health-check", dependencies=[Depends(require_authenticated)])
+async def check_model_health(request: Request, deployment_id: str) -> dict[str, Any]:
+    deployment = _find_runtime_deployment(request.app, deployment_id)
+    if deployment is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
+
+    health_checker = getattr(request.app.state, "background_health_checker", None)
+    if health_checker is not None:
+        result = await health_checker.check_deployment_once(deployment)
+    else:
+        result = await probe_provider_health(
+            request.app.state.http_client,
+            deployment.deltallm_params,
+            default_openai_base_url=request.app.state.settings.openai_base_url,
+        )
+
+    health = await _serialize_deployment_health(request.app, deployment_id)
+    return {
+        "deployment_id": deployment_id,
+        "healthy": health["healthy"],
+        "health": health,
+        "message": "Health check passed" if result.healthy else (result.error or "Health check failed"),
+        "status_code": result.status_code,
+        "checked_at": result.checked_at,
+    }
 
 
 @ui_router.post("/ui/api/models", dependencies=[Depends(require_master_key)])

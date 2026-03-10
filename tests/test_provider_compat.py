@@ -47,6 +47,23 @@ async def test_openai_adapter_keeps_tool_choice_with_tools() -> None:
 
 
 @pytest.mark.asyncio
+async def test_openai_adapter_preserves_slash_prefixed_model_for_groq() -> None:
+    adapter = OpenAIAdapter(httpx.AsyncClient())
+    try:
+        req = ChatCompletionRequest(
+            model="openai/gpt-oss-120b",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        payload = await adapter.translate_request(
+            req,
+            {"provider": "groq", "model": "openai/gpt-oss-120b"},
+        )
+        assert payload["model"] == "openai/gpt-oss-120b"
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_anthropic_adapter_translate_request_and_response() -> None:
     adapter = AnthropicAdapter(httpx.AsyncClient())
     try:

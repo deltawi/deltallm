@@ -119,6 +119,26 @@ export interface ProviderPreset {
   supported_modes: string[];
 }
 
+export interface DeploymentHealth {
+  healthy: boolean;
+  in_cooldown: boolean;
+  consecutive_failures: number;
+  last_error: string | null;
+  last_error_at: number | null;
+  last_success_at: number | null;
+}
+
+export interface ModelDeploymentDetail {
+  deployment_id: string;
+  model_name: string;
+  provider: string;
+  mode?: string;
+  healthy?: boolean;
+  health?: DeploymentHealth;
+  deltallm_params: Record<string, any>;
+  model_info: Record<string, any>;
+}
+
 export interface AuditPayload {
   payload_id: string;
   event_id: string;
@@ -216,7 +236,12 @@ export const models = {
   list: (params?: { search?: string; provider?: string; mode?: string; limit?: number; offset?: number }) =>
     apiFetch<Paginated<any>>(withQuery('/ui/api/models', params as any)),
   providerPresets: () => apiFetch<{ data: ProviderPreset[] }>('/ui/api/provider-presets'),
-  get: (deploymentId: string) => apiFetch<any>(`/ui/api/models/${encodeURIComponent(deploymentId)}`),
+  get: (deploymentId: string) => apiFetch<ModelDeploymentDetail>(`/ui/api/models/${encodeURIComponent(deploymentId)}`),
+  checkHealth: (deploymentId: string) =>
+    apiFetch<{ deployment_id: string; healthy: boolean; health: DeploymentHealth; message: string; status_code?: number | null; checked_at: number }>(
+      `/ui/api/models/${encodeURIComponent(deploymentId)}/health-check`,
+      { method: 'POST' },
+    ),
   create: (payload: any) => apiFetch<any>('/ui/api/models', { method: 'POST', json: payload }),
   update: (deploymentId: string, payload: any) =>
     apiFetch<any>(`/ui/api/models/${encodeURIComponent(deploymentId)}`, { method: 'PUT', json: payload }),
@@ -248,6 +273,13 @@ export interface RouteGroupMember {
   updated_at?: string | null;
 }
 
+export interface RouteGroupMemberDetail extends RouteGroupMember {
+  model_name?: string | null;
+  provider?: string | null;
+  mode?: string | null;
+  healthy?: boolean | null;
+}
+
 export interface RoutePolicy {
   route_policy_id: string;
   route_group_id: string;
@@ -264,7 +296,7 @@ export const routeGroups = {
   list: (params?: { search?: string; limit?: number; offset?: number }) =>
     apiFetch<Paginated<RouteGroup>>(withQuery('/ui/api/route-groups', params as any)),
   get: (groupKey: string) =>
-    apiFetch<{ group: RouteGroup; members: RouteGroupMember[]; policy: RoutePolicy | null }>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}`),
+    apiFetch<{ group: RouteGroup; members: RouteGroupMemberDetail[]; policy: RoutePolicy | null }>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}`),
   create: (payload: any) => apiFetch<RouteGroup>('/ui/api/route-groups', { method: 'POST', json: payload }),
   update: (groupKey: string, payload: any) =>
     apiFetch<RouteGroup>(`/ui/api/route-groups/${encodeURIComponent(groupKey)}`, { method: 'PUT', json: payload }),

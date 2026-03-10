@@ -17,11 +17,11 @@ interface RouteGroupSettingsCardProps {
 
 export default function RouteGroupSettingsCard({ form, saving, onChange, onSave }: RouteGroupSettingsCardProps) {
   return (
-    <Card title="1. Basics">
+    <Card title="Group Settings">
       <div className="space-y-4">
         <div>
-          <h4 className="text-sm font-semibold text-slate-900">Define the group shell</h4>
-          <p className="mt-1 text-xs text-slate-500">Keep the first pass minimal. Groups use shuffle routing until you open Advanced and publish an override.</p>
+          <h4 className="text-sm font-semibold text-slate-900">Control the group identity and traffic state</h4>
+          <p className="mt-1 text-xs text-slate-500">Use this section for the group name, workload type, and live-traffic toggle. Routing behavior stays separate below.</p>
         </div>
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Display Name</label>
@@ -70,7 +70,7 @@ export default function RouteGroupSettingsCard({ form, saving, onChange, onSave 
           className="w-full mt-2 flex items-center justify-center gap-2 px-3 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
         >
           <Save className="w-4 h-4" />
-          {saving ? 'Saving...' : 'Save Basics'}
+          {saving ? 'Saving...' : 'Save Settings'}
         </button>
       </div>
     </Card>

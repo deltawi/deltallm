@@ -37,7 +37,7 @@ from src.guardrails.middleware import GuardrailMiddleware
 from src.guardrails.registry import GuardrailRegistry
 from src.middleware.errors import register_exception_handlers
 from src.middleware.platform_auth import attach_platform_auth_context
-from src.metrics import infer_provider
+from src.providers.healthcheck import probe_provider_health
 from src.providers.anthropic import AnthropicAdapter
 from src.providers.bedrock import BedrockAdapter
 from src.providers.azure import AzureOpenAIAdapter
@@ -311,11 +311,12 @@ async def lifespan(app: FastAPI):
         salt_key=salt_key,
     )
 
-    async def _deployment_health_check(deployment) -> bool:
-        provider = infer_provider(deployment.deltallm_params.get("model"))
-        if provider == "anthropic":
-            return await app.state.anthropic_adapter.health_check(deployment.deltallm_params)
-        return await app.state.openai_adapter.health_check(deployment.deltallm_params)
+    async def _deployment_health_check(deployment):
+        return await probe_provider_health(
+            app.state.http_client,
+            deployment.deltallm_params,
+            default_openai_base_url=app.state.settings.openai_base_url,
+        )
 
     health_checker = BackgroundHealthChecker(
         config=HealthCheckConfig(

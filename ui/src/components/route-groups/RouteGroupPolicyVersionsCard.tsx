@@ -27,7 +27,7 @@ export default function RouteGroupPolicyVersionsCard({
   onRollback,
 }: RouteGroupPolicyVersionsCardProps) {
   return (
-    <Card title="4. History and Rollback">
+    <Card title="History and Rollback">
       <div className="space-y-3">
         <p className="text-xs text-slate-500">Use rollback only when you need to restore a previously published policy. This is a maintenance view, not part of the first-time setup path.</p>
         {hasError && (

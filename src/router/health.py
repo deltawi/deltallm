@@ -11,6 +11,7 @@ from src.metrics import (
     set_deployment_latency_per_output_token,
     set_deployment_state,
 )
+from src.providers.healthcheck import HealthProbeResult
 from src.router.router import Deployment
 from src.router.state import DeploymentStateBackend
 
@@ -28,7 +29,7 @@ class BackgroundHealthChecker:
         config: HealthCheckConfig,
         deployment_registry: dict[str, list[Deployment]],
         state_backend: DeploymentStateBackend,
-        checker: Callable[[Deployment], Awaitable[bool]],
+        checker: Callable[[Deployment], Awaitable[HealthProbeResult]],
     ):
         self.config = config
         self.registry = deployment_registry
@@ -57,18 +58,40 @@ class BackgroundHealthChecker:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for deployment, result in zip(deployments, results, strict=False):
-            if result is True:
-                await self.state.set_health(deployment.deployment_id, True)
-                if await self.state.is_cooled_down(deployment.deployment_id):
-                    await self.state.clear_cooldown(deployment.deployment_id)
-            else:
-                await self.state.set_health(deployment.deployment_id, False)
-                await self.state.record_failure(deployment.deployment_id, str(result))
+            if isinstance(result, Exception):
+                await self._apply_result(
+                    deployment,
+                    HealthProbeResult(healthy=False, error=str(result) or "Health check failed"),
+                )
+                continue
+            await self._apply_result(deployment, result)
 
-    async def _check_deployment(self, deployment: Deployment) -> bool:
+    async def check_deployment_once(self, deployment: Deployment) -> HealthProbeResult:
+        try:
+            result = await self._check_deployment(deployment)
+        except Exception as exc:
+            result = HealthProbeResult(healthy=False, error=str(exc) or "Health check failed")
+        await self._apply_result(deployment, result)
+        return result
+
+    async def _check_deployment(self, deployment: Deployment) -> HealthProbeResult:
         return await asyncio.wait_for(
             self.checker(deployment),
             timeout=self.config.timeout_seconds,
+        )
+
+    async def _apply_result(self, deployment: Deployment, result: HealthProbeResult) -> None:
+        if result.healthy:
+            await self.state.record_success(deployment.deployment_id)
+            await self.state.set_health(deployment.deployment_id, True)
+            if await self.state.is_cooled_down(deployment.deployment_id):
+                await self.state.clear_cooldown(deployment.deployment_id)
+            return
+
+        await self.state.set_health(deployment.deployment_id, False)
+        await self.state.record_failure(
+            deployment.deployment_id,
+            result.error or "Health check failed",
         )
 
 

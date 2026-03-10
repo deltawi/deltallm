@@ -21,6 +21,15 @@ OPENAI_COMPATIBLE_PROVIDERS = {
     "azure_openai",
 }
 
+PROVIDER_MODEL_PREFIXES_TO_STRIP: dict[str, tuple[str, ...]] = {
+    "openai": ("openai/",),
+    "anthropic": ("anthropic/",),
+    "azure": ("azure/", "azure_openai/"),
+    "azure_openai": ("azure/", "azure_openai/"),
+    "gemini": ("gemini/",),
+    "bedrock": ("bedrock/",),
+}
+
 PROVIDER_CAPABILITIES: dict[str, set[ModelMode]] = {
     "openai": {"chat", "embedding", "image_generation", "audio_speech", "audio_transcription"},
     "anthropic": {"chat"},
@@ -73,6 +82,22 @@ def resolve_provider(params: Mapping[str, object] | None) -> str:
         return sanitize_label(str(explicit)).lower()
 
     return provider_from_model(str(params.get("model") or ""))
+
+
+def resolve_upstream_model(params: Mapping[str, object] | None, fallback_model: str | None = None) -> str:
+    if not params:
+        return (fallback_model or "").strip()
+
+    upstream_model = str(params.get("model") or fallback_model or "").strip()
+    if not upstream_model:
+        return ""
+
+    provider = resolve_provider(params)
+    lowered = upstream_model.lower()
+    for prefix in PROVIDER_MODEL_PREFIXES_TO_STRIP.get(provider, ()):
+        if lowered.startswith(prefix):
+            return upstream_model[len(prefix):]
+    return upstream_model
 
 
 def provider_supports_mode(provider: str, mode: ModelMode) -> bool:

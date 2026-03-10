@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
-import JourneyChecklist from '../components/JourneyChecklist';
 import { useToast } from '../components/ToastProvider';
 import { models, promptRegistry, routeGroups, type PromptBinding } from '../lib/api';
 import { useApi } from '../lib/hooks';
@@ -33,7 +32,7 @@ export default function RouteGroupDetail() {
   const [policyError, setPolicyError] = useState<string | null>(null);
   const [selectedRollbackVersion, setSelectedRollbackVersion] = useState<number | null>(null);
   const [showAdvancedJson, setShowAdvancedJson] = useState(false);
-  const [showAdvancedSection, setShowAdvancedSection] = useState(false);
+  const [activeTab, setActiveTab] = useState<'models' | 'test' | 'settings' | 'advanced'>('models');
   const [policyAction, setPolicyAction] = useState<PolicyAction>(null);
   const [memberSearchInput, setMemberSearchInput] = useState('');
   const [memberSearch, setMemberSearch] = useState('');
@@ -76,6 +75,8 @@ export default function RouteGroupDetail() {
   const policies = policyHistory.data?.policies || [];
   const members = detail.data?.members || [];
   const bindings = groupBindings.data?.data || [];
+  const healthyMembers = members.filter((member) => member.healthy === true).length;
+  const missingMembers = members.filter((member) => member.healthy == null).length;
   const memberIds = useMemo(() => members.map((member) => member.deployment_id), [members]);
   const isPolicyBusy = policyAction !== null;
   const publishedPolicy = useMemo(() => policies.find((policy) => policy.status === 'published') || null, [policies]);
@@ -177,16 +178,6 @@ export default function RouteGroupDetail() {
       requiredVariables: requiredPromptVariables(versionRecord?.variables_schema),
     };
   }, [winningPrompt, winningPromptDetail.data]);
-
-  const checklistSteps = [
-    { label: 'Add members', done: members.length > 0, hint: 'At least one deployment is required before the group can serve traffic.' },
-    {
-      label: 'Choose prompt',
-      done: !winningPrompt || !!promptSummary,
-      hint: winningPrompt ? `Bound prompt ${String(winningPrompt.template_key)} is ready to resolve for this group.` : 'Optional. Leave this empty if the group should run without an attached prompt.',
-    },
-    { label: 'Enable live traffic', done: !!detail.data?.group?.enabled, hint: 'Leave this off until members and any prompt binding look correct.' },
-  ];
 
   if (detail.loading) {
     return (
@@ -411,14 +402,22 @@ export default function RouteGroupDetail() {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">{detail.data.group.name || detail.data.group.group_key}</h1>
+            <p className="mt-1 text-sm text-slate-700">
+              {members.length} {members.length === 1 ? 'model' : 'models'} configured for {form.mode} traffic
+              {detail.data.group.enabled ? ' and ready for live requests.' : ', with live traffic currently off.'}
+            </p>
             <p className="mt-1 text-sm text-gray-500">
               Group key: <code className="rounded bg-gray-100 px-1.5 py-0.5">{detail.data.group.group_key}</code>
             </p>
           </div>
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Members</div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Models</div>
               <div className="mt-1 text-lg font-semibold text-slate-900">{members.length}</div>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Healthy</div>
+              <div className="mt-1 text-lg font-semibold text-slate-900">{healthyMembers}</div>
             </div>
             <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
               <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Routing</div>
@@ -432,58 +431,74 @@ export default function RouteGroupDetail() {
               <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Traffic</div>
               <div className="mt-1 text-sm font-semibold text-slate-900">{detail.data.group.enabled ? 'Live' : 'Off'}</div>
             </div>
+            <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Registry Gaps</div>
+              <div className="mt-1 text-sm font-semibold text-slate-900">{missingMembers > 0 ? `${missingMembers} missing` : 'None'}</div>
+            </div>
           </div>
         </div>
       </div>
 
-      <JourneyChecklist
-        title="Setup Progress"
-        description="Model groups are easiest to configure in this order: add members, optionally choose a prompt, then turn on live traffic."
-        steps={checklistSteps}
-      />
+      <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-3">
+        <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-3">
+          {[
+            { key: 'models', label: 'Models' },
+            { key: 'test', label: 'Test' },
+            { key: 'settings', label: 'Settings' },
+            { key: 'advanced', label: 'Advanced' },
+          ].map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setActiveTab(tab.key as typeof activeTab)}
+              className={`rounded-lg px-4 py-2 text-sm transition-colors ${
+                activeTab === tab.key
+                  ? 'bg-blue-600 text-white'
+                  : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
-      <div className="mt-5 space-y-5">
-        <RouteGroupSettingsCard form={form} saving={savingGroup} onChange={setForm} onSave={handleSaveGroup} />
-        <RouteGroupMembersCard
-          mode={form.mode}
-          memberForm={memberForm}
-          manualMemberEntry={manualMemberEntry}
-          memberSearchInput={memberSearchInput}
-          candidateDeployments={candidateDeployments}
-          loadingCandidates={deploymentCandidates.loading}
-          hasCandidateError={!!deploymentCandidates.error}
-          addingMember={addingMember}
-          members={members}
-          onMemberFormChange={setMemberForm}
-          onToggleManualEntry={() => setManualMemberEntry((current) => !current)}
-          onMemberSearchChange={setMemberSearchInput}
-          onAddMember={handleAddMember}
-          onRequestRemoveMember={setMemberToRemove}
-        />
-        <RouteGroupUsageCard
-          groupKey={detail.data.group.group_key}
-          mode={form.mode}
-          liveTrafficEnabled={detail.data.group.enabled}
-          boundPrompt={promptSummary}
-        />
+        <div className="pt-4">
+          {activeTab === 'models' && (
+            <RouteGroupMembersCard
+              mode={form.mode}
+              memberForm={memberForm}
+              manualMemberEntry={manualMemberEntry}
+              memberSearchInput={memberSearchInput}
+              candidateDeployments={candidateDeployments}
+              loadingCandidates={deploymentCandidates.loading}
+              hasCandidateError={!!deploymentCandidates.error}
+              addingMember={addingMember}
+              members={members}
+              onMemberFormChange={setMemberForm}
+              onToggleManualEntry={() => setManualMemberEntry((current) => !current)}
+              onMemberSearchChange={setMemberSearchInput}
+              onAddMember={handleAddMember}
+              onRequestRemoveMember={setMemberToRemove}
+            />
+          )}
 
-        <details
-          open={showAdvancedSection}
-          className="rounded-2xl border border-slate-200 bg-white px-4 py-4"
-        >
-          <summary
-            className="cursor-pointer list-none text-sm font-semibold text-slate-900"
-            onClick={(event) => {
-              event.preventDefault();
-              setShowAdvancedSection((current) => !current);
-            }}
-          >
-            4. Advanced
-          </summary>
-          {showAdvancedSection && (
-            <div className="mt-4 space-y-5">
+          {activeTab === 'test' && (
+            <RouteGroupUsageCard
+              groupKey={detail.data.group.group_key}
+              mode={form.mode}
+              liveTrafficEnabled={detail.data.group.enabled}
+              boundPrompt={promptSummary}
+            />
+          )}
+
+          {activeTab === 'settings' && (
+            <RouteGroupSettingsCard form={form} saving={savingGroup} onChange={setForm} onSave={handleSaveGroup} />
+          )}
+
+          {activeTab === 'advanced' && (
+            <div className="space-y-5">
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
-                Use advanced settings only when this group needs something beyond default shuffle and no-prompt behavior.
+                Configure prompts, routing overrides, and rollback history here after the model inventory looks correct.
               </div>
 
               <RouteGroupPromptBindingCard
@@ -529,7 +544,7 @@ export default function RouteGroupDetail() {
               />
             </div>
           )}
-        </details>
+        </div>
       </div>
 
       <ConfirmDialog

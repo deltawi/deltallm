@@ -231,12 +231,15 @@ class RedisStateBackend:
                     "last_success_at": now,
                 },
             )
+            pipe.hdel(health_key, "last_error", "last_error_at")
             await pipe.execute()
             return
         except Exception:
             self._failures[deployment_id] = 0
             entry = self._health.setdefault(deployment_id, {})
             entry.update({"healthy": "true", "consecutive_failures": "0", "last_success_at": now})
+            entry.pop("last_error", None)
+            entry.pop("last_error_at", None)
 
     async def record_failure(self, deployment_id: str, error: str) -> int:
         failures_key = f"failures:{deployment_id}"
