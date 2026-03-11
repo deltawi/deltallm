@@ -6,6 +6,37 @@ from src.config import AppConfig
 from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
 
 
+class DuplicateModelNameError(ValueError):
+    """Raised when multiple deployments share the same public model name."""
+
+
+def _raise_duplicate_model_name(model_name: str) -> None:
+    raise DuplicateModelNameError(f"Duplicate model_name '{model_name}' is not allowed")
+
+
+def ensure_unique_model_names(model_names: list[str]) -> None:
+    seen: set[str] = set()
+    for raw_name in model_names:
+        model_name = str(raw_name).strip()
+        if model_name in seen:
+            _raise_duplicate_model_name(model_name)
+        seen.add(model_name)
+
+
+def ensure_model_name_available(
+    model_registry: dict[str, list[dict[str, Any]]],
+    *,
+    model_name: str,
+    exclude_deployment_id: str | None = None,
+) -> None:
+    deployments = model_registry.get(model_name, [])
+    for index, deployment in enumerate(deployments):
+        deployment_id = str(deployment.get("deployment_id") or f"{model_name}-{index}")
+        if exclude_deployment_id is not None and deployment_id == exclude_deployment_id:
+            continue
+        _raise_duplicate_model_name(model_name)
+
+
 def _deployment_id(model_name: str, index: int, value: str | None) -> str:
     if value:
         return str(value)
@@ -22,6 +53,7 @@ def _resolved_params(params: dict[str, Any], settings: Any) -> dict[str, Any]:
 
 
 def model_records_from_config(cfg: AppConfig) -> list[ModelDeploymentRecord]:
+    ensure_unique_model_names([entry.model_name for entry in cfg.model_list])
     records: list[ModelDeploymentRecord] = []
     for index, entry in enumerate(cfg.model_list):
         records.append(
@@ -36,6 +68,7 @@ def model_records_from_config(cfg: AppConfig) -> list[ModelDeploymentRecord]:
 
 
 def build_model_registry_from_config(cfg: AppConfig, settings: Any) -> dict[str, list[dict[str, Any]]]:
+    ensure_unique_model_names([entry.model_name for entry in cfg.model_list])
     model_registry: dict[str, list[dict[str, Any]]] = {}
     for index, entry in enumerate(cfg.model_list):
         model_registry.setdefault(entry.model_name, []).append(
@@ -52,6 +85,7 @@ def build_model_registry_from_records(
     records: list[ModelDeploymentRecord],
     settings: Any,
 ) -> dict[str, list[dict[str, Any]]]:
+    ensure_unique_model_names([record.model_name for record in records])
     model_registry: dict[str, list[dict[str, Any]]] = {}
     for record in records:
         model_registry.setdefault(record.model_name, []).append(

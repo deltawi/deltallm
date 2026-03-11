@@ -5,6 +5,7 @@ from .completions import router as completions_router
 from .embeddings import router as embeddings_router
 from .health import router as health_router
 from .images import router as images_router
+from .mcp import router as mcp_router
 from .metrics import router as metrics_router
 from .models import router as models_router
 from .rerank import router as rerank_router
@@ -19,6 +20,7 @@ __all__ = [
     "health_router",
     "images_router",
     "metrics_router",
+    "mcp_router",
     "models_router",
     "rerank_router",
     "responses_router",

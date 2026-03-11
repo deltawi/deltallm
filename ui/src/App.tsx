@@ -25,12 +25,16 @@ import RouteGroups from './pages/RouteGroups';
 import RouteGroupDetail from './pages/RouteGroupDetail';
 import PromptRegistry from './pages/PromptRegistry';
 import PromptTemplateDetail from './pages/PromptTemplateDetail';
+import MCPServers from './pages/MCPServers';
+import MCPServerDetail from './pages/MCPServerDetail';
 import { ToastProvider } from './components/ToastProvider';
 
 function AppRoutes() {
   const { isAuthenticated, isLoading, session, authMode, mfaSkipped } = useAuth();
   const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
   const isPlatformAdmin = userRole === 'platform_admin';
+  const permissions = new Set(session?.effective_permissions || []);
+  const canReadMcp = isPlatformAdmin || permissions.has('key.read');
   const canReadAudit = isPlatformAdmin || (session?.effective_permissions || []).includes('audit.read');
 
   if (isLoading) {
@@ -65,6 +69,8 @@ function AppRoutes() {
         <Route path="/route-groups/:groupKey" element={isPlatformAdmin ? <RouteGroupDetail /> : <Navigate to="/" replace />} />
         <Route path="/prompts" element={isPlatformAdmin ? <PromptRegistry /> : <Navigate to="/" replace />} />
         <Route path="/prompts/:templateKey" element={isPlatformAdmin ? <PromptTemplateDetail /> : <Navigate to="/" replace />} />
+        <Route path="/mcp-servers" element={canReadMcp ? <MCPServers /> : <Navigate to="/" replace />} />
+        <Route path="/mcp-servers/:serverId" element={canReadMcp ? <MCPServerDetail /> : <Navigate to="/" replace />} />
         <Route path="/keys" element={<ApiKeys />} />
         <Route path="/organizations" element={<Organizations />} />
         <Route path="/organizations/:orgId" element={<OrganizationDetail />} />

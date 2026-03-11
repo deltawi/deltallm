@@ -3,6 +3,7 @@ from src.api.admin.endpoints.batches import router as batches_router
 from src.api.admin.endpoints.config import router as config_router
 from src.api.admin.endpoints.guardrails import router as guardrails_router
 from src.api.admin.endpoints.keys import router as keys_router
+from src.api.admin.endpoints.mcp import router as mcp_router
 from src.api.admin.endpoints.organizations import router as organizations_router
 from src.api.admin.endpoints.prompt_registry import router as prompt_registry_router
 from src.api.admin.endpoints.rbac import router as rbac_router
@@ -16,6 +17,7 @@ __all__ = [
     "config_router",
     "guardrails_router",
     "keys_router",
+    "mcp_router",
     "organizations_router",
     "prompt_registry_router",
     "rbac_router",

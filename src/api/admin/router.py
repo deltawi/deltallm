@@ -6,6 +6,7 @@ from src.api.admin.endpoints import (
     config_router,
     guardrails_router,
     keys_router,
+    mcp_router,
     organizations_router,
     prompt_registry_router,
     rbac_router,
@@ -19,6 +20,7 @@ admin_router = APIRouter()
 
 # Keep explicit order for predictable route registration.
 admin_router.include_router(keys_router)
+admin_router.include_router(mcp_router)
 admin_router.include_router(service_accounts_router)
 admin_router.include_router(teams_router)
 admin_router.include_router(organizations_router)

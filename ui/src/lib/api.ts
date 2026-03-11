@@ -132,6 +132,131 @@ export interface ServiceAccount {
   updated_at?: string | null;
 }
 
+export interface MCPServer {
+  mcp_server_id: string;
+  server_key: string;
+  name: string;
+  description?: string | null;
+  transport: 'streamable_http';
+  base_url: string;
+  enabled: boolean;
+  auth_mode: 'none' | 'bearer' | 'basic' | 'header_map';
+  auth_config?: Record<string, unknown> | null;
+  forwarded_headers_allowlist?: string[] | null;
+  request_timeout_ms: number;
+  capabilities_json?: Record<string, unknown> | null;
+  capabilities_etag?: string | null;
+  capabilities_fetched_at?: string | null;
+  last_health_status?: string | null;
+  last_health_error?: string | null;
+  last_health_at?: string | null;
+  last_health_latency_ms?: number | null;
+  metadata?: Record<string, unknown> | null;
+  created_by_account_id?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  tool_count: number;
+}
+
+export interface MCPNamespacedTool {
+  server_key: string;
+  original_name: string;
+  namespaced_name: string;
+  description?: string | null;
+  input_schema: Record<string, unknown>;
+}
+
+export interface MCPBinding {
+  mcp_binding_id: string;
+  mcp_server_id: string;
+  scope_type: 'organization' | 'team' | 'api_key';
+  scope_id: string;
+  enabled: boolean;
+  tool_allowlist?: string[] | null;
+  metadata?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface MCPToolPolicy {
+  mcp_tool_policy_id: string;
+  mcp_server_id: string;
+  tool_name: string;
+  scope_type: 'organization' | 'team' | 'api_key';
+  scope_id: string;
+  enabled: boolean;
+  require_approval?: 'never' | 'manual' | null;
+  max_rpm?: number | null;
+  max_concurrency?: number | null;
+  result_cache_ttl_seconds?: number | null;
+  metadata?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface MCPApprovalRequest {
+  mcp_approval_request_id: string;
+  mcp_server_id: string;
+  tool_name: string;
+  scope_type: 'organization' | 'team' | 'api_key';
+  scope_id: string;
+  status: 'pending' | 'approved' | 'rejected';
+  request_fingerprint: string;
+  requested_by_api_key?: string | null;
+  requested_by_user?: string | null;
+  organization_id?: string | null;
+  request_id?: string | null;
+  correlation_id?: string | null;
+  arguments_json?: Record<string, unknown> | null;
+  decision_comment?: string | null;
+  decided_by_account_id?: string | null;
+  decided_at?: string | null;
+  metadata?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface MCPServerDetail {
+  server: MCPServer;
+  tools: MCPNamespacedTool[];
+  bindings: MCPBinding[];
+  tool_policies: MCPToolPolicy[];
+}
+
+export interface MCPOperationsToolRow {
+  tool_name: string;
+  total_calls: number;
+  failed_calls: number;
+  avg_latency_ms: number;
+}
+
+export interface MCPOperationsFailureRow {
+  event_id: string;
+  occurred_at: string;
+  tool_name: string;
+  error_type?: string | null;
+  error_code?: string | null;
+  latency_ms?: number | null;
+  request_id?: string | null;
+}
+
+export interface MCPServerOperations {
+  window_hours: number;
+  summary: {
+    total_calls: number;
+    failed_calls: number;
+    success_calls: number;
+    failure_rate: number;
+    avg_latency_ms: number;
+    approval_requests: number;
+    pending_approvals: number;
+    approved_approvals: number;
+    rejected_approvals: number;
+  };
+  top_tools: MCPOperationsToolRow[];
+  recent_failures: MCPOperationsFailureRow[];
+}
+
 export interface ApiKey {
   token: string;
   key_name: string | null;
@@ -524,6 +649,44 @@ export const serviceAccounts = {
     apiFetch<Paginated<ServiceAccount>>(withQuery('/ui/api/service-accounts', params as any)),
   create: (payload: { team_id: string; name: string; description?: string }) =>
     apiFetch<ServiceAccount>('/ui/api/service-accounts', { method: 'POST', json: payload }),
+};
+
+export const mcpServers = {
+  list: (params?: { search?: string; enabled?: boolean; limit?: number; offset?: number }) =>
+    apiFetch<Paginated<MCPServer>>(withQuery('/ui/api/mcp-servers', params as any)),
+  get: (serverId: string) => apiFetch<MCPServerDetail>(`/ui/api/mcp-servers/${encodeURIComponent(serverId)}`),
+  operations: (serverId: string, params?: { window_hours?: number; top_tools_limit?: number; failures_limit?: number }) =>
+    apiFetch<MCPServerOperations>(withQuery(`/ui/api/mcp-servers/${encodeURIComponent(serverId)}/operations`, params as any)),
+  create: (payload: any) => apiFetch<MCPServer>('/ui/api/mcp-servers', { method: 'POST', json: payload }),
+  update: (serverId: string, payload: any) =>
+    apiFetch<MCPServer>(`/ui/api/mcp-servers/${encodeURIComponent(serverId)}`, { method: 'PATCH', json: payload }),
+  delete: (serverId: string) =>
+    apiFetch<{ deleted: boolean; mcp_server_id: string }>(`/ui/api/mcp-servers/${encodeURIComponent(serverId)}`, { method: 'DELETE' }),
+  refreshCapabilities: (serverId: string) =>
+    apiFetch<{ server: MCPServer; tools: MCPNamespacedTool[] }>(
+      `/ui/api/mcp-servers/${encodeURIComponent(serverId)}/refresh-capabilities`,
+      { method: 'POST' }
+    ),
+  healthCheck: (serverId: string) =>
+    apiFetch<{ server: MCPServer; health: { status: string; latency_ms: number; error?: string | null } }>(
+      `/ui/api/mcp-servers/${encodeURIComponent(serverId)}/health-check`,
+      { method: 'POST' }
+    ),
+  listBindings: (params?: { server_id?: string; scope_type?: string; scope_id?: string; limit?: number; offset?: number }) =>
+    apiFetch<Paginated<MCPBinding>>(withQuery('/ui/api/mcp-bindings', params as any)),
+  upsertBinding: (payload: any) => apiFetch<MCPBinding>('/ui/api/mcp-bindings', { method: 'POST', json: payload }),
+  deleteBinding: (bindingId: string) =>
+    apiFetch<{ deleted: boolean; mcp_binding_id: string }>(`/ui/api/mcp-bindings/${encodeURIComponent(bindingId)}`, { method: 'DELETE' }),
+  listToolPolicies: (params?: { server_id?: string; scope_type?: string; scope_id?: string; limit?: number; offset?: number }) =>
+    apiFetch<Paginated<MCPToolPolicy>>(withQuery('/ui/api/mcp-tool-policies', params as any)),
+  upsertToolPolicy: (payload: any) =>
+    apiFetch<MCPToolPolicy>('/ui/api/mcp-tool-policies', { method: 'POST', json: payload }),
+  deleteToolPolicy: (policyId: string) =>
+    apiFetch<{ deleted: boolean; mcp_tool_policy_id: string }>(`/ui/api/mcp-tool-policies/${encodeURIComponent(policyId)}`, { method: 'DELETE' }),
+  listApprovalRequests: (params?: { server_id?: string; status?: string; limit?: number; offset?: number }) =>
+    apiFetch<Paginated<MCPApprovalRequest>>(withQuery('/ui/api/mcp-approval-requests', params as any)),
+  decideApprovalRequest: (approvalRequestId: string, payload: { status: 'approved' | 'rejected'; decision_comment?: string }) =>
+    apiFetch<MCPApprovalRequest>(`/ui/api/mcp-approval-requests/${encodeURIComponent(approvalRequestId)}/decision`, { method: 'POST', json: payload }),
 };
 
 export const keys = {

@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import json as jsonlib
 
 import httpx
 import pytest
 
+from src.audit.actions import AuditAction
 from src.callbacks import CallbackManager, CustomLogger
 from src.guardrails.base import CustomGuardrail, GuardrailAction
 from src.guardrails.exceptions import GuardrailViolationError
+from src.mcp.exceptions import MCPApprovalRequiredError
+from src.mcp.exceptions import MCPRateLimitError
+from src.mcp.exceptions import MCPToolTimeoutError
+from src.mcp.exceptions import MCPTransportError
+from src.mcp.models import MCPToolCallResult
 
 
 class BlockingChatGuardrail(CustomGuardrail):
@@ -35,6 +42,89 @@ class RecordingCallback(CustomLogger):
         self.failure += 1
 
 
+class BlockingMCPToolGuardrail(CustomGuardrail):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        del user_api_key_dict, cache
+        if call_type == "mcp_tool" and isinstance(data, dict) and data.get("tool_name") == "search":
+            raise GuardrailViolationError(self.name, "blocked MCP tool", "content_policy")
+        return data
+
+
+class _RecordingAuditService:
+    def __init__(self) -> None:
+        self.records: list[tuple[object, list[object], bool]] = []
+
+    def record_event(self, event, *, payloads=None, critical=False):  # noqa: ANN001, ANN201
+        self.records.append((event, list(payloads or []), critical))
+
+
+class _ExplodingMCPGateway:
+    async def list_visible_tools(self, auth):  # noqa: ANN001, ANN201
+        del auth
+        raise AssertionError("MCP gateway should not be used for non-MCP requests")
+
+    async def call_tool(self, auth, **kwargs):  # noqa: ANN001, ANN201
+        del auth, kwargs
+        raise AssertionError("MCP gateway should not be used for non-MCP requests")
+
+
+class _FakeMCPGateway:
+    def __init__(self) -> None:
+        self.tool_calls: list[tuple[str, dict[str, object], str | None]] = []
+
+    async def list_visible_tools(self, auth):  # noqa: ANN001, ANN201
+        del auth
+        return [
+            type(
+                "VisibleTool",
+                (),
+                {
+                    "server_key": "docs",
+                    "original_name": "search",
+                    "namespaced_name": "docs.search",
+                    "description": "Search docs",
+                    "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+                    "scope_type": "team",
+                    "scope_id": "team-ops",
+                },
+            )()
+        ]
+
+    async def call_tool(self, auth, *, namespaced_tool_name, arguments, request_headers=None, request_id=None, correlation_id=None):  # noqa: ANN001, ANN201
+        del auth
+        del correlation_id
+        self.tool_calls.append((namespaced_tool_name, dict(arguments or {}), request_id or (request_headers or {}).get("x-request-id")))
+        return MCPToolCallResult(
+            content=[{"type": "text", "text": "delta docs result"}],
+            structured_content={"answer": "delta docs result"},
+            is_error=False,
+        )
+
+
+class _FailingMCPGateway(_FakeMCPGateway):
+    async def call_tool(self, auth, *, namespaced_tool_name, arguments, request_headers=None, request_id=None, correlation_id=None):  # noqa: ANN001, ANN201
+        del auth, namespaced_tool_name, arguments, request_headers, request_id, correlation_id
+        raise MCPTransportError("upstream MCP unavailable")
+
+
+class _RateLimitedMCPGateway(_FakeMCPGateway):
+    async def call_tool(self, auth, *, namespaced_tool_name, arguments, request_headers=None, request_id=None, correlation_id=None):  # noqa: ANN001, ANN201
+        del auth, namespaced_tool_name, arguments, request_headers, request_id, correlation_id
+        raise MCPRateLimitError("Rate limit exceeded for scope 'mcp_tool_rpm'", retry_after=42)
+
+
+class _ApprovalRequiredMCPGateway(_FakeMCPGateway):
+    async def call_tool(self, auth, *, namespaced_tool_name, arguments, request_headers=None, request_id=None, correlation_id=None):  # noqa: ANN001, ANN201
+        del auth, namespaced_tool_name, arguments, request_headers, request_id, correlation_id
+        raise MCPApprovalRequiredError("MCP tool 'docs.search' requires approval", approval_request_id="approval-1")
+
+
+class _TimeoutMCPGateway(_FakeMCPGateway):
+    async def call_tool(self, auth, *, namespaced_tool_name, arguments, request_headers=None, request_id=None, correlation_id=None):  # noqa: ANN001, ANN201
+        del auth, namespaced_tool_name, arguments, request_headers, request_id, correlation_id
+        raise MCPToolTimeoutError("MCP tool 'docs.search' exceeded the policy execution limit of 10 ms", timeout_ms=10)
+
+
 @pytest.mark.asyncio
 async def test_chat_completion_success(client, test_app):
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
@@ -53,6 +143,331 @@ async def test_chat_completion_success(client, test_app):
     payload = response.json()
     assert payload["object"] == "chat.completion"
     assert payload["choices"][0]["message"]["content"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_with_mcp_tool_auto_executes_and_audits(client, test_app):
+    gateway = _FakeMCPGateway()
+    audit = _RecordingAuditService()
+    test_app.state.mcp_gateway_service = gateway
+    test_app.state.audit_service = audit
+
+    upstream_calls: list[dict[str, object]] = []
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del headers, timeout
+        upstream_calls.append(json)
+        assert url.endswith("/chat/completions")
+        if len(upstream_calls) == 1:
+            assert json["tools"][0]["function"]["name"] == "docs.search"
+            payload = {
+                "id": "chatcmpl-tool-1",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": json["model"],
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_docs_search",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "docs.search",
+                                        "arguments": jsonlib.dumps({"query": "delta"}),
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+            }
+            return httpx.Response(200, json=payload)
+
+        assert any(message.get("role") == "tool" for message in json["messages"])
+        payload = {
+            "id": "chatcmpl-tool-2",
+            "object": "chat.completion",
+            "created": 1700000001,
+            "model": json["model"],
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        }
+        return httpx.Response(200, json=payload)
+
+    test_app.state.http_client.post = post
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": "req-mcp-chat"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "Search docs for DeltaLLM"}],
+        "tools": [{"type": "mcp", "server": "docs", "allowed_tools": ["search"], "require_approval": "never"}],
+    }
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "done"
+    assert len(upstream_calls) == 2
+    assert gateway.tool_calls == [("docs.search", {"query": "delta"}, "req-mcp-chat")]
+    assert any(getattr(event, "action", None) == AuditAction.MCP_TOOL_CALL.value for event, _, _ in audit.records)
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_with_mcp_tool_guardrail_blocks_tool_execution(client, test_app):
+    gateway = _FakeMCPGateway()
+    test_app.state.mcp_gateway_service = gateway
+    test_app.state.guardrail_registry.register(BlockingMCPToolGuardrail(name="block-mcp-tool", default_on=True))
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del url, headers, timeout
+        payload = {
+            "id": "chatcmpl-tool-block",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": json["model"],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_docs_search",
+                                "type": "function",
+                                "function": {"name": "docs.search", "arguments": "{\"query\":\"delta\"}"},
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        }
+        return httpx.Response(200, json=payload)
+
+    test_app.state.http_client.post = post
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "Search docs for DeltaLLM"}],
+        "tools": [{"type": "mcp", "server": "docs", "allowed_tools": ["search"], "require_approval": "never"}],
+    }
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == "guardrail_violation"
+    assert gateway.tool_calls == []
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_with_mcp_tool_failure_emits_error_audit(client, test_app):
+    gateway = _FailingMCPGateway()
+    audit = _RecordingAuditService()
+    test_app.state.mcp_gateway_service = gateway
+    test_app.state.audit_service = audit
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del url, headers, timeout
+        payload = {
+            "id": "chatcmpl-tool-fail",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": json["model"],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_docs_search",
+                                "type": "function",
+                                "function": {"name": "docs.search", "arguments": "{\"query\":\"delta\"}"},
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        }
+        return httpx.Response(200, json=payload)
+
+    test_app.state.http_client.post = post
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": "req-mcp-tool-fail"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "Search docs for DeltaLLM"}],
+        "tools": [{"type": "mcp", "server": "docs", "allowed_tools": ["search"], "require_approval": "never"}],
+    }
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert response.status_code == 503
+    matching = [event for event, _, _ in audit.records if getattr(event, "action", None) == AuditAction.MCP_TOOL_CALL.value]
+    assert matching
+    assert matching[-1].status == "error"
+    assert matching[-1].request_id == "req-mcp-tool-fail"
+    assert matching[-1].metadata["scope_type"] == "team"
+    assert matching[-1].metadata["scope_id"] == "team-ops"
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_with_mcp_tool_rate_limit_returns_429(client, test_app):
+    test_app.state.mcp_gateway_service = _RateLimitedMCPGateway()
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del url, headers, timeout
+        payload = {
+            "id": "chatcmpl-tool-rate-limit",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": json["model"],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_docs_search",
+                                "type": "function",
+                                "function": {"name": "docs.search", "arguments": "{\"query\":\"delta\"}"},
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        }
+        return httpx.Response(200, json=payload)
+
+    test_app.state.http_client.post = post
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "Search docs for DeltaLLM"}],
+        "tools": [{"type": "mcp", "server": "docs", "allowed_tools": ["search"], "require_approval": "never"}],
+    }
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert response.status_code == 429
+    assert response.json()["error"]["type"] == "rate_limit_error"
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_with_mcp_tool_manual_approval_returns_409(client, test_app):
+    test_app.state.mcp_gateway_service = _ApprovalRequiredMCPGateway()
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del url, headers, timeout
+        payload = {
+            "id": "chatcmpl-tool-approval",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": json["model"],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_docs_search",
+                                "type": "function",
+                                "function": {"name": "docs.search", "arguments": "{\"query\":\"delta\"}"},
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        }
+        return httpx.Response(200, json=payload)
+
+    test_app.state.http_client.post = post
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "Search docs for DeltaLLM"}],
+        "tools": [{"type": "mcp", "server": "docs", "allowed_tools": ["search"], "require_approval": "never"}],
+    }
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert response.status_code == 409
+    assert response.json()["error"]["type"] == "approval_required"
+    assert response.json()["error"]["approval_request_id"] == "approval-1"
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_with_mcp_tool_timeout_returns_503(client, test_app):
+    test_app.state.mcp_gateway_service = _TimeoutMCPGateway()
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del url, headers, timeout
+        payload = {
+            "id": "chatcmpl-tool-timeout",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": json["model"],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_docs_search",
+                                "type": "function",
+                                "function": {"name": "docs.search", "arguments": "{\"query\":\"delta\"}"},
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        }
+        return httpx.Response(200, json=payload)
+
+    test_app.state.http_client.post = post
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "Search docs for DeltaLLM"}],
+        "tools": [{"type": "mcp", "server": "docs", "allowed_tools": ["search"], "require_approval": "never"}],
+    }
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "service_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_without_mcp_tools_skips_mcp_gateway(client, test_app):
+    test_app.state.mcp_gateway_service = _ExplodingMCPGateway()
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert response.status_code == 200
 
 
 @pytest.mark.asyncio

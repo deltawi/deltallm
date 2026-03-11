@@ -21,6 +21,7 @@ from src.config_runtime.models import ModelHotReloadManager
 from src.providers.healthcheck import probe_provider_health
 from src.providers.resolution import provider_presets, resolve_provider, validate_provider_mode_compatibility
 from src.router import build_deployment_registry
+from src.services.model_deployments import DuplicateModelNameError, ensure_model_name_available
 
 ui_router = APIRouter(tags=["UI"])
 logger = logging.getLogger(__name__)
@@ -157,6 +158,8 @@ async def _invalidate_route_group_runtime_cache(app: Any) -> None:
 def _validate_model_config_or_400(model_config: dict[str, Any]) -> None:
     try:
         validate_provider_mode_compatibility(model_config)
+    except DuplicateModelNameError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -298,6 +301,10 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
     request_start = perf_counter()
     model_name, deltallm_params, model_info = _normalized_model_payload_or_400(payload)
     deployment_id = str(payload.get("deployment_id") or f"{model_name}-{secrets.token_hex(4)}")
+    try:
+        ensure_model_name_available(getattr(request.app.state, "model_registry", {}) or {}, model_name=model_name)
+    except DuplicateModelNameError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     model_config = {
         "deployment_id": deployment_id,
         "model_name": model_name,
@@ -363,6 +370,14 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
         existing_params=found_deployment.get("deltallm_params", {}),
         existing_model_info=found_deployment.get("model_info", {}),
     )
+    try:
+        ensure_model_name_available(
+            getattr(request.app.state, "model_registry", {}) or {},
+            model_name=new_model_name,
+            exclude_deployment_id=deployment_id,
+        )
+    except DuplicateModelNameError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     model_config = {
         "deployment_id": deployment_id,
         "model_name": new_model_name,

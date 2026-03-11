@@ -4,6 +4,7 @@ import { useAuth } from '../lib/auth';
 import {
   LayoutDashboard,
   Box,
+  Activity,
   Key,
   Users,
   UsersRound,
@@ -56,6 +57,7 @@ const navEntries: NavEntry[] = [
       { type: 'item', to: '/models', icon: Box, label: 'Models' },
       { type: 'item', to: '/route-groups', icon: Workflow, label: 'Route Groups', adminOnly: true },
       { type: 'item', to: '/prompts', icon: FileText, label: 'Prompt Registry', adminOnly: true },
+      { type: 'item', to: '/mcp-servers', icon: Activity, label: 'MCP Servers', requiredPermission: 'key.read' },
     ],
   },
   {

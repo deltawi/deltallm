@@ -6,7 +6,7 @@ import pytest
 
 from src.config import AppConfig
 from src.db.repositories import ModelDeploymentRecord
-from src.services.model_deployments import bootstrap_model_deployments_from_config, load_model_registry
+from src.services.model_deployments import DuplicateModelNameError, bootstrap_model_deployments_from_config, load_model_registry
 
 
 class FakeModelRepository:
@@ -159,3 +159,28 @@ async def test_bootstrap_model_deployments_from_config_prepares_records():
     assert inserted is True
     assert [item.deployment_id for item in repo.bootstrap_payload] == ["dep-1", "gpt-4.1-mini-1"]
     assert [item.model_name for item in repo.bootstrap_payload] == ["gpt-4o-mini", "gpt-4.1-mini"]
+
+
+@pytest.mark.asyncio
+async def test_load_model_registry_rejects_duplicate_model_names_from_db() -> None:
+    settings = SimpleNamespace(openai_api_key="default-key", openai_base_url="https://api.openai.com/v1")
+    cfg = AppConfig.model_validate({})
+    repo = FakeModelRepository(
+        records=[
+            ModelDeploymentRecord(
+                deployment_id="db-1",
+                model_name="shared-model",
+                deltallm_params={"model": "openai/gpt-4o-mini"},
+                model_info={},
+            ),
+            ModelDeploymentRecord(
+                deployment_id="db-2",
+                model_name="shared-model",
+                deltallm_params={"model": "azure/gpt-4o-mini"},
+                model_info={},
+            ),
+        ]
+    )
+
+    with pytest.raises(DuplicateModelNameError, match="Duplicate model_name 'shared-model' is not allowed"):
+        await load_model_registry(repo, cfg, settings)
