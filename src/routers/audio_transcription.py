@@ -8,7 +8,8 @@ import httpx
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
 
-from src.billing.cost import compute_cost
+from src.billing.audio_usage import billing_metadata, normalize_transcription_usage
+from src.billing.cost import compute_billing_result
 from src.callbacks import CallbackManager, build_standard_logging_payload
 from src.middleware.auth import require_api_key
 from src.middleware.rate_limit import enforce_rate_limits
@@ -20,7 +21,11 @@ from src.metrics import (
     observe_request_latency,
 )
 from src.models.errors import InvalidRequestError, PermissionDeniedError
-from src.providers.resolution import resolve_provider, resolve_upstream_model
+from src.providers.resolution import (
+    is_openai_compatible_provider,
+    resolve_provider,
+    resolve_upstream_model,
+)
 from src.router.router import Deployment
 from src.audit.actions import AuditAction
 from src.routers.audit_helpers import emit_audit_event
@@ -55,6 +60,12 @@ async def _execute_stt(
 
     api_base = params.get("api_base", request.app.state.settings.openai_base_url).rstrip("/")
     headers = {"Authorization": f"Bearer {api_key}"}
+    api_provider = resolve_provider(params)
+    upstream_response_format = _resolve_upstream_response_format(
+        requested_response_format=response_format,
+        model_info=deployment.model_info,
+        provider=api_provider,
+    )
 
     form_model = resolve_upstream_model(params, fallback_model=model) or model
 
@@ -64,8 +75,8 @@ async def _execute_stt(
         _stt_defaults["language"] = language
     if prompt:
         _stt_defaults["prompt"] = prompt
-    if response_format:
-        _stt_defaults["response_format"] = response_format
+    if upstream_response_format:
+        _stt_defaults["response_format"] = upstream_response_format
     if temperature is not None:
         _stt_defaults["temperature"] = str(temperature)
     apply_default_params(_stt_defaults, deployment.model_info)
@@ -88,7 +99,14 @@ async def _execute_stt(
             request=httpx.Request("POST", f"{api_base}/audio/transcriptions"),
             response=response,
         )
-    data = response.json() if "json" in (response_format or "json") else {"text": response.text}
+    parsed_response = response.json() if "json" in upstream_response_format else {"text": response.text}
+    data = _reshape_transcription_response(
+        requested_response_format=response_format,
+        upstream_response_format=upstream_response_format,
+        response_payload=parsed_response,
+    )
+    if parsed_response is not data:
+        data["_billing_payload"] = parsed_response
     data["_api_latency_ms"] = (perf_counter() - upstream_start) * 1000
     data["_api_base"] = api_base
     data["_deployment_model"] = params.get("model")
@@ -155,10 +173,19 @@ async def audio_transcriptions(
         api_base = data.pop("_api_base", "")
         deployment_model = data.pop("_deployment_model", None)
         model_info = data.pop("_model_info", {})
+        billing_payload = data.pop("_billing_payload", data)
 
-        duration_seconds = data.get("duration", 0)
-        usage = {"duration_seconds": duration_seconds, "file_size_bytes": len(file_content)}
-        request_cost = compute_cost(mode="audio_transcription", usage=usage, model_info=model_info)
+        usage = normalize_transcription_usage(
+            response_payload=billing_payload,
+            file_size_bytes=len(file_content),
+            provider=api_provider,
+        )
+        billing = compute_billing_result(mode="audio_transcription", usage=usage, model_info=model_info)
+        request_cost = billing.cost
+        spend_metadata = attach_route_decision(
+            {"api_base": api_base, "billing": billing_metadata(billing)},
+            request,
+        )
         increment_request(
             model=model, api_provider=api_provider,
             api_key=auth.api_key, user=auth.user_id, team=auth.team_id, status_code=200,
@@ -179,7 +206,7 @@ async def audio_transcriptions(
                 call_type="audio_transcription",
                 usage=usage,
                 cost=request_cost,
-                metadata=attach_route_decision({"api_base": api_base}, request),
+                metadata=spend_metadata,
                 cache_hit=False,
                 start_time=callback_start,
                 end_time=datetime.now(tz=UTC),
@@ -266,3 +293,106 @@ async def audio_transcriptions(
             ),
         )
         raise
+
+
+def _resolve_upstream_response_format(
+    *,
+    requested_response_format: str | None,
+    model_info: dict[str, Any] | None,
+    provider: str,
+) -> str:
+    normalized_format = (requested_response_format or "json").strip().lower() or "json"
+    if normalized_format == "verbose_json":
+        return "verbose_json"
+    if normalized_format not in {"json", "text", "srt", "vtt"}:
+        return normalized_format
+    if not is_openai_compatible_provider(provider):
+        return normalized_format
+
+    info = dict(model_info or {})
+    has_second_pricing = any(
+        float(info.get(field) or 0) > 0
+        for field in ("input_cost_per_second", "output_cost_per_second")
+    )
+    return "verbose_json" if has_second_pricing else normalized_format
+
+
+def _reshape_transcription_response(
+    *,
+    requested_response_format: str | None,
+    upstream_response_format: str,
+    response_payload: dict[str, Any],
+) -> dict[str, Any]:
+    normalized_format = (requested_response_format or "json").strip().lower() or "json"
+    if upstream_response_format != "verbose_json":
+        return response_payload
+    if normalized_format == "verbose_json":
+        return response_payload
+
+    transcript_text = str(response_payload.get("text") or "")
+    if normalized_format == "json":
+        return {"text": transcript_text}
+    if normalized_format == "text":
+        return {"text": transcript_text}
+    if normalized_format == "srt":
+        return {"text": _render_srt(response_payload)}
+    if normalized_format == "vtt":
+        return {"text": _render_vtt(response_payload)}
+    return response_payload
+
+
+def _render_srt(response_payload: dict[str, Any]) -> str:
+    segments = response_payload.get("segments")
+    if not isinstance(segments, list) or not segments:
+        return str(response_payload.get("text") or "")
+
+    lines: list[str] = []
+    for index, segment in enumerate(segments, start=1):
+        if not isinstance(segment, dict):
+            continue
+        text = str(segment.get("text") or "").strip()
+        if not text:
+            continue
+        start = _format_timestamp(segment.get("start"), decimal_separator=",")
+        end = _format_timestamp(segment.get("end"), decimal_separator=",")
+        lines.extend([str(index), f"{start} --> {end}", text, ""])
+    return "\n".join(lines).strip()
+
+
+def _render_vtt(response_payload: dict[str, Any]) -> str:
+    segments = response_payload.get("segments")
+    if not isinstance(segments, list) or not segments:
+        transcript_text = str(response_payload.get("text") or "")
+        return f"WEBVTT\n\n{transcript_text}".strip()
+
+    lines = ["WEBVTT", ""]
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        text = str(segment.get("text") or "").strip()
+        if not text:
+            continue
+        start = _format_timestamp(segment.get("start"), decimal_separator=".")
+        end = _format_timestamp(segment.get("end"), decimal_separator=".")
+        lines.extend([f"{start} --> {end}", text, ""])
+    return "\n".join(lines).strip()
+
+
+def _format_timestamp(value: Any, *, decimal_separator: str) -> str:
+    total_seconds = max(0.0, float(value or 0))
+    hours = int(total_seconds // 3600)
+    minutes = int((total_seconds % 3600) // 60)
+    seconds = int(total_seconds % 60)
+    milliseconds = int(round((total_seconds - int(total_seconds)) * 1000))
+
+    if milliseconds == 1000:
+        milliseconds = 0
+        seconds += 1
+    if seconds == 60:
+        seconds = 0
+        minutes += 1
+    if minutes == 60:
+        minutes = 0
+        hours += 1
+
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}{decimal_separator}{milliseconds:03d}"

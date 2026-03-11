@@ -63,7 +63,9 @@ class ModelInfo(BaseModel):
     batch_output_cost_per_token: float | None = None
     batch_price_multiplier: float | None = None
     input_cost_per_character: float | None = None
+    output_cost_per_character: float | None = None
     input_cost_per_second: float | None = None
+    output_cost_per_second: float | None = None
     input_cost_per_image: float | None = None
     output_cost_per_image: float | None = None
     input_cost_per_audio_token: float | None = None

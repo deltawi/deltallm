@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from src.billing.cost import ModelPricing, completion_cost, get_model_pricing
+from src.billing.audio_usage import normalize_transcription_usage
+from src.billing.cost import ModelPricing, completion_cost, compute_billing_result, get_model_pricing
 from src.billing.pricing import normalize_gateway_cache_hit_usage, pricing_from_model_info
 
 
@@ -96,3 +97,92 @@ def test_pricing_from_model_info_includes_cache_hit_fields() -> None:
     assert pricing is not None
     assert pricing.input_cost_per_token_cache_hit == 0.25
     assert pricing.output_cost_per_token_cache_hit == 0.5
+
+
+def test_audio_transcription_prefers_audio_token_pricing_when_usage_available() -> None:
+    result = compute_billing_result(
+        mode="audio_transcription",
+        usage={"duration_seconds": 60, "prompt_tokens": 12, "input_audio_tokens": 100},
+        model_info={
+            "input_cost_per_second": 0.0001,
+            "input_cost_per_token": 0.5,
+            "input_cost_per_audio_token": 0.25,
+        },
+    )
+
+    assert result.cost == 31.0
+    assert result.billing_unit == "token"
+    assert result.usage_snapshot["input_audio_tokens"] == 100
+
+
+def test_audio_transcription_falls_back_to_second_pricing() -> None:
+    result = compute_billing_result(
+        mode="audio_transcription",
+        usage={"duration_seconds": 90},
+        model_info={"input_cost_per_second": 0.1, "output_cost_per_second": 0.05},
+    )
+
+    assert result.cost == 13.5
+    assert result.billing_unit == "second"
+
+
+def test_audio_transcription_applies_provider_billing_rules_to_duration() -> None:
+    usage = normalize_transcription_usage(
+        response_payload={"text": "hello", "duration": 2.0},
+        file_size_bytes=16,
+        provider="groq",
+    )
+
+    result = compute_billing_result(
+        mode="audio_transcription",
+        usage=usage,
+        model_info={"input_cost_per_second": 0.111},
+    )
+
+    assert result.cost == 1.11
+    assert result.billing_unit == "second"
+    assert result.usage_snapshot["duration_seconds"] == 2.0
+    assert result.usage_snapshot["billable_duration_seconds"] == 10.0
+
+
+def test_audio_speech_uses_character_pricing() -> None:
+    result = compute_billing_result(
+        mode="audio_speech",
+        usage={"input_characters": 1000},
+        model_info={"input_cost_per_character": 0.002},
+    )
+
+    assert result.cost == 2.0
+    assert result.billing_unit == "character"
+
+
+def test_audio_speech_uses_token_pricing_when_usage_available() -> None:
+    result = compute_billing_result(
+        mode="audio_speech",
+        usage={
+            "prompt_tokens": 10,
+            "completion_tokens": 4,
+            "input_audio_tokens": 3,
+            "output_audio_tokens": 5,
+        },
+        model_info={
+            "input_cost_per_token": 1.0,
+            "output_cost_per_token": 2.0,
+            "input_cost_per_audio_token": 3.0,
+            "output_cost_per_audio_token": 4.0,
+        },
+    )
+
+    assert result.cost == 47.0
+    assert result.billing_unit == "token"
+
+
+def test_audio_speech_marks_missing_usage_or_pricing_as_unpriced() -> None:
+    result = compute_billing_result(
+        mode="audio_speech",
+        usage={"input_characters": 100},
+        model_info={},
+    )
+
+    assert result.cost == 0.0
+    assert result.unpriced_reason == "missing_tts_pricing_or_usage"

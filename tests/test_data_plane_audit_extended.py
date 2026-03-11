@@ -75,7 +75,7 @@ class _SpendQueryDB:
         normalized = " ".join(query.lower().split())
         if "count(*) as total" in normalized:
             return [{"total": 1}]
-        if "from deltallm_spendlogs" in normalized and "order by start_time desc" in normalized:
+        if "from deltallm_spendlog_events" in normalized and "order by start_time desc" in normalized:
             return [
                 {
                     "id": "log_1",
@@ -96,7 +96,7 @@ class _SpendQueryDB:
                     "request_tags": ["tag-a"],
                 }
             ]
-        if "total_requests" in normalized and "from deltallm_spendlogs" in normalized:
+        if "total_requests" in normalized and "from deltallm_spendlog_events" in normalized:
             return [
                 {
                     "total_spend": 1.25,

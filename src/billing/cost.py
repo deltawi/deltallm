@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping
 
 
@@ -13,6 +13,15 @@ class ModelPricing:
     cost_per_request: float = 0.0
     context_window: int = 8192
     max_output_tokens: int | None = None
+
+
+@dataclass(frozen=True)
+class BillingResult:
+    cost: float
+    billing_unit: str | None = None
+    pricing_fields_used: tuple[str, ...] = ()
+    usage_snapshot: dict[str, float | int] = field(default_factory=dict)
+    unpriced_reason: str | None = None
 
 
 DEFAULT_MODEL_COST_MAP: dict[str, ModelPricing] = {
@@ -156,6 +165,15 @@ def compute_cost(
     usage: Mapping[str, Any],
     model_info: Mapping[str, Any] | None = None,
 ) -> float:
+    return compute_billing_result(mode=mode, usage=usage, model_info=model_info).cost
+
+
+def compute_billing_result(
+    *,
+    mode: str,
+    usage: Mapping[str, Any],
+    model_info: Mapping[str, Any] | None = None,
+) -> BillingResult:
     info = dict(model_info or {})
 
     if mode == "chat" or mode == "embedding" or mode == "rerank":
@@ -163,25 +181,198 @@ def compute_cost(
         output_cost = float(info.get("output_cost_per_token") or 0)
         prompt_tokens = max(0, int(usage.get("prompt_tokens", 0) or 0))
         completion_tokens = max(0, int(usage.get("completion_tokens", 0) or 0))
-        return round(prompt_tokens * input_cost + completion_tokens * output_cost, 10)
+        return BillingResult(
+            cost=round(prompt_tokens * input_cost + completion_tokens * output_cost, 10),
+            billing_unit="token",
+            pricing_fields_used=("input_cost_per_token", "output_cost_per_token"),
+            usage_snapshot={"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens},
+        )
 
     if mode == "image_generation":
         cost_per_image = float(info.get("input_cost_per_image") or 0)
         num_images = max(0, int(usage.get("images", 1) or 1))
-        return round(num_images * cost_per_image, 10)
+        return BillingResult(
+            cost=round(num_images * cost_per_image, 10),
+            billing_unit="image",
+            pricing_fields_used=("input_cost_per_image",),
+            usage_snapshot={"images": num_images},
+        )
 
     if mode == "audio_speech":
-        cost_per_char = float(info.get("input_cost_per_character") or 0)
-        characters = max(0, int(usage.get("characters", 0) or 0))
-        if cost_per_char > 0:
-            return round(characters * cost_per_char, 10)
-        cost_per_audio_token = float(info.get("input_cost_per_audio_token") or 0)
-        audio_tokens = max(0, int(usage.get("audio_tokens", 0) or 0))
-        return round(audio_tokens * cost_per_audio_token, 10)
+        return _compute_audio_speech_billing(usage=usage, model_info=info)
 
     if mode == "audio_transcription":
-        cost_per_second = float(info.get("input_cost_per_second") or 0)
-        duration = max(0, float(usage.get("duration_seconds", 0) or 0))
-        return round(duration * cost_per_second, 10)
+        return _compute_audio_transcription_billing(usage=usage, model_info=info)
 
-    return 0.0
+    return BillingResult(cost=0.0, unpriced_reason=f"unsupported_mode:{mode}")
+
+
+def _compute_audio_speech_billing(
+    *,
+    usage: Mapping[str, Any],
+    model_info: Mapping[str, Any],
+) -> BillingResult:
+    prompt_tokens = max(0, int(usage.get("prompt_tokens", 0) or 0))
+    completion_tokens = max(0, int(usage.get("completion_tokens", 0) or 0))
+    input_audio_tokens = max(0, int(usage.get("input_audio_tokens", usage.get("audio_tokens", 0)) or 0))
+    output_audio_tokens = max(0, int(usage.get("output_audio_tokens", 0) or 0))
+
+    input_cost_per_token = _float_or_zero(model_info.get("input_cost_per_token"))
+    output_cost_per_token = _float_or_zero(model_info.get("output_cost_per_token"))
+    input_cost_per_audio_token = _float_or_zero(model_info.get("input_cost_per_audio_token"))
+    output_cost_per_audio_token = _float_or_zero(model_info.get("output_cost_per_audio_token"))
+
+    has_token_usage = any(
+        value > 0 for value in (prompt_tokens, completion_tokens, input_audio_tokens, output_audio_tokens)
+    )
+    has_token_pricing = any(
+        value > 0
+        for value in (
+            input_cost_per_token,
+            output_cost_per_token,
+            input_cost_per_audio_token,
+            output_cost_per_audio_token,
+        )
+    )
+    if has_token_usage and has_token_pricing:
+        cost = (
+            prompt_tokens * input_cost_per_token
+            + completion_tokens * output_cost_per_token
+            + input_audio_tokens * input_cost_per_audio_token
+            + output_audio_tokens * output_cost_per_audio_token
+        )
+        return BillingResult(
+            cost=round(cost, 10),
+            billing_unit="token",
+            pricing_fields_used=(
+                "input_cost_per_token",
+                "output_cost_per_token",
+                "input_cost_per_audio_token",
+                "output_cost_per_audio_token",
+            ),
+            usage_snapshot={
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "input_audio_tokens": input_audio_tokens,
+                "output_audio_tokens": output_audio_tokens,
+            },
+        )
+
+    input_characters = max(0, int(usage.get("input_characters", usage.get("characters", 0)) or 0))
+    output_characters = max(0, int(usage.get("output_characters", 0) or 0))
+    input_cost_per_character = _float_or_zero(model_info.get("input_cost_per_character"))
+    output_cost_per_character = _float_or_zero(model_info.get("output_cost_per_character"))
+    has_character_usage = input_characters > 0 or output_characters > 0
+    has_character_pricing = input_cost_per_character > 0 or output_cost_per_character > 0
+    if has_character_usage and has_character_pricing:
+        cost = (
+            input_characters * input_cost_per_character
+            + output_characters * output_cost_per_character
+        )
+        return BillingResult(
+            cost=round(cost, 10),
+            billing_unit="character",
+            pricing_fields_used=("input_cost_per_character", "output_cost_per_character"),
+            usage_snapshot={
+                "input_characters": input_characters,
+                "output_characters": output_characters,
+            },
+        )
+
+    duration_seconds = max(0.0, float(usage.get("duration_seconds", 0) or 0))
+    input_cost_per_second = _float_or_zero(model_info.get("input_cost_per_second"))
+    output_cost_per_second = _float_or_zero(model_info.get("output_cost_per_second"))
+    has_second_pricing = input_cost_per_second > 0 or output_cost_per_second > 0
+    if duration_seconds > 0 and has_second_pricing:
+        cost = duration_seconds * (input_cost_per_second + output_cost_per_second)
+        return BillingResult(
+            cost=round(cost, 10),
+            billing_unit="second",
+            pricing_fields_used=("input_cost_per_second", "output_cost_per_second"),
+            usage_snapshot={"duration_seconds": duration_seconds},
+        )
+
+    return BillingResult(
+        cost=0.0,
+        unpriced_reason="missing_tts_pricing_or_usage",
+        usage_snapshot=_compact_usage_snapshot(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            input_audio_tokens=input_audio_tokens,
+            output_audio_tokens=output_audio_tokens,
+            input_characters=input_characters,
+            output_characters=output_characters,
+            duration_seconds=duration_seconds,
+        ),
+    )
+
+
+def _compute_audio_transcription_billing(
+    *,
+    usage: Mapping[str, Any],
+    model_info: Mapping[str, Any],
+) -> BillingResult:
+    prompt_tokens = max(0, int(usage.get("prompt_tokens", 0) or 0))
+    completion_tokens = max(0, int(usage.get("completion_tokens", 0) or 0))
+    input_audio_tokens = max(0, int(usage.get("input_audio_tokens", usage.get("audio_tokens", 0)) or 0))
+
+    input_cost_per_token = _float_or_zero(model_info.get("input_cost_per_token"))
+    output_cost_per_token = _float_or_zero(model_info.get("output_cost_per_token"))
+    input_cost_per_audio_token = _float_or_zero(model_info.get("input_cost_per_audio_token"))
+    has_token_usage = any(value > 0 for value in (prompt_tokens, completion_tokens, input_audio_tokens))
+    has_token_pricing = any(value > 0 for value in (input_cost_per_token, output_cost_per_token, input_cost_per_audio_token))
+    if has_token_usage and has_token_pricing:
+        cost = (
+            prompt_tokens * input_cost_per_token
+            + completion_tokens * output_cost_per_token
+            + input_audio_tokens * input_cost_per_audio_token
+        )
+        return BillingResult(
+            cost=round(cost, 10),
+            billing_unit="token",
+            pricing_fields_used=("input_cost_per_token", "output_cost_per_token", "input_cost_per_audio_token"),
+            usage_snapshot={
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "input_audio_tokens": input_audio_tokens,
+            },
+        )
+
+    raw_duration_seconds = max(0.0, float(usage.get("duration_seconds", 0) or 0))
+    duration_seconds = max(0.0, float(usage.get("billable_duration_seconds", raw_duration_seconds) or 0))
+    input_cost_per_second = _float_or_zero(model_info.get("input_cost_per_second"))
+    output_cost_per_second = _float_or_zero(model_info.get("output_cost_per_second"))
+    has_second_pricing = input_cost_per_second > 0 or output_cost_per_second > 0
+    if duration_seconds > 0 and has_second_pricing:
+        cost = duration_seconds * (input_cost_per_second + output_cost_per_second)
+        usage_snapshot: dict[str, float | int] = {"duration_seconds": raw_duration_seconds or duration_seconds}
+        if raw_duration_seconds > 0 and duration_seconds != raw_duration_seconds:
+            usage_snapshot["billable_duration_seconds"] = duration_seconds
+        return BillingResult(
+            cost=round(cost, 10),
+            billing_unit="second",
+            pricing_fields_used=("input_cost_per_second", "output_cost_per_second"),
+            usage_snapshot=usage_snapshot,
+        )
+
+    return BillingResult(
+        cost=0.0,
+        unpriced_reason="missing_stt_pricing_or_usage",
+        usage_snapshot=_compact_usage_snapshot(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            input_audio_tokens=input_audio_tokens,
+            duration_seconds=raw_duration_seconds or duration_seconds,
+        ),
+    )
+
+
+def _compact_usage_snapshot(**values: float | int) -> dict[str, float | int]:
+    return {key: value for key, value in values.items() if value}
+
+
+def _float_or_zero(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
