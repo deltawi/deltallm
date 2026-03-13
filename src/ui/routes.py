@@ -16,6 +16,7 @@ from src.middleware.admin import require_admin_permission, require_master_key, r
 from src.api.audit import emit_control_audit_event
 from src.auth.roles import Permission
 from src.api.admin.endpoints.common import get_auth_scope
+from src.billing.spend_read import SpendReadSource, apply_org_scope, get_spend_read_source
 from src.config_runtime.models import ModelHotReloadManager
 from src.providers.healthcheck import probe_provider_health
 from src.providers.resolution import provider_presets, resolve_provider, validate_provider_mode_compatibility
@@ -480,25 +481,7 @@ def _date_end(value: date | None) -> datetime | None:
     return datetime.combine(value, time.max, tzinfo=UTC)
 
 
-def _apply_org_scope_to_spendlogs(
-    clauses: list[str],
-    params: list[Any],
-    org_ids: list[str],
-    *,
-    table_alias: str | None = None,
-) -> None:
-    if not org_ids:
-        clauses.append("1 = 0")
-        return
-    team_column = f"{table_alias}.team_id" if table_alias else "team_id"
-    placeholders = ", ".join(f"${len(params) + i + 1}" for i in range(len(org_ids)))
-    params.extend(org_ids)
-    clauses.append(
-        f"{team_column} IN (SELECT team_id FROM deltallm_teamtable WHERE organization_id IN ({placeholders}))"
-    )
-
-
-def _grouped_spend_config(group_by: str) -> dict[str, Any]:
+def _grouped_spend_config(group_by: str, source: SpendReadSource) -> dict[str, Any]:
     if group_by == "model":
         return {
             "group_expr": "s.model",
@@ -550,10 +533,10 @@ def _grouped_spend_config(group_by: str) -> dict[str, Any]:
             "search_clause": "COALESCE(s.api_base, 'unknown') ILIKE ${i}",
         }
     return {
-        "group_expr": "COALESCE(s.\"user\", 'anonymous')",
+        "group_expr": f"COALESCE({source.column('user_column', table_alias='s')}, 'anonymous')",
         "display_expr": "NULL",
-        "group_by_exprs": ["COALESCE(s.\"user\", 'anonymous')"],
-        "search_clause": "COALESCE(s.\"user\", 'anonymous') ILIKE ${i}",
+        "group_by_exprs": [f"COALESCE({source.column('user_column', table_alias='s')}, 'anonymous')"],
+        "search_clause": f"COALESCE({source.column('user_column', table_alias='s')}, 'anonymous') ILIKE ${{i}}",
     }
 
 
@@ -568,6 +551,7 @@ async def spend_summary(
     started_at = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.SPEND_READ)
     db = _db_or_503(request)
+    source = get_spend_read_source()
     clauses: list[str] = []
     params: list[Any] = []
 
@@ -578,7 +562,7 @@ async def spend_summary(
         params.append(_date_end(end_date))
         clauses.append(f"start_time <= ${len(params)}::timestamp")
     if not scope.is_platform_admin:
-        _apply_org_scope_to_spendlogs(clauses, params, scope.org_ids)
+        apply_org_scope(clauses=clauses, params=params, org_ids=scope.org_ids, source=source)
 
     where_sql = ""
     if clauses:
@@ -589,10 +573,10 @@ async def spend_summary(
         SELECT
             COALESCE(SUM(spend), 0) AS total_spend,
             COALESCE(SUM(total_tokens), 0) AS total_tokens,
-            COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
-            COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+            COALESCE(SUM({source.prompt_tokens_column}), 0) AS prompt_tokens,
+            COALESCE(SUM({source.completion_tokens_column}), 0) AS completion_tokens,
             COUNT(*) AS total_requests
-        FROM deltallm_spendlogs
+        FROM {source.table}
         {where_sql}
         """,
         *params,
@@ -622,6 +606,7 @@ async def spend_report(
     started_at = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.SPEND_READ)
     db = _db_or_503(request)
+    source = get_spend_read_source()
     if group_by == "day":
         clauses: list[str] = []
         params: list[Any] = []
@@ -632,7 +617,7 @@ async def spend_report(
             params.append(_date_end(end_date))
             clauses.append(f"start_time <= ${len(params)}::timestamp")
         if not scope.is_platform_admin:
-            _apply_org_scope_to_spendlogs(clauses, params, scope.org_ids)
+            apply_org_scope(clauses=clauses, params=params, org_ids=scope.org_ids, source=source)
 
         where_sql = ""
         if clauses:
@@ -645,7 +630,7 @@ async def spend_report(
                 COALESCE(SUM(spend), 0) AS total_spend,
                 COUNT(*) AS request_count,
                 COALESCE(SUM(total_tokens), 0) AS total_tokens
-            FROM deltallm_spendlogs
+            FROM {source.table}
             {where_sql}
             GROUP BY DATE(start_time)
             ORDER BY group_key ASC
@@ -664,7 +649,7 @@ async def spend_report(
             "breakdown": [_to_json_value(dict(row)) for row in rows],
         }
 
-    config = _grouped_spend_config(group_by)
+    config = _grouped_spend_config(group_by, source)
     clauses: list[str] = []
     params: list[Any] = []
     joins = list(config.get("joins", []))
@@ -682,7 +667,7 @@ async def spend_report(
         params.append(f"%{search.strip()}%")
         clauses.append(config["search_clause"].format(i=len(params)))
     if not scope.is_platform_admin:
-        _apply_org_scope_to_spendlogs(clauses, params, scope.org_ids, table_alias="s")
+        apply_org_scope(clauses=clauses, params=params, org_ids=scope.org_ids, source=source, table_alias="s")
 
     join_sql = ""
     if joins:
@@ -704,7 +689,7 @@ async def spend_report(
                 COALESCE(SUM(s.spend), 0) AS total_spend,
                 COUNT(*) AS request_count,
                 COALESCE(SUM(s.total_tokens), 0) AS total_tokens
-            FROM deltallm_spendlogs s
+            FROM {source.table} s
             {join_sql}
             {where_sql}
             GROUP BY {group_by_sql}
@@ -762,6 +747,7 @@ async def request_logs(
     started_at = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.SPEND_READ)
     db = _db_or_503(request)
+    source = get_spend_read_source()
 
     clauses: list[str] = []
     params: list[Any] = []
@@ -775,13 +761,13 @@ async def request_logs(
     if team_id:
         add_clause("team_id = ${i}", team_id)
     if user_id:
-        add_clause('"user" = ${i}', user_id)
+        add_clause(f"{source.user_column} = ${{i}}", user_id)
     if start_date is not None:
         add_clause("start_time >= ${i}::timestamp", _date_start(start_date))
     if end_date is not None:
         add_clause("start_time <= ${i}::timestamp", _date_end(end_date))
     if not scope.is_platform_admin:
-        _apply_org_scope_to_spendlogs(clauses, params, scope.org_ids)
+        apply_org_scope(clauses=clauses, params=params, org_ids=scope.org_ids, source=source)
 
     where_sql = ""
     if clauses:
@@ -793,9 +779,13 @@ async def request_logs(
     logs = await db.query_raw(
         f"""
         SELECT id, request_id, call_type, model, api_base, api_key, spend, total_tokens,
-               prompt_tokens, completion_tokens, prompt_tokens_cached, completion_tokens_cached,
-               start_time, end_time, "user", team_id, end_user, metadata, cache_hit, cache_key, request_tags
-        FROM deltallm_spendlogs
+               {source.prompt_tokens_column} AS prompt_tokens,
+               {source.completion_tokens_column} AS completion_tokens,
+               {source.cached_prompt_tokens_column} AS prompt_tokens_cached,
+               {source.cached_completion_tokens_column} AS completion_tokens_cached,
+               start_time, end_time, {source.user_column} AS "user", team_id, {source.end_user_column} AS end_user,
+               metadata, cache_hit, cache_key, request_tags
+        FROM {source.table}
         {where_sql}
         ORDER BY start_time DESC
         LIMIT ${limit_idx}
@@ -807,7 +797,7 @@ async def request_logs(
     )
 
     total_rows = await db.query_raw(
-        f"SELECT COUNT(*) AS total FROM deltallm_spendlogs {where_sql}",
+        f"SELECT COUNT(*) AS total FROM {source.table} {where_sql}",
         *params,
     )
 

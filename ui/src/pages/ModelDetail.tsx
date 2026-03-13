@@ -114,8 +114,15 @@ function summarizeLimits(rpm: unknown, tpm: unknown): string {
 
 function primaryCost(mode: string, modelInfo: Record<string, any>): string | null {
   if (mode === 'image_generation') return formatCost(modelInfo.input_cost_per_image);
-  if (mode === 'audio_speech') return formatCost(modelInfo.input_cost_per_character) || formatCost(modelInfo.input_cost_per_audio_token);
-  if (mode === 'audio_transcription') return formatCost(modelInfo.input_cost_per_second);
+  if (mode === 'audio_speech') {
+    return (
+      formatCost(modelInfo.input_cost_per_character)
+      || formatCost(modelInfo.input_cost_per_audio_token)
+      || formatCost(modelInfo.output_cost_per_second)
+      || formatCost(modelInfo.input_cost_per_second)
+    );
+  }
+  if (mode === 'audio_transcription') return formatCost(modelInfo.input_cost_per_second) || formatCost(modelInfo.input_cost_per_audio_token);
   return formatCost(modelInfo.input_cost_per_token);
 }
 
@@ -142,11 +149,20 @@ function modeSpecificItems(mode: string, model: any): Array<{ label: string; val
     case 'audio_speech':
       return [
         { label: 'Cost / Character', value: formatCost(mi.input_cost_per_character) },
+        { label: 'Output Cost / Character', value: formatCost(mi.output_cost_per_character) },
+        { label: 'Input Cost / Second', value: formatCost(mi.input_cost_per_second) },
+        { label: 'Output Cost / Second', value: formatCost(mi.output_cost_per_second) },
         { label: 'Input Audio Token', value: formatCost(mi.input_cost_per_audio_token) },
         { label: 'Output Audio Token', value: formatCost(mi.output_cost_per_audio_token) },
       ];
     case 'audio_transcription':
-      return [{ label: 'Cost / Second', value: formatCost(mi.input_cost_per_second) }];
+      return [
+        { label: 'Input Cost / Second', value: formatCost(mi.input_cost_per_second) },
+        { label: 'Output Cost / Second', value: formatCost(mi.output_cost_per_second) },
+        { label: 'Input Audio Token', value: formatCost(mi.input_cost_per_audio_token) },
+        { label: 'Input Cost / Token', value: formatCost(mi.input_cost_per_token) },
+        { label: 'Output Cost / Token', value: formatCost(mi.output_cost_per_token) },
+      ];
     case 'rerank':
       return [{ label: 'Cost / Token', value: formatCost(mi.input_cost_per_token) }];
     default:
@@ -219,7 +235,9 @@ export default function ModelDetail() {
     { label: 'Output Cost / Token', value: formatCost(mi.output_cost_per_token) },
     { label: 'Cost / Image', value: formatCost(mi.input_cost_per_image) },
     { label: 'Cost / Character', value: formatCost(mi.input_cost_per_character) },
+    { label: 'Output Cost / Character', value: formatCost(mi.output_cost_per_character) },
     { label: 'Cost / Second', value: formatCost(mi.input_cost_per_second) },
+    { label: 'Output Cost / Second', value: formatCost(mi.output_cost_per_second) },
     { label: 'Input Audio Token', value: formatCost(mi.input_cost_per_audio_token) },
     { label: 'Output Audio Token', value: formatCost(mi.output_cost_per_audio_token) },
     { label: 'Batch Multiplier', value: mi.batch_price_multiplier != null ? String(mi.batch_price_multiplier) : null },

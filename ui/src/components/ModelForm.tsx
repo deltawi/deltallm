@@ -74,7 +74,9 @@ export interface ModelFormValues {
   output_vector_size: string;
   input_cost_per_image: string;
   input_cost_per_character: string;
+  output_cost_per_character: string;
   input_cost_per_second: string;
+  output_cost_per_second: string;
   input_cost_per_audio_token: string;
   output_cost_per_audio_token: string;
   batch_price_multiplier: string;
@@ -108,7 +110,9 @@ export const EMPTY_FORM: ModelFormValues = {
   output_vector_size: '',
   input_cost_per_image: '',
   input_cost_per_character: '',
+  output_cost_per_character: '',
   input_cost_per_second: '',
+  output_cost_per_second: '',
   input_cost_per_audio_token: '',
   output_cost_per_audio_token: '',
   batch_price_multiplier: '',
@@ -166,10 +170,14 @@ export function buildModelPayload(form: ModelFormValues, defaultParams: { key: s
     model_info.input_cost_per_image = numOrUndef(form.input_cost_per_image);
   } else if (form.mode === 'audio_speech') {
     model_info.input_cost_per_character = numOrUndef(form.input_cost_per_character);
+    model_info.output_cost_per_character = numOrUndef(form.output_cost_per_character);
+    model_info.input_cost_per_second = numOrUndef(form.input_cost_per_second);
+    model_info.output_cost_per_second = numOrUndef(form.output_cost_per_second);
     model_info.input_cost_per_audio_token = numOrUndef(form.input_cost_per_audio_token);
     model_info.output_cost_per_audio_token = numOrUndef(form.output_cost_per_audio_token);
   } else if (form.mode === 'audio_transcription') {
     model_info.input_cost_per_second = numOrUndef(form.input_cost_per_second);
+    model_info.output_cost_per_second = numOrUndef(form.output_cost_per_second);
   } else if (form.mode === 'rerank') {
     model_info.input_cost_per_token = numOrUndef(form.input_cost_per_token);
   }
@@ -232,7 +240,9 @@ export function formFromModel(model: any): { form: ModelFormValues; defaultParam
     output_vector_size: strOrEmpty(mi.output_vector_size),
     input_cost_per_image: strOrEmpty(mi.input_cost_per_image),
     input_cost_per_character: strOrEmpty(mi.input_cost_per_character),
+    output_cost_per_character: strOrEmpty(mi.output_cost_per_character),
     input_cost_per_second: strOrEmpty(mi.input_cost_per_second),
+    output_cost_per_second: strOrEmpty(mi.output_cost_per_second),
     input_cost_per_audio_token: strOrEmpty(mi.input_cost_per_audio_token),
     output_cost_per_audio_token: strOrEmpty(mi.output_cost_per_audio_token),
     batch_price_multiplier: strOrEmpty(mi.batch_price_multiplier),
@@ -576,10 +586,22 @@ export default function ModelForm({
           )}
 
           {mode === 'audio_speech' && (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Cost / Character ($)</label>
                 <input type="number" step="any" value={form.input_cost_per_character} onChange={(e) => setForm({ ...form, input_cost_per_character: e.target.value })} placeholder="0.000015" className={inputClass} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Output Cost / Character ($)</label>
+                <input type="number" step="any" value={form.output_cost_per_character} onChange={(e) => setForm({ ...form, output_cost_per_character: e.target.value })} placeholder="0.000015" className={inputClass} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Input Cost / Second ($)</label>
+                <input type="number" step="any" value={form.input_cost_per_second} onChange={(e) => setForm({ ...form, input_cost_per_second: e.target.value })} placeholder="0.00025" className={inputClass} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Output Cost / Second ($)</label>
+                <input type="number" step="any" value={form.output_cost_per_second} onChange={(e) => setForm({ ...form, output_cost_per_second: e.target.value })} placeholder="0.00025" className={inputClass} />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Input Audio Token Cost ($)</label>
@@ -593,10 +615,17 @@ export default function ModelForm({
           )}
 
           {mode === 'audio_transcription' && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Cost / Second of Audio ($)</label>
-              <input type="number" step="any" value={form.input_cost_per_second} onChange={(e) => setForm({ ...form, input_cost_per_second: e.target.value })} placeholder="0.0001" className={inputClass} />
-              <p className="text-xs text-gray-400 mt-1">Cost per second of audio transcribed</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Input Cost / Second ($)</label>
+                <input type="number" step="any" value={form.input_cost_per_second} onChange={(e) => setForm({ ...form, input_cost_per_second: e.target.value })} placeholder="0.0001" className={inputClass} />
+                <p className="text-xs text-gray-400 mt-1">Primary STT pricing field for duration-based billing</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Output Cost / Second ($)</label>
+                <input type="number" step="any" value={form.output_cost_per_second} onChange={(e) => setForm({ ...form, output_cost_per_second: e.target.value })} placeholder="0" className={inputClass} />
+                <p className="text-xs text-gray-400 mt-1">Optional for providers that bill output audio duration separately</p>
+              </div>
             </div>
           )}
 

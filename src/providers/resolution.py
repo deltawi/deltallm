@@ -41,7 +41,7 @@ PROVIDER_CAPABILITIES: dict[str, set[ModelMode]] = {
     "fireworks": {"chat", "embedding", "image_generation"},
     "deepinfra": {"chat", "embedding", "image_generation"},
     "perplexity": {"chat"},
-    "gemini": {"chat"},
+    "gemini": {"chat", "audio_speech"},
     "bedrock": {"chat"},
     "vllm": {"chat", "embedding", "image_generation", "audio_speech", "audio_transcription"},
     "lmstudio": {"chat", "embedding"},

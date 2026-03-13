@@ -95,16 +95,29 @@ class BudgetEnforcementService:
         if max_budget is None:
             return
 
-        spend_rows = await self.db.query_raw(
+        counter_rows = await self.db.query_raw(
             """
-            SELECT COALESCE(SUM(spend), 0) AS total
-            FROM deltallm_spendlogs
+            SELECT spend
+            FROM deltallm_teammodelspend
             WHERE team_id = $1 AND model = $2
+            LIMIT 1
             """,
             team_id,
             model,
         )
-        current_spend = _to_float((spend_rows[0] if spend_rows else {}).get("total"))
+        if counter_rows:
+            current_spend = _to_float(counter_rows[0].get("spend"))
+        else:
+            spend_rows = await self.db.query_raw(
+                """
+                SELECT COALESCE(SUM(spend), 0) AS total
+                FROM deltallm_spendlog_events
+                WHERE team_id = $1 AND model = $2
+                """,
+                team_id,
+                model,
+            )
+            current_spend = _to_float((spend_rows[0] if spend_rows else {}).get("total"))
         if current_spend >= max_budget:
             raise BudgetExceeded(
                 entity_type="team_model",

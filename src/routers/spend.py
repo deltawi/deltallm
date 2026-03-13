@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from src.audit import AuditAction
+from src.billing.spend_read import SpendReadSource, get_spend_read_source
 from src.middleware.admin import require_master_key
 from src.routers.audit_helpers import emit_audit_event
 
@@ -73,6 +74,7 @@ def _date_end(value: date | None) -> datetime | None:
 
 def _build_spendlog_where(
     *,
+    source: SpendReadSource,
     api_key: str | None,
     user_id: str | None,
     team_id: str | None,
@@ -91,7 +93,7 @@ def _build_spendlog_where(
     if api_key:
         add_clause("api_key = ${i}", api_key)
     if user_id:
-        add_clause('"user" = ${i}', user_id)
+        add_clause(f"{source.user_column} = ${{i}}", user_id)
     if team_id:
         add_clause("team_id = ${i}", team_id)
     if model:
@@ -130,7 +132,9 @@ async def get_spend_logs(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     db = _db_or_503(request)
+    source = get_spend_read_source()
     where_sql, params = _build_spendlog_where(
+        source=source,
         api_key=api_key,
         user_id=user_id,
         team_id=team_id,
@@ -156,17 +160,17 @@ async def get_spend_logs(
             api_key,
             spend,
             total_tokens,
-            prompt_tokens,
-            completion_tokens,
-            prompt_tokens_cached,
-            completion_tokens_cached,
+            {source.prompt_tokens_column} AS prompt_tokens,
+            {source.completion_tokens_column} AS completion_tokens,
+            {source.cached_prompt_tokens_column} AS prompt_tokens_cached,
+            {source.cached_completion_tokens_column} AS completion_tokens_cached,
             start_time,
             end_time,
-            "user",
+            {source.user_column} AS "user",
             team_id,
             cache_hit,
             request_tags
-        FROM deltallm_spendlogs
+        FROM {source.table}
         {where_sql}
         ORDER BY start_time DESC
         LIMIT ${limit_idx}
@@ -178,7 +182,7 @@ async def get_spend_logs(
         total_rows = await db.query_raw(
         f"""
         SELECT COUNT(*) AS total
-        FROM deltallm_spendlogs
+        FROM {source.table}
         {where_sql}
         """,
         *params,
@@ -244,7 +248,9 @@ async def get_global_spend(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     db = _db_or_503(request)
+    source = get_spend_read_source()
     where_sql, params = _build_spendlog_where(
+        source=source,
         api_key=None,
         user_id=None,
         team_id=None,
@@ -259,10 +265,10 @@ async def get_global_spend(
         SELECT
             COALESCE(SUM(spend), 0) AS total_spend,
             COALESCE(SUM(total_tokens), 0) AS total_tokens,
-            COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
-            COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+            COALESCE(SUM({source.prompt_tokens_column}), 0) AS prompt_tokens,
+            COALESCE(SUM({source.completion_tokens_column}), 0) AS completion_tokens,
             COUNT(*) AS total_requests
-        FROM deltallm_spendlogs
+        FROM {source.table}
         {where_sql}
         """,
         *params,
@@ -299,15 +305,17 @@ async def get_spend_report(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     db = _db_or_503(request)
+    source = get_spend_read_source()
     group_column = {
         "model": "model",
         "provider": "api_base",
         "day": "DATE(start_time)",
-        "user": "COALESCE(\"user\", 'anonymous')",
+        "user": f"COALESCE({source.user_column}, 'anonymous')",
         "team": "COALESCE(team_id, 'none')",
     }.get(group_by, "model")
 
     where_sql, params = _build_spendlog_where(
+        source=source,
         api_key=None,
         user_id=None,
         team_id=None,
@@ -325,7 +333,7 @@ async def get_spend_report(
             COUNT(*) AS request_count,
             COALESCE(SUM(total_tokens), 0) AS total_tokens,
             COALESCE(AVG(spend), 0) AS avg_spend_per_request
-        FROM deltallm_spendlogs
+        FROM {source.table}
         {where_sql}
         GROUP BY {group_column}
         ORDER BY total_spend DESC
@@ -430,7 +438,9 @@ async def get_spend_per_end_user(
 ) -> list[dict[str, Any]]:
     request_start = perf_counter()
     db = _db_or_503(request)
+    source = get_spend_read_source()
     where_sql, params = _build_spendlog_where(
+        source=source,
         api_key=None,
         user_id=None,
         team_id=None,
@@ -444,10 +454,10 @@ async def get_spend_per_end_user(
         rows = await db.query_raw(
         f"""
         SELECT
-            COALESCE(end_user, "user", 'anonymous') AS end_user_id,
+            COALESCE({source.end_user_column}, {source.user_column}, 'anonymous') AS end_user_id,
             COALESCE(SUM(spend), 0) AS total_spend,
             COUNT(*) AS request_count
-        FROM deltallm_spendlogs
+        FROM {source.table}
         {where_sql}
         GROUP BY end_user_id
         ORDER BY total_spend DESC
@@ -485,7 +495,9 @@ async def get_spend_per_model(
 ) -> list[dict[str, Any]]:
     request_start = perf_counter()
     db = _db_or_503(request)
+    source = get_spend_read_source()
     where_sql, params = _build_spendlog_where(
+        source=source,
         api_key=None,
         user_id=None,
         team_id=None,
@@ -503,7 +515,7 @@ async def get_spend_per_model(
             COALESCE(SUM(spend), 0) AS total_spend,
             COALESCE(SUM(total_tokens), 0) AS total_tokens,
             COUNT(*) AS request_count
-        FROM deltallm_spendlogs
+        FROM {source.table}
         {where_sql}
         GROUP BY model
         ORDER BY total_spend DESC

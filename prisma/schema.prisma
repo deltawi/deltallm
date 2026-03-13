@@ -8,40 +8,66 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model DeltaLLM_SpendLogs {
-  id                String   @id @default(uuid())
-  request_id        String
-  call_type         String
-  api_key           String
-  spend             Float
-  total_tokens      Int
-  prompt_tokens     Int
-  completion_tokens Int
-  prompt_tokens_cached Int      @default(0)
-  completion_tokens_cached Int  @default(0)
-  start_time        DateTime
-  end_time          DateTime
-  model             String
-  api_base          String?
-  user              String?
-  team_id           String?
-  end_user          String?
-  metadata          Json?
-  cache_hit         Boolean  @default(false)
-  cache_key         String?
-  request_tags      String[]
+model DeltaLLM_SpendLogEvents {
+  id                     String   @id @default(uuid())
+  request_id             String
+  call_type              String
+  api_key                String
+  user_id                String?
+  team_id                String?
+  organization_id        String?
+  end_user_id            String?
+  model                  String
+  deployment_model       String?
+  provider               String?
+  api_base               String?
+  spend                  Float
+  provider_cost          Float?
+  billing_unit           String?
+  pricing_tier           String?
+  total_tokens           Int      @default(0)
+  input_tokens           Int      @default(0)
+  output_tokens          Int      @default(0)
+  cached_input_tokens    Int      @default(0)
+  cached_output_tokens   Int      @default(0)
+  input_audio_tokens     Int      @default(0)
+  output_audio_tokens    Int      @default(0)
+  input_characters       Int      @default(0)
+  output_characters      Int      @default(0)
+  duration_seconds       Float    @default(0)
+  image_count            Int      @default(0)
+  rerank_units           Int      @default(0)
+  start_time             DateTime
+  end_time               DateTime
+  latency_ms             Int?
+  cache_hit              Boolean  @default(false)
+  cache_key              String?
+  request_tags           String[]
+  unpriced_reason        String?
+  pricing_fields_used    Json?
+  usage_snapshot         Json?
+  metadata               Json?
 
-  @@index([api_key])
-  @@index([team_id])
-  @@index([user])
-  @@index([start_time])
-  @@index([model])
-  @@index([team_id, start_time], map: "deltallm_spendlogs_team_time_idx")
-  @@index([api_key, start_time], map: "deltallm_spendlogs_api_key_time_idx")
-  @@index([user, start_time], map: "deltallm_spendlogs_user_time_idx")
-  @@index([model, start_time], map: "deltallm_spendlogs_model_time_idx")
-  @@index([request_tags], type: Gin, map: "deltallm_spendlogs_request_tags_gin_idx")
-  @@map("deltallm_spendlogs")
+  @@index([organization_id, start_time], map: "deltallm_spendlog_events_org_time_idx")
+  @@index([team_id, start_time], map: "deltallm_spendlog_events_team_time_idx")
+  @@index([api_key, start_time], map: "deltallm_spendlog_events_api_key_time_idx")
+  @@index([user_id, start_time], map: "deltallm_spendlog_events_user_time_idx")
+  @@index([model, start_time], map: "deltallm_spendlog_events_model_time_idx")
+  @@index([provider, start_time], map: "deltallm_spendlog_events_provider_time_idx")
+  @@index([start_time], map: "deltallm_spendlog_events_start_time_idx")
+  @@index([request_tags], type: Gin, map: "deltallm_spendlog_events_request_tags_gin_idx")
+  @@map("deltallm_spendlog_events")
+}
+
+model DeltaLLM_TeamModelSpendCounter {
+  team_id     String
+  model       String
+  spend       Float    @default(0)
+  updated_at  DateTime @updatedAt
+
+  @@id([team_id, model])
+  @@index([team_id], map: "deltallm_teammodelspend_team_idx")
+  @@map("deltallm_teammodelspend")
 }
 
 model DeltaLLM_VerificationToken {

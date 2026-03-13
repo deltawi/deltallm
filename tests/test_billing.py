@@ -38,10 +38,29 @@ class BudgetDB:
         return []
 
 
+class TeamModelBudgetDB:
+    def __init__(self, *, counter_spend: float | None) -> None:
+        self.counter_spend = counter_spend
+        self.calls: list[tuple[str, tuple]] = []
+
+    async def query_raw(self, query: str, *args):
+        self.calls.append((query, args))
+        normalized = " ".join(query.lower().split())
+        if "from deltallm_teamtable" in normalized:
+            return [{"model_max_budget": {"gpt-4o-mini": 10.0}}]
+        if "from deltallm_teammodelspend" in normalized:
+            if self.counter_spend is None:
+                return []
+            return [{"spend": self.counter_spend}]
+        if "from deltallm_spendlog_events" in normalized:
+            return [{"total": 12.0}]
+        return []
+
+
 class SpendQueryDB:
     async def query_raw(self, query: str, *args):
         normalized = " ".join(query.lower().split())
-        if "total_requests" in normalized and "from deltallm_spendlogs" in normalized:
+        if "total_requests" in normalized and "from deltallm_spendlog_events" in normalized:
             return [
                 {
                     "total_spend": 1.25,
@@ -53,7 +72,7 @@ class SpendQueryDB:
             ]
         if "count(*) as total" in normalized:
             return [{"total": 1}]
-        if "from deltallm_spendlogs" in normalized and "order by start_time desc" in normalized:
+        if "from deltallm_spendlog_events" in normalized and "order by start_time desc" in normalized:
             return [
                 {
                     "id": "log_1",
@@ -98,11 +117,87 @@ async def test_spend_tracking_writes_log_and_ledger_updates():
         metadata={"api_base": "https://api.openai.com/v1", "tags": ["prod"]},
     )
 
-    assert any("insert into deltallm_spendlogs" in q.lower() for q, _ in db.calls)
+    assert any("insert into deltallm_spendlog_events" in q.lower() for q, _ in db.calls)
+    assert not any("insert into deltallm_spendlogs" in q.lower() for q, _ in db.calls)
     assert any("update deltallm_verificationtoken" in q.lower() for q, _ in db.calls)
     assert any("update deltallm_usertable" in q.lower() for q, _ in db.calls)
     assert any("update deltallm_teamtable" in q.lower() for q, _ in db.calls)
     assert any("update deltallm_organizationtable" in q.lower() for q, _ in db.calls)
+
+
+@pytest.mark.asyncio
+async def test_spend_tracking_writes_normalized_event_and_team_model_counter():
+    db = RecordingDB()
+    service = SpendTrackingService(db_client=db)
+
+    await service.log_spend(
+        request_id="req_audio_123",
+        api_key="key_hash",
+        user_id="user_1",
+        team_id="team_1",
+        organization_id="org_1",
+        end_user_id="end_1",
+        model="gpt-4o-mini-tts",
+        call_type="audio_speech",
+        usage={"input_characters": 1200},
+        cost=0.02,
+        metadata={
+            "api_base": "https://api.openai.com/v1",
+            "billing": {
+                "billing_unit": "character",
+                "pricing_fields_used": ["input_cost_per_character"],
+                "usage_snapshot": {"input_characters": 1200},
+            },
+        },
+    )
+
+    event_call = next(args for query, args in db.calls if "insert into deltallm_spendlog_events" in query.lower())
+    assert event_call[6] == "org_1"
+    assert event_call[10] == "openai"
+    assert event_call[14] == "character"
+    assert event_call[23] == 1200
+    assert any("insert into deltallm_teammodelspend" in q.lower() for q, _ in db.calls)
+
+
+@pytest.mark.asyncio
+async def test_spend_tracking_counts_audio_tokens_in_total_tokens_when_explicit_total_missing():
+    db = RecordingDB()
+    service = SpendTrackingService(db_client=db)
+
+    await service.log_spend(
+        request_id="req_audio_tokens",
+        api_key="key_hash",
+        user_id="user_1",
+        team_id="team_1",
+        organization_id="org_1",
+        end_user_id=None,
+        model="gpt-4o-mini-tts",
+        call_type="audio_speech",
+        usage={
+            "prompt_tokens": 10,
+            "completion_tokens": 4,
+            "input_audio_tokens": 3,
+            "output_audio_tokens": 5,
+        },
+        cost=0.47,
+        metadata={
+            "api_base": "https://api.openai.com/v1",
+            "billing": {
+                "billing_unit": "token",
+                "usage_snapshot": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 4,
+                    "input_audio_tokens": 3,
+                    "output_audio_tokens": 5,
+                },
+            },
+        },
+    )
+
+    event_call = next(args for query, args in db.calls if "insert into deltallm_spendlog_events" in query.lower())
+    assert event_call[16] == 22
+    assert event_call[21] == 3
+    assert event_call[22] == 5
 
 
 @pytest.mark.asyncio
@@ -131,9 +226,9 @@ async def test_spend_tracking_persists_cached_token_counts():
         cache_hit=True,
     )
 
-    insert_call = next(args for query, args in db.calls if "insert into deltallm_spendlogs" in query.lower())
-    assert insert_call[8] == 6
-    assert insert_call[9] == 0
+    insert_call = next(args for query, args in db.calls if "insert into deltallm_spendlog_events" in query.lower())
+    assert insert_call[19] == 6
+    assert insert_call[20] == 0
 
 
 @pytest.mark.asyncio
@@ -151,7 +246,58 @@ async def test_budget_enforcement_raises_when_hard_budget_exceeded():
 
 
 @pytest.mark.asyncio
+async def test_budget_enforcement_prefers_team_model_counter_when_available():
+    db = TeamModelBudgetDB(counter_spend=12.0)
+    service = BudgetEnforcementService(db_client=db)
+
+    with pytest.raises(BudgetExceeded):
+        await service.check_budgets(
+            api_key=None,
+            user_id=None,
+            team_id="team_1",
+            organization_id=None,
+            model="gpt-4o-mini",
+        )
+
+    assert any("from deltallm_teammodelspend" in query.lower() for query, _ in db.calls)
+    assert not any("from deltallm_spendlog_events" in query.lower() for query, _ in db.calls)
+
+
+@pytest.mark.asyncio
+async def test_budget_enforcement_falls_back_to_spend_events_when_counter_missing():
+    db = TeamModelBudgetDB(counter_spend=None)
+    service = BudgetEnforcementService(db_client=db)
+
+    with pytest.raises(BudgetExceeded):
+        await service.check_budgets(
+            api_key=None,
+            user_id=None,
+            team_id="team_1",
+            organization_id=None,
+            model="gpt-4o-mini",
+        )
+
+    assert any("from deltallm_spendlog_events" in query.lower() for query, _ in db.calls)
+
+
+@pytest.mark.asyncio
 async def test_spend_logs_endpoint_returns_paginated_data(client, test_app):
+    test_app.state.prisma_manager = SimpleNamespace(client=SpendQueryDB())
+    test_app.state.settings.master_key = "mk-test"
+
+    response = await client.get(
+        "/spend/logs",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["pagination"]["total"] == 1
+    assert payload["logs"][0]["request_id"] == "req_1"
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_endpoint_reads_normalized_events(client, test_app):
     test_app.state.prisma_manager = SimpleNamespace(client=SpendQueryDB())
     test_app.state.settings.master_key = "mk-test"
 

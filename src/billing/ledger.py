@@ -19,6 +19,7 @@ class SpendLedgerService:
         user_id: str | None,
         team_id: str | None,
         organization_id: str | None,
+        model: str | None,
         cost: float,
     ) -> None:
         if self.db is None or cost <= 0:
@@ -48,6 +49,7 @@ class SpendLedgerService:
             entity_id=organization_id,
             amount=cost,
         )
+        await self._increment_team_model_counter(team_id=team_id, model=model, amount=cost)
 
     async def _increment_table(self, *, table: str, id_column: str, entity_id: str | None, amount: float) -> None:
         if not entity_id:
@@ -66,3 +68,27 @@ class SpendLedgerService:
             )
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.warning("failed to increment spend", extra={"table": table, "entity_id": entity_id, "error": str(exc)})
+
+    async def _increment_team_model_counter(self, *, team_id: str | None, model: str | None, amount: float) -> None:
+        if not team_id or not model:
+            return
+
+        try:
+            await self.db.execute_raw(
+                """
+                INSERT INTO deltallm_teammodelspend (team_id, model, spend, updated_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT (team_id, model)
+                DO UPDATE SET
+                    spend = deltallm_teammodelspend.spend + EXCLUDED.spend,
+                    updated_at = NOW()
+                """,
+                team_id,
+                model,
+                amount,
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning(
+                "failed to increment team-model spend",
+                extra={"team_id": team_id, "model": model, "error": str(exc)},
+            )
