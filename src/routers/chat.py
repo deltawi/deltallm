@@ -21,6 +21,8 @@ from src.chat import (
 )
 from src.middleware.auth import require_api_key
 from src.middleware.rate_limit import enforce_rate_limits
+from src.mcp.orchestrator import MCPChatOrchestrator, chat_request_has_mcp_tools
+from src.models.errors import InvalidRequestError, ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
 from src.providers.registry import resolve_chat_upstream
 from src.providers.resolution import resolve_provider
@@ -56,6 +58,7 @@ async def handle_chat_like_request(
         payload=payload,
         request_data=request_data,
     )
+    has_mcp_tools = chat_request_has_mcp_tools(payload)
 
     router = request.app.state.router
     model_group = router.resolve_model_group(payload.model)
@@ -76,6 +79,8 @@ async def handle_chat_like_request(
 
     try:
         if payload.stream:
+            if has_mcp_tools:
+                raise InvalidRequestError(message="MCP tools are not supported on streaming chat requests yet")
             # Validate provider+mode before starting the streaming response,
             # so unsupported stream providers fail as a normal HTTP error.
             resolve_chat_upstream(request, primary.deltallm_params, is_stream=True)
@@ -199,10 +204,25 @@ async def handle_chat_like_request(
                 },
             )
 
+        async def _execute_for_deployment(deployment):  # noqa: ANN001, ANN202
+            if not has_mcp_tools:
+                return await execute_chat(request, payload, deployment)
+            gateway = getattr(request.app.state, "mcp_gateway_service", None)
+            if gateway is None:
+                raise ServiceUnavailableError(message="MCP gateway service is not available")
+            orchestrator = MCPChatOrchestrator(gateway)
+            return await orchestrator.execute(
+                request=request,
+                auth=auth,
+                payload=payload,
+                execute_chat_call=lambda request_payload: execute_chat(request, request_payload, deployment),
+                guardrail_middleware=guardrail_middleware,
+            )
+
         (payload_data, api_latency_ms), served_deployment = await request.app.state.failover_manager.execute_with_failover(
             primary_deployment=primary,
             model_group=model_group,
-            execute=lambda deployment: execute_chat(request, payload, deployment),
+            execute=_execute_for_deployment,
             return_deployment=True,
             **failover_kwargs,
         )

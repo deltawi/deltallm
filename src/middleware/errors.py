@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from src.guardrails.exceptions import GuardrailViolationError
-from src.models.errors import ProxyError, RateLimitError
+from src.models.errors import ApprovalRequiredError, ProxyError, RateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,8 @@ def _serialize_error(exc: ProxyError) -> dict[str, object]:
     }
     if isinstance(exc, GuardrailViolationError):
         payload["error"]["guardrail"] = exc.guardrail_name
+    if isinstance(exc, ApprovalRequiredError) and exc.approval_request_id:
+        payload["error"]["approval_request_id"] = exc.approval_request_id
     return payload
 
 

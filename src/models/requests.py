@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 from pydantic import BaseModel, Field
 
@@ -13,9 +13,19 @@ class ChatMessage(BaseModel):
     tool_call_id: str | None = None
 
 
-class ToolDefinition(BaseModel):
+class FunctionToolDefinition(BaseModel):
     type: Literal["function"] = "function"
     function: dict[str, Any]
+
+
+class MCPToolDefinition(BaseModel):
+    type: Literal["mcp"] = "mcp"
+    server: str
+    allowed_tools: list[str] | None = None
+    require_approval: Literal["never"] = "never"
+
+
+ToolDefinition: TypeAlias = FunctionToolDefinition | MCPToolDefinition
 
 
 class ToolChoice(BaseModel):

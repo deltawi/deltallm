@@ -27,9 +27,19 @@ from src.callbacks import CallbackManager
 from src.config import get_settings, resolve_salt_key
 from src.config_runtime import DynamicConfigManager, ModelHotReloadManager, SecretResolver, build_app_config, load_yaml_dict
 from src.db.client import prisma_manager
+from src.db.mcp import MCPRepository
 from src.db.repositories import AuditRepository, KeyRepository, ModelDeploymentRepository
 from src.db.prompt_registry import PromptRegistryRepository
 from src.db.route_groups import RouteGroupRepository
+from src.mcp import (
+    MCPApprovalService,
+    MCPGatewayService,
+    MCPHealthProbe,
+    MCPRegistryService,
+    MCPToolPolicyEnforcer,
+    MCPToolResultCache,
+    StreamableHTTPMCPClient,
+)
 from src.auth import CustomAuthManager, InMemoryUserRepository, JWTAuthHandler, SSOAuthHandler, SSOConfig, SSOProvider
 from src.api.admin import admin_router
 from src.api.v1.router import v1_router
@@ -160,10 +170,27 @@ async def lifespan(app: FastAPI):
     app.state.model_deployment_repository = ModelDeploymentRepository(prisma_manager.client)
     app.state.route_group_repository = RouteGroupRepository(prisma_manager.client)
     app.state.prompt_registry_repository = PromptRegistryRepository(prisma_manager.client)
+    app.state.mcp_repository = MCPRepository(prisma_manager.client)
     app.state.prompt_registry_service = PromptRegistryService(
         repository=app.state.prompt_registry_repository,
         route_group_repository=app.state.route_group_repository,
         redis_client=redis_client,
+    )
+    app.state.mcp_registry_service = MCPRegistryService(
+        repository=app.state.mcp_repository,
+        redis_client=redis_client,
+    )
+    app.state.mcp_transport_client = StreamableHTTPMCPClient(app.state.http_client)
+    app.state.mcp_health_probe = MCPHealthProbe(
+        registry=app.state.mcp_registry_service,
+        client=app.state.mcp_transport_client,
+    )
+    app.state.mcp_gateway_service = MCPGatewayService(
+        registry=app.state.mcp_registry_service,
+        transport_client=app.state.mcp_transport_client,
+        policy_enforcer=MCPToolPolicyEnforcer(app.state.limit_counter),
+        result_cache=MCPToolResultCache(getattr(app.state, "cache_backend", None)),
+        approval_service=MCPApprovalService(app.state.mcp_repository),
     )
     app.state.batch_repository = BatchRepository(prisma_manager.client)
     if cfg.general_settings.model_deployment_bootstrap_from_config:

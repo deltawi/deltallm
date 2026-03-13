@@ -10,7 +10,7 @@ from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
 from src.db.route_groups import RouteGroupRepository
 from src.providers.resolution import validate_provider_mode_compatibility
 from src.router import RouterConfig, RoutingStrategy, build_deployment_registry, build_route_group_policies
-from src.services.model_deployments import load_model_registry
+from src.services.model_deployments import ensure_model_name_available, load_model_registry
 from src.services.route_groups import RouteGroupRuntimeCache, load_route_groups
 
 
@@ -46,6 +46,10 @@ class ModelHotReloadManager:
         deployment["deployment_id"] = deployment_id
 
         self._validate_model_config(deployment)
+        ensure_model_name_available(
+            getattr(self.app.state, "model_registry", {}) or {},
+            model_name=str(deployment["model_name"]),
+        )
         if self.model_repository is None:
             current = self.dynamic_config.get_config()
             model_list = list(current.get("model_list", []))
@@ -68,6 +72,11 @@ class ModelHotReloadManager:
         deployment = model_config.copy()
         deployment["deployment_id"] = deployment_id
         self._validate_model_config(deployment)
+        ensure_model_name_available(
+            getattr(self.app.state, "model_registry", {}) or {},
+            model_name=str(deployment["model_name"]),
+            exclude_deployment_id=deployment_id,
+        )
 
         if self.model_repository is None:
             current = self.dynamic_config.get_config()

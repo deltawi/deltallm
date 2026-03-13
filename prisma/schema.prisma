@@ -384,6 +384,110 @@ model DeltaLLM_RouteGroup {
   @@map("deltallm_routegroup")
 }
 
+model DeltaLLM_MCPServer {
+  mcp_server_id                String   @id @default(uuid())
+  server_key                   String   @unique
+  name                         String
+  description                  String?
+  transport                    String   @default("streamable_http")
+  base_url                     String
+  enabled                      Boolean  @default(true)
+  auth_mode                    String   @default("none")
+  auth_config                  Json?
+  forwarded_headers_allowlist  String[]
+  request_timeout_ms           Int      @default(30000)
+  capabilities_json            Json?
+  capabilities_etag            String?
+  capabilities_fetched_at      DateTime?
+  last_health_status           String?
+  last_health_error            String?
+  last_health_at               DateTime?
+  last_health_latency_ms       Int?
+  metadata                     Json?
+  created_by_account_id        String?
+  created_at                   DateTime @default(now())
+  updated_at                   DateTime @updatedAt
+
+  bindings     DeltaLLM_MCPServerBinding[]
+  tool_policies DeltaLLM_MCPToolPolicy[]
+  approval_requests DeltaLLM_MCPApprovalRequest[]
+
+  @@index([enabled], map: "deltallm_mcpserver_enabled_idx")
+  @@index([created_at], map: "deltallm_mcpserver_created_at_idx")
+  @@map("deltallm_mcpserver")
+}
+
+model DeltaLLM_MCPServerBinding {
+  mcp_binding_id  String   @id @default(uuid())
+  mcp_server_id   String
+  scope_type      String
+  scope_id        String
+  enabled         Boolean  @default(true)
+  tool_allowlist  String[]
+  metadata        Json?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  server DeltaLLM_MCPServer @relation(fields: [mcp_server_id], references: [mcp_server_id], onDelete: Cascade)
+
+  @@unique([mcp_server_id, scope_type, scope_id], map: "deltallm_mcpbinding_server_scope_key")
+  @@index([scope_type, scope_id, enabled], map: "deltallm_mcpbinding_scope_idx")
+  @@index([mcp_server_id], map: "deltallm_mcpbinding_server_idx")
+  @@map("deltallm_mcpbinding")
+}
+
+model DeltaLLM_MCPToolPolicy {
+  mcp_tool_policy_id       String   @id @default(uuid())
+  mcp_server_id            String
+  tool_name                String
+  scope_type               String
+  scope_id                 String
+  enabled                  Boolean  @default(true)
+  require_approval         String?
+  max_rpm                  Int?
+  max_concurrency          Int?
+  result_cache_ttl_seconds Int?
+  metadata                 Json?
+  created_at               DateTime @default(now())
+  updated_at               DateTime @updatedAt
+
+  server DeltaLLM_MCPServer @relation(fields: [mcp_server_id], references: [mcp_server_id], onDelete: Cascade)
+
+  @@unique([mcp_server_id, tool_name, scope_type, scope_id], map: "deltallm_mcptoolpolicy_server_tool_scope_key")
+  @@index([mcp_server_id, tool_name], map: "deltallm_mcptoolpolicy_server_tool_idx")
+  @@index([scope_type, scope_id, enabled], map: "deltallm_mcptoolpolicy_scope_idx")
+  @@map("deltallm_mcptoolpolicy")
+}
+
+model DeltaLLM_MCPApprovalRequest {
+  mcp_approval_request_id String   @id @default(uuid())
+  mcp_server_id           String
+  tool_name               String
+  scope_type              String
+  scope_id                String
+  status                  String   @default("pending")
+  request_fingerprint     String
+  requested_by_api_key    String?
+  requested_by_user       String?
+  organization_id         String?
+  request_id              String?
+  correlation_id          String?
+  arguments_json          Json
+  decision_comment        String?
+  decided_by_account_id   String?
+  decided_at              DateTime?
+  metadata                Json?
+  created_at              DateTime @default(now())
+  updated_at              DateTime @updatedAt
+
+  server DeltaLLM_MCPServer @relation(fields: [mcp_server_id], references: [mcp_server_id], onDelete: Cascade)
+
+  @@index([mcp_server_id, status, created_at], map: "deltallm_mcpapproval_server_status_created_idx")
+  @@index([status, created_at], map: "deltallm_mcpapproval_status_created_idx")
+  @@index([request_fingerprint], map: "deltallm_mcpapproval_fingerprint_idx")
+  @@map("deltallm_mcpapprovalrequest")
+}
+
 model DeltaLLM_PromptTemplate {
   prompt_template_id String   @id @default(uuid())
   template_key       String   @unique

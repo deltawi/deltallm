@@ -191,7 +191,11 @@ async def test_dynamic_config_merges_db_and_notifies_subscribers(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_model_hot_reload_manager_updates_runtime_registries():
-    settings = SimpleNamespace(openai_api_key="provider-key", openai_base_url="https://api.openai.com/v1")
+    settings = SimpleNamespace(
+        openai_api_key="provider-key",
+        openai_base_url="https://api.openai.com/v1",
+        salt_key="test-salt",
+    )
     initial_model_registry = {
         "gpt-4o-mini": [
             {
@@ -273,7 +277,11 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
 
 @pytest.mark.asyncio
 async def test_model_hot_reload_manager_model_crud_refreshes_runtime_registry():
-    settings = SimpleNamespace(openai_api_key="provider-key", openai_base_url="https://api.openai.com/v1")
+    settings = SimpleNamespace(
+        openai_api_key="provider-key",
+        openai_base_url="https://api.openai.com/v1",
+        salt_key="test-salt",
+    )
     initial_model_registry = {
         "gpt-4o-mini": [
             {
@@ -366,5 +374,74 @@ async def test_model_hot_reload_manager_model_crud_refreshes_runtime_registry():
     assert removed is True
     assert "gpt-4.1-mini" not in app.state.model_registry
     assert route_group_cache.invalidate_calls == 3
+
+    await dynamic.close()
+
+
+@pytest.mark.asyncio
+async def test_model_hot_reload_manager_rejects_duplicate_model_name() -> None:
+    settings = SimpleNamespace(
+        openai_api_key="default-key",
+        openai_base_url="https://api.openai.com/v1",
+        salt_key="test-salt",
+    )
+    initial_model_registry = {
+        "gpt-4o-mini": [{"deployment_id": "old-dep", "deltallm_params": {"model": "openai/gpt-4o-mini"}, "model_info": {}}]
+    }
+    deployment_registry = build_deployment_registry(initial_model_registry)
+    state_backend = RedisStateBackend(redis=None)
+    router = Router(
+        strategy=RoutingStrategy.SIMPLE_SHUFFLE,
+        state_backend=state_backend,
+        config=RouterConfig(),
+        deployment_registry=deployment_registry,
+    )
+    cooldown_manager = CooldownManager(state_backend=state_backend)
+    failover_manager = FailoverManager(
+        config=FallbackConfig(),
+        deployment_registry=deployment_registry,
+        state_backend=state_backend,
+        cooldown_manager=cooldown_manager,
+    )
+    health_handler = HealthEndpointHandler(deployment_registry=deployment_registry, state_backend=state_backend)
+    health_checker = BackgroundHealthChecker(
+        config=HealthCheckConfig(enabled=False),
+        deployment_registry=deployment_registry,
+        state_backend=state_backend,
+        checker=lambda _: asyncio.sleep(0, result=True),
+    )
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            settings=settings,
+            app_config=AppConfig.model_validate({}),
+            model_registry=initial_model_registry,
+            router=router,
+            failover_manager=failover_manager,
+            router_health_handler=health_handler,
+            background_health_checker=health_checker,
+            cooldown_manager=cooldown_manager,
+            guardrail_registry=SimpleNamespace(load_from_config=lambda _: None),
+            callback_manager=SimpleNamespace(load_from_settings=lambda **_: None),
+            turn_off_message_logging=False,
+        )
+    )
+    dynamic = DynamicConfigManager(db_client=FakeDB(), redis_client=None, file_config={})
+    await dynamic.initialize()
+    manager = ModelHotReloadManager(
+        app=app,
+        dynamic_config=dynamic,
+        model_repository=None,
+        route_group_cache=FakeRouteGroupCache(),
+    )
+
+    with pytest.raises(ValueError, match="Duplicate model_name 'gpt-4o-mini' is not allowed"):
+        await manager.add_model(
+            {
+                "model_name": "gpt-4o-mini",
+                "deployment_id": "new-dep",
+                "deltallm_params": {"model": "azure/gpt-4o-mini"},
+                "model_info": {"weight": 2},
+            }
+        )
 
     await dynamic.close()

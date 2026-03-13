@@ -13,6 +13,7 @@ from src.api.v1.endpoints import (
     health_router,
     images_router,
     metrics_router,
+    mcp_router,
     models_router,
     rerank_router,
     responses_router,
@@ -23,6 +24,7 @@ v1_router = APIRouter()
 
 v1_router.include_router(health_router)
 v1_router.include_router(metrics_router)
+v1_router.include_router(mcp_router)
 v1_router.include_router(files_router)
 v1_router.include_router(batches_router)
 v1_router.include_router(chat_router)

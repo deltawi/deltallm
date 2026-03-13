@@ -59,6 +59,16 @@ class PermissionDeniedError(ProxyError):
     message = "Permission denied"
 
 
+class ApprovalRequiredError(ProxyError):
+    status_code = 409
+    error_type = "approval_required"
+    message = "Approval required"
+
+    def __init__(self, message: str | None = None, approval_request_id: str | None = None, **kwargs):
+        super().__init__(message=message, **kwargs)
+        self.approval_request_id = approval_request_id
+
+
 class ServiceUnavailableError(ProxyError):
     status_code = 503
     error_type = "service_unavailable"
