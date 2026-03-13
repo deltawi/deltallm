@@ -9,7 +9,7 @@ from src.models.errors import InvalidRequestError, ServiceUnavailableError, Time
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
 from src.providers.base import ProviderAdapter
-from src.providers.resolution import resolve_upstream_model
+from src.providers.resolution import normalize_openai_chat_payload, resolve_provider, resolve_upstream_model
 
 
 class OpenAIAdapter(ProviderAdapter):
@@ -26,9 +26,11 @@ class OpenAIAdapter(ProviderAdapter):
         payload = canonical_request.model_dump(exclude_none=True)
         if payload.get("tool_choice") is not None and not payload.get("tools"):
             payload.pop("tool_choice", None)
+        provider = resolve_provider(provider_config)
         upstream_model = resolve_upstream_model(provider_config)
         if upstream_model:
             payload["model"] = upstream_model
+        normalize_openai_chat_payload(payload, provider=provider, upstream_model=upstream_model or str(payload.get("model") or ""))
         return payload
 
     async def translate_response(self, provider_response: Any, model_name: str) -> ChatCompletionResponse:

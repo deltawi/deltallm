@@ -36,10 +36,18 @@ The fastest way to get everything running:
 ```bash
 # Edit config.yaml with your API keys and settings
 
-docker compose --profile single up -d
+docker compose --profile single up -d --build
 ```
 
-On startup, the DeltaLLM container runs the shared database bootstrap script before launching the API. It prefers `prisma migrate deploy` and falls back to `prisma db push` for legacy or unbaselined databases.
+Run the command from the repository root so Compose can read the project `.env` file automatically.
+
+On startup, the DeltaLLM container applies the Prisma schema with:
+
+```bash
+prisma db push --schema=./prisma/schema.prisma --accept-data-loss
+```
+
+Then it starts the API server.
 
 This starts:
 - DeltaLLM on port **4000**
@@ -55,10 +63,10 @@ Once a model is available, see [Quick Start](quickstart.md) for `curl`, Python, 
 Run two DeltaLLM instances behind an Nginx load balancer:
 
 ```bash
-docker compose --profile ha up -d
+docker compose --profile ha up -d --build
 ```
 
-Each DeltaLLM container runs the shared database bootstrap script before starting the API.
+Each DeltaLLM container applies the Prisma schema with `prisma db push --schema=./prisma/schema.prisma --accept-data-loss` before starting the API.
 
 This starts:
 - 2 DeltaLLM instances (load balanced)
@@ -119,7 +127,7 @@ The `docker-compose.yaml` automatically sets these for the bundled services:
 
 You do not need to configure them manually for the default Compose setup.
 
-The container also runs the shared database bootstrap script automatically on boot, so you do not need a separate schema initialization step for the default Compose setup.
+The container applies the Prisma schema automatically on boot, so you do not need a separate schema initialization step for the default Compose setup.
 
 ## Custom Config
 
@@ -142,7 +150,7 @@ docker run -p 4000:4000 \
   deltallm
 ```
 
-The image runs the shared database bootstrap script before starting `uvicorn`, so the target database must be reachable when the container starts.
+The image runs `prisma db push --schema=./prisma/schema.prisma --accept-data-loss` before starting `uvicorn`, so the target database must be reachable when the container starts.
 
 ## Health Check
 
@@ -151,3 +159,12 @@ Verify the container is healthy:
 ```bash
 curl http://localhost:4000/health/liveliness
 ```
+
+List the available models:
+
+```bash
+curl http://localhost:4000/v1/models \
+  -H "Authorization: Bearer $DELTALLM_MASTER_KEY"
+```
+
+If this list is empty, enable one-time bootstrap in `config.yaml` and restart once, or create a deployment in the Admin UI before sending requests.

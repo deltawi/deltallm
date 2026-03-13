@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 
 from src.config import ModelDeployment, ModelMode
 from src.metrics.prometheus import sanitize_label
@@ -17,6 +17,13 @@ OPENAI_COMPATIBLE_PROVIDERS = {
     "vllm",
     "lmstudio",
     "ollama",
+    "azure",
+    "azure_openai",
+}
+
+# Providers that use OpenAI-owned request semantics rather than generic OpenAI-compatible proxy behavior.
+OPENAI_FAMILY_PROVIDERS = {
+    "openai",
     "azure",
     "azure_openai",
 }
@@ -98,6 +105,54 @@ def resolve_upstream_model(params: Mapping[str, object] | None, fallback_model: 
         if lowered.startswith(prefix):
             return upstream_model[len(prefix):]
     return upstream_model
+
+
+def is_openai_family_provider(provider: str) -> bool:
+    return (provider or "").strip().lower() in OPENAI_FAMILY_PROVIDERS
+
+
+def normalize_openai_chat_payload(
+    payload: MutableMapping[str, object],
+    *,
+    provider: str,
+    upstream_model: str,
+) -> None:
+    """Apply provider-family request normalization for OpenAI-owned chat APIs."""
+
+    if not is_openai_family_provider(provider):
+        return
+
+    if upstream_model.lower().startswith("gpt-5"):
+        max_tokens = payload.pop("max_tokens", None)
+        if max_tokens is not None and payload.get("max_completion_tokens") is None:
+            payload["max_completion_tokens"] = max_tokens
+
+
+def normalize_openai_image_generation_payload(
+    payload: MutableMapping[str, object],
+    *,
+    provider: str,
+    upstream_model: str,
+) -> None:
+    """Apply model-family request normalization for OpenAI-owned image APIs."""
+
+    if not is_openai_family_provider(provider):
+        return
+
+    lowered = upstream_model.lower()
+    if lowered.startswith("gpt-image-"):
+        quality = payload.get("quality")
+        if quality == "standard":
+            payload["quality"] = "medium"
+        elif quality == "hd":
+            payload["quality"] = "high"
+        payload.pop("style", None)
+        payload.pop("response_format", None)
+        return
+
+    if lowered == "dall-e-2":
+        payload.pop("quality", None)
+        payload.pop("style", None)
 
 
 def provider_supports_mode(provider: str, mode: ModelMode) -> bool:
