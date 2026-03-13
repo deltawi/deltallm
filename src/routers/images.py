@@ -21,7 +21,11 @@ from src.metrics import (
 )
 from src.models.errors import InvalidRequestError, PermissionDeniedError
 from src.models.requests import ImageGenerationRequest
-from src.providers.resolution import resolve_provider, resolve_upstream_model
+from src.providers.resolution import (
+    normalize_openai_image_generation_payload,
+    resolve_provider,
+    resolve_upstream_model,
+)
 from src.router.router import Deployment
 from src.audit.actions import AuditAction
 from src.routers.audit_helpers import emit_audit_event
@@ -51,9 +55,15 @@ async def _execute_image_generation(
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
     upstream_payload = payload.model_dump(exclude_none=True)
+    provider = resolve_provider(params)
     upstream_model = resolve_upstream_model(params)
     if upstream_model:
         upstream_payload["model"] = upstream_model
+    normalize_openai_image_generation_payload(
+        upstream_payload,
+        provider=provider,
+        upstream_model=upstream_model or str(upstream_payload.get("model") or ""),
+    )
 
     from src.routers.utils import apply_default_params
     apply_default_params(upstream_payload, deployment.model_info)

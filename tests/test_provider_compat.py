@@ -5,6 +5,7 @@ import pytest
 
 from src.models.requests import ChatCompletionRequest
 from src.providers.anthropic import AnthropicAdapter
+from src.providers.azure import AzureOpenAIAdapter
 from src.providers.bedrock import BedrockAdapter
 from src.providers.gemini import GeminiAdapter
 from src.providers.openai import OpenAIAdapter
@@ -59,6 +60,63 @@ async def test_openai_adapter_preserves_slash_prefixed_model_for_groq() -> None:
             {"provider": "groq", "model": "openai/gpt-oss-120b"},
         )
         assert payload["model"] == "openai/gpt-oss-120b"
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_openai_adapter_maps_max_tokens_to_max_completion_tokens_for_gpt5() -> None:
+    adapter = OpenAIAdapter(httpx.AsyncClient())
+    try:
+        req = ChatCompletionRequest(
+            model="gpt-5-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=64,
+        )
+        payload = await adapter.translate_request(
+            req,
+            {"provider": "openai", "model": "openai/gpt-5-mini"},
+        )
+        assert "max_tokens" not in payload
+        assert payload["max_completion_tokens"] == 64
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_openai_adapter_keeps_max_tokens_for_non_gpt5_models() -> None:
+    adapter = OpenAIAdapter(httpx.AsyncClient())
+    try:
+        req = ChatCompletionRequest(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=64,
+        )
+        payload = await adapter.translate_request(
+            req,
+            {"provider": "openai", "model": "openai/gpt-4o-mini"},
+        )
+        assert payload["max_tokens"] == 64
+        assert "max_completion_tokens" not in payload
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_azure_openai_adapter_maps_max_tokens_to_max_completion_tokens_for_gpt5() -> None:
+    adapter = AzureOpenAIAdapter(httpx.AsyncClient())
+    try:
+        req = ChatCompletionRequest(
+            model="gpt-5-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=64,
+        )
+        payload = await adapter.translate_request(
+            req,
+            {"provider": "azure_openai", "model": "azure_openai/gpt-5-mini"},
+        )
+        assert "max_tokens" not in payload
+        assert payload["max_completion_tokens"] == 64
     finally:
         await adapter.http_client.aclose()
 

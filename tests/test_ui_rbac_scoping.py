@@ -30,7 +30,7 @@ async def test_spend_summary_applies_org_scope_for_non_platform(client, test_app
     setattr(test_app.state.settings, "master_key", "mk-test")
 
     monkeypatch.setattr(
-        "src.ui.routes.get_auth_scope",
+        "src.api.admin.endpoints.spend.get_auth_scope",
         lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
             is_platform_admin=False,
             org_ids=["org-1"],
@@ -54,7 +54,7 @@ async def test_spend_summary_uses_event_scope(client, test_app, monkeypatch):
     setattr(test_app.state.settings, "master_key", "mk-test")
 
     monkeypatch.setattr(
-        "src.ui.routes.get_auth_scope",
+        "src.api.admin.endpoints.spend.get_auth_scope",
         lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
             is_platform_admin=False,
             org_ids=["org-1"],
@@ -79,7 +79,7 @@ async def test_spend_logs_applies_org_scope_for_non_platform(client, test_app, m
     setattr(test_app.state.settings, "master_key", "mk-test")
 
     monkeypatch.setattr(
-        "src.ui.routes.get_auth_scope",
+        "src.api.admin.endpoints.spend.get_auth_scope",
         lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
             is_platform_admin=False,
             org_ids=["org-1"],
@@ -106,7 +106,7 @@ async def test_spend_logs_use_normalized_event_columns(client, test_app, monkeyp
     setattr(test_app.state.settings, "master_key", "mk-test")
 
     monkeypatch.setattr(
-        "src.ui.routes.get_auth_scope",
+        "src.api.admin.endpoints.spend.get_auth_scope",
         lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
             is_platform_admin=True,
             org_ids=[],
@@ -131,7 +131,7 @@ async def test_spend_report_not_scoped_for_platform_admin(client, test_app, monk
     setattr(test_app.state.settings, "master_key", "mk-test")
 
     monkeypatch.setattr(
-        "src.ui.routes.get_auth_scope",
+        "src.api.admin.endpoints.spend.get_auth_scope",
         lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
             is_platform_admin=True,
             org_ids=[],
@@ -153,7 +153,7 @@ async def test_grouped_spend_report_applies_org_scope_for_non_platform(client, t
     setattr(test_app.state.settings, "master_key", "mk-test")
 
     monkeypatch.setattr(
-        "src.ui.routes.get_auth_scope",
+        "src.api.admin.endpoints.spend.get_auth_scope",
         lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
             is_platform_admin=False,
             org_ids=["org-1"],
@@ -183,7 +183,7 @@ async def test_grouped_spend_report_supports_api_key_search(client, test_app, mo
     setattr(test_app.state.settings, "master_key", "mk-test")
 
     monkeypatch.setattr(
-        "src.ui.routes.get_auth_scope",
+        "src.api.admin.endpoints.spend.get_auth_scope",
         lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
             is_platform_admin=True,
             org_ids=[],
@@ -213,7 +213,7 @@ async def test_grouped_spend_report_for_model_does_not_group_by_null_constant(cl
     setattr(test_app.state.settings, "master_key", "mk-test")
 
     monkeypatch.setattr(
-        "src.ui.routes.get_auth_scope",
+        "src.api.admin.endpoints.spend.get_auth_scope",
         lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
             is_platform_admin=True,
             org_ids=[],
@@ -239,7 +239,7 @@ async def test_spend_endpoints_cast_date_filters_to_timestamp(client, test_app, 
     setattr(test_app.state.settings, "master_key", "mk-test")
 
     monkeypatch.setattr(
-        "src.ui.routes.get_auth_scope",
+        "src.api.admin.endpoints.spend.get_auth_scope",
         lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
             is_platform_admin=True,
             org_ids=[],

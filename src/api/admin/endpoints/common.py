@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
+import logging
 from time import perf_counter
 from typing import Any
 
@@ -11,6 +12,8 @@ from fastapi import Header, HTTPException, Request, status
 from src.api.audit import emit_control_audit_event
 from src.audit.actions import AuditAction
 from src.providers.resolution import resolve_provider
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class AuthScope:
@@ -102,6 +105,22 @@ def to_json_value(value: Any) -> Any:
     return value
 
 
+def log_admin_query_timing(name: str, started_at: float, **context: Any) -> None:
+    elapsed_ms = int((perf_counter() - started_at) * 1000)
+    if not logger.isEnabledFor(logging.DEBUG) and elapsed_ms < 500:
+        return
+
+    details = " ".join(f"{key}={value}" for key, value in context.items() if value not in (None, "", []))
+    message = f"Admin query completed: name={name} latency_ms={elapsed_ms}"
+    if details:
+        message = f"{message} {details}"
+
+    if elapsed_ms >= 500:
+        logger.info(message)
+    else:
+        logger.debug(message)
+
+
 def optional_int(value: Any, field_name: str) -> int | None:
     if value is None:
         return None
@@ -135,6 +154,7 @@ def model_entries(app: Any) -> list[dict[str, Any]]:
                     "deployment_id": deployment_id,
                     "model_name": model_name,
                     "provider": resolve_provider(params),
+                    "mode": model_info.get("mode", "chat"),
                     "deltallm_params": params,
                     "model_info": model_info,
                 }
