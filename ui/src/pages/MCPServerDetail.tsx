@@ -72,6 +72,10 @@ export default function MCPServerDetail() {
   const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
   const isPlatformAdmin = userRole === 'platform_admin';
   const permissions = new Set(session?.effective_permissions || []);
+  const orgIds = (session?.organization_memberships || [])
+    .map((membership) => String(membership.organization_id || ''))
+    .filter(Boolean);
+  const ownerScopeOptions = orgIds.map((organizationId) => ({ value: organizationId, label: organizationId }));
   const canUpdateMcp = isPlatformAdmin || permissions.has('key.update');
   const [form, setForm] = useState<MCPServerFormValues | null>(null);
   const [bindingForm, setBindingForm] = useState<BindingFormState>(EMPTY_BINDING_FORM);
@@ -102,6 +106,11 @@ export default function MCPServerDetail() {
       setForm(formFromMCPServer(data.server));
     }
   }, [data?.server]);
+
+  const currentServer = data?.server;
+  const canMutateServer = Boolean(currentServer?.capabilities?.can_mutate);
+  const canOperateServer = Boolean(currentServer?.capabilities?.can_operate);
+  const canManageScopeConfig = Boolean(currentServer?.capabilities?.can_manage_scope_config);
 
   const toolOptions = useMemo(() => (data?.tools || []).map((tool) => tool.original_name), [data?.tools]);
 
@@ -269,7 +278,7 @@ export default function MCPServerDetail() {
     { key: 'scope_type', header: 'Scope', render: (row: MCPBinding) => `${row.scope_type}:${row.scope_id}` },
     { key: 'tool_allowlist', header: 'Allowed Tools', render: (row: MCPBinding) => (row.tool_allowlist?.length ? row.tool_allowlist.join(', ') : 'All tools') },
     { key: 'enabled', header: 'Status', render: (row: MCPBinding) => (row.enabled ? 'Enabled' : 'Disabled') },
-    ...(isPlatformAdmin
+    ...(canManageScopeConfig
       ? [{
           key: 'actions',
           header: '',
@@ -297,7 +306,7 @@ export default function MCPServerDetail() {
       },
     },
     { key: 'result_cache_ttl_seconds', header: 'Cache TTL', render: (row: MCPToolPolicy) => row.result_cache_ttl_seconds ?? '—' },
-    ...(isPlatformAdmin
+    ...(canManageScopeConfig
       ? [{
           key: 'actions',
           header: '',
@@ -392,7 +401,7 @@ export default function MCPServerDetail() {
           <p className="mt-1 text-sm text-gray-500">Server key <code className="rounded bg-gray-100 px-1.5 py-0.5">{server.server_key}</code> • {server.base_url}</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {canUpdateMcp && (
+          {canOperateServer && (
             <>
               <button type="button" onClick={() => void handleRefreshCapabilities()} disabled={refreshing} className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
                 <RefreshCw className="h-4 w-4" />
@@ -404,7 +413,7 @@ export default function MCPServerDetail() {
               </button>
             </>
           )}
-          {isPlatformAdmin && (
+          {canMutateServer && (
             <button type="button" onClick={() => setDeleteOpen(true)} className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-3 py-2 text-sm text-white hover:bg-red-700">
               <Trash2 className="h-4 w-4" />
               Delete
@@ -416,7 +425,7 @@ export default function MCPServerDetail() {
       <div className="mb-5 grid gap-4 lg:grid-cols-4">
         <Card className="lg:col-span-1"><div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Health</div><div className="mt-2 text-lg font-semibold text-gray-900">{server.last_health_status || 'Unchecked'}</div><div className="mt-1 text-sm text-gray-500">{server.last_health_latency_ms != null ? `${server.last_health_latency_ms} ms` : 'No latency recorded yet'}</div></Card>
         <Card className="lg:col-span-1"><div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Discovered Tools</div><div className="mt-2 text-lg font-semibold text-gray-900">{server.tool_count}</div><div className="mt-1 text-sm text-gray-500">Last refresh {fmtDate(server.capabilities_fetched_at)}</div></Card>
-        <Card className="lg:col-span-1"><div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Bindings</div><div className="mt-2 text-lg font-semibold text-gray-900">{data.bindings.length}</div><div className="mt-1 text-sm text-gray-500">Scope rules attached to this server</div></Card>
+        <Card className="lg:col-span-1"><div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Ownership</div><div className="mt-2 text-lg font-semibold text-gray-900">{server.owner_scope_type === 'organization' ? 'Organization' : 'Global'}</div><div className="mt-1 text-sm text-gray-500">{server.owner_scope_type === 'organization' ? server.owner_scope_id : 'Shared across organizations'}</div></Card>
         <Card className="lg:col-span-1"><div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Policies</div><div className="mt-2 text-lg font-semibold text-gray-900">{data.tool_policies.length}</div><div className="mt-1 text-sm text-gray-500">Per-tool limits and cache settings</div></Card>
       </div>
 
@@ -480,19 +489,27 @@ export default function MCPServerDetail() {
           </Card>
 
           <Card title="Server Configuration" action={
-            isPlatformAdmin ? (
+            canMutateServer ? (
               <button type="button" onClick={() => void handleSave()} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50">
                 <Save className="h-4 w-4" />
                 {saving ? 'Saving...' : 'Save'}
               </button>
             ) : undefined
           }>
-            {!isPlatformAdmin && (
+            {!canMutateServer && (
               <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-900">
-                Read-only configuration. Platform admins can edit server settings and access rules.
+                Read-only configuration. You can edit only MCP servers owned by one of your organizations.
               </div>
             )}
-            <MCPServerForm value={form} onChange={setForm} disableServerKey disabled={!isPlatformAdmin} />
+            <MCPServerForm
+              value={form}
+              onChange={setForm}
+              disableServerKey
+              disabled={!canMutateServer}
+              ownerScopeOptions={ownerScopeOptions}
+              lockOwnerScopeType
+              disableOwnerScopeId
+            />
           </Card>
 
           <Card title="Discovered Tools">
@@ -502,7 +519,7 @@ export default function MCPServerDetail() {
 
         <div className="space-y-5">
           <Card title="Bindings">
-            {isPlatformAdmin ? (
+            {canManageScopeConfig ? (
               <div className="mb-4 grid gap-3">
                 <div className="grid gap-3 sm:grid-cols-2">
                   <select value={bindingForm.scope_type} onChange={(event) => setBindingForm({ ...bindingForm, scope_type: event.target.value as BindingFormState['scope_type'] })} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
@@ -530,7 +547,7 @@ export default function MCPServerDetail() {
           </Card>
 
           <Card title="Tool Policies">
-            {isPlatformAdmin ? (
+            {canManageScopeConfig ? (
               <div className="mb-4 grid gap-3">
                 <div className="grid gap-3 sm:grid-cols-2">
                   <select value={policyForm.tool_name} onChange={(event) => setPolicyForm({ ...policyForm, tool_name: event.target.value })} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">

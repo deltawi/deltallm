@@ -43,6 +43,8 @@ class MCPServerRecord:
     server_key: str
     name: str
     description: str | None = None
+    owner_scope_type: str = "global"
+    owner_scope_id: str | None = None
     transport: str = "streamable_http"
     base_url: str = ""
     enabled: bool = True
@@ -157,6 +159,8 @@ class MCPRepository:
                 s.server_key,
                 s.name,
                 s.description,
+                s.owner_scope_type,
+                s.owner_scope_id,
                 s.transport,
                 s.base_url,
                 s.enabled,
@@ -194,6 +198,8 @@ class MCPRepository:
                 server_key,
                 name,
                 description,
+                owner_scope_type,
+                owner_scope_id,
                 transport,
                 base_url,
                 enabled,
@@ -230,6 +236,8 @@ class MCPRepository:
                 server_key,
                 name,
                 description,
+                owner_scope_type,
+                owner_scope_id,
                 transport,
                 base_url,
                 enabled,
@@ -262,6 +270,8 @@ class MCPRepository:
         server_key: str,
         name: str,
         description: str | None,
+        owner_scope_type: str,
+        owner_scope_id: str | None,
         transport: str,
         base_url: str,
         enabled: bool,
@@ -278,6 +288,8 @@ class MCPRepository:
                 server_key=server_key,
                 name=name,
                 description=description,
+                owner_scope_type=owner_scope_type,
+                owner_scope_id=owner_scope_id,
                 transport=transport,
                 base_url=base_url,
                 enabled=enabled,
@@ -291,22 +303,27 @@ class MCPRepository:
         rows = await self.prisma.query_raw(
             """
             INSERT INTO deltallm_mcpserver (
-                mcp_server_id, server_key, name, description, transport, base_url, enabled, auth_mode,
-                auth_config, forwarded_headers_allowlist, request_timeout_ms, metadata, created_by_account_id, created_at, updated_at
+                mcp_server_id, server_key, name, description, owner_scope_type, owner_scope_id,
+                transport, base_url, enabled, auth_mode, auth_config, forwarded_headers_allowlist,
+                request_timeout_ms, metadata, created_by_account_id, created_at, updated_at
             )
             VALUES (
-                gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7,
-                $8::jsonb, $9::text[], $10, $11::jsonb, $12, NOW(), NOW()
+                gen_random_uuid()::text, $1, $2, $3, $4, $5,
+                $6, $7, $8, $9, $10::jsonb, $11::text[],
+                $12, $13::jsonb, $14, NOW(), NOW()
             )
             RETURNING
-                mcp_server_id, server_key, name, description, transport, base_url, enabled, auth_mode,
-                auth_config, forwarded_headers_allowlist, request_timeout_ms, capabilities_json, capabilities_etag,
-                capabilities_fetched_at, last_health_status, last_health_error, last_health_at, last_health_latency_ms,
+                mcp_server_id, server_key, name, description, owner_scope_type, owner_scope_id,
+                transport, base_url, enabled, auth_mode, auth_config, forwarded_headers_allowlist,
+                request_timeout_ms, capabilities_json, capabilities_etag, capabilities_fetched_at,
+                last_health_status, last_health_error, last_health_at, last_health_latency_ms,
                 metadata, created_by_account_id, created_at, updated_at
             """,
             server_key,
             name,
             description,
+            owner_scope_type,
+            owner_scope_id,
             transport,
             base_url,
             enabled,
@@ -353,9 +370,10 @@ class MCPRepository:
                 updated_at = NOW()
             WHERE mcp_server_id = $1
             RETURNING
-                mcp_server_id, server_key, name, description, transport, base_url, enabled, auth_mode,
-                auth_config, forwarded_headers_allowlist, request_timeout_ms, capabilities_json, capabilities_etag,
-                capabilities_fetched_at, last_health_status, last_health_error, last_health_at, last_health_latency_ms,
+                mcp_server_id, server_key, name, description, owner_scope_type, owner_scope_id,
+                transport, base_url, enabled, auth_mode, auth_config, forwarded_headers_allowlist,
+                request_timeout_ms, capabilities_json, capabilities_etag, capabilities_fetched_at,
+                last_health_status, last_health_error, last_health_at, last_health_latency_ms,
                 metadata, created_by_account_id, created_at, updated_at
             """,
             server_id,
@@ -404,9 +422,10 @@ class MCPRepository:
                 updated_at = NOW()
             WHERE mcp_server_id = $1
             RETURNING
-                mcp_server_id, server_key, name, description, transport, base_url, enabled, auth_mode,
-                auth_config, forwarded_headers_allowlist, request_timeout_ms, capabilities_json, capabilities_etag,
-                capabilities_fetched_at, last_health_status, last_health_error, last_health_at, last_health_latency_ms,
+                mcp_server_id, server_key, name, description, owner_scope_type, owner_scope_id,
+                transport, base_url, enabled, auth_mode, auth_config, forwarded_headers_allowlist,
+                request_timeout_ms, capabilities_json, capabilities_etag, capabilities_fetched_at,
+                last_health_status, last_health_error, last_health_at, last_health_latency_ms,
                 metadata, created_by_account_id, created_at, updated_at
             """,
             server_id,
@@ -436,9 +455,10 @@ class MCPRepository:
                 updated_at = NOW()
             WHERE mcp_server_id = $1
             RETURNING
-                mcp_server_id, server_key, name, description, transport, base_url, enabled, auth_mode,
-                auth_config, forwarded_headers_allowlist, request_timeout_ms, capabilities_json, capabilities_etag,
-                capabilities_fetched_at, last_health_status, last_health_error, last_health_at, last_health_latency_ms,
+                mcp_server_id, server_key, name, description, owner_scope_type, owner_scope_id,
+                transport, base_url, enabled, auth_mode, auth_config, forwarded_headers_allowlist,
+                request_timeout_ms, capabilities_json, capabilities_etag, capabilities_fetched_at,
+                last_health_status, last_health_error, last_health_at, last_health_latency_ms,
                 metadata, created_by_account_id, created_at, updated_at
             """,
             server_id,
@@ -548,6 +568,29 @@ class MCPRepository:
             binding_id,
         )
         return bool(rows)
+
+    async def get_binding(self, binding_id: str) -> MCPServerBindingRecord | None:
+        if self.prisma is None:
+            return None
+        rows = await self.prisma.query_raw(
+            """
+            SELECT
+                mcp_binding_id,
+                mcp_server_id,
+                scope_type,
+                scope_id,
+                enabled,
+                tool_allowlist,
+                metadata,
+                created_at,
+                updated_at
+            FROM deltallm_mcpbinding
+            WHERE mcp_binding_id = $1
+            LIMIT 1
+            """,
+            binding_id,
+        )
+        return self._to_binding_record(rows[0]) if rows else None
 
     async def list_effective_bindings(self, *, scopes: list[tuple[str, str]]) -> list[MCPServerBindingRecord]:
         if self.prisma is None or not scopes:
@@ -702,6 +745,33 @@ class MCPRepository:
             policy_id,
         )
         return bool(rows)
+
+    async def get_tool_policy(self, policy_id: str) -> MCPToolPolicyRecord | None:
+        if self.prisma is None:
+            return None
+        rows = await self.prisma.query_raw(
+            """
+            SELECT
+                mcp_tool_policy_id,
+                mcp_server_id,
+                tool_name,
+                scope_type,
+                scope_id,
+                enabled,
+                require_approval,
+                max_rpm,
+                max_concurrency,
+                result_cache_ttl_seconds,
+                metadata,
+                created_at,
+                updated_at
+            FROM deltallm_mcptoolpolicy
+            WHERE mcp_tool_policy_id = $1
+            LIMIT 1
+            """,
+            policy_id,
+        )
+        return self._to_tool_policy_record(rows[0]) if rows else None
 
     async def list_effective_tool_policies(
         self,
@@ -966,6 +1036,8 @@ class MCPRepository:
             server_key=str(row.get("server_key") or ""),
             name=str(row.get("name") or ""),
             description=str(row.get("description")) if row.get("description") is not None else None,
+            owner_scope_type=str(row.get("owner_scope_type") or "global"),
+            owner_scope_id=str(row.get("owner_scope_id")) if row.get("owner_scope_id") is not None else None,
             transport=str(row.get("transport") or "streamable_http"),
             base_url=str(row.get("base_url") or ""),
             enabled=bool(row.get("enabled", True)),

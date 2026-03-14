@@ -137,6 +137,8 @@ export interface MCPServer {
   server_key: string;
   name: string;
   description?: string | null;
+  owner_scope_type: 'global' | 'organization';
+  owner_scope_id?: string | null;
   transport: 'streamable_http';
   base_url: string;
   enabled: boolean;
@@ -156,6 +158,11 @@ export interface MCPServer {
   created_at?: string | null;
   updated_at?: string | null;
   tool_count: number;
+  capabilities?: {
+    can_mutate: boolean;
+    can_operate: boolean;
+    can_manage_scope_config: boolean;
+  };
 }
 
 export interface MCPNamespacedTool {

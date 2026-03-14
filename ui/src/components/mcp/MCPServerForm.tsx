@@ -6,6 +6,8 @@ export interface MCPServerFormValues {
   server_key: string;
   name: string;
   description: string;
+  owner_scope_type: 'global' | 'organization';
+  owner_scope_id: string;
   base_url: string;
   transport: 'streamable_http';
   enabled: boolean;
@@ -22,6 +24,8 @@ export const EMPTY_MCP_SERVER_FORM: MCPServerFormValues = {
   server_key: '',
   name: '',
   description: '',
+  owner_scope_type: 'global',
+  owner_scope_id: '',
   base_url: '',
   transport: 'streamable_http',
   enabled: true,
@@ -49,6 +53,9 @@ interface MCPServerFormProps {
   onChange: (next: MCPServerFormValues) => void;
   disableServerKey?: boolean;
   disabled?: boolean;
+  ownerScopeOptions?: Array<{ value: string; label: string }>;
+  lockOwnerScopeType?: boolean;
+  disableOwnerScopeId?: boolean;
 }
 
 export function buildMCPServerPayload(form: MCPServerFormValues) {
@@ -73,6 +80,8 @@ export function buildMCPServerPayload(form: MCPServerFormValues) {
     server_key: form.server_key.trim().toLowerCase(),
     name: form.name.trim(),
     description: form.description.trim() || null,
+    owner_scope_type: form.owner_scope_type,
+    owner_scope_id: form.owner_scope_type === 'organization' ? form.owner_scope_id.trim() : null,
     base_url: form.base_url.trim(),
     transport: form.transport,
     enabled: form.enabled,
@@ -87,6 +96,8 @@ export function formFromMCPServer(server: {
   server_key: string;
   name: string;
   description?: string | null;
+  owner_scope_type: 'global' | 'organization';
+  owner_scope_id?: string | null;
   base_url: string;
   transport: 'streamable_http';
   enabled: boolean;
@@ -100,6 +111,8 @@ export function formFromMCPServer(server: {
     server_key: server.server_key,
     name: server.name,
     description: server.description || '',
+    owner_scope_type: server.owner_scope_type || 'global',
+    owner_scope_id: server.owner_scope_id || '',
     base_url: server.base_url,
     transport: server.transport,
     enabled: server.enabled,
@@ -113,7 +126,15 @@ export function formFromMCPServer(server: {
   };
 }
 
-export default function MCPServerForm({ value, onChange, disableServerKey = false, disabled = false }: MCPServerFormProps) {
+export default function MCPServerForm({
+  value,
+  onChange,
+  disableServerKey = false,
+  disabled = false,
+  ownerScopeOptions = [],
+  lockOwnerScopeType = false,
+  disableOwnerScopeId = false,
+}: MCPServerFormProps) {
   const inputDisabledClass = 'disabled:bg-gray-50 disabled:text-gray-500';
   return (
     <div className="space-y-4">
@@ -140,6 +161,49 @@ export default function MCPServerForm({ value, onChange, disableServerKey = fals
             className={`${inputClass} ${inputDisabledClass}`}
           />
         </div>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label className="mb-1 block text-sm font-medium text-gray-700">Owner Scope *</label>
+          <select
+            value={value.owner_scope_type}
+            onChange={(event) =>
+              onChange({
+                ...value,
+                owner_scope_type: textValue(event) as 'global' | 'organization',
+                owner_scope_id: textValue(event) === 'organization' ? value.owner_scope_id : '',
+              })
+            }
+            disabled={disabled || lockOwnerScopeType}
+            className={`${inputClass} ${inputDisabledClass}`}
+          >
+            <option value="global">Global</option>
+            <option value="organization">Organization</option>
+          </select>
+        </div>
+        {value.owner_scope_type === 'organization' ? (
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Organization *</label>
+            <select
+              value={value.owner_scope_id}
+              onChange={(event) => onChange({ ...value, owner_scope_id: textValue(event) })}
+              disabled={disabled || disableOwnerScopeId}
+              className={`${inputClass} ${inputDisabledClass}`}
+            >
+              <option value="">Select organization</option>
+              {ownerScopeOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600">
+            Global MCP servers are shared infrastructure objects managed across organizations.
+          </div>
+        )}
       </div>
 
       <div>

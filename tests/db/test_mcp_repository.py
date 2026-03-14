@@ -26,6 +26,8 @@ async def test_list_servers_parses_rows() -> None:
                     "server_key": "github",
                     "name": "GitHub",
                     "description": "GitHub tools",
+                    "owner_scope_type": "organization",
+                    "owner_scope_id": "org-main",
                     "transport": "streamable_http",
                     "base_url": "https://mcp.example.com",
                     "enabled": True,
@@ -55,6 +57,8 @@ async def test_list_servers_parses_rows() -> None:
     assert total == 1
     assert len(items) == 1
     assert items[0].server_key == "github"
+    assert items[0].owner_scope_type == "organization"
+    assert items[0].owner_scope_id == "org-main"
     assert items[0].auth_config == {"token": "secret"}
     assert items[0].forwarded_headers_allowlist == ["authorization"]
     assert items[0].capabilities_json == {"tools": [{"name": "search"}]}

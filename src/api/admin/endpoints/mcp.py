@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from time import perf_counter
 from typing import Any
 from urllib.parse import urlparse
@@ -24,8 +24,24 @@ router = APIRouter(tags=["Admin MCP"])
 
 _ALLOWED_AUTH_MODES = {"none", "bearer", "basic", "header_map"}
 _ALLOWED_SCOPE_TYPES = {"organization", "team", "api_key"}
+_ALLOWED_OWNER_SCOPE_TYPES = {"global", "organization"}
 _ALLOWED_TRANSPORTS = {"streamable_http"}
 _SERVER_KEY_ALLOWED = set("abcdefghijklmnopqrstuvwxyz0123456789-_")
+
+
+@dataclass(frozen=True)
+class ResolvedScopeTarget:
+    scope_type: str
+    scope_id: str
+    organization_id: str | None = None
+    team_id: str | None = None
+
+
+@dataclass(frozen=True)
+class MCPServerCapabilities:
+    can_mutate: bool
+    can_operate: bool
+    can_manage_scope_config: bool
 
 
 def _repository_or_503(request: Request) -> MCPRepository:
@@ -166,6 +182,14 @@ def _validate_scope_type(value: Any) -> str:
     return scope_type
 
 
+def _validate_owner_scope_type(value: Any) -> str:
+    owner_scope_type = str(value or "global").strip().lower()
+    if owner_scope_type not in _ALLOWED_OWNER_SCOPE_TYPES:
+        allowed = ", ".join(sorted(_ALLOWED_OWNER_SCOPE_TYPES))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"owner_scope_type must be one of: {allowed}")
+    return owner_scope_type
+
+
 def _normalize_scope_id(value: Any, *, field_name: str = "scope_id") -> str:
     scope_id = str(value or "").strip()
     if not scope_id:
@@ -173,7 +197,7 @@ def _normalize_scope_id(value: Any, *, field_name: str = "scope_id") -> str:
     return scope_id
 
 
-async def _validate_scope_target(request: Request, *, scope_type: str, scope_id: str) -> None:
+async def _validate_scope_target(request: Request, *, scope_type: str, scope_id: str) -> ResolvedScopeTarget:
     db = _db_or_503(request)
     if scope_type == "organization":
         rows = await db.query_raw(
@@ -187,12 +211,12 @@ async def _validate_scope_target(request: Request, *, scope_type: str, scope_id:
         )
         if not rows:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
-        return
+        return ResolvedScopeTarget(scope_type="organization", scope_id=scope_id, organization_id=scope_id)
 
     if scope_type == "team":
         rows = await db.query_raw(
             """
-            SELECT team_id
+            SELECT team_id, organization_id
             FROM deltallm_teamtable
             WHERE team_id = $1
             LIMIT 1
@@ -201,7 +225,13 @@ async def _validate_scope_target(request: Request, *, scope_type: str, scope_id:
         )
         if not rows:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
-        return
+        row = rows[0]
+        return ResolvedScopeTarget(
+            scope_type="team",
+            scope_id=scope_id,
+            organization_id=str(row.get("organization_id") or "") or None,
+            team_id=scope_id,
+        )
 
     if scope_type == "api_key":
         rows = await db.query_raw(
@@ -219,7 +249,142 @@ async def _validate_scope_target(request: Request, *, scope_type: str, scope_id:
         row = rows[0]
         if not str(row.get("team_id") or "").strip():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="API key must belong to a team")
-        return
+        return ResolvedScopeTarget(
+            scope_type="api_key",
+            scope_id=scope_id,
+            organization_id=str(row.get("organization_id") or "") or None,
+            team_id=str(row.get("team_id") or "") or None,
+        )
+
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported scope_type")
+
+
+async def _validate_owner_scope(
+    request: Request,
+    *,
+    scope: AuthScope,
+    owner_scope_type: str,
+    owner_scope_id: str | None,
+) -> tuple[str, str | None]:
+    if owner_scope_type == "global":
+        if owner_scope_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="owner_scope_id must be omitted for global servers")
+        if not scope.is_platform_admin:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only platform admins can create global MCP servers")
+        return owner_scope_type, None
+
+    if not owner_scope_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="owner_scope_id is required for organization-owned servers")
+
+    await _validate_scope_target(request, scope_type="organization", scope_id=owner_scope_id)
+    if not scope.is_platform_admin and owner_scope_id not in scope.org_ids:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions for the selected organization")
+    return owner_scope_type, owner_scope_id
+
+
+async def _resolve_server_create_owner_scope(
+    request: Request,
+    *,
+    scope: AuthScope,
+    payload: dict[str, Any],
+) -> tuple[str, str | None]:
+    requested_type = _validate_owner_scope_type(
+        payload.get("owner_scope_type") if scope.is_platform_admin else payload.get("owner_scope_type", "organization")
+    )
+    requested_id = (
+        _normalize_scope_id(payload.get("owner_scope_id"), field_name="owner_scope_id")
+        if payload.get("owner_scope_id") is not None
+        else None
+    )
+    if scope.is_platform_admin:
+        return await _validate_owner_scope(
+            request,
+            scope=scope,
+            owner_scope_type=requested_type,
+            owner_scope_id=requested_id,
+        )
+
+    if not scope.org_ids:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+    if requested_type != "organization":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only organization-owned MCP servers can be created in scoped mode")
+    owner_scope_id = requested_id
+    if owner_scope_id is None:
+        if len(scope.org_ids) == 1:
+            owner_scope_id = scope.org_ids[0]
+        else:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="owner_scope_id is required when you manage multiple organizations")
+    return await _validate_owner_scope(
+        request,
+        scope=scope,
+        owner_scope_type="organization",
+        owner_scope_id=owner_scope_id,
+    )
+
+
+def _server_owned_by_scope(server: MCPServerRecord, scope: AuthScope) -> bool:
+    if scope.is_platform_admin:
+        return True
+    if server.owner_scope_type == "organization":
+        return bool(server.owner_scope_id and server.owner_scope_id in scope.org_ids)
+    return False
+
+
+def _server_mutable_by_scope(server: MCPServerRecord, scope: AuthScope) -> bool:
+    return _server_owned_by_scope(server, scope)
+
+
+def _server_operable_by_scope(server: MCPServerRecord, scope: AuthScope) -> bool:
+    return _server_owned_by_scope(server, scope)
+
+
+def _server_scope_config_writable_by_scope(server: MCPServerRecord, scope: AuthScope) -> bool:
+    return _server_owned_by_scope(server, scope) or scope.is_platform_admin or server.owner_scope_type == "global"
+
+
+def _server_view_capabilities(
+    server: MCPServerRecord,
+    *,
+    manage_scope: AuthScope,
+    is_visible: bool,
+) -> MCPServerCapabilities:
+    can_mutate = _server_mutable_by_scope(server, manage_scope)
+    can_delegate_global = bool(
+        is_visible
+        and server.owner_scope_type == "global"
+        and (manage_scope.is_platform_admin or bool(manage_scope.org_ids))
+    )
+    return MCPServerCapabilities(
+        can_mutate=can_mutate,
+        can_operate=can_mutate or can_delegate_global,
+        can_manage_scope_config=can_mutate or can_delegate_global,
+    )
+
+
+async def _validate_scoped_server_target_write(
+    request: Request,
+    *,
+    scope: AuthScope,
+    server: MCPServerRecord,
+    scope_type: str,
+    scope_id: str,
+) -> dict[str, str | None]:
+    target = await _validate_scope_target(request, scope_type=scope_type, scope_id=scope_id)
+    target_organization_id = str(target.organization_id or "")
+    if scope.is_platform_admin:
+        return {"organization_id": target.organization_id, "team_id": target.team_id}
+    if not target_organization_id or target_organization_id not in scope.org_ids:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions for the selected scope")
+    if server.owner_scope_type == "organization":
+        if server.owner_scope_id != target_organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Organization-owned MCP servers can only be scoped within their owner organization",
+            )
+        return target
+    if server.owner_scope_type == "global":
+        return {"organization_id": target.organization_id, "team_id": target.team_id}
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
 
 
 def _normalize_tool_name(value: Any) -> str:
@@ -268,8 +433,22 @@ def _scoped_entity_visibility_clause(alias: str, scope: AuthScope, params: list[
     return " OR ".join(clauses) if clauses else "FALSE"
 
 
+def _server_owner_visibility_clause(server_alias: str, scope: AuthScope, params: list[Any]) -> str:
+    clauses: list[str] = []
+    if scope.org_ids:
+        org_placeholders = _append_param_list(params, scope.org_ids)
+        clauses.append(
+            f"({server_alias}.owner_scope_type = 'organization' AND {server_alias}.owner_scope_id IN ({org_placeholders}))"
+        )
+    return " OR ".join(clauses) if clauses else "FALSE"
+
+
 def _server_visibility_exists_clause(server_alias: str, scope: AuthScope, params: list[Any]) -> str:
-    return (
+    clauses: list[str] = []
+    owner_clause = _server_owner_visibility_clause(server_alias, scope, params)
+    if owner_clause != "FALSE":
+        clauses.append(owner_clause)
+    clauses.append(
         f"""EXISTS (
                 SELECT 1
                 FROM deltallm_mcpserverbinding b
@@ -277,6 +456,7 @@ def _server_visibility_exists_clause(server_alias: str, scope: AuthScope, params
                   AND ({_scoped_entity_visibility_clause('b', scope, params)})
             )"""
     )
+    return " OR ".join(f"({clause})" for clause in clauses)
 
 
 def _audit_scope_visibility_clause(scope: AuthScope, params: list[Any]) -> str:
@@ -374,9 +554,15 @@ def _validate_require_approval(value: Any) -> str | None:
     return approval
 
 
-def _serialize_server(server: MCPServerRecord) -> dict[str, Any]:
+def _serialize_server(
+    server: MCPServerRecord,
+    *,
+    capabilities: MCPServerCapabilities | None = None,
+) -> dict[str, Any]:
     payload = to_json_value(asdict(server))
     payload["tool_count"] = len(extract_tool_schemas(server.capabilities_json or {}))
+    if capabilities is not None:
+        payload["capabilities"] = to_json_value(asdict(capabilities))
     return payload
 
 
@@ -649,10 +835,17 @@ async def list_mcp_servers(
 ) -> dict[str, Any]:
     registry = _registry_or_503(request)
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    manage_scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
     if scope.is_platform_admin:
         servers, total = await registry.list_servers(search=search, enabled=enabled, limit=limit, offset=offset)
         return {
-            "data": [_serialize_server(server) for server in servers],
+            "data": [
+                _serialize_server(
+                    server,
+                    capabilities=_server_view_capabilities(server, manage_scope=manage_scope, is_visible=True),
+                )
+                for server in servers
+            ],
             "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
         }
 
@@ -687,6 +880,8 @@ async def list_mcp_servers(
             s.server_key,
             s.name,
             s.description,
+            s.owner_scope_type,
+            s.owner_scope_id,
             s.transport,
             s.base_url,
             s.enabled,
@@ -714,12 +909,18 @@ async def list_mcp_servers(
     )
     servers = [MCPRepository._to_server_record(row) for row in rows]
     return {
-        "data": [_serialize_server(server) for server in servers],
+        "data": [
+            _serialize_server(
+                server,
+                capabilities=_server_view_capabilities(server, manage_scope=manage_scope, is_visible=True),
+            )
+            for server in servers
+        ],
         "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
     }
 
 
-@router.post("/ui/api/mcp-servers", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.post("/ui/api/mcp-servers", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
 async def create_mcp_server(
     request: Request,
     payload: dict[str, Any],
@@ -728,7 +929,7 @@ async def create_mcp_server(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
-    scope = get_auth_scope(request, authorization, x_master_key)
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
 
     server_key = _normalize_server_key(payload.get("server_key"))
     name = str(payload.get("name") or "").strip()
@@ -738,12 +939,15 @@ async def create_mcp_server(
     existing = await repository.get_server_by_key(server_key)
     if existing is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An MCP server with this server_key already exists")
+    owner_scope_type, owner_scope_id = await _resolve_server_create_owner_scope(request, scope=scope, payload=payload)
 
     created_by_account_id = getattr(get_platform_auth_context(request), "account_id", None)
     created = await repository.create_server(
         server_key=server_key,
         name=name,
         description=str(payload.get("description")).strip() if payload.get("description") is not None else None,
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
         transport=_normalize_transport(payload.get("transport")),
         base_url=_validate_url(payload.get("base_url")),
         enabled=bool(payload.get("enabled", True)),
@@ -754,7 +958,10 @@ async def create_mcp_server(
         metadata=_normalize_metadata(payload.get("metadata")),
         created_by_account_id=created_by_account_id,
     )
-    response = _serialize_server(created)
+    response = _serialize_server(
+        created,
+        capabilities=_server_view_capabilities(created, manage_scope=scope, is_visible=True),
+    )
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -777,8 +984,10 @@ async def get_mcp_server(
 ) -> dict[str, Any]:
     registry = _registry_or_503(request)
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    manage_scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
     server = await _load_server_or_404(request, server_id)
-    if not await _server_visible_to_scope(request, scope, server_id):
+    is_visible = await _server_visible_to_scope(request, scope, server_id)
+    if not is_visible:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
     bindings, _ = await _list_scoped_bindings(request, scope=scope, server_id=server_id, limit=200, offset=0)
     policies, _ = await _list_scoped_tool_policies(request, scope=scope, server_id=server_id, limit=200, offset=0)
@@ -786,10 +995,13 @@ async def get_mcp_server(
         await registry.list_namespaced_tools(server),
         bindings=bindings,
         policies=policies,
-        include_all=scope.is_platform_admin,
+        include_all=_server_owned_by_scope(server, scope),
     )
     return {
-        "server": _serialize_server(server),
+        "server": _serialize_server(
+            server,
+            capabilities=_server_view_capabilities(server, manage_scope=manage_scope, is_visible=is_visible),
+        ),
         "tools": [to_json_value(asdict(item)) for item in tools],
         "bindings": [_serialize_binding(binding) for binding in bindings],
         "tool_policies": [_serialize_policy(policy) for policy in policies],
@@ -919,7 +1131,7 @@ async def get_mcp_server_operations(
     }
 
 
-@router.patch("/ui/api/mcp-servers/{server_id}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.patch("/ui/api/mcp-servers/{server_id}", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
 async def update_mcp_server(
     request: Request,
     server_id: str,
@@ -930,9 +1142,20 @@ async def update_mcp_server(
     request_start = perf_counter()
     repository = _repository_or_503(request)
     registry = _registry_or_503(request)
-    scope = get_auth_scope(request, authorization, x_master_key)
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
 
     existing = await _load_server_or_404(request, server_id)
+    if not _server_mutable_by_scope(existing, scope):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+    if "owner_scope_type" in payload or "owner_scope_id" in payload:
+        requested_owner_scope_type = _validate_owner_scope_type(payload.get("owner_scope_type", existing.owner_scope_type))
+        requested_owner_scope_id = (
+            _normalize_scope_id(payload.get("owner_scope_id"), field_name="owner_scope_id")
+            if payload.get("owner_scope_id") is not None
+            else existing.owner_scope_id
+        )
+        if requested_owner_scope_type != existing.owner_scope_type or requested_owner_scope_id != existing.owner_scope_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MCP server ownership cannot be changed")
     auth_mode = _normalize_auth_mode(payload.get("auth_mode", existing.auth_mode))
     updated = await repository.update_server(
         server_id,
@@ -952,7 +1175,10 @@ async def update_mcp_server(
     if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found")
     await registry.invalidate_server(updated.server_key)
-    response = _serialize_server(updated)
+    response = _serialize_server(
+        updated,
+        capabilities=_server_view_capabilities(updated, manage_scope=scope, is_visible=True),
+    )
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -968,7 +1194,7 @@ async def update_mcp_server(
     return response
 
 
-@router.delete("/ui/api/mcp-servers/{server_id}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.delete("/ui/api/mcp-servers/{server_id}", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
 async def delete_mcp_server(
     request: Request,
     server_id: str,
@@ -978,9 +1204,11 @@ async def delete_mcp_server(
     request_start = perf_counter()
     repository = _repository_or_503(request)
     registry = _registry_or_503(request)
-    scope = get_auth_scope(request, authorization, x_master_key)
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
 
     server = await _load_server_or_404(request, server_id)
+    if not _server_mutable_by_scope(server, scope):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
     deleted = await repository.delete_server(server_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found")
@@ -999,7 +1227,7 @@ async def delete_mcp_server(
     return response
 
 
-@router.post("/ui/api/mcp-servers/{server_id}/refresh-capabilities", dependencies=[Depends(require_admin_permission(Permission.KEY_UPDATE))])
+@router.post("/ui/api/mcp-servers/{server_id}/refresh-capabilities", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
 async def refresh_mcp_server_capabilities(
     request: Request,
     server_id: str,
@@ -1007,15 +1235,23 @@ async def refresh_mcp_server_capabilities(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
     server = await _load_server_or_404(request, server_id)
-    if not await _server_visible_to_scope(request, scope, server_id):
+    is_visible = await _server_visible_to_scope(request, scope, server_id)
+    capabilities = _server_view_capabilities(server, manage_scope=scope, is_visible=is_visible)
+    if not capabilities.can_operate:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
     try:
         updated, tools = await _capability_refresh(request, server)
     except MCPError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-    response = {"server": _serialize_server(updated), "tools": tools}
+    response = {
+        "server": _serialize_server(
+            updated,
+            capabilities=_server_view_capabilities(updated, manage_scope=scope, is_visible=True),
+        ),
+        "tools": tools,
+    }
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -1028,7 +1264,7 @@ async def refresh_mcp_server_capabilities(
     return response
 
 
-@router.post("/ui/api/mcp-servers/{server_id}/health-check", dependencies=[Depends(require_admin_permission(Permission.KEY_UPDATE))])
+@router.post("/ui/api/mcp-servers/{server_id}/health-check", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
 async def health_check_mcp_server(
     request: Request,
     server_id: str,
@@ -1036,9 +1272,11 @@ async def health_check_mcp_server(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
     server = await _load_server_or_404(request, server_id)
-    if not await _server_visible_to_scope(request, scope, server_id):
+    is_visible = await _server_visible_to_scope(request, scope, server_id)
+    capabilities = _server_view_capabilities(server, manage_scope=scope, is_visible=is_visible)
+    if not capabilities.can_operate:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
     probe = _health_probe_or_503(request)
     try:
@@ -1047,7 +1285,10 @@ async def health_check_mcp_server(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     refreshed = await _load_server_or_404(request, server_id)
     response = {
-        "server": _serialize_server(refreshed),
+        "server": _serialize_server(
+            refreshed,
+            capabilities=_server_view_capabilities(refreshed, manage_scope=scope, is_visible=True),
+        ),
         "health": {"status": result.status, "latency_ms": result.latency_ms, "error": result.error},
     }
     await emit_admin_mutation_audit(
@@ -1140,7 +1381,7 @@ async def list_mcp_bindings(
     }
 
 
-@router.post("/ui/api/mcp-bindings", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.post("/ui/api/mcp-bindings", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
 async def upsert_mcp_binding(
     request: Request,
     payload: dict[str, Any],
@@ -1150,11 +1391,13 @@ async def upsert_mcp_binding(
     request_start = perf_counter()
     repository = _repository_or_503(request)
     registry = _registry_or_503(request)
-    scope = get_auth_scope(request, authorization, x_master_key)
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
     server = await _load_server_or_404(request, _normalize_scope_id(payload.get("server_id"), field_name="server_id"))
     scope_type = _validate_scope_type(payload.get("scope_type"))
     scope_id = _normalize_scope_id(payload.get("scope_id"))
-    await _validate_scope_target(request, scope_type=scope_type, scope_id=scope_id)
+    if not _server_scope_config_writable_by_scope(server, scope):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+    await _validate_scoped_server_target_write(request, scope=scope, server=server, scope_type=scope_type, scope_id=scope_id)
     binding = await repository.upsert_binding(
         server_id=server.mcp_server_id,
         scope_type=scope_type,
@@ -1180,7 +1423,7 @@ async def upsert_mcp_binding(
     return response
 
 
-@router.delete("/ui/api/mcp-bindings/{binding_id}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.delete("/ui/api/mcp-bindings/{binding_id}", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
 async def delete_mcp_binding(
     request: Request,
     binding_id: str,
@@ -1190,7 +1433,20 @@ async def delete_mcp_binding(
     request_start = perf_counter()
     repository = _repository_or_503(request)
     registry = _registry_or_503(request)
-    scope = get_auth_scope(request, authorization, x_master_key)
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
+    binding = await repository.get_binding(binding_id)
+    if binding is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP binding not found")
+    server = await _load_server_or_404(request, binding.mcp_server_id)
+    if not _server_scope_config_writable_by_scope(server, scope):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+    await _validate_scoped_server_target_write(
+        request,
+        scope=scope,
+        server=server,
+        scope_type=binding.scope_type,
+        scope_id=binding.scope_id,
+    )
     deleted = await repository.delete_binding(binding_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP binding not found")
@@ -1374,7 +1630,7 @@ async def list_mcp_approval_requests(
     }
 
 
-@router.post("/ui/api/mcp-tool-policies", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.post("/ui/api/mcp-tool-policies", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
 async def upsert_mcp_tool_policy(
     request: Request,
     payload: dict[str, Any],
@@ -1384,11 +1640,13 @@ async def upsert_mcp_tool_policy(
     request_start = perf_counter()
     repository = _repository_or_503(request)
     registry = _registry_or_503(request)
-    scope = get_auth_scope(request, authorization, x_master_key)
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
     server = await _load_server_or_404(request, _normalize_scope_id(payload.get("server_id"), field_name="server_id"))
     scope_type = _validate_scope_type(payload.get("scope_type"))
     scope_id = _normalize_scope_id(payload.get("scope_id"))
-    await _validate_scope_target(request, scope_type=scope_type, scope_id=scope_id)
+    if not _server_scope_config_writable_by_scope(server, scope):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+    await _validate_scoped_server_target_write(request, scope=scope, server=server, scope_type=scope_type, scope_id=scope_id)
     policy = await repository.upsert_tool_policy(
         server_id=server.mcp_server_id,
         tool_name=_normalize_tool_name(payload.get("tool_name")),
@@ -1459,7 +1717,7 @@ async def decide_mcp_approval_request(
     return response
 
 
-@router.delete("/ui/api/mcp-tool-policies/{policy_id}", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.delete("/ui/api/mcp-tool-policies/{policy_id}", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
 async def delete_mcp_tool_policy(
     request: Request,
     policy_id: str,
@@ -1469,7 +1727,20 @@ async def delete_mcp_tool_policy(
     request_start = perf_counter()
     repository = _repository_or_503(request)
     registry = _registry_or_503(request)
-    scope = get_auth_scope(request, authorization, x_master_key)
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
+    policy = await repository.get_tool_policy(policy_id)
+    if policy is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP tool policy not found")
+    server = await _load_server_or_404(request, policy.mcp_server_id)
+    if not _server_scope_config_writable_by_scope(server, scope):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+    await _validate_scoped_server_target_write(
+        request,
+        scope=scope,
+        server=server,
+        scope_type=policy.scope_type,
+        scope_id=policy.scope_id,
+    )
     deleted = await repository.delete_tool_policy(policy_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP tool policy not found")

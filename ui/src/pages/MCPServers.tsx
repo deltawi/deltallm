@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Activity, Plus, Trash2 } from 'lucide-react';
 import Card from '../components/Card';
@@ -17,6 +17,19 @@ export default function MCPServers() {
   const { pushToast } = useToast();
   const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
   const isPlatformAdmin = userRole === 'platform_admin';
+  const permissions = new Set(session?.effective_permissions || []);
+  const orgMemberships = (session?.organization_memberships || [])
+    .map((membership) => ({
+      organization_id: String(membership.organization_id || ''),
+      role: String(membership.role || ''),
+    }))
+    .filter((membership) => membership.organization_id);
+  const ownerScopeOptions = useMemo(
+    () => orgMemberships.map((membership) => ({ value: membership.organization_id, label: membership.organization_id })),
+    [orgMemberships]
+  );
+  const canManageMcp = isPlatformAdmin || permissions.has('org.update');
+  const isOrgScopedOnly = canManageMcp && !isPlatformAdmin;
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [pageOffset, setPageOffset] = useState(0);
@@ -31,6 +44,7 @@ export default function MCPServers() {
     () => mcpServers.list({ search, limit: pageSize, offset: pageOffset }),
     [search, pageOffset]
   );
+  const showDeleteColumn = Boolean((result?.data || []).some((row) => row.capabilities?.can_mutate));
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -39,6 +53,17 @@ export default function MCPServers() {
     }, 250);
     return () => window.clearTimeout(timer);
   }, [searchInput]);
+
+  useEffect(() => {
+    if (!createOpen || !isOrgScopedOnly) {
+      return;
+    }
+    setForm((current) => ({
+      ...current,
+      owner_scope_type: 'organization',
+      owner_scope_id: current.owner_scope_id || ownerScopeOptions[0]?.value || '',
+    }));
+  }, [createOpen, isOrgScopedOnly, ownerScopeOptions]);
 
   const handleCreate = async () => {
     try {
@@ -83,6 +108,15 @@ export default function MCPServers() {
       ),
     },
     { key: 'transport', header: 'Transport', render: () => <span className="text-xs text-gray-600">Streamable HTTP</span> },
+    {
+      key: 'ownership',
+      header: 'Ownership',
+      render: (row: MCPServer) => (
+        <span className="text-xs text-gray-600">
+          {row.owner_scope_type === 'organization' ? `Org: ${row.owner_scope_id}` : 'Global'}
+        </span>
+      ),
+    },
     { key: 'tool_count', header: 'Tools' },
     {
       key: 'health',
@@ -110,21 +144,23 @@ export default function MCPServers() {
         </span>
       ),
     },
-    ...(isPlatformAdmin
+    ...(showDeleteColumn
       ? [
           {
             key: 'actions',
             header: '',
             render: (row: MCPServer) => (
               <div className="flex justify-end" onClick={(event) => event.stopPropagation()}>
-                <button
-                  type="button"
-                  onClick={() => setDeleteTarget(row)}
-                  className="rounded-lg p-1.5 hover:bg-red-50"
-                  title="Delete server"
-                >
-                  <Trash2 className="h-4 w-4 text-red-500" />
-                </button>
+                {row.capabilities?.can_mutate ? (
+                  <button
+                    type="button"
+                    onClick={() => setDeleteTarget(row)}
+                    className="rounded-lg p-1.5 hover:bg-red-50"
+                    title="Delete server"
+                  >
+                    <Trash2 className="h-4 w-4 text-red-500" />
+                  </button>
+                ) : null}
               </div>
             ),
           },
@@ -139,7 +175,7 @@ export default function MCPServers() {
           <h1 className="text-2xl font-bold text-gray-900">MCP Servers</h1>
           <p className="mt-1 text-sm text-gray-500">Register remote MCP servers, refresh tool discovery, and scope access before wiring them into runtime flows.</p>
         </div>
-        {isPlatformAdmin ? (
+        {canManageMcp ? (
           <button
             type="button"
             onClick={() => setCreateOpen(true)}
@@ -150,7 +186,7 @@ export default function MCPServers() {
           </button>
         ) : (
           <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-900">
-            Read-only access. Platform admins can register or delete MCP servers.
+            Read-only access. MCP server registration requires organization or platform admin permissions.
           </div>
         )}
       </div>
@@ -192,13 +228,18 @@ export default function MCPServers() {
         />
       </Card>
 
-      <Modal open={createOpen && isPlatformAdmin} onClose={() => setCreateOpen(false)} title="Add MCP Server" wide>
+      <Modal open={createOpen && canManageMcp} onClose={() => setCreateOpen(false)} title="Add MCP Server" wide>
         <div className="space-y-5">
           <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
             <div className="font-semibold">What happens next</div>
             <div className="mt-1 text-blue-800">This registers the server record only. On the detail page you can run health checks, refresh tool discovery, and add bindings or tool policies.</div>
           </div>
-          <MCPServerForm value={form} onChange={setForm} />
+          <MCPServerForm
+            value={form}
+            onChange={setForm}
+            ownerScopeOptions={ownerScopeOptions}
+            lockOwnerScopeType={isOrgScopedOnly}
+          />
           <div className="flex justify-end gap-2">
             <button type="button" onClick={() => setCreateOpen(false)} className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
               Cancel

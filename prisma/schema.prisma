@@ -389,6 +389,8 @@ model DeltaLLM_MCPServer {
   server_key                   String   @unique
   name                         String
   description                  String?
+  owner_scope_type             String   @default("global")
+  owner_scope_id               String?
   transport                    String   @default("streamable_http")
   base_url                     String
   enabled                      Boolean  @default(true)
@@ -414,6 +416,7 @@ model DeltaLLM_MCPServer {
 
   @@index([enabled], map: "deltallm_mcpserver_enabled_idx")
   @@index([created_at], map: "deltallm_mcpserver_created_at_idx")
+  @@index([owner_scope_type, owner_scope_id], map: "deltallm_mcpserver_owner_scope_idx")
   @@map("deltallm_mcpserver")
 }
 

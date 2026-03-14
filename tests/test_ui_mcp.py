@@ -56,6 +56,8 @@ class _FakeMCPRepository(MCPRepository):
             server_key=kwargs["server_key"],
             name=kwargs["name"],
             description=kwargs.get("description"),
+            owner_scope_type=kwargs.get("owner_scope_type", "global"),
+            owner_scope_id=kwargs.get("owner_scope_id"),
             transport=kwargs["transport"],
             base_url=kwargs["base_url"],
             enabled=kwargs["enabled"],
@@ -178,6 +180,9 @@ class _FakeMCPRepository(MCPRepository):
     async def delete_binding(self, binding_id: str) -> bool:
         return self.bindings.pop(binding_id, None) is not None
 
+    async def get_binding(self, binding_id: str):  # noqa: ANN201
+        return self.bindings.get(binding_id)
+
     async def list_tool_policies(self, *, server_id=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
         items = list(self.policies.values())
         if server_id:
@@ -248,6 +253,9 @@ class _FakeMCPRepository(MCPRepository):
 
     async def delete_tool_policy(self, policy_id: str) -> bool:
         return self.policies.pop(policy_id, None) is not None
+
+    async def get_tool_policy(self, policy_id: str):  # noqa: ANN201
+        return self.policies.get(policy_id)
 
     async def list_approval_requests(self, *, server_id=None, status=None, limit=100, offset=0):  # noqa: ANN001, ANN201
         items = list(self.approvals.values())
@@ -379,6 +387,7 @@ class _FakeMCPScopeQueryClient:
                 return [{"organization_id": organization_id}]
             return []
         if "FROM deltallm_teamtable" in normalized and "LEFT JOIN" not in normalized:
+            assert "organization_id" in normalized
             team_id = str(params[0] or "")
             team = self.teams.get(team_id)
             if team is None:
@@ -721,6 +730,8 @@ async def test_mcp_binding_and_tool_policy_admin_lifecycle(client, test_app):
         server_key="docs",
         name="Docs MCP",
         description=None,
+        owner_scope_type="global",
+        owner_scope_id=None,
         transport="streamable_http",
         base_url="https://mcp.example.com",
         enabled=True,
@@ -788,6 +799,8 @@ async def test_mcp_binding_and_policy_validation_reject_unknown_scope_targets(cl
         server_key="docs",
         name="Docs MCP",
         description=None,
+        owner_scope_type="global",
+        owner_scope_id=None,
         transport="streamable_http",
         base_url="https://mcp.example.com",
         enabled=True,
@@ -837,6 +850,8 @@ async def test_mcp_server_validation_rejects_invalid_phase1_config(client, test_
         server_key="docs",
         name="Docs MCP",
         description=None,
+        owner_scope_type="global",
+        owner_scope_id=None,
         transport="streamable_http",
         base_url="https://mcp.example.com",
         enabled=True,
@@ -889,6 +904,8 @@ async def test_mcp_server_operations_summary(client, test_app):
         server_key="docs",
         name="Docs MCP",
         description=None,
+        owner_scope_type="global",
+        owner_scope_id=None,
         transport="streamable_http",
         base_url="https://mcp.example.com",
         enabled=True,
@@ -923,6 +940,8 @@ async def test_mcp_approval_request_list_and_decision(client, test_app):
         server_key="docs",
         name="Docs MCP",
         description=None,
+        owner_scope_type="global",
+        owner_scope_id=None,
         transport="streamable_http",
         base_url="https://mcp.example.com",
         enabled=True,
@@ -1140,6 +1159,8 @@ async def test_scoped_org_admin_can_access_mcp_server_read_surfaces_and_health_c
         server_key="docs",
         name="Docs MCP",
         description=None,
+        owner_scope_type="global",
+        owner_scope_id=None,
         transport="streamable_http",
         base_url="https://mcp.example.com",
         enabled=True,
@@ -1170,10 +1191,20 @@ async def test_scoped_org_admin_can_access_mcp_server_read_surfaces_and_health_c
     list_response = await client.get("/ui/api/mcp-servers")
     assert list_response.status_code == 200
     assert list_response.json()["data"][0]["server_key"] == "docs"
+    assert list_response.json()["data"][0]["capabilities"] == {
+        "can_mutate": False,
+        "can_operate": True,
+        "can_manage_scope_config": True,
+    }
 
     detail_response = await client.get(f"/ui/api/mcp-servers/{server.mcp_server_id}")
     assert detail_response.status_code == 200
     assert detail_response.json()["server"]["server_key"] == "docs"
+    assert detail_response.json()["server"]["capabilities"] == {
+        "can_mutate": False,
+        "can_operate": True,
+        "can_manage_scope_config": True,
+    }
     assert detail_response.json()["bindings"][0]["scope_id"] == "team-ops"
     assert [tool["original_name"] for tool in detail_response.json()["tools"]] == ["search"]
 
@@ -1187,12 +1218,130 @@ async def test_scoped_org_admin_can_access_mcp_server_read_surfaces_and_health_c
 
 
 @pytest.mark.asyncio
+async def test_scoped_org_admin_can_create_org_owned_server_but_not_global_server(client, test_app, monkeypatch):
+    repository = _FakeMCPRepository()
+    test_app.state.mcp_repository = repository
+    test_app.state.mcp_registry_service = _FakeMCPRegistryService(repository)
+    test_app.state.prisma_manager = type("PrismaManager", (), {"client": _FakeMCPScopeQueryClient()})()
+    _set_auth_context(monkeypatch, _make_context(org_role=OrganizationRole.ADMIN))
+
+    create_owned = await client.post(
+        "/ui/api/mcp-servers",
+        json={
+            "server_key": "org-docs",
+            "name": "Org Docs MCP",
+            "base_url": "https://mcp.example.com",
+        },
+    )
+    assert create_owned.status_code == 200
+    assert create_owned.json()["owner_scope_type"] == "organization"
+    assert create_owned.json()["owner_scope_id"] == "org-main"
+
+    create_global = await client.post(
+        "/ui/api/mcp-servers",
+        json={
+            "server_key": "global-docs",
+            "name": "Global Docs MCP",
+            "base_url": "https://mcp.example.com",
+            "owner_scope_type": "global",
+        },
+    )
+    assert create_global.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_scoped_org_admin_can_update_owned_server_and_scope_global_server_bindings(client, test_app, monkeypatch):
+    repository = _FakeMCPRepository()
+    owned_server = await repository.create_server(
+        server_key="org-docs",
+        name="Org Docs MCP",
+        description=None,
+        owner_scope_type="organization",
+        owner_scope_id="org-main",
+        transport="streamable_http",
+        base_url="https://mcp.example.com",
+        enabled=True,
+        auth_mode="none",
+        auth_config={},
+        forwarded_headers_allowlist=[],
+        request_timeout_ms=30000,
+        metadata=None,
+        created_by_account_id=None,
+    )
+    global_server = await repository.create_server(
+        server_key="global-docs",
+        name="Global Docs MCP",
+        description=None,
+        owner_scope_type="global",
+        owner_scope_id=None,
+        transport="streamable_http",
+        base_url="https://mcp.example.com",
+        enabled=True,
+        auth_mode="none",
+        auth_config={},
+        forwarded_headers_allowlist=[],
+        request_timeout_ms=30000,
+        metadata=None,
+        created_by_account_id=None,
+    )
+    test_app.state.mcp_repository = repository
+    registry = _FakeMCPRegistryService(repository)
+    test_app.state.mcp_registry_service = registry
+    test_app.state.prisma_manager = type("PrismaManager", (), {"client": _FakeMCPScopeQueryClient()})()
+    _set_auth_context(monkeypatch, _make_context(org_role=OrganizationRole.ADMIN))
+
+    update_owned = await client.patch(
+        f"/ui/api/mcp-servers/{owned_server.mcp_server_id}",
+        json={"name": "Updated Org Docs MCP"},
+    )
+    assert update_owned.status_code == 200
+    assert update_owned.json()["name"] == "Updated Org Docs MCP"
+    assert update_owned.json()["capabilities"] == {
+        "can_mutate": True,
+        "can_operate": True,
+        "can_manage_scope_config": True,
+    }
+
+    update_global = await client.patch(
+        f"/ui/api/mcp-servers/{global_server.mcp_server_id}",
+        json={"name": "Updated Global Docs MCP"},
+    )
+    assert update_global.status_code == 403
+
+    create_binding = await client.post(
+        "/ui/api/mcp-bindings",
+        json={
+            "server_id": global_server.mcp_server_id,
+            "scope_type": "team",
+            "scope_id": "team-ops",
+            "tool_allowlist": ["search"],
+        },
+    )
+    assert create_binding.status_code == 200
+
+    create_policy = await client.post(
+        "/ui/api/mcp-tool-policies",
+        json={
+            "server_id": global_server.mcp_server_id,
+            "tool_name": "search",
+            "scope_type": "api_key",
+            "scope_id": "sk-key-1",
+            "max_rpm": 30,
+        },
+    )
+    assert create_policy.status_code == 200
+    assert registry.invalidate_all_calls == 2
+
+
+@pytest.mark.asyncio
 async def test_scoped_team_developer_cannot_run_mcp_health_check(client, test_app, monkeypatch):
     repository = _FakeMCPRepository()
     server = await repository.create_server(
         server_key="docs",
         name="Docs MCP",
         description=None,
+        owner_scope_type="global",
+        owner_scope_id=None,
         transport="streamable_http",
         base_url="https://mcp.example.com",
         enabled=True,
