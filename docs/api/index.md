@@ -1,10 +1,11 @@
 # API Reference
 
-DeltaLLM exposes two API surfaces:
+DeltaLLM exposes multiple API surfaces:
 
 | API | Base path | Purpose |
 |-----|-----------|---------|
 | [Proxy Endpoints](proxy.md) | `/v1/` | OpenAI-compatible inference endpoints used by applications |
+| [MCP Gateway & Tooling](mcp.md) | `/mcp`, `/v1/*`, `/ui/api/mcp-*` | Direct MCP access plus MCP-aware chat and admin workflows |
 | [Admin Endpoints](admin.md) | `/ui/api/` and `/auth/` | Gateway management, runtime configuration, accounts, and operations |
 | [Health & Metrics](health.md) | `/health` and `/metrics` | Monitoring and diagnostics |
 
@@ -14,8 +15,9 @@ Most developers should follow this order:
 
 1. Make sure at least one model is available in `GET /v1/models`
 2. Send a test request through [Proxy Endpoints](proxy.md)
-3. Create scoped keys or manage runtime state through [Admin Endpoints](admin.md)
-4. Use [Health & Metrics](health.md) for readiness and monitoring
+3. If you want external tools, register and verify them through [MCP Gateway & Tooling](mcp.md)
+4. Create scoped keys or manage runtime state through [Admin Endpoints](admin.md)
+5. Use [Health & Metrics](health.md) for readiness and monitoring
 
 For the first working `curl`, Python, and JavaScript examples, see [Quick Start](../getting-started/quickstart.md).
 

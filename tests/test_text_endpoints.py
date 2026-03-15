@@ -54,6 +54,16 @@ class _FakeMCPGateway:
             is_error=False,
         )
 
+    async def tool_requires_manual_approval(self, auth, *, server_key, tool_name):  # noqa: ANN001, ANN201
+        del auth, server_key, tool_name
+        return False
+
+
+class _ManualApprovalMCPGateway(_FakeMCPGateway):
+    async def tool_requires_manual_approval(self, auth, *, server_key, tool_name):  # noqa: ANN001, ANN201
+        del auth, server_key, tool_name
+        return True
+
 
 @pytest.mark.asyncio
 async def test_completions_success(client, test_app):
@@ -213,6 +223,22 @@ async def test_responses_stream_with_mcp_tools_returns_400(client, test_app):
 
     assert response.status_code == 400
     assert "MCP tools are not supported on streaming chat requests yet" in response.text
+
+
+@pytest.mark.asyncio
+async def test_responses_with_manual_approval_mcp_tools_returns_400(client, test_app):
+    test_app.state.mcp_gateway_service = _ManualApprovalMCPGateway()
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "input": "Search docs for DeltaLLM",
+        "tools": [{"type": "mcp", "server": "docs", "allowed_tools": ["search"], "require_approval": "never"}],
+    }
+
+    response = await client.post("/v1/responses", headers=headers, json=body)
+
+    assert response.status_code == 400
+    assert "manual approval" in response.text
 
 
 @pytest.mark.asyncio

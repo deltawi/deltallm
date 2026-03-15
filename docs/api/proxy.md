@@ -58,6 +58,8 @@ POST /v1/chat/completions
 
 This is the main endpoint most applications should start with.
 
+Chat requests also support DeltaLLM-managed MCP tools through `tools: [{ "type": "mcp", ... }]` on non-streaming requests. See [MCP Gateway & Tooling](mcp.md).
+
 ### Completions (Legacy)
 
 ```text
@@ -91,6 +93,8 @@ curl http://localhost:8000/v1/responses \
     "stream": false
   }'
 ```
+
+Responses requests also support DeltaLLM-managed MCP tools on non-streaming requests. See [MCP Gateway & Tooling](mcp.md).
 
 ### Embeddings
 

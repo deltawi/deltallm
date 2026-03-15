@@ -11,6 +11,7 @@ DeltaLLM acts as a proxy between your applications and LLM providers like OpenAI
 - **Unified API** — One OpenAI-compatible endpoint for 100+ LLM providers and models
 - **Virtual API Keys** — Issue scoped keys with budgets, rate limits, and model restrictions
 - **Routing & Failover** — Multiple routing strategies with automatic failover and retries
+- **MCP Gateway & Tooling** — Register external MCP servers, expose approved tools, and bridge them into chat flows
 - **Guardrails** — Built-in PII detection and prompt injection protection
 - **Spend Tracking** — Per-key, per-team, and per-model cost attribution
 - **Rate Limiting** — Hierarchical limits at organization, team, user, and key levels
@@ -38,6 +39,7 @@ Your applications use the standard OpenAI SDK — just change the `base_url` to 
 - [Docker Compose](getting-started/docker.md) — Fastest way to run DeltaLLM locally
 - [Installation](getting-started/installation.md) — Full local setup for development and contribution
 - [Quick Start](getting-started/quickstart.md) — Use the gateway with curl, Python, and JavaScript
+- [MCP Quick Start](getting-started/mcp-quickstart.md) — Register a server, expose a tool, and test `/mcp`
 - [Configuration Reference](configuration/index.md) — Full config.yaml documentation
 - [API Reference](api/index.md) — OpenAI-compatible and admin API endpoints
 - [Admin UI Guide](admin-ui/index.md) — Managing the gateway through the web dashboard

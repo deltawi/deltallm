@@ -43,6 +43,8 @@ class MCPServerRecord:
     server_key: str
     name: str
     description: str | None = None
+    owner_scope_type: str = "global"
+    owner_scope_id: str | None = None
     transport: str = "streamable_http"
     base_url: str = ""
     enabled: bool = True
@@ -111,6 +113,7 @@ class MCPApprovalRequestRecord:
     decision_comment: str | None = None
     decided_by_account_id: str | None = None
     decided_at: datetime | None = None
+    expires_at: datetime | None = None
     metadata: dict[str, Any] | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -157,6 +160,8 @@ class MCPRepository:
                 s.server_key,
                 s.name,
                 s.description,
+                s.owner_scope_type,
+                s.owner_scope_id,
                 s.transport,
                 s.base_url,
                 s.enabled,
@@ -194,6 +199,8 @@ class MCPRepository:
                 server_key,
                 name,
                 description,
+                owner_scope_type,
+                owner_scope_id,
                 transport,
                 base_url,
                 enabled,
@@ -230,6 +237,8 @@ class MCPRepository:
                 server_key,
                 name,
                 description,
+                owner_scope_type,
+                owner_scope_id,
                 transport,
                 base_url,
                 enabled,
@@ -262,6 +271,8 @@ class MCPRepository:
         server_key: str,
         name: str,
         description: str | None,
+        owner_scope_type: str,
+        owner_scope_id: str | None,
         transport: str,
         base_url: str,
         enabled: bool,
@@ -278,6 +289,8 @@ class MCPRepository:
                 server_key=server_key,
                 name=name,
                 description=description,
+                owner_scope_type=owner_scope_type,
+                owner_scope_id=owner_scope_id,
                 transport=transport,
                 base_url=base_url,
                 enabled=enabled,
@@ -291,22 +304,27 @@ class MCPRepository:
         rows = await self.prisma.query_raw(
             """
             INSERT INTO deltallm_mcpserver (
-                mcp_server_id, server_key, name, description, transport, base_url, enabled, auth_mode,
-                auth_config, forwarded_headers_allowlist, request_timeout_ms, metadata, created_by_account_id, created_at, updated_at
+                mcp_server_id, server_key, name, description, owner_scope_type, owner_scope_id,
+                transport, base_url, enabled, auth_mode, auth_config, forwarded_headers_allowlist,
+                request_timeout_ms, metadata, created_by_account_id, created_at, updated_at
             )
             VALUES (
-                gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7,
-                $8::jsonb, $9::text[], $10, $11::jsonb, $12, NOW(), NOW()
+                gen_random_uuid()::text, $1, $2, $3, $4, $5,
+                $6, $7, $8, $9, $10::jsonb, $11::text[],
+                $12, $13::jsonb, $14, NOW(), NOW()
             )
             RETURNING
-                mcp_server_id, server_key, name, description, transport, base_url, enabled, auth_mode,
-                auth_config, forwarded_headers_allowlist, request_timeout_ms, capabilities_json, capabilities_etag,
-                capabilities_fetched_at, last_health_status, last_health_error, last_health_at, last_health_latency_ms,
+                mcp_server_id, server_key, name, description, owner_scope_type, owner_scope_id,
+                transport, base_url, enabled, auth_mode, auth_config, forwarded_headers_allowlist,
+                request_timeout_ms, capabilities_json, capabilities_etag, capabilities_fetched_at,
+                last_health_status, last_health_error, last_health_at, last_health_latency_ms,
                 metadata, created_by_account_id, created_at, updated_at
             """,
             server_key,
             name,
             description,
+            owner_scope_type,
+            owner_scope_id,
             transport,
             base_url,
             enabled,
@@ -353,9 +371,10 @@ class MCPRepository:
                 updated_at = NOW()
             WHERE mcp_server_id = $1
             RETURNING
-                mcp_server_id, server_key, name, description, transport, base_url, enabled, auth_mode,
-                auth_config, forwarded_headers_allowlist, request_timeout_ms, capabilities_json, capabilities_etag,
-                capabilities_fetched_at, last_health_status, last_health_error, last_health_at, last_health_latency_ms,
+                mcp_server_id, server_key, name, description, owner_scope_type, owner_scope_id,
+                transport, base_url, enabled, auth_mode, auth_config, forwarded_headers_allowlist,
+                request_timeout_ms, capabilities_json, capabilities_etag, capabilities_fetched_at,
+                last_health_status, last_health_error, last_health_at, last_health_latency_ms,
                 metadata, created_by_account_id, created_at, updated_at
             """,
             server_id,
@@ -404,9 +423,10 @@ class MCPRepository:
                 updated_at = NOW()
             WHERE mcp_server_id = $1
             RETURNING
-                mcp_server_id, server_key, name, description, transport, base_url, enabled, auth_mode,
-                auth_config, forwarded_headers_allowlist, request_timeout_ms, capabilities_json, capabilities_etag,
-                capabilities_fetched_at, last_health_status, last_health_error, last_health_at, last_health_latency_ms,
+                mcp_server_id, server_key, name, description, owner_scope_type, owner_scope_id,
+                transport, base_url, enabled, auth_mode, auth_config, forwarded_headers_allowlist,
+                request_timeout_ms, capabilities_json, capabilities_etag, capabilities_fetched_at,
+                last_health_status, last_health_error, last_health_at, last_health_latency_ms,
                 metadata, created_by_account_id, created_at, updated_at
             """,
             server_id,
@@ -436,9 +456,10 @@ class MCPRepository:
                 updated_at = NOW()
             WHERE mcp_server_id = $1
             RETURNING
-                mcp_server_id, server_key, name, description, transport, base_url, enabled, auth_mode,
-                auth_config, forwarded_headers_allowlist, request_timeout_ms, capabilities_json, capabilities_etag,
-                capabilities_fetched_at, last_health_status, last_health_error, last_health_at, last_health_latency_ms,
+                mcp_server_id, server_key, name, description, owner_scope_type, owner_scope_id,
+                transport, base_url, enabled, auth_mode, auth_config, forwarded_headers_allowlist,
+                request_timeout_ms, capabilities_json, capabilities_etag, capabilities_fetched_at,
+                last_health_status, last_health_error, last_health_at, last_health_latency_ms,
                 metadata, created_by_account_id, created_at, updated_at
             """,
             server_id,
@@ -548,6 +569,29 @@ class MCPRepository:
             binding_id,
         )
         return bool(rows)
+
+    async def get_binding(self, binding_id: str) -> MCPServerBindingRecord | None:
+        if self.prisma is None:
+            return None
+        rows = await self.prisma.query_raw(
+            """
+            SELECT
+                mcp_binding_id,
+                mcp_server_id,
+                scope_type,
+                scope_id,
+                enabled,
+                tool_allowlist,
+                metadata,
+                created_at,
+                updated_at
+            FROM deltallm_mcpbinding
+            WHERE mcp_binding_id = $1
+            LIMIT 1
+            """,
+            binding_id,
+        )
+        return self._to_binding_record(rows[0]) if rows else None
 
     async def list_effective_bindings(self, *, scopes: list[tuple[str, str]]) -> list[MCPServerBindingRecord]:
         if self.prisma is None or not scopes:
@@ -703,6 +747,33 @@ class MCPRepository:
         )
         return bool(rows)
 
+    async def get_tool_policy(self, policy_id: str) -> MCPToolPolicyRecord | None:
+        if self.prisma is None:
+            return None
+        rows = await self.prisma.query_raw(
+            """
+            SELECT
+                mcp_tool_policy_id,
+                mcp_server_id,
+                tool_name,
+                scope_type,
+                scope_id,
+                enabled,
+                require_approval,
+                max_rpm,
+                max_concurrency,
+                result_cache_ttl_seconds,
+                metadata,
+                created_at,
+                updated_at
+            FROM deltallm_mcptoolpolicy
+            WHERE mcp_tool_policy_id = $1
+            LIMIT 1
+            """,
+            policy_id,
+        )
+        return self._to_tool_policy_record(rows[0]) if rows else None
+
     async def list_effective_tool_policies(
         self,
         *,
@@ -770,13 +841,70 @@ class MCPRepository:
                 r.decision_comment,
                 r.decided_by_account_id,
                 r.decided_at,
+                r.expires_at,
                 r.metadata,
                 r.created_at,
                 r.updated_at
             FROM deltallm_mcpapprovalrequest r
             WHERE r.request_fingerprint = $1
               AND r.status = 'pending'
+              AND (r.expires_at IS NULL OR r.expires_at > NOW())
             ORDER BY r.created_at DESC
+            LIMIT 1
+            """,
+            request_fingerprint,
+        )
+        return self._to_approval_request_record(rows[0]) if rows else None
+
+    async def expire_stale_approval_requests(self, *, request_fingerprint: str) -> int:
+        if self.prisma is None:
+            return 0
+        rows = await self.prisma.query_raw(
+            """
+            UPDATE deltallm_mcpapprovalrequest
+            SET status = 'expired',
+                updated_at = NOW()
+            WHERE request_fingerprint = $1
+              AND status IN ('pending', 'approved', 'rejected')
+              AND expires_at IS NOT NULL
+              AND expires_at <= NOW()
+            RETURNING mcp_approval_request_id
+            """,
+            request_fingerprint,
+        )
+        return len(rows)
+
+    async def find_active_approval_request(self, *, request_fingerprint: str) -> MCPApprovalRequestRecord | None:
+        if self.prisma is None:
+            return None
+        rows = await self.prisma.query_raw(
+            """
+            SELECT
+                r.mcp_approval_request_id,
+                r.mcp_server_id,
+                r.tool_name,
+                r.scope_type,
+                r.scope_id,
+                r.status,
+                r.request_fingerprint,
+                r.requested_by_api_key,
+                r.requested_by_user,
+                r.organization_id,
+                r.request_id,
+                r.correlation_id,
+                r.arguments_json,
+                r.decision_comment,
+                r.decided_by_account_id,
+                r.decided_at,
+                r.expires_at,
+                r.metadata,
+                r.created_at,
+                r.updated_at
+            FROM deltallm_mcpapprovalrequest r
+            WHERE r.request_fingerprint = $1
+              AND r.status IN ('pending', 'approved', 'rejected')
+              AND (r.expires_at IS NULL OR r.expires_at > NOW())
+            ORDER BY COALESCE(r.decided_at, r.created_at) DESC, r.updated_at DESC
             LIMIT 1
             """,
             request_fingerprint,
@@ -805,6 +933,7 @@ class MCPRepository:
                 r.decision_comment,
                 r.decided_by_account_id,
                 r.decided_at,
+                r.expires_at,
                 r.metadata,
                 r.created_at,
                 r.updated_at
@@ -830,6 +959,7 @@ class MCPRepository:
         request_id: str | None,
         correlation_id: str | None,
         arguments_json: dict[str, Any],
+        expires_at: datetime | None,
         metadata: dict[str, Any] | None,
     ) -> MCPApprovalRequestRecord | None:
         if self.prisma is None:
@@ -839,18 +969,20 @@ class MCPRepository:
             INSERT INTO deltallm_mcpapprovalrequest (
                 mcp_approval_request_id, mcp_server_id, tool_name, scope_type, scope_id, status,
                 request_fingerprint, requested_by_api_key, requested_by_user, organization_id,
-                request_id, correlation_id, arguments_json, metadata, created_at, updated_at
+                request_id, correlation_id, arguments_json, expires_at, metadata, created_at, updated_at
             )
             VALUES (
                 gen_random_uuid()::text, $1, $2, $3, $4, 'pending',
                 $5, $6, $7, $8,
-                $9, $10, $11::jsonb, $12::jsonb, NOW(), NOW()
+                $9, $10, $11::jsonb, $12, $13::jsonb, NOW(), NOW()
             )
+            ON CONFLICT (request_fingerprint) WHERE status = 'pending'
+            DO UPDATE SET updated_at = deltallm_mcpapprovalrequest.updated_at
             RETURNING
                 mcp_approval_request_id, mcp_server_id, tool_name, scope_type, scope_id, status,
                 request_fingerprint, requested_by_api_key, requested_by_user, organization_id,
                 request_id, correlation_id, arguments_json, decision_comment, decided_by_account_id,
-                decided_at, metadata, created_at, updated_at
+                decided_at, expires_at, metadata, created_at, updated_at
             """,
             server_id,
             tool_name,
@@ -863,6 +995,7 @@ class MCPRepository:
             request_id,
             correlation_id,
             arguments_json,
+            expires_at,
             metadata or {},
         )
         return self._to_approval_request_record(rows[0]) if rows else None
@@ -914,6 +1047,7 @@ class MCPRepository:
                 r.decision_comment,
                 r.decided_by_account_id,
                 r.decided_at,
+                r.expires_at,
                 r.metadata,
                 r.created_at,
                 r.updated_at
@@ -933,6 +1067,7 @@ class MCPRepository:
         status: str,
         decided_by_account_id: str | None,
         decision_comment: str | None,
+        expires_at: datetime | None,
     ) -> MCPApprovalRequestRecord | None:
         if self.prisma is None:
             return None
@@ -942,6 +1077,7 @@ class MCPRepository:
             SET status = $2,
                 decided_by_account_id = $3,
                 decision_comment = $4,
+                expires_at = $5,
                 decided_at = NOW(),
                 updated_at = NOW()
             WHERE mcp_approval_request_id = $1
@@ -950,12 +1086,13 @@ class MCPRepository:
                 mcp_approval_request_id, mcp_server_id, tool_name, scope_type, scope_id, status,
                 request_fingerprint, requested_by_api_key, requested_by_user, organization_id,
                 request_id, correlation_id, arguments_json, decision_comment, decided_by_account_id,
-                decided_at, metadata, created_at, updated_at
+                decided_at, expires_at, metadata, created_at, updated_at
             """,
             approval_request_id,
             status,
             decided_by_account_id,
             decision_comment,
+            expires_at,
         )
         return self._to_approval_request_record(rows[0]) if rows else None
 
@@ -966,6 +1103,8 @@ class MCPRepository:
             server_key=str(row.get("server_key") or ""),
             name=str(row.get("name") or ""),
             description=str(row.get("description")) if row.get("description") is not None else None,
+            owner_scope_type=str(row.get("owner_scope_type") or "global"),
+            owner_scope_id=str(row.get("owner_scope_id")) if row.get("owner_scope_id") is not None else None,
             transport=str(row.get("transport") or "streamable_http"),
             base_url=str(row.get("base_url") or ""),
             enabled=bool(row.get("enabled", True)),
@@ -1037,6 +1176,7 @@ class MCPRepository:
             decision_comment=str(row.get("decision_comment")) if row.get("decision_comment") is not None else None,
             decided_by_account_id=str(row.get("decided_by_account_id")) if row.get("decided_by_account_id") is not None else None,
             decided_at=_parse_datetime(row.get("decided_at")),
+            expires_at=_parse_datetime(row.get("expires_at")),
             metadata=_parse_json_object(row.get("metadata")) or None,
             created_at=_parse_datetime(row.get("created_at")),
             updated_at=_parse_datetime(row.get("updated_at")),

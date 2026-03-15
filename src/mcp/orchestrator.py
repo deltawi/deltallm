@@ -9,7 +9,7 @@ from fastapi import Request
 
 from src.audit.actions import AuditAction
 from src.chat.audit import request_client_ip
-from src.models.errors import ApprovalRequiredError, InvalidRequestError, PermissionDeniedError, RateLimitError, ServiceUnavailableError
+from src.models.errors import InvalidRequestError, PermissionDeniedError, RateLimitError, ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest, ChatMessage, FunctionToolDefinition, MCPToolDefinition
 from src.services.audit_service import AuditEventInput, AuditPayloadInput, AuditService
 
@@ -83,6 +83,20 @@ class MCPChatOrchestrator:
             for tool in matched:
                 if tool.namespaced_name in resolved_tools:
                     continue
+                requires_manual_approval = False
+                if hasattr(self.gateway, "tool_requires_manual_approval"):
+                    requires_manual_approval = await self.gateway.tool_requires_manual_approval(
+                        auth,
+                        server_key=tool.server_key,
+                        tool_name=tool.original_name,
+                    )
+                if requires_manual_approval:
+                    raise InvalidRequestError(
+                        message=(
+                            "MCP tools that require manual approval are not supported on chat/responses yet. "
+                            "Use the /mcp tools/call flow and retry after approval."
+                        )
+                    )
                 resolved_tools[tool.namespaced_name] = ResolvedMCPTool(
                     server_key=tool.server_key,
                     original_name=tool.original_name,
@@ -183,9 +197,11 @@ class MCPChatOrchestrator:
                         request_start=tool_started,
                         error=exc,
                     )
-                    raise ApprovalRequiredError(
-                        message=str(exc),
-                        approval_request_id=exc.approval_request_id,
+                    raise InvalidRequestError(
+                        message=(
+                            "MCP tools that require manual approval are not supported on chat/responses yet. "
+                            "Use the /mcp tools/call flow and retry after approval."
+                        ),
                     ) from exc
                 except (MCPAccessDeniedError, MCPPolicyDeniedError) as exc:
                     self._emit_tool_audit_failure_event(

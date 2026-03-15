@@ -10,7 +10,6 @@ from src.audit.actions import AuditAction
 from src.callbacks import CallbackManager, CustomLogger
 from src.guardrails.base import CustomGuardrail, GuardrailAction
 from src.guardrails.exceptions import GuardrailViolationError
-from src.mcp.exceptions import MCPApprovalRequiredError
 from src.mcp.exceptions import MCPRateLimitError
 from src.mcp.exceptions import MCPToolTimeoutError
 from src.mcp.exceptions import MCPTransportError
@@ -100,6 +99,10 @@ class _FakeMCPGateway:
             is_error=False,
         )
 
+    async def tool_requires_manual_approval(self, auth, *, server_key, tool_name):  # noqa: ANN001, ANN201
+        del auth, server_key, tool_name
+        return False
+
 
 class _FailingMCPGateway(_FakeMCPGateway):
     async def call_tool(self, auth, *, namespaced_tool_name, arguments, request_headers=None, request_id=None, correlation_id=None):  # noqa: ANN001, ANN201
@@ -113,10 +116,10 @@ class _RateLimitedMCPGateway(_FakeMCPGateway):
         raise MCPRateLimitError("Rate limit exceeded for scope 'mcp_tool_rpm'", retry_after=42)
 
 
-class _ApprovalRequiredMCPGateway(_FakeMCPGateway):
-    async def call_tool(self, auth, *, namespaced_tool_name, arguments, request_headers=None, request_id=None, correlation_id=None):  # noqa: ANN001, ANN201
-        del auth, namespaced_tool_name, arguments, request_headers, request_id, correlation_id
-        raise MCPApprovalRequiredError("MCP tool 'docs.search' requires approval", approval_request_id="approval-1")
+class _ManualApprovalMCPGateway(_FakeMCPGateway):
+    async def tool_requires_manual_approval(self, auth, *, server_key, tool_name):  # noqa: ANN001, ANN201
+        del auth, server_key, tool_name
+        return True
 
 
 class _TimeoutMCPGateway(_FakeMCPGateway):
@@ -367,8 +370,8 @@ async def test_chat_completion_with_mcp_tool_rate_limit_returns_429(client, test
 
 
 @pytest.mark.asyncio
-async def test_chat_completion_with_mcp_tool_manual_approval_returns_409(client, test_app):
-    test_app.state.mcp_gateway_service = _ApprovalRequiredMCPGateway()
+async def test_chat_completion_with_mcp_tool_manual_approval_returns_400(client, test_app):
+    test_app.state.mcp_gateway_service = _ManualApprovalMCPGateway()
 
     async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
         del url, headers, timeout
@@ -408,9 +411,9 @@ async def test_chat_completion_with_mcp_tool_manual_approval_returns_409(client,
 
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
 
-    assert response.status_code == 409
-    assert response.json()["error"]["type"] == "approval_required"
-    assert response.json()["error"]["approval_request_id"] == "approval-1"
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == "invalid_request_error"
+    assert "manual approval" in response.json()["error"]["message"]
 
 
 @pytest.mark.asyncio

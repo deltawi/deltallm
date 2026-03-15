@@ -12,6 +12,7 @@ from src.middleware.rate_limit import enforce_rate_limits
 from src.mcp.capabilities import parse_namespaced_tool_name
 from src.mcp import (
     MCPAccessDeniedError,
+    MCPApprovalDeniedError,
     MCPApprovalRequiredError,
     MCPAuthError,
     MCPError,
@@ -60,6 +61,13 @@ def _map_mcp_error(request_id: str | int | None, exc: Exception) -> JSONResponse
         return _jsonrpc_error(request_id, code=-32004, message=str(exc))
     if isinstance(exc, (MCPAccessDeniedError, MCPPolicyDeniedError)):
         return _jsonrpc_error(request_id, code=-32003, message=str(exc))
+    if isinstance(exc, MCPApprovalDeniedError):
+        return _jsonrpc_error(
+            request_id,
+            code=-32009,
+            message=str(exc),
+            data={"approval_request_id": exc.approval_request_id} if exc.approval_request_id else None,
+        )
     if isinstance(exc, MCPApprovalRequiredError):
         return _jsonrpc_error(
             request_id,

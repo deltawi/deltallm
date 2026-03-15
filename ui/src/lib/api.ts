@@ -137,11 +137,13 @@ export interface MCPServer {
   server_key: string;
   name: string;
   description?: string | null;
+  owner_scope_type: 'global' | 'organization';
+  owner_scope_id?: string | null;
   transport: 'streamable_http';
   base_url: string;
   enabled: boolean;
   auth_mode: 'none' | 'bearer' | 'basic' | 'header_map';
-  auth_config?: Record<string, unknown> | null;
+  auth_credentials_present: boolean;
   forwarded_headers_allowlist?: string[] | null;
   request_timeout_ms: number;
   capabilities_json?: Record<string, unknown> | null;
@@ -156,6 +158,11 @@ export interface MCPServer {
   created_at?: string | null;
   updated_at?: string | null;
   tool_count: number;
+  capabilities?: {
+    can_mutate: boolean;
+    can_operate: boolean;
+    can_manage_scope_config: boolean;
+  };
 }
 
 export interface MCPNamespacedTool {
@@ -189,6 +196,7 @@ export interface MCPToolPolicy {
   max_rpm?: number | null;
   max_concurrency?: number | null;
   result_cache_ttl_seconds?: number | null;
+  max_total_execution_time_ms?: number | null;
   metadata?: Record<string, unknown> | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -200,7 +208,7 @@ export interface MCPApprovalRequest {
   tool_name: string;
   scope_type: 'organization' | 'team' | 'api_key';
   scope_id: string;
-  status: 'pending' | 'approved' | 'rejected';
+  status: 'pending' | 'approved' | 'rejected' | 'expired';
   request_fingerprint: string;
   requested_by_api_key?: string | null;
   requested_by_user?: string | null;
@@ -211,9 +219,20 @@ export interface MCPApprovalRequest {
   decision_comment?: string | null;
   decided_by_account_id?: string | null;
   decided_at?: string | null;
+  expires_at?: string | null;
   metadata?: Record<string, unknown> | null;
   created_at?: string | null;
   updated_at?: string | null;
+  server?: {
+    mcp_server_id: string | null;
+    server_key?: string | null;
+    name?: string | null;
+    owner_scope_type?: 'global' | 'organization' | null;
+    owner_scope_id?: string | null;
+  } | null;
+  capabilities?: {
+    can_decide: boolean;
+  };
 }
 
 export interface MCPServerDetail {

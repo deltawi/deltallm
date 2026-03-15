@@ -12,7 +12,7 @@ from src.db.mcp import MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRec
 from src.metrics import get_prometheus_registry
 from src.mcp.approvals import MCPApprovalService
 from src.mcp.capabilities import namespace_tools
-from src.mcp.exceptions import MCPApprovalRequiredError, MCPRateLimitError, MCPToolTimeoutError
+from src.mcp.exceptions import MCPApprovalDeniedError, MCPApprovalRequiredError, MCPRateLimitError, MCPToolTimeoutError
 from src.mcp.gateway import MCPGatewayService
 from src.mcp.models import MCPToolCallResult, MCPToolSchema
 from src.mcp.policy import MCPToolPolicyEnforcer
@@ -109,11 +109,31 @@ class _FakeTransport:
 
 class _FakeApprovalRepository:
     def __init__(self) -> None:
-        self.pending_by_fingerprint: dict[str, MCPApprovalRequestRecord] = {}
+        self.records_by_fingerprint: dict[str, list[MCPApprovalRequestRecord]] = {}
         self.create_calls = 0
 
     async def find_pending_approval_request(self, *, request_fingerprint: str):  # noqa: ANN201
-        return self.pending_by_fingerprint.get(request_fingerprint)
+        records = self.records_by_fingerprint.get(request_fingerprint, [])
+        for record in reversed(records):
+            if record.status == "pending":
+                return record
+        return None
+
+    async def expire_stale_approval_requests(self, *, request_fingerprint: str):  # noqa: ANN201
+        now = datetime.now(tz=UTC)
+        updated = 0
+        for record in self.records_by_fingerprint.get(request_fingerprint, []):
+            if record.status in {"pending", "approved", "rejected"} and record.expires_at is not None and record.expires_at <= now:
+                record.status = "expired"
+                updated += 1
+        return updated
+
+    async def find_active_approval_request(self, *, request_fingerprint: str):  # noqa: ANN201
+        records = self.records_by_fingerprint.get(request_fingerprint, [])
+        for record in reversed(records):
+            if record.status in {"pending", "approved", "rejected"}:
+                return record
+        return None
 
     async def create_approval_request(self, **kwargs):  # noqa: ANN003, ANN201
         self.create_calls += 1
@@ -131,9 +151,10 @@ class _FakeApprovalRepository:
             request_id=kwargs.get("request_id"),
             correlation_id=kwargs.get("correlation_id"),
             arguments_json=kwargs.get("arguments_json"),
+            expires_at=kwargs.get("expires_at"),
             metadata=kwargs.get("metadata"),
         )
-        self.pending_by_fingerprint[record.request_fingerprint] = record
+        self.records_by_fingerprint.setdefault(record.request_fingerprint, []).append(record)
         return record
 
 
@@ -565,6 +586,119 @@ async def test_mcp_gateway_manual_approval_creates_pending_request() -> None:
     assert approval_repo.create_calls == 1
     metrics_text = generate_latest(get_prometheus_registry()).decode("utf-8")
     assert "deltallm_mcp_approval_request_total" in metrics_text
+
+
+@pytest.mark.asyncio
+async def test_mcp_gateway_manual_approval_approved_retry_executes() -> None:
+    registry = _FakeRegistry(
+        servers=[
+            _server(
+                "srv-docs",
+                "docs",
+                capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+            )
+        ],
+        bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
+        policies=[
+            MCPToolPolicyRecord("policy-1", "srv-docs", "search", "team", "team-ops", True, "manual", None, None, None, None)
+        ],
+    )
+    approval_repo = _FakeApprovalRepository()
+    transport = _FakeTransport()
+    approval_service = MCPApprovalService(approval_repo)
+    gateway = MCPGatewayService(
+        registry,
+        transport,
+        MCPToolPolicyEnforcer(LimitCounter(redis_client=None)),
+        approval_service=approval_service,  # type: ignore[arg-type]
+    )  # type: ignore[arg-type]
+    auth = type("Auth", (), {"api_key": "sk-test", "team_id": "team-ops", "organization_id": "org-acme", "metadata": None})()
+
+    with pytest.raises(MCPApprovalRequiredError):
+        await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "hello"})
+
+    fingerprint = next(iter(approval_repo.records_by_fingerprint))
+    approval_repo.records_by_fingerprint[fingerprint][-1].status = "approved"
+    approval_repo.records_by_fingerprint[fingerprint][-1].expires_at = datetime.now(tz=UTC) + timedelta(minutes=5)
+
+    result = await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "hello"})
+
+    assert result.structured_content["tool"] == "search"
+    assert transport.calls == [("docs", "search", None, {"query": "hello"})]
+
+
+@pytest.mark.asyncio
+async def test_mcp_gateway_manual_approval_rejected_retry_denies() -> None:
+    registry = _FakeRegistry(
+        servers=[
+            _server(
+                "srv-docs",
+                "docs",
+                capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+            )
+        ],
+        bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
+        policies=[
+            MCPToolPolicyRecord("policy-1", "srv-docs", "search", "team", "team-ops", True, "manual", None, None, None, None)
+        ],
+    )
+    approval_repo = _FakeApprovalRepository()
+    gateway = MCPGatewayService(
+        registry,
+        _FakeTransport(),
+        MCPToolPolicyEnforcer(LimitCounter(redis_client=None)),
+        approval_service=MCPApprovalService(approval_repo),  # type: ignore[arg-type]
+    )  # type: ignore[arg-type]
+    auth = type("Auth", (), {"api_key": "sk-test", "team_id": "team-ops", "organization_id": "org-acme", "metadata": None})()
+
+    with pytest.raises(MCPApprovalRequiredError):
+        await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "hello"})
+
+    fingerprint = next(iter(approval_repo.records_by_fingerprint))
+    approval_repo.records_by_fingerprint[fingerprint][-1].status = "rejected"
+    approval_repo.records_by_fingerprint[fingerprint][-1].expires_at = datetime.now(tz=UTC) + timedelta(minutes=5)
+
+    with pytest.raises(MCPApprovalDeniedError):
+        await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "hello"})
+
+
+@pytest.mark.asyncio
+async def test_mcp_gateway_manual_approval_expired_creates_new_request() -> None:
+    registry = _FakeRegistry(
+        servers=[
+            _server(
+                "srv-docs",
+                "docs",
+                capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+            )
+        ],
+        bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
+        policies=[
+            MCPToolPolicyRecord("policy-1", "srv-docs", "search", "team", "team-ops", True, "manual", None, None, None, None)
+        ],
+    )
+    approval_repo = _FakeApprovalRepository()
+    approval_service = MCPApprovalService(approval_repo, pending_ttl=timedelta(minutes=1))
+    gateway = MCPGatewayService(
+        registry,
+        _FakeTransport(),
+        MCPToolPolicyEnforcer(LimitCounter(redis_client=None)),
+        approval_service=approval_service,  # type: ignore[arg-type]
+    )  # type: ignore[arg-type]
+    auth = type("Auth", (), {"api_key": "sk-test", "team_id": "team-ops", "organization_id": "org-acme", "metadata": None})()
+
+    with pytest.raises(MCPApprovalRequiredError):
+        await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "hello"})
+
+    fingerprint = next(iter(approval_repo.records_by_fingerprint))
+    approval_repo.records_by_fingerprint[fingerprint][-1].status = "expired"
+    approval_repo.records_by_fingerprint[fingerprint][-1].expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+
+    with pytest.raises(MCPApprovalRequiredError) as exc:
+        await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "hello"})
+
+    assert exc.value.approval_request_id == "approval-2"
+    assert approval_repo.create_calls == 2
 
 
 @pytest.mark.asyncio

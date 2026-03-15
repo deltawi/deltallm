@@ -12,6 +12,7 @@ This section covers everything you need to get DeltaLLM up and running.
 | [Docker Compose](docker.md) | Fastest local setup, evaluation, demos | ~5 min |
 | [Installation](installation.md) | Local development, contributing, debugging | ~10 min |
 | [Quick Start](quickstart.md) | Using the gateway with curl, Python, and JavaScript | ~5 min |
+| [MCP Quick Start](mcp-quickstart.md) | Register an MCP server and test tool execution end to end | ~5 min |
 
 ## Prerequisites
 

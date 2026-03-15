@@ -51,6 +51,7 @@ nav:
       - getting-started/index.md
       - Installation: getting-started/installation.md
       - Quick Start: getting-started/quickstart.md
+      - MCP Quick Start: getting-started/mcp-quickstart.md
       - Docker: getting-started/docker.md
   - Configuration:
       - configuration/index.md
@@ -60,6 +61,7 @@ nav:
   - Features:
       - features/index.md
       - Authentication & SSO: features/authentication.md
+      - MCP Gateway & Tools: features/mcp.md
       - Routing & Failover: features/routing.md
       - Caching: features/caching.md
       - Guardrails: features/guardrails.md
@@ -74,6 +76,7 @@ nav:
           - Models: admin-ui/models.md
           - Route Groups: admin-ui/route-groups.md
           - Prompt Registry: admin-ui/prompt-registry.md
+          - MCP Servers: admin-ui/mcp.md
       - Access:
           - API Keys: admin-ui/api-keys.md
           - Organizations: admin-ui/organizations.md
@@ -88,6 +91,7 @@ nav:
   - API Reference:
       - api/index.md
       - Proxy Endpoints: api/proxy.md
+      - MCP Gateway & Tooling: api/mcp.md
       - Admin Endpoints: api/admin.md
       - Health & Metrics: api/health.md
   - Deployment:
