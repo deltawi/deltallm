@@ -35,6 +35,12 @@ class MCPApprovalRequiredError(MCPError):
         super().__init__(message)
 
 
+class MCPApprovalDeniedError(MCPError):
+    def __init__(self, message: str, *, approval_request_id: str | None = None) -> None:
+        self.approval_request_id = approval_request_id
+        super().__init__(message)
+
+
 class MCPRateLimitError(MCPError):
     def __init__(self, message: str, *, retry_after: int | None = None) -> None:
         self.retry_after = retry_after

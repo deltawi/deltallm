@@ -37,11 +37,39 @@ class OpenAIAdapter(ProviderAdapter):
         data = provider_response if isinstance(provider_response, dict) else json.loads(provider_response)
         if "model" not in data:
             data["model"] = model_name
+        choices = data.get("choices")
+        if isinstance(choices, list):
+            for choice in choices:
+                if not isinstance(choice, dict):
+                    continue
+                message = choice.get("message")
+                if not isinstance(message, dict):
+                    continue
+                if "content" not in message or message.get("content") is None:
+                    message["content"] = ""
         return ChatCompletionResponse.model_validate(data)
 
     async def translate_stream(self, provider_stream: AsyncIterator[str]) -> AsyncIterator[str]:
         async for chunk in provider_stream:
             yield chunk
+
+    @staticmethod
+    def _http_error_message(provider_error: httpx.HTTPStatusError) -> str:
+        response = provider_error.response
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        if isinstance(payload, dict):
+            error = payload.get("error")
+            if isinstance(error, dict):
+                message = str(error.get("message") or "").strip()
+                if message:
+                    return message
+        body = response.text.strip()
+        if body:
+            return body
+        return f"Provider rejected request: {response.status_code}"
 
     def map_error(self, provider_error: Exception) -> Exception:
         if isinstance(provider_error, httpx.TimeoutException):
@@ -50,7 +78,7 @@ class OpenAIAdapter(ProviderAdapter):
             status = provider_error.response.status_code
             if status >= 500:
                 return ServiceUnavailableError(message=f"Provider error: {status}")
-            return InvalidRequestError(message=f"Provider rejected request: {status}")
+            return InvalidRequestError(message=self._http_error_message(provider_error))
         return ServiceUnavailableError(message="Provider unavailable")
 
     async def health_check(self, provider_config: dict[str, Any]) -> bool:

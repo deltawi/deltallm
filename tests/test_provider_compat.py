@@ -103,6 +103,62 @@ async def test_openai_adapter_keeps_max_tokens_for_non_gpt5_models() -> None:
 
 
 @pytest.mark.asyncio
+async def test_openai_adapter_allows_tool_call_messages_without_content() -> None:
+    adapter = OpenAIAdapter(httpx.AsyncClient())
+    try:
+        canonical = await adapter.translate_response(
+            {
+                "id": "chatcmpl-tool-1",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "openai/gpt-oss-120b",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "call_docs_search",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "docs.search",
+                                        "arguments": "{\"query\":\"DeltaLLM\"}",
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+            },
+            model_name="openai/gpt-oss-120b",
+        )
+        payload = canonical.model_dump(mode="json")
+        assert payload["choices"][0]["message"]["content"] == ""
+        assert payload["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "docs.search"
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_openai_adapter_surfaces_provider_error_message() -> None:
+    adapter = OpenAIAdapter(httpx.AsyncClient())
+    try:
+        response = httpx.Response(
+            400,
+            json={"error": {"message": "tool_choice is not supported for this model"}},
+            request=httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions"),
+        )
+        exc = httpx.HTTPStatusError("bad request", request=response.request, response=response)
+        mapped = adapter.map_error(exc)
+        assert str(mapped) == "tool_choice is not supported for this model"
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_azure_openai_adapter_maps_max_tokens_to_max_completion_tokens_for_gpt5() -> None:
     adapter = AzureOpenAIAdapter(httpx.AsyncClient())
     try:

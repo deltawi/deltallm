@@ -2,6 +2,7 @@ from .approvals import MCPApprovalService
 from .auth import build_forwarded_headers, build_server_headers
 from .capabilities import NamespacedTool, namespace_tool_name, parse_namespaced_tool_name
 from .exceptions import (
+    MCPApprovalDeniedError,
     MCPApprovalRequiredError,
     MCPAccessDeniedError,
     MCPAuthError,
@@ -24,6 +25,7 @@ from .transport_http import StreamableHTTPMCPClient
 __all__ = [
     "MCPAuthError",
     "MCPAccessDeniedError",
+    "MCPApprovalDeniedError",
     "MCPApprovalRequiredError",
     "MCPApprovalService",
     "MCPBindingResolution",

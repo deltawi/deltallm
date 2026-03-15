@@ -7,6 +7,7 @@ Use this section when DeltaLLM is already running and you want to turn on a capa
 | Goal | Read this |
 |------|-----------|
 | Protect access to the gateway | [Authentication & SSO](authentication.md) |
+| Connect external MCP tools and expose them safely | [MCP Gateway & Tools](mcp.md) |
 | Spread traffic across multiple deployments | [Routing & Failover](routing.md) |
 | Lower latency and cost for repeated requests | [Caching](caching.md) |
 | Block or sanitize unsafe content | [Guardrails](guardrails.md) |
@@ -30,5 +31,6 @@ If you are still trying to get DeltaLLM running for the first time, go back to [
 Some DeltaLLM capabilities are documented outside the Features section because they are primarily control-plane workflows:
 
 - [Model Deployments](../configuration/models.md) explains how runtime models are defined
+- [MCP Servers](../admin-ui/mcp.md) covers the operator workflow for server registration, bindings, policies, and approvals
 - [Admin UI](../admin-ui/index.md) covers operator workflows such as Models, Route Groups, Prompt Registry, Batch Jobs, and Settings
 - [API Reference](../api/index.md) documents the public proxy API and admin API endpoints

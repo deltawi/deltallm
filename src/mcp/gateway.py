@@ -11,7 +11,15 @@ from src.models.responses import UserAPIKeyAuth
 
 from .approvals import MCPApprovalService
 from .capabilities import NamespacedTool, parse_namespaced_tool_name
-from .exceptions import MCPAccessDeniedError, MCPApprovalRequiredError, MCPPolicyDeniedError, MCPRateLimitError, MCPToolNotFoundError, MCPToolTimeoutError
+from .exceptions import (
+    MCPAccessDeniedError,
+    MCPApprovalDeniedError,
+    MCPApprovalRequiredError,
+    MCPPolicyDeniedError,
+    MCPRateLimitError,
+    MCPToolNotFoundError,
+    MCPToolTimeoutError,
+)
 from .metrics import record_mcp_tool_call, record_mcp_tools_list
 from .models import MCPBindingResolution, MCPToolCallResult
 from .policy import MCPToolPolicyEnforcer, resolve_policy_timeout_ms
@@ -118,9 +126,23 @@ class MCPGatewayService:
                 )
                 raise MCPPolicyDeniedError(f"MCP tool '{namespaced_tool_name}' is disabled by policy")
             if policy.require_approval and policy.require_approval != "never":
-                approval_request = None
-                if policy.require_approval == "manual" and self.approval_service is not None:
-                    approval_request = await self.approval_service.require_approval(
+                if policy.require_approval != "manual":
+                    record_mcp_tool_call(
+                        server_key=server_key,
+                        tool_name=tool_name,
+                        success=False,
+                        latency_ms=int((perf_counter() - started) * 1000),
+                    )
+                    raise MCPPolicyDeniedError(f"MCP tool '{namespaced_tool_name}' uses an unsupported approval mode")
+                if self.approval_service is None:
+                    record_mcp_tool_call(
+                        server_key=server_key,
+                        tool_name=tool_name,
+                        success=False,
+                        latency_ms=int((perf_counter() - started) * 1000),
+                    )
+                    raise MCPPolicyDeniedError(f"MCP tool '{namespaced_tool_name}' requires approval, but the approval service is unavailable")
+                approval = await self.approval_service.authorize_execution(
                         server=server_record_to_config(visible.server),
                         tool_name=tool_name,
                         policy=policy,
@@ -130,16 +152,38 @@ class MCPGatewayService:
                         request_id=request_id,
                         correlation_id=correlation_id,
                     )
-                record_mcp_tool_call(
-                    server_key=server_key,
-                    tool_name=tool_name,
-                    success=False,
-                    latency_ms=int((perf_counter() - started) * 1000),
-                )
-                raise MCPApprovalRequiredError(
-                    f"MCP tool '{namespaced_tool_name}' requires approval",
-                    approval_request_id=getattr(approval_request, "mcp_approval_request_id", None),
-                )
+                if approval is None:
+                    record_mcp_tool_call(
+                        server_key=server_key,
+                        tool_name=tool_name,
+                        success=False,
+                        latency_ms=int((perf_counter() - started) * 1000),
+                    )
+                    raise MCPPolicyDeniedError(f"MCP tool '{namespaced_tool_name}' requires approval, but no approval record could be created")
+                if approval.status == "approved":
+                    pass
+                elif approval.status == "rejected":
+                    record_mcp_tool_call(
+                        server_key=server_key,
+                        tool_name=tool_name,
+                        success=False,
+                        latency_ms=int((perf_counter() - started) * 1000),
+                    )
+                    raise MCPApprovalDeniedError(
+                        f"MCP tool '{namespaced_tool_name}' approval was rejected",
+                        approval_request_id=approval.approval_request.mcp_approval_request_id,
+                    )
+                else:
+                    record_mcp_tool_call(
+                        server_key=server_key,
+                        tool_name=tool_name,
+                        success=False,
+                        latency_ms=int((perf_counter() - started) * 1000),
+                    )
+                    raise MCPApprovalRequiredError(
+                        f"MCP tool '{namespaced_tool_name}' requires approval",
+                        approval_request_id=approval.approval_request.mcp_approval_request_id,
+                    )
 
         lease = None
         cache_ttl = policy.result_cache_ttl_seconds if policy is not None and policy.result_cache_ttl_seconds else 0
@@ -332,6 +376,19 @@ class MCPGatewayService:
             scope_type=visible.binding.scope_type,
             scope_id=visible.binding.scope_id,
         )
+
+    async def tool_requires_manual_approval(
+        self,
+        auth: UserAPIKeyAuth,
+        *,
+        server_key: str,
+        tool_name: str,
+    ) -> bool:
+        visible = await self._visible_server_by_key(auth, server_key)
+        if visible is None or tool_name not in set(visible.tool_names):
+            return False
+        policy = await self._effective_tool_policy(auth, visible.server.mcp_server_id, tool_name)
+        return bool(policy is not None and policy.require_approval == "manual" and policy.enabled)
 
     async def _filtered_tools_for_binding(
         self,

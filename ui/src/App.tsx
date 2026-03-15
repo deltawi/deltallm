@@ -27,6 +27,7 @@ import PromptRegistry from './pages/PromptRegistry';
 import PromptTemplateDetail from './pages/PromptTemplateDetail';
 import MCPServers from './pages/MCPServers';
 import MCPServerDetail from './pages/MCPServerDetail';
+import MCPApprovalQueue from './pages/MCPApprovalQueue';
 import { ToastProvider } from './components/ToastProvider';
 
 function AppRoutes() {
@@ -35,6 +36,7 @@ function AppRoutes() {
   const isPlatformAdmin = userRole === 'platform_admin';
   const permissions = new Set(session?.effective_permissions || []);
   const canReadMcp = isPlatformAdmin || permissions.has('key.read');
+  const canReviewMcp = isPlatformAdmin || permissions.has('key.update');
   const canReadAudit = isPlatformAdmin || (session?.effective_permissions || []).includes('audit.read');
 
   if (isLoading) {
@@ -71,6 +73,7 @@ function AppRoutes() {
         <Route path="/prompts/:templateKey" element={isPlatformAdmin ? <PromptTemplateDetail /> : <Navigate to="/" replace />} />
         <Route path="/mcp-servers" element={canReadMcp ? <MCPServers /> : <Navigate to="/" replace />} />
         <Route path="/mcp-servers/:serverId" element={canReadMcp ? <MCPServerDetail /> : <Navigate to="/" replace />} />
+        <Route path="/mcp-approvals" element={canReviewMcp ? <MCPApprovalQueue /> : <Navigate to="/" replace />} />
         <Route path="/keys" element={<ApiKeys />} />
         <Route path="/organizations" element={<Organizations />} />
         <Route path="/organizations/:orgId" element={<OrganizationDetail />} />

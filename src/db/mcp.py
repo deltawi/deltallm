@@ -113,6 +113,7 @@ class MCPApprovalRequestRecord:
     decision_comment: str | None = None
     decided_by_account_id: str | None = None
     decided_at: datetime | None = None
+    expires_at: datetime | None = None
     metadata: dict[str, Any] | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -840,13 +841,70 @@ class MCPRepository:
                 r.decision_comment,
                 r.decided_by_account_id,
                 r.decided_at,
+                r.expires_at,
                 r.metadata,
                 r.created_at,
                 r.updated_at
             FROM deltallm_mcpapprovalrequest r
             WHERE r.request_fingerprint = $1
               AND r.status = 'pending'
+              AND (r.expires_at IS NULL OR r.expires_at > NOW())
             ORDER BY r.created_at DESC
+            LIMIT 1
+            """,
+            request_fingerprint,
+        )
+        return self._to_approval_request_record(rows[0]) if rows else None
+
+    async def expire_stale_approval_requests(self, *, request_fingerprint: str) -> int:
+        if self.prisma is None:
+            return 0
+        rows = await self.prisma.query_raw(
+            """
+            UPDATE deltallm_mcpapprovalrequest
+            SET status = 'expired',
+                updated_at = NOW()
+            WHERE request_fingerprint = $1
+              AND status IN ('pending', 'approved', 'rejected')
+              AND expires_at IS NOT NULL
+              AND expires_at <= NOW()
+            RETURNING mcp_approval_request_id
+            """,
+            request_fingerprint,
+        )
+        return len(rows)
+
+    async def find_active_approval_request(self, *, request_fingerprint: str) -> MCPApprovalRequestRecord | None:
+        if self.prisma is None:
+            return None
+        rows = await self.prisma.query_raw(
+            """
+            SELECT
+                r.mcp_approval_request_id,
+                r.mcp_server_id,
+                r.tool_name,
+                r.scope_type,
+                r.scope_id,
+                r.status,
+                r.request_fingerprint,
+                r.requested_by_api_key,
+                r.requested_by_user,
+                r.organization_id,
+                r.request_id,
+                r.correlation_id,
+                r.arguments_json,
+                r.decision_comment,
+                r.decided_by_account_id,
+                r.decided_at,
+                r.expires_at,
+                r.metadata,
+                r.created_at,
+                r.updated_at
+            FROM deltallm_mcpapprovalrequest r
+            WHERE r.request_fingerprint = $1
+              AND r.status IN ('pending', 'approved', 'rejected')
+              AND (r.expires_at IS NULL OR r.expires_at > NOW())
+            ORDER BY COALESCE(r.decided_at, r.created_at) DESC, r.updated_at DESC
             LIMIT 1
             """,
             request_fingerprint,
@@ -875,6 +933,7 @@ class MCPRepository:
                 r.decision_comment,
                 r.decided_by_account_id,
                 r.decided_at,
+                r.expires_at,
                 r.metadata,
                 r.created_at,
                 r.updated_at
@@ -900,6 +959,7 @@ class MCPRepository:
         request_id: str | None,
         correlation_id: str | None,
         arguments_json: dict[str, Any],
+        expires_at: datetime | None,
         metadata: dict[str, Any] | None,
     ) -> MCPApprovalRequestRecord | None:
         if self.prisma is None:
@@ -909,18 +969,20 @@ class MCPRepository:
             INSERT INTO deltallm_mcpapprovalrequest (
                 mcp_approval_request_id, mcp_server_id, tool_name, scope_type, scope_id, status,
                 request_fingerprint, requested_by_api_key, requested_by_user, organization_id,
-                request_id, correlation_id, arguments_json, metadata, created_at, updated_at
+                request_id, correlation_id, arguments_json, expires_at, metadata, created_at, updated_at
             )
             VALUES (
                 gen_random_uuid()::text, $1, $2, $3, $4, 'pending',
                 $5, $6, $7, $8,
-                $9, $10, $11::jsonb, $12::jsonb, NOW(), NOW()
+                $9, $10, $11::jsonb, $12, $13::jsonb, NOW(), NOW()
             )
+            ON CONFLICT (request_fingerprint) WHERE status = 'pending'
+            DO UPDATE SET updated_at = deltallm_mcpapprovalrequest.updated_at
             RETURNING
                 mcp_approval_request_id, mcp_server_id, tool_name, scope_type, scope_id, status,
                 request_fingerprint, requested_by_api_key, requested_by_user, organization_id,
                 request_id, correlation_id, arguments_json, decision_comment, decided_by_account_id,
-                decided_at, metadata, created_at, updated_at
+                decided_at, expires_at, metadata, created_at, updated_at
             """,
             server_id,
             tool_name,
@@ -933,6 +995,7 @@ class MCPRepository:
             request_id,
             correlation_id,
             arguments_json,
+            expires_at,
             metadata or {},
         )
         return self._to_approval_request_record(rows[0]) if rows else None
@@ -984,6 +1047,7 @@ class MCPRepository:
                 r.decision_comment,
                 r.decided_by_account_id,
                 r.decided_at,
+                r.expires_at,
                 r.metadata,
                 r.created_at,
                 r.updated_at
@@ -1003,6 +1067,7 @@ class MCPRepository:
         status: str,
         decided_by_account_id: str | None,
         decision_comment: str | None,
+        expires_at: datetime | None,
     ) -> MCPApprovalRequestRecord | None:
         if self.prisma is None:
             return None
@@ -1012,6 +1077,7 @@ class MCPRepository:
             SET status = $2,
                 decided_by_account_id = $3,
                 decision_comment = $4,
+                expires_at = $5,
                 decided_at = NOW(),
                 updated_at = NOW()
             WHERE mcp_approval_request_id = $1
@@ -1020,12 +1086,13 @@ class MCPRepository:
                 mcp_approval_request_id, mcp_server_id, tool_name, scope_type, scope_id, status,
                 request_fingerprint, requested_by_api_key, requested_by_user, organization_id,
                 request_id, correlation_id, arguments_json, decision_comment, decided_by_account_id,
-                decided_at, metadata, created_at, updated_at
+                decided_at, expires_at, metadata, created_at, updated_at
             """,
             approval_request_id,
             status,
             decided_by_account_id,
             decision_comment,
+            expires_at,
         )
         return self._to_approval_request_record(rows[0]) if rows else None
 
@@ -1109,6 +1176,7 @@ class MCPRepository:
             decision_comment=str(row.get("decision_comment")) if row.get("decision_comment") is not None else None,
             decided_by_account_id=str(row.get("decided_by_account_id")) if row.get("decided_by_account_id") is not None else None,
             decided_at=_parse_datetime(row.get("decided_at")),
+            expires_at=_parse_datetime(row.get("expires_at")),
             metadata=_parse_json_object(row.get("metadata")) or None,
             created_at=_parse_datetime(row.get("created_at")),
             updated_at=_parse_datetime(row.get("updated_at")),

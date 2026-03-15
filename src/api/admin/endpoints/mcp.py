@@ -12,6 +12,7 @@ from src.audit.actions import AuditAction
 from src.auth.roles import Permission
 from src.db.mcp import MCPApprovalRequestRecord, MCPRepository, MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
 from src.mcp.capabilities import extract_tool_schemas
+from src.mcp.approvals import MCPApprovalService
 from src.mcp.exceptions import MCPError
 from src.mcp.health import MCPHealthProbe
 from src.mcp.metrics import record_mcp_approval_decision, record_mcp_capability_refresh
@@ -112,6 +113,29 @@ def _normalize_metadata(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="metadata must be an object")
     return dict(value)
+
+
+def _credentials_present(auth_mode: str, auth_config: dict[str, Any] | None) -> bool:
+    config = auth_config or {}
+    if auth_mode == "none":
+        return False
+    if auth_mode == "bearer":
+        return bool(str(config.get("token") or "").strip())
+    if auth_mode == "basic":
+        return bool(str(config.get("username") or "") and str(config.get("password") or ""))
+    headers = config.get("headers")
+    return isinstance(headers, dict) and any(str(key).strip() and value is not None for key, value in headers.items())
+
+
+def _sanitize_auth_payload(payload: dict[str, Any] | None, *, auth_mode: str | None = None) -> dict[str, Any] | None:
+    if payload is None:
+        return None
+    sanitized = dict(payload)
+    effective_mode = _normalize_auth_mode(auth_mode if auth_mode is not None else sanitized.get("auth_mode"))
+    auth_config = sanitized.pop("auth_config", None)
+    sanitized["auth_mode"] = effective_mode
+    sanitized["auth_config_redacted"] = auth_config is not None
+    return sanitized
 
 
 def _normalize_allowlist(value: Any) -> list[str]:
@@ -451,7 +475,7 @@ def _server_visibility_exists_clause(server_alias: str, scope: AuthScope, params
     clauses.append(
         f"""EXISTS (
                 SELECT 1
-                FROM deltallm_mcpserverbinding b
+                FROM deltallm_mcpbinding b
                 WHERE b.mcp_server_id = {server_alias}.mcp_server_id
                   AND ({_scoped_entity_visibility_clause('b', scope, params)})
             )"""
@@ -560,7 +584,9 @@ def _serialize_server(
     capabilities: MCPServerCapabilities | None = None,
 ) -> dict[str, Any]:
     payload = to_json_value(asdict(server))
+    payload.pop("auth_config", None)
     payload["tool_count"] = len(extract_tool_schemas(server.capabilities_json or {}))
+    payload["auth_credentials_present"] = _credentials_present(server.auth_mode, server.auth_config)
     if capabilities is not None:
         payload["capabilities"] = to_json_value(asdict(capabilities))
     return payload
@@ -570,12 +596,122 @@ def _serialize_binding(binding: MCPServerBindingRecord) -> dict[str, Any]:
     return to_json_value(asdict(binding))
 
 
+def _policy_max_total_execution_time_ms(policy: MCPToolPolicyRecord) -> int | None:
+    value = (policy.metadata or {}).get("max_total_mcp_execution_time_ms")
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _serialize_policy(policy: MCPToolPolicyRecord) -> dict[str, Any]:
-    return to_json_value(asdict(policy))
+    payload = to_json_value(asdict(policy))
+    payload["max_total_execution_time_ms"] = _policy_max_total_execution_time_ms(policy)
+    return payload
 
 
-def _serialize_approval_request(record: MCPApprovalRequestRecord) -> dict[str, Any]:
-    return to_json_value(asdict(record))
+def _normalize_tool_policy_metadata(payload: dict[str, Any]) -> dict[str, Any] | None:
+    metadata = _normalize_metadata(payload.get("metadata")) or {}
+    timeout_value = payload.get("max_total_execution_time_ms")
+    if timeout_value is None:
+        timeout_value = payload.get("max_total_mcp_execution_time_ms")
+    if timeout_value is not None:
+        metadata["max_total_mcp_execution_time_ms"] = optional_int(timeout_value, "max_total_execution_time_ms")
+    elif "max_total_mcp_execution_time_ms" in metadata:
+        metadata["max_total_mcp_execution_time_ms"] = optional_int(
+            metadata.get("max_total_mcp_execution_time_ms"),
+            "metadata.max_total_mcp_execution_time_ms",
+        )
+    return metadata or None
+
+
+def _serialize_server_summary(server: MCPServerRecord | None, *, server_id: str | None = None) -> dict[str, Any]:
+    if server is None:
+        return {
+            "mcp_server_id": server_id,
+            "server_key": None,
+            "name": None,
+            "owner_scope_type": None,
+            "owner_scope_id": None,
+        }
+    return {
+        "mcp_server_id": server.mcp_server_id,
+        "server_key": server.server_key,
+        "name": server.name,
+        "owner_scope_type": server.owner_scope_type,
+        "owner_scope_id": server.owner_scope_id,
+    }
+
+
+def _serialize_approval_request(
+    record: MCPApprovalRequestRecord,
+    *,
+    server: MCPServerRecord | None = None,
+    can_decide: bool = False,
+) -> dict[str, Any]:
+    payload = to_json_value(asdict(record))
+    payload["server"] = _serialize_server_summary(server, server_id=record.mcp_server_id)
+    payload["capabilities"] = {"can_decide": bool(can_decide and record.status == "pending")}
+    return payload
+
+
+async def _load_server_summary_map(request: Request, server_ids: list[str]) -> dict[str, MCPServerRecord]:
+    if not server_ids:
+        return {}
+    repository = _repository_or_503(request)
+    prisma = getattr(repository, "prisma", None)
+    unique_ids = list(dict.fromkeys(server_ids))
+    if prisma is None:
+        out: dict[str, MCPServerRecord] = {}
+        for server_id in unique_ids:
+            server = await repository.get_server(server_id)
+            if server is not None:
+                out[server_id] = server
+        return out
+
+    placeholders: list[str] = []
+    params: list[Any] = []
+    for server_id in unique_ids:
+        params.append(server_id)
+        placeholders.append(f"${len(params)}")
+    rows = await prisma.query_raw(
+        f"""
+        SELECT
+            s.mcp_server_id,
+            s.server_key,
+            s.name,
+            s.description,
+            s.owner_scope_type,
+            s.owner_scope_id,
+            s.transport,
+            s.base_url,
+            s.enabled,
+            s.auth_mode,
+            s.auth_config,
+            s.forwarded_headers_allowlist,
+            s.request_timeout_ms,
+            s.capabilities_json,
+            s.capabilities_etag,
+            s.capabilities_fetched_at,
+            s.last_health_status,
+            s.last_health_error,
+            s.last_health_at,
+            s.last_health_latency_ms,
+            s.metadata,
+            s.created_by_account_id,
+            s.created_at,
+            s.updated_at
+        FROM deltallm_mcpserver s
+        WHERE s.mcp_server_id IN ({", ".join(placeholders)})
+        """,
+        *params,
+    )
+    return {
+        record.mcp_server_id: record
+        for record in (MCPRepository._to_server_record(row) for row in rows)
+    }
 
 
 def _filter_server_tools_for_scope(
@@ -680,7 +816,7 @@ async def _list_scoped_bindings(
     clauses.append(f"({_scoped_entity_visibility_clause('b', scope, params)})")
     where_sql = f" WHERE {' AND '.join(clauses)}"
     count_rows = await db.query_raw(
-        f"SELECT COUNT(*)::int AS total FROM deltallm_mcpserverbinding b {where_sql}",
+        f"SELECT COUNT(*)::int AS total FROM deltallm_mcpbinding b {where_sql}",
         *params,
     )
     total = int((count_rows[0] if count_rows else {}).get("total") or 0)
@@ -697,7 +833,7 @@ async def _list_scoped_bindings(
             b.metadata,
             b.created_at,
             b.updated_at
-        FROM deltallm_mcpserverbinding b
+        FROM deltallm_mcpbinding b
         {where_sql}
         ORDER BY b.created_at DESC, b.scope_type ASC, b.scope_id ASC
         LIMIT ${len(page_params) - 1} OFFSET ${len(page_params)}
@@ -969,7 +1105,7 @@ async def create_mcp_server(
         scope=scope,
         resource_type="mcp_server",
         resource_id=created.mcp_server_id,
-        request_payload=payload,
+        request_payload=_sanitize_auth_payload(payload, auth_mode=auth_mode),
         response_payload=response,
     )
     return response
@@ -1186,7 +1322,7 @@ async def update_mcp_server(
         scope=scope,
         resource_type="mcp_server",
         resource_id=updated.mcp_server_id,
-        request_payload=payload,
+        request_payload=_sanitize_auth_payload(payload, auth_mode=auth_mode),
         response_payload=response,
         before=_serialize_server(existing),
         after=response,
@@ -1349,7 +1485,7 @@ async def list_mcp_bindings(
     where_sql = f" WHERE {' AND '.join(clauses)}"
 
     count_rows = await db.query_raw(
-        f"SELECT COUNT(*)::int AS total FROM deltallm_mcpserverbinding b {where_sql}",
+        f"SELECT COUNT(*)::int AS total FROM deltallm_mcpbinding b {where_sql}",
         *params,
     )
     total = int((count_rows[0] if count_rows else {}).get("total") or 0)
@@ -1367,7 +1503,7 @@ async def list_mcp_bindings(
             b.metadata,
             b.created_at,
             b.updated_at
-        FROM deltallm_mcpserverbinding b
+        FROM deltallm_mcpbinding b
         {where_sql}
         ORDER BY b.created_at DESC, b.scope_type ASC, b.scope_id ASC
         LIMIT ${len(page_params) - 1} OFFSET ${len(page_params)}
@@ -1558,8 +1694,8 @@ async def list_mcp_approval_requests(
 ) -> dict[str, Any]:
     repository = _repository_or_503(request)
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
-    if status_value is not None and status_value not in {"pending", "approved", "rejected"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="status must be pending, approved, or rejected")
+    if status_value is not None and status_value not in {"pending", "approved", "rejected", "expired"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="status must be pending, approved, rejected, or expired")
     if scope.is_platform_admin:
         approvals, total = await repository.list_approval_requests(
             server_id=server_id,
@@ -1567,8 +1703,16 @@ async def list_mcp_approval_requests(
             limit=limit,
             offset=offset,
         )
+        servers = await _load_server_summary_map(request, [item.mcp_server_id for item in approvals])
         return {
-            "data": [_serialize_approval_request(item) for item in approvals],
+            "data": [
+                _serialize_approval_request(
+                    item,
+                    server=servers.get(item.mcp_server_id),
+                    can_decide=item.status == "pending",
+                )
+                for item in approvals
+            ],
             "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
         }
 
@@ -1613,6 +1757,7 @@ async def list_mcp_approval_requests(
             r.decision_comment,
             r.decided_by_account_id,
             r.decided_at,
+            r.expires_at,
             r.metadata,
             r.created_at,
             r.updated_at
@@ -1624,8 +1769,16 @@ async def list_mcp_approval_requests(
         *page_params,
     )
     approvals = [MCPRepository._to_approval_request_record(row) for row in rows]
+    servers = await _load_server_summary_map(request, [item.mcp_server_id for item in approvals])
     return {
-        "data": [_serialize_approval_request(item) for item in approvals],
+        "data": [
+            _serialize_approval_request(
+                item,
+                server=servers.get(item.mcp_server_id),
+                can_decide=item.status == "pending",
+            )
+            for item in approvals
+        ],
         "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
     }
 
@@ -1657,7 +1810,7 @@ async def upsert_mcp_tool_policy(
         max_rpm=optional_int(payload.get("max_rpm"), "max_rpm"),
         max_concurrency=optional_int(payload.get("max_concurrency"), "max_concurrency"),
         result_cache_ttl_seconds=optional_int(payload.get("result_cache_ttl_seconds"), "result_cache_ttl_seconds"),
-        metadata=_normalize_metadata(payload.get("metadata")),
+        metadata=_normalize_tool_policy_metadata(payload),
     )
     if policy is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found")
@@ -1686,6 +1839,7 @@ async def decide_mcp_approval_request(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
+    approval_service = MCPApprovalService(repository)
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
     decision = str(payload.get("status") or "").strip().lower()
     if decision not in {"approved", "rejected"}:
@@ -1699,11 +1853,13 @@ async def decide_mcp_approval_request(
         status=decision,
         decided_by_account_id=getattr(context, "account_id", None),
         decision_comment=str(payload.get("decision_comment")).strip() if payload.get("decision_comment") is not None else None,
+        expires_at=approval_service.decision_expiry_for_status(decision),
     )
     if decided is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pending MCP approval request not found")
     record_mcp_approval_decision(status=decision)
-    response = _serialize_approval_request(decided)
+    server = await _load_server_or_404(request, decided.mcp_server_id)
+    response = _serialize_approval_request(decided, server=server, can_decide=False)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,

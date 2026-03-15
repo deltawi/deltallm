@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from src.db.mcp import MCPApprovalRequestRecord, MCPRepository, MCPToolPolicyRecord
@@ -12,11 +14,27 @@ from .metrics import record_mcp_approval_request
 from .models import MCPServerConfig
 
 
-class MCPApprovalService:
-    def __init__(self, repository: MCPRepository | None) -> None:
-        self.repository = repository
+@dataclass(frozen=True)
+class MCPApprovalAuthorization:
+    status: str
+    approval_request: MCPApprovalRequestRecord
 
-    async def require_approval(
+
+class MCPApprovalService:
+    def __init__(
+        self,
+        repository: MCPRepository | None,
+        *,
+        pending_ttl: timedelta = timedelta(hours=24),
+        approved_ttl: timedelta = timedelta(minutes=15),
+        rejected_ttl: timedelta = timedelta(minutes=15),
+    ) -> None:
+        self.repository = repository
+        self.pending_ttl = pending_ttl
+        self.approved_ttl = approved_ttl
+        self.rejected_ttl = rejected_ttl
+
+    async def authorize_execution(
         self,
         *,
         server: MCPServerConfig,
@@ -27,7 +45,7 @@ class MCPApprovalService:
         request_headers: dict[str, str] | None,
         request_id: str | None,
         correlation_id: str | None,
-    ) -> MCPApprovalRequestRecord | None:
+    ) -> MCPApprovalAuthorization | None:
         if self.repository is None:
             return None
         fingerprint = self._fingerprint(
@@ -38,10 +56,12 @@ class MCPApprovalService:
             arguments=arguments,
             request_headers=request_headers,
         )
-        pending = await self.repository.find_pending_approval_request(request_fingerprint=fingerprint)
-        if pending is not None:
-            record_mcp_approval_request(server_key=server.server_key, tool_name=tool_name, created=False)
-            return pending
+        await self.repository.expire_stale_approval_requests(request_fingerprint=fingerprint)
+        active = await self.repository.find_active_approval_request(request_fingerprint=fingerprint)
+        if active is not None:
+            if active.status == "pending":
+                record_mcp_approval_request(server_key=server.server_key, tool_name=tool_name, created=False)
+            return MCPApprovalAuthorization(status=active.status, approval_request=active)
         created = await self.repository.create_approval_request(
             server_id=server.server_id,
             tool_name=tool_name,
@@ -54,6 +74,7 @@ class MCPApprovalService:
             request_id=request_id,
             correlation_id=correlation_id,
             arguments_json=arguments or {},
+            expires_at=datetime.now(tz=UTC) + self.pending_ttl,
             metadata={
                 "server_key": server.server_key,
                 "policy_scope_type": policy.scope_type,
@@ -62,7 +83,16 @@ class MCPApprovalService:
         )
         if created is not None:
             record_mcp_approval_request(server_key=server.server_key, tool_name=tool_name, created=True)
-        return created
+            return MCPApprovalAuthorization(status=created.status, approval_request=created)
+        return None
+
+    def decision_expiry_for_status(self, status: str) -> datetime | None:
+        now = datetime.now(tz=UTC)
+        if status == "approved":
+            return now + self.approved_ttl
+        if status == "rejected":
+            return now + self.rejected_ttl
+        return None
 
     @staticmethod
     def _fingerprint(
@@ -75,6 +105,7 @@ class MCPApprovalService:
         request_headers: dict[str, str] | None,
     ) -> str:
         payload = {
+            "server_id": server.server_id,
             "server_key": server.server_key,
             "tool_name": tool_name,
             "scope_type": policy.scope_type,

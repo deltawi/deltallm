@@ -91,6 +91,27 @@ Some endpoints require specific admin permissions, so a valid session does not a
 | `GET` | `/ui/api/settings` | Read gateway settings |
 | `PUT` | `/ui/api/settings` | Update gateway settings |
 
+### MCP Management
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/ui/api/mcp-servers` | List MCP servers |
+| `POST` | `/ui/api/mcp-servers` | Create an MCP server |
+| `GET` | `/ui/api/mcp-servers/{server_id}` | Get one server with visible tools, bindings, and policies |
+| `GET` | `/ui/api/mcp-servers/{server_id}/operations` | Server-level usage and approval summary |
+| `PATCH` | `/ui/api/mcp-servers/{server_id}` | Update an MCP server |
+| `DELETE` | `/ui/api/mcp-servers/{server_id}` | Delete an MCP server |
+| `POST` | `/ui/api/mcp-servers/{server_id}/refresh-capabilities` | Refresh upstream tool capabilities |
+| `POST` | `/ui/api/mcp-servers/{server_id}/health-check` | Run an upstream health check |
+| `GET` | `/ui/api/mcp-bindings` | List MCP bindings |
+| `POST` | `/ui/api/mcp-bindings` | Create or update an MCP binding |
+| `DELETE` | `/ui/api/mcp-bindings/{binding_id}` | Delete an MCP binding |
+| `GET` | `/ui/api/mcp-tool-policies` | List MCP tool policies |
+| `POST` | `/ui/api/mcp-tool-policies` | Create or update an MCP tool policy |
+| `DELETE` | `/ui/api/mcp-tool-policies/{policy_id}` | Delete an MCP tool policy |
+| `GET` | `/ui/api/mcp-approval-requests` | List approval requests |
+| `POST` | `/ui/api/mcp-approval-requests/{approval_request_id}/decision` | Approve or reject a pending request |
+
 ## Access and Identity
 
 ### API Keys
@@ -219,4 +240,5 @@ Audit read access is limited to the roles that hold `audit.read`.
 ## Related Pages
 
 - [Admin UI](../admin-ui/index.md)
+- [MCP Gateway & Tooling](mcp.md)
 - [Authentication & SSO](../features/authentication.md)

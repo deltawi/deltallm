@@ -22,6 +22,7 @@ import {
   X,
   ChevronDown,
   ChevronRight,
+  CheckCircle2,
   type LucideIcon,
 } from 'lucide-react';
 import clsx from 'clsx';
@@ -58,6 +59,7 @@ const navEntries: NavEntry[] = [
       { type: 'item', to: '/route-groups', icon: Workflow, label: 'Route Groups', adminOnly: true },
       { type: 'item', to: '/prompts', icon: FileText, label: 'Prompt Registry', adminOnly: true },
       { type: 'item', to: '/mcp-servers', icon: Activity, label: 'MCP Servers', requiredPermission: 'key.read' },
+      { type: 'item', to: '/mcp-approvals', icon: CheckCircle2, label: 'Tool Approvals', requiredPermission: 'key.update' },
     ],
   },
   {

@@ -269,7 +269,7 @@ class _FakeMCPRepository(MCPRepository):
     async def get_approval_request(self, approval_request_id: str):  # noqa: ANN201
         return self.approvals.get(approval_request_id)
 
-    async def decide_approval_request(self, approval_request_id: str, *, status, decided_by_account_id, decision_comment):  # noqa: ANN001, ANN201
+    async def decide_approval_request(self, approval_request_id: str, *, status, decided_by_account_id, decision_comment, expires_at):  # noqa: ANN001, ANN201
         existing = self.approvals.get(approval_request_id)
         if existing is None or existing.status != "pending":
             return None
@@ -279,6 +279,7 @@ class _FakeMCPRepository(MCPRepository):
             decided_by_account_id=decided_by_account_id,
             decision_comment=decision_comment,
             decided_at=_utcnow(),
+            expires_at=expires_at,
             updated_at=_utcnow(),
         )
         self.approvals[approval_request_id] = updated
@@ -519,9 +520,9 @@ class _FakeBindingPolicyListQueryClient:
     async def query_raw(self, query: str, *params):  # noqa: ANN201
         normalized = " ".join(str(query).split())
         self.calls.append((normalized, params))
-        if "COUNT(*)::int AS total FROM deltallm_mcpserverbinding b" in normalized:
+        if "COUNT(*)::int AS total FROM deltallm_mcpbinding b" in normalized:
             return [{"total": len(self.bindings)}]
-        if "FROM deltallm_mcpserverbinding b" in normalized and "ORDER BY b.created_at DESC" in normalized:
+        if "FROM deltallm_mcpbinding b" in normalized and "ORDER BY b.created_at DESC" in normalized:
             return list(self.bindings)
         if "COUNT(*)::int AS total FROM deltallm_mcptoolpolicy p" in normalized:
             return [{"total": len(self.policies)}]
@@ -605,9 +606,9 @@ class _FakeScopedServerQueryClient:
             return [{"total": len(self.servers)}]
         if "FROM deltallm_mcpserver s" in normalized and "ORDER BY s.created_at DESC" in normalized:
             return list(self.servers)
-        if "COUNT(*)::int AS total FROM deltallm_mcpserverbinding b" in normalized:
+        if "COUNT(*)::int AS total FROM deltallm_mcpbinding b" in normalized:
             return [{"total": len(self.bindings)}]
-        if "FROM deltallm_mcpserverbinding b" in normalized and "ORDER BY b.created_at DESC" in normalized:
+        if "FROM deltallm_mcpbinding b" in normalized and "ORDER BY b.created_at DESC" in normalized:
             return list(self.bindings)
         if "COUNT(*)::int AS total FROM deltallm_mcptoolpolicy p" in normalized:
             return [{"total": len(self.policies)}]
@@ -677,10 +678,14 @@ async def test_mcp_server_admin_crud_refresh_and_health(client, test_app):
     created = create.json()
     assert created["server_key"] == "docs"
     assert created["tool_count"] == 0
+    assert created["auth_credentials_present"] is True
+    assert "auth_config" not in created
 
     list_response = await client.get("/ui/api/mcp-servers", headers=headers)
     assert list_response.status_code == 200
     assert list_response.json()["data"][0]["name"] == "Docs MCP"
+    assert list_response.json()["data"][0]["auth_credentials_present"] is True
+    assert "auth_config" not in list_response.json()["data"][0]
 
     refresh = await client.post(f"/ui/api/mcp-servers/{created['mcp_server_id']}/refresh-capabilities", headers=headers)
     assert refresh.status_code == 200
@@ -690,6 +695,8 @@ async def test_mcp_server_admin_crud_refresh_and_health(client, test_app):
     detail = await client.get(f"/ui/api/mcp-servers/{created['mcp_server_id']}", headers=headers)
     assert detail.status_code == 200
     assert detail.json()["tools"][0]["original_name"] == "search"
+    assert detail.json()["server"]["auth_credentials_present"] is True
+    assert "auth_config" not in detail.json()["server"]
 
     health = await client.post(f"/ui/api/mcp-servers/{created['mcp_server_id']}/health-check", headers=headers)
     assert health.status_code == 200
@@ -703,6 +710,9 @@ async def test_mcp_server_admin_crud_refresh_and_health(client, test_app):
     )
     assert update.status_code == 200
     assert update.json()["name"] == "Updated Docs MCP"
+    assert update.json()["auth_credentials_present"] is True
+    assert "auth_config" not in update.json()
+    assert repository.servers[created["mcp_server_id"]].auth_config == {"token": "secret-token"}
 
     delete = await client.delete(f"/ui/api/mcp-servers/{created['mcp_server_id']}", headers=headers)
     assert delete.status_code == 200
@@ -775,14 +785,18 @@ async def test_mcp_binding_and_tool_policy_admin_lifecycle(client, test_app):
             "scope_id": "team-ops",
             "require_approval": "manual",
             "max_rpm": 30,
+            "max_total_execution_time_ms": 1500,
         },
     )
     assert policy.status_code == 200
     assert policy.json()["require_approval"] == "manual"
+    assert policy.json()["max_total_execution_time_ms"] == 1500
+    assert policy.json()["metadata"]["max_total_mcp_execution_time_ms"] == 1500
 
     policy_list = await client.get("/ui/api/mcp-tool-policies?server_id=" + server.mcp_server_id, headers=headers)
     assert policy_list.status_code == 200
     assert policy_list.json()["data"][0]["tool_name"] == "search"
+    assert policy_list.json()["data"][0]["max_total_execution_time_ms"] == 1500
 
     delete_policy = await client.delete(f"/ui/api/mcp-tool-policies/{policy.json()['mcp_tool_policy_id']}", headers=headers)
     assert delete_policy.status_code == 200
@@ -975,7 +989,12 @@ async def test_mcp_approval_request_list_and_decision(client, test_app):
         headers={"Authorization": "Bearer mk-test"},
     )
     assert list_response.status_code == 200
-    assert list_response.json()["data"][0]["tool_name"] == "search"
+    list_payload = list_response.json()["data"][0]
+    assert list_payload["tool_name"] == "search"
+    assert list_payload["server"]["mcp_server_id"] == server.mcp_server_id
+    assert list_payload["server"]["server_key"] == server.server_key
+    assert list_payload["server"]["name"] == server.name
+    assert list_payload["capabilities"]["can_decide"] is True
 
     decision = await client.post(
         f"/ui/api/mcp-approval-requests/{approval.mcp_approval_request_id}/decision",
@@ -983,7 +1002,10 @@ async def test_mcp_approval_request_list_and_decision(client, test_app):
         json={"status": "approved"},
     )
     assert decision.status_code == 200
-    assert decision.json()["status"] == "approved"
+    decision_payload = decision.json()
+    assert decision_payload["status"] == "approved"
+    assert decision_payload["server"]["mcp_server_id"] == server.mcp_server_id
+    assert decision_payload["capabilities"]["can_decide"] is False
     actions = [call[0].action for call in audit.sync_calls]
     assert AuditAction.ADMIN_MCP_APPROVAL_DECIDE in actions
     metrics_text = generate_latest(get_prometheus_registry()).decode("utf-8")
@@ -993,9 +1015,25 @@ async def test_mcp_approval_request_list_and_decision(client, test_app):
 @pytest.mark.asyncio
 async def test_scoped_org_admin_can_list_and_decide_visible_approval_requests(client, test_app, monkeypatch):
     repository = _FakeMCPRepository()
+    server = await repository.create_server(
+        server_key="docs",
+        name="Docs MCP",
+        description=None,
+        owner_scope_type="global",
+        owner_scope_id=None,
+        transport="streamable_http",
+        base_url="https://mcp.example.com",
+        enabled=True,
+        auth_mode="none",
+        auth_config={},
+        forwarded_headers_allowlist=[],
+        request_timeout_ms=30000,
+        metadata=None,
+        created_by_account_id=None,
+    )
     approval = MCPApprovalRequestRecord(
         mcp_approval_request_id="approval-org-1",
-        mcp_server_id="mcp-1",
+        mcp_server_id=server.mcp_server_id,
         tool_name="search",
         scope_type="team",
         scope_id="team-ops",
@@ -1016,7 +1054,11 @@ async def test_scoped_org_admin_can_list_and_decide_visible_approval_requests(cl
 
     list_response = await client.get("/ui/api/mcp-approval-requests")
     assert list_response.status_code == 200
-    assert list_response.json()["data"][0]["mcp_approval_request_id"] == "approval-org-1"
+    list_payload = list_response.json()["data"][0]
+    assert list_payload["mcp_approval_request_id"] == "approval-org-1"
+    assert list_payload["server"]["mcp_server_id"] == server.mcp_server_id
+    assert list_payload["server"]["server_key"] == server.server_key
+    assert list_payload["capabilities"]["can_decide"] is True
 
     decision = await client.post(
         f"/ui/api/mcp-approval-requests/{approval.mcp_approval_request_id}/decision",
@@ -1029,9 +1071,25 @@ async def test_scoped_org_admin_can_list_and_decide_visible_approval_requests(cl
 @pytest.mark.asyncio
 async def test_scoped_team_developer_cannot_decide_approval_requests(client, test_app, monkeypatch):
     repository = _FakeMCPRepository()
+    server = await repository.create_server(
+        server_key="docs",
+        name="Docs MCP",
+        description=None,
+        owner_scope_type="global",
+        owner_scope_id=None,
+        transport="streamable_http",
+        base_url="https://mcp.example.com",
+        enabled=True,
+        auth_mode="none",
+        auth_config={},
+        forwarded_headers_allowlist=[],
+        request_timeout_ms=30000,
+        metadata=None,
+        created_by_account_id=None,
+    )
     approval = MCPApprovalRequestRecord(
         mcp_approval_request_id="approval-team-1",
-        mcp_server_id="mcp-1",
+        mcp_server_id=server.mcp_server_id,
         tool_name="search",
         scope_type="team",
         scope_id="team-ops",
@@ -1070,7 +1128,7 @@ async def test_scoped_org_admin_can_list_visible_bindings_and_policies(client, t
     assert policies_response.status_code == 200
     assert len(policies_response.json()["data"]) == 3
 
-    binding_query = next(query for query, _ in fake_db.calls if "FROM deltallm_mcpserverbinding b" in query)
+    binding_query = next(query for query, _ in fake_db.calls if "FROM deltallm_mcpbinding b" in query)
     policy_query = next(query for query, _ in fake_db.calls if "FROM deltallm_mcptoolpolicy p" in query)
     assert "deltallm_teamtable" in binding_query
     assert "deltallm_verificationtoken" in binding_query
@@ -1196,6 +1254,8 @@ async def test_scoped_org_admin_can_access_mcp_server_read_surfaces_and_health_c
         "can_operate": True,
         "can_manage_scope_config": True,
     }
+    assert list_response.json()["data"][0]["auth_credentials_present"] is False
+    assert "auth_config" not in list_response.json()["data"][0]
 
     detail_response = await client.get(f"/ui/api/mcp-servers/{server.mcp_server_id}")
     assert detail_response.status_code == 200
@@ -1205,6 +1265,8 @@ async def test_scoped_org_admin_can_access_mcp_server_read_surfaces_and_health_c
         "can_operate": True,
         "can_manage_scope_config": True,
     }
+    assert detail_response.json()["server"]["auth_credentials_present"] is False
+    assert "auth_config" not in detail_response.json()["server"]
     assert detail_response.json()["bindings"][0]["scope_id"] == "team-ops"
     assert [tool["original_name"] for tool in detail_response.json()["tools"]] == ["search"]
 

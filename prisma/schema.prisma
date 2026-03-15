@@ -479,6 +479,7 @@ model DeltaLLM_MCPApprovalRequest {
   decision_comment        String?
   decided_by_account_id   String?
   decided_at              DateTime?
+  expires_at              DateTime?
   metadata                Json?
   created_at              DateTime @default(now())
   updated_at              DateTime @updatedAt

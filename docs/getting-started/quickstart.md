@@ -113,6 +113,7 @@ The response includes a `raw_key` — use this as the API key for your applicati
 
 ## Next Steps
 
+- [Try MCP tools through DeltaLLM](mcp-quickstart.md)
 - [Configure models and providers](../configuration/models.md)
 - [Set up authentication and SSO](../features/authentication.md)
 - [Explore the Admin UI](../admin-ui/index.md)

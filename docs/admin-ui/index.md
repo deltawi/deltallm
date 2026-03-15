@@ -18,7 +18,7 @@ The current UI is organized by operator intent:
 
 - **Dashboard**: health and spend overview
 - **API Keys**: credential issuance and limits
-- **AI Gateway**: [Models](models.md), [Route Groups](route-groups.md), and [Prompt Registry](prompt-registry.md)
+- **AI Gateway**: [Models](models.md), [Route Groups](route-groups.md), [Prompt Registry](prompt-registry.md), and [MCP Servers](mcp.md)
 - **Access**: [Organizations](organizations.md), [Teams](teams.md), and [People & Access](people-and-access.md)
 - **Operations**: [Usage & Spend](usage.md), [Audit Logs](audit-logs.md), [Batch Jobs](batch-jobs.md), [Guardrails](guardrails.md), and [Settings](settings.md)
 
@@ -29,7 +29,7 @@ Parent menu sections start collapsed by default and expand only when the operato
 - **Platform admins** can access the full UI
 - **Organization users** see only the organizations, teams, keys, and users they are allowed to manage
 - **Audit logs** require audit-read access
-- **Guardrails**, **Prompt Registry**, **Route Groups**, and **Settings** are admin surfaces
+- **Guardrails**, **Prompt Registry**, **Route Groups**, **MCP Servers**, and **Settings** are admin surfaces
 
 ## Page guide
 
@@ -39,6 +39,7 @@ Parent menu sections start collapsed by default and expand only when the operato
 | [Models](models.md) | Provider-backed deployments and health |
 | [Route Groups](route-groups.md) | Group-level routing, membership, prompt binding, and usage |
 | [Prompt Registry](prompt-registry.md) | Prompt shells, versions, labels, tests, and history |
+| [MCP Servers](mcp.md) | External MCP server registry, bindings, tool policies, approvals, and health |
 | [API Keys](api-keys.md) | Key issuance, budgets, rate limits, and allowlists |
 | [Organizations](organizations.md) | Top-level ownership, budgets, and limits |
 | [Teams](teams.md) | Team-level budgets, models, and memberships |
