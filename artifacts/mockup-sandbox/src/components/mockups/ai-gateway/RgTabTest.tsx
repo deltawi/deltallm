@@ -165,11 +165,11 @@ print(response.choices[0].message.content)`;
                     <button 
                       key={lang}
                       onClick={() => setActiveLang(lang)}
-                      className={\`px-3 py-1.5 rounded-md text-xs font-medium transition-colors \${
+                      className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
                         activeLang === lang 
                           ? 'bg-blue-600 text-white shadow-sm' 
                           : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
-                      }\`}
+                      }`}
                     >
                       {lang}
                     </button>
