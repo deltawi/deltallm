@@ -16,6 +16,7 @@ import SettingsPage from './pages/SettingsPage';
 import BatchJobs from './pages/BatchJobs';
 import BatchJobDetail from './pages/BatchJobDetail';
 import OrganizationDetail from './pages/OrganizationDetail';
+import OrganizationCreate from './pages/OrganizationCreate';
 import TeamDetail from './pages/TeamDetail';
 import ModelDetail from './pages/ModelDetail';
 import ModelEdit from './pages/ModelEdit';
@@ -76,6 +77,7 @@ function AppRoutes() {
         <Route path="/mcp-approvals" element={canReviewMcp ? <MCPApprovalQueue /> : <Navigate to="/" replace />} />
         <Route path="/keys" element={<ApiKeys />} />
         <Route path="/organizations" element={<Organizations />} />
+        <Route path="/organizations/new" element={<OrganizationCreate />} />
         <Route path="/organizations/:orgId" element={<OrganizationDetail />} />
         <Route path="/teams" element={<Teams />} />
         <Route path="/teams/:teamId" element={<TeamDetail />} />

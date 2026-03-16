@@ -129,7 +129,6 @@ export default function Organizations() {
   }, [assetSearchInput]);
 
   /* ── modal state ── */
-  const [showCreate, setShowCreate] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
   const [form, setForm] = useState({
     organization_name: '',
@@ -150,7 +149,7 @@ export default function Organizations() {
   );
   const { data: callableTargetPage, loading: callableTargetPageLoading } = useApi(
     () => (
-      isPlatformAdmin && (showCreate || !!editItem) && !form.select_all_current_assets
+      isPlatformAdmin && !!editItem && !form.select_all_current_assets
         ? callableTargets.list({
             search: assetSearch || undefined,
             target_type: assetTargetType === 'all' ? undefined : assetTargetType,
@@ -159,7 +158,7 @@ export default function Organizations() {
           })
         : Promise.resolve({ data: [], pagination: { total: 0, limit: assetPageSize, offset: 0, has_more: false } })
     ),
-    [isPlatformAdmin, showCreate, editItem?.organization_id, form.select_all_current_assets, assetSearch, assetTargetType, assetPageOffset],
+    [isPlatformAdmin, editItem?.organization_id, form.select_all_current_assets, assetSearch, assetTargetType, assetPageOffset],
   );
 
   const resetForm = () => {
@@ -191,6 +190,7 @@ export default function Organizations() {
   }, [editItem, editAssetAccess]);
 
   const handleSave = async () => {
+    if (!editItem) return;
     setError(null);
     setSaving(true);
     try {
@@ -201,38 +201,14 @@ export default function Organizations() {
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
         audit_content_storage_enabled: !!form.audit_content_storage_enabled,
       };
-      if (editItem) {
-        await organizations.update(editItem.organization_id, payload);
-        if (isPlatformAdmin) {
-          await organizations.updateAssetAccess(editItem.organization_id, {
-            selected_callable_keys: form.select_all_current_assets ? [] : form.selected_callable_keys,
-            select_all_selectable: form.select_all_current_assets,
-          });
-        }
-        setPageError(null);
-      } else {
-        const created = await organizations.create({
-          ...payload,
-          callable_target_bindings: form.select_all_current_assets
-            ? []
-            : form.selected_callable_keys.map((callable_key) => ({ callable_key })),
+      await organizations.update(editItem.organization_id, payload);
+      if (isPlatformAdmin) {
+        await organizations.updateAssetAccess(editItem.organization_id, {
+          selected_callable_keys: form.select_all_current_assets ? [] : form.selected_callable_keys,
+          select_all_selectable: form.select_all_current_assets,
         });
-        if (isPlatformAdmin && form.select_all_current_assets) {
-          let assetAccessError: string | null = null;
-          try {
-            await organizations.updateAssetAccess(created.organization_id, {
-              selected_callable_keys: [],
-              select_all_selectable: true,
-            });
-          } catch (err: any) {
-            assetAccessError = err?.message || 'Organization created, but asset access could not be updated.';
-          }
-          setPageError(assetAccessError);
-        } else {
-          setPageError(null);
-        }
       }
-      setShowCreate(false);
+      setPageError(null);
       setEditItem(null);
       resetForm();
       refetch();
@@ -294,7 +270,7 @@ export default function Organizations() {
           </div>
           {isPlatformAdmin && (
             <button
-              onClick={() => { setPageError(null); resetForm(); setShowCreate(true); }}
+              onClick={() => navigate('/organizations/new')}
               className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
             >
               <Plus className="w-4 h-4" /> Create Organization
@@ -393,7 +369,7 @@ export default function Organizations() {
                       : 'No organizations created yet.'}
                     {statusTab === 'All' && !search && isPlatformAdmin && (
                       <button
-                        onClick={() => { setPageError(null); resetForm(); setShowCreate(true); }}
+                        onClick={() => navigate('/organizations/new')}
                         className="ml-1 text-blue-600 hover:underline"
                       >
                         Create one
@@ -523,9 +499,9 @@ export default function Organizations() {
 
       {/* ─────────────── Create / Edit Modal ─────────────── */}
       <Modal
-        open={showCreate || !!editItem}
-        onClose={() => { setPageError(null); setShowCreate(false); setEditItem(null); resetForm(); }}
-        title={editItem ? 'Edit Organization' : 'Create Organization'}
+        open={!!editItem}
+        onClose={() => { setPageError(null); setEditItem(null); resetForm(); }}
+        title="Edit Organization"
       >
         <div className="space-y-4">
           {error && (
@@ -653,7 +629,7 @@ export default function Organizations() {
           )}
           <div className="flex justify-end gap-3 pt-2">
             <button
-              onClick={() => { setPageError(null); setShowCreate(false); setEditItem(null); resetForm(); }}
+              onClick={() => { setPageError(null); setEditItem(null); resetForm(); }}
               className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
             >
               Cancel
