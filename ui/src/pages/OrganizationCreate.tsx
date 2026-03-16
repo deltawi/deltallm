@@ -9,6 +9,7 @@ import {
   Building2, X, DollarSign, Gauge, TrendingUp, Info,
   ChevronRight, Check, AlertCircle, Shield,
 } from 'lucide-react';
+import ToggleSwitch from '../components/ToggleSwitch';
 
 /* ─────────────── helpers ─────────────── */
 
@@ -27,25 +28,6 @@ function FieldLabel({ label, required, hint }: { label: string; required?: boole
       {required && <span className="text-red-500 text-xs">*</span>}
       {hint && <Info className="w-3.5 h-3.5 text-gray-400" />}
     </div>
-  );
-}
-
-function Toggle({ enabled, onToggle }: { enabled: boolean; onToggle: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      className={`relative rounded-full transition-colors shrink-0 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1`}
-      style={{ height: 22, width: 40, background: enabled ? '#2563eb' : '#d1d5db' }}
-      aria-checked={enabled}
-      role="switch"
-    >
-      <span
-        className={`absolute left-0 top-[2px] w-[18px] h-[18px] bg-white rounded-full shadow transition-transform ${
-          enabled ? 'translate-x-[20px]' : 'translate-x-[2px]'
-        }`}
-      />
-    </button>
   );
 }
 
@@ -307,7 +289,7 @@ export default function OrganizationCreate() {
                       <p className="text-xs text-gray-500">Cap total spend for this org</p>
                     </div>
                   </div>
-                  <Toggle enabled={budgetEnabled} onToggle={() => setBudgetEnabled((v) => !v)} />
+                  <ToggleSwitch enabled={budgetEnabled} onToggle={() => setBudgetEnabled((v) => !v)} />
                 </div>
                 {budgetEnabled && (
                   <div className="ml-6 pl-3 border-l-2 border-green-200">
@@ -339,7 +321,7 @@ export default function OrganizationCreate() {
                       <p className="text-xs text-gray-500">Max requests per minute</p>
                     </div>
                   </div>
-                  <Toggle enabled={rpmEnabled} onToggle={() => setRpmEnabled((v) => !v)} />
+                  <ToggleSwitch enabled={rpmEnabled} onToggle={() => setRpmEnabled((v) => !v)} />
                 </div>
                 {rpmEnabled && (
                   <div className="ml-6 pl-3 border-l-2 border-purple-200">
@@ -367,7 +349,7 @@ export default function OrganizationCreate() {
                       <p className="text-xs text-gray-500">Max tokens per minute</p>
                     </div>
                   </div>
-                  <Toggle enabled={tpmEnabled} onToggle={() => setTpmEnabled((v) => !v)} />
+                  <ToggleSwitch enabled={tpmEnabled} onToggle={() => setTpmEnabled((v) => !v)} />
                 </div>
                 {tpmEnabled && (
                   <div className="ml-6 pl-3 border-l-2 border-indigo-200">
@@ -400,7 +382,7 @@ export default function OrganizationCreate() {
                     Store request and response payloads in audit logs for compliance review.
                   </p>
                 </div>
-                <Toggle enabled={auditStorage} onToggle={() => setAuditStorage((v) => !v)} />
+                <ToggleSwitch enabled={auditStorage} onToggle={() => setAuditStorage((v) => !v)} />
               </div>
               {auditStorage && (
                 <div className="mt-3 flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">

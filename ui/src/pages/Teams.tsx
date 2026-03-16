@@ -107,7 +107,6 @@ export default function Teams() {
   const inheritCount = items.filter((t) => !t.blocked).length; // placeholder until API returns mode
 
   /* ── create / edit modal ── */
-  const [showCreate, setShowCreate] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
   const [form, setForm] = useState({
     team_alias: '',
@@ -142,10 +141,10 @@ export default function Teams() {
     [editItem?.team_id, usesParentPreview, form.asset_access_mode],
   );
   const { data: parentOrgAssetVisibility, loading: parentOrgAssetVisibilityLoading } = useApi(
-    () => ((showCreate || !!editItem) && usesParentPreview && form.asset_access_mode === 'restrict' && selectedOrganizationId
+    () => (!!editItem && usesParentPreview && form.asset_access_mode === 'restrict' && selectedOrganizationId
       ? organizations.assetVisibility(selectedOrganizationId)
       : Promise.resolve(null)),
-    [showCreate, editItem?.team_id, selectedOrganizationId, usesParentPreview, form.asset_access_mode],
+    [editItem?.team_id, selectedOrganizationId, usesParentPreview, form.asset_access_mode],
   );
 
   useEffect(() => {
@@ -172,6 +171,7 @@ export default function Teams() {
     : editAssetAccessTargetsLoading;
 
   const handleSave = async () => {
+    if (!editItem) return;
     setError(null);
     setSaving(true);
     try {
@@ -182,26 +182,12 @@ export default function Teams() {
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
       };
-      if (editItem) {
-        await teams.update(editItem.team_id, payload);
-        await teams.updateAssetAccess(editItem.team_id, {
-          mode: form.asset_access_mode,
-          selected_callable_keys: form.asset_access_mode === 'restrict' ? form.selected_callable_keys : [],
-        });
-        setPageError(null);
-      } else {
-        const created = await teams.create(payload);
-        let assetAccessError: string | null = null;
-        if (form.asset_access_mode === 'restrict') {
-          try {
-            await teams.updateAssetAccess(created.team_id, { mode: 'restrict', selected_callable_keys: form.selected_callable_keys });
-          } catch (err: any) {
-            assetAccessError = err?.message || 'Team created, but asset access could not be updated.';
-          }
-        }
-        setPageError(assetAccessError);
-      }
-      setShowCreate(false);
+      await teams.update(editItem.team_id, payload);
+      await teams.updateAssetAccess(editItem.team_id, {
+        mode: form.asset_access_mode,
+        selected_callable_keys: form.asset_access_mode === 'restrict' ? form.selected_callable_keys : [],
+      });
+      setPageError(null);
       setEditItem(null);
       resetForm();
       refetch();
@@ -290,7 +276,7 @@ export default function Teams() {
             </h1>
           </div>
           <button
-            onClick={() => { resetForm(); setShowCreate(true); }}
+            onClick={() => navigate('/teams/new')}
             className="flex items-center gap-1.5 bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors"
           >
             <Plus className="w-4 h-4" /> Create Team
@@ -556,9 +542,9 @@ export default function Teams() {
 
       {/* ── Create / Edit Modal ── */}
       <Modal
-        open={showCreate || !!editItem}
-        onClose={() => { setShowCreate(false); setEditItem(null); resetForm(); setError(null); }}
-        title={editItem ? 'Edit Team' : 'Create Team'}
+        open={!!editItem}
+        onClose={() => { setEditItem(null); resetForm(); setError(null); }}
+        title="Edit Team"
       >
         <div className="space-y-4">
           {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>}
@@ -644,7 +630,7 @@ export default function Teams() {
           />
           <div className="flex justify-end gap-3 pt-2">
             <button
-              onClick={() => { setShowCreate(false); setEditItem(null); resetForm(); setError(null); }}
+              onClick={() => { setEditItem(null); resetForm(); setError(null); }}
               className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
             >
               Cancel
