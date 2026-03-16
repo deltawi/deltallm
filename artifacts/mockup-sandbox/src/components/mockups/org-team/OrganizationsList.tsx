@@ -119,7 +119,6 @@ export function OrganizationsList() {
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Budget Usage</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Rate Limits</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Members</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Trend</th>
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
@@ -167,12 +166,6 @@ export function OrganizationsList() {
                         {org.teams} teams
                       </div>
                     </div>
-                  </td>
-                  <td className="px-4 py-3.5">
-                    <span className={`text-xs font-semibold ${org.trend.startsWith("+") && org.trend !== "+0%" ? "text-emerald-600" : "text-gray-400"}`}>
-                      {org.trend}
-                    </span>
-                    <p className="text-[10px] text-gray-400">this week</p>
                   </td>
                   <td className="px-4 py-3.5">
                     <div className="flex items-center gap-1">
