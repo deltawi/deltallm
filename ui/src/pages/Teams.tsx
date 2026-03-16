@@ -29,18 +29,15 @@ function MemberDots({ count }: { count: number }) {
 }
 
 function MiniBar({ spend, budget }: { spend: number; budget: number | null }) {
-  if (!budget) return <span className="text-xs text-gray-400">Unlimited</span>;
+  if (!budget) return <span className="text-xs text-gray-400">—</span>;
   const pct = Math.min(100, (spend / budget) * 100);
   const color = pct > 90 ? 'bg-red-500' : pct > 75 ? 'bg-amber-500' : 'bg-blue-500';
   return (
-    <div className="w-28">
-      <div className="flex justify-between text-[10px] mb-1">
-        <span className="font-medium text-gray-600">${spend.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-        <span className="text-gray-400">${budget.toLocaleString()}</span>
-      </div>
+    <div className="w-28 space-y-1">
       <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
         <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
       </div>
+      <span className="text-[10px] text-gray-500">{Math.round(pct)}% of ${budget.toLocaleString()}</span>
     </div>
   );
 }
@@ -380,7 +377,7 @@ export default function Teams() {
                 Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i} className="border-b border-gray-100">
                     {Array.from({ length: 6 }).map((_, j) => (
-                      <td key={j} className="px-4 py-3.5">
+                      <td key={j} className="px-4 py-2.5">
                         <div className="h-4 bg-gray-100 rounded animate-pulse w-24" />
                       </td>
                     ))}
@@ -406,7 +403,7 @@ export default function Teams() {
                     } ${t.blocked ? 'opacity-60' : ''}`}
                   >
                     {/* Team name */}
-                    <td className="px-4 py-3.5">
+                    <td className="px-4 py-2.5">
                       <div className="flex items-center gap-3">
                         <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${t.blocked ? 'bg-red-50' : 'bg-indigo-50'}`}>
                           <Users className={`w-4 h-4 ${t.blocked ? 'text-red-500' : 'text-indigo-600'}`} />
@@ -426,7 +423,7 @@ export default function Teams() {
                     </td>
 
                     {/* Org */}
-                    <td className="px-4 py-3.5">
+                    <td className="px-4 py-2.5">
                       <div className="flex items-center gap-1.5">
                         <Building2 className="w-3 h-3 text-gray-400 shrink-0" />
                         <span
@@ -439,17 +436,17 @@ export default function Teams() {
                     </td>
 
                     {/* Members */}
-                    <td className="px-4 py-3.5">
+                    <td className="px-4 py-2.5">
                       <MemberDots count={t.member_count || 0} />
                     </td>
 
                     {/* Budget */}
-                    <td className="px-4 py-3.5">
+                    <td className="px-4 py-2.5">
                       <MiniBar spend={t.spend || 0} budget={t.max_budget} />
                     </td>
 
                     {/* Rate limits */}
-                    <td className="px-4 py-3.5">
+                    <td className="px-4 py-2.5">
                       <div className="space-y-0.5">
                         <div className="flex items-center gap-1 text-[10px] text-gray-500">
                           <Gauge className="w-3 h-3 shrink-0" />
@@ -468,7 +465,7 @@ export default function Teams() {
                     </td>
 
                     {/* Actions */}
-                    <td className="px-4 py-3.5">
+                    <td className="px-4 py-2.5">
                       <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                         <button
                           onClick={() => openEdit(t)}

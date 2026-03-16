@@ -110,8 +110,9 @@ export default function TeamDetail() {
     [team?.organization_id],
   );
 
-  /* ── edit team modal ── */
-  const [showEdit, setShowEdit] = useState(false);
+  /* ── inline editing ── */
+  const [isEditingSettings, setIsEditingSettings] = useState(false);
+  const [isEditingAssets, setIsEditingAssets] = useState(false);
   const [form, setForm] = useState({
     team_alias: '',
     organization_id: '',
@@ -128,40 +129,51 @@ export default function TeamDetail() {
   const usesParentPreview = selectedOrganizationId !== (team?.organization_id || '');
 
   const { data: teamAssetAccessTargets, loading: teamAssetAccessTargetsLoading } = useApi(
-    () => (showEdit && !usesParentPreview && form.asset_access_mode === 'restrict'
+    () => (isEditingAssets && !usesParentPreview && form.asset_access_mode === 'restrict'
       ? teams.assetAccess(teamId!, { include_targets: true })
       : Promise.resolve(null)),
-    [showEdit, teamId, usesParentPreview, form.asset_access_mode],
+    [isEditingAssets, teamId, usesParentPreview, form.asset_access_mode],
   );
   const { data: parentOrgAssetVisibility, loading: parentOrgAssetVisibilityLoading } = useApi(
-    () => (showEdit && usesParentPreview && form.asset_access_mode === 'restrict' && selectedOrganizationId
+    () => (isEditingAssets && usesParentPreview && form.asset_access_mode === 'restrict' && selectedOrganizationId
       ? organizations.assetVisibility(selectedOrganizationId)
       : Promise.resolve(null)),
-    [showEdit, selectedOrganizationId, usesParentPreview, form.asset_access_mode],
+    [isEditingAssets, selectedOrganizationId, usesParentPreview, form.asset_access_mode],
   );
 
   useEffect(() => {
-    if (!showEdit || !teamAssetAccess) return;
+    if (!isEditingAssets || !teamAssetAccess) return;
     setForm((c) => ({
       ...c,
       asset_access_mode: teamAssetAccess.mode === 'restrict' ? 'restrict' : 'inherit',
       selected_callable_keys: teamAssetAccess.selected_callable_keys || [],
     }));
-  }, [showEdit, teamAssetAccess]);
+  }, [isEditingAssets, teamAssetAccess]);
 
-  const openEdit = () => {
+  const openEditSettings = () => {
     if (!team) return;
     setTeamError(null);
-    setForm({
+    setForm((c) => ({
+      ...c,
       team_alias: team.team_alias || '',
       organization_id: team.organization_id || '',
       max_budget: team.max_budget != null ? String(team.max_budget) : '',
       rpm_limit: team.rpm_limit != null ? String(team.rpm_limit) : '',
       tpm_limit: team.tpm_limit != null ? String(team.tpm_limit) : '',
+    }));
+    setIsEditingSettings(true);
+  };
+
+  const openEditAssets = () => {
+    if (!team) return;
+    setTeamError(null);
+    setForm((c) => ({
+      ...c,
+      organization_id: team.organization_id || '',
       asset_access_mode: teamAssetAccess?.mode === 'restrict' ? 'restrict' : 'inherit',
       selected_callable_keys: teamAssetAccess?.selected_callable_keys || [],
-    });
-    setShowEdit(true);
+    }));
+    setIsEditingAssets(true);
   };
 
   const handleOrganizationChange = (orgId: string) => {
@@ -178,26 +190,38 @@ export default function TeamDetail() {
     : usesParentPreview ? parentOrgAssetVisibilityLoading
     : teamAssetAccessTargetsLoading;
 
-  const handleSaveTeam = async () => {
+  const handleSaveSettings = async () => {
     setSaving(true);
     setTeamError(null);
     try {
       await teams.update(teamId!, {
         team_alias: form.team_alias || undefined,
-        organization_id: form.organization_id || undefined,
         max_budget: form.max_budget ? Number(form.max_budget) : undefined,
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
       });
+      setIsEditingSettings(false);
+      refetchTeam();
+    } catch (err: any) {
+      setTeamError(err?.message || 'Failed to update team');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveAssets = async () => {
+    setSaving(true);
+    setTeamError(null);
+    try {
       await teams.updateAssetAccess(teamId!, {
         mode: form.asset_access_mode,
         selected_callable_keys: form.asset_access_mode === 'restrict' ? form.selected_callable_keys : [],
       });
-      setShowEdit(false);
+      setIsEditingAssets(false);
       refetchTeam();
       refetchTeamAssetAccess();
     } catch (err: any) {
-      setTeamError(err?.message || 'Failed to update team');
+      setTeamError(err?.message || 'Failed to update asset access');
     } finally {
       setSaving(false);
     }
@@ -335,7 +359,7 @@ export default function TeamDetail() {
               </div>
             </div>
             <button
-              onClick={openEdit}
+              onClick={openEditSettings}
               className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
             >
               <Pencil className="w-3.5 h-3.5" /> Edit
@@ -494,36 +518,128 @@ export default function TeamDetail() {
 
             {/* Sidebar */}
             <div className="space-y-4">
-              {/* Team Info */}
-              <div className="bg-white rounded-xl border border-gray-200 p-4">
-                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Team Info</h4>
-                <div className="space-y-2.5 text-sm">
-                  {team.organization_id && (
-                    <div className="flex justify-between items-center">
-                      <span className="text-gray-500">Organization</span>
+              {/* Team Info / Settings */}
+              <div className={`bg-white rounded-xl border p-4 transition-colors ${isEditingSettings ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-gray-200'}`}>
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Team Info</h4>
+                  {!isEditingSettings && (
+                    <button
+                      onClick={openEditSettings}
+                      className="p-1 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-gray-600 transition-colors"
+                      title="Edit settings"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+                {isEditingSettings ? (
+                  <div className="space-y-3">
+                    {teamError && (
+                      <div className="p-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">{teamError}</div>
+                    )}
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Team Name</label>
+                      <input
+                        value={form.team_alias}
+                        onChange={(e) => setForm({ ...form, team_alias: e.target.value })}
+                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Max Budget ($)</label>
+                      <input
+                        type="number"
+                        value={form.max_budget}
+                        onChange={(e) => setForm({ ...form, max_budget: e.target.value })}
+                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        placeholder="No limit"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">RPM Limit</label>
+                        <input
+                          type="number"
+                          value={form.rpm_limit}
+                          onChange={(e) => setForm({ ...form, rpm_limit: e.target.value })}
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          placeholder="Unlimited"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">TPM Limit</label>
+                        <input
+                          type="number"
+                          value={form.tpm_limit}
+                          onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })}
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          placeholder="Unlimited"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex gap-2 pt-1">
                       <button
-                        onClick={() => navigate(`/organizations/${team.organization_id}`)}
-                        className="text-xs font-medium text-indigo-600 hover:underline"
+                        onClick={() => { setIsEditingSettings(false); setTeamError(null); }}
+                        className="flex-1 px-3 py-1.5 text-xs text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
                       >
-                        {orgName}
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleSaveSettings}
+                        disabled={saving}
+                        className="flex-1 px-3 py-1.5 text-xs text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+                      >
+                        {saving ? 'Saving…' : 'Save'}
                       </button>
                     </div>
-                  )}
-                  {team.created_at && (
-                    <div className="flex justify-between items-center">
-                      <span className="text-gray-500">Created</span>
-                      <span className="text-xs font-medium text-gray-800">
-                        {new Date(team.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                      </span>
-                    </div>
-                  )}
-                  <div className="flex justify-between items-center">
-                    <span className="text-gray-500">Status</span>
-                    {team.blocked
-                      ? <span className="text-xs font-medium text-red-600 flex items-center gap-1"><AlertOctagon className="w-3 h-3" /> Blocked</span>
-                      : <span className="text-xs font-medium text-emerald-600 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Active</span>}
                   </div>
-                </div>
+                ) : (
+                  <div className="space-y-2.5 text-sm">
+                    {team.organization_id && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-500">Organization</span>
+                        <button
+                          onClick={() => navigate(`/organizations/${team.organization_id}`)}
+                          className="text-xs font-medium text-indigo-600 hover:underline"
+                        >
+                          {orgName}
+                        </button>
+                      </div>
+                    )}
+                    {team.created_at && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-500">Created</span>
+                        <span className="text-xs font-medium text-gray-800">
+                          {new Date(team.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                        </span>
+                      </div>
+                    )}
+                    {team.max_budget != null && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-500">Max budget</span>
+                        <span className="text-xs font-semibold text-gray-800">${Number(team.max_budget).toLocaleString()}</span>
+                      </div>
+                    )}
+                    {team.rpm_limit != null && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-500">RPM limit</span>
+                        <span className="text-xs font-semibold text-gray-800">{Number(team.rpm_limit).toLocaleString()}</span>
+                      </div>
+                    )}
+                    {team.tpm_limit != null && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-500">TPM limit</span>
+                        <span className="text-xs font-semibold text-gray-800">{Number(team.tpm_limit).toLocaleString()}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between items-center">
+                      <span className="text-gray-500">Status</span>
+                      {team.blocked
+                        ? <span className="text-xs font-medium text-red-600 flex items-center gap-1"><AlertOctagon className="w-3 h-3" /> Blocked</span>
+                        : <span className="text-xs font-medium text-emerald-600 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Active</span>}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Asset Access summary */}
@@ -663,7 +779,53 @@ export default function TeamDetail() {
         {tab === 'assets' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
             <div className="lg:col-span-2 space-y-4">
-              {teamAssetTargetsLoading ? (
+              {isEditingAssets ? (
+                <div className="bg-white rounded-xl border border-indigo-300 ring-1 ring-indigo-200 p-5 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-gray-900">Edit Asset Access</h3>
+                    <button
+                      onClick={() => { setIsEditingAssets(false); setTeamError(null); }}
+                      className="text-xs text-gray-500 hover:text-gray-700 transition-colors"
+                    >
+                      ✕ Cancel
+                    </button>
+                  </div>
+                  {teamError && (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{teamError}</div>
+                  )}
+                  <AssetAccessEditor
+                    title="Team Asset Access"
+                    description="Choose whether this team inherits the organization asset ceiling or narrows itself to a selected subset."
+                    mode={form.asset_access_mode}
+                    allowModeSelection
+                    onModeChange={(mode) => setForm((c) => ({
+                      ...c,
+                      asset_access_mode: mode === 'restrict' ? 'restrict' : 'inherit',
+                      selected_callable_keys: mode === 'restrict' ? c.selected_callable_keys : [],
+                    }))}
+                    targets={assetTargets}
+                    selectedKeys={form.selected_callable_keys}
+                    onSelectedKeysChange={(selected_callable_keys) => setForm({ ...form, selected_callable_keys })}
+                    loading={assetAccessLoading}
+                    disabled={saving || !form.organization_id}
+                  />
+                  <div className="flex justify-end gap-3 pt-2 border-t border-gray-100">
+                    <button
+                      onClick={() => { setIsEditingAssets(false); setTeamError(null); }}
+                      className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleSaveAssets}
+                      disabled={saving || !form.organization_id || assetAccessLoading}
+                      className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+                    >
+                      {saving ? 'Saving…' : 'Save Changes'}
+                    </button>
+                  </div>
+                </div>
+              ) : teamAssetTargetsLoading ? (
                 <div className="bg-white rounded-xl border border-gray-200 p-8 flex items-center justify-center">
                   <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600" />
                 </div>
@@ -763,12 +925,14 @@ export default function TeamDetail() {
                 </div>
               </div>
 
-              <button
-                onClick={openEdit}
-                className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-              >
-                <Pencil className="w-3.5 h-3.5" /> Edit Asset Selection
-              </button>
+              {!isEditingAssets && (
+                <button
+                  onClick={openEditAssets}
+                  className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                >
+                  <Pencil className="w-3.5 h-3.5" /> Edit Asset Selection
+                </button>
+              )}
 
               <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
                 <p className="text-xs text-blue-800 leading-relaxed">
@@ -782,89 +946,6 @@ export default function TeamDetail() {
           </div>
         )}
       </div>
-
-      {/* ── Edit Modal ── */}
-      <Modal open={showEdit} onClose={() => setShowEdit(false)} title="Edit Team">
-        <div className="space-y-4">
-          {teamError && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{teamError}</div>}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Team Name</label>
-            <input
-              value={form.team_alias}
-              onChange={(e) => setForm({ ...form, team_alias: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Organization ID</label>
-              <input
-                value={form.organization_id}
-                onChange={(e) => handleOrganizationChange(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Max Budget ($)</label>
-              <input
-                type="number"
-                value={form.max_budget}
-                onChange={(e) => setForm({ ...form, max_budget: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">RPM Limit</label>
-              <input
-                type="number"
-                value={form.rpm_limit}
-                onChange={(e) => setForm({ ...form, rpm_limit: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">TPM Limit</label>
-              <input
-                type="number"
-                value={form.tpm_limit}
-                onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
-          </div>
-          <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
-            Team runtime access is enforced through callable-target bindings. Use the section below to inherit the organization set or narrow it for this team.
-          </p>
-          <AssetAccessEditor
-            title="Team Asset Access"
-            description="Choose whether this team inherits the organization asset ceiling or narrows itself to a selected subset."
-            mode={form.asset_access_mode}
-            allowModeSelection
-            onModeChange={(mode) => setForm((c) => ({
-              ...c,
-              asset_access_mode: mode === 'restrict' ? 'restrict' : 'inherit',
-              selected_callable_keys: mode === 'restrict' ? c.selected_callable_keys : [],
-            }))}
-            targets={assetTargets}
-            selectedKeys={form.selected_callable_keys}
-            onSelectedKeysChange={(selected_callable_keys) => setForm({ ...form, selected_callable_keys })}
-            loading={assetAccessLoading}
-            disabled={saving || !form.organization_id}
-          />
-          <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => setShowEdit(false)} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-            <button
-              onClick={handleSaveTeam}
-              disabled={saving || !form.organization_id || assetAccessLoading}
-              className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
-            >
-              {saving ? 'Saving…' : 'Save Changes'}
-            </button>
-          </div>
-        </div>
-      </Modal>
 
       {/* ── Add Member Modal ── */}
       <Modal open={showAddMember} onClose={() => setShowAddMember(false)} title="Add Member">

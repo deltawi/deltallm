@@ -135,7 +135,8 @@ export default function OrganizationDetail() {
   );
 
   /* ── edit org modal ── */
-  const [showEdit, setShowEdit] = useState(false);
+  const [isEditingSettings, setIsEditingSettings] = useState(false);
+  const [isEditingAssets, setIsEditingAssets] = useState(false);
   const [assetSearchInput, setAssetSearchInput] = useState('');
   const [assetSearch, setAssetSearch] = useState('');
   const [assetPageOffset, setAssetPageOffset] = useState(0);
@@ -160,7 +161,7 @@ export default function OrganizationDetail() {
   }, [assetSearchInput]);
 
   useEffect(() => {
-    if (!showEdit || !orgAssetAccess) return;
+    if (!isEditingAssets || !orgAssetAccess) return;
     setForm((c) => ({
       ...c,
       select_all_current_assets:
@@ -168,11 +169,11 @@ export default function OrganizationDetail() {
         orgAssetAccess.summary.selected_total === orgAssetAccess.summary.selectable_total,
       selected_callable_keys: orgAssetAccess.selected_callable_keys || [],
     }));
-  }, [showEdit, orgAssetAccess]);
+  }, [isEditingAssets, orgAssetAccess]);
 
   const { data: callableTargetPage, loading: callableTargetPageLoading } = useApi(
     () => (
-      isPlatformAdmin && showEdit && !form.select_all_current_assets
+      isPlatformAdmin && isEditingAssets && !form.select_all_current_assets
         ? callableTargets.list({
             search: assetSearch || undefined,
             target_type: assetTargetType === 'all' ? undefined : assetTargetType,
@@ -181,29 +182,39 @@ export default function OrganizationDetail() {
           })
         : Promise.resolve({ data: [], pagination: { total: 0, limit: assetPageSize, offset: 0, has_more: false } })
     ),
-    [isPlatformAdmin, showEdit, form.select_all_current_assets, assetSearch, assetTargetType, assetPageOffset],
+    [isPlatformAdmin, isEditingAssets, form.select_all_current_assets, assetSearch, assetTargetType, assetPageOffset],
   );
 
-  const openEdit = () => {
+  const openEditSettings = () => {
     if (!org) return;
     setOrgError(null);
-    setForm({
+    setForm((c) => ({
+      ...c,
       organization_name: org.organization_name || '',
       max_budget: org.max_budget != null ? String(org.max_budget) : '',
       rpm_limit: org.rpm_limit != null ? String(org.rpm_limit) : '',
       tpm_limit: org.tpm_limit != null ? String(org.tpm_limit) : '',
       audit_content_storage_enabled: !!org.audit_content_storage_enabled,
+    }));
+    setIsEditingSettings(true);
+  };
+
+  const openEditAssets = () => {
+    if (!org) return;
+    setOrgError(null);
+    setForm((c) => ({
+      ...c,
       select_all_current_assets: false,
       selected_callable_keys: orgAssetAccess?.selected_callable_keys || [],
-    });
+    }));
     setAssetSearchInput('');
     setAssetSearch('');
     setAssetPageOffset(0);
     setAssetTargetType('all');
-    setShowEdit(true);
+    setIsEditingAssets(true);
   };
 
-  const handleSaveOrg = async () => {
+  const handleSaveSettings = async () => {
     setSaving(true);
     setOrgError(null);
     try {
@@ -214,17 +225,28 @@ export default function OrganizationDetail() {
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
         audit_content_storage_enabled: !!form.audit_content_storage_enabled,
       });
-      if (isPlatformAdmin) {
-        await organizations.updateAssetAccess(orgId!, {
-          selected_callable_keys: form.select_all_current_assets ? [] : form.selected_callable_keys,
-          select_all_selectable: form.select_all_current_assets,
-        });
-        refetchOrgAssetAccess();
-      }
-      setShowEdit(false);
+      setIsEditingSettings(false);
       refetchOrg();
     } catch (err: any) {
       setOrgError(err?.message || 'Failed to update organization');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveAssets = async () => {
+    setSaving(true);
+    setOrgError(null);
+    try {
+      await organizations.updateAssetAccess(orgId!, {
+        selected_callable_keys: form.select_all_current_assets ? [] : form.selected_callable_keys,
+        select_all_selectable: form.select_all_current_assets,
+      });
+      refetchOrgAssetAccess();
+      setIsEditingAssets(false);
+      refetchOrg();
+    } catch (err: any) {
+      setOrgError(err?.message || 'Failed to update asset access');
     } finally {
       setSaving(false);
     }
@@ -424,7 +446,7 @@ export default function OrganizationDetail() {
               </div>
             </div>
             <button
-              onClick={openEdit}
+              onClick={openEditSettings}
               className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
             >
               <Pencil className="w-3.5 h-3.5" /> Edit
@@ -642,23 +664,119 @@ export default function OrganizationDetail() {
             {/* Sidebar */}
             <div className="space-y-4">
               {/* Settings */}
-              <div className="bg-white rounded-xl border border-gray-200 p-5">
-                <h3 className="text-sm font-semibold text-gray-900 mb-3">Settings</h3>
-                <div className="space-y-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="text-xs font-medium text-gray-700">Audit content storage</p>
-                      <p className="text-[10px] text-gray-400 mt-0.5">Stores request/response payloads in audit logs</p>
-                    </div>
-                    <span className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-                      org.audit_content_storage_enabled
-                        ? 'bg-green-100 text-green-700'
-                        : 'bg-gray-100 text-gray-500'
-                    }`}>
-                      {org.audit_content_storage_enabled ? 'Enabled' : 'Disabled'}
-                    </span>
-                  </div>
+              <div className={`bg-white rounded-xl border p-5 transition-colors ${isEditingSettings ? 'border-blue-300 ring-1 ring-blue-200' : 'border-gray-200'}`}>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold text-gray-900">Settings</h3>
+                  {!isEditingSettings && (
+                    <button
+                      onClick={openEditSettings}
+                      className="p-1 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-gray-600 transition-colors"
+                      title="Edit settings"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
+                {isEditingSettings ? (
+                  <div className="space-y-3">
+                    {orgError && (
+                      <div className="p-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">{orgError}</div>
+                    )}
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Name</label>
+                      <input
+                        value={form.organization_name}
+                        onChange={(e) => setForm({ ...form, organization_name: e.target.value })}
+                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Max Budget ($)</label>
+                      <input
+                        type="number"
+                        value={form.max_budget}
+                        onChange={(e) => setForm({ ...form, max_budget: e.target.value })}
+                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="No limit"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">RPM Limit</label>
+                        <input
+                          type="number"
+                          value={form.rpm_limit}
+                          onChange={(e) => setForm({ ...form, rpm_limit: e.target.value })}
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="Unlimited"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">TPM Limit</label>
+                        <input
+                          type="number"
+                          value={form.tpm_limit}
+                          onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })}
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="Unlimited"
+                        />
+                      </div>
+                    </div>
+                    <label className="flex items-start gap-2 p-2.5 border border-gray-200 rounded-lg bg-gray-50 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!!form.audit_content_storage_enabled}
+                        onChange={(e) => setForm({ ...form, audit_content_storage_enabled: e.target.checked })}
+                        className="mt-0.5"
+                      />
+                      <span className="text-xs text-gray-700">Store request/response payloads in audit logs</span>
+                    </label>
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        onClick={() => { setIsEditingSettings(false); setOrgError(null); }}
+                        className="flex-1 px-3 py-1.5 text-xs text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleSaveSettings}
+                        disabled={saving}
+                        className="flex-1 px-3 py-1.5 text-xs text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+                      >
+                        {saving ? 'Saving…' : 'Save'}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2.5 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-gray-500">Audit storage</span>
+                      <span className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                        org.audit_content_storage_enabled ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
+                      }`}>
+                        {org.audit_content_storage_enabled ? 'Enabled' : 'Disabled'}
+                      </span>
+                    </div>
+                    {org.max_budget != null && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-gray-500">Max budget</span>
+                        <span className="text-xs font-semibold text-gray-800">${Number(org.max_budget).toLocaleString()}</span>
+                      </div>
+                    )}
+                    {org.rpm_limit != null && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-gray-500">RPM limit</span>
+                        <span className="text-xs font-semibold text-gray-800">{Number(org.rpm_limit).toLocaleString()}</span>
+                      </div>
+                    )}
+                    {org.tpm_limit != null && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-gray-500">TPM limit</span>
+                        <span className="text-xs font-semibold text-gray-800">{Number(org.tpm_limit).toLocaleString()}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Asset Access sidebar */}
@@ -896,9 +1014,100 @@ export default function OrganizationDetail() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
             <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 p-5">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-semibold text-gray-900">Allowed Assets</h3>
+                <h3 className="text-sm font-semibold text-gray-900">{isEditingAssets ? 'Edit Asset Access' : 'Allowed Assets'}</h3>
+                {isEditingAssets && (
+                  <button
+                    onClick={() => { setIsEditingAssets(false); setOrgError(null); }}
+                    className="text-xs text-gray-500 hover:text-gray-700 transition-colors"
+                  >
+                    ✕ Cancel
+                  </button>
+                )}
               </div>
-              {orgAssetTargetsFullLoading ? (
+              {isEditingAssets ? (
+                <div className="space-y-4">
+                  {orgError && (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{orgError}</div>
+                  )}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <label className={`rounded-lg border px-3 py-2 text-sm cursor-pointer ${form.select_all_current_assets ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'}`}>
+                      <div className="flex items-start gap-2">
+                        <input
+                          type="radio"
+                          name="org-detail-asset-strategy"
+                          checked={form.select_all_current_assets}
+                          onChange={() => setForm((c) => ({ ...c, select_all_current_assets: true, selected_callable_keys: [] }))}
+                          disabled={saving}
+                          className="mt-0.5"
+                        />
+                        <span>
+                          <span className="block font-medium text-gray-900">Allow all current assets</span>
+                          <span className="block text-xs text-gray-500">Grant every current model and route group without loading the full catalog.</span>
+                        </span>
+                      </div>
+                    </label>
+                    <label className={`rounded-lg border px-3 py-2 text-sm cursor-pointer ${!form.select_all_current_assets ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'}`}>
+                      <div className="flex items-start gap-2">
+                        <input
+                          type="radio"
+                          name="org-detail-asset-strategy"
+                          checked={!form.select_all_current_assets}
+                          onChange={() => setForm((c) => ({ ...c, select_all_current_assets: false }))}
+                          disabled={saving}
+                          className="mt-0.5"
+                        />
+                        <span>
+                          <span className="block font-medium text-gray-900">Choose a subset</span>
+                          <span className="block text-xs text-gray-500">Search and pick only the assets this organization should use.</span>
+                        </span>
+                      </div>
+                    </label>
+                  </div>
+                  {form.select_all_current_assets ? (
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-3 text-xs text-blue-800">
+                      {orgAssetAccess
+                        ? `This organization currently has ${orgAssetAccess.summary.selected_total} of ${orgAssetAccess.summary.selectable_total} assets granted. Saving will align it to all current assets.`
+                        : 'Saving will grant every currently available model and route group to this organization.'}
+                    </div>
+                  ) : (
+                    <AssetAccessEditor
+                      title="Allowed Assets"
+                      description="Choose the models and route groups this organization is allowed to use. Lower scopes can inherit or narrow from this set."
+                      mode="grant"
+                      targets={orgAssetTargets}
+                      selectedKeys={form.selected_callable_keys}
+                      onSelectedKeysChange={(selected_callable_keys) => setForm({ ...form, selected_callable_keys })}
+                      loading={orgAssetAccessLoading || callableTargetPageLoading}
+                      disabled={saving}
+                      searchValue={assetSearchInput}
+                      onSearchValueChange={setAssetSearchInput}
+                      targetTypeFilter={assetTargetType}
+                      onTargetTypeFilterChange={(next) => { setAssetTargetType(next); setAssetPageOffset(0); }}
+                      pagination={orgAssetPagination}
+                      onPageChange={setAssetPageOffset}
+                      primaryActionLabel="Allow all current assets"
+                      onPrimaryAction={() => setForm((c) => ({ ...c, select_all_current_assets: true, selected_callable_keys: [] }))}
+                      secondaryActionLabel={form.selected_callable_keys.length > 0 ? 'Clear selection' : undefined}
+                      onSecondaryAction={form.selected_callable_keys.length > 0 ? () => setForm((c) => ({ ...c, selected_callable_keys: [] })) : undefined}
+                    />
+                  )}
+                  <div className="flex justify-end gap-3 pt-2 border-t border-gray-100">
+                    <button
+                      onClick={() => { setIsEditingAssets(false); setOrgError(null); }}
+                      className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleSaveAssets}
+                      disabled={saving || (isPlatformAdmin && orgAssetAccessLoading)}
+                      className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+                    >
+                      {saving ? 'Saving…' : 'Save Changes'}
+                    </button>
+                  </div>
+                </div>
+              ) : orgAssetTargetsFullLoading ? (
                 <div className="py-12 flex items-center justify-center">
                   <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600" />
                 </div>
@@ -957,149 +1166,18 @@ export default function OrganizationDetail() {
                   Teams, API keys, and users within this org can only use assets from this allowed set. Child scopes can narrow further but never expand beyond this ceiling.
                 </p>
               </div>
-              <button
-                onClick={openEdit}
-                className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium border border-gray-300 text-gray-700 bg-white rounded-lg hover:bg-gray-50 transition-colors"
-              >
-                <Pencil className="w-3.5 h-3.5" /> Edit Asset Access
-              </button>
+              {!isEditingAssets && (
+                <button
+                  onClick={openEditAssets}
+                  className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium border border-gray-300 text-gray-700 bg-white rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  <Pencil className="w-3.5 h-3.5" /> Edit Asset Access
+                </button>
+              )}
             </div>
           </div>
         )}
       </div>
-
-      {/* ── Edit Org Modal ── */}
-      <Modal open={showEdit} onClose={() => setShowEdit(false)} title="Edit Organization">
-        <div className="space-y-4">
-          {orgError && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{orgError}</div>
-          )}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Organization Name</label>
-            <input
-              value={form.organization_name}
-              onChange={(e) => setForm({ ...form, organization_name: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Max Budget ($)</label>
-            <input
-              type="number"
-              value={form.max_budget}
-              onChange={(e) => setForm({ ...form, max_budget: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">RPM Limit</label>
-              <input
-                type="number"
-                value={form.rpm_limit}
-                onChange={(e) => setForm({ ...form, rpm_limit: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">TPM Limit</label>
-              <input
-                type="number"
-                value={form.tpm_limit}
-                onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-          </div>
-          <label className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg bg-gray-50 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={!!form.audit_content_storage_enabled}
-              onChange={(e) => setForm({ ...form, audit_content_storage_enabled: e.target.checked })}
-              className="mt-0.5"
-            />
-            <span className="text-sm text-gray-700">
-              Store request and response payload content in audit logs for this organization.
-            </span>
-          </label>
-          {isPlatformAdmin && (
-            <div className="space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <label className={`rounded-lg border px-3 py-2 text-sm cursor-pointer ${form.select_all_current_assets ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'}`}>
-                  <div className="flex items-start gap-2">
-                    <input
-                      type="radio"
-                      name="organization-detail-asset-strategy"
-                      checked={form.select_all_current_assets}
-                      onChange={() => setForm((c) => ({ ...c, select_all_current_assets: true, selected_callable_keys: [] }))}
-                      disabled={saving}
-                      className="mt-0.5"
-                    />
-                    <span>
-                      <span className="block font-medium text-gray-900">Allow all current assets</span>
-                      <span className="block text-xs text-gray-500">Grant every current model and route group without loading the full catalog.</span>
-                    </span>
-                  </div>
-                </label>
-                <label className={`rounded-lg border px-3 py-2 text-sm cursor-pointer ${!form.select_all_current_assets ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'}`}>
-                  <div className="flex items-start gap-2">
-                    <input
-                      type="radio"
-                      name="organization-detail-asset-strategy"
-                      checked={!form.select_all_current_assets}
-                      onChange={() => setForm((c) => ({ ...c, select_all_current_assets: false }))}
-                      disabled={saving}
-                      className="mt-0.5"
-                    />
-                    <span>
-                      <span className="block font-medium text-gray-900">Choose a subset</span>
-                      <span className="block text-xs text-gray-500">Search and pick only the assets this organization should use.</span>
-                    </span>
-                  </div>
-                </label>
-              </div>
-              {form.select_all_current_assets ? (
-                <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-3 text-xs text-blue-800">
-                  {orgAssetAccess
-                    ? `This organization currently has ${orgAssetAccess.summary.selected_total} of ${orgAssetAccess.summary.selectable_total} assets granted. Saving will align it to all current assets.`
-                    : 'Saving will grant every currently available model and route group to this organization.'}
-                </div>
-              ) : (
-                <AssetAccessEditor
-                  title="Allowed Assets"
-                  description="Choose the models and route groups this organization is allowed to use. Lower scopes can inherit or narrow from this set."
-                  mode="grant"
-                  targets={orgAssetTargets}
-                  selectedKeys={form.selected_callable_keys}
-                  onSelectedKeysChange={(selected_callable_keys) => setForm({ ...form, selected_callable_keys })}
-                  loading={orgAssetAccessLoading || callableTargetPageLoading}
-                  disabled={saving}
-                  searchValue={assetSearchInput}
-                  onSearchValueChange={setAssetSearchInput}
-                  targetTypeFilter={assetTargetType}
-                  onTargetTypeFilterChange={(next) => { setAssetTargetType(next); setAssetPageOffset(0); }}
-                  pagination={orgAssetPagination}
-                  onPageChange={setAssetPageOffset}
-                  primaryActionLabel="Allow all current assets"
-                  onPrimaryAction={() => setForm((c) => ({ ...c, select_all_current_assets: true, selected_callable_keys: [] }))}
-                  secondaryActionLabel={form.selected_callable_keys.length > 0 ? 'Clear selection' : undefined}
-                  onSecondaryAction={form.selected_callable_keys.length > 0 ? () => setForm((c) => ({ ...c, selected_callable_keys: [] })) : undefined}
-                />
-              )}
-            </div>
-          )}
-          <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => setShowEdit(false)} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-            <button
-              onClick={handleSaveOrg}
-              disabled={saving || (isPlatformAdmin && orgAssetAccessLoading)}
-              className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
-            >
-              {saving ? 'Saving…' : 'Save Changes'}
-            </button>
-          </div>
-        </div>
-      </Modal>
 
       {/* ── Create Team Modal ── */}
       <Modal open={showCreateTeam} onClose={() => setShowCreateTeam(false)} title="Add Team to Organization">
