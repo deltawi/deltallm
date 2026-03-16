@@ -1,5 +1,4 @@
 import { Save } from 'lucide-react';
-import Card from '../Card';
 import { ROUTE_GROUP_MODE_OPTIONS } from '../../lib/routeGroups';
 
 interface GroupFormValues {
@@ -17,62 +16,79 @@ interface RouteGroupSettingsCardProps {
 
 export default function RouteGroupSettingsCard({ form, saving, onChange, onSave }: RouteGroupSettingsCardProps) {
   return (
-    <Card title="Group Settings">
-      <div className="space-y-4">
+    <div className="space-y-5 max-w-lg">
+      <div>
+        <h4 className="text-sm font-semibold text-gray-900">Group identity &amp; traffic state</h4>
+        <p className="mt-1 text-xs text-gray-500">Routing behavior is configured separately in the Advanced tab after you have the right members in place.</p>
+      </div>
+
+      {/* Name + Mode */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
-          <h4 className="text-sm font-semibold text-slate-900">Control the group identity and traffic state</h4>
-          <p className="mt-1 text-xs text-slate-500">Use this section for the group name, workload type, and live-traffic toggle. Routing behavior stays separate below.</p>
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Display Name</label>
+          <label className="mb-1 block text-sm font-medium text-gray-700">Display Name</label>
           <input
             value={form.name}
-            onChange={(event) => onChange({ ...form, name: event.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            onChange={(e) => onChange({ ...form, name: e.target.value })}
+            placeholder="e.g. Production Chat"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Workload Type</label>
-            <select
-              value={form.mode}
-              onChange={(event) => onChange({ ...form, mode: event.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              {ROUTE_GROUP_MODE_OPTIONS.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
-            <div className="font-medium text-slate-900">Default routing</div>
-            <div className="mt-1 text-xs text-slate-500">Shuffle traffic across eligible members until you publish an override in Advanced.</div>
+        <div>
+          <label className="mb-1 block text-sm font-medium text-gray-700">Workload Mode</label>
+          <select
+            value={form.mode}
+            onChange={(e) => onChange({ ...form, mode: e.target.value })}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            {ROUTE_GROUP_MODE_OPTIONS.map((m) => (
+              <option key={m} value={m}>
+                {m.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-[11px] text-gray-400">Only deployments matching this mode can be added as members.</p>
+        </div>
+      </div>
+
+      {/* Live traffic toggle */}
+      <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
+        <div>
+          <div className="text-sm font-semibold text-gray-900">Live Traffic</div>
+          <div className="text-xs text-gray-500">
+            {form.enabled
+              ? 'This group is accepting requests from the gateway.'
+              : 'Disabled — no requests will be routed through this group.'}
           </div>
         </div>
-        <label className="flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-gray-700">
-          <input
-            type="checkbox"
-            checked={form.enabled}
-            onChange={(event) => onChange({ ...form, enabled: event.target.checked })}
-            className="mt-0.5 rounded border-gray-300"
+        <button
+          type="button"
+          role="switch"
+          aria-checked={form.enabled}
+          onClick={() => onChange({ ...form, enabled: !form.enabled })}
+          className={`relative h-6 w-10 shrink-0 cursor-pointer rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+            form.enabled ? 'bg-blue-600' : 'bg-gray-300'
+          }`}
+        >
+          <span
+            className={`absolute top-[3px] h-[18px] w-[18px] rounded-full bg-white shadow-sm transition-transform ${
+              form.enabled ? 'translate-x-[19px]' : 'translate-x-[3px]'
+            }`}
           />
-          <span>
-            Accept live traffic
-            <span className="block text-xs text-gray-500">Turn this off while you are still assembling members or testing policy behavior.</span>
-          </span>
-        </label>
+        </button>
+      </div>
+
+      {/* Save */}
+      <div className="flex justify-end">
         <button
           type="button"
           onClick={onSave}
           disabled={saving}
-          className="w-full mt-2 flex items-center justify-center gap-2 px-3 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
         >
-          <Save className="w-4 h-4" />
-          {saving ? 'Saving...' : 'Save Settings'}
+          <Save className="h-4 w-4" />
+          {saving ? 'Saving…' : 'Save Settings'}
         </button>
       </div>
-    </Card>
+    </div>
   );
 }
