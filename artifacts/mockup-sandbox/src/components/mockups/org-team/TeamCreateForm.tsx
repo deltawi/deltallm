@@ -211,7 +211,7 @@ export function TeamCreateForm() {
                   className="relative rounded-full transition-colors"
                   style={{ height: "22px", width: "40px", background: budgetEnabled ? "#2563eb" : "#d1d5db" }}
                 >
-                  <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${budgetEnabled ? "translate-x-5" : "translate-x-0.5"}`} />
+                  <span className={`absolute left-0 top-[2px] w-[18px] h-[18px] bg-white rounded-full shadow transition-transform ${budgetEnabled ? "translate-x-[20px]" : "translate-x-[2px]"}`} />
                 </button>
               </div>
               {budgetEnabled && (
@@ -243,7 +243,7 @@ export function TeamCreateForm() {
                   className="relative rounded-full transition-colors"
                   style={{ height: "22px", width: "40px", background: rpmEnabled ? "#2563eb" : "#d1d5db" }}
                 >
-                  <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${rpmEnabled ? "translate-x-5" : "translate-x-0.5"}`} />
+                  <span className={`absolute left-0 top-[2px] w-[18px] h-[18px] bg-white rounded-full shadow transition-transform ${rpmEnabled ? "translate-x-[20px]" : "translate-x-[2px]"}`} />
                 </button>
               </div>
               {rpmEnabled && (
@@ -267,7 +267,7 @@ export function TeamCreateForm() {
                   className="relative rounded-full transition-colors"
                   style={{ height: "22px", width: "40px", background: tpmEnabled ? "#2563eb" : "#d1d5db" }}
                 >
-                  <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${tpmEnabled ? "translate-x-5" : "translate-x-0.5"}`} />
+                  <span className={`absolute left-0 top-[2px] w-[18px] h-[18px] bg-white rounded-full shadow transition-transform ${tpmEnabled ? "translate-x-[20px]" : "translate-x-[2px]"}`} />
                 </button>
               </div>
               {tpmEnabled && (
@@ -347,7 +347,7 @@ export function TeamCreateForm() {
                 className="relative rounded-full transition-colors shrink-0 ml-4"
                 style={{ height: "22px", width: "40px", background: blockedEnabled ? "#ef4444" : "#d1d5db" }}
               >
-                <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${blockedEnabled ? "translate-x-5" : "translate-x-0.5"}`} />
+                <span className={`absolute left-0 top-[2px] w-[18px] h-[18px] bg-white rounded-full shadow transition-transform ${blockedEnabled ? "translate-x-[20px]" : "translate-x-[2px]"}`} />
               </button>
             </div>
             {blockedEnabled && (
