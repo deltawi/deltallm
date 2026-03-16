@@ -4,12 +4,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 const orgs = [
-  { id: "org-acme-001", name: "Acme Corp", teams: 6, members: 42, spend: 1842.5, budget: 5000, rpm: 500, tpm: 200000, asset_count: 12, trend: "+8%", status: "healthy" },
-  { id: "org-beta-002", name: "Beta Labs", teams: 3, members: 18, spend: 4780.0, budget: 5000, rpm: 200, tpm: 80000, asset_count: 5, trend: "+24%", status: "warning" },
-  { id: "org-gamma-003", name: "Gamma Research", teams: 9, members: 67, spend: 720.1, budget: null, rpm: null, tpm: null, asset_count: 20, trend: "+3%", status: "healthy" },
-  { id: "org-delta-004", name: "Delta Finance", teams: 4, members: 29, spend: 210.0, budget: 1000, rpm: 100, tpm: 50000, asset_count: 8, trend: "+1%", status: "healthy" },
-  { id: "org-eps-005", name: "Epsilon Ventures", teams: 2, members: 8, spend: 0, budget: 500, rpm: 50, tpm: 20000, asset_count: 3, trend: "0%", status: "idle" },
-  { id: "org-zeta-006", name: "Zeta Dynamics", teams: 7, members: 55, spend: 3100, budget: 3000, rpm: 300, tpm: 120000, asset_count: 15, trend: "+15%", status: "over" },
+  { id: "org-acme-001", name: "Acme Corp", teams: 6, members: 42, spend: 1842.5, budget: 5000, rpm: 500, tpm: 200000, asset_count: 12, status: "healthy" },
+  { id: "org-beta-002", name: "Beta Labs", teams: 3, members: 18, spend: 4780.0, budget: 5000, rpm: 200, tpm: 80000, asset_count: 5, status: "warning" },
+  { id: "org-gamma-003", name: "Gamma Research", teams: 9, members: 67, spend: 720.1, budget: null, rpm: null, tpm: null, asset_count: 20, status: "healthy" },
+  { id: "org-delta-004", name: "Delta Finance", teams: 4, members: 29, spend: 210.0, budget: 1000, rpm: 100, tpm: 50000, asset_count: 8, status: "healthy" },
+  { id: "org-eps-005", name: "Epsilon Ventures", teams: 2, members: 8, spend: 0, budget: 500, rpm: 50, tpm: 20000, asset_count: 3, status: "idle" },
+  { id: "org-zeta-006", name: "Zeta Dynamics", teams: 7, members: 55, spend: 3100, budget: 3000, rpm: 300, tpm: 120000, asset_count: 15, status: "over" },
 ];
 
 function BudgetRing({ spend, budget }: { spend: number; budget: number | null }) {
