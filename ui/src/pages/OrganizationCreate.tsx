@@ -41,8 +41,8 @@ function Toggle({ enabled, onToggle }: { enabled: boolean; onToggle: () => void 
       role="switch"
     >
       <span
-        className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
-          enabled ? 'translate-x-5' : 'translate-x-0.5'
+        className={`absolute left-0 top-[2px] w-[18px] h-[18px] bg-white rounded-full shadow transition-transform ${
+          enabled ? 'translate-x-[20px]' : 'translate-x-[2px]'
         }`}
       />
     </button>
