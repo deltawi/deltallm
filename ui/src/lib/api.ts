@@ -286,7 +286,6 @@ export interface ApiKey {
   owner_account_email?: string | null;
   owner_service_account_id?: string | null;
   owner_service_account_name?: string | null;
-  models: string[];
   spend: number;
   max_budget: number | null;
   rpm_limit: number | null;
@@ -294,6 +293,62 @@ export interface ApiKey {
   expires: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+}
+
+export interface CallableTargetListItem {
+  callable_key: string;
+  target_type: 'model' | 'route_group';
+  binding_count: number;
+}
+
+export interface AssetAccessTarget {
+  callable_key: string;
+  target_type: 'model' | 'route_group';
+  selectable: boolean;
+  selected: boolean;
+  effective_visible: boolean;
+  inherited_only: boolean;
+}
+
+export interface AssetVisibilityTarget {
+  callable_key: string;
+  target_type: 'model' | 'route_group';
+  effective_visible: boolean;
+  effective_enabled?: boolean;
+  visibility_source?: string;
+}
+
+export interface AssetVisibilityResponse {
+  organization_id?: string | null;
+  team_id?: string | null;
+  api_key_id?: string | null;
+  user_id?: string | null;
+  scope_policies?: {
+    team?: 'inherit' | 'restrict';
+    api_key?: 'inherit' | 'restrict';
+  };
+  callable_targets: {
+    total: number;
+    items: AssetVisibilityTarget[];
+  };
+}
+
+export interface ScopedAssetAccess {
+  scope_type: 'organization' | 'team' | 'api_key' | 'user';
+  scope_id: string;
+  organization_id?: string | null;
+  team_id?: string | null;
+  api_key_id?: string | null;
+  user_id?: string | null;
+  mode: 'grant' | 'inherit' | 'restrict';
+  selected_callable_keys: string[];
+  selectable_targets: AssetAccessTarget[];
+  effective_targets: AssetAccessTarget[];
+  summary: {
+    selected_total: number;
+    selectable_total: number;
+    effective_total: number;
+  };
 }
 
 export interface ProviderPreset {
@@ -322,6 +377,27 @@ export interface ModelDeploymentDetail {
   deltallm_params: Record<string, any>;
   model_info: Record<string, any>;
 }
+
+export const callableTargets = {
+  list: (params?: { search?: string; target_type?: string; limit?: number; offset?: number }) =>
+    apiFetch<Paginated<CallableTargetListItem>>(withQuery('/ui/api/callable-targets', params as any)),
+  listAll: async (params?: { search?: string; target_type?: string }) => {
+    const limit = 500;
+    let offset = 0;
+    let items: CallableTargetListItem[] = [];
+    while (true) {
+      const page = await apiFetch<Paginated<CallableTargetListItem>>(
+        withQuery('/ui/api/callable-targets', { ...(params || {}), limit, offset } as any),
+      );
+      items = items.concat(page.data || []);
+      if (!page.pagination?.has_more) {
+        break;
+      }
+      offset += limit;
+    }
+    return items;
+  },
+};
 
 export interface AuditPayload {
   payload_id: string;
@@ -646,6 +722,12 @@ export const organizations = {
   removeMember: (orgId: string, membershipId: string) =>
     apiFetch<any>(`/ui/api/organizations/${encodeURIComponent(orgId)}/members/${encodeURIComponent(membershipId)}`, { method: 'DELETE' }),
   teams: (orgId: string) => apiFetch<any[]>(`/ui/api/organizations/${encodeURIComponent(orgId)}/teams`),
+  assetVisibility: (orgId: string, params?: { user_id?: string }) =>
+    apiFetch<AssetVisibilityResponse>(withQuery(`/ui/api/organizations/${encodeURIComponent(orgId)}/asset-visibility`, params as any)),
+  assetAccess: (orgId: string, params?: { include_targets?: boolean }) =>
+    apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/organizations/${encodeURIComponent(orgId)}/asset-access`, params as any)),
+  updateAssetAccess: (orgId: string, payload: { mode?: string; selected_callable_keys: string[]; select_all_selectable?: boolean }) =>
+    apiFetch<ScopedAssetAccess>(`/ui/api/organizations/${encodeURIComponent(orgId)}/asset-access`, { method: 'PUT', json: payload }),
 };
 
 export const teams = {
@@ -661,6 +743,12 @@ export const teams = {
   addMember: (teamId: string, payload: any) => apiFetch<any>(`/ui/api/teams/${encodeURIComponent(teamId)}/members`, { method: 'POST', json: payload }),
   removeMember: (teamId: string, userId: string) =>
     apiFetch<any>(`/ui/api/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
+  assetVisibility: (teamId: string, params?: { user_id?: string }) =>
+    apiFetch<AssetVisibilityResponse>(withQuery(`/ui/api/teams/${encodeURIComponent(teamId)}/asset-visibility`, params as any)),
+  assetAccess: (teamId: string, params?: { include_targets?: boolean }) =>
+    apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/teams/${encodeURIComponent(teamId)}/asset-access`, params as any)),
+  updateAssetAccess: (teamId: string, payload: { mode: 'inherit' | 'restrict'; selected_callable_keys: string[]; select_all_selectable?: boolean }) =>
+    apiFetch<ScopedAssetAccess>(`/ui/api/teams/${encodeURIComponent(teamId)}/asset-access`, { method: 'PUT', json: payload }),
 };
 
 export const serviceAccounts = {
@@ -717,6 +805,12 @@ export const keys = {
   regenerate: (tokenHash: string) => apiFetch<{ token: string; raw_key: string }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/regenerate`, { method: 'POST' }),
   revoke: (tokenHash: string) => apiFetch<{ revoked: boolean }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/revoke`, { method: 'POST' }),
   delete: (tokenHash: string) => apiFetch<{ deleted: boolean }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}`, { method: 'DELETE' }),
+  assetVisibility: (tokenHash: string, params?: { user_id?: string }) =>
+    apiFetch<AssetVisibilityResponse>(withQuery(`/ui/api/keys/${encodeURIComponent(tokenHash)}/asset-visibility`, params as any)),
+  assetAccess: (tokenHash: string, params?: { include_targets?: boolean }) =>
+    apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/keys/${encodeURIComponent(tokenHash)}/asset-access`, params as any)),
+  updateAssetAccess: (tokenHash: string, payload: { mode: 'inherit' | 'restrict'; selected_callable_keys: string[]; select_all_selectable?: boolean }) =>
+    apiFetch<ScopedAssetAccess>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/asset-access`, { method: 'PUT', json: payload }),
 };
 
 export const batches = {

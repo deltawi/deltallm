@@ -10,9 +10,10 @@ Most operators use the admin API in this order:
 
 1. Log in with the master key or an authenticated admin session
 2. Create a model deployment
-3. Create a virtual API key
-4. Adjust settings, guardrails, or route groups as needed
-5. Inspect spend, audit history, or batch activity
+3. Grant the callable targets an organization, team, or key should see
+4. Create a virtual API key
+5. Adjust settings, guardrails, or route groups as needed
+6. Inspect spend, audit history, or batch activity
 
 ## Authentication
 
@@ -48,6 +49,23 @@ Some endpoints require specific admin permissions, so a valid session does not a
 | `GET` | `/ui/api/route-groups/{group_key}/members` | List group members |
 | `POST` | `/ui/api/route-groups/{group_key}/members` | Add a member |
 | `DELETE` | `/ui/api/route-groups/{group_key}/members/{deployment_id}` | Remove a member |
+
+### Callable Target Governance
+
+Callable targets are the public runtime names that callers can use, including both model names and route-group keys.
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/ui/api/callable-targets` | List callable targets from the live catalog |
+| `GET` | `/ui/api/callable-targets/{callable_key}` | Get one callable target with current bindings |
+| `GET` | `/ui/api/callable-target-bindings` | List callable-target bindings |
+| `POST` | `/ui/api/callable-target-bindings` | Create or update a binding |
+| `DELETE` | `/ui/api/callable-target-bindings/{binding_id}` | Delete a binding |
+| `GET` | `/ui/api/callable-target-scope-policies` | List scope policies such as `inherit` or `restrict` |
+| `POST` | `/ui/api/callable-target-scope-policies` | Create or update a scope policy |
+| `DELETE` | `/ui/api/callable-target-scope-policies/{policy_id}` | Delete a scope policy |
+| `GET` | `/ui/api/callable-target-migration/report` | Report rollout and migration readiness |
+| `POST` | `/ui/api/callable-target-migration/backfill` | Backfill explicit bindings from legacy data |
 
 ### Route Group Policy
 
@@ -121,6 +139,7 @@ Some endpoints require specific admin permissions, so a valid session does not a
 | `GET` | `/ui/api/keys` | List keys |
 | `POST` | `/ui/api/keys` | Create a key |
 | `PUT` | `/ui/api/keys/{token_hash}` | Update a key |
+| `GET` | `/ui/api/keys/{token_hash}/asset-visibility` | Preview effective callable-target visibility for a key |
 | `POST` | `/ui/api/keys/{token_hash}/regenerate` | Regenerate a key |
 | `POST` | `/ui/api/keys/{token_hash}/revoke` | Revoke a key |
 | `DELETE` | `/ui/api/keys/{token_hash}` | Delete a key |
@@ -138,6 +157,7 @@ Some endpoints require specific admin permissions, so a valid session does not a
 |--------|----------|---------|
 | `GET` | `/ui/api/teams` | List teams |
 | `GET` | `/ui/api/teams/{team_id}` | Get one team |
+| `GET` | `/ui/api/teams/{team_id}/asset-visibility` | Preview effective callable-target visibility for a team |
 | `POST` | `/ui/api/teams` | Create a team |
 | `PUT` | `/ui/api/teams/{team_id}` | Update a team |
 | `DELETE` | `/ui/api/teams/{team_id}` | Delete a team |
@@ -152,6 +172,7 @@ Some endpoints require specific admin permissions, so a valid session does not a
 |--------|----------|---------|
 | `GET` | `/ui/api/organizations` | List organizations |
 | `GET` | `/ui/api/organizations/{organization_id}` | Get one organization |
+| `GET` | `/ui/api/organizations/{organization_id}/asset-visibility` | Preview effective callable-target visibility for an organization |
 | `POST` | `/ui/api/organizations` | Create an organization |
 | `PUT` | `/ui/api/organizations/{organization_id}` | Update an organization |
 | `GET` | `/ui/api/organizations/{organization_id}/members` | List organization members |

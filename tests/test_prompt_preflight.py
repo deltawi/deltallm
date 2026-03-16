@@ -5,7 +5,9 @@ import httpx
 import pytest
 
 from src.db.prompt_registry import PromptBindingRecord, PromptResolvedRecord
+from src.models.responses import UserAPIKeyAuth
 from src.services.prompt_registry import PromptProvenance, PromptRegistryService, PromptRenderOutput
+from src.services.runtime_scopes import annotate_auth_metadata, resolve_runtime_scope_context
 
 
 class _InjectingPromptService:
@@ -94,6 +96,39 @@ class _RouteGroupPromptRepo:
 class _PromptRepoWithoutBindings(_PromptRepoForDefaults):
     async def resolve_binding(self, *, scope_type: str, scope_id: str):  # noqa: ANN201
         del scope_type, scope_id
+        return None
+
+
+class _PromptRepoWithScopedBindings(_PromptRepoForDefaults):
+    async def resolve_binding(self, *, scope_type: str, scope_id: str):  # noqa: ANN201
+        if scope_type == "user" and scope_id == "user-1":
+            return PromptBindingRecord(
+                prompt_binding_id="binding-user",
+                scope_type="user",
+                scope_id=scope_id,
+                prompt_template_id="tmpl-support",
+                template_key="support.prompt",
+                label="production",
+                priority=1,
+                enabled=True,
+                metadata=None,
+                created_at=None,
+                updated_at=None,
+            )
+        if scope_type == "key" and scope_id == "sk-test":
+            return PromptBindingRecord(
+                prompt_binding_id="binding-key",
+                scope_type="key",
+                scope_id=scope_id,
+                prompt_template_id="tmpl-key",
+                template_key="key.prompt",
+                label="production",
+                priority=1,
+                enabled=True,
+                metadata=None,
+                created_at=None,
+                updated_at=None,
+            )
         return None
 
 
@@ -245,6 +280,63 @@ async def test_chat_preflight_keeps_explicit_prompt_precedence_over_route_group_
     request_payload = captured.get("json")
     assert isinstance(request_payload, dict)
     assert request_payload["messages"][0]["content"] == "Key prompt wins."
+
+
+@pytest.mark.asyncio
+async def test_prompt_registry_resolves_legacy_key_binding_from_api_key_scope() -> None:
+    service = PromptRegistryService(repository=_PromptRepoForDefaults(), route_group_repository=_RouteGroupPromptRepo())
+
+    resolved = await service.resolve_and_render(
+        explicit_reference=None,
+        variables={},
+        api_key="sk-test",
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        route_group_key=None,
+        model="gpt-4o-mini",
+        request_id="req-1",
+        scope_context=resolve_runtime_scope_context(
+            annotate_auth_metadata(
+                UserAPIKeyAuth(api_key="sk-test"),
+                auth_source="api_key",
+                api_key_scope_id="sk-test",
+            )
+        ),
+    )
+
+    assert resolved is not None
+    assert resolved.provenance.binding_scope == "api_key"
+    assert resolved.provenance.binding_scope_id == "sk-test"
+    assert resolved.messages[0]["content"] == "Key prompt wins."
+
+
+@pytest.mark.asyncio
+async def test_prompt_registry_user_binding_precedes_api_key_binding() -> None:
+    service = PromptRegistryService(repository=_PromptRepoWithScopedBindings())
+    auth = annotate_auth_metadata(
+        UserAPIKeyAuth(api_key="sk-test", user_id="user-1"),
+        auth_source="api_key",
+        api_key_scope_id="sk-test",
+    )
+
+    resolved = await service.resolve_and_render(
+        explicit_reference=None,
+        variables={},
+        api_key=auth.api_key,
+        user_id=auth.user_id,
+        team_id=auth.team_id,
+        organization_id=auth.organization_id,
+        route_group_key=None,
+        model="gpt-4o-mini",
+        request_id="req-2",
+        scope_context=resolve_runtime_scope_context(auth),
+    )
+
+    assert resolved is not None
+    assert resolved.provenance.binding_scope == "user"
+    assert resolved.provenance.binding_scope_id == "user-1"
+    assert resolved.messages[0]["content"] == "Support prompt active."
 
 
 @pytest.mark.asyncio

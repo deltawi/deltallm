@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from src.db.callable_targets import CallableTargetBindingRecord
+from src.db.callable_target_policies import CallableTargetScopePolicyRecord
 from src.db.prompt_registry import PromptResolvedRecord
 from src.cache import CacheKeyBuilder, InMemoryBackend, PrometheusCacheMetrics
+from src.services.callable_target_grants import CallableTargetGrantService
 from src.services.prompt_registry import PromptRegistryService
 
 
@@ -31,6 +34,47 @@ class _PromptMetricsRepository:
     async def create_render_log(self, **kwargs):  # noqa: ANN003, ANN201
         del kwargs
         return None
+
+
+class _ShadowMetricsBindingRepository:
+    async def list_bindings(self, *, callable_key=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+        del callable_key, scope_type, scope_id, limit, offset
+        return [
+            CallableTargetBindingRecord(
+                callable_target_binding_id="ctb-org-1",
+                callable_key="gpt-4o-mini",
+                scope_type="organization",
+                scope_id="org-1",
+                enabled=True,
+            ),
+            CallableTargetBindingRecord(
+                callable_target_binding_id="ctb-org-2",
+                callable_key="text-embedding-3-small",
+                scope_type="organization",
+                scope_id="org-1",
+                enabled=True,
+            ),
+            CallableTargetBindingRecord(
+                callable_target_binding_id="ctb-team-1",
+                callable_key="gpt-4o-mini",
+                scope_type="team",
+                scope_id="team-1",
+                enabled=True,
+            ),
+        ], 3
+
+
+class _ShadowMetricsPolicyRepository:
+    async def list_policies(self, *, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+        del scope_type, scope_id, limit, offset
+        return [
+            CallableTargetScopePolicyRecord(
+                callable_target_scope_policy_id="ctp-team-1",
+                scope_type="team",
+                scope_id="team-1",
+                mode="restrict",
+            )
+        ], 1
 
 
 async def test_metrics_endpoint_exposes_request_and_usage_metrics(client, test_app):
@@ -101,3 +145,27 @@ async def test_metrics_endpoint_exposes_prompt_registry_metrics(client, test_app
     assert "deltallm_prompt_cache_lookups_total" in text
     assert "deltallm_prompt_resolutions_total" in text
     assert "deltallm_prompt_resolution_latency_seconds" in text
+
+
+async def test_metrics_endpoint_exposes_callable_target_policy_shadow_metrics(client, test_app):
+    record = next(iter(test_app.state._test_repo.records.values()))
+    record.organization_id = "org-1"
+    record.team_id = "team-1"
+    record.models = ["gpt-4o-mini", "text-embedding-3-small"]
+    setattr(test_app.state.settings, "callable_target_scope_policy_mode", "shadow")
+    setattr(test_app.state.app_config.general_settings, "callable_target_scope_policy_mode", "shadow")
+    test_app.state.callable_target_grant_service = CallableTargetGrantService(
+        repository=_ShadowMetricsBindingRepository(),
+        policy_repository=_ShadowMetricsPolicyRepository(),
+    )
+    await test_app.state.callable_target_grant_service.reload()
+
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    response = await client.get("/v1/models", headers=headers)
+
+    assert response.status_code == 200
+
+    metrics = await client.get("/metrics")
+    text = metrics.text
+    assert "deltallm_callable_target_policy_shadow_mismatches_total" in text
+    assert 'difference_type="removed_only"' in text

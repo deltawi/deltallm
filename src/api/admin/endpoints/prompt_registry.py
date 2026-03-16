@@ -12,13 +12,19 @@ from src.audit.actions import AuditAction
 from src.auth.roles import Permission
 from src.db.prompt_registry import PromptRegistryRepository
 from src.middleware.admin import require_admin_permission
+from src.services.asset_ownership import (
+    apply_owner_scope_to_metadata,
+    normalize_owner_scope_type,
+    public_metadata_without_owner_scope,
+)
+from src.services.asset_scopes import normalize_scope_type
 from src.services.prompt_registry import PromptRegistryService, normalize_route_preferences
 from src.services.prompt_rendering import detect_secret_like_content
 
 router = APIRouter(tags=["Admin Prompt Registry"])
 
 _TEMPLATE_KEY_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{1,127}$")
-_ALLOWED_SCOPE_TYPES = {"key", "team", "org", "group"}
+_ALLOWED_SCOPE_TYPES = {"api_key", "key", "team", "organization", "org", "user", "group"}
 
 
 def _repository_or_503(request: Request) -> PromptRegistryRepository:
@@ -59,7 +65,28 @@ def _validate_scope_type(value: Any) -> str:
     if scope_type not in _ALLOWED_SCOPE_TYPES:
         allowed = ", ".join(sorted(_ALLOWED_SCOPE_TYPES))
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"scope_type must be one of: {allowed}")
-    return scope_type
+    return normalize_scope_type(scope_type)
+
+
+def _normalize_binding_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(payload)
+    if "scope_type" in normalized:
+        normalized["scope_type"] = normalize_scope_type(normalized.get("scope_type"))
+    return normalized
+
+
+def _normalize_preview_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(payload)
+    winner = normalized.get("winner")
+    if isinstance(winner, dict):
+        normalized["winner"] = _normalize_binding_payload(winner)
+    candidates = normalized.get("candidates")
+    if isinstance(candidates, list):
+        normalized["candidates"] = [
+            _normalize_binding_payload(item) if isinstance(item, dict) else item
+            for item in candidates
+        ]
+    return normalized
 
 
 def _validate_version(value: Any, *, field_name: str = "version") -> int:
@@ -105,6 +132,66 @@ async def _invalidate_all_cache(request: Request) -> None:
     await service.invalidate_all()
 
 
+def _validated_metadata(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="metadata must be an object")
+    return dict(value)
+
+
+def _template_response_payload(template: Any) -> dict[str, Any]:
+    payload = to_json_value(asdict(template))
+    if isinstance(payload, dict):
+        payload["metadata"] = public_metadata_without_owner_scope(payload.get("metadata"))
+    return payload
+
+
+def _resolve_owner_scope_inputs(payload: dict[str, Any], *, existing_scope_type: str | None = None, existing_scope_id: str | None = None) -> tuple[str, str | None]:
+    raw_scope_type = payload.get("owner_scope_type", payload.get("owner_scope", ...))
+    raw_scope_id = payload.get("owner_scope_id", ...)
+
+    if raw_scope_type is ...:
+        scope_type = existing_scope_type or "global"
+    else:
+        try:
+            scope_type = normalize_owner_scope_type(raw_scope_type)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    if raw_scope_id is ...:
+        scope_id = existing_scope_id
+    else:
+        scope_id = str(raw_scope_id).strip() if raw_scope_id is not None else None
+        if scope_id == "":
+            scope_id = None
+    return scope_type, scope_id
+
+
+def _resolve_template_metadata(
+    *,
+    existing_metadata: dict[str, Any] | None,
+    raw_metadata: Any,
+    owner_scope_type: str,
+    owner_scope_id: str | None,
+    allow_legacy_owner_without_scope_id: bool = False,
+) -> dict[str, Any] | None:
+    metadata = dict(existing_metadata or {})
+    raw_metadata_value = _validated_metadata(raw_metadata)
+    if raw_metadata_value is not None:
+        metadata.update(raw_metadata_value)
+    if allow_legacy_owner_without_scope_id and owner_scope_type == "organization" and not owner_scope_id:
+        return metadata or None
+    try:
+        return apply_owner_scope_to_metadata(
+            metadata or None,
+            scope_type=owner_scope_type,
+            scope_id=owner_scope_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
 @router.get("/ui/api/prompt-registry/templates", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
 async def list_prompt_templates(
     request: Request,
@@ -114,7 +201,7 @@ async def list_prompt_templates(
 ) -> dict[str, Any]:
     repository = _repository_or_503(request)
     items, total = await repository.list_templates(search=search, limit=limit, offset=offset)
-    data = [to_json_value(asdict(item)) for item in items]
+    data = [_template_response_payload(item) for item in items]
     return {"data": data, "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total}}
 
 
@@ -128,10 +215,10 @@ async def get_prompt_template(request: Request, template_key: str) -> dict[str, 
     labels = await repository.list_labels(template_key)
     bindings, _ = await repository.list_bindings(template_key=template_key, limit=200, offset=0)
     return {
-        "template": to_json_value(asdict(template)),
+        "template": _template_response_payload(template),
         "versions": [to_json_value(asdict(item)) for item in versions],
         "labels": [to_json_value(asdict(item)) for item in labels],
-        "bindings": [to_json_value(asdict(item)) for item in bindings],
+        "bindings": [to_json_value(_normalize_binding_payload(asdict(item))) for item in bindings],
     }
 
 
@@ -144,17 +231,20 @@ async def create_prompt_template(request: Request, payload: dict[str, Any]) -> d
     if not name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name is required")
     description = str(payload.get("description")).strip() if payload.get("description") is not None else None
-    owner_scope = str(payload.get("owner_scope")).strip() if payload.get("owner_scope") is not None else None
-    metadata = payload.get("metadata")
-    if metadata is not None and not isinstance(metadata, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="metadata must be an object")
+    owner_scope_type, owner_scope_id = _resolve_owner_scope_inputs(payload)
+    metadata = _resolve_template_metadata(
+        existing_metadata=None,
+        raw_metadata=payload.get("metadata"),
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
+    )
 
     try:
         created = await repository.create_template(
             template_key=template_key,
             name=name,
             description=description,
-            owner_scope=owner_scope,
+            owner_scope=owner_scope_type,
             metadata=metadata,
         )
     except Exception as exc:
@@ -162,7 +252,7 @@ async def create_prompt_template(request: Request, payload: dict[str, Any]) -> d
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Prompt template already exists") from exc
         raise
 
-    response = to_json_value(asdict(created))
+    response = _template_response_payload(created)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -191,26 +281,36 @@ async def update_prompt_template(request: Request, template_key: str, payload: d
         if "description" in payload and payload.get("description") is not None
         else existing.description
     )
-    owner_scope = (
-        str(payload.get("owner_scope")).strip()
-        if "owner_scope" in payload and payload.get("owner_scope") is not None
-        else existing.owner_scope
+    owner_scope_type, owner_scope_id = _resolve_owner_scope_inputs(
+        payload,
+        existing_scope_type=existing.owner_scope_type,
+        existing_scope_id=existing.owner_scope_id,
     )
-    metadata = payload.get("metadata", existing.metadata)
-    if metadata is not None and not isinstance(metadata, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="metadata must be an object")
+    metadata = _resolve_template_metadata(
+        existing_metadata=existing.metadata,
+        raw_metadata=payload.get("metadata"),
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
+        allow_legacy_owner_without_scope_id=(
+            existing.owner_scope_type == "organization"
+            and existing.owner_scope_id is None
+            and "owner_scope" not in payload
+            and "owner_scope_type" not in payload
+            and "owner_scope_id" not in payload
+        ),
+    )
 
     updated = await repository.update_template(
         template_key,
         name=name,
         description=description,
-        owner_scope=owner_scope,
+        owner_scope=owner_scope_type,
         metadata=metadata,
     )
     if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template not found")
 
-    response = to_json_value(asdict(updated))
+    response = _template_response_payload(updated)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -219,7 +319,7 @@ async def update_prompt_template(request: Request, template_key: str, payload: d
         resource_id=template_key,
         request_payload=payload,
         response_payload=response,
-        before=to_json_value(asdict(existing)),
+        before=_template_response_payload(existing),
         after=response,
     )
     return response
@@ -391,7 +491,7 @@ async def list_prompt_bindings(
         offset=offset,
     )
     return {
-        "data": [to_json_value(asdict(item)) for item in items],
+        "data": [to_json_value(_normalize_binding_payload(asdict(item))) for item in items],
         "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
     }
 
@@ -428,7 +528,7 @@ async def upsert_prompt_binding(request: Request, payload: dict[str, Any]) -> di
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt template not found")
 
     await _invalidate_scope_cache(request, scope_type=scope_type, scope_id=scope_id)
-    response = to_json_value(asdict(binding))
+    response = to_json_value(_normalize_binding_payload(asdict(binding)))
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -486,12 +586,15 @@ async def preview_prompt_resolution(request: Request, payload: dict[str, Any]) -
     if service is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Prompt registry service unavailable")
     api_key = str(payload.get("api_key")).strip() if payload.get("api_key") is not None else None
+    user_id = str(payload.get("user_id")).strip() if payload.get("user_id") is not None else None
     team_id = str(payload.get("team_id")).strip() if payload.get("team_id") is not None else None
     organization_id = str(payload.get("organization_id")).strip() if payload.get("organization_id") is not None else None
     route_group_key = str(payload.get("route_group_key")).strip() if payload.get("route_group_key") is not None else None
-    return await service.resolve_binding_preview(
+    result = await service.resolve_binding_preview(
         api_key=api_key,
+        user_id=user_id,
         team_id=team_id,
         organization_id=organization_id,
         route_group_key=route_group_key,
     )
+    return _normalize_preview_payload(result)

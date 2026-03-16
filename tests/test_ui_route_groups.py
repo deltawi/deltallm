@@ -5,8 +5,11 @@ from typing import Any
 
 import pytest
 
+from src.db.callable_targets import CallableTargetBindingRecord
 from src.db.prompt_registry import PromptResolvedRecord
-from src.db.route_groups import RouteGroupMemberRecord, RouteGroupRecord, RoutePolicyRecord
+from src.db.route_groups import RouteGroupBindingRecord, RouteGroupMemberRecord, RouteGroupRecord, RoutePolicyRecord
+from src.services.asset_ownership import owner_scope_from_metadata
+from src.services.asset_scopes import normalize_scope_type
 
 
 def _extract_default_prompt(metadata: dict[str, Any] | None) -> dict[str, str] | None:
@@ -29,9 +32,11 @@ class _FakeRouteGroupRepository:
     def __init__(self) -> None:
         self.groups: dict[str, RouteGroupRecord] = {}
         self.members: dict[str, list[RouteGroupMemberRecord]] = {}
+        self.bindings: dict[str, list[RouteGroupBindingRecord]] = {}
         self.policies: dict[str, RoutePolicyRecord] = {}
         self._group_counter = 0
         self._member_counter = 0
+        self._binding_counter = 0
         self._policy_counter = 0
 
     async def list_groups(self, *, search=None, limit=100, offset=0):  # noqa: ANN001, ANN201
@@ -44,6 +49,7 @@ class _FakeRouteGroupRepository:
 
     async def create_group(self, *, group_key, name, mode, routing_strategy, enabled, metadata):  # noqa: ANN001, ANN201
         self._group_counter += 1
+        owner_scope = owner_scope_from_metadata(metadata)
         record = RouteGroupRecord(
             route_group_id=f"rg-{self._group_counter}",
             group_key=group_key,
@@ -53,6 +59,8 @@ class _FakeRouteGroupRepository:
             enabled=enabled,
             metadata=metadata,
             default_prompt=_extract_default_prompt(metadata),
+            owner_scope_type=owner_scope.scope_type,
+            owner_scope_id=owner_scope.scope_id,
         )
         self.groups[group_key] = record
         return record
@@ -61,6 +69,7 @@ class _FakeRouteGroupRepository:
         existing = self.groups.get(group_key)
         if existing is None:
             return None
+        owner_scope = owner_scope_from_metadata(metadata)
         updated = replace(
             existing,
             name=name,
@@ -69,6 +78,8 @@ class _FakeRouteGroupRepository:
             enabled=enabled,
             metadata=metadata,
             default_prompt=_extract_default_prompt(metadata),
+            owner_scope_type=owner_scope.scope_type,
+            owner_scope_id=owner_scope.scope_id,
         )
         self.groups[group_key] = updated
         return updated
@@ -78,8 +89,59 @@ class _FakeRouteGroupRepository:
             return False
         self.groups.pop(group_key, None)
         self.members.pop(group_key, None)
+        self.bindings.pop(group_key, None)
         self.policies.pop(group_key, None)
         return True
+
+    async def list_bindings(self, *, group_key=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+        items = [binding for bindings in self.bindings.values() for binding in bindings]
+        if group_key:
+            items = [binding for binding in items if binding.group_key == group_key]
+        if scope_type:
+            items = [binding for binding in items if binding.scope_type == scope_type]
+        if scope_id:
+            items = [binding for binding in items if binding.scope_id == scope_id]
+        sliced = items[offset : offset + limit]
+        return sliced, len(items)
+
+    async def upsert_binding(self, group_key: str, *, scope_type, scope_id, enabled, metadata):  # noqa: ANN001, ANN201
+        group = self.groups.get(group_key)
+        if group is None:
+            return None
+        normalized_scope_type = normalize_scope_type(scope_type)
+        items = self.bindings.setdefault(group_key, [])
+        for idx, binding in enumerate(items):
+            if binding.scope_type == normalized_scope_type and binding.scope_id == scope_id:
+                updated = replace(binding, enabled=enabled, metadata=metadata)
+                items[idx] = updated
+                return updated
+        self._binding_counter += 1
+        binding = RouteGroupBindingRecord(
+            route_group_binding_id=f"rgb-{self._binding_counter}",
+            route_group_id=group.route_group_id,
+            group_key=group.group_key,
+            scope_type=normalized_scope_type,
+            scope_id=scope_id,
+            enabled=enabled,
+            metadata=metadata,
+        )
+        items.append(binding)
+        return binding
+
+    async def get_binding(self, binding_id: str):  # noqa: ANN201
+        for items in self.bindings.values():
+            for binding in items:
+                if binding.route_group_binding_id == binding_id:
+                    return binding
+        return None
+
+    async def delete_binding(self, binding_id: str) -> bool:
+        for group_key, items in self.bindings.items():
+            kept = [binding for binding in items if binding.route_group_binding_id != binding_id]
+            if len(kept) != len(items):
+                self.bindings[group_key] = kept
+                return True
+        return False
 
     async def list_members(self, group_key: str):  # noqa: ANN201
         return list(self.members.get(group_key, []))
@@ -210,6 +272,55 @@ class _FakeRouteGroupRepository:
         return rolled
 
 
+class _FakeCallableTargetBindingRepository:
+    def __init__(self) -> None:
+        self.bindings: list[CallableTargetBindingRecord] = []
+        self._counter = 0
+
+    async def list_bindings(self, *, callable_key=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+        items = list(self.bindings)
+        if callable_key:
+            items = [item for item in items if item.callable_key == callable_key]
+        if scope_type:
+            items = [item for item in items if item.scope_type == scope_type]
+        if scope_id:
+            items = [item for item in items if item.scope_id == scope_id]
+        return items[offset : offset + limit], len(items)
+
+    async def upsert_binding(self, *, callable_key, scope_type, scope_id, enabled, metadata):  # noqa: ANN001, ANN201
+        for index, binding in enumerate(self.bindings):
+            if binding.callable_key == callable_key and binding.scope_type == scope_type and binding.scope_id == scope_id:
+                updated = replace(binding, enabled=enabled, metadata=metadata)
+                self.bindings[index] = updated
+                return updated
+        self._counter += 1
+        binding = CallableTargetBindingRecord(
+            callable_target_binding_id=f"ctb-{self._counter}",
+            callable_key=callable_key,
+            scope_type=scope_type,
+            scope_id=scope_id,
+            enabled=enabled,
+            metadata=metadata,
+        )
+        self.bindings.append(binding)
+        return binding
+
+    async def delete_binding(self, binding_id: str) -> bool:
+        kept = [binding for binding in self.bindings if binding.callable_target_binding_id != binding_id]
+        if len(kept) == len(self.bindings):
+            return False
+        self.bindings = kept
+        return True
+
+
+class _FakeGrantReload:
+    def __init__(self) -> None:
+        self.reload_count = 0
+
+    async def reload(self) -> None:
+        self.reload_count += 1
+
+
 class _FakeHotReload:
     def __init__(self) -> None:
         self.calls = 0
@@ -242,6 +353,8 @@ async def test_route_group_admin_crud_and_policy_publish(client, test_app):
     )
     assert create_response.status_code == 200
     assert create_response.json()["group_key"] == "support-route"
+    assert create_response.json()["owner_scope_type"] == "global"
+    assert create_response.json()["owner_scope_id"] is None
 
     member_response = await client.post(
         "/ui/api/route-groups/support-route/members",
@@ -263,6 +376,7 @@ async def test_route_group_admin_crud_and_policy_publish(client, test_app):
     assert detail_response.status_code == 200
     payload = detail_response.json()
     assert payload["group"]["group_key"] == "support-route"
+    assert payload["group"]["owner_scope_type"] == "global"
     assert len(payload["members"]) == 1
     assert payload["policy"]["policy_json"]["strategy"] == "least-busy"
 
@@ -519,3 +633,178 @@ async def test_route_group_default_prompt_is_saved_and_cleared(client, test_app)
     assert update_response.json()["default_prompt"] is None
     assert runtime_cache.invalidate_calls >= 2
     assert ("group", "support-route") in prompt_service.invalidations
+
+
+@pytest.mark.asyncio
+async def test_route_group_can_be_created_with_organization_owner_scope(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    repo = _FakeRouteGroupRepository()
+    test_app.state.route_group_repository = repo
+    test_app.state.model_hot_reload_manager = _FakeHotReload()
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    headers = {"Authorization": "Bearer mk-test"}
+
+    response = await client.post(
+        "/ui/api/route-groups",
+        headers=headers,
+        json={
+            "group_key": "org-owned-route",
+            "mode": "chat",
+            "strategy": "weighted",
+            "owner_scope_type": "organization",
+            "owner_scope_id": "org-1",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["owner_scope_type"] == "organization"
+    assert payload["owner_scope_id"] == "org-1"
+    assert repo.groups["org-owned-route"].owner_scope_type == "organization"
+    assert repo.groups["org-owned-route"].owner_scope_id == "org-1"
+
+
+@pytest.mark.asyncio
+async def test_route_group_owner_scope_can_be_reset_to_global(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    repo = _FakeRouteGroupRepository()
+    test_app.state.route_group_repository = repo
+    test_app.state.model_hot_reload_manager = _FakeHotReload()
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    headers = {"Authorization": "Bearer mk-test"}
+
+    await client.post(
+        "/ui/api/route-groups",
+        headers=headers,
+        json={
+            "group_key": "owned-route",
+            "mode": "chat",
+            "strategy": "weighted",
+            "owner_scope_type": "organization",
+            "owner_scope_id": "org-1",
+        },
+    )
+
+    response = await client.put(
+        "/ui/api/route-groups/owned-route",
+        headers=headers,
+        json={"owner_scope_type": "global"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["owner_scope_type"] == "global"
+    assert payload["owner_scope_id"] is None
+    assert repo.groups["owned-route"].owner_scope_type == "global"
+    assert repo.groups["owned-route"].owner_scope_id is None
+
+
+@pytest.mark.asyncio
+async def test_route_group_rejects_organization_owner_without_scope_id(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.model_hot_reload_manager = _FakeHotReload()
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    headers = {"Authorization": "Bearer mk-test"}
+
+    response = await client.post(
+        "/ui/api/route-groups",
+        headers=headers,
+        json={
+            "group_key": "invalid-owned-route",
+            "mode": "chat",
+            "strategy": "weighted",
+            "owner_scope_type": "organization",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "owner_scope_id is required" in response.text
+
+
+@pytest.mark.asyncio
+async def test_route_group_binding_admin_lifecycle(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    repo = _FakeRouteGroupRepository()
+    callable_repo = _FakeCallableTargetBindingRepository()
+    grant_reload = _FakeGrantReload()
+    test_app.state.route_group_repository = repo
+    test_app.state.callable_target_binding_repository = callable_repo
+    test_app.state.callable_target_grant_service = grant_reload
+    test_app.state.model_hot_reload_manager = _FakeHotReload()
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    headers = {"Authorization": "Bearer mk-test"}
+
+    await client.post(
+        "/ui/api/route-groups",
+        headers=headers,
+        json={"group_key": "bound-route", "mode": "chat"},
+    )
+
+    upsert_response = await client.post(
+        "/ui/api/route-group-bindings",
+        headers=headers,
+        json={
+            "group_key": "bound-route",
+            "scope_type": "org",
+            "scope_id": "org-1",
+            "enabled": True,
+            "metadata": {"source": "bootstrap"},
+        },
+    )
+    assert upsert_response.status_code == 200
+    payload = upsert_response.json()
+    assert payload["group_key"] == "bound-route"
+    assert payload["scope_type"] == "organization"
+    assert payload["scope_id"] == "org-1"
+    assert {(binding.callable_key, binding.scope_type, binding.scope_id) for binding in callable_repo.bindings} == {
+        ("bound-route", "organization", "org-1")
+    }
+    assert grant_reload.reload_count == 1
+
+    list_response = await client.get(
+        "/ui/api/route-group-bindings",
+        headers=headers,
+        params={"group_key": "bound-route", "scope_type": "organization", "scope_id": "org-1"},
+    )
+    assert list_response.status_code == 200
+    assert list_response.json()["pagination"]["total"] == 1
+    assert list_response.json()["data"][0]["scope_type"] == "organization"
+
+    detail_response = await client.get("/ui/api/route-groups/bound-route", headers=headers)
+    assert detail_response.status_code == 200
+    assert detail_response.json()["bindings"][0]["scope_id"] == "org-1"
+
+    delete_response = await client.delete(
+        f"/ui/api/route-group-bindings/{payload['route_group_binding_id']}",
+        headers=headers,
+    )
+    assert delete_response.status_code == 200
+    assert delete_response.json()["deleted"] is True
+    assert callable_repo.bindings == []
+    assert grant_reload.reload_count == 2
+
+
+@pytest.mark.asyncio
+async def test_route_group_binding_rejects_invalid_scope_type(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    repo = _FakeRouteGroupRepository()
+    test_app.state.route_group_repository = repo
+    test_app.state.model_hot_reload_manager = _FakeHotReload()
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    headers = {"Authorization": "Bearer mk-test"}
+
+    await client.post(
+        "/ui/api/route-groups",
+        headers=headers,
+        json={"group_key": "bound-route", "mode": "chat"},
+    )
+
+    response = await client.post(
+        "/ui/api/route-group-bindings",
+        headers=headers,
+        json={"group_key": "bound-route", "scope_type": "group", "scope_id": "nested"},
+    )
+
+    assert response.status_code == 400
+    assert "scope_type must be one of" in response.text

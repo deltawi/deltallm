@@ -8,6 +8,7 @@ from typing import Any
 
 from src.db.mcp import MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
 from src.models.responses import UserAPIKeyAuth
+from src.services.runtime_scopes import resolve_runtime_scope_context
 
 from .approvals import MCPApprovalService
 from .capabilities import NamespacedTool, parse_namespaced_tool_name
@@ -281,7 +282,8 @@ class MCPGatewayService:
         )
 
     async def list_visible_servers(self, auth: UserAPIKeyAuth) -> list[VisibleMCPServer]:
-        if self._is_master_key(auth):
+        scope_context = resolve_runtime_scope_context(auth)
+        if scope_context.is_master_key:
             servers, _ = await self.registry.list_servers(enabled=True, limit=500, offset=0)
             visible: list[VisibleMCPServer] = []
             for server in servers:
@@ -301,8 +303,7 @@ class MCPGatewayService:
                 )
             return visible
 
-        scopes = self._scopes_for_auth(auth)
-        bindings = await self.registry.list_effective_bindings(scopes=scopes)
+        bindings = await self.registry.list_effective_bindings(scopes=scope_context.binding_scopes)
         grouped: dict[str, list[MCPServerBindingRecord]] = defaultdict(list)
         for binding in bindings:
             grouped[binding.mcp_server_id].append(binding)
@@ -417,10 +418,11 @@ class MCPGatewayService:
         server_id: str,
         tool_name: str,
     ) -> MCPToolPolicyRecord | None:
-        if self._is_master_key(auth):
+        scope_context = resolve_runtime_scope_context(auth)
+        if scope_context.is_master_key:
             return None
         policies = await self.registry.list_effective_tool_policies(
-            scopes=self._scopes_for_auth(auth),
+            scopes=scope_context.binding_scopes,
             server_id=server_id,
         )
         candidates = [policy for policy in policies if policy.tool_name == tool_name]
@@ -428,22 +430,6 @@ class MCPGatewayService:
             return None
         candidates.sort(key=lambda policy: _SCOPE_PRECEDENCE.get(policy.scope_type, 999))
         return candidates[0]
-
-    @staticmethod
-    def _is_master_key(auth: UserAPIKeyAuth) -> bool:
-        metadata = auth.metadata or {}
-        return bool(metadata.get("is_master_key")) or auth.api_key == "master_key"
-
-    @staticmethod
-    def _scopes_for_auth(auth: UserAPIKeyAuth) -> list[tuple[str, str]]:
-        scopes: list[tuple[str, str]] = []
-        if auth.api_key:
-            scopes.append(("api_key", auth.api_key))
-        if auth.team_id:
-            scopes.append(("team", auth.team_id))
-        if auth.organization_id:
-            scopes.append(("organization", auth.organization_id))
-        return scopes
 
     @staticmethod
     def _select_binding(bindings: list[MCPServerBindingRecord]) -> MCPBindingResolution:

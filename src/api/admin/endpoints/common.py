@@ -93,6 +93,42 @@ def db_or_503(request: Request) -> Any:
     return db
 
 
+async def get_runtime_user_row(db: Any, user_id: str) -> dict[str, Any]:
+    rows = await db.query_raw(
+        """
+        SELECT
+            u.user_id,
+            u.team_id,
+            t.organization_id
+        FROM deltallm_usertable u
+        LEFT JOIN deltallm_teamtable t ON t.team_id = u.team_id
+        WHERE u.user_id = $1
+        LIMIT 1
+        """,
+        user_id,
+    )
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id not found")
+    return dict(rows[0])
+
+
+async def validate_runtime_user_scope(
+    db: Any,
+    user_id: str,
+    *,
+    team_id: str | None = None,
+    organization_id: str | None = None,
+) -> dict[str, Any]:
+    row = await get_runtime_user_row(db, user_id)
+    user_team_id = str(row.get("team_id") or "").strip() or None
+    user_organization_id = str(row.get("organization_id") or "").strip() or None
+    if team_id and user_team_id != team_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id does not belong to team_id")
+    if organization_id and user_organization_id != organization_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id does not belong to organization_id")
+    return row
+
+
 def to_json_value(value: Any) -> Any:
     if isinstance(value, Decimal):
         return float(value)

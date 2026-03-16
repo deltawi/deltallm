@@ -17,6 +17,7 @@ from src.mcp import (
     MCPToolResultCache,
     StreamableHTTPMCPClient,
 )
+from src.services.callable_target_grants import CallableTargetGrantService
 from src.services.prompt_registry import PromptRegistryService
 
 
@@ -27,6 +28,11 @@ class RuntimeServicesRuntime:
 
 
 async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
+    app.state.callable_target_grant_service = CallableTargetGrantService(
+        repository=getattr(app.state, "callable_target_binding_repository", None),
+        policy_repository=getattr(app.state, "callable_target_scope_policy_repository", None),
+    )
+    await app.state.callable_target_grant_service.reload()
     app.state.prompt_registry_service = PromptRegistryService(
         repository=app.state.prompt_registry_repository,
         route_group_repository=app.state.route_group_repository,
@@ -82,6 +88,7 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
     return RuntimeServicesRuntime(
         callback_manager=callback_manager,
         statuses=(
+            BootstrapStatus("callable_target_grants", "ready"),
             BootstrapStatus("prompt_registry", "ready"),
             BootstrapStatus("mcp_runtime", "ready"),
             BootstrapStatus("guardrails", "ready"),

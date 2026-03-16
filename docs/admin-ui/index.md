@@ -40,12 +40,14 @@ Parent menu sections start collapsed by default and expand only when the operato
 | [Route Groups](route-groups.md) | Group-level routing, membership, prompt binding, and usage |
 | [Prompt Registry](prompt-registry.md) | Prompt shells, versions, labels, tests, and history |
 | [MCP Servers](mcp.md) | External MCP server registry, bindings, tool policies, approvals, and health |
-| [API Keys](api-keys.md) | Key issuance, budgets, rate limits, and allowlists |
+| [API Keys](api-keys.md) | Key issuance, ownership, budgets, and rate limits |
 | [Organizations](organizations.md) | Top-level ownership, budgets, and limits |
-| [Teams](teams.md) | Team-level budgets, models, and memberships |
+| [Teams](teams.md) | Team-level budgets, memberships, and operating scope |
 | [People & Access](people-and-access.md) | Platform accounts plus org and team memberships |
 | [Usage & Spend](usage.md) | Trends, breakdowns, and request logs |
 | [Audit Logs](audit-logs.md) | Control-plane and data-plane audit history |
 | [Batch Jobs](batch-jobs.md) | Batch processing status and progress |
 | [Guardrails](guardrails.md) | Safety policy definitions and scoped assignment |
 | [Settings](settings.md) | Global runtime, fallback, and cache behavior |
+
+Runtime visibility for models and route groups is governed through callable-target bindings and scope policies. In the UI, organizations choose the allowed top-level asset set, while teams and keys can inherit that set or narrow it further in their create/edit dialogs.

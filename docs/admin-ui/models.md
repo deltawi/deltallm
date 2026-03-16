@@ -64,6 +64,7 @@ Create a route group when:
 - DeltaLLM validates provider and mode compatibility when you create or update a deployment
 - Creating, updating, and deleting deployments requires admin access
 - Readable deployment IDs make later route-group work easier
+- Visibility to organizations, teams, keys, and users is governed through callable-target bindings and scope policies
 
 ## Related Pages
 

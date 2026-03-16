@@ -379,9 +379,58 @@ model DeltaLLM_RouteGroup {
 
   members  DeltaLLM_RouteGroupMember[]
   policies DeltaLLM_RoutePolicy[]
+  bindings DeltaLLM_RouteGroupBinding[]
 
   @@index([enabled])
   @@map("deltallm_routegroup")
+}
+
+model DeltaLLM_RouteGroupBinding {
+  route_group_binding_id String   @id @default(uuid())
+  route_group_id         String
+  scope_type             String
+  scope_id               String
+  enabled                Boolean  @default(true)
+  metadata               Json?
+  created_at             DateTime @default(now())
+  updated_at             DateTime @updatedAt
+
+  group DeltaLLM_RouteGroup @relation(fields: [route_group_id], references: [route_group_id], onDelete: Cascade)
+
+  @@unique([route_group_id, scope_type, scope_id], map: "deltallm_routegroupbinding_scope_target_key")
+  @@index([scope_type, scope_id, enabled], map: "deltallm_routegroupbinding_scope_idx")
+  @@index([route_group_id], map: "deltallm_routegroupbinding_group_idx")
+  @@map("deltallm_routegroupbinding")
+}
+
+model DeltaLLM_CallableTargetBinding {
+  callable_target_binding_id String   @id @default(uuid())
+  callable_key               String
+  scope_type                 String
+  scope_id                   String
+  enabled                    Boolean  @default(true)
+  metadata                   Json?
+  created_at                 DateTime @default(now())
+  updated_at                 DateTime @updatedAt
+
+  @@unique([callable_key, scope_type, scope_id], map: "deltallm_callabletargetbinding_scope_target_key")
+  @@index([scope_type, scope_id, enabled], map: "deltallm_callabletargetbinding_scope_idx")
+  @@index([callable_key], map: "deltallm_callabletargetbinding_target_idx")
+  @@map("deltallm_callabletargetbinding")
+}
+
+model DeltaLLM_CallableTargetScopePolicy {
+  callable_target_scope_policy_id String   @id @default(uuid())
+  scope_type                      String
+  scope_id                        String
+  mode                            String   @default("inherit")
+  metadata                        Json?
+  created_at                      DateTime @default(now())
+  updated_at                      DateTime @updatedAt
+
+  @@unique([scope_type, scope_id], map: "deltallm_callabletargetscopepolicy_scope_key")
+  @@index([scope_type, scope_id], map: "deltallm_callabletargetscopepolicy_scope_idx")
+  @@map("deltallm_callabletargetscopepolicy")
 }
 
 model DeltaLLM_MCPServer {

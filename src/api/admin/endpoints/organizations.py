@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 import secrets
 from time import perf_counter
 from typing import Any
@@ -8,9 +9,34 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 
 from src.auth.roles import OrganizationRole, Permission
 from src.audit.actions import AuditAction
-from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, optional_int, to_json_value, get_auth_scope, AuthScope
+from src.services.asset_binding_mirror import (
+    callable_catalog,
+    callable_target_binding_repository,
+    delete_callable_target_binding_mirror,
+    delete_route_group_binding_mirror,
+    list_all_callable_target_bindings,
+    list_all_route_group_bindings,
+    mirror_callable_target_binding_to_route_group,
+    mirror_route_group_binding_to_callable_target,
+    reload_callable_target_grants,
+    route_group_repository,
+)
+from src.api.admin.endpoints.common import (
+    AuthScope,
+    db_or_503,
+    emit_admin_mutation_audit,
+    get_auth_scope,
+    optional_int,
+    to_json_value,
+    validate_runtime_user_scope,
+)
 from src.db.repositories import AUDIT_METADATA_RETENTION_DAYS_KEY, AUDIT_PAYLOAD_RETENTION_DAYS_KEY
 from src.middleware.admin import require_admin_permission
+from src.services.asset_visibility_preview import (
+    build_asset_visibility_preview,
+    list_scope_route_group_bindings,
+)
+from src.services.scoped_asset_access import apply_scope_asset_access, build_scope_asset_access
 
 router = APIRouter(tags=["Admin Organizations"])
 
@@ -48,6 +74,238 @@ def _audit_retention_metadata(payload: dict[str, Any], existing: dict[str, Any] 
     if not metadata and not metadata_changed:
         return None
     return metadata
+
+def _normalize_route_group_binding_payloads(payload: Any) -> list[dict[str, Any]]:
+    if payload is None:
+        return []
+    if not isinstance(payload, list):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="route_group_bindings must be an array")
+
+    normalized: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="route_group_bindings entries must be objects")
+        group_key = str(item.get("group_key") or "").strip()
+        if not group_key:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="route_group_bindings.group_key is required")
+        metadata = item.get("metadata")
+        if metadata is not None and not isinstance(metadata, dict):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="route_group_bindings.metadata must be an object")
+        normalized.append(
+            {
+                "group_key": group_key,
+                "enabled": bool(item.get("enabled", True)),
+                "metadata": metadata,
+            }
+        )
+
+    deduped: dict[str, dict[str, Any]] = {}
+    for item in normalized:
+        deduped[item["group_key"]] = item
+    return list(deduped.values())
+
+
+def _normalize_callable_target_binding_payloads(payload: Any) -> list[dict[str, Any]]:
+    if payload is None:
+        return []
+    if not isinstance(payload, list):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="callable_target_bindings must be an array")
+
+    normalized: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="callable_target_bindings entries must be objects")
+        callable_key = str(item.get("callable_key") or "").strip()
+        if not callable_key:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="callable_target_bindings.callable_key is required")
+        metadata = item.get("metadata")
+        if metadata is not None and not isinstance(metadata, dict):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="callable_target_bindings.metadata must be an object")
+        normalized.append(
+            {
+                "callable_key": callable_key,
+                "enabled": bool(item.get("enabled", True)),
+                "metadata": metadata,
+            }
+        )
+
+    deduped: dict[str, dict[str, Any]] = {}
+    for item in normalized:
+        deduped[item["callable_key"]] = item
+    return list(deduped.values())
+
+
+def _validate_route_group_callable_target_overlap(
+    route_group_bindings: list[dict[str, Any]],
+    callable_target_bindings: list[dict[str, Any]],
+) -> None:
+    callable_by_key = {item["callable_key"]: item for item in callable_target_bindings}
+    for binding in route_group_bindings:
+        callable_binding = callable_by_key.get(binding["group_key"])
+        if callable_binding is None:
+            continue
+        if bool(callable_binding.get("enabled", True)) != bool(binding.get("enabled", True)):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"route_group_bindings and callable_target_bindings disagree for: {binding['group_key']}",
+            )
+        if (callable_binding.get("metadata") or None) != (binding.get("metadata") or None):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"route_group_bindings and callable_target_bindings disagree for: {binding['group_key']}",
+            )
+
+
+async def _sync_org_route_group_bindings(
+    request: Request,
+    *,
+    organization_id: str,
+    binding_payloads: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    repository = route_group_repository(request)
+    if repository is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Route group repository unavailable")
+
+    desired_by_group: dict[str, dict[str, Any]] = {}
+    for item in binding_payloads:
+        group = await repository.get_group(item["group_key"])
+        if group is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"route_group_bindings.group_key does not exist: {item['group_key']}",
+            )
+        desired_by_group[item["group_key"]] = item
+
+    current_bindings = await list_all_route_group_bindings(
+        repository,
+        scope_type="organization",
+        scope_id=organization_id,
+    )
+    current_by_group = {binding.group_key: binding for binding in current_bindings}
+
+    for group_key, binding in current_by_group.items():
+        if group_key in desired_by_group:
+            continue
+        await repository.delete_binding(binding.route_group_binding_id)
+        await delete_callable_target_binding_mirror(
+            request,
+            callable_key=group_key,
+            scope_type="organization",
+            scope_id=organization_id,
+        )
+
+    for group_key, item in desired_by_group.items():
+        await repository.upsert_binding(
+            group_key,
+            scope_type="organization",
+            scope_id=organization_id,
+            enabled=item["enabled"],
+            metadata=item["metadata"],
+        )
+        await mirror_route_group_binding_to_callable_target(
+            request,
+            group_key=group_key,
+            scope_type="organization",
+            scope_id=organization_id,
+            enabled=item["enabled"],
+            metadata=item["metadata"],
+        )
+
+    bindings = await list_all_route_group_bindings(
+        repository,
+        scope_type="organization",
+        scope_id=organization_id,
+    )
+    return [to_json_value(asdict(binding)) for binding in bindings]
+
+
+async def _list_org_route_group_bindings(request: Request, organization_id: str) -> list[dict[str, Any]]:
+    return await list_scope_route_group_bindings(
+        request,
+        scope_type="organization",
+        scope_id=organization_id,
+    )
+
+
+async def _sync_org_callable_target_bindings(
+    request: Request,
+    *,
+    organization_id: str,
+    binding_payloads: list[dict[str, Any]],
+    protected_callable_keys: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    repository = callable_target_binding_repository(request)
+    if repository is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Callable target binding repository unavailable")
+
+    catalog = callable_catalog(request)
+    desired_by_key: dict[str, dict[str, Any]] = {}
+    for item in binding_payloads:
+        if item["callable_key"] not in catalog:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"callable_target_bindings.callable_key does not exist: {item['callable_key']}",
+            )
+        desired_by_key[item["callable_key"]] = item
+
+    current_bindings = await list_all_callable_target_bindings(
+        repository,
+        scope_type="organization",
+        scope_id=organization_id,
+    )
+    current_by_key = {binding.callable_key: binding for binding in current_bindings}
+    protected_keys = protected_callable_keys or set()
+
+    for callable_key, binding in current_by_key.items():
+        if callable_key in desired_by_key or callable_key in protected_keys:
+            continue
+        await repository.delete_binding(binding.callable_target_binding_id)
+        await delete_route_group_binding_mirror(
+            request,
+            group_key=callable_key,
+            scope_type="organization",
+            scope_id=organization_id,
+        )
+
+    for callable_key, item in desired_by_key.items():
+        await repository.upsert_binding(
+            callable_key=callable_key,
+            scope_type="organization",
+            scope_id=organization_id,
+            enabled=item["enabled"],
+            metadata=item["metadata"],
+        )
+        await mirror_callable_target_binding_to_route_group(
+            request,
+            callable_key=callable_key,
+            scope_type="organization",
+            scope_id=organization_id,
+            enabled=item["enabled"],
+            metadata=item["metadata"],
+        )
+
+    bindings = await list_all_callable_target_bindings(
+        repository,
+        scope_type="organization",
+        scope_id=organization_id,
+    )
+    return [to_json_value(asdict(binding)) for binding in bindings]
+
+
+async def _list_org_callable_target_bindings(request: Request, organization_id: str) -> list[dict[str, Any]]:
+    repository = callable_target_binding_repository(request)
+    if repository is None:
+        return []
+    bindings = await list_all_callable_target_bindings(
+        repository,
+        scope_type="organization",
+        scope_id=organization_id,
+    )
+    return [to_json_value(asdict(binding)) for binding in bindings]
+
+
+async def _build_org_asset_visibility_preview(request: Request, organization_id: str) -> dict[str, Any]:
+    return await build_asset_visibility_preview(request, organization_id=organization_id)
 
 
 @router.get("/ui/api/organizations")
@@ -122,7 +380,108 @@ async def get_organization(request: Request, organization_id: str) -> dict[str, 
     )
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
-    return to_json_value(dict(rows[0]))
+    payload = to_json_value(dict(rows[0]))
+    if isinstance(payload, dict):
+        payload["route_group_bindings"] = await _list_org_route_group_bindings(request, organization_id)
+        payload["callable_target_bindings"] = await _list_org_callable_target_bindings(request, organization_id)
+    return payload
+
+
+@router.get("/ui/api/organizations/{organization_id}/asset-visibility", dependencies=[Depends(require_admin_permission(Permission.ORG_READ))])
+async def get_organization_asset_visibility(
+    request: Request,
+    organization_id: str,
+    user_id: str | None = Query(default=None),
+) -> dict[str, Any]:
+    db = db_or_503(request)
+    rows = await db.query_raw(
+        """
+        SELECT organization_id
+        FROM deltallm_organizationtable
+        WHERE organization_id = $1
+        LIMIT 1
+        """,
+        organization_id,
+    )
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+    user_row = (
+        await validate_runtime_user_scope(db, user_id, organization_id=organization_id)
+        if user_id is not None and str(user_id).strip()
+        else None
+    )
+    return await build_asset_visibility_preview(
+        request,
+        organization_id=organization_id,
+        user_id=str(user_row.get("user_id") or "").strip() or None if user_row else None,
+    )
+
+
+@router.get("/ui/api/organizations/{organization_id}/asset-access", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+async def get_organization_asset_access(
+    request: Request,
+    organization_id: str,
+    include_targets: bool = Query(default=True),
+) -> dict[str, Any]:
+    db = db_or_503(request)
+    rows = await db.query_raw(
+        """
+        SELECT organization_id
+        FROM deltallm_organizationtable
+        WHERE organization_id = $1
+        LIMIT 1
+        """,
+        organization_id,
+    )
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+    return await build_scope_asset_access(
+        request,
+        scope_type="organization",
+        scope_id=organization_id,
+        organization_id=organization_id,
+        include_targets=include_targets,
+    )
+
+
+@router.put("/ui/api/organizations/{organization_id}/asset-access", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+async def update_organization_asset_access(
+    request: Request,
+    organization_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    request_start = perf_counter()
+    db = db_or_503(request)
+    rows = await db.query_raw(
+        """
+        SELECT organization_id
+        FROM deltallm_organizationtable
+        WHERE organization_id = $1
+        LIMIT 1
+        """,
+        organization_id,
+    )
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+    response = await apply_scope_asset_access(
+        request,
+        scope_type="organization",
+        scope_id=organization_id,
+        organization_id=organization_id,
+        mode=payload.get("mode"),
+        selected_callable_keys=payload.get("selected_callable_keys", []),
+        select_all_selectable=bool(payload.get("select_all_selectable", False)),
+    )
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_ORGANIZATION_ASSET_ACCESS_UPDATE,
+        resource_type="organization_asset_access",
+        resource_id=organization_id,
+        request_payload=payload,
+        response_payload=response,
+    )
+    return response
 
 
 @router.post("/ui/api/organizations", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
@@ -139,6 +498,9 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
         "audit_content_storage_enabled",
     )
     metadata = _audit_retention_metadata(payload)
+    route_group_bindings = _normalize_route_group_binding_payloads(payload.get("route_group_bindings"))
+    callable_target_bindings = _normalize_callable_target_binding_payloads(payload.get("callable_target_bindings"))
+    _validate_route_group_callable_target_overlap(route_group_bindings, callable_target_bindings)
 
     await db.execute_raw(
         """
@@ -174,6 +536,19 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
         bool(audit_content_storage_enabled) if audit_content_storage_enabled is not None else False,
         metadata if metadata is not None else None,
     )
+    applied_route_group_bindings = await _sync_org_route_group_bindings(
+        request,
+        organization_id=organization_id,
+        binding_payloads=route_group_bindings,
+    ) if route_group_bindings else []
+    applied_callable_target_bindings = await _sync_org_callable_target_bindings(
+        request,
+        organization_id=organization_id,
+        binding_payloads=callable_target_bindings,
+        protected_callable_keys={item["group_key"] for item in route_group_bindings},
+    ) if callable_target_bindings else []
+    if route_group_bindings or callable_target_bindings:
+        await reload_callable_target_grants(request)
     response = {
         "organization_id": organization_id,
         "organization_name": organization_name,
@@ -182,6 +557,8 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
         "tpm_limit": tpm_limit,
         "audit_content_storage_enabled": bool(audit_content_storage_enabled) if audit_content_storage_enabled is not None else False,
         "metadata": metadata or {},
+        "route_group_bindings": applied_route_group_bindings,
+        "callable_target_bindings": applied_callable_target_bindings,
     }
     await emit_admin_mutation_audit(
         request=request,
@@ -196,9 +573,16 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
 
 
 @router.put("/ui/api/organizations/{organization_id}", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
-async def update_organization(request: Request, organization_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+async def update_organization(
+    request: Request,
+    organization_id: str,
+    payload: dict[str, Any],
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
     request_start = perf_counter()
     db = db_or_503(request)
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
     rows = await db.query_raw(
         """
         SELECT organization_id, organization_name, max_budget, spend, rpm_limit, tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
@@ -221,6 +605,22 @@ async def update_organization(request: Request, organization_id: str, payload: d
         "audit_content_storage_enabled",
     )
     metadata = _audit_retention_metadata(payload, existing.get("metadata") if isinstance(existing.get("metadata"), dict) else None)
+    route_group_bindings = (
+        _normalize_route_group_binding_payloads(payload.get("route_group_bindings"))
+        if "route_group_bindings" in payload
+        else None
+    )
+    callable_target_bindings = (
+        _normalize_callable_target_binding_payloads(payload.get("callable_target_bindings"))
+        if "callable_target_bindings" in payload
+        else None
+    )
+    _validate_route_group_callable_target_overlap(route_group_bindings or [], callable_target_bindings or [])
+    if (route_group_bindings is not None or callable_target_bindings is not None) and not scope.is_platform_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only platform admins can update asset bootstrap bindings",
+        )
 
     await db.execute_raw(
         """
@@ -254,6 +654,28 @@ async def update_organization(request: Request, organization_id: str, payload: d
     if not updated_rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
     updated = to_json_value(dict(updated_rows[0]))
+    if isinstance(updated, dict):
+        updated["route_group_bindings"] = (
+            await _sync_org_route_group_bindings(
+                request,
+                organization_id=organization_id,
+                binding_payloads=route_group_bindings,
+            )
+            if route_group_bindings is not None
+            else await _list_org_route_group_bindings(request, organization_id)
+        )
+        updated["callable_target_bindings"] = (
+            await _sync_org_callable_target_bindings(
+                request,
+                organization_id=organization_id,
+                binding_payloads=callable_target_bindings,
+                protected_callable_keys={item["group_key"] for item in (route_group_bindings or [])},
+            )
+            if callable_target_bindings is not None
+            else await _list_org_callable_target_bindings(request, organization_id)
+        )
+        if route_group_bindings is not None or callable_target_bindings is not None:
+            await reload_callable_target_grants(request)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -485,7 +907,7 @@ async def list_organization_teams(request: Request, organization_id: str) -> lis
     db = db_or_503(request)
     rows = await db.query_raw(
         """
-        SELECT t.team_id, t.team_alias, t.max_budget, t.spend, t.rpm_limit, t.tpm_limit, t.models, t.blocked, t.created_at, t.updated_at,
+        SELECT t.team_id, t.team_alias, t.max_budget, t.spend, t.rpm_limit, t.tpm_limit, t.blocked, t.created_at, t.updated_at,
                (SELECT COUNT(*) FROM deltallm_teammembership tm WHERE tm.team_id = t.team_id) AS member_count
         FROM deltallm_teamtable t
         WHERE t.organization_id = $1

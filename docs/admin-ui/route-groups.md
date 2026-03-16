@@ -34,6 +34,8 @@ A route group defines:
 - optional prompt binding
 - optional routing policy history and overrides
 
+Route groups are also callable targets. Their runtime visibility is governed through the same callable-target bindings and scope policies used for public model names.
+
 ## What the List Page Shows
 
 - group key and display name

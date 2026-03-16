@@ -7,6 +7,8 @@ from src.metrics.audit import (
 from src.metrics.counters import (
     increment_cache_hit,
     increment_cache_miss,
+    increment_callable_target_policy_fallback,
+    increment_callable_target_policy_shadow_mismatch,
     increment_prompt_cache_lookup,
     increment_prompt_resolution,
     increment_request,
@@ -36,6 +38,8 @@ __all__ = [
     "increment_spend",
     "increment_cache_hit",
     "increment_cache_miss",
+    "increment_callable_target_policy_shadow_mismatch",
+    "increment_callable_target_policy_fallback",
     "increment_prompt_cache_lookup",
     "increment_prompt_resolution",
     "observe_request_latency",

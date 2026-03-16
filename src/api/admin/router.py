@@ -4,6 +4,7 @@ from src.api.admin.endpoints import (
     audit_router,
     auth_ui_router,
     batches_router,
+    callable_targets_router,
     config_router,
     guardrails_router,
     keys_router,
@@ -25,6 +26,7 @@ admin_router = APIRouter()
 admin_router.include_router(auth_ui_router)
 admin_router.include_router(keys_router)
 admin_router.include_router(mcp_router)
+admin_router.include_router(callable_targets_router)
 admin_router.include_router(models_router)
 admin_router.include_router(service_accounts_router)
 admin_router.include_router(teams_router)

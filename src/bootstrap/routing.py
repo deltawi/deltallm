@@ -26,6 +26,7 @@ from src.router import (
     build_deployment_registry,
     build_route_group_policies,
 )
+from src.services.callable_targets import build_callable_target_catalog
 from src.services.model_deployments import bootstrap_model_deployments_from_config, load_model_registry
 from src.services.route_groups import load_route_groups
 
@@ -75,6 +76,10 @@ async def init_routing_runtime(
         route_group_cache=app.state.route_group_runtime_cache,
     )
     logger.info("loaded route groups from %s source", route_group_source)
+    app.state.callable_target_catalog = build_callable_target_catalog(
+        app.state.model_registry,
+        app.state.route_groups,
+    )
 
     state_backend = RedisStateBackend(redis_client)
     route_groups = list(getattr(app.state, "route_groups", []))
@@ -160,7 +165,11 @@ async def init_routing_runtime(
         health_checker=health_checker,
         health_task=health_task,
         statuses=(
-            BootstrapStatus("routing", "ready", f"models={len(app.state.model_registry)} route_groups={len(app.state.route_groups)}"),
+            BootstrapStatus(
+                "routing",
+                "ready",
+                f"models={len(app.state.model_registry)} route_groups={len(app.state.route_groups)} callable_targets={len(app.state.callable_target_catalog)}",
+            ),
             BootstrapStatus("background_health_checks", "ready" if health_task is not None else "disabled"),
         ),
     )

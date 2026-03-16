@@ -1,12 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
-import { teams } from '../lib/api';
+import { organizations, teams } from '../lib/api';
+import { buildParentScopedAssetTargets, buildScopedSelectableTargets } from '../lib/assetAccess';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import Modal from '../components/Modal';
 import UserSearchSelect from '../components/UserSearchSelect';
-import { ArrowLeft, UsersRound, Users, DollarSign, Gauge, Box, Pencil, UserPlus, Trash2 } from 'lucide-react';
+import AssetAccessEditor from '../components/access/AssetAccessEditor';
+import { ArrowLeft, UsersRound, Users, DollarSign, Gauge, Shield, Pencil, UserPlus, Trash2 } from 'lucide-react';
 
 function StatCard({ icon: Icon, label, value, subValue, color }: { icon: any; label: string; value: string; subValue?: string; color: string }) {
   return (
@@ -29,33 +31,88 @@ export default function TeamDetail() {
 
   const { data: team, loading: teamLoading, refetch: refetchTeam } = useApi(() => teams.get(teamId!), [teamId]);
   const { data: members, loading: membersLoading, refetch: refetchMembers } = useApi(() => teams.members(teamId!), [teamId]);
+  const { data: teamAssetAccess, loading: teamAssetAccessLoading, refetch: refetchTeamAssetAccess } = useApi(
+    () => teams.assetAccess(teamId!, { include_targets: false }),
+    [teamId],
+  );
 
   const [showEdit, setShowEdit] = useState(false);
-  const [form, setForm] = useState({ team_alias: '', organization_id: '', max_budget: '', rpm_limit: '', tpm_limit: '', models: '' });
+  const [form, setForm] = useState({
+    team_alias: '',
+    organization_id: '',
+    max_budget: '',
+    rpm_limit: '',
+    tpm_limit: '',
+    asset_access_mode: 'inherit' as 'inherit' | 'restrict',
+    selected_callable_keys: [] as string[],
+  });
   const [showAddMember, setShowAddMember] = useState(false);
   const [memberSearch, setMemberSearch] = useState('');
   const [memberForm, setMemberForm] = useState({ user_id: '', user_email: '', user_role: 'team_viewer' });
   const [saving, setSaving] = useState(false);
+  const [teamError, setTeamError] = useState<string | null>(null);
+  const selectedOrganizationId = form.organization_id.trim();
+  const usesParentPreview = selectedOrganizationId !== (team?.organization_id || '');
+  const { data: teamAssetAccessTargets, loading: teamAssetAccessTargetsLoading } = useApi(
+    () => (
+      showEdit && !usesParentPreview && form.asset_access_mode === 'restrict'
+        ? teams.assetAccess(teamId!, { include_targets: true })
+        : Promise.resolve(null)
+    ),
+    [showEdit, teamId, usesParentPreview, form.asset_access_mode],
+  );
+  const { data: parentOrgAssetVisibility, loading: parentOrgAssetVisibilityLoading } = useApi(
+    () => (
+      showEdit && usesParentPreview && form.asset_access_mode === 'restrict' && selectedOrganizationId
+        ? organizations.assetVisibility(selectedOrganizationId)
+        : Promise.resolve(null)
+    ),
+    [showEdit, selectedOrganizationId, usesParentPreview, form.asset_access_mode],
+  );
   const { data: memberCandidates, loading: memberCandidatesLoading } = useApi(
     () => showAddMember ? teams.memberCandidates(teamId!, { search: memberSearch, limit: 50 }) : Promise.resolve([]),
     [teamId, showAddMember, memberSearch],
   );
 
+  useEffect(() => {
+    if (!showEdit || !teamAssetAccess) return;
+    setForm((current) => ({
+      ...current,
+      asset_access_mode: teamAssetAccess.mode === 'restrict' ? 'restrict' : 'inherit',
+      selected_callable_keys: teamAssetAccess.selected_callable_keys || [],
+    }));
+  }, [showEdit, teamAssetAccess]);
+
   const openEdit = () => {
     if (!team) return;
+    setTeamError(null);
     setForm({
       team_alias: team.team_alias || '',
       organization_id: team.organization_id || '',
       max_budget: team.max_budget != null ? String(team.max_budget) : '',
       rpm_limit: team.rpm_limit != null ? String(team.rpm_limit) : '',
       tpm_limit: team.tpm_limit != null ? String(team.tpm_limit) : '',
-      models: (team.models || []).join(', '),
+      asset_access_mode: teamAssetAccess?.mode === 'restrict' ? 'restrict' : 'inherit',
+      selected_callable_keys: teamAssetAccess?.selected_callable_keys || [],
     });
     setShowEdit(true);
   };
 
+  const handleOrganizationChange = (organizationId: string) => {
+    setForm((current) => {
+      const changed = current.organization_id !== organizationId;
+      return {
+        ...current,
+        organization_id: organizationId,
+        asset_access_mode: changed ? 'inherit' : current.asset_access_mode,
+        selected_callable_keys: changed ? [] : current.selected_callable_keys,
+      };
+    });
+  };
+
   const handleSaveTeam = async () => {
     setSaving(true);
+    setTeamError(null);
     try {
       await teams.update(teamId!, {
         team_alias: form.team_alias || undefined,
@@ -63,10 +120,16 @@ export default function TeamDetail() {
         max_budget: form.max_budget ? Number(form.max_budget) : undefined,
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
-        models: form.models ? form.models.split(',').map(m => m.trim()).filter(Boolean) : [],
+      });
+      await teams.updateAssetAccess(teamId!, {
+        mode: form.asset_access_mode,
+        selected_callable_keys: form.asset_access_mode === 'restrict' ? form.selected_callable_keys : [],
       });
       setShowEdit(false);
       refetchTeam();
+      refetchTeamAssetAccess();
+    } catch (err: any) {
+      setTeamError(err?.message || 'Failed to update team');
     } finally {
       setSaving(false);
     }
@@ -112,8 +175,6 @@ export default function TeamDetail() {
     );
   }
 
-  const modelList = team.models?.length ? team.models : [];
-
   const memberColumns = [
     { key: 'user_id', header: 'User ID', render: (r: any) => <span className="font-medium font-mono text-xs">{r.user_id}</span> },
     { key: 'user_email', header: 'Email', render: (r: any) => r.user_email || <span className="text-gray-400">--</span> },
@@ -127,6 +188,22 @@ export default function TeamDetail() {
       </button>
     ) },
   ];
+  const assetTargets = usesParentPreview
+    ? buildParentScopedAssetTargets(
+        parentOrgAssetVisibility?.callable_targets?.items || [],
+        form.selected_callable_keys,
+        form.asset_access_mode,
+      )
+    : buildScopedSelectableTargets(
+        teamAssetAccessTargets?.selectable_targets || [],
+        form.selected_callable_keys,
+        form.asset_access_mode,
+      );
+  const assetAccessLoading = form.asset_access_mode !== 'restrict'
+    ? false
+    : usesParentPreview
+      ? parentOrgAssetVisibilityLoading
+      : teamAssetAccessTargetsLoading || teamAssetAccessLoading;
 
   return (
     <div className="p-4 sm:p-6 max-w-6xl">
@@ -164,7 +241,11 @@ export default function TeamDetail() {
         <StatCard icon={DollarSign} label="Spend" value={`$${(team.spend || 0).toFixed(2)}`} subValue={team.max_budget ? `of $${team.max_budget} budget` : 'No budget limit'} color="bg-green-50 text-green-600" />
         <StatCard icon={Users} label="Members" value={String(members?.length || 0)} color="bg-blue-50 text-blue-600" />
         <StatCard icon={Gauge} label="RPM Limit" value={team.rpm_limit != null ? team.rpm_limit.toLocaleString() : 'Unlimited'} subValue="Requests per minute" color="bg-purple-50 text-purple-600" />
-        <StatCard icon={Box} label="Models" value={modelList.length ? String(modelList.length) : 'All'} subValue={modelList.length ? modelList.slice(0, 3).join(', ') : 'All models allowed'} color="bg-orange-50 text-orange-600" />
+        <StatCard icon={Shield} label="Access" value="Scoped" subValue="Inherit or restrict this team below" color="bg-orange-50 text-orange-600" />
+      </div>
+
+      <div className="mb-6 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+        Team runtime access comes from callable-target bindings and scope policies across organization, team, key, and user scopes. Use the edit dialog to inherit the org set or narrow it for this team.
       </div>
 
       <Card
@@ -185,6 +266,9 @@ export default function TeamDetail() {
 
       <Modal open={showEdit} onClose={() => setShowEdit(false)} title="Edit Team">
         <div className="space-y-4">
+          {teamError && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{teamError}</div>
+          )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Team Name</label>
             <input value={form.team_alias} onChange={(e) => setForm({ ...form, team_alias: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
@@ -192,7 +276,7 @@ export default function TeamDetail() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Organization ID</label>
-              <input value={form.organization_id} onChange={(e) => setForm({ ...form, organization_id: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <input value={form.organization_id} onChange={(e) => handleOrganizationChange(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Max Budget ($)</label>
@@ -209,14 +293,28 @@ export default function TeamDetail() {
               <input type="number" value={form.tpm_limit} onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Allowed Models</label>
-            <input value={form.models} onChange={(e) => setForm({ ...form, models: e.target.value })} placeholder="gpt-4o, claude-3" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            <p className="text-xs text-gray-400 mt-1">Comma-separated. Leave empty for all models.</p>
-          </div>
+          <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+            Team runtime access is enforced through callable-target bindings and scope policies. Use the section below to inherit the organization set or narrow it for this team.
+          </p>
+          <AssetAccessEditor
+            title="Team Asset Access"
+            description="Choose whether this team inherits the organization asset ceiling or narrows itself to a selected subset."
+            mode={form.asset_access_mode}
+            allowModeSelection
+            onModeChange={(asset_access_mode) => setForm((current) => ({
+              ...current,
+              asset_access_mode: asset_access_mode === 'restrict' ? 'restrict' : 'inherit',
+              selected_callable_keys: asset_access_mode === 'restrict' ? current.selected_callable_keys : [],
+            }))}
+            targets={assetTargets}
+            selectedKeys={form.selected_callable_keys}
+            onSelectedKeysChange={(selected_callable_keys) => setForm({ ...form, selected_callable_keys })}
+            loading={assetAccessLoading}
+            disabled={saving || !form.organization_id}
+          />
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setShowEdit(false)} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-            <button onClick={handleSaveTeam} disabled={saving} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">Save Changes</button>
+            <button onClick={handleSaveTeam} disabled={saving || !form.organization_id || assetAccessLoading} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">Save Changes</button>
           </div>
         </div>
       </Modal>

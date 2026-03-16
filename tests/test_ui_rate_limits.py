@@ -53,14 +53,13 @@ class FakeAdminDB:
             return 1
 
         if "INSERT INTO deltallm_teamtable" in query:
-            team_id, team_alias, organization_id, max_budget, rpm_limit, tpm_limit, models = params
+            team_id, team_alias, organization_id, max_budget, rpm_limit, tpm_limit = params
             self.teams[team_id] = {
                 "team_id": team_id,
                 "team_alias": team_alias,
                 "organization_id": organization_id,
                 "max_budget": max_budget,
                 "spend": 0.0,
-                "models": models,
                 "rpm_limit": rpm_limit,
                 "tpm_limit": tpm_limit,
                 "blocked": False,
@@ -70,7 +69,7 @@ class FakeAdminDB:
             return 1
 
         if "UPDATE deltallm_teamtable" in query:
-            team_alias, organization_id, max_budget, rpm_limit, tpm_limit, models, team_id = params
+            team_alias, organization_id, max_budget, rpm_limit, tpm_limit, team_id = params
             row = self.teams[team_id]
             row.update(
                 {
@@ -79,7 +78,6 @@ class FakeAdminDB:
                     "max_budget": max_budget,
                     "rpm_limit": rpm_limit,
                     "tpm_limit": tpm_limit,
-                    "models": models,
                     "updated_at": datetime.now(tz=UTC),
                 }
             )

@@ -1,6 +1,7 @@
 from src.api.admin.endpoints.auth_ui import router as auth_ui_router
 from src.api.admin.endpoints.audit import router as audit_router
 from src.api.admin.endpoints.batches import router as batches_router
+from src.api.admin.endpoints.callable_targets import router as callable_targets_router
 from src.api.admin.endpoints.config import router as config_router
 from src.api.admin.endpoints.guardrails import router as guardrails_router
 from src.api.admin.endpoints.keys import router as keys_router

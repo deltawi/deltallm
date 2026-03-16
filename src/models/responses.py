@@ -100,6 +100,7 @@ class UserAPIKeyAuth(BaseModel):
     team_id: str | None = None
     organization_id: str | None = None
     models: list[str] = Field(default_factory=list)
+    team_models: list[str] = Field(default_factory=list)
     max_budget: float | None = None
     spend: float = 0.0
     # Legacy key-level limit aliases preserved for compatibility.

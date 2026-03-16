@@ -17,7 +17,9 @@ from src.mcp.gateway import MCPGatewayService
 from src.mcp.models import MCPToolCallResult, MCPToolSchema
 from src.mcp.policy import MCPToolPolicyEnforcer
 from src.mcp.result_cache import MCPToolResultCache
+from src.models.responses import UserAPIKeyAuth
 from src.services.limit_counter import LimitCounter
+from src.services.runtime_scopes import annotate_auth_metadata
 
 
 def _server(
@@ -346,6 +348,43 @@ async def test_gateway_service_enforces_policy_execution_timeout() -> None:
 
     with pytest.raises(MCPToolTimeoutError):
         await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "delta"})
+
+
+@pytest.mark.asyncio
+async def test_gateway_service_jwt_auth_does_not_use_pseudo_api_key_scope() -> None:
+    auth = annotate_auth_metadata(
+        UserAPIKeyAuth(
+            api_key="jwt:user-1",
+            user_id="user-1",
+            team_id="team-ops",
+            organization_id="org-acme",
+        ),
+        auth_source="jwt",
+    )
+    registry = _FakeRegistry(
+        servers=[
+            _server(
+                "srv-docs",
+                "docs",
+                capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+            ),
+            _server(
+                "srv-team",
+                "teamdocs",
+                capabilities=[MCPToolSchema(name="search", description="Search team docs", input_schema={"type": "object"})],
+            ),
+        ],
+        bindings=[
+            MCPServerBindingRecord("bind-1", "srv-docs", "api_key", "jwt:user-1", True, None),
+            MCPServerBindingRecord("bind-2", "srv-team", "team", "team-ops", True, None),
+        ],
+        policies=[],
+    )
+
+    gateway = MCPGatewayService(registry, _FakeTransport())  # type: ignore[arg-type]
+    visible = await gateway.list_visible_servers(auth)
+
+    assert [item.server.server_key for item in visible] == ["teamdocs"]
 
 
 @pytest.mark.asyncio

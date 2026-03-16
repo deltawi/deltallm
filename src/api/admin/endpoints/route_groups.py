@@ -8,18 +8,32 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from src.auth.roles import Permission
 from src.audit.actions import AuditAction
+from src.services.asset_binding_mirror import (
+    delete_callable_target_binding_mirror,
+    delete_all_callable_target_bindings_for_key,
+    mirror_route_group_binding_to_callable_target,
+    reload_callable_target_grants,
+)
 from src.api.admin.endpoints.common import emit_admin_mutation_audit, model_entries, to_json_value
 from src.db.prompt_registry import PromptRegistryRepository
 from src.db.route_groups import RouteGroupRepository
 from src.middleware.admin import require_admin_permission
 from src.router.policy_validation import validate_route_policy
 from src.router import Router, RouterConfig, RoutingStrategy, build_deployment_registry, build_route_group_policies
+from src.services.asset_ownership import (
+    apply_owner_scope_to_metadata,
+    normalize_owner_scope_type,
+    owner_scope_from_metadata,
+    public_metadata_without_owner_scope,
+)
+from src.services.asset_scopes import normalize_scope_type
 from src.services.prompt_registry import apply_route_preferences_to_metadata, parse_prompt_reference
 from src.services.route_groups import RouteGroupRuntimeCache
 
 router = APIRouter(tags=["Admin Route Groups"])
 
 ALLOWED_MODES = {"chat", "embedding", "image_generation", "audio_speech", "audio_transcription", "rerank"}
+_ALLOWED_BINDING_SCOPE_TYPES = {"api_key", "key", "team", "organization", "org", "user"}
 
 
 def _repository_or_503(request: Request) -> RouteGroupRepository:
@@ -230,6 +244,35 @@ def _validated_metadata(value: Any) -> dict[str, Any] | None:
     return dict(value)
 
 
+def _validate_binding_scope_type(value: Any) -> str:
+    scope_type = str(value or "").strip().lower()
+    if scope_type not in _ALLOWED_BINDING_SCOPE_TYPES:
+        allowed = ", ".join(sorted(_ALLOWED_BINDING_SCOPE_TYPES))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"scope_type must be one of: {allowed}")
+    normalized = normalize_scope_type(scope_type)
+    if normalized == "group":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scope_type must be one of: api_key, team, organization, user")
+    return normalized
+
+
+def _validate_scope_id(value: Any, *, field_name: str = "scope_id") -> str:
+    scope_id = str(value or "").strip()
+    if not scope_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} is required")
+    return scope_id
+
+
+def _group_response_payload(group: Any) -> dict[str, Any]:
+    payload = to_json_value(asdict(group))
+    if isinstance(payload, dict):
+        payload["metadata"] = public_metadata_without_owner_scope(payload.get("metadata"))
+    return payload
+
+
+def _binding_response_payload(binding: Any) -> dict[str, Any]:
+    return to_json_value(asdict(binding))
+
+
 async def _validate_default_prompt(request: Request, value: Any) -> tuple[bool, dict[str, str] | None]:
     if value is ...:
         return False, None
@@ -258,6 +301,8 @@ async def _resolve_group_metadata(
     existing_metadata: dict[str, Any] | None,
     raw_metadata: Any,
     raw_default_prompt: Any,
+    raw_owner_scope_type: Any = ...,
+    raw_owner_scope_id: Any = ...,
 ) -> dict[str, Any] | None:
     metadata = dict(existing_metadata or {})
     raw_metadata_value = _validated_metadata(raw_metadata)
@@ -269,6 +314,22 @@ async def _resolve_group_metadata(
             metadata.pop("default_prompt", None)
         else:
             metadata["default_prompt"] = default_prompt
+    if raw_owner_scope_type is not ... or raw_owner_scope_id is not ...:
+        current_scope = owner_scope_from_metadata(existing_metadata)
+        current_scope_type = current_scope.scope_type
+        current_scope_id = current_scope.scope_id
+        scope_type = current_scope_type if raw_owner_scope_type is ... else normalize_owner_scope_type(raw_owner_scope_type)
+        scope_id = current_scope_id if raw_owner_scope_id is ... else (
+            str(raw_owner_scope_id).strip() if raw_owner_scope_id is not None else None
+        )
+        try:
+            metadata = apply_owner_scope_to_metadata(
+                metadata or None,
+                scope_type=scope_type,
+                scope_id=scope_id,
+            ) or {}
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return metadata or None
 
 
@@ -292,7 +353,7 @@ async def list_route_groups(
 ) -> dict[str, Any]:
     repository = _repository_or_503(request)
     groups, total = await repository.list_groups(search=search, limit=limit, offset=offset)
-    data = [to_json_value(asdict(group)) for group in groups]
+    data = [_group_response_payload(group) for group in groups]
     return {
         "data": data,
         "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
@@ -308,10 +369,12 @@ async def get_route_group(request: Request, group_key: str) -> dict[str, Any]:
 
     members = await repository.list_members(group_key)
     policy = await repository.get_published_policy(group_key)
+    bindings, _ = await repository.list_bindings(group_key=group_key, limit=200, offset=0)
     return {
-        "group": to_json_value(asdict(group)),
+        "group": _group_response_payload(group),
         "members": await _serialize_group_members(request, members),
         "policy": to_json_value(asdict(policy)) if policy is not None else None,
+        "bindings": [_binding_response_payload(binding) for binding in bindings],
     }
 
 
@@ -333,6 +396,8 @@ async def create_route_group(request: Request, payload: dict[str, Any]) -> dict[
         existing_metadata=None,
         raw_metadata=payload.get("metadata"),
         raw_default_prompt=payload.get("default_prompt", ...),
+        raw_owner_scope_type=payload.get("owner_scope_type", ...),
+        raw_owner_scope_id=payload.get("owner_scope_id", ...),
     )
 
     try:
@@ -352,7 +417,7 @@ async def create_route_group(request: Request, payload: dict[str, Any]) -> dict[
     await _invalidate_runtime_cache(request)
     await _invalidate_prompt_group_cache(request, created.group_key)
     await _reload_runtime(request)
-    response = to_json_value(asdict(created))
+    response = _group_response_payload(created)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -383,6 +448,8 @@ async def update_route_group(request: Request, group_key: str, payload: dict[str
         existing_metadata=existing.metadata,
         raw_metadata=payload.get("metadata"),
         raw_default_prompt=payload.get("default_prompt", ...),
+        raw_owner_scope_type=payload.get("owner_scope_type", ...),
+        raw_owner_scope_id=payload.get("owner_scope_id", ...),
     )
 
     updated = await repository.update_group(
@@ -399,8 +466,8 @@ async def update_route_group(request: Request, group_key: str, payload: dict[str
     await _invalidate_runtime_cache(request)
     await _invalidate_prompt_group_cache(request, group_key)
     await _reload_runtime(request)
-    before = to_json_value(asdict(existing))
-    after = to_json_value(asdict(updated))
+    before = _group_response_payload(existing)
+    after = _group_response_payload(updated)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -423,6 +490,8 @@ async def delete_route_group(request: Request, group_key: str) -> dict[str, bool
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
 
+    await delete_all_callable_target_bindings_for_key(request, callable_key=group_key)
+    await reload_callable_target_grants(request)
     await _invalidate_runtime_cache(request)
     await _invalidate_prompt_group_cache(request, group_key)
     await _reload_runtime(request)
@@ -433,6 +502,108 @@ async def delete_route_group(request: Request, group_key: str) -> dict[str, bool
         action=AuditAction.ADMIN_ROUTING_UPDATE,
         resource_type="route_group",
         resource_id=group_key,
+        response_payload=response,
+    )
+    return response
+
+
+@router.get("/ui/api/route-group-bindings", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
+async def list_route_group_bindings(
+    request: Request,
+    group_key: str | None = Query(default=None),
+    scope_type: str | None = Query(default=None),
+    scope_id: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    repository = _repository_or_503(request)
+    normalized_scope_type = _validate_binding_scope_type(scope_type) if scope_type is not None else None
+    bindings, total = await repository.list_bindings(
+        group_key=group_key,
+        scope_type=normalized_scope_type,
+        scope_id=scope_id,
+        limit=limit,
+        offset=offset,
+    )
+    return {
+        "data": [_binding_response_payload(binding) for binding in bindings],
+        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+    }
+
+
+@router.post("/ui/api/route-group-bindings", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
+async def upsert_route_group_binding(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    request_start = perf_counter()
+    repository = _repository_or_503(request)
+    group_key = str(payload.get("group_key") or "").strip()
+    if not group_key:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="group_key is required")
+    if await repository.get_group(group_key) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
+
+    normalized_scope_type = _validate_binding_scope_type(payload.get("scope_type"))
+    scope_id = _validate_scope_id(payload.get("scope_id"))
+    enabled = bool(payload.get("enabled", True))
+    metadata = _validated_metadata(payload.get("metadata"))
+
+    binding = await repository.upsert_binding(
+        group_key,
+        scope_type=normalized_scope_type,
+        scope_id=scope_id,
+        enabled=enabled,
+        metadata=metadata,
+    )
+    if binding is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group not found")
+
+    await mirror_route_group_binding_to_callable_target(
+        request,
+        group_key=group_key,
+        scope_type=normalized_scope_type,
+        scope_id=scope_id,
+        enabled=enabled,
+        metadata=metadata,
+    )
+    await reload_callable_target_grants(request)
+    response = _binding_response_payload(binding)
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_ROUTE_GROUP_BINDING_UPSERT,
+        resource_type="route_group_binding",
+        resource_id=binding.route_group_binding_id,
+        request_payload=payload,
+        response_payload=response,
+    )
+    return response
+
+
+@router.delete("/ui/api/route-group-bindings/{binding_id}", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
+async def delete_route_group_binding(request: Request, binding_id: str) -> dict[str, Any]:
+    request_start = perf_counter()
+    repository = _repository_or_503(request)
+    binding = await repository.get_binding(binding_id)
+    if binding is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group binding not found")
+
+    deleted = await repository.delete_binding(binding_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route group binding not found")
+
+    await delete_callable_target_binding_mirror(
+        request,
+        callable_key=binding.group_key,
+        scope_type=binding.scope_type,
+        scope_id=binding.scope_id,
+    )
+    await reload_callable_target_grants(request)
+    response = {"deleted": True, "route_group_binding_id": binding_id}
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_ROUTE_GROUP_BINDING_DELETE,
+        resource_type="route_group_binding",
+        resource_id=binding_id,
         response_payload=response,
     )
     return response

@@ -5,6 +5,7 @@ from fastapi import Depends, Header, HTTPException, Request, status
 from src.models.errors import AuthenticationError
 from src.models.responses import UserAPIKeyAuth
 from src.services.key_service import KeyService
+from src.services.runtime_scopes import annotate_auth_metadata, resolve_runtime_scope_context
 
 
 async def authenticate_request(
@@ -25,13 +26,16 @@ async def authenticate_request(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing API key")
 
     if _is_master_key(request, raw_key):
-        auth = UserAPIKeyAuth(
-            api_key="master_key",
-            user_id="admin",
-            metadata={"is_master_key": True},
+        auth = annotate_auth_metadata(
+            UserAPIKeyAuth(
+                api_key="master_key",
+                user_id="admin",
+                metadata={},
+            ),
+            auth_source="master_key",
+            is_master_key=True,
         )
-        request.state.user_api_key = auth
-        request.state.auth_context = auth
+        _attach_request_auth_context(request, auth)
         return auth
 
     key_service: KeyService | None = getattr(request.app.state, "key_service", None)
@@ -45,8 +49,7 @@ async def authenticate_request(
         if auth is None:
             raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
-    request.state.user_api_key = auth
-    request.state.auth_context = auth
+    _attach_request_auth_context(request, auth)
     return auth
 
 
@@ -79,18 +82,32 @@ async def _try_fallback_auth(request: Request, raw_token: str) -> UserAPIKeyAuth
     if jwt_handler is not None:
         try:
             claims = await jwt_handler.validate_token(raw_token)
-            return UserAPIKeyAuth(
-                api_key=f"jwt:{claims.get('user_id') or claims.get('email') or 'unknown'}",
-                user_id=claims.get("user_id"),
-                team_id=claims.get("team_id"),
-                organization_id=claims.get("organization_id"),
-                metadata={"jwt_claims": claims.get("claims", claims)},
+            return annotate_auth_metadata(
+                UserAPIKeyAuth(
+                    api_key=f"jwt:{claims.get('user_id') or claims.get('email') or 'unknown'}",
+                    user_id=claims.get("user_id"),
+                    team_id=claims.get("team_id"),
+                    organization_id=claims.get("organization_id"),
+                    metadata={"jwt_claims": claims.get("claims", claims)},
+                ),
+                auth_source="jwt",
             )
         except HTTPException:
             pass
 
     custom_auth_manager = getattr(request.app.state, "custom_auth_manager", None)
     if custom_auth_manager is not None:
-        return await custom_auth_manager.authenticate(raw_token, request)
+        auth = await custom_auth_manager.authenticate(raw_token, request)
+        metadata = auth.metadata if isinstance(auth.metadata, dict) else {}
+        auth_source = str(metadata.get("auth_source") or "").strip().lower()
+        if auth_source in {"api_key", "jwt", "custom", "master_key"}:
+            return annotate_auth_metadata(auth, auth_source=auth_source)  # type: ignore[arg-type]
+        return annotate_auth_metadata(auth, auth_source="custom")
 
     return None
+
+
+def _attach_request_auth_context(request: Request, auth: UserAPIKeyAuth) -> None:
+    request.state.user_api_key = auth
+    request.state.auth_context = auth
+    request.state.runtime_scope_context = resolve_runtime_scope_context(auth)
