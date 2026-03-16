@@ -473,14 +473,6 @@ export function ModelDetailV2() {
         </div>
       </div>
 
-      {/* ── Metric tiles ── */}
-      <div className="grid grid-cols-4 gap-3 px-6 py-4">
-        <MetricCard icon={Shield}    label="Health status"   value="Healthy"        sub="0 consecutive failures" accent="green" />
-        <MetricCard icon={Server}    label="Provider model"  value="gpt-4-turbo"    sub={MODEL.provider}          accent="blue"  />
-        <MetricCard icon={Gauge}     label="Rate limits"     value="10K RPM"        sub="2M TPM"                  accent="violet"/>
-        <MetricCard icon={DollarSign}label="Input cost"      value="$10 / 1M tok"   sub="$30 / 1M output tok"     accent="amber" />
-      </div>
-
       {/* ── Tab navigation + body ── */}
       <div className="px-6 pb-8">
         {/* Tabs */}
