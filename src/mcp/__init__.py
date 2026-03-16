@@ -15,6 +15,7 @@ from .exceptions import (
     MCPTransportError,
 )
 from .gateway import MCPGatewayService
+from .governance import MCPGovernanceService
 from .health import MCPHealthProbe
 from .models import MCPBindingResolution, MCPRequestEnvelope, MCPServerConfig, MCPToolCallResult, MCPToolSchema
 from .policy import MCPToolPolicyEnforcer
@@ -31,6 +32,7 @@ __all__ = [
     "MCPBindingResolution",
     "MCPError",
     "MCPGatewayService",
+    "MCPGovernanceService",
     "MCPHealthProbe",
     "MCPInvalidResponseError",
     "MCPPolicyDeniedError",

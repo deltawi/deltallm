@@ -9,11 +9,13 @@ from prometheus_client import generate_latest
 from src.cache import InMemoryBackend
 from src.db.mcp import MCPApprovalRequestRecord
 from src.db.mcp import MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
+from src.db.mcp_scope_policies import MCPScopePolicyRecord
 from src.metrics import get_prometheus_registry
 from src.mcp.approvals import MCPApprovalService
 from src.mcp.capabilities import namespace_tools
 from src.mcp.exceptions import MCPApprovalDeniedError, MCPApprovalRequiredError, MCPRateLimitError, MCPToolTimeoutError
 from src.mcp.gateway import MCPGatewayService
+from src.mcp.governance import MCPGovernanceService
 from src.mcp.models import MCPToolCallResult, MCPToolSchema
 from src.mcp.policy import MCPToolPolicyEnforcer
 from src.mcp.result_cache import MCPToolResultCache
@@ -94,6 +96,58 @@ class _FakeRegistry:
             if isinstance(item, dict)
         ]
         return namespace_tools(server.server_key, schemas)
+
+
+class _FakeGovernanceRepository:
+    def __init__(
+        self,
+        servers: list[MCPServerRecord],
+        bindings: list[MCPServerBindingRecord],
+        policies: list[MCPToolPolicyRecord],
+        scope_policies: list[MCPScopePolicyRecord] | None = None,
+    ) -> None:
+        self.servers = list(servers)
+        self.bindings = list(bindings)
+        self.policies = list(policies)
+        self.scope_policies = list(scope_policies or [])
+
+    async def list_servers(self, *, search=None, enabled=None, limit=100, offset=0):  # noqa: ANN001, ANN201
+        items = list(self.servers)
+        if enabled is not None:
+            items = [item for item in items if item.enabled is enabled]
+        return items[offset : offset + limit], len(items)
+
+    async def list_bindings(self, *, server_id=None, scope_type=None, scope_id=None, enabled=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+        items = list(self.bindings)
+        if server_id is not None:
+            items = [item for item in items if item.mcp_server_id == server_id]
+        if scope_type is not None:
+            items = [item for item in items if item.scope_type == scope_type]
+        if scope_id is not None:
+            items = [item for item in items if item.scope_id == scope_id]
+        if enabled is not None:
+            items = [item for item in items if item.enabled is enabled]
+        return items[offset : offset + limit], len(items)
+
+    async def list_tool_policies(self, *, server_id=None, scope_type=None, scope_id=None, enabled=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+        items = list(self.policies)
+        if server_id is not None:
+            items = [item for item in items if item.mcp_server_id == server_id]
+        if scope_type is not None:
+            items = [item for item in items if item.scope_type == scope_type]
+        if scope_id is not None:
+            items = [item for item in items if item.scope_id == scope_id]
+        if enabled is not None:
+            items = [item for item in items if item.enabled is enabled]
+        return items[offset : offset + limit], len(items)
+
+    async def list_policies(self, *, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+        items = list(self.scope_policies)
+        if scope_type is not None:
+            items = [item for item in items if item.scope_type == scope_type]
+        if scope_id is not None:
+            items = [item for item in items if item.scope_id == scope_id]
+        return items[offset : offset + limit], len(items)
 
 
 class _FakeTransport:
@@ -385,6 +439,151 @@ async def test_gateway_service_jwt_auth_does_not_use_pseudo_api_key_scope() -> N
     visible = await gateway.list_visible_servers(auth)
 
     assert [item.server.server_key for item in visible] == ["teamdocs"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_service_user_scope_affects_mcp_visibility_and_policy_resolution() -> None:
+    auth = annotate_auth_metadata(
+        UserAPIKeyAuth(
+            api_key="hashed-key",
+            user_id="user-1",
+            team_id="team-ops",
+            organization_id="org-acme",
+        ),
+        auth_source="api_key",
+        api_key_scope_id="hashed-key",
+    )
+    registry = _FakeRegistry(
+        servers=[
+            _server(
+                "srv-user",
+                "userdocs",
+                capabilities=[MCPToolSchema(name="search", description="Search user docs", input_schema={"type": "object"})],
+            ),
+            _server(
+                "srv-team",
+                "teamdocs",
+                capabilities=[MCPToolSchema(name="search", description="Search team docs", input_schema={"type": "object"})],
+            ),
+        ],
+        bindings=[
+            MCPServerBindingRecord("bind-user", "srv-user", "user", "user-1", True, None),
+            MCPServerBindingRecord("bind-team", "srv-team", "team", "team-ops", True, None),
+        ],
+        policies=[
+            MCPToolPolicyRecord("policy-team", "srv-team", "search", "team", "team-ops", True, "never", None, None, None, None),
+            MCPToolPolicyRecord("policy-user", "srv-team", "search", "user", "user-1", False, "never", None, None, None, None),
+        ],
+    )
+
+    gateway = MCPGatewayService(registry, _FakeTransport())  # type: ignore[arg-type]
+    visible = await gateway.list_visible_servers(auth)
+
+    assert [item.server.server_key for item in visible] == ["userdocs"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_service_uses_governance_snapshot_instead_of_registry_binding_queries() -> None:
+    auth = annotate_auth_metadata(
+        UserAPIKeyAuth(
+            api_key="hashed-key",
+            team_id="team-ops",
+            organization_id="org-acme",
+        ),
+        auth_source="api_key",
+        api_key_scope_id="hashed-key",
+    )
+    servers = [
+        _server(
+            "srv-docs",
+            "docs",
+            capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+        )
+    ]
+    bindings = [
+        MCPServerBindingRecord("bind-org", "srv-docs", "organization", "org-acme", True, None),
+        MCPServerBindingRecord("bind-team", "srv-docs", "team", "team-ops", True, ["search"]),
+    ]
+    policies = [MCPToolPolicyRecord("policy-team", "srv-docs", "search", "team", "team-ops", True, None, 1, None, None, None)]
+    governance = MCPGovernanceService(_FakeGovernanceRepository(servers, bindings, policies))  # type: ignore[arg-type]
+    await governance.reload()
+
+    class _RegistryWithoutBindingReads(_FakeRegistry):
+        async def list_effective_bindings(self, *, scopes):  # noqa: ANN001, ANN201
+            raise AssertionError("gateway should use governance snapshot bindings")
+
+        async def list_effective_tool_policies(self, *, scopes, server_id=None):  # noqa: ANN001, ANN201
+            raise AssertionError("gateway should use governance snapshot policies")
+
+        async def get_server(self, server_id: str):  # noqa: ANN201
+            raise AssertionError("gateway should use governance snapshot servers")
+
+    gateway = MCPGatewayService(
+        _RegistryWithoutBindingReads(servers=servers, bindings=bindings, policies=policies),
+        _FakeTransport(),
+        governance_service=governance,
+        policy_enforcer=MCPToolPolicyEnforcer(LimitCounter(redis_client=None)),
+    )  # type: ignore[arg-type]
+
+    visible = await gateway.list_visible_servers(auth)
+    assert [item.server.server_key for item in visible] == ["docs"]
+
+    await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "hello"})
+    with pytest.raises(MCPRateLimitError):
+        await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "again"})
+
+
+@pytest.mark.asyncio
+async def test_gateway_service_governance_respects_org_ceiling_and_team_restrict() -> None:
+    auth = annotate_auth_metadata(
+        UserAPIKeyAuth(
+            api_key="hashed-key",
+            team_id="team-ops",
+            organization_id="org-acme",
+        ),
+        auth_source="api_key",
+        api_key_scope_id="hashed-key",
+    )
+    servers = [
+        _server(
+            "srv-docs",
+            "docs",
+            capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+        ),
+        _server(
+            "srv-github",
+            "github",
+            capabilities=[MCPToolSchema(name="search", description="Search code", input_schema={"type": "object"})],
+        ),
+    ]
+    bindings = [
+        MCPServerBindingRecord("bind-org-docs", "srv-docs", "organization", "org-acme", True, None),
+        MCPServerBindingRecord("bind-org-github", "srv-github", "organization", "org-acme", True, None),
+        MCPServerBindingRecord("bind-team-docs", "srv-docs", "team", "team-ops", True, ["search"]),
+    ]
+    scope_policies = [
+        MCPScopePolicyRecord(
+            mcp_scope_policy_id="mcp-scope-team",
+            scope_type="team",
+            scope_id="team-ops",
+            mode="restrict",
+        )
+    ]
+    governance_repository = _FakeGovernanceRepository(servers, bindings, [], scope_policies)
+    governance = MCPGovernanceService(governance_repository, policy_repository=governance_repository)  # type: ignore[arg-type]
+    await governance.reload()
+
+    gateway = MCPGatewayService(
+        _FakeRegistry(servers=servers, bindings=bindings, policies=[]),
+        _FakeTransport(),
+        governance_service=governance,
+    )  # type: ignore[arg-type]
+
+    visible = await gateway.list_visible_servers(auth)
+
+    assert [(item.server.server_key, item.binding.scope_type, item.tool_names) for item in visible] == [
+        ("docs", "team", ("search",)),
+    ]
 
 
 @pytest.mark.asyncio

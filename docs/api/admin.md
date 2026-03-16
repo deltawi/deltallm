@@ -24,6 +24,12 @@ Admin endpoints require either:
 
 Some endpoints require specific admin permissions, so a valid session does not automatically mean full access.
 
+## Governance Notes
+
+- Callable-target and MCP runtime checks are enforced from in-memory snapshots, not per-request database reads.
+- In multi-instance deployments, admin writes publish governance invalidation events so other instances reload their local snapshots asynchronously.
+- MCP binding and tool-policy listing endpoints return **enabled** rows by default. Platform admins can opt in to disabled rows with `include_disabled=true`.
+
 ## Runtime Configuration
 
 ### Models
@@ -124,11 +130,16 @@ Callable targets are the public runtime names that callers can use, including bo
 | `GET` | `/ui/api/mcp-bindings` | List MCP bindings |
 | `POST` | `/ui/api/mcp-bindings` | Create or update an MCP binding |
 | `DELETE` | `/ui/api/mcp-bindings/{binding_id}` | Delete an MCP binding |
+| `GET` | `/ui/api/mcp-scope-policies` | List MCP scope policies |
+| `POST` | `/ui/api/mcp-scope-policies` | Create or update an MCP scope policy |
+| `DELETE` | `/ui/api/mcp-scope-policies/{policy_id}` | Delete an MCP scope policy |
 | `GET` | `/ui/api/mcp-tool-policies` | List MCP tool policies |
 | `POST` | `/ui/api/mcp-tool-policies` | Create or update an MCP tool policy |
 | `DELETE` | `/ui/api/mcp-tool-policies/{policy_id}` | Delete an MCP tool policy |
 | `GET` | `/ui/api/mcp-approval-requests` | List approval requests |
 | `POST` | `/ui/api/mcp-approval-requests/{approval_request_id}/decision` | Approve or reject a pending request |
+| `GET` | `/ui/api/mcp-migration/report` | Report MCP rollout readiness by organization |
+| `POST` | `/ui/api/mcp-migration/backfill` | Backfill explicit org ceilings and child scope policies for MCP |
 
 ## Access and Identity
 
@@ -140,6 +151,8 @@ Callable targets are the public runtime names that callers can use, including bo
 | `POST` | `/ui/api/keys` | Create a key |
 | `PUT` | `/ui/api/keys/{token_hash}` | Update a key |
 | `GET` | `/ui/api/keys/{token_hash}/asset-visibility` | Preview effective callable-target visibility for a key |
+| `GET` | `/ui/api/keys/{token_hash}/asset-access` | Read scoped callable-target access config for a key |
+| `PUT` | `/ui/api/keys/{token_hash}/asset-access` | Update scoped callable-target access config for a key |
 | `POST` | `/ui/api/keys/{token_hash}/regenerate` | Regenerate a key |
 | `POST` | `/ui/api/keys/{token_hash}/revoke` | Revoke a key |
 | `DELETE` | `/ui/api/keys/{token_hash}` | Delete a key |
@@ -158,6 +171,8 @@ Callable targets are the public runtime names that callers can use, including bo
 | `GET` | `/ui/api/teams` | List teams |
 | `GET` | `/ui/api/teams/{team_id}` | Get one team |
 | `GET` | `/ui/api/teams/{team_id}/asset-visibility` | Preview effective callable-target visibility for a team |
+| `GET` | `/ui/api/teams/{team_id}/asset-access` | Read scoped callable-target access config for a team |
+| `PUT` | `/ui/api/teams/{team_id}/asset-access` | Update scoped callable-target access config for a team |
 | `POST` | `/ui/api/teams` | Create a team |
 | `PUT` | `/ui/api/teams/{team_id}` | Update a team |
 | `DELETE` | `/ui/api/teams/{team_id}` | Delete a team |
@@ -173,6 +188,8 @@ Callable targets are the public runtime names that callers can use, including bo
 | `GET` | `/ui/api/organizations` | List organizations |
 | `GET` | `/ui/api/organizations/{organization_id}` | Get one organization |
 | `GET` | `/ui/api/organizations/{organization_id}/asset-visibility` | Preview effective callable-target visibility for an organization |
+| `GET` | `/ui/api/organizations/{organization_id}/asset-access` | Read scoped callable-target access config for an organization |
+| `PUT` | `/ui/api/organizations/{organization_id}/asset-access` | Update scoped callable-target access config for an organization |
 | `POST` | `/ui/api/organizations` | Create an organization |
 | `PUT` | `/ui/api/organizations/{organization_id}` | Update an organization |
 | `GET` | `/ui/api/organizations/{organization_id}/members` | List organization members |
@@ -187,6 +204,9 @@ Callable targets are the public runtime names that callers can use, including bo
 |--------|----------|---------|
 | `GET` | `/ui/api/rbac/accounts` | List platform accounts |
 | `GET` | `/ui/api/principals` | List assignable principals |
+| `GET` | `/ui/api/users/{user_id}/asset-visibility` | Preview effective callable-target visibility for a runtime user |
+| `GET` | `/ui/api/users/{user_id}/asset-access` | Read scoped callable-target access config for a runtime user |
+| `PUT` | `/ui/api/users/{user_id}/asset-access` | Update scoped callable-target access config for a runtime user |
 | `POST` | `/ui/api/rbac/accounts` | Create a platform account |
 | `DELETE` | `/ui/api/rbac/accounts/{account_id}` | Delete a platform account |
 | `GET` | `/ui/api/rbac/organization-memberships` | List org memberships |

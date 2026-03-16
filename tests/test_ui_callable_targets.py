@@ -95,6 +95,29 @@ class _FakeMigrationDB:
         return 0
 
 
+class _FakeScopeValidationDB:
+    def __init__(self) -> None:
+        self.organizations = [{"organization_id": "org-1"}]
+        self.teams = [{"team_id": "team-1", "organization_id": "org-1"}]
+        self.keys = [{"token": "key-1", "team_id": "team-1", "organization_id": "org-1"}]
+        self.users = [{"user_id": "user-1", "team_id": "team-1", "organization_id": "org-1"}]
+
+    async def query_raw(self, query: str, *params):  # noqa: ANN201
+        if "FROM deltallm_organizationtable" in query and "WHERE organization_id = $1" in query:
+            organization_id = str(params[0])
+            return [row for row in self.organizations if row["organization_id"] == organization_id]
+        if "FROM deltallm_teamtable" in query and "WHERE team_id = $1" in query:
+            team_id = str(params[0])
+            return [row for row in self.teams if row["team_id"] == team_id]
+        if "FROM deltallm_verificationtoken vt" in query and "WHERE vt.token = $1" in query:
+            token = str(params[0])
+            return [row for row in self.keys if row["token"] == token]
+        if "FROM deltallm_usertable u" in query and "WHERE u.user_id = $1" in query:
+            user_id = str(params[0])
+            return [row for row in self.users if row["user_id"] == user_id]
+        return []
+
+
 class _FakeReadyMigrationDB(_FakeMigrationDB):
     def __init__(self) -> None:
         super().__init__()
@@ -323,6 +346,7 @@ async def test_callable_target_binding_admin_lifecycle(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
     repo = _FakeCallableTargetBindingRepository()
     policy_repo = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeValidationDB()})()
     test_app.state.callable_target_binding_repository = repo
     test_app.state.callable_target_scope_policy_repository = policy_repo
     test_app.state.callable_target_catalog = {
@@ -374,6 +398,7 @@ async def test_callable_target_route_group_binding_mirrors_route_group_bindings(
     repo = _FakeCallableTargetBindingRepository()
     policy_repo = _FakeCallableTargetScopePolicyRepository()
     route_group_repo = _FakeRouteGroupRepository()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeValidationDB()})()
     await route_group_repo.create_group(
         group_key="support-fast",
         name="Support Fast",
@@ -418,6 +443,7 @@ async def test_callable_target_route_group_binding_mirrors_route_group_bindings(
 @pytest.mark.asyncio
 async def test_callable_target_binding_rejects_unknown_target(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeValidationDB()})()
     test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
     test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
     test_app.state.callable_target_catalog = {
@@ -437,6 +463,7 @@ async def test_callable_target_binding_rejects_unknown_target(client, test_app):
 @pytest.mark.asyncio
 async def test_callable_target_scope_policy_admin_lifecycle(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeValidationDB()})()
     test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
     repo = _FakeCallableTargetScopePolicyRepository()
     test_app.state.callable_target_scope_policy_repository = repo
@@ -474,6 +501,62 @@ async def test_callable_target_scope_policy_admin_lifecycle(client, test_app):
     )
     assert delete.status_code == 200
     assert delete.json()["deleted"] is True
+
+
+@pytest.mark.asyncio
+async def test_callable_target_binding_rejects_missing_team_scope(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeValidationDB()})()
+    test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.callable_target_catalog = {
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model"),
+    }
+
+    response = await client.post(
+        "/ui/api/callable-target-bindings",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"callable_key": "gpt-4o-mini", "scope_type": "team", "scope_id": "team-missing"},
+    )
+
+    assert response.status_code == 404
+    assert "Team not found" in response.text
+
+
+@pytest.mark.asyncio
+async def test_callable_target_scope_policy_rejects_missing_api_key_scope(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeValidationDB()})()
+    test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
+
+    response = await client.post(
+        "/ui/api/callable-target-scope-policies",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"scope_type": "api_key", "scope_id": "key-missing", "mode": "restrict"},
+    )
+
+    assert response.status_code == 404
+    assert "API key not found" in response.text
+
+
+@pytest.mark.asyncio
+async def test_callable_target_scope_policy_accepts_user_scope(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeValidationDB()})()
+    test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
+
+    response = await client.post(
+        "/ui/api/callable-target-scope-policies",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"scope_type": "user", "scope_id": "user-1", "mode": "restrict"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["scope_type"] == "user"
+    assert payload["mode"] == "restrict"
 
 
 @pytest.mark.asyncio
@@ -545,6 +628,7 @@ async def test_callable_target_migration_backfill_creates_bindings_and_policies(
     assert payload["applied"]["user_bindings_upserted"] == 1
     assert payload["applied"]["team_policies_upserted"] == 1
     assert payload["applied"]["api_key_policies_upserted"] == 1
+    assert payload["applied"]["user_policies_upserted"] == 1
     assert payload["applied"]["team_legacy_models_cleared"] == 0
     assert payload["applied"]["api_key_legacy_models_cleared"] == 1
     assert payload["applied"]["user_legacy_models_cleared"] == 1
@@ -561,6 +645,7 @@ async def test_callable_target_migration_backfill_creates_bindings_and_policies(
     policies = {(item.scope_type, item.scope_id, item.mode) for item in policy_repo.policies}
     assert ("team", "team-1", "restrict") in policies
     assert ("api_key", "key-1", "restrict") in policies
+    assert ("user", "user-1", "restrict") in policies
 
     report = await client.get(
         "/ui/api/callable-target-migration/report",
@@ -606,6 +691,7 @@ async def test_callable_target_migration_backfill_returns_ready_for_enforce_when
     assert payload["organizations"][0]["api_keys"][0]["rollout_state"] == "ready_for_enforce"
     assert payload["organizations"][0]["users"][0]["rollout_state"] == "ready_for_enforce"
     assert payload["applied"]["user_bindings_upserted"] == 1
+    assert payload["applied"]["user_policies_upserted"] == 1
     assert payload["applied"]["team_legacy_models_cleared"] == 1
     assert payload["applied"]["api_key_legacy_models_cleared"] == 1
     assert payload["applied"]["user_legacy_models_cleared"] == 1
@@ -711,6 +797,7 @@ async def test_callable_target_migration_filter_targets_actionable_orgs_only(cli
     assert payload["applied"]["user_bindings_upserted"] == 1
     assert payload["applied"]["team_policies_upserted"] == 1
     assert payload["applied"]["api_key_policies_upserted"] == 1
+    assert payload["applied"]["user_policies_upserted"] == 1
     assert payload["applied"]["route_group_bindings_mirrored"] == 0
     assert payload["summary"]["organizations_total"] == 0
     assert reload_tracker.reload_count == 1

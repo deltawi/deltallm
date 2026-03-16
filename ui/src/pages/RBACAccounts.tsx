@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import { rbac, organizations, teams, type Principal } from '../lib/api';
+import { organizations, rbac, teams, users, type Principal, type ScopedAssetAccess } from '../lib/api';
 import { Plus, UserCog, ShieldCheck, Search, ChevronDown, ChevronRight, Building2, UsersRound, Trash2 } from 'lucide-react';
 import Modal from '../components/Modal';
+import AssetAccessEditor from '../components/access/AssetAccessEditor';
 
 const PLATFORM_ROLES = [
   { value: 'platform_admin', label: 'Platform Admin' },
@@ -76,6 +77,13 @@ export default function RBACAccounts() {
   const [showTeamMembershipModal, setShowTeamMembershipModal] = useState(false);
   const [membershipTeamId, setMembershipTeamId] = useState('');
   const [membershipTeamRole, setMembershipTeamRole] = useState('team_viewer');
+  const [showUserAccessModal, setShowUserAccessModal] = useState(false);
+  const [selectedRuntimeUser, setSelectedRuntimeUser] = useState<Principal | null>(null);
+  const [userAssetAccess, setUserAssetAccess] = useState<ScopedAssetAccess | null>(null);
+  const [userAssetMode, setUserAssetMode] = useState<'inherit' | 'restrict'>('inherit');
+  const [userAssetSelectedKeys, setUserAssetSelectedKeys] = useState<string[]>([]);
+  const [userAssetLoading, setUserAssetLoading] = useState(false);
+  const [userAssetError, setUserAssetError] = useState('');
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -241,6 +249,44 @@ export default function RBACAccounts() {
     }
   };
 
+  const openUserAssetAccess = async (acct: Principal) => {
+    setSelectedRuntimeUser(acct);
+    setShowUserAccessModal(true);
+    setUserAssetLoading(true);
+    setUserAssetError('');
+    setUserAssetAccess(null);
+    try {
+      const access = await users.assetAccess(acct.account_id, { include_targets: true });
+      setUserAssetAccess(access);
+      setUserAssetMode(access.mode === 'restrict' ? 'restrict' : 'inherit');
+      setUserAssetSelectedKeys(access.selected_callable_keys || []);
+    } catch (err: any) {
+      setUserAssetError(err?.message || 'Failed to load runtime user asset access');
+    } finally {
+      setUserAssetLoading(false);
+    }
+  };
+
+  const saveUserAssetAccess = async () => {
+    if (!selectedRuntimeUser) return;
+    setSaving(true);
+    setUserAssetError('');
+    try {
+      const response = await users.updateAssetAccess(selectedRuntimeUser.account_id, {
+        mode: userAssetMode,
+        selected_callable_keys: userAssetMode === 'inherit' ? [] : userAssetSelectedKeys,
+      });
+      setUserAssetAccess(response);
+      setUserAssetMode(response.mode === 'restrict' ? 'restrict' : 'inherit');
+      setUserAssetSelectedKeys(response.selected_callable_keys || []);
+      setShowUserAccessModal(false);
+    } catch (err: any) {
+      setUserAssetError(err?.message || 'Failed to update runtime user asset access');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const getOrgName = (orgId: string) => {
     const org = orgList.find(o => o.organization_id === orgId);
     return org?.organization_name || orgId.slice(0, 12) + '...';
@@ -328,6 +374,12 @@ export default function RBACAccounts() {
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); openUserAssetAccess(acct); }}
+                      className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+                    >
+                      Asset Access
+                    </button>
                     <button
                       onClick={(e) => { e.stopPropagation(); openEditAccount(acct); }}
                       className="text-sm text-blue-600 hover:text-blue-800 font-medium"
@@ -520,6 +572,66 @@ export default function RBACAccounts() {
               className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
             >
               {saving ? 'Saving...' : editAccount ? 'Update Account' : 'Create Account'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={showUserAccessModal}
+        onClose={() => { if (!saving) setShowUserAccessModal(false); }}
+        title={selectedRuntimeUser ? `Runtime Asset Access · ${selectedRuntimeUser.email}` : 'Runtime Asset Access'}
+      >
+        <div className="space-y-4">
+          {userAssetError && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">{userAssetError}</div>
+          )}
+          {!userAssetError && (
+            <p className="text-sm text-gray-500">
+              This edits the runtime user scope used by callable-target governance. If this account does not have a runtime user profile yet, the gateway will reject the request.
+            </p>
+          )}
+          <AssetAccessEditor
+            title="User Asset Access"
+            description="Restrict this runtime user below the inherited team and organization asset set when needed."
+            mode={userAssetMode}
+            allowModeSelection
+            onModeChange={(mode) => setUserAssetMode(mode === 'restrict' ? 'restrict' : 'inherit')}
+            targets={userAssetAccess?.selectable_targets || []}
+            selectedKeys={userAssetSelectedKeys}
+            onSelectedKeysChange={setUserAssetSelectedKeys}
+            loading={userAssetLoading}
+            disabled={saving || !userAssetAccess}
+            primaryActionLabel={userAssetMode === 'restrict' ? 'Select All Visible' : undefined}
+            onPrimaryAction={userAssetMode === 'restrict' ? (() => {
+              const next = (userAssetAccess?.selectable_targets || [])
+                .filter((item) => item.selectable)
+                .map((item) => item.callable_key)
+                .sort();
+              setUserAssetSelectedKeys(next);
+            }) : undefined}
+            secondaryActionLabel={userAssetMode === 'restrict' && userAssetSelectedKeys.length > 0 ? 'Clear Selection' : undefined}
+            onSecondaryAction={userAssetMode === 'restrict' && userAssetSelectedKeys.length > 0 ? (() => setUserAssetSelectedKeys([])) : undefined}
+          />
+          {userAssetAccess && (
+            <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+              Effective visible assets: {userAssetAccess.summary.effective_total} · Direct selections: {userAssetSelectedKeys.length}
+            </div>
+          )}
+          <div className="flex gap-3 pt-2">
+            <button
+              onClick={() => setShowUserAccessModal(false)}
+              disabled={saving}
+              className="flex-1 border border-gray-300 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={saveUserAssetAccess}
+              disabled={saving || !userAssetAccess}
+              className="flex-1 bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50"
+            >
+              {saving ? 'Saving...' : 'Save Access'}
             </button>
           </div>
         </div>

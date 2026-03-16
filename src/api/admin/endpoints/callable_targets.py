@@ -14,13 +14,13 @@ from src.services.asset_binding_mirror import (
     reload_callable_target_grants,
     route_group_repository,
 )
-from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, to_json_value
+from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, resolve_runtime_scope_target, to_json_value
 from src.auth.roles import Permission
 from src.audit.actions import AuditAction
 from src.db.callable_targets import CallableTargetBindingRepository
 from src.db.callable_target_policies import CallableTargetScopePolicyRepository
 from src.middleware.admin import require_admin_permission
-from src.services.asset_scopes import normalize_scope_type
+from src.services.asset_scopes import strict_normalize_scope_type
 from src.services.callable_target_migration import (
     ORGANIZATION_ROLLOUT_STATES,
     ROLLOUT_STATE_ALIASES,
@@ -32,7 +32,7 @@ from src.services.callable_targets import CallableTarget
 router = APIRouter(tags=["Admin Callable Targets"])
 
 _ALLOWED_SCOPE_TYPES = {"api_key", "key", "team", "organization", "org", "user"}
-_POLICY_SCOPE_TYPES = {"api_key", "key", "team"}
+_POLICY_SCOPE_TYPES = {"api_key", "key", "team", "user"}
 _ALLOWED_SCOPE_POLICY_MODES = {"inherit", "restrict"}
 
 
@@ -55,7 +55,10 @@ def _validate_scope_type(value: Any) -> str:
     if scope_type not in _ALLOWED_SCOPE_TYPES:
         allowed = ", ".join(sorted(_ALLOWED_SCOPE_TYPES))
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"scope_type must be one of: {allowed}")
-    normalized = normalize_scope_type(scope_type)
+    try:
+        normalized = strict_normalize_scope_type(scope_type, allowed={"api_key", "team", "organization", "user"})
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scope_type must be one of: api_key, team, organization, user") from None
     if normalized == "group":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scope_type must be one of: api_key, team, organization, user")
     return normalized
@@ -66,9 +69,10 @@ def _validate_policy_scope_type(value: Any) -> str:
     if scope_type not in _POLICY_SCOPE_TYPES:
         allowed = ", ".join(sorted(_POLICY_SCOPE_TYPES))
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"scope_type must be one of: {allowed}")
-    normalized = normalize_scope_type(scope_type)
-    if normalized not in {"api_key", "team"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scope_type must be one of: api_key, team")
+    try:
+        normalized = strict_normalize_scope_type(scope_type, allowed={"api_key", "team", "user"})
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scope_type must be one of: api_key, team, user")
     return normalized
 
 
@@ -208,11 +212,18 @@ async def upsert_callable_target_binding(request: Request, payload: dict[str, An
     request_start = perf_counter()
     repository = _repository_or_503(request)
     target = _validate_callable_key(request, payload.get("callable_key"))
+    scope_type = _validate_scope_type(payload.get("scope_type"))
+    scope_id = _validate_scope_id(payload.get("scope_id"))
+    await resolve_runtime_scope_target(
+        db_or_503(request),
+        scope_type=scope_type,
+        scope_id=scope_id,
+    )
 
     binding = await repository.upsert_binding(
         callable_key=target.key,
-        scope_type=_validate_scope_type(payload.get("scope_type")),
-        scope_id=_validate_scope_id(payload.get("scope_id")),
+        scope_type=scope_type,
+        scope_id=scope_id,
         enabled=bool(payload.get("enabled", True)),
         metadata=_validated_metadata(payload.get("metadata")),
     )
@@ -268,10 +279,17 @@ async def list_callable_target_scope_policies(
 async def upsert_callable_target_scope_policy(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _policy_repository_or_503(request)
+    scope_type = _validate_policy_scope_type(payload.get("scope_type"))
+    scope_id = _validate_scope_id(payload.get("scope_id"))
+    await resolve_runtime_scope_target(
+        db_or_503(request),
+        scope_type=scope_type,
+        scope_id=scope_id,
+    )
 
     policy = await repository.upsert_policy(
-        scope_type=_validate_policy_scope_type(payload.get("scope_type")),
-        scope_id=_validate_scope_id(payload.get("scope_id")),
+        scope_type=scope_type,
+        scope_id=scope_id,
         mode=_validate_scope_policy_mode(payload.get("mode")),
         metadata=_validated_metadata(payload.get("metadata")),
     )

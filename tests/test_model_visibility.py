@@ -176,6 +176,61 @@ async def test_effective_model_allowlist_does_not_apply_legacy_user_narrowing_wi
 
 
 @pytest.mark.asyncio
+async def test_effective_model_allowlist_does_not_narrow_user_scope_when_policy_is_explicitly_inherit() -> None:
+    auth = UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id="user-1",
+        organization_id="org-1",
+    )
+    service = CallableTargetGrantService(
+        repository=_FakeCallableTargetBindingRepository(
+            [
+                CallableTargetBindingRecord(
+                    callable_target_binding_id="ctb-org-1",
+                    callable_key="gpt-4o-mini",
+                    scope_type="organization",
+                    scope_id="org-1",
+                    enabled=True,
+                ),
+                CallableTargetBindingRecord(
+                    callable_target_binding_id="ctb-org-2",
+                    callable_key="text-embedding-3-small",
+                    scope_type="organization",
+                    scope_id="org-1",
+                    enabled=True,
+                ),
+                CallableTargetBindingRecord(
+                    callable_target_binding_id="ctb-user-1",
+                    callable_key="gpt-4o-mini",
+                    scope_type="user",
+                    scope_id="user-1",
+                    enabled=True,
+                ),
+            ]
+        ),
+        policy_repository=_FakeCallableTargetScopePolicyRepository(
+            [
+                CallableTargetScopePolicyRecord(
+                    callable_target_scope_policy_id="ctp-user-1",
+                    scope_type="user",
+                    scope_id="user-1",
+                    mode="inherit",
+                )
+            ]
+        ),
+    )
+    await service.reload()
+
+    resolution = resolve_model_allowlist_resolution(
+        auth,
+        callable_target_grant_service=service,
+        policy_mode="enforce",
+    )
+
+    assert resolution.effective_allowlist == {"gpt-4o-mini", "text-embedding-3-small"}
+
+
+@pytest.mark.asyncio
 async def test_effective_model_allowlist_treats_disabled_explicit_bindings_as_authoritative() -> None:
     auth = UserAPIKeyAuth(
         api_key="sk-test",

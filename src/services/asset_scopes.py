@@ -20,10 +20,24 @@ LEGACY_TO_CANONICAL_SCOPE: dict[str, str] = {
     "group": "group",
 }
 
+CANONICAL_SCOPE_TYPES: frozenset[str] = frozenset(CANONICAL_SCOPE_ALIASES)
+
 
 def normalize_scope_type(scope_type: str) -> str:
     normalized = str(scope_type or "").strip().lower()
     return LEGACY_TO_CANONICAL_SCOPE.get(normalized, normalized)
+
+
+def strict_normalize_scope_type(
+    scope_type: str,
+    *,
+    allowed: set[str] | frozenset[str] | None = None,
+) -> str:
+    canonical = normalize_scope_type(scope_type)
+    valid = CANONICAL_SCOPE_TYPES if allowed is None else frozenset(str(item).strip() for item in allowed if str(item).strip())
+    if canonical not in valid:
+        raise ValueError(canonical or str(scope_type or "").strip().lower())
+    return canonical
 
 
 def scope_lookup_candidates(scope_type: str) -> tuple[str, ...]:

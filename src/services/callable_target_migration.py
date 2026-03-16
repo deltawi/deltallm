@@ -95,6 +95,7 @@ async def build_callable_target_migration_report(
     user_bindings = await list_callable_target_bindings_by_scope(binding_repository, scope_type="user")
     team_policies = await list_callable_target_scope_policies_by_scope_type(policy_repository, scope_type="team")
     key_policies = await list_callable_target_scope_policies_by_scope_type(policy_repository, scope_type="api_key")
+    user_policies = await list_callable_target_scope_policies_by_scope_type(policy_repository, scope_type="user")
 
     teams_by_org: dict[str, list[dict[str, Any]]] = {}
     for row in team_rows:
@@ -184,6 +185,7 @@ async def build_callable_target_migration_report(
                 valid_callable_keys=valid_callable_keys,
                 missing_callable_keys=missing_callable_keys,
                 existing_binding_keys=existing_binding_keys,
+                scope_policy_mode=user_policies.get(str(user_row["user_id"]), "inherit"),
             )
             user_items.append(
                 {
@@ -196,6 +198,7 @@ async def build_callable_target_migration_report(
                     "missing_callable_keys": missing_callable_keys,
                     "binding_count": len(existing_binding_keys),
                     "binding_keys": existing_binding_keys,
+                    "scope_policy_mode": user_policies.get(str(user_row["user_id"]), "inherit"),
                     "rollout_state": user_rollout_state,
                 }
             )
@@ -261,6 +264,7 @@ async def apply_callable_target_migration_backfill(
         "user_bindings_upserted": 0,
         "team_policies_upserted": 0,
         "api_key_policies_upserted": 0,
+        "user_policies_upserted": 0,
         "team_legacy_models_cleared": 0,
         "api_key_legacy_models_cleared": 0,
         "user_legacy_models_cleared": 0,
@@ -340,6 +344,14 @@ async def apply_callable_target_migration_backfill(
                 continue
             processed_user_scope_ids.add(user_scope_id)
             valid_callable_keys = list(user["valid_callable_keys"])
+            if valid_callable_keys:
+                await policy_repository.upsert_policy(
+                    scope_type="user",
+                    scope_id=user_scope_id,
+                    mode="restrict",
+                    metadata={"source": "legacy_user_models_backfill"},
+                )
+                applied["user_policies_upserted"] += 1
             for callable_key in valid_callable_keys:
                 await binding_repository.upsert_binding(
                     callable_key=callable_key,
@@ -524,14 +536,15 @@ def _classify_binding_only_scope_rollout_state(
     valid_callable_keys: list[str],
     missing_callable_keys: list[str],
     existing_binding_keys: list[str],
+    scope_policy_mode: str,
 ) -> str:
-    if not legacy_models:
-        return "ready_for_enforce"
-    if missing_callable_keys:
-        return "missing_catalog_keys"
-    if not set(valid_callable_keys).issubset(set(existing_binding_keys)):
-        return "needs_scope_backfill"
-    return "ready_for_enforce"
+    return _classify_scope_rollout_state(
+        legacy_models=legacy_models,
+        valid_callable_keys=valid_callable_keys,
+        missing_callable_keys=missing_callable_keys,
+        existing_binding_keys=existing_binding_keys,
+        scope_policy_mode=scope_policy_mode,
+    )
 
 
 def _classify_organization_rollout_state(

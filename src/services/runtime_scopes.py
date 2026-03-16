@@ -18,6 +18,7 @@ class RuntimeScopeContext:
     user_id: str | None
     team_id: str | None
     organization_id: str | None
+    scope_chain: tuple[tuple[str, str], ...]
     binding_scopes: tuple[tuple[str, str], ...]
 
 
@@ -75,13 +76,22 @@ def _build_runtime_scope_context(
     team_id: str | None,
     organization_id: str | None,
 ) -> RuntimeScopeContext:
+    scope_chain: list[tuple[str, str]] = []
+    if not is_master_key and user_id is not None:
+        scope_chain.append(("user", user_id))
     binding_scopes: list[tuple[str, str]] = []
     if not is_master_key and api_key_scope_id is not None:
-        binding_scopes.append(("api_key", api_key_scope_id))
-    if team_id is not None:
-        binding_scopes.append(("team", team_id))
-    if organization_id is not None:
-        binding_scopes.append(("organization", organization_id))
+        scope = ("api_key", api_key_scope_id)
+        scope_chain.append(scope)
+        binding_scopes.append(scope)
+    if not is_master_key and team_id is not None:
+        scope = ("team", team_id)
+        scope_chain.append(scope)
+        binding_scopes.append(scope)
+    if not is_master_key and organization_id is not None:
+        scope = ("organization", organization_id)
+        scope_chain.append(scope)
+        binding_scopes.append(scope)
 
     return RuntimeScopeContext(
         auth_source=auth_source,
@@ -91,6 +101,7 @@ def _build_runtime_scope_context(
         user_id=user_id,
         team_id=team_id,
         organization_id=organization_id,
+        scope_chain=tuple(scope_chain),
         binding_scopes=tuple(binding_scopes),
     )
 

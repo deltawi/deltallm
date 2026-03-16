@@ -326,6 +326,7 @@ export interface AssetVisibilityResponse {
   scope_policies?: {
     team?: 'inherit' | 'restrict';
     api_key?: 'inherit' | 'restrict';
+    user?: 'inherit' | 'restrict';
   };
   callable_targets: {
     total: number;
@@ -811,6 +812,15 @@ export const keys = {
     apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/keys/${encodeURIComponent(tokenHash)}/asset-access`, params as any)),
   updateAssetAccess: (tokenHash: string, payload: { mode: 'inherit' | 'restrict'; selected_callable_keys: string[]; select_all_selectable?: boolean }) =>
     apiFetch<ScopedAssetAccess>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/asset-access`, { method: 'PUT', json: payload }),
+};
+
+export const users = {
+  assetVisibility: (userId: string) =>
+    apiFetch<AssetVisibilityResponse>(`/ui/api/users/${encodeURIComponent(userId)}/asset-visibility`),
+  assetAccess: (userId: string, params?: { include_targets?: boolean }) =>
+    apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/users/${encodeURIComponent(userId)}/asset-access`, params as any)),
+  updateAssetAccess: (userId: string, payload: { mode: 'inherit' | 'restrict'; selected_callable_keys: string[]; select_all_selectable?: boolean }) =>
+    apiFetch<ScopedAssetAccess>(`/ui/api/users/${encodeURIComponent(userId)}/asset-access`, { method: 'PUT', json: payload }),
 };
 
 export const batches = {

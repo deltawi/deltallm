@@ -488,6 +488,20 @@ model DeltaLLM_MCPServerBinding {
   @@map("deltallm_mcpbinding")
 }
 
+model DeltaLLM_MCPScopePolicy {
+  mcp_scope_policy_id String   @id @default(uuid())
+  scope_type          String
+  scope_id            String
+  mode                String   @default("inherit")
+  metadata            Json?
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@unique([scope_type, scope_id], map: "deltallm_mcpscopepolicy_scope_key")
+  @@index([scope_type, scope_id], map: "deltallm_mcpscopepolicy_scope_idx")
+  @@map("deltallm_mcpscopepolicy")
+}
+
 model DeltaLLM_MCPToolPolicy {
   mcp_tool_policy_id       String   @id @default(uuid())
   mcp_server_id            String

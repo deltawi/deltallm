@@ -17,7 +17,7 @@ from src.services.asset_binding_mirror import (
 from src.services.asset_visibility_preview import build_asset_visibility_preview
 from src.services.callable_targets import CallableTarget
 
-_SCOPES_WITH_POLICY = {"team", "api_key"}
+_SCOPES_WITH_POLICY = {"team", "api_key", "user"}
 _ALLOWED_SCOPE_TYPES = {"organization", "team", "api_key", "user"}
 
 
@@ -278,7 +278,12 @@ async def _resolved_mode(request: Request, *, scope_type: str, scope_id: str) ->
         return "grant"
     if scope_type in _SCOPES_WITH_POLICY:
         record = await _get_scope_policy_record(request, scope_type=scope_type, scope_id=scope_id)
-        return record.mode if record is not None else "inherit"
+        if record is not None:
+            return record.mode
+        if scope_type == "user":
+            bindings = await _list_scope_bindings(request, scope_type=scope_type, scope_id=scope_id)
+            return "restrict" if any(binding.enabled for binding in bindings) else "inherit"
+        return "inherit"
     bindings = await _list_scope_bindings(request, scope_type=scope_type, scope_id=scope_id)
     return "restrict" if any(binding.enabled for binding in bindings) else "inherit"
 

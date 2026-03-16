@@ -24,6 +24,12 @@ def test_resolve_runtime_scope_context_for_api_key_auth() -> None:
 
     assert context.auth_source == "api_key"
     assert context.actor_id == "user-1"
+    assert context.scope_chain == (
+        ("user", "user-1"),
+        ("api_key", "hashed-key"),
+        ("team", "team-1"),
+        ("organization", "org-1"),
+    )
     assert context.binding_scopes == (
         ("api_key", "hashed-key"),
         ("team", "team-1"),
@@ -46,6 +52,11 @@ def test_resolve_runtime_scope_context_for_jwt_omits_api_key_scope() -> None:
 
     assert context.auth_source == "jwt"
     assert context.api_key_scope_id is None
+    assert context.scope_chain == (
+        ("user", "user-1"),
+        ("team", "team-1"),
+        ("organization", "org-1"),
+    )
     assert context.binding_scopes == (
         ("team", "team-1"),
         ("organization", "org-1"),
@@ -63,6 +74,10 @@ def test_resolve_runtime_scope_context_for_custom_auth_uses_explicit_api_key_sco
 
     assert context.auth_source == "custom"
     assert context.api_key_scope_id == "svc-account-1"
+    assert context.scope_chain == (
+        ("api_key", "svc-account-1"),
+        ("team", "team-1"),
+    )
     assert context.binding_scopes == (
         ("api_key", "svc-account-1"),
         ("team", "team-1"),
@@ -96,6 +111,7 @@ async def test_auth_middleware_attaches_runtime_scope_context_for_jwt(test_app) 
     context = request.state.runtime_scope_context
     assert context.auth_source == "jwt"
     assert context.is_master_key is False
+    assert context.scope_chain == (("user", "u-1"), ("team", "team-1"), ("organization", "org-1"))
     assert context.binding_scopes == (("team", "team-1"), ("organization", "org-1"))
 
 
@@ -121,4 +137,5 @@ async def test_auth_middleware_attaches_runtime_scope_context_for_master_key(tes
     context = request.state.runtime_scope_context
     assert context.auth_source == "master_key"
     assert context.is_master_key is True
+    assert context.scope_chain == ()
     assert context.binding_scopes == ()

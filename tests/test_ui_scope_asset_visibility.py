@@ -471,6 +471,12 @@ async def test_key_asset_visibility_applies_user_scope_narrowing(client, test_ap
         enabled=True,
         metadata={"source": "user"},
     )
+    await policies.upsert_policy(
+        scope_type="user",
+        scope_id="user-1",
+        mode="restrict",
+        metadata={"source": "user"},
+    )
 
     response = await client.get(
         "/ui/api/keys/key-hash-1/asset-visibility",
@@ -481,6 +487,7 @@ async def test_key_asset_visibility_applies_user_scope_narrowing(client, test_ap
     payload = response.json()
     assert payload["user_id"] == "user-1"
     assert payload["direct_scope_type"] == "user"
+    assert payload["scope_policies"]["user"] == "restrict"
 
     callable_payload = {item["callable_key"]: item for item in payload["callable_targets"]["items"]}
     assert callable_payload["gpt-4o-mini"]["effective_visible"] is True
@@ -530,3 +537,61 @@ async def test_org_asset_visibility_paginates_large_route_group_and_callable_tar
     callable_keys = {item["callable_key"] for item in payload["callable_targets"]["items"]}
     assert {"rg-0", "rg-519"} <= route_group_keys
     assert {"rg-0", "rg-519"} <= callable_keys
+
+
+@pytest.mark.asyncio
+async def test_user_asset_access_routes_support_explicit_user_scope(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeDB()})()
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    callable_targets = _FakeCallableTargetBindingRepository()
+    policies = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.callable_target_binding_repository = callable_targets
+    test_app.state.callable_target_scope_policy_repository = policies
+    test_app.state.callable_target_catalog = {
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model"),
+        "team-assistant": CallableTarget(key="team-assistant", target_type="model"),
+    }
+
+    await callable_targets.upsert_binding(
+        callable_key="gpt-4o-mini",
+        scope_type="organization",
+        scope_id="org-1",
+        enabled=True,
+        metadata={"source": "org"},
+    )
+    await callable_targets.upsert_binding(
+        callable_key="team-assistant",
+        scope_type="team",
+        scope_id="team-1",
+        enabled=True,
+        metadata={"source": "team"},
+    )
+
+    access = await client.get("/ui/api/users/user-1/asset-access", headers={"Authorization": "Bearer mk-test"})
+    assert access.status_code == 200
+    access_payload = access.json()
+    assert access_payload["scope_type"] == "user"
+    assert access_payload["scope_id"] == "user-1"
+    assert access_payload["mode"] == "inherit"
+    assert access_payload["summary"]["effective_total"] == 1
+
+    update = await client.put(
+        "/ui/api/users/user-1/asset-access",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"mode": "restrict", "selected_callable_keys": ["gpt-4o-mini"]},
+    )
+    assert update.status_code == 200
+    update_payload = update.json()
+    assert update_payload["mode"] == "restrict"
+    assert update_payload["selected_callable_keys"] == ["gpt-4o-mini"]
+
+    visibility = await client.get("/ui/api/users/user-1/asset-visibility", headers={"Authorization": "Bearer mk-test"})
+    assert visibility.status_code == 200
+    visibility_payload = visibility.json()
+    assert visibility_payload["user_id"] == "user-1"
+    assert visibility_payload["scope_policies"]["user"] == "restrict"
+    callable_items = {item["callable_key"]: item for item in visibility_payload["callable_targets"]["items"]}
+    assert visibility_payload["callable_targets"]["total"] == 2
+    assert callable_items["gpt-4o-mini"]["effective_visible"] is True
+    assert callable_items["team-assistant"]["effective_visible"] is False

@@ -307,6 +307,11 @@ async def build_asset_visibility_preview(
         scope_type="api_key",
         scope_id=api_key_id,
     )
+    user_policy_mode = await get_scope_callable_target_policy_mode(
+        request,
+        scope_type="user",
+        scope_id=user_id,
+    )
 
     owned_route_groups = await list_owned_route_groups(
         request,
@@ -392,8 +397,8 @@ async def build_asset_visibility_preview(
             == "route_group"
         ]
 
-    user_route_group_mode = "restrict" if user_route_group_bindings else None
-    user_callable_target_mode = "restrict" if user_callable_target_bindings else None
+    user_route_group_mode = user_policy_mode or ("restrict" if user_route_group_bindings else None)
+    user_callable_target_mode = user_policy_mode or ("restrict" if user_callable_target_bindings else None)
 
     for item in route_group_items.values():
         _summarize_route_group_visibility(item, direct_scope_type=direct_scope_type)
@@ -431,6 +436,7 @@ async def build_asset_visibility_preview(
         "scope_policies": {
             "team": team_policy_mode or "inherit",
             "api_key": api_key_policy_mode or "inherit",
+            "user": user_policy_mode or ("restrict" if user_id and user_callable_target_bindings else "inherit"),
         },
         "route_groups": {
             "total": len(route_group_items),

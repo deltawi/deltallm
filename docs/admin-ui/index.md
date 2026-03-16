@@ -50,4 +50,4 @@ Parent menu sections start collapsed by default and expand only when the operato
 | [Guardrails](guardrails.md) | Safety policy definitions and scoped assignment |
 | [Settings](settings.md) | Global runtime, fallback, and cache behavior |
 
-Runtime visibility for models and route groups is governed through callable-target bindings and scope policies. In the UI, organizations choose the allowed top-level asset set, while teams and keys can inherit that set or narrow it further in their create/edit dialogs.
+Runtime visibility for models and route groups is governed through callable-target bindings and scope policies. In the UI, organizations choose the allowed top-level asset set, teams and keys can inherit that set or narrow it further in their create/edit dialogs, and People & Access can narrow specific runtime users when required.

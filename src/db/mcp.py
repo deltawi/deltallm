@@ -475,6 +475,7 @@ class MCPRepository:
         server_id: str | None = None,
         scope_type: str | None = None,
         scope_id: str | None = None,
+        enabled: bool | None = None,
         limit: int = 200,
         offset: int = 0,
     ) -> tuple[list[MCPServerBindingRecord], int]:
@@ -492,6 +493,9 @@ class MCPRepository:
         if scope_id:
             params.append(scope_id)
             clauses.append(f"b.scope_id = ${len(params)}")
+        if enabled is not None:
+            params.append(enabled)
+            clauses.append(f"b.enabled = ${len(params)}")
 
         where_sql = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         count_rows = await self.prisma.query_raw(
@@ -631,6 +635,7 @@ class MCPRepository:
         server_id: str | None = None,
         scope_type: str | None = None,
         scope_id: str | None = None,
+        enabled: bool | None = None,
         limit: int = 200,
         offset: int = 0,
     ) -> tuple[list[MCPToolPolicyRecord], int]:
@@ -648,6 +653,9 @@ class MCPRepository:
         if scope_id:
             params.append(scope_id)
             clauses.append(f"p.scope_id = ${len(params)}")
+        if enabled is not None:
+            params.append(enabled)
+            clauses.append(f"p.enabled = ${len(params)}")
         where_sql = f" WHERE {' AND '.join(clauses)}" if clauses else ""
 
         count_rows = await self.prisma.query_raw(

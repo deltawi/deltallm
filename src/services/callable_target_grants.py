@@ -136,14 +136,14 @@ class CallableTargetGrantService:
                 authoritative=True,
             )
 
-        if scope_context.team_id is not None and self.get_scope_mode("team", scope_context.team_id) == "restrict":
+        if scope_context.team_id is not None and self._get_scope_mode(snapshot, "team", scope_context.team_id) == "restrict":
             effective.intersection_update(snapshot.enabled_by_scope.get(("team", scope_context.team_id), ()))
 
-        if scope_context.api_key_scope_id is not None and self.get_scope_mode("api_key", scope_context.api_key_scope_id) == "restrict":
+        if scope_context.api_key_scope_id is not None and self._get_scope_mode(snapshot, "api_key", scope_context.api_key_scope_id) == "restrict":
             effective.intersection_update(snapshot.enabled_by_scope.get(("api_key", scope_context.api_key_scope_id), ()))
 
         user_scope = ("user", scope_context.user_id) if scope_context.user_id is not None else None
-        if user_scope is not None and snapshot.binding_counts_by_scope.get(user_scope, 0) > 0:
+        if user_scope is not None and self._should_restrict_user_scope(snapshot, user_scope):
             effective.intersection_update(snapshot.enabled_by_scope.get(user_scope, ()))
 
         return CallableTargetPolicyResolution(
@@ -180,8 +180,26 @@ class CallableTargetGrantService:
     @staticmethod
     def _applicable_scopes(auth: UserAPIKeyAuth) -> tuple[tuple[str, str], ...]:
         scope_context = resolve_runtime_scope_context(auth)
-        scopes: list[tuple[str, str]] = []
-        if scope_context.user_id is not None:
-            scopes.append(("user", scope_context.user_id))
-        scopes.extend(scope_context.binding_scopes)
-        return tuple(scopes)
+        return scope_context.scope_chain
+
+    @staticmethod
+    def _get_scope_mode(
+        snapshot: CallableTargetGrantSnapshot,
+        scope_type: str,
+        scope_id: str,
+    ) -> str | None:
+        normalized_scope_type = str(scope_type or "").strip()
+        normalized_scope_id = str(scope_id or "").strip()
+        if not normalized_scope_type or not normalized_scope_id:
+            return None
+        return snapshot.scope_modes_by_scope.get((normalized_scope_type, normalized_scope_id))
+
+    @staticmethod
+    def _should_restrict_user_scope(
+        snapshot: CallableTargetGrantSnapshot,
+        user_scope: tuple[str, str],
+    ) -> bool:
+        mode = snapshot.scope_modes_by_scope.get(user_scope)
+        if mode == "restrict":
+            return True
+        return mode is None and snapshot.binding_counts_by_scope.get(user_scope, 0) > 0

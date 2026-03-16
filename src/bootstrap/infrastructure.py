@@ -14,6 +14,7 @@ from src.db.callable_targets import CallableTargetBindingRepository
 from src.db.callable_target_policies import CallableTargetScopePolicyRepository
 from src.db.client import prisma_manager
 from src.db.mcp import MCPRepository
+from src.db.mcp_scope_policies import MCPScopePolicyRepository
 from src.db.prompt_registry import PromptRegistryRepository
 from src.db.repositories import ModelDeploymentRepository
 from src.db.route_groups import RouteGroupRepository
@@ -85,6 +86,7 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
     app.state.route_group_repository = RouteGroupRepository(prisma_manager.client)
     app.state.prompt_registry_repository = PromptRegistryRepository(prisma_manager.client)
     app.state.mcp_repository = MCPRepository(prisma_manager.client)
+    app.state.mcp_scope_policy_repository = MCPScopePolicyRepository(prisma_manager.client)
     app.state.batch_repository = BatchRepository(prisma_manager.client)
 
     return InfrastructureRuntime(

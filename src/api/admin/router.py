@@ -17,6 +17,7 @@ from src.api.admin.endpoints import (
     service_accounts_router,
     spend_router,
     teams_router,
+    users_router,
 )
 from src.ui.routes import ui_router as legacy_ui_router
 
@@ -30,6 +31,7 @@ admin_router.include_router(callable_targets_router)
 admin_router.include_router(models_router)
 admin_router.include_router(service_accounts_router)
 admin_router.include_router(teams_router)
+admin_router.include_router(users_router)
 admin_router.include_router(organizations_router)
 admin_router.include_router(batches_router)
 admin_router.include_router(rbac_router)
