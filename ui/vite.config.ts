@@ -34,6 +34,10 @@ export default defineConfig(({ command }) => ({
         target: 'http://localhost:8000',
         changeOrigin: true,
       },
+      '/__mockup': {
+        target: 'http://localhost:23636',
+        changeOrigin: true,
+      },
     },
   },
   build: {
