@@ -19,6 +19,7 @@ interface DeploymentSearchSelectProps {
   searchPlaceholder?: string;
   helperText?: string;
   emptyText?: string;
+  inputClassName?: string;
 }
 
 export default function DeploymentSearchSelect({
@@ -31,6 +32,7 @@ export default function DeploymentSearchSelect({
   searchPlaceholder = 'Search deployments...',
   helperText,
   emptyText = 'No deployments found.',
+  inputClassName = '',
 }: DeploymentSearchSelectProps) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -59,7 +61,7 @@ export default function DeploymentSearchSelect({
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
-        className="w-full flex items-center justify-between gap-2 px-3 py-2 border border-gray-300 rounded-lg text-sm text-left hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        className={`w-full flex items-center justify-between gap-2 px-3 py-2 border border-gray-300 rounded-lg text-sm text-left hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 ${inputClassName}`}
         aria-haspopup="listbox"
         aria-expanded={open}
       >

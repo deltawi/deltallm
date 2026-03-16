@@ -1,8 +1,17 @@
-import { Activity, ChevronDown, ChevronUp, Plus, ShieldAlert, Trash2, XCircle, CheckCircle2 } from 'lucide-react';
+import {
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Plus,
+  Search,
+  ShieldAlert,
+  Trash2,
+  XCircle,
+} from 'lucide-react';
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import ProviderBadge from '../ProviderBadge';
+import { useNavigate } from 'react-router-dom';
 import DeploymentSearchSelect from '../DeploymentSearchSelect';
+import ProviderBadge from '../ProviderBadge';
 import type { RouteGroupMemberDetail } from '../../lib/api';
 import { modelDetailPath } from '../../lib/modelRoutes';
 
@@ -65,61 +74,93 @@ export default function RouteGroupMembersCard({
 
   return (
     <div className="space-y-4">
-      {/* Summary row + Add button */}
+      {/* ── Summary row + Add toggle ── */}
       <div className="flex items-center justify-between">
         <p className="text-sm text-gray-500">
           {members.length} {members.length === 1 ? 'deployment' : 'deployments'}&nbsp;·&nbsp;
-          <span className={healthyCount === members.length && members.length > 0 ? 'text-emerald-600 font-medium' : 'text-gray-500'}>
+          <span
+            className={
+              healthyCount === members.length && members.length > 0
+                ? 'font-medium text-emerald-600'
+                : 'text-gray-500'
+            }
+          >
             {healthyCount} healthy
           </span>
           {missingCount > 0 && (
-            <span className="ml-1 text-amber-600">&nbsp;·&nbsp;{missingCount} registry gap{missingCount > 1 ? 's' : ''}</span>
+            <span className="ml-1 text-amber-600">
+              &nbsp;·&nbsp;{missingCount} registry gap{missingCount > 1 ? 's' : ''}
+            </span>
           )}
         </p>
         <button
           type="button"
           onClick={() => setShowAddForm((v) => !v)}
-          className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"
+          className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 transition-colors"
         >
-          {showAddForm ? <><ChevronUp className="h-3.5 w-3.5" /> Cancel</> : <><Plus className="h-3.5 w-3.5" /> Add Deployment</>}
+          {showAddForm ? (
+            <><ChevronUp className="h-3.5 w-3.5" /> Cancel</>
+          ) : (
+            <><Plus className="h-3.5 w-3.5" /> Add Deployment</>
+          )}
         </button>
       </div>
 
-      {/* Inline add form */}
+      {/* ── Inline add form ── */}
       {showAddForm && (
-        <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+        <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 shadow-sm">
           <h4 className="mb-3 text-sm font-semibold text-blue-900">
             Add a deployment — must be compatible with <strong>{mode}</strong> traffic
           </h4>
 
-          <DeploymentSearchSelect
-            search={memberSearchInput}
-            onSearchChange={onMemberSearchChange}
-            options={candidateDeployments}
-            loading={loadingCandidates}
-            selectedDeploymentId={memberForm.deployment_id}
-            onSelect={(option) => onMemberFormChange({ ...memberForm, deployment_id: option.deployment_id })}
-            searchPlaceholder="Search by deployment, model, or provider…"
-            helperText={`Showing deployments compatible with "${mode}" traffic.`}
-            emptyText={hasCandidateError ? 'Failed to load candidates. Enter ID manually below.' : 'No compatible deployments found.'}
-          />
+          {/* Search with icon */}
+          <div className="relative mb-3">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+            <DeploymentSearchSelect
+              search={memberSearchInput}
+              onSearchChange={onMemberSearchChange}
+              options={candidateDeployments}
+              loading={loadingCandidates}
+              selectedDeploymentId={memberForm.deployment_id}
+              onSelect={(option) => onMemberFormChange({ ...memberForm, deployment_id: option.deployment_id })}
+              searchPlaceholder="Search by deployment, model, or provider…"
+              helperText={`Showing deployments compatible with "${mode}" traffic.`}
+              emptyText={
+                hasCandidateError
+                  ? 'Failed to load candidates. Enter ID manually below.'
+                  : 'No compatible deployments found.'
+              }
+              inputClassName="pl-9"
+            />
+          </div>
 
+          {/* Selected candidate preview */}
           {selectedCandidate && (
-            <div className="mt-2 rounded-lg border border-blue-100 bg-white px-3 py-2.5 text-sm text-blue-900">
-              <div className="font-medium">{selectedCandidate.model_name || selectedCandidate.deployment_id}</div>
-              <div className="mt-0.5 text-xs text-blue-700">
-                {selectedCandidate.deployment_id}
-                {selectedCandidate.provider ? ` · ${selectedCandidate.provider}` : ''}
-                {selectedCandidate.mode ? ` · ${selectedCandidate.mode}` : ''}
+            <div className="mb-3 rounded-lg border border-blue-100 bg-white px-4 py-3 shadow-sm flex items-center justify-between">
+              <div>
+                <div className="font-semibold text-slate-900">
+                  {selectedCandidate.model_name || selectedCandidate.deployment_id}
+                </div>
+                <code className="mt-0.5 block font-mono text-xs text-slate-500">
+                  {selectedCandidate.deployment_id}
+                </code>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <ProviderBadge provider={selectedCandidate.provider} />
+                {selectedCandidate.mode && (
+                  <span className="rounded border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                    {selectedCandidate.mode}
+                  </span>
+                )}
               </div>
             </div>
           )}
 
-          {/* Advanced member options */}
+          {/* Advanced options toggle */}
           <button
             type="button"
             onClick={() => setShowAdvanced((v) => !v)}
-            className="mt-3 flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-900"
+            className="mb-1 flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-900 transition-colors"
           >
             {showAdvanced ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
             Advanced options
@@ -127,6 +168,13 @@ export default function RouteGroupMembersCard({
 
           {showAdvanced && (
             <div className="mt-3 space-y-3">
+              <button
+                type="button"
+                onClick={onToggleManualEntry}
+                className="text-xs text-blue-600 hover:underline"
+              >
+                {manualMemberEntry ? 'Hide manual ID entry' : 'Enter deployment ID manually'}
+              </button>
               {manualMemberEntry && (
                 <label className="block space-y-1">
                   <span className="text-xs font-medium text-gray-700">Manual Deployment ID</span>
@@ -138,13 +186,6 @@ export default function RouteGroupMembersCard({
                   />
                 </label>
               )}
-              <button
-                type="button"
-                onClick={onToggleManualEntry}
-                className="text-xs text-blue-600 hover:underline"
-              >
-                {manualMemberEntry ? 'Hide manual ID entry' : 'Enter deployment ID manually'}
-              </button>
               <div className="grid grid-cols-2 gap-2">
                 <label className="space-y-1">
                   <span className="text-xs font-medium text-gray-700">Weight</span>
@@ -180,25 +221,27 @@ export default function RouteGroupMembersCard({
                 />
                 <span>
                   Eligible for routing
-                  <span className="block text-xs text-gray-500">Uncheck to keep attached but temporarily exclude from selection.</span>
+                  <span className="block text-xs text-gray-500">
+                    Uncheck to keep attached but temporarily exclude from selection.
+                  </span>
                 </span>
               </label>
             </div>
           )}
 
-          <div className="mt-4 flex gap-2">
+          <div className="mt-4 flex items-center gap-3">
             <button
               type="button"
               onClick={onAddMember}
               disabled={addingMember || !memberForm.deployment_id.trim()}
-              className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-50 transition-colors"
             >
               {addingMember ? 'Adding…' : 'Add'}
             </button>
             <button
               type="button"
               onClick={() => setShowAddForm(false)}
-              className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
+              className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-gray-50 transition-colors"
             >
               Cancel
             </button>
@@ -206,94 +249,119 @@ export default function RouteGroupMembersCard({
         </div>
       )}
 
-      {/* Member list */}
+      {/* ── Member list ── */}
       {members.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-gray-200 px-6 py-10 text-center">
           <div className="text-sm font-medium text-gray-400">No deployments attached yet</div>
-          <div className="mt-1 text-xs text-gray-400">Add at least one healthy deployment before enabling live traffic.</div>
+          <div className="mt-1 text-xs text-gray-400">
+            Add at least one healthy deployment before enabling live traffic.
+          </div>
         </div>
       ) : (
-        <div className="overflow-hidden rounded-2xl border border-gray-200">
-          {/* Header */}
-          <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-4 border-b border-gray-100 bg-gray-50 px-4 py-2.5 text-[10px] font-semibold uppercase tracking-widest text-gray-400">
-            <div>Deployment</div>
-            <div className="w-28 text-center">Provider</div>
-            {totalWeight > 0 && <div className="w-28 text-center">Weight</div>}
-            <div className="w-20 text-center">Status</div>
-            <div className="w-8" />
-          </div>
-
-          {/* Rows */}
-          {members.map((m, i) => {
-            const weightPct = totalWeight > 0 ? Math.round(((m.weight ?? 0) / totalWeight) * 100) : 0;
-            return (
-              <div
-                key={m.deployment_id}
-                className={`grid grid-cols-[1fr_auto_auto_auto_auto] items-center gap-4 px-4 py-3 transition hover:bg-gray-50 ${i < members.length - 1 ? 'border-b border-gray-100' : ''}`}
-                onClick={() => navigate(modelDetailPath(m.deployment_id))}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => e.key === 'Enter' && navigate(modelDetailPath(m.deployment_id))}
-              >
-                {/* Name + ID */}
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-gray-900">
-                    {m.model_name || m.deployment_id}
-                  </div>
-                  <code className="font-mono text-[11px] text-gray-400">{m.deployment_id}</code>
-                  {!m.enabled && (
-                    <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-gray-400">paused</span>
-                  )}
-                </div>
-
-                {/* Provider */}
-                <div className="flex w-28 justify-center">
-                  <ProviderBadge provider={m.provider} />
-                </div>
-
-                {/* Weight bar */}
+        <div className="overflow-hidden rounded-2xl border border-gray-200 shadow-sm">
+          <table className="w-full border-collapse text-left">
+            <thead>
+              <tr className="border-b border-gray-200 bg-gray-50">
+                <th className="w-[38%] px-4 py-3 text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+                  Deployment
+                </th>
+                <th className="w-[20%] px-4 py-3 text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+                  Provider
+                </th>
                 {totalWeight > 0 && (
-                  <div className="flex w-28 flex-col items-center gap-1">
-                    <div className="h-1.5 w-16 overflow-hidden rounded-full bg-gray-100">
-                      <div className="h-full rounded-full bg-blue-400 transition-all" style={{ width: `${weightPct}%` }} />
-                    </div>
-                    <span className="text-[11px] font-semibold text-gray-500">
-                      {m.weight ?? 0} ({weightPct}%)
-                    </span>
-                  </div>
+                  <th className="w-[22%] px-4 py-3 text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+                    Weight
+                  </th>
                 )}
-
-                {/* Health */}
-                <div className="flex w-20 justify-center">
-                  {m.healthy === true ? (
-                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600">
-                      <CheckCircle2 className="h-3.5 w-3.5" /> Healthy
-                    </span>
-                  ) : m.healthy === false ? (
-                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-red-500">
-                      <XCircle className="h-3.5 w-3.5" /> Down
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-500">
-                      <ShieldAlert className="h-3.5 w-3.5" /> Missing
-                    </span>
-                  )}
-                </div>
-
-                {/* Remove */}
-                <div className="flex w-8 justify-end" onClick={(e) => e.stopPropagation()}>
-                  <button
-                    type="button"
-                    onClick={() => onRequestRemoveMember(m.deployment_id)}
-                    className="rounded-lg p-1 text-gray-300 hover:bg-red-50 hover:text-red-400"
-                    aria-label={`Remove ${m.deployment_id}`}
+                <th className="w-[15%] px-4 py-3 text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+                  Status
+                </th>
+                <th className="w-[5%] px-4 py-3" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 bg-white">
+              {members.map((m) => {
+                const weightPct =
+                  totalWeight > 0 ? Math.round(((m.weight ?? 0) / totalWeight) * 100) : 0;
+                return (
+                  <tr
+                    key={m.deployment_id}
+                    className="group cursor-pointer transition-colors hover:bg-gray-50"
+                    onClick={() => navigate(modelDetailPath(m.deployment_id))}
                   >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              </div>
-            );
-          })}
+                    {/* Deployment name + ID */}
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-slate-900 truncate">
+                        {m.model_name || m.deployment_id}
+                      </div>
+                      <div className="mt-0.5 flex items-center gap-1.5">
+                        <code className="font-mono text-xs text-slate-500">{m.deployment_id}</code>
+                        {!m.enabled && (
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+                            paused
+                          </span>
+                        )}
+                      </div>
+                    </td>
+
+                    {/* Provider */}
+                    <td className="px-4 py-3">
+                      <ProviderBadge provider={m.provider} />
+                    </td>
+
+                    {/* Weight bar */}
+                    {totalWeight > 0 && (
+                      <td className="px-4 py-3">
+                        <div className="flex flex-col gap-1">
+                          <div className="h-1.5 w-full max-w-[100px] overflow-hidden rounded-full bg-gray-100">
+                            <div
+                              className="h-full rounded-full bg-blue-400 transition-all"
+                              style={{ width: `${weightPct}%` }}
+                            />
+                          </div>
+                          <span className="text-xs text-slate-500">
+                            {m.weight ?? 0} ({weightPct}%)
+                          </span>
+                        </div>
+                      </td>
+                    )}
+
+                    {/* Health */}
+                    <td className="px-4 py-3">
+                      {m.healthy === true ? (
+                        <span className="inline-flex items-center gap-1 text-sm font-medium text-emerald-600">
+                          <CheckCircle2 className="h-4 w-4" /> Healthy
+                        </span>
+                      ) : m.healthy === false ? (
+                        <span className="inline-flex items-center gap-1 text-sm font-medium text-red-600">
+                          <XCircle className="h-4 w-4" /> Down
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-sm font-medium text-amber-500">
+                          <ShieldAlert className="h-4 w-4" /> Missing
+                        </span>
+                      )}
+                    </td>
+
+                    {/* Hover-reveal remove */}
+                    <td
+                      className="px-4 py-3 text-right"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onRequestRemoveMember(m.deployment_id)}
+                        className="rounded-lg p-1.5 text-gray-300 opacity-0 transition-all hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
+                        aria-label={`Remove ${m.deployment_id}`}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
