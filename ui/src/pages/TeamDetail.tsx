@@ -3,39 +3,114 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { organizations, teams } from '../lib/api';
 import { buildParentScopedAssetTargets, buildScopedSelectableTargets } from '../lib/assetAccess';
-import Card from '../components/Card';
-import DataTable from '../components/DataTable';
 import Modal from '../components/Modal';
 import UserSearchSelect from '../components/UserSearchSelect';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
-import { ArrowLeft, UsersRound, Users, DollarSign, Gauge, Shield, Pencil, UserPlus, Trash2 } from 'lucide-react';
+import {
+  ArrowLeft, Users, DollarSign, Gauge, Shield, Pencil, UserPlus, Trash2,
+  ChevronRight, Building2, AlertOctagon, CheckCircle2, TrendingUp,
+  Lock, Unlock, Info,
+} from 'lucide-react';
 
-function StatCard({ icon: Icon, label, value, subValue, color }: { icon: any; label: string; value: string; subValue?: string; color: string }) {
+/* ─────────────── helpers ─────────────── */
+
+const AVATAR_COLORS = [
+  'bg-violet-100 text-violet-700',
+  'bg-blue-100 text-blue-700',
+  'bg-emerald-100 text-emerald-700',
+  'bg-amber-100 text-amber-700',
+  'bg-pink-100 text-pink-700',
+  'bg-teal-100 text-teal-700',
+  'bg-rose-100 text-rose-700',
+  'bg-cyan-100 text-cyan-700',
+  'bg-orange-100 text-orange-700',
+  'bg-indigo-100 text-indigo-700',
+];
+
+function getInitials(userId: string, email?: string | null): string {
+  if (email) {
+    const local = email.split('@')[0];
+    const parts = local.split(/[._-]/);
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    return local.slice(0, 2).toUpperCase();
+  }
+  return userId.slice(0, 2).toUpperCase();
+}
+
+const ROLE_BADGES: Record<string, { label: string; cls: string }> = {
+  team_admin:     { label: 'Admin',     cls: 'bg-indigo-100 text-indigo-700' },
+  team_developer: { label: 'Developer', cls: 'bg-blue-100 text-blue-700' },
+  team_viewer:    { label: 'Viewer',    cls: 'bg-gray-100 text-gray-600' },
+};
+
+type TabId = 'overview' | 'members' | 'assets';
+
+/* ─────────────── subcomponents ─────────────── */
+
+function StatCard({ icon: Icon, label, value, sub, bg, iconCls }: {
+  icon: any; label: string; value: string; sub?: string; bg: string; iconCls: string;
+}) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
-      <div className="flex items-center gap-3 mb-3">
-        <div className={`p-2 rounded-lg ${color}`}>
-          <Icon className="w-4 h-4" />
-        </div>
-        <span className="text-sm text-gray-500">{label}</span>
+    <div className="flex items-center gap-3 px-4 py-3 bg-white rounded-xl border border-gray-200">
+      <div className={`p-2 rounded-lg ${bg} shrink-0`}>
+        <Icon className={`w-4 h-4 ${iconCls}`} />
       </div>
-      <p className="text-2xl font-bold text-gray-900">{value}</p>
-      {subValue && <p className="text-xs text-gray-400 mt-1">{subValue}</p>}
+      <div>
+        <p className="text-lg font-bold text-gray-900 leading-none">{value}</p>
+        <p className="text-xs text-gray-400 mt-0.5">{label}</p>
+        {sub && <p className="text-[10px] text-gray-400">{sub}</p>}
+      </div>
     </div>
   );
 }
 
+function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`pb-3 text-sm font-medium transition-colors border-b-2 ${
+        active
+          ? 'border-indigo-600 text-indigo-600'
+          : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+/* ─────────────── page ─────────────── */
+
 export default function TeamDetail() {
   const { teamId } = useParams<{ teamId: string }>();
   const navigate = useNavigate();
+  const [tab, setTab] = useState<TabId>('overview');
 
-  const { data: team, loading: teamLoading, refetch: refetchTeam } = useApi(() => teams.get(teamId!), [teamId]);
-  const { data: members, loading: membersLoading, refetch: refetchMembers } = useApi(() => teams.members(teamId!), [teamId]);
-  const { data: teamAssetAccess, loading: teamAssetAccessLoading, refetch: refetchTeamAssetAccess } = useApi(
+  /* ── data ── */
+  const { data: team, loading: teamLoading, refetch: refetchTeam } = useApi(
+    () => teams.get(teamId!),
+    [teamId],
+  );
+  const { data: members, loading: membersLoading, refetch: refetchMembers } = useApi(
+    () => teams.members(teamId!),
+    [teamId],
+  );
+  const { data: teamAssetAccess, refetch: refetchTeamAssetAccess } = useApi(
     () => teams.assetAccess(teamId!, { include_targets: false }),
     [teamId],
   );
+  /* targets loaded lazily on assets tab */
+  const { data: teamAssetTargets, loading: teamAssetTargetsLoading } = useApi(
+    () => tab === 'assets' ? teams.assetAccess(teamId!, { include_targets: true }) : Promise.resolve(null),
+    [teamId, tab],
+  );
+  /* org info for breadcrumb + info card */
+  const { data: orgData } = useApi(
+    () => team?.organization_id ? organizations.get(team.organization_id) : Promise.resolve(null),
+    [team?.organization_id],
+  );
 
+  /* ── edit team modal ── */
   const [showEdit, setShowEdit] = useState(false);
   const [form, setForm] = useState({
     team_alias: '',
@@ -46,38 +121,29 @@ export default function TeamDetail() {
     asset_access_mode: 'inherit' as 'inherit' | 'restrict',
     selected_callable_keys: [] as string[],
   });
-  const [showAddMember, setShowAddMember] = useState(false);
-  const [memberSearch, setMemberSearch] = useState('');
-  const [memberForm, setMemberForm] = useState({ user_id: '', user_email: '', user_role: 'team_viewer' });
   const [saving, setSaving] = useState(false);
   const [teamError, setTeamError] = useState<string | null>(null);
+
   const selectedOrganizationId = form.organization_id.trim();
   const usesParentPreview = selectedOrganizationId !== (team?.organization_id || '');
+
   const { data: teamAssetAccessTargets, loading: teamAssetAccessTargetsLoading } = useApi(
-    () => (
-      showEdit && !usesParentPreview && form.asset_access_mode === 'restrict'
-        ? teams.assetAccess(teamId!, { include_targets: true })
-        : Promise.resolve(null)
-    ),
+    () => (showEdit && !usesParentPreview && form.asset_access_mode === 'restrict'
+      ? teams.assetAccess(teamId!, { include_targets: true })
+      : Promise.resolve(null)),
     [showEdit, teamId, usesParentPreview, form.asset_access_mode],
   );
   const { data: parentOrgAssetVisibility, loading: parentOrgAssetVisibilityLoading } = useApi(
-    () => (
-      showEdit && usesParentPreview && form.asset_access_mode === 'restrict' && selectedOrganizationId
-        ? organizations.assetVisibility(selectedOrganizationId)
-        : Promise.resolve(null)
-    ),
+    () => (showEdit && usesParentPreview && form.asset_access_mode === 'restrict' && selectedOrganizationId
+      ? organizations.assetVisibility(selectedOrganizationId)
+      : Promise.resolve(null)),
     [showEdit, selectedOrganizationId, usesParentPreview, form.asset_access_mode],
-  );
-  const { data: memberCandidates, loading: memberCandidatesLoading } = useApi(
-    () => showAddMember ? teams.memberCandidates(teamId!, { search: memberSearch, limit: 50 }) : Promise.resolve([]),
-    [teamId, showAddMember, memberSearch],
   );
 
   useEffect(() => {
     if (!showEdit || !teamAssetAccess) return;
-    setForm((current) => ({
-      ...current,
+    setForm((c) => ({
+      ...c,
       asset_access_mode: teamAssetAccess.mode === 'restrict' ? 'restrict' : 'inherit',
       selected_callable_keys: teamAssetAccess.selected_callable_keys || [],
     }));
@@ -98,17 +164,19 @@ export default function TeamDetail() {
     setShowEdit(true);
   };
 
-  const handleOrganizationChange = (organizationId: string) => {
-    setForm((current) => {
-      const changed = current.organization_id !== organizationId;
-      return {
-        ...current,
-        organization_id: organizationId,
-        asset_access_mode: changed ? 'inherit' : current.asset_access_mode,
-        selected_callable_keys: changed ? [] : current.selected_callable_keys,
-      };
+  const handleOrganizationChange = (orgId: string) => {
+    setForm((c) => {
+      const changed = c.organization_id !== orgId;
+      return { ...c, organization_id: orgId, asset_access_mode: changed ? 'inherit' : c.asset_access_mode, selected_callable_keys: changed ? [] : c.selected_callable_keys };
     });
   };
+
+  const assetTargets = usesParentPreview
+    ? buildParentScopedAssetTargets(parentOrgAssetVisibility?.callable_targets?.items || [], form.selected_callable_keys, form.asset_access_mode)
+    : buildScopedSelectableTargets(teamAssetAccessTargets?.selectable_targets || [], form.selected_callable_keys, form.asset_access_mode);
+  const assetAccessLoading = form.asset_access_mode !== 'restrict' ? false
+    : usesParentPreview ? parentOrgAssetVisibilityLoading
+    : teamAssetAccessTargetsLoading;
 
   const handleSaveTeam = async () => {
     setSaving(true);
@@ -135,6 +203,15 @@ export default function TeamDetail() {
     }
   };
 
+  /* ── add member modal ── */
+  const [showAddMember, setShowAddMember] = useState(false);
+  const [memberSearch, setMemberSearch] = useState('');
+  const [memberForm, setMemberForm] = useState({ user_id: '', user_email: '', user_role: 'team_viewer' });
+  const { data: memberCandidates, loading: memberCandidatesLoading } = useApi(
+    () => showAddMember ? teams.memberCandidates(teamId!, { search: memberSearch, limit: 50 }) : Promise.resolve([]),
+    [teamId, showAddMember, memberSearch],
+  );
+
   const handleAddMember = async () => {
     if (!memberForm.user_id.trim()) return;
     setSaving(true);
@@ -158,10 +235,27 @@ export default function TeamDetail() {
     refetchMembers();
   };
 
+  /* ── derived ── */
+  const memberList: any[] = members || [];
+  const spend = team?.spend || 0;
+  const budget = team?.max_budget ?? null;
+  const spendPct = budget ? Math.min(100, Math.round((spend / budget) * 100)) : null;
+  const assetMode = teamAssetAccess?.mode ?? 'inherit';
+  const assetSummary = teamAssetAccess?.summary;
+
+  const grantedTargets = teamAssetTargets?.selectable_targets?.filter((t: any) => t.selected) ?? [];
+  const blockedTargets = teamAssetTargets?.selectable_targets?.filter((t: any) => !t.selected) ?? [];
+
+  const topSpenders = [...memberList]
+    .filter((m) => (m.spend || 0) > 0)
+    .sort((a, b) => (b.spend || 0) - (a.spend || 0))
+    .slice(0, 3);
+
+  /* ── loading / not found ── */
   if (teamLoading) {
     return (
-      <div className="p-6 flex items-center justify-center py-24">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
       </div>
     );
   }
@@ -170,141 +264,588 @@ export default function TeamDetail() {
     return (
       <div className="p-6">
         <p className="text-gray-500">Team not found.</p>
-        <Link to="/teams" className="text-blue-600 text-sm mt-2 inline-block">Back to Teams</Link>
+        <Link to="/teams" className="text-indigo-600 text-sm mt-2 inline-block">← Back to Teams</Link>
       </div>
     );
   }
 
-  const memberColumns = [
-    { key: 'user_id', header: 'User ID', render: (r: any) => <span className="font-medium font-mono text-xs">{r.user_id}</span> },
-    { key: 'user_email', header: 'Email', render: (r: any) => r.user_email || <span className="text-gray-400">--</span> },
-    { key: 'user_role', header: 'Team Role', render: (r: any) => (
-      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">{r.user_role}</span>
-    ) },
-    { key: 'spend', header: 'Spend', render: (r: any) => <span className="text-sm">${(r.spend || 0).toFixed(2)}</span> },
-    { key: 'actions', header: '', render: (r: any) => (
-      <button onClick={() => handleRemoveMember(r.user_id)} className="p-1.5 hover:bg-red-50 rounded-lg transition-colors" title="Remove member">
-        <Trash2 className="w-4 h-4 text-red-500" />
-      </button>
-    ) },
-  ];
-  const assetTargets = usesParentPreview
-    ? buildParentScopedAssetTargets(
-        parentOrgAssetVisibility?.callable_targets?.items || [],
-        form.selected_callable_keys,
-        form.asset_access_mode,
-      )
-    : buildScopedSelectableTargets(
-        teamAssetAccessTargets?.selectable_targets || [],
-        form.selected_callable_keys,
-        form.asset_access_mode,
-      );
-  const assetAccessLoading = form.asset_access_mode !== 'restrict'
-    ? false
-    : usesParentPreview
-      ? parentOrgAssetVisibilityLoading
-      : teamAssetAccessTargetsLoading || teamAssetAccessLoading;
+  const teamName = team.team_alias || team.team_id;
+  const orgName = orgData?.organization_name || orgData?.organization_id || team.organization_id;
 
   return (
-    <div className="p-4 sm:p-6 max-w-6xl">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 mb-6">
-        <div className="flex items-center gap-3 flex-1 min-w-0">
-          <button onClick={() => navigate('/teams')} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
-            <ArrowLeft className="w-5 h-5 text-gray-500" />
-          </button>
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-indigo-50 rounded-lg">
-              <UsersRound className="w-5 h-5 text-indigo-600" />
+    <div className="min-h-screen bg-gray-50">
+      {/* ── Header ── */}
+      <div className="bg-white border-b border-gray-200">
+        <div className="px-6 py-4">
+          {/* Breadcrumb */}
+          <div className="flex items-center gap-1.5 text-xs text-gray-400 mb-3">
+            <button
+              onClick={() => navigate('/teams')}
+              className="hover:text-gray-700 flex items-center gap-1 transition-colors"
+            >
+              <ArrowLeft className="w-3 h-3" /> Teams
+            </button>
+            {team.organization_id && (
+              <>
+                <ChevronRight className="w-3 h-3" />
+                <button
+                  onClick={() => navigate(`/organizations/${team.organization_id}`)}
+                  className="hover:text-gray-700 flex items-center gap-1 transition-colors"
+                >
+                  <Building2 className="w-3 h-3" /> {orgName}
+                </button>
+              </>
+            )}
+            <ChevronRight className="w-3 h-3" />
+            <span className="text-gray-600 font-medium">{teamName}</span>
+          </div>
+
+          {/* Title row */}
+          <div className="flex items-start justify-between">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-700 flex items-center justify-center shadow-sm shrink-0">
+                <Users className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <h1 className="text-xl font-bold text-gray-900">{teamName}</h1>
+                  {team.blocked ? (
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-red-100 text-red-700">
+                      <AlertOctagon className="w-3.5 h-3.5" /> Blocked
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-xs text-emerald-600 font-medium">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Active
+                    </span>
+                  )}
+                  {orgName && (
+                    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
+                      <Building2 className="w-3 h-3" /> {orgName}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 mt-1.5">
+                  <code className="text-xs text-gray-400 font-mono bg-gray-100 px-1.5 py-0.5 rounded">{team.team_id}</code>
+                  {team.created_at && (
+                    <span className="text-xs text-gray-400">
+                      Created {new Date(team.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
-            <div>
-              <h1 className="text-xl font-bold text-gray-900">{team.team_alias || team.team_id}</h1>
-              <div className="flex items-center gap-2 mt-0.5">
-                <code className="text-xs text-gray-400 font-mono">{team.team_id}</code>
-                {team.organization_id && (
+            <button
+              onClick={openEdit}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              <Pencil className="w-3.5 h-3.5" /> Edit
+            </button>
+          </div>
+
+          {/* Metrics strip */}
+          <div className="mt-5 grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <StatCard
+              icon={DollarSign}
+              label="Budget used"
+              value={spendPct != null ? `${spendPct}%` : `$${spend.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+              sub={budget ? `$${spend.toLocaleString(undefined, { maximumFractionDigits: 0 })} of $${budget.toLocaleString()}` : 'No limit'}
+              bg={spendPct != null && spendPct > 80 ? 'bg-amber-50' : 'bg-green-50'}
+              iconCls={spendPct != null && spendPct > 80 ? 'text-amber-500' : 'text-green-500'}
+            />
+            <StatCard
+              icon={Users}
+              label="Members"
+              value={String(memberList.length || team.member_count || 0)}
+              sub="in this team"
+              bg="bg-indigo-50"
+              iconCls="text-indigo-600"
+            />
+            <StatCard
+              icon={Gauge}
+              label="RPM Limit"
+              value={team.rpm_limit != null ? Number(team.rpm_limit).toLocaleString() : 'Unlimited'}
+              sub="requests / min"
+              bg="bg-purple-50"
+              iconCls="text-purple-600"
+            />
+            <StatCard
+              icon={Shield}
+              label="Asset access"
+              value={
+                assetMode === 'restrict' && assetSummary
+                  ? `${assetSummary.selected_total}/${assetSummary.selectable_total}`
+                  : assetMode === 'restrict' ? 'Restricted' : 'Inherited'
+              }
+              sub={assetMode === 'restrict' ? 'from org ceiling' : 'full org access'}
+              bg="bg-blue-50"
+              iconCls="text-blue-600"
+            />
+          </div>
+
+          {/* Tabs */}
+          <div className="mt-5 -mb-px flex gap-6">
+            <TabButton active={tab === 'overview'} onClick={() => setTab('overview')}>Overview</TabButton>
+            <TabButton active={tab === 'members'} onClick={() => setTab('members')}>
+              Members
+              {memberList.length > 0 && (
+                <span className="ml-1.5 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 rounded-full bg-gray-100 text-xs font-semibold text-gray-600">
+                  {memberList.length}
+                </span>
+              )}
+            </TabButton>
+            <TabButton active={tab === 'assets'} onClick={() => setTab('assets')}>Asset Access</TabButton>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Content ── */}
+      <div className="px-6 py-5">
+
+        {/* ── OVERVIEW ── */}
+        {tab === 'overview' && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+            <div className="lg:col-span-2 space-y-5">
+              {/* Budget & Spend */}
+              <div className="bg-white rounded-xl border border-gray-200 p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-semibold text-gray-900">Budget &amp; Spend</h3>
+                  {spendPct != null && (
+                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${spendPct > 80 ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
+                      {spendPct}% used
+                    </span>
+                  )}
+                </div>
+                {budget && (
+                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden mb-4">
+                    <div
+                      className={`h-full rounded-full transition-all ${spendPct! > 90 ? 'bg-red-500' : spendPct! > 80 ? 'bg-amber-500' : 'bg-indigo-500'}`}
+                      style={{ width: `${spendPct}%` }}
+                    />
+                  </div>
+                )}
+                <div className="flex justify-between items-end mb-4">
+                  <div>
+                    <p className="text-2xl font-bold text-gray-900">${spend.toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">Current spend</p>
+                  </div>
+                  {budget && (
+                    <div className="text-right">
+                      <p className="text-lg font-semibold text-gray-500">${(budget - spend).toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
+                      <p className="text-xs text-gray-400">Remaining</p>
+                    </div>
+                  )}
+                  {!budget && <span className="text-sm text-gray-400">No budget limit</span>}
+                </div>
+                <div className="border-t border-gray-100 pt-4 grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-xs text-gray-500 flex items-center gap-1 mb-1">
+                      <Gauge className="w-3.5 h-3.5" /> RPM Limit
+                    </p>
+                    {team.rpm_limit != null
+                      ? <p className="text-sm font-semibold">{Number(team.rpm_limit).toLocaleString()} <span className="text-xs font-normal text-gray-400">req/min</span></p>
+                      : <p className="text-sm text-gray-400">Unlimited</p>}
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 flex items-center gap-1 mb-1">
+                      <TrendingUp className="w-3.5 h-3.5" /> TPM Limit
+                    </p>
+                    {team.tpm_limit != null
+                      ? <p className="text-sm font-semibold">{Number(team.tpm_limit).toLocaleString()} <span className="text-xs font-normal text-gray-400">tok/min</span></p>
+                      : <p className="text-sm text-gray-400">Unlimited</p>}
+                  </div>
+                </div>
+              </div>
+
+              {/* Top Spenders */}
+              {topSpenders.length > 0 && (
+                <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                  <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-gray-900">Top Spenders</h3>
+                    <button onClick={() => setTab('members')} className="text-xs text-indigo-600 hover:underline">
+                      View all →
+                    </button>
+                  </div>
+                  <div className="divide-y divide-gray-100">
+                    {topSpenders.map((m: any, idx: number) => (
+                      <div key={m.user_id} className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50 transition-colors">
+                        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${AVATAR_COLORS[idx % AVATAR_COLORS.length]}`}>
+                          {getInitials(m.user_id, m.user_email)}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-800 truncate">{m.user_email || m.user_id}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="w-24 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-indigo-400 rounded-full"
+                              style={{ width: `${Math.min(100, (m.spend / spend) * 100)}%` }}
+                            />
+                          </div>
+                          <span className="text-xs font-medium text-gray-700 w-14 text-right">
+                            ${(m.spend || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Sidebar */}
+            <div className="space-y-4">
+              {/* Team Info */}
+              <div className="bg-white rounded-xl border border-gray-200 p-4">
+                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Team Info</h4>
+                <div className="space-y-2.5 text-sm">
+                  {team.organization_id && (
+                    <div className="flex justify-between items-center">
+                      <span className="text-gray-500">Organization</span>
+                      <button
+                        onClick={() => navigate(`/organizations/${team.organization_id}`)}
+                        className="text-xs font-medium text-indigo-600 hover:underline"
+                      >
+                        {orgName}
+                      </button>
+                    </div>
+                  )}
+                  {team.created_at && (
+                    <div className="flex justify-between items-center">
+                      <span className="text-gray-500">Created</span>
+                      <span className="text-xs font-medium text-gray-800">
+                        {new Date(team.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-500">Status</span>
+                    {team.blocked
+                      ? <span className="text-xs font-medium text-red-600 flex items-center gap-1"><AlertOctagon className="w-3 h-3" /> Blocked</span>
+                      : <span className="text-xs font-medium text-emerald-600 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Active</span>}
+                  </div>
+                </div>
+              </div>
+
+              {/* Asset Access summary */}
+              <div className="bg-white rounded-xl border border-gray-200 p-4">
+                <div className="flex items-center gap-1.5 mb-3">
+                  <Shield className="w-3.5 h-3.5 text-indigo-600" />
+                  <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Asset Access</h4>
+                  <Info className="w-3.5 h-3.5 text-gray-400" />
+                </div>
+                <div className="mb-3">
+                  <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
+                    assetMode === 'restrict' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-600'
+                  }`}>
+                    {assetMode === 'restrict'
+                      ? <><Lock className="w-3 h-3" /> Restricted</>
+                      : <><Unlock className="w-3 h-3" /> Inherited</>}
+                  </span>
+                </div>
+                {assetMode === 'restrict' && assetSummary && (
                   <>
-                    <span className="text-gray-300">|</span>
-                    <Link to={`/organizations/${team.organization_id}`} className="text-xs text-blue-500 hover:text-blue-600">
-                      Org: {team.organization_id}
-                    </Link>
+                    <div className="flex justify-between text-xs mb-1.5 text-gray-600">
+                      <span>{assetSummary.selected_total} assets selected</span>
+                      <span className="text-gray-400">of {assetSummary.selectable_total}</span>
+                    </div>
+                    <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden mb-2">
+                      <div
+                        className="h-full bg-indigo-500 rounded-full"
+                        style={{ width: `${Math.min(100, (assetSummary.selected_total / Math.max(1, assetSummary.selectable_total)) * 100)}%` }}
+                      />
+                    </div>
                   </>
                 )}
+                <button
+                  onClick={() => setTab('assets')}
+                  className="text-xs text-indigo-600 hover:underline font-medium"
+                >
+                  Manage asset access →
+                </button>
               </div>
             </div>
           </div>
-        </div>
-        <button onClick={openEdit} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
-          <Pencil className="w-4 h-4" /> Edit
-        </button>
+        )}
+
+        {/* ── MEMBERS ── */}
+        {tab === 'members' && (
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 bg-gray-50">
+              <h3 className="text-sm font-semibold text-gray-900">
+                Members {memberList.length > 0 && `(${memberList.length})`}
+              </h3>
+              <button
+                onClick={() => { setMemberSearch(''); setMemberForm({ user_id: '', user_email: '', user_role: 'team_viewer' }); setShowAddMember(true); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+              >
+                <UserPlus className="w-3.5 h-3.5" /> Add Member
+              </button>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Member</th>
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Team Role</th>
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Spend</th>
+                  <th className="px-5 py-3" />
+                </tr>
+              </thead>
+              <tbody>
+                {membersLoading ? (
+                  Array.from({ length: 3 }).map((_, i) => (
+                    <tr key={i} className="border-b border-gray-100">
+                      {[1, 2, 3, 4].map((j) => (
+                        <td key={j} className="px-5 py-3.5"><div className="h-4 bg-gray-100 rounded animate-pulse w-24" /></td>
+                      ))}
+                    </tr>
+                  ))
+                ) : memberList.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="px-5 py-12 text-center text-sm text-gray-400">
+                      No members yet.{' '}
+                      <button onClick={() => setShowAddMember(true)} className="text-indigo-600 hover:underline">Add the first one</button>
+                    </td>
+                  </tr>
+                ) : (
+                  memberList.map((m: any, idx: number) => {
+                    const role = ROLE_BADGES[m.user_role] ?? { label: m.user_role, cls: 'bg-gray-100 text-gray-600' };
+                    const totalSpend = spend || 1;
+                    return (
+                      <tr key={m.user_id} className={`hover:bg-gray-50 transition-colors ${idx < memberList.length - 1 ? 'border-b border-gray-100' : ''}`}>
+                        <td className="px-5 py-3.5">
+                          <div className="flex items-center gap-3">
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${AVATAR_COLORS[idx % AVATAR_COLORS.length]}`}>
+                              {getInitials(m.user_id, m.user_email)}
+                            </div>
+                            <div>
+                              <p className="font-medium text-gray-900 text-sm">{m.user_email || m.user_id}</p>
+                              {m.user_email && <p className="text-[10px] text-gray-400 font-mono">{m.user_id}</p>}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-5 py-3.5">
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${role.cls}`}>{role.label}</span>
+                        </td>
+                        <td className="px-5 py-3.5">
+                          {(m.spend || 0) > 0 ? (
+                            <div className="flex items-center gap-2">
+                              <div className="w-20 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-indigo-400 rounded-full"
+                                  style={{ width: `${Math.min(100, ((m.spend || 0) / totalSpend) * 100)}%` }}
+                                />
+                              </div>
+                              <span className="text-xs text-gray-700">${(m.spend || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-400">—</span>
+                          )}
+                        </td>
+                        <td className="px-5 py-3.5 text-right">
+                          <button
+                            onClick={() => handleRemoveMember(m.user_id)}
+                            className="p-1.5 hover:bg-red-50 rounded-lg transition-colors"
+                            title="Remove member"
+                          >
+                            <Trash2 className="w-4 h-4 text-red-400" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* ── ASSET ACCESS ── */}
+        {tab === 'assets' && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+            <div className="lg:col-span-2 space-y-4">
+              {teamAssetTargetsLoading ? (
+                <div className="bg-white rounded-xl border border-gray-200 p-8 flex items-center justify-center">
+                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600" />
+                </div>
+              ) : assetMode === 'inherit' ? (
+                <div className="bg-white rounded-xl border border-gray-200 p-5">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Unlock className="w-4 h-4 text-gray-500" />
+                    <h3 className="text-sm font-semibold text-gray-900">Inherited Access</h3>
+                  </div>
+                  <p className="text-sm text-gray-500 mb-4">
+                    This team inherits the full asset set available to its organization. All models and routes accessible to the org are also accessible here.
+                  </p>
+                  {teamAssetTargets?.effective_targets && teamAssetTargets.effective_targets.length > 0 && (
+                    <div className="space-y-1.5">
+                      {teamAssetTargets.effective_targets.map((t: any) => (
+                        <div key={t.callable_key} className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-gray-50 border border-gray-200">
+                          <CheckCircle2 className="w-4 h-4 text-gray-400 shrink-0" />
+                          <span className="text-sm font-medium text-gray-700">{t.callable_key}</span>
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">{t.target_type}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <>
+                  {/* Granted */}
+                  <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                    <div className="px-5 py-4 border-b border-gray-200 flex items-center gap-2">
+                      <Lock className="w-4 h-4 text-indigo-600" />
+                      <h3 className="text-sm font-semibold text-gray-900">Granted to this team</h3>
+                      <span className="ml-auto inline-flex items-center justify-center min-w-[1.5rem] h-5 px-1.5 rounded-full bg-gray-100 text-xs font-semibold text-gray-600">
+                        {grantedTargets.length}
+                      </span>
+                    </div>
+                    <div className="p-3 space-y-1.5">
+                      {grantedTargets.length === 0
+                        ? <p className="text-sm text-gray-400 text-center py-4">No assets granted yet.</p>
+                        : grantedTargets.map((t: any) => (
+                          <div key={t.callable_key} className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-indigo-50 border border-indigo-100">
+                            <CheckCircle2 className="w-4 h-4 text-indigo-600 shrink-0" />
+                            <span className="text-sm font-medium text-gray-800">{t.callable_key}</span>
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-600">{t.target_type}</span>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+
+                  {/* Blocked (available in org, not granted here) */}
+                  {blockedTargets.length > 0 && (
+                    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                      <div className="px-5 py-4 border-b border-gray-200 flex items-center gap-2">
+                        <Lock className="w-4 h-4 text-gray-400" />
+                        <h3 className="text-sm font-semibold text-gray-600">Not granted to this team</h3>
+                        <span className="text-xs text-gray-400 ml-1">— available in org</span>
+                        <span className="ml-auto inline-flex items-center justify-center min-w-[1.5rem] h-5 px-1.5 rounded-full bg-gray-100 text-xs font-semibold text-gray-600">
+                          {blockedTargets.length}
+                        </span>
+                      </div>
+                      <div className="p-3 space-y-1.5">
+                        {blockedTargets.map((t: any) => (
+                          <div key={t.callable_key} className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-gray-50 border border-gray-200 opacity-50">
+                            <Lock className="w-4 h-4 text-gray-400 shrink-0" />
+                            <span className="text-sm font-medium text-gray-500">{t.callable_key}</span>
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">{t.target_type}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Access policy sidebar */}
+            <div className="space-y-4">
+              <div className="bg-white rounded-xl border border-gray-200 p-4">
+                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Access Policy</h4>
+                <div className="space-y-2">
+                  <div className={`flex items-start gap-2 p-2.5 rounded-lg border-2 ${
+                    assetMode === 'restrict' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-300 bg-gray-50'
+                  }`}>
+                    {assetMode === 'restrict'
+                      ? <Lock className="w-4 h-4 text-indigo-600 mt-0.5 shrink-0" />
+                      : <Unlock className="w-4 h-4 text-gray-500 mt-0.5 shrink-0" />}
+                    <div>
+                      <p className={`text-xs font-semibold ${assetMode === 'restrict' ? 'text-indigo-800' : 'text-gray-700'}`}>
+                        {assetMode === 'restrict' ? 'Restricted' : 'Inherited'}
+                      </p>
+                      <p className={`text-[10px] mt-0.5 ${assetMode === 'restrict' ? 'text-indigo-700' : 'text-gray-500'}`}>
+                        {assetMode === 'restrict'
+                          ? `Only ${assetSummary?.selected_total ?? '?'} selected assets are accessible. Org ceiling: ${assetSummary?.selectable_total ?? '?'} assets.`
+                          : 'All org assets are available to this team.'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={openEdit}
+                className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+              >
+                <Pencil className="w-3.5 h-3.5" /> Edit Asset Selection
+              </button>
+
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                <p className="text-xs text-blue-800 leading-relaxed">
+                  <strong>{assetMode === 'restrict' ? 'Restricted mode:' : 'Inherited mode:'}</strong>{' '}
+                  {assetMode === 'restrict'
+                    ? 'API keys and users in this team can only call models in the granted set. This narrows the org\'s ceiling — it never expands it.'
+                    : 'This team has access to everything the parent organization allows. Switch to Restricted to limit access to a specific subset.'}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <StatCard icon={DollarSign} label="Spend" value={`$${(team.spend || 0).toFixed(2)}`} subValue={team.max_budget ? `of $${team.max_budget} budget` : 'No budget limit'} color="bg-green-50 text-green-600" />
-        <StatCard icon={Users} label="Members" value={String(members?.length || 0)} color="bg-blue-50 text-blue-600" />
-        <StatCard icon={Gauge} label="RPM Limit" value={team.rpm_limit != null ? team.rpm_limit.toLocaleString() : 'Unlimited'} subValue="Requests per minute" color="bg-purple-50 text-purple-600" />
-        <StatCard icon={Shield} label="Access" value="Scoped" subValue="Inherit or restrict this team below" color="bg-orange-50 text-orange-600" />
-      </div>
-
-      <div className="mb-6 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
-        Team runtime access comes from callable-target bindings and scope policies across organization, team, key, and user scopes. Use the edit dialog to inherit the org set or narrow it for this team.
-      </div>
-
-      <Card
-        title="Members"
-        action={
-          <button onClick={() => { setMemberSearch(''); setMemberForm({ user_id: '', user_email: '', user_role: 'team_viewer' }); setShowAddMember(true); }} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
-            <UserPlus className="w-3.5 h-3.5" /> Add Member
-          </button>
-        }
-      >
-        <DataTable
-          columns={memberColumns}
-          data={members || []}
-          loading={membersLoading}
-          emptyMessage="No members in this team yet"
-        />
-      </Card>
-
+      {/* ── Edit Modal ── */}
       <Modal open={showEdit} onClose={() => setShowEdit(false)} title="Edit Team">
         <div className="space-y-4">
-          {teamError && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{teamError}</div>
-          )}
+          {teamError && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{teamError}</div>}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Team Name</label>
-            <input value={form.team_alias} onChange={(e) => setForm({ ...form, team_alias: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <input
+              value={form.team_alias}
+              onChange={(e) => setForm({ ...form, team_alias: e.target.value })}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Organization ID</label>
-              <input value={form.organization_id} onChange={(e) => handleOrganizationChange(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <input
+                value={form.organization_id}
+                onChange={(e) => handleOrganizationChange(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Max Budget ($)</label>
-              <input type="number" value={form.max_budget} onChange={(e) => setForm({ ...form, max_budget: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <input
+                type="number"
+                value={form.max_budget}
+                onChange={(e) => setForm({ ...form, max_budget: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">RPM Limit</label>
-              <input type="number" value={form.rpm_limit} onChange={(e) => setForm({ ...form, rpm_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <input
+                type="number"
+                value={form.rpm_limit}
+                onChange={(e) => setForm({ ...form, rpm_limit: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">TPM Limit</label>
-              <input type="number" value={form.tpm_limit} onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <input
+                type="number"
+                value={form.tpm_limit}
+                onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
             </div>
           </div>
           <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
-            Team runtime access is enforced through callable-target bindings and scope policies. Use the section below to inherit the organization set or narrow it for this team.
+            Team runtime access is enforced through callable-target bindings. Use the section below to inherit the organization set or narrow it for this team.
           </p>
           <AssetAccessEditor
             title="Team Asset Access"
             description="Choose whether this team inherits the organization asset ceiling or narrows itself to a selected subset."
             mode={form.asset_access_mode}
             allowModeSelection
-            onModeChange={(asset_access_mode) => setForm((current) => ({
-              ...current,
-              asset_access_mode: asset_access_mode === 'restrict' ? 'restrict' : 'inherit',
-              selected_callable_keys: asset_access_mode === 'restrict' ? current.selected_callable_keys : [],
+            onModeChange={(mode) => setForm((c) => ({
+              ...c,
+              asset_access_mode: mode === 'restrict' ? 'restrict' : 'inherit',
+              selected_callable_keys: mode === 'restrict' ? c.selected_callable_keys : [],
             }))}
             targets={assetTargets}
             selectedKeys={form.selected_callable_keys}
@@ -314,11 +855,18 @@ export default function TeamDetail() {
           />
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setShowEdit(false)} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-            <button onClick={handleSaveTeam} disabled={saving || !form.organization_id || assetAccessLoading} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">Save Changes</button>
+            <button
+              onClick={handleSaveTeam}
+              disabled={saving || !form.organization_id || assetAccessLoading}
+              className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+            >
+              {saving ? 'Saving…' : 'Save Changes'}
+            </button>
           </div>
         </div>
       </Modal>
 
+      {/* ── Add Member Modal ── */}
       <Modal open={showAddMember} onClose={() => setShowAddMember(false)} title="Add Member">
         <div className="space-y-4">
           <div>
@@ -337,7 +885,11 @@ export default function TeamDetail() {
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Team Role</label>
-            <select value={memberForm.user_role} onChange={(e) => setMemberForm({ ...memberForm, user_role: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <select
+              value={memberForm.user_role}
+              onChange={(e) => setMemberForm({ ...memberForm, user_role: e.target.value })}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+            >
               <option value="team_viewer">Viewer</option>
               <option value="team_developer">Developer</option>
               <option value="team_admin">Admin</option>
@@ -346,7 +898,13 @@ export default function TeamDetail() {
           </div>
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setShowAddMember(false)} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-            <button onClick={handleAddMember} disabled={saving || !memberForm.user_id.trim()} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">Add Member</button>
+            <button
+              onClick={handleAddMember}
+              disabled={saving || !memberForm.user_id.trim()}
+              className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+            >
+              Add Member
+            </button>
           </div>
         </div>
       </Modal>
