@@ -1,17 +1,95 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
+import {
+  ArrowLeft,
+  Brain,
+  CheckCircle2,
+  GitBranch,
+  Layers,
+  Mic,
+  Pencil,
+  Route,
+  Server,
+  Settings,
+  Shuffle,
+  Tag,
+  Terminal,
+  Trash2,
+  XCircle,
+  Zap,
+} from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
 import { models, promptRegistry, routeGroups, type PromptBinding } from '../lib/api';
 import { useApi } from '../lib/hooks';
-import { buildPolicyFromGuided, GUIDED_POLICY_DEFAULTS, parsePolicyTextLoose, toGuidedPolicy, type PolicyAction, type PolicyGuidedValues } from '../lib/routeGroups';
+import {
+  buildPolicyFromGuided,
+  GUIDED_POLICY_DEFAULTS,
+  parsePolicyTextLoose,
+  toGuidedPolicy,
+  type PolicyAction,
+  type PolicyGuidedValues,
+} from '../lib/routeGroups';
 import RouteGroupSettingsCard from '../components/route-groups/RouteGroupSettingsCard';
 import RouteGroupMembersCard from '../components/route-groups/RouteGroupMembersCard';
 import RouteGroupPolicyEditorCard from '../components/route-groups/RouteGroupPolicyEditorCard';
 import RouteGroupPolicyVersionsCard from '../components/route-groups/RouteGroupPolicyVersionsCard';
 import RouteGroupUsageCard from '../components/route-groups/RouteGroupUsageCard';
 import RouteGroupPromptBindingCard from '../components/route-groups/RouteGroupPromptBindingCard';
+
+/* ─── Visual helpers ─────────────────────────────────────────────────────── */
+
+const MODE_ICONS: Record<string, React.ElementType> = {
+  chat:                Brain,
+  embedding:           Zap,
+  audio_speech:        Mic,
+  audio_transcription: Mic,
+  image_generation:    Layers,
+  rerank:              GitBranch,
+};
+
+const MODE_COLORS: Record<string, string> = {
+  chat:                'bg-blue-100 text-blue-700',
+  embedding:           'bg-violet-100 text-violet-700',
+  audio_speech:        'bg-orange-100 text-orange-700',
+  audio_transcription: 'bg-orange-100 text-orange-700',
+  image_generation:    'bg-pink-100 text-pink-700',
+  rerank:              'bg-teal-100 text-teal-700',
+};
+
+const ROUTING_LABELS: Record<string, string> = {
+  'simple-shuffle':        'Shuffle',
+  weighted:                'Weighted',
+  'least-busy':            'Least Busy',
+  'latency-based-routing': 'Latency',
+  'cost-based-routing':    'Cost',
+  'usage-based-routing':   'Usage',
+  'tag-based-routing':     'Tag',
+  'priority-based-routing':'Priority',
+  'rate-limit-aware':      'Rate Limit',
+};
+
+function StatBadge({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">{label}</span>
+      <span className="text-sm font-bold text-gray-900 truncate max-w-[140px]">{value}</span>
+    </div>
+  );
+}
+
+/* ─── Tab definitions ────────────────────────────────────────────────────── */
+
+const TABS = [
+  { id: 'models',   label: 'Models',   icon: Server   },
+  { id: 'test',     label: 'Test',     icon: Terminal  },
+  { id: 'settings', label: 'Settings', icon: Settings  },
+  { id: 'advanced', label: 'Advanced', icon: Layers    },
+] as const;
+
+type TabId = (typeof TABS)[number]['id'];
+
+/* ─── Utilities ──────────────────────────────────────────────────────────── */
 
 function requiredPromptVariables(schema: unknown): string[] {
   if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return [];
@@ -20,11 +98,17 @@ function requiredPromptVariables(schema: unknown): string[] {
   return required.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
 }
 
+/* ─── Page ───────────────────────────────────────────────────────────────── */
+
 export default function RouteGroupDetail() {
   const { groupKey } = useParams<{ groupKey: string }>();
   const navigate = useNavigate();
   const { pushToast } = useToast();
+
+  const [activeTab, setActiveTab] = useState<TabId>('models');
   const [savingGroup, setSavingGroup] = useState(false);
+  const [deletingGroup, setDeletingGroup] = useState(false);
+  const [confirmDeleteGroup, setConfirmDeleteGroup] = useState(false);
   const [addingMember, setAddingMember] = useState(false);
   const [savingBinding, setSavingBinding] = useState(false);
   const [deletingBinding, setDeletingBinding] = useState<string | null>(null);
@@ -32,69 +116,52 @@ export default function RouteGroupDetail() {
   const [policyError, setPolicyError] = useState<string | null>(null);
   const [selectedRollbackVersion, setSelectedRollbackVersion] = useState<number | null>(null);
   const [showAdvancedJson, setShowAdvancedJson] = useState(false);
-  const [activeTab, setActiveTab] = useState<'models' | 'test' | 'settings' | 'advanced'>('models');
   const [policyAction, setPolicyAction] = useState<PolicyAction>(null);
   const [memberSearchInput, setMemberSearchInput] = useState('');
   const [memberSearch, setMemberSearch] = useState('');
   const [manualMemberEntry, setManualMemberEntry] = useState(false);
   const [memberToRemove, setMemberToRemove] = useState<string | null>(null);
   const [removingMember, setRemovingMember] = useState(false);
-  const [form, setForm] = useState({
-    name: '',
-    mode: 'chat',
-    enabled: true,
-  });
-  const [memberForm, setMemberForm] = useState({
-    deployment_id: '',
-    weight: '',
-    priority: '',
-    enabled: true,
-  });
-  const [bindingForm, setBindingForm] = useState({
-    template_key: '',
-    label: 'production',
-    priority: '100',
-    enabled: true,
-  });
+  const [form, setForm] = useState({ name: '', mode: 'chat', enabled: true });
+  const [memberForm, setMemberForm] = useState({ deployment_id: '', weight: '', priority: '', enabled: true });
+  const [bindingForm, setBindingForm] = useState({ template_key: '', label: 'production', priority: '100', enabled: true });
   const [guidedPolicy, setGuidedPolicy] = useState<PolicyGuidedValues>(GUIDED_POLICY_DEFAULTS);
   const [policyText, setPolicyText] = useState('{\n  "strategy": "weighted"\n}');
 
+  /* API */
   const detail = useApi(() => routeGroups.get(groupKey!), [groupKey]);
   const policyHistory = useApi(() => routeGroups.listPolicies(groupKey!), [groupKey]);
   const groupBindings = useApi(
     () => promptRegistry.listBindings({ scope_type: 'group', scope_id: groupKey!, limit: 20, offset: 0 }),
-    [groupKey]
+    [groupKey],
   );
   const promptTemplates = useApi(() => promptRegistry.listTemplates({ limit: 100, offset: 0 }), []);
   const bindingPreview = useApi(() => promptRegistry.previewResolution({ route_group_key: groupKey! }), [groupKey]);
   const deploymentCandidates = useApi(
     () => models.list({ search: memberSearch, mode: form.mode, limit: 20, offset: 0 }),
-    [memberSearch, form.mode]
+    [memberSearch, form.mode],
   );
 
   const policies = policyHistory.data?.policies || [];
   const members = detail.data?.members || [];
   const bindings = groupBindings.data?.data || [];
-  const healthyMembers = members.filter((member) => member.healthy === true).length;
-  const missingMembers = members.filter((member) => member.healthy == null).length;
-  const memberIds = useMemo(() => members.map((member) => member.deployment_id), [members]);
+  const healthyMembers = members.filter((m) => m.healthy === true).length;
+  const missingMembers = members.filter((m) => m.healthy == null).length;
+  const memberIds = useMemo(() => members.map((m) => m.deployment_id), [members]);
   const isPolicyBusy = policyAction !== null;
-  const publishedPolicy = useMemo(() => policies.find((policy) => policy.status === 'published') || null, [policies]);
-  const draftPolicy = useMemo(() => policies.find((policy) => policy.status === 'draft') || null, [policies]);
+  const publishedPolicy = useMemo(() => policies.find((p) => p.status === 'published') || null, [policies]);
+  const draftPolicy = useMemo(() => policies.find((p) => p.status === 'draft') || null, [policies]);
   const winningPrompt = bindingPreview.data?.winner || null;
   const winningPromptDetail = useApi(
     () => (winningPrompt?.template_key ? promptRegistry.getTemplate(String(winningPrompt.template_key)) : Promise.resolve(null)),
-    [winningPrompt?.template_key]
+    [winningPrompt?.template_key],
   );
 
+  /* Sync form from API data */
   useEffect(() => {
     const group = detail.data?.group;
     if (!group) return;
-    setForm({
-      name: group.name || '',
-      mode: group.mode || 'chat',
-      enabled: !!group.enabled,
-    });
+    setForm({ name: group.name || '', mode: group.mode || 'chat', enabled: !!group.enabled });
   }, [detail.data?.group]);
 
   useEffect(() => {
@@ -123,29 +190,27 @@ export default function RouteGroupDetail() {
     setPolicyText(JSON.stringify(policyJson, null, 2));
     setGuidedPolicy(toGuidedPolicy(policyJson, memberIds));
     const rollbackCandidates = policies
-      .filter((policy) => policy.status === 'archived' || policy.status === 'published')
-      .sort((left, right) => right.version - left.version);
+      .filter((p) => p.status === 'archived' || p.status === 'published')
+      .sort((a, b) => b.version - a.version);
     setSelectedRollbackVersion(rollbackCandidates[0]?.version ?? null);
   }, [draftPolicy, memberIds, policies]);
 
   useEffect(() => {
     if (memberIds.length === 0) {
-      setGuidedPolicy((current) => (current.memberIds.length === 0 ? current : { ...current, memberIds: [] }));
+      setGuidedPolicy((cur) => (cur.memberIds.length === 0 ? cur : { ...cur, memberIds: [] }));
       return;
     }
-    setGuidedPolicy((current) => {
-      const filtered = current.memberIds.filter((memberId) => memberIds.includes(memberId));
-      const nextMembers = filtered.length > 0 ? filtered : memberIds;
-      if (nextMembers.length === current.memberIds.length && nextMembers.every((memberId, index) => memberId === current.memberIds[index])) {
-        return current;
-      }
-      return { ...current, memberIds: nextMembers };
+    setGuidedPolicy((cur) => {
+      const filtered = cur.memberIds.filter((id) => memberIds.includes(id));
+      const next = filtered.length > 0 ? filtered : memberIds;
+      if (next.length === cur.memberIds.length && next.every((id, i) => id === cur.memberIds[i])) return cur;
+      return { ...cur, memberIds: next };
     });
   }, [memberIds]);
 
   const canRollbackVersions = useMemo(
-    () => policies.filter((policy) => policy.status === 'archived' || policy.status === 'published'),
-    [policies]
+    () => policies.filter((p) => p.status === 'archived' || p.status === 'published'),
+    [policies],
   );
 
   const candidateDeployments = useMemo(() => {
@@ -161,17 +226,16 @@ export default function RouteGroupDetail() {
 
   const promptSummary = useMemo(() => {
     if (!winningPrompt || !winningPromptDetail.data) return null;
-    const detailPayload = winningPromptDetail.data;
+    const detail = winningPromptDetail.data;
     const versionFromLabel =
       typeof winningPrompt.label === 'string'
-        ? detailPayload.labels.find((item) => item.label === winningPrompt.label)?.version
+        ? detail.labels.find((l) => l.label === winningPrompt.label)?.version
         : null;
     const resolvedVersion =
       (typeof versionFromLabel === 'number' ? versionFromLabel : null) ??
-      detailPayload.versions.find((item) => item.status === 'published')?.version ??
-      detailPayload.versions[0]?.version;
-    const versionRecord = detailPayload.versions.find((item) => item.version === resolvedVersion) || null;
-
+      detail.versions.find((v) => v.status === 'published')?.version ??
+      detail.versions[0]?.version;
+    const versionRecord = detail.versions.find((v) => v.version === resolvedVersion) || null;
     return {
       templateKey: String(winningPrompt.template_key),
       label: typeof winningPrompt.label === 'string' ? winningPrompt.label : null,
@@ -179,52 +243,17 @@ export default function RouteGroupDetail() {
     };
   }, [winningPrompt, winningPromptDetail.data]);
 
-  if (detail.loading) {
-    return (
-      <div className="p-6 flex items-center justify-center min-h-[400px]">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
-      </div>
-    );
-  }
-
-  if (detail.error && !detail.data?.group) {
-    return (
-      <div className="p-6">
-        <button onClick={() => navigate('/route-groups')} className="mb-4 flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700">
-          <ArrowLeft className="w-4 h-4" /> Back to Route Groups
-        </button>
-        <div className="mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">Failed to load route group details.</div>
-        <button type="button" onClick={detail.refetch} className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
-          Retry
-        </button>
-      </div>
-    );
-  }
-
-  if (!detail.data?.group) {
-    return (
-      <div className="p-6">
-        <button onClick={() => navigate('/route-groups')} className="mb-4 flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700">
-          <ArrowLeft className="w-4 h-4" /> Back to Route Groups
-        </button>
-        <p className="text-gray-500">Route group not found.</p>
-      </div>
-    );
-  }
-
+  /* ── Handlers ── */
   const parsePolicy = (): Record<string, unknown> | null => {
     if (!showAdvancedJson) {
-      const basePolicy = parsePolicyTextLoose(policyText) || {};
-      const payload = buildPolicyFromGuided(basePolicy, guidedPolicy);
+      const base = parsePolicyTextLoose(policyText) || {};
+      const payload = buildPolicyFromGuided(base, guidedPolicy);
       setPolicyText(JSON.stringify(payload, null, 2));
       setPolicyError(null);
       return payload;
     }
     const parsed = parsePolicyTextLoose(policyText);
-    if (!parsed) {
-      setPolicyError('Invalid JSON payload');
-      return null;
-    }
+    if (!parsed) { setPolicyError('Invalid JSON payload'); return null; }
     setPolicyError(null);
     return parsed;
   };
@@ -232,17 +261,25 @@ export default function RouteGroupDetail() {
   const handleSaveGroup = async () => {
     setSavingGroup(true);
     try {
-      await routeGroups.update(groupKey!, {
-        name: form.name.trim() || null,
-        mode: form.mode,
-        enabled: form.enabled,
-      });
+      await routeGroups.update(groupKey!, { name: form.name.trim() || null, mode: form.mode, enabled: form.enabled });
       await detail.refetch();
       pushToast({ tone: 'success', title: 'Group updated', message: 'Route group settings were saved.' });
     } catch (error: any) {
       pushToast({ tone: 'error', title: 'Update failed', message: error?.message || 'Failed to update route group.' });
     } finally {
       setSavingGroup(false);
+    }
+  };
+
+  const handleDeleteGroup = async () => {
+    setDeletingGroup(true);
+    try {
+      await routeGroups.delete(groupKey!);
+      pushToast({ tone: 'success', title: 'Group deleted', message: `"${groupKey}" was deleted.` });
+      navigate('/route-groups');
+    } catch (error: any) {
+      pushToast({ tone: 'error', title: 'Delete failed', message: error?.message || 'Failed to delete route group.' });
+      setDeletingGroup(false);
     }
   };
 
@@ -314,7 +351,7 @@ export default function RouteGroupDetail() {
     setRemovingMember(true);
     try {
       await routeGroups.removeMember(groupKey!, memberToRemove);
-      pushToast({ tone: 'success', title: 'Member removed', message: `Deployment "${memberToRemove}" was removed.` });
+      pushToast({ tone: 'success', title: 'Member removed', message: `"${memberToRemove}" was removed.` });
       setMemberToRemove(null);
       await detail.refetch();
     } catch (error: any) {
@@ -381,7 +418,7 @@ export default function RouteGroupDetail() {
     setPolicyAction('rollback');
     try {
       const result = await routeGroups.rollbackPolicy(groupKey!, selectedRollbackVersion);
-      setPolicyMessage(`Rolled back from version ${result.rolled_back_from_version} to new published version ${result.policy.version}.`);
+      setPolicyMessage(`Rolled back to new published version ${result.policy.version}.`);
       setPolicyError(null);
       await Promise.all([detail.refetch(), policyHistory.refetch()]);
     } catch (error: any) {
@@ -392,77 +429,172 @@ export default function RouteGroupDetail() {
     }
   };
 
-  return (
-    <div className="max-w-6xl mx-auto p-4 sm:p-6">
-      <button onClick={() => navigate('/route-groups')} className="mb-5 flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700 transition-colors">
-        <ArrowLeft className="w-4 h-4" /> Back to Route Groups
-      </button>
+  /* ── Loading / error / not-found guards ── */
+  if (detail.loading) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <div className="border-b border-gray-200 bg-white px-6 py-3">
+          <button onClick={() => navigate('/route-groups')} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800">
+            <ArrowLeft className="h-4 w-4" /> Back to Model Groups
+          </button>
+        </div>
+        <div className="flex min-h-[400px] items-center justify-center">
+          <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-blue-600" />
+        </div>
+      </div>
+    );
+  }
 
-      <div className="mb-6">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">{detail.data.group.name || detail.data.group.group_key}</h1>
-            <p className="mt-1 text-sm text-slate-700">
-              {members.length} {members.length === 1 ? 'model' : 'models'} configured for {form.mode} traffic
-              {detail.data.group.enabled ? ' and ready for live requests.' : ', with live traffic currently off.'}
-            </p>
-            <p className="mt-1 text-sm text-gray-500">
-              Group key: <code className="rounded bg-gray-100 px-1.5 py-0.5">{detail.data.group.group_key}</code>
-            </p>
+  if (detail.error && !detail.data?.group) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <div className="border-b border-gray-200 bg-white px-6 py-3">
+          <button onClick={() => navigate('/route-groups')} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800">
+            <ArrowLeft className="h-4 w-4" /> Back to Model Groups
+          </button>
+        </div>
+        <div className="p-6">
+          <div className="mb-3 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+            Failed to load route group details.
           </div>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-            <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Models</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">{members.length}</div>
+          <button onClick={detail.refetch} className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!detail.data?.group) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <div className="border-b border-gray-200 bg-white px-6 py-3">
+          <button onClick={() => navigate('/route-groups')} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800">
+            <ArrowLeft className="h-4 w-4" /> Back to Model Groups
+          </button>
+        </div>
+        <div className="p-6 text-sm text-gray-500">Route group not found.</div>
+      </div>
+    );
+  }
+
+  const group = detail.data.group;
+  const ModeIcon = MODE_ICONS[group.mode] || Layers;
+  const modeColor = MODE_COLORS[group.mode] || 'bg-gray-100 text-gray-700';
+  const routingLabel = group.routing_strategy
+    ? (ROUTING_LABELS[group.routing_strategy] || group.routing_strategy)
+    : 'Shuffle';
+  const RoutingIcon = !group.routing_strategy || group.routing_strategy === 'simple-shuffle' ? Shuffle : GitBranch;
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Top nav bar */}
+      <div className="border-b border-gray-200 bg-white px-6 py-3">
+        <button
+          onClick={() => navigate('/route-groups')}
+          className="flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-gray-800"
+        >
+          <ArrowLeft className="h-4 w-4" /> Back to Model Groups
+        </button>
+      </div>
+
+      {/* ── Hero header ── */}
+      <div className="relative overflow-hidden border-b border-gray-200 bg-white">
+        {/* Gradient + glow */}
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-blue-50 via-white to-slate-50 opacity-70" />
+        <div className="pointer-events-none absolute right-0 top-0 h-40 w-40 rounded-full bg-blue-100/40 blur-3xl" />
+
+        <div className="relative px-6 pb-5 pt-6">
+          {/* Badge row */}
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${modeColor}`}>
+              <ModeIcon className="h-3.5 w-3.5" />
+              {group.mode.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
+            </span>
+            <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${group.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
+              {group.enabled ? <><CheckCircle2 className="h-3.5 w-3.5" /> Live</> : <><XCircle className="h-3.5 w-3.5" /> Off</>}
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
+              <RoutingIcon className="h-3.5 w-3.5" />
+              {publishedPolicy ? `Override v${publishedPolicy.version}` : `${routingLabel} routing`}
+            </span>
+          </div>
+
+          {/* Name + key + actions */}
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">{group.name || group.group_key}</h1>
+              <p className="mt-0.5 text-sm text-gray-500">
+                Group key:{' '}
+                <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-700">{group.group_key}</code>
+              </p>
             </div>
-            <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Healthy</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">{healthyMembers}</div>
+            <div className="flex shrink-0 gap-2">
+              <button
+                onClick={() => setActiveTab('settings')}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 shadow-sm hover:bg-gray-50"
+              >
+                <Pencil className="h-4 w-4" /> Edit
+              </button>
+              <button
+                onClick={() => setConfirmDeleteGroup(true)}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-500 shadow-sm hover:bg-red-50"
+                title="Delete group"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
             </div>
-            <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Routing</div>
-              <div className="mt-1 text-sm font-semibold text-slate-900">{publishedPolicy ? `Override v${publishedPolicy.version}` : 'Default shuffle'}</div>
+          </div>
+
+          {/* Stat strip */}
+          <div className="mt-5 flex flex-wrap items-center gap-6 divide-x divide-gray-100">
+            <StatBadge label="Members" value={String(members.length)} />
+            <div className="pl-6">
+              <StatBadge
+                label="Healthy"
+                value={members.length > 0 ? `${healthyMembers}/${members.length}` : '—'}
+              />
             </div>
-            <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Prompt</div>
-              <div className="mt-1 text-sm font-semibold text-slate-900">{promptSummary ? promptSummary.templateKey : 'None bound'}</div>
+            <div className="pl-6">
+              <StatBadge
+                label="Policy"
+                value={publishedPolicy ? `v${publishedPolicy.version} published` : 'Default shuffle'}
+              />
             </div>
-            <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Traffic</div>
-              <div className="mt-1 text-sm font-semibold text-slate-900">{detail.data.group.enabled ? 'Live' : 'Off'}</div>
+            <div className="pl-6">
+              <StatBadge label="Prompt" value={promptSummary ? promptSummary.templateKey : 'None bound'} />
             </div>
-            <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Registry Gaps</div>
-              <div className="mt-1 text-sm font-semibold text-slate-900">{missingMembers > 0 ? `${missingMembers} missing` : 'None'}</div>
-            </div>
+            {missingMembers > 0 && (
+              <div className="pl-6">
+                <StatBadge label="Registry Gaps" value={`${missingMembers} missing`} />
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-3">
-        <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-3">
-          {[
-            { key: 'models', label: 'Models' },
-            { key: 'test', label: 'Test' },
-            { key: 'settings', label: 'Settings' },
-            { key: 'advanced', label: 'Advanced' },
-          ].map((tab) => (
+      {/* ── Tabs + content ── */}
+      <div className="px-6 pb-8 pt-0">
+        {/* Tab bar */}
+        <div className="mb-4 flex gap-1 border-b border-gray-200">
+          {TABS.map(({ id, label, icon: Icon }) => (
             <button
-              key={tab.key}
+              key={id}
               type="button"
-              onClick={() => setActiveTab(tab.key as typeof activeTab)}
-              className={`rounded-lg px-4 py-2 text-sm transition-colors ${
-                activeTab === tab.key
-                  ? 'bg-blue-600 text-white'
-                  : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+              onClick={() => setActiveTab(id)}
+              className={`flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-sm font-medium transition ${
+                activeTab === id
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
               }`}
             >
-              {tab.label}
+              <Icon className="h-4 w-4" /> {label}
             </button>
           ))}
         </div>
 
-        <div className="pt-4">
+        {/* Tab panel */}
+        <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
           {activeTab === 'models' && (
             <RouteGroupMembersCard
               mode={form.mode}
@@ -475,7 +607,7 @@ export default function RouteGroupDetail() {
               addingMember={addingMember}
               members={members}
               onMemberFormChange={setMemberForm}
-              onToggleManualEntry={() => setManualMemberEntry((current) => !current)}
+              onToggleManualEntry={() => setManualMemberEntry((cur) => !cur)}
               onMemberSearchChange={setMemberSearchInput}
               onAddMember={handleAddMember}
               onRequestRemoveMember={setMemberToRemove}
@@ -484,9 +616,9 @@ export default function RouteGroupDetail() {
 
           {activeTab === 'test' && (
             <RouteGroupUsageCard
-              groupKey={detail.data.group.group_key}
+              groupKey={group.group_key}
               mode={form.mode}
-              liveTrafficEnabled={detail.data.group.enabled}
+              liveTrafficEnabled={group.enabled}
               boundPrompt={promptSummary}
             />
           )}
@@ -524,13 +656,14 @@ export default function RouteGroupDetail() {
                 policyAction={policyAction}
                 showAdvancedJson={showAdvancedJson}
                 hasMembers={memberIds.length > 0}
-                onToggleAdvancedJson={() => setShowAdvancedJson((current) => !current)}
+                onToggleAdvancedJson={() => setShowAdvancedJson((cur) => !cur)}
                 onGuidedPolicyChange={setGuidedPolicy}
                 onPolicyTextChange={setPolicyText}
                 onValidate={handleValidatePolicy}
                 onSaveDraft={handleSaveDraft}
                 onPublish={handlePublish}
               />
+
               <RouteGroupPolicyVersionsCard
                 policies={policies}
                 canRollbackVersions={canRollbackVersions}
@@ -547,6 +680,7 @@ export default function RouteGroupDetail() {
         </div>
       </div>
 
+      {/* Remove member confirmation */}
       <ConfirmDialog
         open={!!memberToRemove}
         title="Remove route group member"
@@ -555,9 +689,19 @@ export default function RouteGroupDetail() {
         destructive
         confirming={removingMember}
         onConfirm={handleRemoveMember}
-        onClose={() => {
-          if (!removingMember) setMemberToRemove(null);
-        }}
+        onClose={() => { if (!removingMember) setMemberToRemove(null); }}
+      />
+
+      {/* Delete group confirmation */}
+      <ConfirmDialog
+        open={confirmDeleteGroup}
+        title="Delete model group"
+        description={`Delete "${group.group_key}"? This removes all members, policy history, and prompt bindings for this group.`}
+        confirmLabel="Delete Group"
+        destructive
+        confirming={deletingGroup}
+        onConfirm={handleDeleteGroup}
+        onClose={() => { if (!deletingGroup) setConfirmDeleteGroup(false); }}
       />
     </div>
   );
