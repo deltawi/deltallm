@@ -9,11 +9,34 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
 from src.auth.roles import Permission
 from src.audit.actions import AuditAction
-from src.api.admin.endpoints.common import db_or_503, to_json_value, get_auth_scope, emit_admin_mutation_audit
+from src.api.admin.endpoints.common import (
+    db_or_503,
+    emit_admin_mutation_audit,
+    get_auth_scope,
+    to_json_value,
+    validate_runtime_user_scope,
+)
 from src.middleware.platform_auth import get_platform_auth_context
+from src.services.asset_visibility_preview import build_asset_visibility_preview
+from src.services.scoped_asset_access import apply_scope_asset_access, build_scope_asset_access
 
 router = APIRouter(tags=["Admin Keys"])
 logger = logging.getLogger(__name__)
+
+
+def _key_response_payload(row: dict[str, Any]) -> dict[str, Any]:
+    payload = to_json_value(dict(row))
+    if isinstance(payload, dict):
+        payload.pop("models", None)
+    return payload
+
+
+def _reject_legacy_models_field(payload: dict[str, Any]) -> None:
+    if "models" in payload:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="models is no longer supported; use callable-target bindings instead",
+        )
 
 
 async def _get_team_row(db: Any, team_id: str) -> dict[str, Any]:
@@ -31,21 +54,29 @@ async def _get_team_row(db: Any, team_id: str) -> dict[str, Any]:
     return dict(rows[0])
 
 
-async def _validate_runtime_user(db: Any, user_id: str, team_id: str | None) -> None:
+async def _get_key_scope_row(db: Any, token_hash: str) -> dict[str, Any]:
     rows = await db.query_raw(
         """
-        SELECT user_id, team_id
-        FROM deltallm_usertable
-        WHERE user_id = $1
+        SELECT
+            vt.token,
+            vt.user_id,
+            COALESCE(vt.team_id, u.team_id) AS team_id,
+            t.organization_id
+        FROM deltallm_verificationtoken vt
+        LEFT JOIN deltallm_usertable u ON u.user_id = vt.user_id
+        LEFT JOIN deltallm_teamtable t ON t.team_id = COALESCE(vt.team_id, u.team_id)
+        WHERE vt.token = $1
         LIMIT 1
         """,
-        user_id,
+        token_hash,
     )
     if not rows:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id not found")
-    user_team_id = rows[0].get("team_id")
-    if team_id and user_team_id and str(user_team_id) != team_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id does not belong to team_id")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
+    return dict(rows[0])
+
+
+async def _validate_runtime_user(db: Any, user_id: str, team_id: str | None) -> None:
+    await validate_runtime_user_scope(db, user_id, team_id=team_id)
 
 
 async def _validate_owner_references(
@@ -158,7 +189,6 @@ async def list_keys(
             pa.email AS owner_account_email,
             vt.owner_service_account_id,
             sa.name AS owner_service_account_name,
-            vt.models,
             vt.spend,
             vt.max_budget,
             vt.rpm_limit,
@@ -175,7 +205,7 @@ async def list_keys(
     )
 
     return {
-        "data": [to_json_value(dict(row)) for row in rows],
+        "data": [_key_response_payload(dict(row)) for row in rows],
         "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
     }
 
@@ -188,6 +218,7 @@ async def create_key(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     request_start = perf_counter()
+    _reject_legacy_models_field(payload)
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
     db = db_or_503(request)
 
@@ -196,7 +227,6 @@ async def create_key(
     team_id = str(payload.get("team_id") or "").strip()
     owner_account_id = str(payload.get("owner_account_id") or "").strip() or None
     owner_service_account_id = str(payload.get("owner_service_account_id") or "").strip() or None
-    models = payload.get("models") if isinstance(payload.get("models"), list) else []
     max_budget = payload.get("max_budget")
     rpm_limit = payload.get("rpm_limit")
     tpm_limit = payload.get("tpm_limit")
@@ -235,9 +265,9 @@ async def create_key(
             """
             INSERT INTO deltallm_verificationtoken (
                 id, token, key_name, user_id, team_id, owner_account_id, owner_service_account_id,
-                models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at
+                spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at
             )
-            VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7::text[], 0, $8, $9, $10, $11::timestamp, NOW(), NOW())
+            VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10::timestamp, NOW(), NOW())
             """,
             token_hash,
             key_name,
@@ -245,7 +275,6 @@ async def create_key(
             team_id,
             owner_account_id,
             owner_service_account_id,
-            models,
             max_budget,
             rpm_limit,
             tpm_limit,
@@ -261,7 +290,6 @@ async def create_key(
             "team_alias": team.get("team_alias"),
             "owner_account_id": owner_account_id,
             "owner_service_account_id": owner_service_account_id,
-            "models": models,
             "max_budget": max_budget,
             "rpm_limit": rpm_limit,
             "tpm_limit": tpm_limit,
@@ -302,12 +330,13 @@ async def update_key(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     request_start = perf_counter()
+    _reject_legacy_models_field(payload)
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
     db = db_or_503(request)
     await _require_key_access(scope, db, token_hash)
     rows = await db.query_raw(
         """
-        SELECT token, key_name, user_id, team_id, owner_account_id, owner_service_account_id, models, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at
+        SELECT token, key_name, user_id, team_id, owner_account_id, owner_service_account_id, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at
         FROM deltallm_verificationtoken
         WHERE token = $1
         LIMIT 1
@@ -318,10 +347,6 @@ async def update_key(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
 
     existing = dict(rows[0])
-    models = payload.get("models", existing.get("models"))
-    if not isinstance(models, list):
-        models = existing.get("models") or []
-
     expires = payload.get("expires", existing.get("expires"))
     if expires is not None and not isinstance(expires, str):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="expires must be a string datetime")
@@ -365,20 +390,18 @@ async def update_key(
                 team_id = $3,
                 owner_account_id = $4,
                 owner_service_account_id = $5,
-                models = $6::text[],
-                max_budget = $7,
-                rpm_limit = $8,
-                tpm_limit = $9,
-                expires = $10::timestamp,
+                max_budget = $6,
+                rpm_limit = $7,
+                tpm_limit = $8,
+                expires = $9::timestamp,
                 updated_at = NOW()
-            WHERE token = $11
+            WHERE token = $10
             """,
             key_name,
             user_id,
             team_id,
             owner_account_id,
             owner_service_account_id,
-            models,
             max_budget,
             rpm_limit,
             tpm_limit,
@@ -398,7 +421,6 @@ async def update_key(
                 pa.email AS owner_account_email,
                 vt.owner_service_account_id,
                 sa.name AS owner_service_account_name,
-                vt.models,
                 vt.spend,
                 vt.max_budget,
                 vt.rpm_limit,
@@ -417,7 +439,7 @@ async def update_key(
         )
         if not updated_rows:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
-        updated = to_json_value(dict(updated_rows[0]))
+        updated = _key_response_payload(dict(updated_rows[0]))
         await emit_admin_mutation_audit(
             request=request,
             request_start=request_start,
@@ -426,7 +448,7 @@ async def update_key(
             resource_type="api_key",
             resource_id=token_hash,
             request_payload=payload,
-            before=to_json_value(existing),
+            before=_key_response_payload(existing),
             after=updated if isinstance(updated, dict) else None,
             response_payload=updated if isinstance(updated, dict) else None,
         )
@@ -449,16 +471,106 @@ async def update_key(
 async def _require_key_access(scope, db, token_hash: str) -> None:
     if scope.is_platform_admin:
         return
-    rows = await db.query_raw(
-        """
-        SELECT t.organization_id FROM deltallm_verificationtoken vt
-        JOIN deltallm_teamtable t ON vt.team_id = t.team_id
-        WHERE vt.token = $1 LIMIT 1
-        """,
-        token_hash,
-    )
-    if not rows or not rows[0].get("organization_id") or rows[0]["organization_id"] not in scope.org_ids:
+    row = await _get_key_scope_row(db, token_hash)
+    if not row.get("organization_id") or row["organization_id"] not in scope.org_ids:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+
+
+@router.get("/ui/api/keys/{token_hash}/asset-visibility")
+async def get_key_asset_visibility(
+    request: Request,
+    token_hash: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    db = db_or_503(request)
+    await _require_key_access(scope, db, token_hash)
+    key_row = await _get_key_scope_row(db, token_hash)
+    organization_id = str(key_row.get("organization_id") or "").strip()
+    team_id = str(key_row.get("team_id") or "").strip() or None
+    user_id = str(key_row.get("user_id") or "").strip() or None
+    if not organization_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Key team organization is not configured")
+    return await build_asset_visibility_preview(
+        request,
+        organization_id=organization_id,
+        team_id=team_id,
+        api_key_id=token_hash,
+        user_id=user_id,
+    )
+
+
+@router.get("/ui/api/keys/{token_hash}/asset-access")
+async def get_key_asset_access(
+    request: Request,
+    token_hash: str,
+    include_targets: bool = Query(default=True),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    db = db_or_503(request)
+    await _require_key_access(scope, db, token_hash)
+    key_row = await _get_key_scope_row(db, token_hash)
+    organization_id = str(key_row.get("organization_id") or "").strip()
+    team_id = str(key_row.get("team_id") or "").strip() or None
+    user_id = str(key_row.get("user_id") or "").strip() or None
+    if not organization_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Key team organization is not configured")
+    return await build_scope_asset_access(
+        request,
+        scope_type="api_key",
+        scope_id=token_hash,
+        organization_id=organization_id,
+        team_id=team_id,
+        api_key_id=token_hash,
+        user_id=user_id,
+        include_targets=include_targets,
+    )
+
+
+@router.put("/ui/api/keys/{token_hash}/asset-access")
+async def update_key_asset_access(
+    request: Request,
+    token_hash: str,
+    payload: dict[str, Any],
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    request_start = perf_counter()
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
+    db = db_or_503(request)
+    await _require_key_access(scope, db, token_hash)
+    key_row = await _get_key_scope_row(db, token_hash)
+    organization_id = str(key_row.get("organization_id") or "").strip()
+    team_id = str(key_row.get("team_id") or "").strip() or None
+    user_id = str(key_row.get("user_id") or "").strip() or None
+    if not organization_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Key team organization is not configured")
+    response = await apply_scope_asset_access(
+        request,
+        scope_type="api_key",
+        scope_id=token_hash,
+        organization_id=organization_id,
+        team_id=team_id,
+        api_key_id=token_hash,
+        user_id=user_id,
+        mode=payload.get("mode"),
+        selected_callable_keys=payload.get("selected_callable_keys", []),
+        select_all_selectable=bool(payload.get("select_all_selectable", False)),
+    )
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_KEY_ASSET_ACCESS_UPDATE,
+        scope=scope,
+        resource_type="api_key_asset_access",
+        resource_id=token_hash,
+        request_payload=payload,
+        response_payload=response,
+    )
+    return response
 
 
 @router.post("/ui/api/keys/{token_hash}/regenerate")

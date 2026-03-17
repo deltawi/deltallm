@@ -10,6 +10,7 @@ from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
 from src.db.route_groups import RouteGroupRepository
 from src.providers.resolution import validate_provider_mode_compatibility
 from src.router import RouterConfig, RoutingStrategy, build_deployment_registry, build_route_group_policies
+from src.services.callable_targets import build_callable_target_catalog
 from src.services.model_deployments import ensure_model_name_available, load_model_registry
 from src.services.route_groups import RouteGroupRuntimeCache, load_route_groups
 
@@ -147,6 +148,10 @@ class ModelHotReloadManager:
             route_group_cache=self.route_group_cache,
         )
         app.state.route_groups = route_groups
+        app.state.callable_target_catalog = build_callable_target_catalog(
+            app.state.model_registry,
+            route_groups,
+        )
         new_deployments = build_deployment_registry(app.state.model_registry, route_groups=route_groups)
         registries = [
             getattr(app.state.router, "deployment_registry", None),

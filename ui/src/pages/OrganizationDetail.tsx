@@ -1,89 +1,196 @@
-import { useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
-import { organizations, teams as teamsApi } from '../lib/api';
-import Card from '../components/Card';
-import DataTable from '../components/DataTable';
+import { callableTargets, organizations, teams as teamsApi } from '../lib/api';
+import { buildCatalogAssetTargets, buildParentScopedAssetTargets } from '../lib/assetAccess';
+import { useAuth } from '../lib/auth';
 import Modal from '../components/Modal';
 import UserSearchSelect from '../components/UserSearchSelect';
-import { ArrowLeft, Building2, Users, DollarSign, Gauge, Pencil, Plus, User, UserPlus, Trash2 } from 'lucide-react';
+import AssetAccessEditor from '../components/access/AssetAccessEditor';
+import {
+  DetailMetricCard,
+  EntityDetailShell,
+  TextTabs,
+} from '../components/admin/shells';
+import {
+  ArrowLeft, Building2, Users, DollarSign, Gauge, TrendingUp, Pencil, Plus,
+  UserPlus, Trash2, ChevronRight, Shield, CheckCircle2, AlertTriangle,
+  MoreHorizontal, ExternalLink, Info,
+} from 'lucide-react';
 
-function StatCard({ icon: Icon, label, value, subValue, color }: { icon: any; label: string; value: string; subValue?: string; color: string }) {
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
-      <div className="flex items-center gap-3 mb-3">
-        <div className={`p-2 rounded-lg ${color}`}>
-          <Icon className="w-4 h-4" />
-        </div>
-        <span className="text-sm text-gray-500">{label}</span>
-      </div>
-      <p className="text-2xl font-bold text-gray-900">{value}</p>
-      {subValue && <p className="text-xs text-gray-400 mt-1">{subValue}</p>}
-    </div>
-  );
+/* ─────────────── helpers ─────────────── */
+
+const AVATAR_COLORS = [
+  'bg-violet-100 text-violet-700',
+  'bg-blue-100 text-blue-700',
+  'bg-emerald-100 text-emerald-700',
+  'bg-amber-100 text-amber-700',
+  'bg-pink-100 text-pink-700',
+  'bg-teal-100 text-teal-700',
+  'bg-rose-100 text-rose-700',
+  'bg-cyan-100 text-cyan-700',
+  'bg-orange-100 text-orange-700',
+  'bg-indigo-100 text-indigo-700',
+];
+
+function getInitials(email?: string | null, accountId?: string): string {
+  if (email) {
+    const local = email.split('@')[0];
+    const parts = local.split(/[._-]/);
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    return local.slice(0, 2).toUpperCase();
+  }
+  return (accountId || '??').slice(0, 2).toUpperCase();
 }
 
-function BudgetBar({ spend, max_budget }: { spend: number; max_budget: number | null }) {
-  if (!max_budget) return <span className="text-gray-400 text-xs">No limit</span>;
-  const pct = Math.min(100, (spend / max_budget) * 100);
+const ROLE_LABELS: Record<string, { label: string; cls: string }> = {
+  org_owner:   { label: 'Owner',   cls: 'bg-purple-100 text-purple-700' },
+  org_admin:   { label: 'Admin',   cls: 'bg-blue-100 text-blue-700' },
+  org_member:  { label: 'Member',  cls: 'bg-gray-100 text-gray-700' },
+  org_viewer:  { label: 'Viewer',  cls: 'bg-gray-50 text-gray-500' },
+  org_billing: { label: 'Billing', cls: 'bg-amber-100 text-amber-700' },
+  org_auditor: { label: 'Auditor', cls: 'bg-teal-100 text-teal-700' },
+};
+
+type TabId = 'overview' | 'teams' | 'members' | 'assets';
+
+/* ─────────────── sub-components ─────────────── */
+
+function SpendBar({ spend, budget }: { spend: number; budget: number | null }) {
+  if (!budget) return <span className="text-xs text-gray-400">No limit</span>;
+  const pct = Math.min(100, (spend / budget) * 100);
+  const color = pct > 95 ? 'bg-red-500' : pct > 80 ? 'bg-amber-500' : 'bg-blue-500';
   return (
-    <div className="w-24">
-      <div className="flex justify-between text-xs mb-0.5">
-        <span>${spend.toFixed(2)}</span>
-        <span className="text-gray-400">${max_budget}</span>
+    <div className="w-28">
+      <div className="flex justify-between text-xs mb-1">
+        <span className="font-medium text-gray-700">${spend.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+        <span className="text-gray-400">/${budget.toLocaleString()}</span>
       </div>
       <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-        <div className={`h-full rounded-full ${pct > 90 ? 'bg-red-500' : pct > 70 ? 'bg-yellow-500' : 'bg-blue-500'}`} style={{ width: `${pct}%` }} />
+        <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${pct}%` }} />
       </div>
     </div>
   );
 }
+
+/* ─────────────── page ─────────────── */
 
 export default function OrganizationDetail() {
   const { orgId } = useParams<{ orgId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const { session, authMode } = useAuth();
+  const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
+  const isPlatformAdmin = userRole === 'platform_admin';
+  const [tab, setTab] = useState<TabId>('overview');
 
-  const { data: org, loading: orgLoading, refetch: refetchOrg } = useApi(() => organizations.get(orgId!), [orgId]);
-  const { data: orgTeams, loading: teamsLoading, refetch: refetchTeams } = useApi(() => organizations.teams(orgId!), [orgId]);
-  const { data: orgMembers, loading: membersLoading, refetch: refetchMembers } = useApi(() => organizations.members(orgId!), [orgId]);
+  /* ── data ── */
+  const { data: org, loading: orgLoading, refetch: refetchOrg } = useApi(
+    () => organizations.get(orgId!), [orgId],
+  );
+  const { data: orgTeams, loading: teamsLoading, refetch: refetchTeams } = useApi(
+    () => organizations.teams(orgId!), [orgId],
+  );
+  const { data: orgMembers, loading: membersLoading, refetch: refetchMembers } = useApi(
+    () => organizations.members(orgId!), [orgId],
+  );
+  const { data: orgAssetAccess, loading: orgAssetAccessLoading, refetch: refetchOrgAssetAccess } = useApi(
+    () => (isPlatformAdmin ? organizations.assetAccess(orgId!, { include_targets: false }) : Promise.resolve(null)),
+    [orgId, isPlatformAdmin],
+  );
+  /* full targets: only loaded when assets tab is active */
+  const { data: orgAssetTargetsFull, loading: orgAssetTargetsFullLoading } = useApi(
+    () => (tab === 'assets' && isPlatformAdmin
+      ? organizations.assetAccess(orgId!, { include_targets: true })
+      : Promise.resolve(null)),
+    [orgId, isPlatformAdmin, tab],
+  );
 
-  const [showEdit, setShowEdit] = useState(false);
+  /* ── edit org modal ── */
+  const [isEditingSettings, setIsEditingSettings] = useState(false);
+  const [isEditingAssets, setIsEditingAssets] = useState(false);
+  const [assetSearchInput, setAssetSearchInput] = useState('');
+  const [assetSearch, setAssetSearch] = useState('');
+  const [assetPageOffset, setAssetPageOffset] = useState(0);
+  const [assetTargetType, setAssetTargetType] = useState<'all' | 'model' | 'route_group'>('all');
+  const assetPageSize = 50;
   const [form, setForm] = useState({
     organization_name: '',
     max_budget: '',
     rpm_limit: '',
     tpm_limit: '',
     audit_content_storage_enabled: false,
+    select_all_current_assets: false,
+    selected_callable_keys: [] as string[],
   });
-  const [showCreateTeam, setShowCreateTeam] = useState(false);
-  const [teamForm, setTeamForm] = useState({ team_alias: '', max_budget: '', rpm_limit: '', tpm_limit: '', models: '' });
-  const [showAddMember, setShowAddMember] = useState(false);
-  const [memberSearch, setMemberSearch] = useState('');
-  const [memberForm, setMemberForm] = useState({ account_id: '', role: 'org_member' });
   const [saving, setSaving] = useState(false);
-  const [pageError, setPageError] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<string | null>(
+    typeof location.state === 'object' && location.state && 'pageWarning' in location.state
+      ? String((location.state as { pageWarning?: string }).pageWarning || '') || null
+      : null,
+  );
   const [orgError, setOrgError] = useState<string | null>(null);
-  const [teamError, setTeamError] = useState<string | null>(null);
-  const [memberError, setMemberError] = useState<string | null>(null);
-  const { data: memberCandidates, loading: memberCandidatesLoading } = useApi(
-    () => showAddMember ? organizations.memberCandidates(orgId!, { search: memberSearch, limit: 50 }) : Promise.resolve([]),
-    [orgId, showAddMember, memberSearch],
+
+  useEffect(() => {
+    const t = setTimeout(() => { setAssetSearch(assetSearchInput); setAssetPageOffset(0); }, 250);
+    return () => clearTimeout(t);
+  }, [assetSearchInput]);
+
+  useEffect(() => {
+    if (!isEditingAssets || !orgAssetAccess) return;
+    setForm((c) => ({
+      ...c,
+      select_all_current_assets:
+        orgAssetAccess.summary.selectable_total > 0 &&
+        orgAssetAccess.summary.selected_total === orgAssetAccess.summary.selectable_total,
+      selected_callable_keys: orgAssetAccess.selected_callable_keys || [],
+    }));
+  }, [isEditingAssets, orgAssetAccess]);
+
+  const { data: callableTargetPage, loading: callableTargetPageLoading } = useApi(
+    () => (
+      isPlatformAdmin && isEditingAssets && !form.select_all_current_assets
+        ? callableTargets.list({
+            search: assetSearch || undefined,
+            target_type: assetTargetType === 'all' ? undefined : assetTargetType,
+            limit: assetPageSize,
+            offset: assetPageOffset,
+          })
+        : Promise.resolve({ data: [], pagination: { total: 0, limit: assetPageSize, offset: 0, has_more: false } })
+    ),
+    [isPlatformAdmin, isEditingAssets, form.select_all_current_assets, assetSearch, assetTargetType, assetPageOffset],
   );
 
-  const openEdit = () => {
+  const openEditSettings = () => {
     if (!org) return;
     setOrgError(null);
-    setForm({
+    setForm((c) => ({
+      ...c,
       organization_name: org.organization_name || '',
       max_budget: org.max_budget != null ? String(org.max_budget) : '',
       rpm_limit: org.rpm_limit != null ? String(org.rpm_limit) : '',
       tpm_limit: org.tpm_limit != null ? String(org.tpm_limit) : '',
       audit_content_storage_enabled: !!org.audit_content_storage_enabled,
-    });
-    setShowEdit(true);
+    }));
+    setIsEditingSettings(true);
   };
 
-  const handleSaveOrg = async () => {
+  const openEditAssets = () => {
+    if (!org) return;
+    setOrgError(null);
+    setForm((c) => ({
+      ...c,
+      select_all_current_assets: false,
+      selected_callable_keys: orgAssetAccess?.selected_callable_keys || [],
+    }));
+    setAssetSearchInput('');
+    setAssetSearch('');
+    setAssetPageOffset(0);
+    setAssetTargetType('all');
+    setIsEditingAssets(true);
+  };
+
+  const handleSaveSettings = async () => {
     setSaving(true);
     setOrgError(null);
     try {
@@ -94,7 +201,7 @@ export default function OrganizationDetail() {
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
         audit_content_storage_enabled: !!form.audit_content_storage_enabled,
       });
-      setShowEdit(false);
+      setIsEditingSettings(false);
       refetchOrg();
     } catch (err: any) {
       setOrgError(err?.message || 'Failed to update organization');
@@ -103,27 +210,88 @@ export default function OrganizationDetail() {
     }
   };
 
+  const handleSaveAssets = async () => {
+    setSaving(true);
+    setOrgError(null);
+    try {
+      await organizations.updateAssetAccess(orgId!, {
+        selected_callable_keys: form.select_all_current_assets ? [] : form.selected_callable_keys,
+        select_all_selectable: form.select_all_current_assets,
+      });
+      refetchOrgAssetAccess();
+      setIsEditingAssets(false);
+      refetchOrg();
+    } catch (err: any) {
+      setOrgError(err?.message || 'Failed to update asset access');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /* ── create team modal ── */
+  const [showCreateTeam, setShowCreateTeam] = useState(false);
+  const [teamForm, setTeamForm] = useState({
+    team_alias: '',
+    max_budget: '',
+    rpm_limit: '',
+    tpm_limit: '',
+    asset_access_mode: 'inherit' as 'inherit' | 'restrict',
+    selected_callable_keys: [] as string[],
+  });
+  const [teamError, setTeamError] = useState<string | null>(null);
+
+  const { data: childTeamAssetVisibility, loading: childTeamAssetVisibilityLoading } = useApi(
+    () => (
+      showCreateTeam && teamForm.asset_access_mode === 'restrict'
+        ? organizations.assetVisibility(orgId!)
+        : Promise.resolve(null)
+    ),
+    [orgId, showCreateTeam, teamForm.asset_access_mode],
+  );
+
   const handleCreateTeam = async () => {
     setSaving(true);
     setTeamError(null);
     try {
-      await teamsApi.create({
+      const created = await teamsApi.create({
         team_alias: teamForm.team_alias || undefined,
         organization_id: orgId,
         max_budget: teamForm.max_budget ? Number(teamForm.max_budget) : undefined,
         rpm_limit: teamForm.rpm_limit ? Number(teamForm.rpm_limit) : undefined,
         tpm_limit: teamForm.tpm_limit ? Number(teamForm.tpm_limit) : undefined,
-        models: teamForm.models ? teamForm.models.split(',').map(m => m.trim()).filter(Boolean) : [],
       });
+      let assetAccessError: string | null = null;
+      if (teamForm.asset_access_mode === 'restrict') {
+        try {
+          await teamsApi.updateAssetAccess(created.team_id, {
+            mode: 'restrict',
+            selected_callable_keys: teamForm.selected_callable_keys,
+          });
+        } catch (err: any) {
+          assetAccessError = err?.message || 'Team created, but asset access could not be updated.';
+        }
+      }
       setShowCreateTeam(false);
-      setTeamForm({ team_alias: '', max_budget: '', rpm_limit: '', tpm_limit: '', models: '' });
+      setTeamForm({ team_alias: '', max_budget: '', rpm_limit: '', tpm_limit: '', asset_access_mode: 'inherit', selected_callable_keys: [] });
       refetchTeams();
+      setPageError(assetAccessError);
     } catch (err: any) {
       setTeamError(err?.message || 'Failed to create team');
     } finally {
       setSaving(false);
     }
   };
+
+  /* ── add member modal ── */
+  const [showAddMember, setShowAddMember] = useState(false);
+  const [memberSearch, setMemberSearch] = useState('');
+  const [memberForm, setMemberForm] = useState({ account_id: '', role: 'org_member' });
+  const [memberError, setMemberError] = useState<string | null>(null);
+
+  const { data: memberCandidates, loading: memberCandidatesLoading } = useApi(
+    () => showAddMember ? organizations.memberCandidates(orgId!, { search: memberSearch, limit: 50 }) : Promise.resolve([]),
+    [orgId, showAddMember, memberSearch],
+  );
 
   const openAddMember = () => {
     setMemberError(null);
@@ -133,17 +301,11 @@ export default function OrganizationDetail() {
   };
 
   const handleAddMember = async () => {
-    if (!memberForm.account_id) {
-      setMemberError('Select an account to add.');
-      return;
-    }
+    if (!memberForm.account_id) { setMemberError('Select an account to add.'); return; }
     setSaving(true);
     setMemberError(null);
     try {
-      await organizations.addMember(orgId!, {
-        account_id: memberForm.account_id,
-        role: memberForm.role,
-      });
+      await organizations.addMember(orgId!, { account_id: memberForm.account_id, role: memberForm.role });
       setShowAddMember(false);
       setMemberForm({ account_id: '', role: 'org_member' });
       setMemberSearch('');
@@ -169,9 +331,38 @@ export default function OrganizationDetail() {
     }
   };
 
+  /* ── derived ── */
+  const teamList: any[] = orgTeams || [];
+  const memberList: any[] = orgMembers || [];
+  const spend = org?.spend || 0;
+  const budget = org?.max_budget ?? null;
+  const spendPct = budget ? Math.min(100, Math.round((spend / budget) * 100)) : null;
+  const orgAssetSummary = orgAssetAccess?.summary;
+  const assetPct = orgAssetSummary && orgAssetSummary.selectable_total > 0
+    ? Math.round((orgAssetSummary.selected_total / orgAssetSummary.selectable_total) * 100)
+    : null;
+
+  const childTeamAssetTargets = buildParentScopedAssetTargets(
+    childTeamAssetVisibility?.callable_targets?.items || [],
+    teamForm.selected_callable_keys,
+    teamForm.asset_access_mode,
+  );
+  const orgAssetTargets = buildCatalogAssetTargets(
+    (callableTargetPage?.data || []) as any[],
+    form.selected_callable_keys,
+  );
+  const orgAssetPagination = callableTargetPage?.pagination;
+
+  /* teams over 80% of budget = "warning" for alert card */
+  const warningTeam = teamList.find((t: any) => {
+    if (!t.max_budget || !t.spend) return false;
+    return (t.spend / t.max_budget) >= 0.8;
+  });
+
+  /* ── loading / not found ── */
   if (orgLoading) {
     return (
-      <div className="p-6 flex items-center justify-center py-24">
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
       </div>
     );
@@ -186,143 +377,774 @@ export default function OrganizationDetail() {
     );
   }
 
-  const teamColumns = [
-    { key: 'team_alias', header: 'Name', render: (r: any) => (
-      <Link to={`/teams/${r.team_id}`} className="font-medium text-blue-600 hover:text-blue-700">{r.team_alias || r.team_id}</Link>
-    ) },
-    { key: 'team_id', header: 'Team ID', render: (r: any) => <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{r.team_id}</code> },
-    { key: 'member_count', header: 'Members', render: (r: any) => (
-      <span className="flex items-center gap-1"><Users className="w-3.5 h-3.5 text-gray-400" /> {r.member_count || 0}</span>
-    ) },
-    { key: 'budget', header: 'Budget', render: (r: any) => <BudgetBar spend={r.spend || 0} max_budget={r.max_budget} /> },
-    { key: 'models', header: 'Models', render: (r: any) => r.models?.length ? <span className="text-xs">{r.models.join(', ')}</span> : <span className="text-gray-400 text-xs">All</span> },
-  ];
-
-  const memberColumns = [
-    { key: 'email', header: 'Email', render: (r: any) => r.email || <span className="text-gray-400">--</span> },
-    { key: 'account_id', header: 'Account ID', render: (r: any) => <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded font-mono">{r.account_id}</code> },
-    { key: 'org_role', header: 'Org Role', render: (r: any) => (
-      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">{r.org_role}</span>
-    ) },
-    { key: 'team_count', header: 'Teams', render: (r: any) => <span className="text-sm">{r.team_count || 0}</span> },
-    { key: 'teams', header: 'Team Memberships', render: (r: any) => (
-      r.teams?.length ? <span className="text-xs">{r.teams.join(', ')}</span> : <span className="text-gray-400 text-xs">None</span>
-    ) },
-    { key: 'actions', header: '', render: (r: any) => (
-      <button onClick={() => handleRemoveMember(r.membership_id)} className="p-1.5 hover:bg-red-50 rounded-lg" title="Remove member">
-        <Trash2 className="w-4 h-4 text-red-500" />
-      </button>
-    ) },
-  ];
+  const orgName = org.organization_name || org.organization_id;
 
   return (
-    <div className="p-4 sm:p-6 max-w-6xl">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 mb-6">
-        <div className="flex items-center gap-3 flex-1 min-w-0">
-          <button onClick={() => navigate('/organizations')} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
-            <ArrowLeft className="w-5 h-5 text-gray-500" />
-          </button>
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-50 rounded-lg">
-              <Building2 className="w-5 h-5 text-blue-600" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold text-gray-900">{org.organization_name || org.organization_id}</h1>
-              <p className="text-xs text-gray-400 font-mono mt-0.5">{org.organization_id}</p>
-            </div>
-          </div>
+    <EntityDetailShell
+      breadcrumbs={[
+        { label: 'Organizations', onClick: () => navigate('/organizations'), icon: ArrowLeft },
+        { label: orgName },
+      ]}
+      avatar={(
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 shadow-sm">
+          <span className="text-lg font-bold text-white">{orgName[0].toUpperCase()}</span>
         </div>
-        <button onClick={openEdit} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
-          <Pencil className="w-4 h-4" /> Edit
-        </button>
-      </div>
-      {pageError && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{pageError}</div>
       )}
-
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <StatCard icon={DollarSign} label="Spend" value={`$${(org.spend || 0).toFixed(2)}`} subValue={org.max_budget ? `of $${org.max_budget} budget` : 'No budget limit'} color="bg-green-50 text-green-600" />
-        <StatCard icon={Users} label="Teams" value={String(orgTeams?.length || 0)} color="bg-blue-50 text-blue-600" />
-        <StatCard icon={User} label="Members" value={String(orgMembers?.length || 0)} subValue="Across all teams" color="bg-teal-50 text-teal-600" />
-        <StatCard icon={Gauge} label="RPM Limit" value={org.rpm_limit != null ? org.rpm_limit.toLocaleString() : 'Unlimited'} subValue="Requests per minute" color="bg-purple-50 text-purple-600" />
-      </div>
-
-      <div className="space-y-6">
-        <Card
-          title="Teams"
-          action={
-            <button onClick={() => { setTeamError(null); setShowCreateTeam(true); }} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
-              <Plus className="w-3.5 h-3.5" /> Add Team
-            </button>
-          }
-        >
-          <DataTable
-            columns={teamColumns}
-            data={orgTeams || []}
-            loading={teamsLoading}
-            emptyMessage="No teams in this organization"
-            onRowClick={(r) => navigate(`/teams/${r.team_id}`)}
-          />
-        </Card>
-
-        <Card
-          title="Members"
-          action={
-            <button onClick={openAddMember} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
-              <UserPlus className="w-3.5 h-3.5" /> Add Member
-            </button>
-          }
-        >
-          <DataTable
-            columns={memberColumns}
-            data={orgMembers || []}
-            loading={membersLoading}
-            emptyMessage="No organization members yet"
-          />
-        </Card>
-      </div>
-
-      <Modal open={showEdit} onClose={() => setShowEdit(false)} title="Edit Organization">
-        <div className="space-y-4">
-          {orgError && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{orgError}</div>
-          )}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Organization Name</label>
-            <input value={form.organization_name} onChange={(e) => setForm({ ...form, organization_name: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Max Budget ($)</label>
-            <input type="number" value={form.max_budget} onChange={(e) => setForm({ ...form, max_budget: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">RPM Limit</label>
-              <input type="number" value={form.rpm_limit} onChange={(e) => setForm({ ...form, rpm_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">TPM Limit</label>
-              <input type="number" value={form.tpm_limit} onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            </div>
-          </div>
-          <label className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg bg-gray-50">
-            <input
-              type="checkbox"
-              checked={!!form.audit_content_storage_enabled}
-              onChange={(e) => setForm({ ...form, audit_content_storage_enabled: e.target.checked })}
-              className="mt-0.5"
-            />
-            <span className="text-sm text-gray-700">
-              Store request and response payload content in audit logs for this organization.
+      title={orgName}
+      badges={(
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600">
+          <CheckCircle2 className="h-3.5 w-3.5" /> Active
+        </span>
+      )}
+      meta={(
+        <div className="flex items-center gap-3">
+          <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-400">
+            {org.organization_id}
+          </code>
+          {org.created_at && (
+            <span className="text-xs text-gray-400">
+              Created {new Date(org.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
             </span>
-          </label>
-          <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => setShowEdit(false)} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-            <button onClick={handleSaveOrg} disabled={saving} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">{saving ? 'Saving...' : 'Save Changes'}</button>
-          </div>
+          )}
         </div>
-      </Modal>
+      )}
+      action={(
+        <button
+          onClick={openEditSettings}
+          className="flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+        >
+          <Pencil className="h-3.5 w-3.5" /> Edit
+        </button>
+      )}
+      metrics={(
+        <>
+          <DetailMetricCard
+            icon={DollarSign}
+            label="Budget used"
+            value={spendPct != null ? `${spendPct}%` : `$${spend.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+            sub={budget ? `$${spend.toLocaleString(undefined, { maximumFractionDigits: 0 })} of $${budget.toLocaleString()}` : 'No limit'}
+            tone={spendPct != null && spendPct > 80 ? 'amber' : 'green'}
+          />
+          <DetailMetricCard
+            icon={Building2}
+            label="Teams"
+            value={String(teamList.length)}
+            sub={`${teamList.filter((t: any) => (t.spend || 0) > 0).length} active`}
+            tone="blue"
+          />
+          <DetailMetricCard
+            icon={Users}
+            label="Members"
+            value={String(memberList.length)}
+            sub="across all teams"
+            tone="violet"
+          />
+          <DetailMetricCard
+            icon={Shield}
+            label="Assets granted"
+            value={
+              orgAssetSummary
+                ? `${orgAssetSummary.selected_total}/${orgAssetSummary.selectable_total}`
+                : isPlatformAdmin ? '—' : 'N/A'
+            }
+            sub={assetPct != null ? `${assetPct}% of catalog` : 'of catalog'}
+            tone="indigo"
+          />
+        </>
+      )}
+      tabs={(
+        <TextTabs
+          active={tab}
+          onChange={setTab}
+          items={[
+            { id: 'overview', label: 'Overview' },
+            {
+              id: 'teams',
+              label: (
+                <>
+                  Teams
+                  {teamList.length > 0 && (
+                    <span className="ml-1.5 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-gray-100 px-1.5 text-xs font-semibold text-gray-600">
+                      {teamList.length}
+                    </span>
+                  )}
+                </>
+              ),
+            },
+            {
+              id: 'members',
+              label: (
+                <>
+                  Members
+                  {memberList.length > 0 && (
+                    <span className="ml-1.5 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-gray-100 px-1.5 text-xs font-semibold text-gray-600">
+                      {memberList.length}
+                    </span>
+                  )}
+                </>
+              ),
+            },
+            ...(isPlatformAdmin ? [{ id: 'assets' as const, label: 'Asset Access' }] : []),
+          ]}
+        />
+      )}
+      notice={pageError ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{pageError}</div>
+      ) : undefined}
+    >
+      {tab === 'overview' && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+            <div className="lg:col-span-2 space-y-5">
+              {/* Budget & Spend */}
+              <div className="bg-white rounded-xl border border-gray-200 p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-semibold text-gray-900">Budget &amp; Spend</h3>
+                  {spendPct != null && (
+                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                      spendPct > 80 ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'
+                    }`}>
+                      {spendPct}% used
+                    </span>
+                  )}
+                </div>
+                {budget && (
+                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden mb-4">
+                    <div
+                      className={`h-full rounded-full transition-all ${
+                        spendPct! > 90 ? 'bg-red-500' : spendPct! > 80 ? 'bg-amber-500' : 'bg-blue-500'
+                      }`}
+                      style={{ width: `${spendPct}%` }}
+                    />
+                  </div>
+                )}
+                <div className="flex justify-between items-end mb-4">
+                  <div>
+                    <p className="text-2xl font-bold text-gray-900">
+                      ${spend.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    </p>
+                    <p className="text-xs text-gray-400 mt-0.5">Current spend</p>
+                  </div>
+                  {budget && (
+                    <div className="text-right">
+                      <p className="text-lg font-semibold text-gray-500">
+                        ${(budget - spend).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                      </p>
+                      <p className="text-xs text-gray-400">Remaining budget</p>
+                    </div>
+                  )}
+                  {!budget && <span className="text-sm text-gray-400">No budget limit</span>}
+                </div>
+                <div className="border-t border-gray-100 pt-4 grid grid-cols-2 gap-4">
+                  <div>
+                    <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">
+                      <Gauge className="w-3.5 h-3.5" /> RPM Limit
+                    </div>
+                    {org.rpm_limit != null
+                      ? <p className="text-sm font-semibold text-gray-800">{Number(org.rpm_limit).toLocaleString()} <span className="text-xs font-normal text-gray-400">req/min</span></p>
+                      : <p className="text-sm text-gray-400">Unlimited</p>}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">
+                      <TrendingUp className="w-3.5 h-3.5" /> TPM Limit
+                    </div>
+                    {org.tpm_limit != null
+                      ? <p className="text-sm font-semibold text-gray-800">{Number(org.tpm_limit).toLocaleString()} <span className="text-xs font-normal text-gray-400">tok/min</span></p>
+                      : <p className="text-sm text-gray-400">Unlimited</p>}
+                  </div>
+                </div>
+              </div>
 
+              {/* Teams quick list */}
+              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+                  <h3 className="text-sm font-semibold text-gray-900">Teams</h3>
+                  <button
+                    onClick={() => { setTeamError(null); setTeamForm({ team_alias: '', max_budget: '', rpm_limit: '', tpm_limit: '', asset_access_mode: 'inherit', selected_callable_keys: [] }); setShowCreateTeam(true); }}
+                    className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-blue-600 border border-blue-200 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+                  >
+                    <Plus className="w-3 h-3" /> Add Team
+                  </button>
+                </div>
+                {teamsLoading ? (
+                  <div className="p-6 flex items-center justify-center">
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600" />
+                  </div>
+                ) : teamList.length === 0 ? (
+                  <p className="text-sm text-gray-400 text-center py-8">No teams yet.</p>
+                ) : (
+                  <>
+                    <table className="w-full text-sm">
+                      <tbody>
+                        {teamList.slice(0, 4).map((t: any, i: number) => (
+                          <tr
+                            key={t.team_id}
+                            onClick={() => navigate(`/teams/${t.team_id}`)}
+                            className={`hover:bg-gray-50 cursor-pointer ${i < Math.min(teamList.length, 4) - 1 ? 'border-b border-gray-100' : ''}`}
+                          >
+                            <td className="px-5 py-3">
+                              <div className="flex items-center gap-2.5">
+                                <div className="w-7 h-7 rounded-lg bg-indigo-50 flex items-center justify-center shrink-0">
+                                  <Users className="w-3.5 h-3.5 text-indigo-600" />
+                                </div>
+                                <div>
+                                  <p className="font-medium text-gray-800 text-xs">{t.team_alias || t.team_id}</p>
+                                  <p className="text-[10px] text-gray-400 font-mono">{t.team_id}</p>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-5 py-3">
+                              <span className="text-xs text-gray-600 flex items-center gap-1">
+                                <Users className="w-3 h-3 text-gray-400" /> {t.member_count || 0}
+                              </span>
+                            </td>
+                            <td className="px-5 py-3">
+                              <SpendBar spend={t.spend || 0} budget={t.max_budget ?? null} />
+                            </td>
+                            <td className="px-5 py-3 text-right">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); navigate(`/teams/${t.team_id}`); }}
+                                className="text-xs text-blue-600 hover:underline flex items-center gap-1 ml-auto"
+                              >
+                                Open <ExternalLink className="w-3 h-3" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {teamList.length > 4 && (
+                      <div className="px-5 py-3 border-t border-gray-100 text-center">
+                        <button
+                          onClick={() => setTab('teams')}
+                          className="text-xs text-blue-600 hover:underline"
+                        >
+                          View all {teamList.length} teams →
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Sidebar */}
+            <div className="space-y-4">
+              {/* Settings */}
+              <div className={`bg-white rounded-xl border p-5 transition-colors ${isEditingSettings ? 'border-blue-300 ring-1 ring-blue-200' : 'border-gray-200'}`}>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold text-gray-900">Settings</h3>
+                  {!isEditingSettings && (
+                    <button
+                      onClick={openEditSettings}
+                      className="p-1 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-gray-600 transition-colors"
+                      title="Edit settings"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+                {isEditingSettings ? (
+                  <div className="space-y-3">
+                    {orgError && (
+                      <div className="p-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">{orgError}</div>
+                    )}
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Name</label>
+                      <input
+                        value={form.organization_name}
+                        onChange={(e) => setForm({ ...form, organization_name: e.target.value })}
+                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Max Budget ($)</label>
+                      <input
+                        type="number"
+                        value={form.max_budget}
+                        onChange={(e) => setForm({ ...form, max_budget: e.target.value })}
+                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="No limit"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">RPM Limit</label>
+                        <input
+                          type="number"
+                          value={form.rpm_limit}
+                          onChange={(e) => setForm({ ...form, rpm_limit: e.target.value })}
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="Unlimited"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">TPM Limit</label>
+                        <input
+                          type="number"
+                          value={form.tpm_limit}
+                          onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })}
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="Unlimited"
+                        />
+                      </div>
+                    </div>
+                    <label className="flex items-start gap-2 p-2.5 border border-gray-200 rounded-lg bg-gray-50 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!!form.audit_content_storage_enabled}
+                        onChange={(e) => setForm({ ...form, audit_content_storage_enabled: e.target.checked })}
+                        className="mt-0.5"
+                      />
+                      <span className="text-xs text-gray-700">Store request/response payloads in audit logs</span>
+                    </label>
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        onClick={() => { setIsEditingSettings(false); setOrgError(null); }}
+                        className="flex-1 px-3 py-1.5 text-xs text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleSaveSettings}
+                        disabled={saving}
+                        className="flex-1 px-3 py-1.5 text-xs text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+                      >
+                        {saving ? 'Saving…' : 'Save'}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2.5 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-gray-500">Audit storage</span>
+                      <span className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                        org.audit_content_storage_enabled ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
+                      }`}>
+                        {org.audit_content_storage_enabled ? 'Enabled' : 'Disabled'}
+                      </span>
+                    </div>
+                    {org.max_budget != null && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-gray-500">Max budget</span>
+                        <span className="text-xs font-semibold text-gray-800">${Number(org.max_budget).toLocaleString()}</span>
+                      </div>
+                    )}
+                    {org.rpm_limit != null && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-gray-500">RPM limit</span>
+                        <span className="text-xs font-semibold text-gray-800">{Number(org.rpm_limit).toLocaleString()}</span>
+                      </div>
+                    )}
+                    {org.tpm_limit != null && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-gray-500">TPM limit</span>
+                        <span className="text-xs font-semibold text-gray-800">{Number(org.tpm_limit).toLocaleString()}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Asset Access sidebar */}
+              {isPlatformAdmin && (
+                <div className="bg-white rounded-xl border border-gray-200 p-5">
+                  <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                    Asset Access <Info className="w-3.5 h-3.5 text-gray-400" />
+                  </h3>
+                  {orgAssetSummary ? (
+                    <>
+                      <div className="mb-3">
+                        <div className="flex justify-between text-xs mb-1.5">
+                          <span className="text-gray-600">{orgAssetSummary.selected_total} models &amp; routes</span>
+                          <span className="text-gray-400">of {orgAssetSummary.selectable_total}</span>
+                        </div>
+                        <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-blue-500 rounded-full transition-all"
+                            style={{ width: `${assetPct ?? 0}%` }}
+                          />
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-gray-400 leading-relaxed">
+                        Teams and API keys within this org can only use assets from this allowed set.
+                      </p>
+                      <button
+                        onClick={() => setTab('assets')}
+                        className="mt-3 text-xs text-blue-600 hover:underline flex items-center gap-1 font-medium"
+                      >
+                        Manage assets <ChevronRight className="w-3 h-3" />
+                      </button>
+                    </>
+                  ) : (
+                    <p className="text-xs text-gray-400">Loading asset access…</p>
+                  )}
+                </div>
+              )}
+
+              {/* Budget warning for a team */}
+              {warningTeam && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="text-xs font-semibold text-amber-800">
+                        {warningTeam.team_alias || warningTeam.team_id} at {Math.round(((warningTeam.spend || 0) / warningTeam.max_budget) * 100)}% budget
+                      </p>
+                      <p className="text-[10px] text-amber-700 mt-0.5">
+                        This team is approaching its budget limit.
+                      </p>
+                      <button
+                        onClick={() => navigate(`/teams/${warningTeam.team_id}`)}
+                        className="text-[10px] text-amber-700 underline mt-1.5"
+                      >
+                        View team →
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── TEAMS ── */}
+        {tab === 'teams' && (
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 bg-gray-50">
+              <h3 className="text-sm font-semibold text-gray-900">
+                All Teams {teamList.length > 0 && `(${teamList.length})`}
+              </h3>
+              <button
+                onClick={() => { setTeamError(null); setTeamForm({ team_alias: '', max_budget: '', rpm_limit: '', tpm_limit: '', asset_access_mode: 'inherit', selected_callable_keys: [] }); setShowCreateTeam(true); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" /> Add Team
+              </button>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500">Name</th>
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500">Members</th>
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500">Budget Usage</th>
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500">RPM Limit</th>
+                  <th className="px-5 py-3" />
+                </tr>
+              </thead>
+              <tbody>
+                {teamsLoading ? (
+                  Array.from({ length: 3 }).map((_, i) => (
+                    <tr key={i} className="border-b border-gray-100">
+                      {[1, 2, 3, 4, 5].map((j) => (
+                        <td key={j} className="px-5 py-4">
+                          <div className="h-4 bg-gray-100 rounded animate-pulse w-24" />
+                        </td>
+                      ))}
+                    </tr>
+                  ))
+                ) : teamList.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-5 py-12 text-center text-sm text-gray-400">
+                      No teams yet.{' '}
+                      <button onClick={() => setShowCreateTeam(true)} className="text-blue-600 hover:underline">Add the first one</button>
+                    </td>
+                  </tr>
+                ) : (
+                  teamList.map((t: any, i: number) => (
+                    <tr
+                      key={t.team_id}
+                      onClick={() => navigate(`/teams/${t.team_id}`)}
+                      className={`hover:bg-blue-50/40 cursor-pointer ${i < teamList.length - 1 ? 'border-b border-gray-100' : ''}`}
+                    >
+                      <td className="px-5 py-3.5">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center shrink-0">
+                            <Users className="w-4 h-4 text-indigo-600" />
+                          </div>
+                          <div>
+                            <p className="font-semibold text-gray-900 text-sm">{t.team_alias || t.team_id}</p>
+                            <code className="text-[10px] text-gray-400 font-mono">{t.team_id}</code>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-5 py-3.5 text-sm text-gray-700">{t.member_count || 0}</td>
+                      <td className="px-5 py-3.5">
+                        <SpendBar spend={t.spend || 0} budget={t.max_budget ?? null} />
+                      </td>
+                      <td className="px-5 py-3.5">
+                        {t.rpm_limit != null
+                          ? <span className="text-xs bg-gray-100 px-2 py-0.5 rounded-full text-gray-600">{Number(t.rpm_limit).toLocaleString()}</span>
+                          : <span className="text-xs text-gray-400">—</span>}
+                      </td>
+                      <td className="px-5 py-3.5 text-right" onClick={(e) => e.stopPropagation()}>
+                        <button className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
+                          <MoreHorizontal className="w-4 h-4 text-gray-400" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* ── MEMBERS ── */}
+        {tab === 'members' && (
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 bg-gray-50">
+              <h3 className="text-sm font-semibold text-gray-900">
+                Organization Members {memberList.length > 0 && `(${memberList.length})`}
+              </h3>
+              <button
+                onClick={openAddMember}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                <UserPlus className="w-3.5 h-3.5" /> Add Member
+              </button>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500">Member</th>
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500">Org Role</th>
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500">Team memberships</th>
+                  <th className="px-5 py-3" />
+                </tr>
+              </thead>
+              <tbody>
+                {membersLoading ? (
+                  Array.from({ length: 3 }).map((_, i) => (
+                    <tr key={i} className="border-b border-gray-100">
+                      {[1, 2, 3, 4].map((j) => (
+                        <td key={j} className="px-5 py-4">
+                          <div className="h-4 bg-gray-100 rounded animate-pulse w-24" />
+                        </td>
+                      ))}
+                    </tr>
+                  ))
+                ) : memberList.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="px-5 py-12 text-center text-sm text-gray-400">
+                      No members yet.{' '}
+                      <button onClick={openAddMember} className="text-blue-600 hover:underline">Add the first one</button>
+                    </td>
+                  </tr>
+                ) : (
+                  memberList.map((m: any, idx: number) => {
+                    const role = ROLE_LABELS[m.org_role] ?? { label: m.org_role, cls: 'bg-gray-100 text-gray-700' };
+                    return (
+                      <tr key={m.membership_id || m.account_id} className={`hover:bg-gray-50 ${idx < memberList.length - 1 ? 'border-b border-gray-100' : ''}`}>
+                        <td className="px-5 py-3.5">
+                          <div className="flex items-center gap-3">
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${AVATAR_COLORS[idx % AVATAR_COLORS.length]}`}>
+                              {getInitials(m.email, m.account_id)}
+                            </div>
+                            <div>
+                              <p className="font-medium text-gray-900 text-sm">{m.email || m.account_id}</p>
+                              {m.email && <p className="text-xs text-gray-400 font-mono">{m.account_id}</p>}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-5 py-3.5">
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${role.cls}`}>{role.label}</span>
+                        </td>
+                        <td className="px-5 py-3.5">
+                          <span className="text-sm text-gray-600">
+                            {m.team_count || 0} {(m.team_count || 0) === 1 ? 'team' : 'teams'}
+                          </span>
+                          {m.teams?.length > 0 && (
+                            <p className="text-[10px] text-gray-400 mt-0.5">{m.teams.slice(0, 3).join(', ')}{m.teams.length > 3 ? ` +${m.teams.length - 3}` : ''}</p>
+                          )}
+                        </td>
+                        <td className="px-5 py-3.5 text-right">
+                          <button
+                            onClick={() => handleRemoveMember(m.membership_id)}
+                            className="p-1.5 hover:bg-red-50 rounded-lg text-gray-300 hover:text-red-400 transition-colors"
+                            title="Remove member"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* ── ASSETS ── */}
+        {tab === 'assets' && isPlatformAdmin && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+            <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-semibold text-gray-900">{isEditingAssets ? 'Edit Asset Access' : 'Allowed Assets'}</h3>
+                {isEditingAssets && (
+                  <button
+                    onClick={() => { setIsEditingAssets(false); setOrgError(null); }}
+                    className="text-xs text-gray-500 hover:text-gray-700 transition-colors"
+                  >
+                    ✕ Cancel
+                  </button>
+                )}
+              </div>
+              {isEditingAssets ? (
+                <div className="space-y-4">
+                  {orgError && (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{orgError}</div>
+                  )}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <label className={`rounded-lg border px-3 py-2 text-sm cursor-pointer ${form.select_all_current_assets ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'}`}>
+                      <div className="flex items-start gap-2">
+                        <input
+                          type="radio"
+                          name="org-detail-asset-strategy"
+                          checked={form.select_all_current_assets}
+                          onChange={() => setForm((c) => ({ ...c, select_all_current_assets: true, selected_callable_keys: [] }))}
+                          disabled={saving}
+                          className="mt-0.5"
+                        />
+                        <span>
+                          <span className="block font-medium text-gray-900">Allow all current assets</span>
+                          <span className="block text-xs text-gray-500">Grant every current model and route group without loading the full catalog.</span>
+                        </span>
+                      </div>
+                    </label>
+                    <label className={`rounded-lg border px-3 py-2 text-sm cursor-pointer ${!form.select_all_current_assets ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'}`}>
+                      <div className="flex items-start gap-2">
+                        <input
+                          type="radio"
+                          name="org-detail-asset-strategy"
+                          checked={!form.select_all_current_assets}
+                          onChange={() => setForm((c) => ({ ...c, select_all_current_assets: false }))}
+                          disabled={saving}
+                          className="mt-0.5"
+                        />
+                        <span>
+                          <span className="block font-medium text-gray-900">Choose a subset</span>
+                          <span className="block text-xs text-gray-500">Search and pick only the assets this organization should use.</span>
+                        </span>
+                      </div>
+                    </label>
+                  </div>
+                  {form.select_all_current_assets ? (
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-3 text-xs text-blue-800">
+                      {orgAssetAccess
+                        ? `This organization currently has ${orgAssetAccess.summary.selected_total} of ${orgAssetAccess.summary.selectable_total} assets granted. Saving will align it to all current assets.`
+                        : 'Saving will grant every currently available model and route group to this organization.'}
+                    </div>
+                  ) : (
+                    <AssetAccessEditor
+                      title="Allowed Assets"
+                      description="Choose the models and route groups this organization is allowed to use. Lower scopes can inherit or narrow from this set."
+                      mode="grant"
+                      targets={orgAssetTargets}
+                      selectedKeys={form.selected_callable_keys}
+                      onSelectedKeysChange={(selected_callable_keys) => setForm({ ...form, selected_callable_keys })}
+                      loading={orgAssetAccessLoading || callableTargetPageLoading}
+                      disabled={saving}
+                      searchValue={assetSearchInput}
+                      onSearchValueChange={setAssetSearchInput}
+                      targetTypeFilter={assetTargetType}
+                      onTargetTypeFilterChange={(next) => { setAssetTargetType(next); setAssetPageOffset(0); }}
+                      pagination={orgAssetPagination}
+                      onPageChange={setAssetPageOffset}
+                      primaryActionLabel="Allow all current assets"
+                      onPrimaryAction={() => setForm((c) => ({ ...c, select_all_current_assets: true, selected_callable_keys: [] }))}
+                      secondaryActionLabel={form.selected_callable_keys.length > 0 ? 'Clear selection' : undefined}
+                      onSecondaryAction={form.selected_callable_keys.length > 0 ? () => setForm((c) => ({ ...c, selected_callable_keys: [] })) : undefined}
+                    />
+                  )}
+                  <div className="flex justify-end gap-3 pt-2 border-t border-gray-100">
+                    <button
+                      onClick={() => { setIsEditingAssets(false); setOrgError(null); }}
+                      className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleSaveAssets}
+                      disabled={saving || (isPlatformAdmin && orgAssetAccessLoading)}
+                      className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+                    >
+                      {saving ? 'Saving…' : 'Save Changes'}
+                    </button>
+                  </div>
+                </div>
+              ) : orgAssetTargetsFullLoading ? (
+                <div className="py-12 flex items-center justify-center">
+                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600" />
+                </div>
+              ) : (orgAssetTargetsFull?.selectable_targets || []).length === 0 ? (
+                <p className="text-sm text-gray-400 text-center py-8">No assets configured for this organization.</p>
+              ) : (
+                <div className="space-y-2">
+                  {(orgAssetTargetsFull?.selectable_targets || [])
+                    .filter((t: any) => t.selected)
+                    .map((t: any) => (
+                      <div key={t.callable_key} className="flex items-center justify-between px-3 py-2.5 rounded-lg bg-gray-50 border border-gray-200 hover:bg-blue-50/50 transition-colors">
+                        <div className="flex items-center gap-2.5">
+                          <Shield className="w-3.5 h-3.5 text-green-500 shrink-0" />
+                          <span className="text-sm font-medium text-gray-800">{t.callable_key}</span>
+                          <span className={`text-xs px-1.5 py-0.5 rounded ${
+                            t.target_type === 'model' ? 'bg-blue-50 text-blue-600' : 'bg-purple-50 text-purple-600'
+                          }`}>
+                            {t.target_type === 'route_group' ? 'route group' : t.target_type}
+                          </span>
+                        </div>
+                        <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
+                      </div>
+                    ))}
+                </div>
+              )}
+              {orgAssetSummary && (
+                <p className="text-xs text-gray-400 mt-3 text-center">
+                  Showing {orgAssetSummary.selected_total} of {orgAssetSummary.selectable_total} granted assets
+                </p>
+              )}
+            </div>
+
+            {/* Access summary sidebar */}
+            <div className="space-y-4">
+              <div className="bg-white rounded-xl border border-gray-200 p-4">
+                <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">Access Summary</h4>
+                <div className="space-y-2.5 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Selected</span>
+                    <span className="font-medium text-gray-800">{orgAssetSummary?.selected_total ?? '—'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Available</span>
+                    <span className="font-medium text-gray-800">{orgAssetSummary?.selectable_total ?? '—'}</span>
+                  </div>
+                  {assetPct != null && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Coverage</span>
+                      <span className="font-medium text-gray-800">{assetPct}%</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                <p className="text-xs text-blue-800 leading-relaxed">
+                  Teams, API keys, and users within this org can only use assets from this allowed set. Child scopes can narrow further but never expand beyond this ceiling.
+                </p>
+              </div>
+              {!isEditingAssets && (
+                <button
+                  onClick={openEditAssets}
+                  className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium border border-gray-300 text-gray-700 bg-white rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  <Pencil className="w-3.5 h-3.5" /> Edit Asset Access
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+      {/* ── Create Team Modal ── */}
       <Modal open={showCreateTeam} onClose={() => setShowCreateTeam(false)} title="Add Team to Organization">
         <div className="space-y-4">
           {teamError && (
@@ -330,35 +1152,77 @@ export default function OrganizationDetail() {
           )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Team Name</label>
-            <input value={teamForm.team_alias} onChange={(e) => setTeamForm({ ...teamForm, team_alias: e.target.value })} placeholder="Engineering" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <input
+              value={teamForm.team_alias}
+              onChange={(e) => setTeamForm({ ...teamForm, team_alias: e.target.value })}
+              placeholder="Engineering"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Max Budget ($)</label>
-              <input type="number" value={teamForm.max_budget} onChange={(e) => setTeamForm({ ...teamForm, max_budget: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <input
+                type="number"
+                value={teamForm.max_budget}
+                onChange={(e) => setTeamForm({ ...teamForm, max_budget: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Allowed Models</label>
-              <input value={teamForm.models} onChange={(e) => setTeamForm({ ...teamForm, models: e.target.value })} placeholder="gpt-4o, claude-3" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+              Team access starts from this organization's allowed assets. Use the section below to keep the full set or narrow it.
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">RPM Limit</label>
-              <input type="number" value={teamForm.rpm_limit} onChange={(e) => setTeamForm({ ...teamForm, rpm_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <input
+                type="number"
+                value={teamForm.rpm_limit}
+                onChange={(e) => setTeamForm({ ...teamForm, rpm_limit: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">TPM Limit</label>
-              <input type="number" value={teamForm.tpm_limit} onChange={(e) => setTeamForm({ ...teamForm, tpm_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <input
+                type="number"
+                value={teamForm.tpm_limit}
+                onChange={(e) => setTeamForm({ ...teamForm, tpm_limit: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
             </div>
           </div>
+          <AssetAccessEditor
+            title="Team Asset Access"
+            description="New teams inherit the organization asset ceiling by default. Switch to restrict if this team should only use a smaller subset."
+            mode={teamForm.asset_access_mode}
+            allowModeSelection
+            onModeChange={(mode) => setTeamForm((c) => ({
+              ...c,
+              asset_access_mode: mode === 'restrict' ? 'restrict' : 'inherit',
+              selected_callable_keys: mode === 'restrict' ? c.selected_callable_keys : [],
+            }))}
+            targets={childTeamAssetTargets}
+            selectedKeys={teamForm.selected_callable_keys}
+            onSelectedKeysChange={(selected_callable_keys) => setTeamForm({ ...teamForm, selected_callable_keys })}
+            loading={childTeamAssetVisibilityLoading}
+            disabled={saving}
+          />
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setShowCreateTeam(false)} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-            <button onClick={handleCreateTeam} disabled={saving} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">{saving ? 'Creating...' : 'Create Team'}</button>
+            <button
+              onClick={handleCreateTeam}
+              disabled={saving || childTeamAssetVisibilityLoading}
+              className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+            >
+              {saving ? 'Creating…' : 'Create Team'}
+            </button>
           </div>
         </div>
       </Modal>
 
+      {/* ── Add Member Modal ── */}
       <Modal open={showAddMember} onClose={() => setShowAddMember(false)} title="Add Organization Member">
         <div className="space-y-4">
           {memberError && (
@@ -394,10 +1258,16 @@ export default function OrganizationDetail() {
           </div>
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={() => setShowAddMember(false)} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-            <button onClick={handleAddMember} disabled={saving} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">{saving ? 'Adding...' : 'Add Member'}</button>
+            <button
+              onClick={handleAddMember}
+              disabled={saving}
+              className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+            >
+              {saving ? 'Adding…' : 'Add Member'}
+            </button>
           </div>
         </div>
       </Modal>
-    </div>
+    </EntityDetailShell>
   );
 }

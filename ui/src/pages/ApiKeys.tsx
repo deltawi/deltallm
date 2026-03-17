@@ -1,13 +1,15 @@
 import { useState, useEffect } from 'react';
 import { useApi } from '../lib/hooks';
 import { keys, serviceAccounts, teams } from '../lib/api';
+import { buildParentScopedAssetTargets, buildScopedSelectableTargets } from '../lib/assetAccess';
 import type { ApiKey, ServiceAccount } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import StatusBadge from '../components/StatusBadge';
 import Modal from '../components/Modal';
+import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import { Plus, RefreshCw, Trash2, Copy, Check, Pencil } from 'lucide-react';
+import { ContentCard, IndexShell } from '../components/admin/shells';
 
 type OwnerMode = 'self' | 'service_account';
 
@@ -19,7 +21,8 @@ type KeyFormState = {
   max_budget: string;
   rpm_limit: string;
   tpm_limit: string;
-  models: string;
+  asset_access_mode: 'inherit' | 'restrict';
+  selected_callable_keys: string[];
 };
 
 const EMPTY_PAGINATION = { total: 0, limit: 200, offset: 0, has_more: false };
@@ -33,7 +36,8 @@ function emptyForm(): KeyFormState {
     max_budget: '',
     rpm_limit: '',
     tpm_limit: '',
-    models: '',
+    asset_access_mode: 'inherit',
+    selected_callable_keys: [],
   };
 }
 
@@ -84,10 +88,32 @@ export default function ApiKeys() {
   const [copied, setCopied] = useState(false);
   const [form, setForm] = useState<KeyFormState>(() => emptyForm());
   const [error, setError] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [newServiceAccountName, setNewServiceAccountName] = useState('');
   const [creatingServiceAccount, setCreatingServiceAccount] = useState(false);
   const selectedTeamId = form.team_id;
+  const usesParentPreview = !editItem || selectedTeamId !== (editItem.team_id || '');
+  const { data: editAssetAccess, loading: editAssetAccessLoading } = useApi(
+    () => (editItem ? keys.assetAccess(editItem.token, { include_targets: false }) : Promise.resolve(null)),
+    [editItem?.token],
+  );
+  const { data: editAssetAccessTargets, loading: editAssetAccessTargetsLoading } = useApi(
+    () => (
+      editItem && !usesParentPreview && form.asset_access_mode === 'restrict'
+        ? keys.assetAccess(editItem.token, { include_targets: true })
+        : Promise.resolve(null)
+    ),
+    [editItem?.token, usesParentPreview, form.asset_access_mode],
+  );
+  const { data: parentTeamAssetVisibility, loading: parentTeamAssetVisibilityLoading } = useApi(
+    () => (
+      (showCreate || !!editItem) && usesParentPreview && form.asset_access_mode === 'restrict' && selectedTeamId
+        ? teams.assetVisibility(selectedTeamId)
+        : Promise.resolve(null)
+    ),
+    [showCreate, editItem?.token, selectedTeamId, usesParentPreview, form.asset_access_mode],
+  );
   const { data: serviceAccountsResult, loading: serviceAccountsLoading, refetch: refetchServiceAccounts } = useApi(
     () => (
       selectedTeamId
@@ -118,6 +144,15 @@ export default function ApiKeys() {
     }
   }, [availableServiceAccounts, form.owner_service_account_id]);
 
+  useEffect(() => {
+    if (!editItem || !editAssetAccess) return;
+    setForm((current) => ({
+      ...current,
+      asset_access_mode: editAssetAccess.mode === 'restrict' ? 'restrict' : 'inherit',
+      selected_callable_keys: editAssetAccess.selected_callable_keys || [],
+    }));
+  }, [editItem, editAssetAccess]);
+
   const closeEditor = () => {
     setShowCreate(false);
     setEditItem(null);
@@ -129,6 +164,7 @@ export default function ApiKeys() {
   };
 
   const openCreate = () => {
+    setPageError(null);
     setError(null);
     setEditItem(null);
     setNewServiceAccountName('');
@@ -191,11 +227,22 @@ export default function ApiKeys() {
         max_budget: form.max_budget ? Number(form.max_budget) : undefined,
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
-        models: form.models ? form.models.split(',').map(m => m.trim()).filter(Boolean) : [],
       });
+      let assetAccessError: string | null = null;
+      if (form.asset_access_mode === 'restrict') {
+        try {
+          await keys.updateAssetAccess(result.token, {
+            mode: 'restrict',
+            selected_callable_keys: form.selected_callable_keys,
+          });
+        } catch (err: any) {
+          assetAccessError = err?.message || 'API key created, but asset access could not be updated. Open the key again to finish access setup.';
+        }
+      }
       setCreatedKey(result.raw_key);
       closeEditor();
       refetch();
+      setPageError(assetAccessError);
     } catch (err: any) {
       setError(err?.message || 'Failed to create key');
     } finally {
@@ -228,7 +275,10 @@ export default function ApiKeys() {
         max_budget: form.max_budget ? Number(form.max_budget) : undefined,
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
-        models: form.models ? form.models.split(',').map(m => m.trim()).filter(Boolean) : [],
+      });
+      await keys.updateAssetAccess(editItem.token, {
+        mode: form.asset_access_mode,
+        selected_callable_keys: form.asset_access_mode === 'restrict' ? form.selected_callable_keys : [],
       });
       closeEditor();
       refetch();
@@ -240,6 +290,7 @@ export default function ApiKeys() {
   };
 
   const openEdit = (row: ApiKey) => {
+    setPageError(null);
     setForm({
       key_name: row.key_name || '',
       team_id: row.team_id || '',
@@ -248,10 +299,23 @@ export default function ApiKeys() {
       max_budget: row.max_budget != null ? String(row.max_budget) : '',
       rpm_limit: row.rpm_limit != null ? String(row.rpm_limit) : '',
       tpm_limit: row.tpm_limit != null ? String(row.tpm_limit) : '',
-      models: (row.models || []).join(', '),
+      asset_access_mode: 'inherit',
+      selected_callable_keys: [],
     });
     setEditItem(row);
     setError(null);
+  };
+
+  const handleTeamChange = (teamId: string) => {
+    setForm((current) => {
+      const changed = current.team_id !== teamId;
+      return {
+        ...current,
+        team_id: teamId,
+        asset_access_mode: changed ? 'inherit' : current.asset_access_mode,
+        selected_callable_keys: changed ? [] : current.selected_callable_keys,
+      };
+    });
   };
 
   const handleRevoke = async (hash: string) => {
@@ -300,7 +364,6 @@ export default function ApiKeys() {
     { key: 'budget', header: 'Budget', render: (r: any) => <BudgetBar spend={r.spend || 0} max_budget={r.max_budget} /> },
     { key: 'rpm_limit', header: 'RPM', render: (r: any) => r.rpm_limit != null ? <span className="text-xs font-medium">{Number(r.rpm_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
     { key: 'tpm_limit', header: 'TPM', render: (r: any) => r.tpm_limit != null ? <span className="text-xs font-medium">{Number(r.tpm_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
-    { key: 'models', header: 'Models', render: (r: any) => r.models?.length ? <span className="text-xs">{r.models.join(', ')}</span> : <span className="text-gray-400 text-xs">All</span> },
     {
       key: 'actions', header: '', render: (r: any) => (
         <div className="flex gap-1">
@@ -311,24 +374,55 @@ export default function ApiKeys() {
       ),
     },
   ];
+  const assetTargets = usesParentPreview
+    ? buildParentScopedAssetTargets(
+        parentTeamAssetVisibility?.callable_targets?.items || [],
+        form.selected_callable_keys,
+        form.asset_access_mode,
+      )
+    : buildScopedSelectableTargets(
+        editAssetAccessTargets?.selectable_targets || [],
+        form.selected_callable_keys,
+        form.asset_access_mode,
+      );
+  const assetAccessLoading = form.asset_access_mode !== 'restrict'
+    ? false
+    : usesParentPreview
+      ? parentTeamAssetVisibilityLoading
+      : editAssetAccessTargetsLoading || editAssetAccessLoading;
 
   return (
-    <div className="p-4 sm:p-6">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">API Keys</h1>
-          <p className="text-sm text-gray-500 mt-1">Manage API keys for accessing the proxy</p>
-        </div>
-        <button onClick={openCreate} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
-          <Plus className="w-4 h-4" /> Create Key
+    <IndexShell
+      title="API Keys"
+      count={pagination?.total ?? null}
+      description={(
+        <>
+          Manage API keys, ownership, budgets, and rate limits
+          <span className="mt-1 block text-xs text-gray-400">
+            Create keys that inherit their team asset set or restrict them to a smaller callable-target subset.
+          </span>
+        </>
+      )}
+      action={(
+        <button onClick={openCreate} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700">
+          <Plus className="h-4 w-4" /> Create Key
         </button>
-      </div>
-      <Card>
-        <div className="px-4 pt-3 pb-2">
-          <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search keys..." className="w-full sm:w-72 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-        </div>
+      )}
+      notice={pageError ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">{pageError}</div>
+      ) : null}
+      toolbar={(
+        <input
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder="Search keys..."
+          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 sm:w-72"
+        />
+      )}
+    >
+      <ContentCard>
         <DataTable columns={columns} data={items} loading={loading} emptyMessage="No API keys created yet" pagination={pagination} onPageChange={setPageOffset} />
-      </Card>
+      </ContentCard>
 
       <Modal open={showCreate || !!editItem} onClose={closeEditor} title={editItem ? 'Edit API Key' : 'Create API Key'}>
         <div className="space-y-4">
@@ -338,7 +432,7 @@ export default function ApiKeys() {
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Team *</label>
-            <select value={form.team_id} onChange={(e) => setForm({ ...form, team_id: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+            <select value={form.team_id} onChange={(e) => handleTeamChange(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
               <option value="">Select a team</option>
               {form.team_id && !(teamsList || []).some((t: any) => t.team_id === form.team_id) && (
                 <option value={form.team_id} disabled>{form.team_id} (inaccessible)</option>
@@ -455,14 +549,29 @@ export default function ApiKeys() {
               <input type="number" value={form.tpm_limit} onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Allowed Models (comma-separated)</label>
-            <input value={form.models} onChange={(e) => setForm({ ...form, models: e.target.value })} placeholder="gpt-4o, claude-3-sonnet" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-          </div>
+          <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+            Key runtime access is enforced through callable-target bindings and scope policies across organization, team, key, and user scopes. Use the section below to inherit the team set or narrow it for this key.
+          </p>
+          <AssetAccessEditor
+            title="Key Asset Access"
+            description="Choose whether this key inherits the team asset set or narrows itself to a selected subset."
+            mode={form.asset_access_mode}
+            allowModeSelection
+            onModeChange={(asset_access_mode) => setForm((current) => ({
+              ...current,
+              asset_access_mode: asset_access_mode === 'restrict' ? 'restrict' : 'inherit',
+              selected_callable_keys: asset_access_mode === 'restrict' ? current.selected_callable_keys : [],
+            }))}
+            targets={assetTargets}
+            selectedKeys={form.selected_callable_keys}
+            onSelectedKeysChange={(selected_callable_keys) => setForm({ ...form, selected_callable_keys })}
+            loading={assetAccessLoading}
+            disabled={saving || !form.team_id}
+          />
           {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>}
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={closeEditor} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-            <button onClick={editItem ? handleUpdate : handleCreate} disabled={saving} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">{saving ? 'Saving...' : editItem ? 'Save Changes' : 'Create Key'}</button>
+            <button onClick={editItem ? handleUpdate : handleCreate} disabled={saving || !form.team_id || assetAccessLoading} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">{saving ? 'Saving...' : editItem ? 'Save Changes' : 'Create Key'}</button>
           </div>
         </div>
       </Modal>
@@ -481,6 +590,6 @@ export default function ApiKeys() {
           </div>
         </div>
       </Modal>
-    </div>
+    </IndexShell>
   );
 }

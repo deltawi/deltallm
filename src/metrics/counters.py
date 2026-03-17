@@ -73,6 +73,20 @@ deltallm_prompt_resolution_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_callable_target_policy_shadow_mismatch_metric = Counter(
+    "deltallm_callable_target_policy_shadow_mismatches_total",
+    "Callable-target policy shadow mismatches",
+    ["auth_source", "difference_type", "fallback_reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_callable_target_policy_fallback_metric = Counter(
+    "deltallm_callable_target_policy_fallback_total",
+    "Callable-target policy fallback events",
+    ["policy_mode", "auth_source", "reason"],
+    registry=get_prometheus_registry(),
+)
+
 
 def increment_request(
     *,
@@ -173,4 +187,30 @@ def increment_prompt_resolution(
         status=sanitize_label(status),
         binding_scope=sanitize_label(binding_scope, "none"),
         label=sanitize_label(label, "none"),
+    ).inc()
+
+
+def increment_callable_target_policy_shadow_mismatch(
+    *,
+    auth_source: str | None,
+    difference_type: str,
+    fallback_reason: str | None,
+) -> None:
+    deltallm_callable_target_policy_shadow_mismatch_metric.labels(
+        auth_source=sanitize_label(auth_source),
+        difference_type=sanitize_label(difference_type),
+        fallback_reason=sanitize_label(fallback_reason, "none"),
+    ).inc()
+
+
+def increment_callable_target_policy_fallback(
+    *,
+    policy_mode: str,
+    auth_source: str | None,
+    reason: str | None,
+) -> None:
+    deltallm_callable_target_policy_fallback_metric.labels(
+        policy_mode=sanitize_label(policy_mode),
+        auth_source=sanitize_label(auth_source),
+        reason=sanitize_label(reason, "none"),
     ).inc()

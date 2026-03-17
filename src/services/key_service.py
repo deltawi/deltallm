@@ -9,6 +9,7 @@ from typing import Any
 from src.db.repositories import KeyRepository
 from src.models.errors import AuthenticationError
 from src.models.responses import UserAPIKeyAuth
+from src.services.runtime_scopes import annotate_auth_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ class KeyService:
             team_id=record.team_id,
             organization_id=record.organization_id,
             models=record.models or [],
+            team_models=record.team_models or [],
             max_budget=record.max_budget,
             spend=record.spend,
             tpm_limit=record.tpm_limit,
@@ -74,6 +76,11 @@ class KeyService:
             team_metadata=record.team_metadata,
             org_metadata=record.org_metadata,
             expires=record.expires.isoformat() if record.expires else None,
+        )
+        annotate_auth_metadata(
+            auth,
+            auth_source="api_key",
+            api_key_scope_id=record.token,
         )
 
         if self.redis is not None:

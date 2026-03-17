@@ -7,10 +7,19 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
-from src.api.admin.endpoints.common import AuthScope, emit_admin_mutation_audit, get_auth_scope, optional_int, to_json_value
+from src.api.admin.endpoints.common import (
+    AuthScope,
+    ResolvedScopeTarget,
+    emit_admin_mutation_audit,
+    get_auth_scope,
+    optional_int,
+    resolve_runtime_scope_target,
+    to_json_value,
+)
 from src.audit.actions import AuditAction
 from src.auth.roles import Permission
 from src.db.mcp import MCPApprovalRequestRecord, MCPRepository, MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
+from src.db.mcp_scope_policies import MCPScopePolicyRecord, MCPScopePolicyRepository
 from src.mcp.capabilities import extract_tool_schemas
 from src.mcp.approvals import MCPApprovalService
 from src.mcp.exceptions import MCPError
@@ -20,22 +29,23 @@ from src.mcp.registry import MCPRegistryService, server_record_to_config
 from src.mcp.transport_http import StreamableHTTPMCPClient
 from src.middleware.admin import require_admin_permission
 from src.middleware.platform_auth import get_platform_auth_context
+from src.services.mcp_migration import (
+    ORGANIZATION_ROLLOUT_STATES as MCP_MIGRATION_ROLLOUT_STATES,
+    ROLLOUT_STATE_ALIASES as MCP_MIGRATION_ROLLOUT_STATE_ALIASES,
+    apply_mcp_migration_backfill,
+    build_mcp_migration_report,
+)
 
 router = APIRouter(tags=["Admin MCP"])
 
 _ALLOWED_AUTH_MODES = {"none", "bearer", "basic", "header_map"}
-_ALLOWED_SCOPE_TYPES = {"organization", "team", "api_key"}
+_ALLOWED_SCOPE_TYPES = {"organization", "team", "api_key", "user"}
 _ALLOWED_OWNER_SCOPE_TYPES = {"global", "organization"}
 _ALLOWED_TRANSPORTS = {"streamable_http"}
 _SERVER_KEY_ALLOWED = set("abcdefghijklmnopqrstuvwxyz0123456789-_")
-
-
-@dataclass(frozen=True)
-class ResolvedScopeTarget:
-    scope_type: str
-    scope_id: str
-    organization_id: str | None = None
-    team_id: str | None = None
+_SCOPE_SPECIFICITY = ("user", "api_key", "team", "organization")
+_MCP_SCOPE_POLICY_SCOPE_TYPES = {"team", "api_key", "user"}
+_MCP_SCOPE_POLICY_MODES = {"inherit", "restrict"}
 
 
 @dataclass(frozen=True)
@@ -57,6 +67,28 @@ def _registry_or_503(request: Request) -> MCPRegistryService:
     if service is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="MCP registry service unavailable")
     return service
+
+
+def _scope_policy_repository_or_503(request: Request) -> MCPScopePolicyRepository:
+    repository = getattr(request.app.state, "mcp_scope_policy_repository", None)
+    if repository is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="MCP scope policy repository unavailable")
+    return repository
+
+
+async def _reload_runtime_governance(request: Request, *, invalidate_registry: bool = True) -> None:
+    invalidation = getattr(request.app.state, "governance_invalidation_service", None)
+    if invalidation is not None and callable(getattr(invalidation, "invalidate_local", None)):
+        await invalidation.invalidate_local("mcp")
+        if callable(getattr(invalidation, "notify", None)):
+            await invalidation.notify("mcp")
+        return
+    registry = getattr(request.app.state, "mcp_registry_service", None)
+    if invalidate_registry and registry is not None and callable(getattr(registry, "invalidate_all", None)):
+        await registry.invalidate_all()
+    governance = getattr(request.app.state, "mcp_governance_service", None)
+    if governance is not None and callable(getattr(governance, "reload", None)):
+        await governance.reload()
 
 
 def _transport_or_503(request: Request) -> StreamableHTTPMCPClient:
@@ -206,6 +238,37 @@ def _validate_scope_type(value: Any) -> str:
     return scope_type
 
 
+def _validate_mcp_scope_policy_scope_type(value: Any) -> str:
+    scope_type = str(value or "").strip().lower()
+    if scope_type not in _MCP_SCOPE_POLICY_SCOPE_TYPES:
+        allowed = ", ".join(sorted(_MCP_SCOPE_POLICY_SCOPE_TYPES))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"scope_type must be one of: {allowed}")
+    return scope_type
+
+
+def _validate_mcp_scope_policy_mode(value: Any) -> str:
+    mode = str(value or "").strip().lower()
+    if mode not in _MCP_SCOPE_POLICY_MODES:
+        allowed = ", ".join(sorted(_MCP_SCOPE_POLICY_MODES))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"mode must be one of: {allowed}")
+    return mode
+
+
+def _validate_mcp_migration_rollout_states(values: list[str] | None) -> set[str]:
+    if not values:
+        return set()
+    normalized = {
+        MCP_MIGRATION_ROLLOUT_STATE_ALIASES.get(str(value or "").strip().lower(), str(value or "").strip().lower())
+        for value in values
+        if str(value or "").strip()
+    }
+    invalid = sorted(value for value in normalized if value not in MCP_MIGRATION_ROLLOUT_STATES)
+    if invalid:
+        allowed = ", ".join(sorted(MCP_MIGRATION_ROLLOUT_STATES))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"rollout_state must be one of: {allowed}")
+    return normalized
+
+
 def _validate_owner_scope_type(value: Any) -> str:
     owner_scope_type = str(value or "global").strip().lower()
     if owner_scope_type not in _ALLOWED_OWNER_SCOPE_TYPES:
@@ -222,65 +285,11 @@ def _normalize_scope_id(value: Any, *, field_name: str = "scope_id") -> str:
 
 
 async def _validate_scope_target(request: Request, *, scope_type: str, scope_id: str) -> ResolvedScopeTarget:
-    db = _db_or_503(request)
-    if scope_type == "organization":
-        rows = await db.query_raw(
-            """
-            SELECT organization_id
-            FROM deltallm_organizationtable
-            WHERE organization_id = $1
-            LIMIT 1
-            """,
-            scope_id,
-        )
-        if not rows:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
-        return ResolvedScopeTarget(scope_type="organization", scope_id=scope_id, organization_id=scope_id)
-
-    if scope_type == "team":
-        rows = await db.query_raw(
-            """
-            SELECT team_id, organization_id
-            FROM deltallm_teamtable
-            WHERE team_id = $1
-            LIMIT 1
-            """,
-            scope_id,
-        )
-        if not rows:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
-        row = rows[0]
-        return ResolvedScopeTarget(
-            scope_type="team",
-            scope_id=scope_id,
-            organization_id=str(row.get("organization_id") or "") or None,
-            team_id=scope_id,
-        )
-
-    if scope_type == "api_key":
-        rows = await db.query_raw(
-            """
-            SELECT vt.token, vt.team_id, t.organization_id
-            FROM deltallm_verificationtoken vt
-            LEFT JOIN deltallm_teamtable t ON vt.team_id = t.team_id
-            WHERE vt.token = $1
-            LIMIT 1
-            """,
-            scope_id,
-        )
-        if not rows:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
-        row = rows[0]
-        if not str(row.get("team_id") or "").strip():
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="API key must belong to a team")
-        return ResolvedScopeTarget(
-            scope_type="api_key",
-            scope_id=scope_id,
-            organization_id=str(row.get("organization_id") or "") or None,
-            team_id=str(row.get("team_id") or "") or None,
-        )
-
-    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported scope_type")
+    return await resolve_runtime_scope_target(
+        _db_or_503(request),
+        scope_type=scope_type,
+        scope_id=scope_id,
+    )
 
 
 async def _validate_owner_scope(
@@ -411,6 +420,22 @@ async def _validate_scoped_server_target_write(
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
 
 
+async def _validate_scoped_scope_target_write(
+    request: Request,
+    *,
+    scope: AuthScope,
+    scope_type: str,
+    scope_id: str,
+) -> dict[str, str | None]:
+    target = await _validate_scope_target(request, scope_type=scope_type, scope_id=scope_id)
+    if scope.is_platform_admin:
+        return {"organization_id": target.organization_id, "team_id": target.team_id}
+    target_organization_id = str(target.organization_id or "")
+    if not target_organization_id or target_organization_id not in scope.org_ids:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions for the selected scope")
+    return {"organization_id": target.organization_id, "team_id": target.team_id}
+
+
 def _normalize_tool_name(value: Any) -> str:
     tool_name = str(value or "").strip()
     if not tool_name:
@@ -444,6 +469,14 @@ def _scoped_entity_visibility_clause(alias: str, scope: AuthScope, params: list[
                       AND t.organization_id IN ({org_placeholders})
                 ))"""
         )
+        clauses.append(
+            f"""({alias}.scope_type = 'user' AND EXISTS (
+                    SELECT 1 FROM deltallm_usertable u
+                    LEFT JOIN deltallm_teamtable t ON u.team_id = t.team_id
+                    WHERE u.user_id = {alias}.scope_id
+                      AND t.organization_id IN ({org_placeholders})
+                ))"""
+        )
     if scope.team_ids:
         team_placeholders = _append_param_list(params, scope.team_ids)
         clauses.append(f"({alias}.scope_type = 'team' AND {alias}.scope_id IN ({team_placeholders}))")
@@ -452,6 +485,13 @@ def _scoped_entity_visibility_clause(alias: str, scope: AuthScope, params: list[
                     SELECT 1 FROM deltallm_verificationtoken vt
                     WHERE vt.token = {alias}.scope_id
                       AND vt.team_id IN ({team_placeholders})
+                ))"""
+        )
+        clauses.append(
+            f"""({alias}.scope_type = 'user' AND EXISTS (
+                    SELECT 1 FROM deltallm_usertable u
+                    WHERE u.user_id = {alias}.scope_id
+                      AND u.team_id IN ({team_placeholders})
                 ))"""
         )
     return " OR ".join(clauses) if clauses else "FALSE"
@@ -503,6 +543,14 @@ def _audit_scope_visibility_clause(scope: AuthScope, params: list[Any]) -> str:
                       AND t.organization_id IN ({org_placeholders})
                 ))"""
         )
+        clauses.append(
+            f"""(metadata->>'scope_type' = 'user' AND EXISTS (
+                    SELECT 1 FROM deltallm_usertable u
+                    LEFT JOIN deltallm_teamtable t ON u.team_id = t.team_id
+                    WHERE u.user_id = metadata->>'scope_id'
+                      AND t.organization_id IN ({org_placeholders})
+                ))"""
+        )
     if scope.team_ids:
         team_placeholders = _append_param_list(params, scope.team_ids)
         clauses.append(f"(metadata->>'scope_type' = 'team' AND metadata->>'scope_id' IN ({team_placeholders}))")
@@ -511,6 +559,13 @@ def _audit_scope_visibility_clause(scope: AuthScope, params: list[Any]) -> str:
                     SELECT 1 FROM deltallm_verificationtoken vt
                     WHERE vt.token = metadata->>'scope_id'
                       AND vt.team_id IN ({team_placeholders})
+                ))"""
+        )
+        clauses.append(
+            f"""(metadata->>'scope_type' = 'user' AND EXISTS (
+                    SELECT 1 FROM deltallm_usertable u
+                    WHERE u.user_id = metadata->>'scope_id'
+                      AND u.team_id IN ({team_placeholders})
                 ))"""
         )
     return " OR ".join(clauses) if clauses else "FALSE"
@@ -550,6 +605,22 @@ async def _approval_visible_to_scope(request: Request, scope: AuthScope, approva
             FROM deltallm_verificationtoken vt
             LEFT JOIN deltallm_teamtable t ON vt.team_id = t.team_id
             WHERE vt.token = $1
+            LIMIT 1
+            """,
+            approval.scope_id,
+        )
+        row = rows[0] if rows else {}
+        team_id = str(row.get("team_id") or "")
+        organization_id = str(row.get("organization_id") or "")
+        return bool((team_id and team_id in scope.team_ids) or (organization_id and organization_id in scope.org_ids))
+    if approval.scope_type == "user":
+        db = _db_or_503(request)
+        rows = await db.query_raw(
+            """
+            SELECT u.team_id, t.organization_id
+            FROM deltallm_usertable u
+            LEFT JOIN deltallm_teamtable t ON u.team_id = t.team_id
+            WHERE u.user_id = $1
             LIMIT 1
             """,
             approval.scope_id,
@@ -610,6 +681,10 @@ def _serialize_policy(policy: MCPToolPolicyRecord) -> dict[str, Any]:
     payload = to_json_value(asdict(policy))
     payload["max_total_execution_time_ms"] = _policy_max_total_execution_time_ms(policy)
     return payload
+
+
+def _serialize_scope_policy(policy: MCPScopePolicyRecord) -> dict[str, Any]:
+    return to_json_value(asdict(policy))
 
 
 def _normalize_tool_policy_metadata(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -738,7 +813,7 @@ def _filter_server_tools_for_scope(
         allowed_names.update(str(name) for name in allowlist)
 
     filtered = [tool for tool in tools if all_allowed or str(getattr(tool, "original_name", "")) in allowed_names]
-    precedence = {"api_key": 0, "team": 1, "organization": 2}
+    precedence = {scope_type: index for index, scope_type in enumerate(_SCOPE_SPECIFICITY)}
     effective_policy_by_tool: dict[str, MCPToolPolicyRecord] = {}
     for policy in sorted(policies, key=lambda item: precedence.get(item.scope_type, 999)):
         effective_policy_by_tool.setdefault(policy.tool_name, policy)
@@ -787,6 +862,7 @@ async def _list_scoped_bindings(
     server_id: str | None = None,
     scope_type: str | None = None,
     scope_id: str | None = None,
+    enabled_only: bool = True,
     limit: int = 200,
     offset: int = 0,
 ) -> tuple[list[MCPServerBindingRecord], int]:
@@ -796,6 +872,7 @@ async def _list_scoped_bindings(
             server_id=server_id,
             scope_type=scope_type,
             scope_id=scope_id,
+            enabled=True if enabled_only else None,
             limit=limit,
             offset=offset,
         )
@@ -813,6 +890,8 @@ async def _list_scoped_bindings(
     if scope_id:
         params.append(scope_id)
         clauses.append(f"b.scope_id = ${len(params)}")
+    if enabled_only:
+        clauses.append("b.enabled = true")
     clauses.append(f"({_scoped_entity_visibility_clause('b', scope, params)})")
     where_sql = f" WHERE {' AND '.join(clauses)}"
     count_rows = await db.query_raw(
@@ -850,6 +929,7 @@ async def _list_scoped_tool_policies(
     server_id: str | None = None,
     scope_type: str | None = None,
     scope_id: str | None = None,
+    enabled_only: bool = True,
     limit: int = 200,
     offset: int = 0,
 ) -> tuple[list[MCPToolPolicyRecord], int]:
@@ -859,6 +939,7 @@ async def _list_scoped_tool_policies(
             server_id=server_id,
             scope_type=scope_type,
             scope_id=scope_id,
+            enabled=True if enabled_only else None,
             limit=limit,
             offset=offset,
         )
@@ -876,6 +957,8 @@ async def _list_scoped_tool_policies(
     if scope_id:
         params.append(scope_id)
         clauses.append(f"p.scope_id = ${len(params)}")
+    if enabled_only:
+        clauses.append("p.enabled = true")
     clauses.append(f"({_scoped_entity_visibility_clause('p', scope, params)})")
     where_sql = f" WHERE {' AND '.join(clauses)}"
     count_rows = await db.query_raw(
@@ -1065,6 +1148,7 @@ async def create_mcp_server(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
+    registry = _registry_or_503(request)
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
 
     server_key = _normalize_server_key(payload.get("server_key"))
@@ -1094,6 +1178,7 @@ async def create_mcp_server(
         metadata=_normalize_metadata(payload.get("metadata")),
         created_by_account_id=created_by_account_id,
     )
+    await _reload_runtime_governance(request, invalidate_registry=False)
     response = _serialize_server(
         created,
         capabilities=_server_view_capabilities(created, manage_scope=scope, is_visible=True),
@@ -1115,6 +1200,7 @@ async def create_mcp_server(
 async def get_mcp_server(
     request: Request,
     server_id: str,
+    include_disabled: bool = Query(default=False),
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
@@ -1125,8 +1211,23 @@ async def get_mcp_server(
     is_visible = await _server_visible_to_scope(request, scope, server_id)
     if not is_visible:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
-    bindings, _ = await _list_scoped_bindings(request, scope=scope, server_id=server_id, limit=200, offset=0)
-    policies, _ = await _list_scoped_tool_policies(request, scope=scope, server_id=server_id, limit=200, offset=0)
+    enabled_only = not (scope.is_platform_admin and include_disabled)
+    bindings, _ = await _list_scoped_bindings(
+        request,
+        scope=scope,
+        server_id=server_id,
+        enabled_only=enabled_only,
+        limit=200,
+        offset=0,
+    )
+    policies, _ = await _list_scoped_tool_policies(
+        request,
+        scope=scope,
+        server_id=server_id,
+        enabled_only=enabled_only,
+        limit=200,
+        offset=0,
+    )
     tools = _filter_server_tools_for_scope(
         await registry.list_namespaced_tools(server),
         bindings=bindings,
@@ -1311,6 +1412,7 @@ async def update_mcp_server(
     if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found")
     await registry.invalidate_server(updated.server_key)
+    await _reload_runtime_governance(request, invalidate_registry=False)
     response = _serialize_server(
         updated,
         capabilities=_server_view_capabilities(updated, manage_scope=scope, is_visible=True),
@@ -1349,6 +1451,7 @@ async def delete_mcp_server(
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found")
     await registry.invalidate_server(server.server_key)
+    await _reload_runtime_governance(request)
     response = {"deleted": True, "mcp_server_id": server_id}
     await emit_admin_mutation_audit(
         request=request,
@@ -1445,6 +1548,7 @@ async def list_mcp_bindings(
     server_id: str | None = Query(default=None),
     scope_type: str | None = Query(default=None),
     scope_id: str | None = Query(default=None),
+    include_disabled: bool = Query(default=False),
     limit: int = Query(default=200, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     authorization: str | None = Header(default=None, alias="Authorization"),
@@ -1458,6 +1562,7 @@ async def list_mcp_bindings(
             server_id=server_id,
             scope_type=normalized_scope_type,
             scope_id=scope_id,
+            enabled=None if include_disabled else True,
             limit=limit,
             offset=offset,
         )
@@ -1481,6 +1586,7 @@ async def list_mcp_bindings(
     if scope_id:
         params.append(scope_id)
         clauses.append(f"b.scope_id = ${len(params)}")
+    clauses.append("b.enabled = true")
     clauses.append(f"({_scoped_entity_visibility_clause('b', scope, params)})")
     where_sql = f" WHERE {' AND '.join(clauses)}"
 
@@ -1526,7 +1632,6 @@ async def upsert_mcp_binding(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
-    registry = _registry_or_503(request)
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
     server = await _load_server_or_404(request, _normalize_scope_id(payload.get("server_id"), field_name="server_id"))
     scope_type = _validate_scope_type(payload.get("scope_type"))
@@ -1544,7 +1649,7 @@ async def upsert_mcp_binding(
     )
     if binding is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found")
-    await registry.invalidate_all()
+    await _reload_runtime_governance(request)
     response = _serialize_binding(binding)
     await emit_admin_mutation_audit(
         request=request,
@@ -1568,7 +1673,6 @@ async def delete_mcp_binding(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
-    registry = _registry_or_503(request)
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
     binding = await repository.get_binding(binding_id)
     if binding is None:
@@ -1586,7 +1690,7 @@ async def delete_mcp_binding(
     deleted = await repository.delete_binding(binding_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP binding not found")
-    await registry.invalidate_all()
+    await _reload_runtime_governance(request)
     response = {"deleted": True, "mcp_binding_id": binding_id}
     await emit_admin_mutation_audit(
         request=request,
@@ -1600,12 +1704,157 @@ async def delete_mcp_binding(
     return response
 
 
+@router.get("/ui/api/mcp-scope-policies", dependencies=[Depends(require_admin_permission(Permission.KEY_READ))])
+async def list_mcp_scope_policies(
+    request: Request,
+    scope_type: str | None = Query(default=None),
+    scope_id: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    repository = _scope_policy_repository_or_503(request)
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    normalized_scope_type = _validate_mcp_scope_policy_scope_type(scope_type) if scope_type is not None else None
+    if scope.is_platform_admin:
+        policies, total = await repository.list_policies(
+            scope_type=normalized_scope_type,
+            scope_id=scope_id,
+            limit=limit,
+            offset=offset,
+        )
+        return {
+            "data": [_serialize_scope_policy(policy) for policy in policies],
+            "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+        }
+
+    if not scope.org_ids and not scope.team_ids:
+        return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
+
+    db = _db_or_503(request)
+    clauses: list[str] = []
+    params: list[Any] = []
+    if normalized_scope_type:
+        params.append(normalized_scope_type)
+        clauses.append(f"p.scope_type = ${len(params)}")
+    if scope_id:
+        params.append(scope_id)
+        clauses.append(f"p.scope_id = ${len(params)}")
+    clauses.append(f"({_scoped_entity_visibility_clause('p', scope, params)})")
+    where_sql = f" WHERE {' AND '.join(clauses)}"
+
+    count_rows = await db.query_raw(
+        f"SELECT COUNT(*)::int AS total FROM deltallm_mcpscopepolicy p {where_sql}",
+        *params,
+    )
+    total = int((count_rows[0] if count_rows else {}).get("total") or 0)
+
+    page_params = [*params, limit, offset]
+    rows = await db.query_raw(
+        f"""
+        SELECT
+            p.mcp_scope_policy_id,
+            p.scope_type,
+            p.scope_id,
+            p.mode,
+            p.metadata,
+            p.created_at,
+            p.updated_at
+        FROM deltallm_mcpscopepolicy p
+        {where_sql}
+        ORDER BY p.created_at DESC, p.scope_type ASC, p.scope_id ASC
+        LIMIT ${len(page_params) - 1} OFFSET ${len(page_params)}
+        """,
+        *page_params,
+    )
+    policies = [MCPScopePolicyRepository._to_policy_record(row) for row in rows]
+    return {
+        "data": [_serialize_scope_policy(policy) for policy in policies],
+        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+    }
+
+
+@router.post("/ui/api/mcp-scope-policies", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
+async def upsert_mcp_scope_policy(
+    request: Request,
+    payload: dict[str, Any],
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    request_start = perf_counter()
+    repository = _scope_policy_repository_or_503(request)
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
+    scope_type = _validate_mcp_scope_policy_scope_type(payload.get("scope_type"))
+    scope_id = _normalize_scope_id(payload.get("scope_id"))
+    await _validate_scoped_scope_target_write(request, scope=scope, scope_type=scope_type, scope_id=scope_id)
+
+    policy = await repository.upsert_policy(
+        scope_type=scope_type,
+        scope_id=scope_id,
+        mode=_validate_mcp_scope_policy_mode(payload.get("mode")),
+        metadata=_normalize_metadata(payload.get("metadata")),
+    )
+    if policy is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP scope policy not found")
+    await _reload_runtime_governance(request)
+    response = _serialize_scope_policy(policy)
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_MCP_SCOPE_POLICY_UPSERT,
+        scope=scope,
+        resource_type="mcp_scope_policy",
+        resource_id=policy.mcp_scope_policy_id,
+        request_payload=payload,
+        response_payload=response,
+    )
+    return response
+
+
+@router.delete("/ui/api/mcp-scope-policies/{policy_id}", dependencies=[Depends(require_admin_permission(Permission.ORG_UPDATE))])
+async def delete_mcp_scope_policy(
+    request: Request,
+    policy_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    request_start = perf_counter()
+    repository = _scope_policy_repository_or_503(request)
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
+    policy = await repository.get_policy(policy_id)
+    if policy is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP scope policy not found")
+    await _validate_scoped_scope_target_write(
+        request,
+        scope=scope,
+        scope_type=policy.scope_type,
+        scope_id=policy.scope_id,
+    )
+    deleted = await repository.delete_policy(policy_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP scope policy not found")
+    await _reload_runtime_governance(request)
+    response = {"deleted": True, "mcp_scope_policy_id": policy_id}
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_MCP_SCOPE_POLICY_DELETE,
+        scope=scope,
+        resource_type="mcp_scope_policy",
+        resource_id=policy_id,
+        response_payload=response,
+    )
+    return response
+
+
 @router.get("/ui/api/mcp-tool-policies", dependencies=[Depends(require_admin_permission(Permission.KEY_READ))])
 async def list_mcp_tool_policies(
     request: Request,
     server_id: str | None = Query(default=None),
     scope_type: str | None = Query(default=None),
     scope_id: str | None = Query(default=None),
+    include_disabled: bool = Query(default=False),
     limit: int = Query(default=200, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     authorization: str | None = Header(default=None, alias="Authorization"),
@@ -1619,6 +1868,7 @@ async def list_mcp_tool_policies(
             server_id=server_id,
             scope_type=normalized_scope_type,
             scope_id=scope_id,
+            enabled=None if include_disabled else True,
             limit=limit,
             offset=offset,
         )
@@ -1642,6 +1892,7 @@ async def list_mcp_tool_policies(
     if scope_id:
         params.append(scope_id)
         clauses.append(f"p.scope_id = ${len(params)}")
+    clauses.append("p.enabled = true")
     clauses.append(f"({_scoped_entity_visibility_clause('p', scope, params)})")
     where_sql = f" WHERE {' AND '.join(clauses)}"
 
@@ -1792,7 +2043,6 @@ async def upsert_mcp_tool_policy(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
-    registry = _registry_or_503(request)
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
     server = await _load_server_or_404(request, _normalize_scope_id(payload.get("server_id"), field_name="server_id"))
     scope_type = _validate_scope_type(payload.get("scope_type"))
@@ -1814,7 +2064,7 @@ async def upsert_mcp_tool_policy(
     )
     if policy is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found")
-    await registry.invalidate_all()
+    await _reload_runtime_governance(request)
     response = _serialize_policy(policy)
     await emit_admin_mutation_audit(
         request=request,
@@ -1882,7 +2132,6 @@ async def delete_mcp_tool_policy(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
-    registry = _registry_or_503(request)
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
     policy = await repository.get_tool_policy(policy_id)
     if policy is None:
@@ -1900,7 +2149,7 @@ async def delete_mcp_tool_policy(
     deleted = await repository.delete_tool_policy(policy_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP tool policy not found")
-    await registry.invalidate_all()
+    await _reload_runtime_governance(request)
     response = {"deleted": True, "mcp_tool_policy_id": policy_id}
     await emit_admin_mutation_audit(
         request=request,
@@ -1909,6 +2158,52 @@ async def delete_mcp_tool_policy(
         scope=scope,
         resource_type="mcp_tool_policy",
         resource_id=policy_id,
+        response_payload=response,
+    )
+    return response
+
+
+@router.get("/ui/api/mcp-migration/report", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+async def get_mcp_migration_report(
+    request: Request,
+    organization_id: str | None = Query(default=None),
+    rollout_state: list[str] | None = Query(default=None),
+) -> dict[str, Any]:
+    return await build_mcp_migration_report(
+        db=_db_or_503(request),
+        repository=_repository_or_503(request),
+        policy_repository=getattr(request.app.state, "mcp_scope_policy_repository", None),
+        organization_id=str(organization_id).strip() if organization_id is not None else None,
+        rollout_states=_validate_mcp_migration_rollout_states(rollout_state),
+    )
+
+
+@router.post("/ui/api/mcp-migration/backfill", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+async def backfill_mcp_migration(
+    request: Request,
+    payload: dict[str, Any] | None = None,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    request_start = perf_counter()
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.PLATFORM_ADMIN)
+    body = payload or {}
+    response = await apply_mcp_migration_backfill(
+        db=_db_or_503(request),
+        repository=_repository_or_503(request),
+        policy_repository=_scope_policy_repository_or_503(request),
+        organization_id=str(body.get("organization_id")).strip() if body.get("organization_id") is not None else None,
+        rollout_states=_validate_mcp_migration_rollout_states(body.get("rollout_states")),
+    )
+    await _reload_runtime_governance(request)
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_MCP_MIGRATION_BACKFILL,
+        scope=scope,
+        resource_type="mcp_migration",
+        resource_id=str(body.get("organization_id") or "all"),
+        request_payload=body,
         response_payload=response,
     )
     return response

@@ -12,6 +12,8 @@ from src.batch.repository import BatchRepository
 from src.batch.storage import BatchArtifactStorage
 from src.models.requests import EmbeddingRequest
 from src.models.responses import UserAPIKeyAuth
+from src.services.model_visibility import CallableTargetPolicyMode, ensure_batch_model_allowed
+from src.services.callable_target_grants import CallableTargetGrantService
 
 
 class BatchService:
@@ -21,10 +23,14 @@ class BatchService:
         repository: BatchRepository,
         storage: BatchArtifactStorage,
         metadata_retention_days: int = 30,
+        callable_target_grant_service: CallableTargetGrantService | None = None,
+        callable_target_scope_policy_mode: CallableTargetPolicyMode | str = "enforce",
     ) -> None:
         self.repository = repository
         self.storage = storage
         self.metadata_retention_days = metadata_retention_days
+        self.callable_target_grant_service = callable_target_grant_service
+        self.callable_target_scope_policy_mode = callable_target_scope_policy_mode
 
     async def create_file(self, *, auth: UserAPIKeyAuth, upload: UploadFile, purpose: str) -> dict[str, Any]:
         body = await upload.read()
@@ -214,11 +220,12 @@ class BatchService:
             if not isinstance(body, dict):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Line {line_number} missing body")
             validated = EmbeddingRequest.model_validate(body)
-            if auth.models and validated.model not in auth.models:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Model '{validated.model}' is not allowed for this key",
-                )
+            ensure_batch_model_allowed(
+                auth,
+                validated.model,
+                callable_target_grant_service=self.callable_target_grant_service,
+                policy_mode=self.callable_target_scope_policy_mode,
+            )
             inferred_model = inferred_model or validated.model
             items.append(
                 BatchItemCreate(

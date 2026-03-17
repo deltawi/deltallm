@@ -43,6 +43,12 @@ class FakeDB:
         }
         self.sessions: list[dict] = [{"account_id": "acct-1"}]
         self.identities: list[dict] = [{"account_id": "acct-1"}]
+        self.runtime_users: dict[str, dict] = {
+            "user-1": {
+                "user_id": "user-1",
+                "user_email": "alice@example.com",
+            }
+        }
 
     async def query_raw(self, query: str, *params):
         if "SELECT COUNT(*) AS total FROM deltallm_platformaccount" in query:
@@ -67,6 +73,17 @@ class FakeDB:
                 if row["account_id"] == account_id and row["organization_id"] == organization_id:
                     return [row]
             return []
+        if "FROM deltallm_platformaccount pa" in query and "JOIN deltallm_usertable u ON lower(u.user_email) = lower(pa.email)" in query:
+            results = []
+            for account_id in params:
+                account = self.accounts.get(str(account_id))
+                if not account:
+                    continue
+                email = str(account.get("email") or "").lower()
+                for user in self.runtime_users.values():
+                    if str(user.get("user_email") or "").lower() == email:
+                        results.append({"account_id": str(account_id), "user_id": user["user_id"]})
+            return results
         if "FROM deltallm_platformaccount" in query:
             return list(self.accounts.values())
         if "FROM deltallm_organizationmembership" in query and "WHERE membership_id = $1" in query:
@@ -139,6 +156,7 @@ async def test_list_principals_returns_account_with_memberships(client, test_app
     assert len(principals) == 1
     assert payload["pagination"]["total"] == 1
     assert principals[0]["email"] == "alice@example.com"
+    assert principals[0]["runtime_user_id"] == "user-1"
     assert len(principals[0]["organization_memberships"]) == 1
     assert len(principals[0]["team_memberships"]) == 1
 

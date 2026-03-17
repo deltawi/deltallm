@@ -7,9 +7,10 @@ from fastapi import Request
 
 from src.callbacks import CallbackManager
 from src.chat.audit import emit_prompt_resolution_audit_event
-from src.models.errors import InvalidRequestError, PermissionDeniedError
+from src.models.errors import InvalidRequestError
 from src.models.requests import ChatCompletionRequest
 from src.routers.routing_decision import set_prompt_provenance
+from src.services.model_visibility import ensure_model_allowed, get_callable_target_policy_mode_from_app
 from src.services.prompt_registry import apply_route_preferences_to_metadata, parse_prompt_reference
 
 
@@ -20,8 +21,13 @@ async def run_text_preflight(
     request_data: dict[str, Any] | None,
 ) -> tuple[Any, ChatCompletionRequest, dict[str, Any], CallbackManager, Any]:
     auth = request.state.user_api_key
-    if auth.models and payload.model not in auth.models:
-        raise PermissionDeniedError(message=f"Model '{payload.model}' is not allowed for this key")
+    ensure_model_allowed(
+        auth,
+        payload.model,
+        callable_target_grant_service=getattr(request.app.state, "callable_target_grant_service", None),
+        policy_mode=get_callable_target_policy_mode_from_app(request.app),
+        emit_shadow_log=True,
+    )
 
     from src.routers.utils import enforce_budget_if_configured
 
@@ -53,6 +59,7 @@ async def run_text_preflight(
                 route_group_key=str(payload.model),
                 model=str(payload.model),
                 request_id=request.headers.get("x-request-id"),
+                scope_context=getattr(request.state, "runtime_scope_context", None),
             )
         except ValueError as exc:
             emit_prompt_resolution_audit_event(

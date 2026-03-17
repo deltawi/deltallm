@@ -7,7 +7,10 @@ from fastapi import HTTPException
 
 from src.batch.models import BatchFileRecord, BatchJobRecord, BatchJobStatus
 from src.batch.service import BatchService
+from src.db.callable_targets import CallableTargetBindingRecord
+from src.db.callable_target_policies import CallableTargetScopePolicyRecord
 from src.models.responses import UserAPIKeyAuth
+from src.services.callable_target_grants import CallableTargetGrantService
 
 
 class _DummyRepo:
@@ -20,22 +23,91 @@ class _DummyStorage:
         return b"{}"
 
 
-def _service() -> BatchService:
-    return BatchService(repository=_DummyRepo(), storage=_DummyStorage())  # type: ignore[arg-type]
+class _FakeCallableTargetBindingRepository:
+    def __init__(self, bindings: list[CallableTargetBindingRecord]) -> None:
+        self.bindings = list(bindings)
+
+    async def list_bindings(self, *, callable_key=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+        items = list(self.bindings)
+        if callable_key:
+            items = [item for item in items if item.callable_key == callable_key]
+        if scope_type:
+            items = [item for item in items if item.scope_type == scope_type]
+        if scope_id:
+            items = [item for item in items if item.scope_id == scope_id]
+        sliced = items[offset : offset + limit]
+        return sliced, len(items)
 
 
-def test_parse_input_jsonl_accepts_embeddings_lines() -> None:
-    service = _service()
-    auth = UserAPIKeyAuth(api_key="sk-test", models=["text-embedding-3-small"])
+class _FakeCallableTargetScopePolicyRepository:
+    def __init__(self, policies: list[CallableTargetScopePolicyRecord]) -> None:
+        self.policies = list(policies)
+
+    async def list_policies(self, *, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+        items = list(self.policies)
+        if scope_type:
+            items = [item for item in items if item.scope_type == scope_type]
+        if scope_id:
+            items = [item for item in items if item.scope_id == scope_id]
+        sliced = items[offset : offset + limit]
+        return sliced, len(items)
+
+
+def _service(
+    *,
+    callable_target_grant_service: CallableTargetGrantService | None = None,
+    callable_target_scope_policy_mode: str = "enforce",
+) -> BatchService:
+    return BatchService(
+        repository=_DummyRepo(),
+        storage=_DummyStorage(),
+        callable_target_grant_service=callable_target_grant_service,
+        callable_target_scope_policy_mode=callable_target_scope_policy_mode,
+    )  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_parse_input_jsonl_accepts_embeddings_lines() -> None:
+    grant_service = CallableTargetGrantService(
+        repository=_FakeCallableTargetBindingRepository(
+            [
+                CallableTargetBindingRecord(
+                    callable_target_binding_id="ctb-1",
+                    callable_key="text-embedding-3-small",
+                    scope_type="organization",
+                    scope_id="org-1",
+                    enabled=True,
+                )
+            ]
+        )
+    )
+    await grant_service.reload()
+    auth = UserAPIKeyAuth(api_key="sk-test", organization_id="org-1")
+    service = _service(callable_target_grant_service=grant_service)
     payload = b'{"custom_id":"item-1","url":"/v1/embeddings","body":{"model":"text-embedding-3-small","input":"hello"}}\n'
     items, model = service._parse_input_jsonl(payload, endpoint="/v1/embeddings", auth=auth)
     assert len(items) == 1
     assert model == "text-embedding-3-small"
 
 
-def test_parse_input_jsonl_rejects_duplicate_custom_id() -> None:
-    service = _service()
-    auth = UserAPIKeyAuth(api_key="sk-test")
+@pytest.mark.asyncio
+async def test_parse_input_jsonl_rejects_duplicate_custom_id() -> None:
+    grant_service = CallableTargetGrantService(
+        repository=_FakeCallableTargetBindingRepository(
+            [
+                CallableTargetBindingRecord(
+                    callable_target_binding_id="ctb-1",
+                    callable_key="text-embedding-3-small",
+                    scope_type="organization",
+                    scope_id="org-1",
+                    enabled=True,
+                )
+            ]
+        )
+    )
+    await grant_service.reload()
+    service = _service(callable_target_grant_service=grant_service)
+    auth = UserAPIKeyAuth(api_key="sk-test", organization_id="org-1")
     payload = (
         b'{"custom_id":"dup","url":"/v1/embeddings","body":{"model":"text-embedding-3-small","input":"a"}}\n'
         b'{"custom_id":"dup","url":"/v1/embeddings","body":{"model":"text-embedding-3-small","input":"b"}}\n'
@@ -43,6 +115,125 @@ def test_parse_input_jsonl_rejects_duplicate_custom_id() -> None:
     with pytest.raises(HTTPException) as exc:
         service._parse_input_jsonl(payload, endpoint="/v1/embeddings", auth=auth)
     assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_parse_input_jsonl_rejects_model_outside_effective_scope() -> None:
+    grant_service = CallableTargetGrantService(
+        repository=_FakeCallableTargetBindingRepository(
+            [
+                CallableTargetBindingRecord(
+                    callable_target_binding_id="ctb-org-1",
+                    callable_key="text-embedding-3-small",
+                    scope_type="organization",
+                    scope_id="org-1",
+                    enabled=True,
+                ),
+                CallableTargetBindingRecord(
+                    callable_target_binding_id="ctb-org-2",
+                    callable_key="text-embedding-3-large",
+                    scope_type="organization",
+                    scope_id="org-1",
+                    enabled=True,
+                ),
+                CallableTargetBindingRecord(
+                    callable_target_binding_id="ctb-user-1",
+                    callable_key="text-embedding-3-small",
+                    scope_type="user",
+                    scope_id="user-1",
+                    enabled=True,
+                ),
+            ]
+        )
+    )
+    await grant_service.reload()
+    service = _service(callable_target_grant_service=grant_service)
+    auth = UserAPIKeyAuth(
+        api_key="sk-test",
+        organization_id="org-1",
+        user_id="user-1",
+    )
+    payload = b'{"custom_id":"item-1","url":"/v1/embeddings","body":{"model":"text-embedding-3-large","input":"hello"}}\n'
+
+    with pytest.raises(HTTPException) as exc:
+        service._parse_input_jsonl(payload, endpoint="/v1/embeddings", auth=auth)
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Model 'text-embedding-3-large' is not allowed for this key"
+
+
+@pytest.mark.asyncio
+async def test_parse_input_jsonl_uses_explicit_callable_target_grants() -> None:
+    grant_service = CallableTargetGrantService(
+        repository=_FakeCallableTargetBindingRepository(
+            [
+                CallableTargetBindingRecord(
+                    callable_target_binding_id="ctb-1",
+                    callable_key="text-embedding-3-small",
+                    scope_type="organization",
+                    scope_id="org-1",
+                    enabled=True,
+                )
+            ]
+        )
+    )
+    await grant_service.reload()
+    service = _service(callable_target_grant_service=grant_service)
+    auth = UserAPIKeyAuth(
+        api_key="sk-test",
+        organization_id="org-1",
+        models=["text-embedding-3-small", "text-embedding-3-large"],
+    )
+    payload = b'{"custom_id":"item-1","url":"/v1/embeddings","body":{"model":"text-embedding-3-small","input":"hello"}}\n'
+
+    items, model = service._parse_input_jsonl(payload, endpoint="/v1/embeddings", auth=auth)
+
+    assert len(items) == 1
+    assert model == "text-embedding-3-small"
+
+
+@pytest.mark.asyncio
+async def test_parse_input_jsonl_honors_enforced_scope_policy_mode() -> None:
+    grant_service = CallableTargetGrantService(
+        repository=_FakeCallableTargetBindingRepository(
+            [
+                CallableTargetBindingRecord(
+                    callable_target_binding_id="ctb-org-1",
+                    callable_key="text-embedding-3-small",
+                    scope_type="organization",
+                    scope_id="org-1",
+                    enabled=True,
+                )
+            ]
+        ),
+        policy_repository=_FakeCallableTargetScopePolicyRepository(
+            [
+                CallableTargetScopePolicyRecord(
+                    callable_target_scope_policy_id="ctp-team-1",
+                    scope_type="team",
+                    scope_id="team-1",
+                    mode="restrict",
+                )
+            ]
+        ),
+    )
+    await grant_service.reload()
+    service = _service(
+        callable_target_grant_service=grant_service,
+        callable_target_scope_policy_mode="enforce",
+    )
+    auth = UserAPIKeyAuth(
+        api_key="sk-test",
+        team_id="team-1",
+        organization_id="org-1",
+        models=["text-embedding-3-small"],
+    )
+    payload = b'{"custom_id":"item-1","url":"/v1/embeddings","body":{"model":"text-embedding-3-small","input":"hello"}}\n'
+
+    with pytest.raises(HTTPException) as exc:
+        service._parse_input_jsonl(payload, endpoint="/v1/embeddings", auth=auth)
+
+    assert exc.value.status_code == 403
 
 
 @pytest.mark.asyncio

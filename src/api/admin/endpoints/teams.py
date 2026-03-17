@@ -9,16 +9,34 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 from src.auth.roles import Permission, ORG_ROLE_PERMISSIONS, TEAM_ROLE_PERMISSIONS, TeamRole
 from src.audit import AuditAction
 from src.api.admin.endpoints.common import (
+    AuthScope,
     db_or_503,
     emit_admin_mutation_audit,
+    get_auth_scope,
     optional_int,
     to_json_value,
-    get_auth_scope,
-    AuthScope,
+    validate_runtime_user_scope,
 )
 from src.middleware.platform_auth import get_platform_auth_context
+from src.services.asset_visibility_preview import build_asset_visibility_preview
+from src.services.scoped_asset_access import apply_scope_asset_access, build_scope_asset_access
 
 router = APIRouter(tags=["Admin Teams"])
+
+
+def _team_response_payload(team: dict[str, Any]) -> dict[str, Any]:
+    payload = to_json_value(dict(team))
+    if isinstance(payload, dict):
+        payload.pop("models", None)
+    return payload
+
+
+def _reject_legacy_models_field(payload: dict[str, Any]) -> None:
+    if "models" in payload:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="models is no longer supported; use callable-target bindings instead",
+        )
 
 
 async def _require_team_access(
@@ -31,7 +49,7 @@ async def _require_team_access(
 ) -> dict[str, Any]:
     rows = await db.query_raw(
         """
-        SELECT team_id, team_alias, organization_id, max_budget, spend, models, rpm_limit, tpm_limit, blocked, created_at, updated_at
+        SELECT team_id, team_alias, organization_id, max_budget, spend, rpm_limit, tpm_limit, blocked, created_at, updated_at
         FROM deltallm_teamtable
         WHERE team_id = $1
         LIMIT 1
@@ -100,7 +118,7 @@ async def list_teams(
 
     where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 
-    select_cols = """t.team_id, t.team_alias, t.organization_id, t.max_budget, t.spend, t.models, t.rpm_limit, t.tpm_limit, t.blocked,
+    select_cols = """t.team_id, t.team_alias, t.organization_id, t.max_budget, t.spend, t.rpm_limit, t.tpm_limit, t.blocked,
                    t.created_at, t.updated_at,
                    (SELECT COUNT(*) FROM deltallm_teammembership tm WHERE tm.team_id = t.team_id) AS member_count"""
 
@@ -124,7 +142,7 @@ async def list_teams(
     )
 
     return {
-        "data": [to_json_value(dict(row)) for row in rows],
+        "data": [_team_response_payload(dict(row)) for row in rows],
         "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
     }
 
@@ -139,7 +157,96 @@ async def get_team(
     scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
     team = await _require_team_access(request, scope, db, team_id)
-    return to_json_value(team)
+    return _team_response_payload(team)
+
+
+@router.get("/ui/api/teams/{team_id}/asset-visibility")
+async def get_team_asset_visibility(
+    request: Request,
+    team_id: str,
+    user_id: str | None = Query(default=None),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.TEAM_READ)
+    db = db_or_503(request)
+    team = await _require_team_access(request, scope, db, team_id)
+    organization_id = str(team.get("organization_id") or "").strip()
+    if not organization_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Team organization is not configured")
+    user_row = (
+        await validate_runtime_user_scope(db, user_id, team_id=team_id)
+        if user_id is not None and str(user_id).strip()
+        else None
+    )
+    return await build_asset_visibility_preview(
+        request,
+        organization_id=organization_id,
+        team_id=team_id,
+        user_id=str(user_row.get("user_id") or "").strip() or None if user_row else None,
+    )
+
+
+@router.get("/ui/api/teams/{team_id}/asset-access")
+async def get_team_asset_access(
+    request: Request,
+    team_id: str,
+    include_targets: bool = Query(default=True),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.TEAM_READ)
+    db = db_or_503(request)
+    team = await _require_team_access(request, scope, db, team_id)
+    organization_id = str(team.get("organization_id") or "").strip()
+    if not organization_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Team organization is not configured")
+    return await build_scope_asset_access(
+        request,
+        scope_type="team",
+        scope_id=team_id,
+        organization_id=organization_id,
+        team_id=team_id,
+        include_targets=include_targets,
+    )
+
+
+@router.put("/ui/api/teams/{team_id}/asset-access")
+async def update_team_asset_access(
+    request: Request,
+    team_id: str,
+    payload: dict[str, Any],
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    request_start = perf_counter()
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.TEAM_UPDATE)
+    db = db_or_503(request)
+    team = await _require_team_access(request, scope, db, team_id, write=True)
+    organization_id = str(team.get("organization_id") or "").strip()
+    if not organization_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Team organization is not configured")
+    response = await apply_scope_asset_access(
+        request,
+        scope_type="team",
+        scope_id=team_id,
+        organization_id=organization_id,
+        team_id=team_id,
+        mode=payload.get("mode"),
+        selected_callable_keys=payload.get("selected_callable_keys", []),
+        select_all_selectable=bool(payload.get("select_all_selectable", False)),
+    )
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_TEAM_ASSET_ACCESS_UPDATE,
+        scope=scope,
+        resource_type="team_asset_access",
+        resource_id=team_id,
+        request_payload=payload,
+        response_payload=response,
+    )
+    return response
 
 
 @router.post("/ui/api/teams")
@@ -150,6 +257,7 @@ async def create_team(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     request_start = perf_counter()
+    _reject_legacy_models_field(payload)
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.TEAM_UPDATE)
     organization_id = payload.get("organization_id")
     if not organization_id:
@@ -163,12 +271,11 @@ async def create_team(
     max_budget = payload.get("max_budget")
     rpm_limit = optional_int(payload.get("rpm_limit"), "rpm_limit")
     tpm_limit = optional_int(payload.get("tpm_limit"), "tpm_limit")
-    models = payload.get("models") if isinstance(payload.get("models"), list) else []
 
     await db.execute_raw(
         """
-        INSERT INTO deltallm_teamtable (team_id, team_alias, organization_id, max_budget, spend, rpm_limit, tpm_limit, models, blocked, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, 0, $5, $6, $7::text[], false, NOW(), NOW())
+        INSERT INTO deltallm_teamtable (team_id, team_alias, organization_id, max_budget, spend, rpm_limit, tpm_limit, blocked, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, 0, $5, $6, false, NOW(), NOW())
         """,
         team_id,
         team_alias,
@@ -176,7 +283,6 @@ async def create_team(
         max_budget,
         rpm_limit,
         tpm_limit,
-        models,
     )
 
     response = {
@@ -186,7 +292,6 @@ async def create_team(
         "max_budget": max_budget,
         "rpm_limit": rpm_limit,
         "tpm_limit": tpm_limit,
-        "models": models,
         "blocked": False,
     }
     await emit_admin_mutation_audit(
@@ -211,6 +316,7 @@ async def update_team(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     request_start = perf_counter()
+    _reject_legacy_models_field(payload)
     scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
     existing_team = await _require_team_access(request, scope, db, team_id, write=True)
@@ -224,9 +330,6 @@ async def update_team(
     max_budget = payload.get("max_budget", existing_team.get("max_budget"))
     rpm_limit = optional_int(payload.get("rpm_limit", existing_team.get("rpm_limit")), "rpm_limit")
     tpm_limit = optional_int(payload.get("tpm_limit", existing_team.get("tpm_limit")), "tpm_limit")
-    models = payload.get("models", existing_team.get("models"))
-    if not isinstance(models, list):
-        models = existing_team.get("models") or []
 
     await db.execute_raw(
         """
@@ -236,21 +339,19 @@ async def update_team(
             max_budget = $3,
             rpm_limit = $4,
             tpm_limit = $5,
-            models = $6::text[],
             updated_at = NOW()
-        WHERE team_id = $7
+        WHERE team_id = $6
         """,
         team_alias,
         organization_id,
         max_budget,
         rpm_limit,
         tpm_limit,
-        models,
         team_id,
     )
     updated_rows = await db.query_raw(
         """
-        SELECT team_id, team_alias, organization_id, max_budget, spend, models, rpm_limit, tpm_limit, blocked, created_at, updated_at
+        SELECT team_id, team_alias, organization_id, max_budget, spend, rpm_limit, tpm_limit, blocked, created_at, updated_at
         FROM deltallm_teamtable
         WHERE team_id = $1
         LIMIT 1
@@ -259,7 +360,7 @@ async def update_team(
     )
     if not updated_rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
-    updated = to_json_value(dict(updated_rows[0]))
+    updated = _team_response_payload(dict(updated_rows[0]))
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,

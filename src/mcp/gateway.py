@@ -4,10 +4,11 @@ import asyncio
 from collections import defaultdict
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Any
+from typing import Any, TypeVar
 
 from src.db.mcp import MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
 from src.models.responses import UserAPIKeyAuth
+from src.services.runtime_scopes import resolve_runtime_scope_context
 
 from .approvals import MCPApprovalService
 from .capabilities import NamespacedTool, parse_namespaced_tool_name
@@ -27,7 +28,8 @@ from .result_cache import MCPToolResultCache
 from .registry import MCPRegistryService, server_record_to_config
 from .transport_http import StreamableHTTPMCPClient
 
-_SCOPE_PRECEDENCE = {"api_key": 0, "team": 1, "organization": 2}
+_ScopeRecordT = TypeVar("_ScopeRecordT", MCPServerBindingRecord, MCPToolPolicyRecord)
+from .governance import MCPGovernanceService
 
 
 @dataclass(frozen=True)
@@ -53,12 +55,14 @@ class MCPGatewayService:
         policy_enforcer: MCPToolPolicyEnforcer | None = None,
         result_cache: MCPToolResultCache | None = None,
         approval_service: MCPApprovalService | None = None,
+        governance_service: MCPGovernanceService | None = None,
     ) -> None:
         self.registry = registry
         self.transport_client = transport_client
         self.policy_enforcer = policy_enforcer
         self.result_cache = result_cache
         self.approval_service = approval_service
+        self.governance_service = governance_service
 
     async def list_visible_tools(self, auth: UserAPIKeyAuth) -> list[NamespacedTool]:
         started = perf_counter()
@@ -281,8 +285,13 @@ class MCPGatewayService:
         )
 
     async def list_visible_servers(self, auth: UserAPIKeyAuth) -> list[VisibleMCPServer]:
-        if self._is_master_key(auth):
-            servers, _ = await self.registry.list_servers(enabled=True, limit=500, offset=0)
+        scope_context = resolve_runtime_scope_context(auth)
+        if scope_context.is_master_key:
+            servers = (
+                self.governance_service.list_enabled_servers()
+                if self.governance_service is not None
+                else (await self.registry.list_servers(enabled=True, limit=500, offset=0))[0]
+            )
             visible: list[VisibleMCPServer] = []
             for server in servers:
                 tools = await self.registry.list_namespaced_tools(server)
@@ -301,16 +310,29 @@ class MCPGatewayService:
                 )
             return visible
 
-        scopes = self._scopes_for_auth(auth)
-        bindings = await self.registry.list_effective_bindings(scopes=scopes)
-        grouped: dict[str, list[MCPServerBindingRecord]] = defaultdict(list)
-        for binding in bindings:
-            grouped[binding.mcp_server_id].append(binding)
-
+        bindings = (
+            self.governance_service.resolve_binding_resolutions(auth)
+            if self.governance_service is not None
+            else await self.registry.list_effective_bindings(scopes=list(scope_context.scope_chain))
+        )
         visible_servers: list[VisibleMCPServer] = []
-        for server_id, server_bindings in grouped.items():
-            binding = self._select_binding(server_bindings)
-            server = await self.registry.get_server(server_id)
+        if self.governance_service is not None:
+            resolved_bindings = list(bindings)
+        else:
+            grouped: dict[str, list[MCPServerBindingRecord]] = defaultdict(list)
+            for binding in bindings:
+                grouped[binding.mcp_server_id].append(binding)
+            resolved_bindings = [
+                self._select_binding(server_bindings, scope_order=scope_context.scope_chain)
+                for server_bindings in grouped.values()
+            ]
+        for binding in resolved_bindings:
+            server_id = binding.server_id
+            server = (
+                self.governance_service.get_server(server_id)
+                if self.governance_service is not None
+                else await self.registry.get_server(server_id)
+            )
             if server is None or not server.enabled:
                 continue
             binding = MCPBindingResolution(
@@ -417,39 +439,34 @@ class MCPGatewayService:
         server_id: str,
         tool_name: str,
     ) -> MCPToolPolicyRecord | None:
-        if self._is_master_key(auth):
+        scope_context = resolve_runtime_scope_context(auth)
+        if scope_context.is_master_key:
             return None
-        policies = await self.registry.list_effective_tool_policies(
-            scopes=self._scopes_for_auth(auth),
-            server_id=server_id,
+        policies = (
+            self.governance_service.list_effective_tool_policies(
+                scopes=scope_context.scope_chain,
+                server_id=server_id,
+            )
+            if self.governance_service is not None
+            else await self.registry.list_effective_tool_policies(
+                scopes=list(scope_context.scope_chain),
+                server_id=server_id,
+            )
         )
         candidates = [policy for policy in policies if policy.tool_name == tool_name]
         if not candidates:
             return None
-        candidates.sort(key=lambda policy: _SCOPE_PRECEDENCE.get(policy.scope_type, 999))
-        return candidates[0]
+        return self._select_policy(candidates, scope_order=scope_context.scope_chain)
 
     @staticmethod
-    def _is_master_key(auth: UserAPIKeyAuth) -> bool:
-        metadata = auth.metadata or {}
-        return bool(metadata.get("is_master_key")) or auth.api_key == "master_key"
-
-    @staticmethod
-    def _scopes_for_auth(auth: UserAPIKeyAuth) -> list[tuple[str, str]]:
-        scopes: list[tuple[str, str]] = []
-        if auth.api_key:
-            scopes.append(("api_key", auth.api_key))
-        if auth.team_id:
-            scopes.append(("team", auth.team_id))
-        if auth.organization_id:
-            scopes.append(("organization", auth.organization_id))
-        return scopes
-
-    @staticmethod
-    def _select_binding(bindings: list[MCPServerBindingRecord]) -> MCPBindingResolution:
+    def _select_binding(
+        bindings: list[MCPServerBindingRecord],
+        *,
+        scope_order: tuple[tuple[str, str], ...],
+    ) -> MCPBindingResolution:
         if not bindings:
             raise MCPAccessDeniedError("No MCP binding available")
-        selected = sorted(bindings, key=lambda item: _SCOPE_PRECEDENCE.get(item.scope_type, 999))[0]
+        selected = _select_record_for_scope_order(bindings, scope_order=scope_order)
         allowed_tools = tuple(selected.tool_allowlist or []) or None
         return MCPBindingResolution(
             server_id=selected.mcp_server_id,
@@ -458,3 +475,26 @@ class MCPGatewayService:
             scope_id=selected.scope_id,
             allowed_tool_names=allowed_tools,
         )
+
+    @staticmethod
+    def _select_policy(
+        policies: list[MCPToolPolicyRecord],
+        *,
+        scope_order: tuple[tuple[str, str], ...],
+    ) -> MCPToolPolicyRecord:
+        return _select_record_for_scope_order(policies, scope_order=scope_order)
+
+
+def _select_record_for_scope_order(
+    records: list[_ScopeRecordT],
+    *,
+    scope_order: tuple[tuple[str, str], ...],
+) -> _ScopeRecordT:
+    if not records:
+        raise MCPAccessDeniedError("No MCP scope record available")
+    scoped_records = {(record.scope_type, record.scope_id): record for record in records}
+    for scope in scope_order:
+        match = scoped_records.get(scope)
+        if match is not None:
+            return match
+    return records[0]

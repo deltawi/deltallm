@@ -11,22 +11,31 @@ from src.guardrails.registry import GuardrailRegistry
 from src.mcp import (
     MCPApprovalService,
     MCPGatewayService,
+    MCPGovernanceService,
     MCPHealthProbe,
     MCPRegistryService,
     MCPToolPolicyEnforcer,
     MCPToolResultCache,
     StreamableHTTPMCPClient,
 )
+from src.services.callable_target_grants import CallableTargetGrantService
+from src.services.governance_invalidation import GovernanceInvalidationService
 from src.services.prompt_registry import PromptRegistryService
 
 
 @dataclass
 class RuntimeServicesRuntime:
     callback_manager: CallbackManager
+    governance_invalidation_service: GovernanceInvalidationService
     statuses: tuple[BootstrapStatus, ...] = ()
 
 
 async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
+    app.state.callable_target_grant_service = CallableTargetGrantService(
+        repository=getattr(app.state, "callable_target_binding_repository", None),
+        policy_repository=getattr(app.state, "callable_target_scope_policy_repository", None),
+    )
+    await app.state.callable_target_grant_service.reload()
     app.state.prompt_registry_service = PromptRegistryService(
         repository=app.state.prompt_registry_repository,
         route_group_repository=app.state.route_group_repository,
@@ -36,6 +45,11 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
         repository=app.state.mcp_repository,
         redis_client=app.state.redis,
     )
+    app.state.mcp_governance_service = MCPGovernanceService(
+        repository=app.state.mcp_repository,
+        policy_repository=getattr(app.state, "mcp_scope_policy_repository", None),
+    )
+    await app.state.mcp_governance_service.reload()
     app.state.mcp_transport_client = StreamableHTTPMCPClient(app.state.http_client)
     app.state.mcp_health_probe = MCPHealthProbe(
         registry=app.state.mcp_registry_service,
@@ -43,11 +57,19 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
     )
     app.state.mcp_gateway_service = MCPGatewayService(
         registry=app.state.mcp_registry_service,
+        governance_service=app.state.mcp_governance_service,
         transport_client=app.state.mcp_transport_client,
         policy_enforcer=MCPToolPolicyEnforcer(app.state.limit_counter),
         result_cache=MCPToolResultCache(getattr(app.state, "cache_backend", None)),
         approval_service=MCPApprovalService(app.state.mcp_repository),
     )
+    app.state.governance_invalidation_service = GovernanceInvalidationService(
+        redis_client=app.state.redis,
+        callable_target_grant_service=app.state.callable_target_grant_service,
+        mcp_registry_service=app.state.mcp_registry_service,
+        mcp_governance_service=app.state.mcp_governance_service,
+    )
+    await app.state.governance_invalidation_service.start()
 
     guardrail_registry = GuardrailRegistry()
     if cfg.deltallm_settings.guardrails:
@@ -81,7 +103,9 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
 
     return RuntimeServicesRuntime(
         callback_manager=callback_manager,
+        governance_invalidation_service=app.state.governance_invalidation_service,
         statuses=(
+            BootstrapStatus("callable_target_grants", "ready"),
             BootstrapStatus("prompt_registry", "ready"),
             BootstrapStatus("mcp_runtime", "ready"),
             BootstrapStatus("guardrails", "ready"),
@@ -92,4 +116,5 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
 
 
 async def shutdown_runtime_services(runtime: RuntimeServicesRuntime) -> None:
+    await runtime.governance_invalidation_service.close()
     await runtime.callback_manager.shutdown()

@@ -11,6 +11,7 @@ from src.batch import BatchCleanupConfig, BatchRetentionCleanupWorker, BatchRepo
 from src.batch.service import BatchService
 from src.batch.storage import LocalBatchArtifactStorage
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
+from src.services.model_visibility import normalize_callable_target_policy_mode
 
 
 @dataclass
@@ -37,6 +38,10 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         repository=repository,
         storage=batch_storage,
         metadata_retention_days=cfg.general_settings.batch_metadata_retention_days,
+        callable_target_grant_service=getattr(app.state, "callable_target_grant_service", None),
+        callable_target_scope_policy_mode=normalize_callable_target_policy_mode(
+            getattr(cfg.general_settings, "callable_target_scope_policy_mode", "enforce")
+        ),
     )
 
     if cfg.general_settings.embeddings_batch_worker_enabled:

@@ -8,6 +8,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from src.db.callable_targets import CallableTargetBindingRecord
 from src.db.repositories import KeyRecord
 from src.guardrails.middleware import GuardrailMiddleware
 from src.guardrails.registry import GuardrailRegistry
@@ -28,6 +29,7 @@ from src.router import (
     RoutingStrategy,
     build_deployment_registry,
 )
+from src.services.callable_target_grants import CallableTargetGrantService
 from src.services.key_service import KeyService
 from src.services.limit_counter import LimitCounter
 
@@ -204,6 +206,22 @@ class InMemoryKeyRepository:
         return self.records.get(token_hash)
 
 
+class InMemoryCallableTargetBindingRepository:
+    def __init__(self, bindings: list[CallableTargetBindingRecord]) -> None:
+        self.bindings = list(bindings)
+
+    async def list_bindings(self, *, callable_key=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+        items = list(self.bindings)
+        if callable_key:
+            items = [item for item in items if item.callable_key == callable_key]
+        if scope_type:
+            items = [item for item in items if item.scope_type == scope_type]
+        if scope_id:
+            items = [item for item in items if item.scope_id == scope_id]
+        sliced = items[offset : offset + limit]
+        return sliced, len(items)
+
+
 class MockHTTPStreamResponse:
     def __init__(self) -> None:
         self.status_code = 200
@@ -272,6 +290,8 @@ async def test_app() -> FastAPI:
 
     record = KeyRecord(
         token=token_hash,
+        team_id="team-default",
+        organization_id="org-default",
         models=["gpt-4o-mini", "text-embedding-3-small"],
         rpm_limit=2,
         tpm_limit=10000,
@@ -285,6 +305,28 @@ async def test_app() -> FastAPI:
     app.state.settings = type("Settings", (), {"openai_base_url": "https://api.openai.com/v1"})()
     app.state.key_service = KeyService(repository=repo, redis_client=redis, salt=salt)
     app.state.limit_counter = LimitCounter(redis_client=redis)
+    app.state.callable_target_grant_service = CallableTargetGrantService(
+        repository=InMemoryCallableTargetBindingRepository(
+            [
+                CallableTargetBindingRecord(
+                    callable_target_binding_id="ctb-default-1",
+                    callable_key="gpt-4o-mini",
+                    scope_type="organization",
+                    scope_id="org-default",
+                    enabled=True,
+                ),
+                CallableTargetBindingRecord(
+                    callable_target_binding_id="ctb-default-2",
+                    callable_key="text-embedding-3-small",
+                    scope_type="organization",
+                    scope_id="org-default",
+                    enabled=True,
+                ),
+            ]
+        ),
+        policy_repository=None,
+    )
+    await app.state.callable_target_grant_service.reload()
     app.state.model_registry = {
         "gpt-4o-mini": [{"deltallm_params": {"model": "openai/gpt-4o-mini", "api_key": "provider-key"}}],
         "text-embedding-3-small": [
@@ -296,7 +338,14 @@ async def test_app() -> FastAPI:
     app.state.azure_openai_adapter = AzureOpenAIAdapter(mock_http)  # type: ignore[arg-type]
     app.state.gemini_adapter = GeminiAdapter(mock_http)  # type: ignore[arg-type]
     app.state.bedrock_adapter = BedrockAdapter(mock_http)  # type: ignore[arg-type]
-    app.state.app_config = type("Cfg", (), {"router_settings": type("RouterCfg", (), {"num_retries": 0})()})()
+    app.state.app_config = type(
+        "Cfg",
+        (),
+        {
+            "router_settings": type("RouterCfg", (), {"num_retries": 0})(),
+            "general_settings": type("GeneralCfg", (), {"callable_target_scope_policy_mode": "enforce"})(),
+        },
+    )()
 
     state_backend = RedisStateBackend(redis)
     deployment_registry = build_deployment_registry(app.state.model_registry)

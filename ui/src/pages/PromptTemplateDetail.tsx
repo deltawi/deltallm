@@ -11,6 +11,7 @@ import PromptVersionComposerCard from '../components/prompt-registry/PromptVersi
 import PromptRolloutCard from '../components/prompt-registry/PromptRolloutCard';
 import PromptTestingCard from '../components/prompt-registry/PromptTestingCard';
 import PromptHistoryCard from '../components/prompt-registry/PromptHistoryCard';
+import { RecordDetailShell } from '../components/admin/shells';
 
 function parseJsonObject(value: string, fieldName: string): Record<string, unknown> {
   try {
@@ -232,43 +233,47 @@ export default function PromptTemplateDetail() {
   };
 
   return (
-    <div className="max-w-7xl mx-auto p-4 sm:p-6">
-      <button onClick={() => navigate('/prompts')} className="mb-5 flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700 transition-colors">
-        <ArrowLeft className="w-4 h-4" /> Back to Prompt Registry
-      </button>
-
-      <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">{template.name}</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Template key: <code className="rounded bg-gray-100 px-1.5 py-0.5">{template.template_key}</code>
-          </p>
-        </div>
-        <div className="grid gap-2 sm:grid-cols-3">
-          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Versions</div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">{versions.length}</div>
+    <RecordDetailShell
+      backAction={(
+        <button onClick={() => navigate('/prompts')} className="flex items-center gap-2 text-sm text-gray-500 transition-colors hover:text-gray-700">
+          <ArrowLeft className="w-4 h-4" /> Back to Prompt Registry
+        </button>
+      )}
+      header={(
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">{template.name}</h1>
+            <p className="mt-1 text-sm text-gray-500">
+              Template key: <code className="rounded bg-gray-100 px-1.5 py-0.5">{template.template_key}</code>
+            </p>
           </div>
-          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Labels</div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">{labels.length}</div>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Published</div>
-            <div className="mt-1 text-sm font-semibold text-slate-900">
-              {versions.find((version) => version.status === 'published') ? 'Version ready' : 'Not yet'}
+          <div className="grid gap-2 sm:grid-cols-3">
+            <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Versions</div>
+              <div className="mt-1 text-lg font-semibold text-slate-900">{versions.length}</div>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Labels</div>
+              <div className="mt-1 text-lg font-semibold text-slate-900">{labels.length}</div>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Published</div>
+              <div className="mt-1 text-sm font-semibold text-slate-900">
+                {versions.find((version) => version.status === 'published') ? 'Version ready' : 'Not yet'}
+              </div>
             </div>
           </div>
         </div>
-      </div>
-
-      <JourneyChecklist
-        title="Rollout Progress"
-        description="Prompt setup is simplest when you author first, register a stable version second, and test before any consuming page binds it."
-        steps={checklistSteps}
-      />
-
-      <div className="mt-5 space-y-5">
+      )}
+      intro={(
+        <JourneyChecklist
+          title="Rollout Progress"
+          description="Prompt setup is simplest when you author first, register a stable version second, and test before any consuming page binds it."
+          steps={checklistSteps}
+        />
+      )}
+    >
+      <div className="space-y-5">
         <Card
           title="1. Template"
           action={
@@ -374,6 +379,6 @@ export default function PromptTemplateDetail() {
           if (!deletingTemplate) setConfirmDeleteTemplate(false);
         }}
       />
-    </div>
+    </RecordDetailShell>
   );
 }

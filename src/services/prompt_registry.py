@@ -10,7 +10,9 @@ from typing import Any
 from src.db.prompt_registry import PromptBindingRecord, PromptRegistryRepository, PromptResolvedRecord
 from src.db.route_groups import RouteGroupRepository
 from src.metrics import increment_prompt_cache_lookup, increment_prompt_resolution, observe_prompt_resolution_latency
+from src.services.asset_scopes import normalize_scope_type, prompt_binding_resolution_chain, scope_lookup_candidates
 from src.services.prompt_rendering import render_template_body, validate_variables_schema
+from src.services.runtime_scopes import RuntimeScopeContext
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +110,7 @@ class PromptRegistryService:
         route_group_key: str | None,
         model: str | None,
         request_id: str | None,
+        scope_context: RuntimeScopeContext | None = None,
     ) -> PromptRenderOutput | None:
         started = perf_counter()
         selected: tuple[PromptResolvedRecord, PromptProvenance, str] | None = None
@@ -162,7 +165,9 @@ class PromptRegistryService:
             )
         else:
             selected = await self._resolve_from_bindings(
+                scope_context=scope_context,
                 api_key=api_key,
+                user_id=user_id,
                 team_id=team_id,
                 organization_id=organization_id,
                 route_group_key=route_group_key,
@@ -307,28 +312,31 @@ class PromptRegistryService:
     async def resolve_binding_preview(
         self,
         *,
-        api_key: str | None,
-        team_id: str | None,
-        organization_id: str | None,
-        route_group_key: str | None,
+        api_key: str | None = None,
+        user_id: str | None = None,
+        team_id: str | None = None,
+        organization_id: str | None = None,
+        route_group_key: str | None = None,
+        scope_context: RuntimeScopeContext | None = None,
     ) -> dict[str, Any]:
-        checks = [
-            ("key", api_key),
-            ("team", team_id),
-            ("org", organization_id),
-            ("group", route_group_key),
-        ]
+        checks = prompt_binding_resolution_chain(
+            scope_context=scope_context,
+            api_key=api_key,
+            user_id=user_id,
+            team_id=team_id,
+            organization_id=organization_id,
+            route_group_key=route_group_key,
+        )
         candidates: list[dict[str, Any]] = []
         chosen: dict[str, Any] | None = None
         for scope_type, scope_id in checks:
-            if not scope_id:
-                continue
             binding = await self._resolve_binding(scope_type=scope_type, scope_id=scope_id)
             if binding is None:
                 continue
+            resolved_scope_type = normalize_scope_type(binding.scope_type)
             candidate = {
-                "scope_type": scope_type,
-                "scope_id": scope_id,
+                "scope_type": resolved_scope_type,
+                "scope_id": binding.scope_id,
                 "template_key": binding.template_key,
                 "label": binding.label,
                 "priority": binding.priority,
@@ -375,20 +383,22 @@ class PromptRegistryService:
     async def _resolve_from_bindings(
         self,
         *,
+        scope_context: RuntimeScopeContext | None = None,
         api_key: str | None,
+        user_id: str | None,
         team_id: str | None,
         organization_id: str | None,
         route_group_key: str | None,
     ) -> tuple[PromptResolvedRecord, PromptProvenance, str] | None:
-        precedence = [
-            ("key", api_key),
-            ("team", team_id),
-            ("org", organization_id),
-            ("group", route_group_key),
-        ]
+        precedence = prompt_binding_resolution_chain(
+            scope_context=scope_context,
+            api_key=api_key,
+            user_id=user_id,
+            team_id=team_id,
+            organization_id=organization_id,
+            route_group_key=route_group_key,
+        )
         for scope_type, scope_id in precedence:
-            if not scope_id:
-                continue
             binding = await self._resolve_binding(scope_type=scope_type, scope_id=scope_id)
             if binding is None:
                 continue
@@ -403,8 +413,8 @@ class PromptRegistryService:
                     template_key=resolved.template_key,
                     version=resolved.version,
                     label=binding.label,
-                    binding_scope=scope_type,
-                    binding_scope_id=scope_id,
+                    binding_scope=normalize_scope_type(binding.scope_type),
+                    binding_scope_id=binding.scope_id,
                     route_preferences=_safe_normalize_route_preferences(resolved.route_preferences),
                 ),
                 lookup.cache_tier,
@@ -464,7 +474,8 @@ class PromptRegistryService:
         return _PromptLookupResult(prompt=resolved, cache_tier="db")
 
     async def _resolve_binding(self, *, scope_type: str, scope_id: str) -> PromptBindingRecord | None:
-        cache_key = self._binding_cache_key(scope_type, scope_id)
+        normalized_scope_type = normalize_scope_type(scope_type)
+        cache_key = self._binding_cache_key(normalized_scope_type, scope_id)
         cached = self._read_l1(self._binding_l1, cache_key)
         if cached is not None:
             increment_prompt_cache_lookup(entity="binding", tier="l1")
@@ -476,7 +487,11 @@ class PromptRegistryService:
             increment_prompt_cache_lookup(entity="binding", tier="l2")
             return _binding_from_cache(l2_cached)
 
-        binding = await self.repository.resolve_binding(scope_type=scope_type, scope_id=scope_id)
+        binding = None
+        for candidate_scope_type in scope_lookup_candidates(normalized_scope_type):
+            binding = await self.repository.resolve_binding(scope_type=candidate_scope_type, scope_id=scope_id)
+            if binding is not None:
+                break
         if binding is None:
             increment_prompt_cache_lookup(entity="binding", tier="miss")
             return None
@@ -572,7 +587,7 @@ class PromptRegistryService:
         return f"{PROMPT_CACHE_PREFIX}:{template_key}:label:{label or 'production'}"
 
     def _binding_cache_key(self, scope_type: str, scope_id: str) -> str:
-        return f"{PROMPT_BINDING_CACHE_PREFIX}:{scope_type}:{scope_id}"
+        return f"{PROMPT_BINDING_CACHE_PREFIX}:{normalize_scope_type(scope_type)}:{scope_id}"
 
     def _group_default_cache_key(self, route_group_key: str) -> str:
         return f"{PROMPT_GROUP_DEFAULT_CACHE_PREFIX}:{route_group_key}"

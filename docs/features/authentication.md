@@ -45,17 +45,18 @@ curl -X POST http://localhost:8000/ui/api/keys \
   -H "Content-Type: application/json" \
   -d '{
     "key_name": "production-app",
-    "max_budget": 50.00,
-    "models": ["gpt-4o-mini"]
+    "team_id": "team-production",
+    "max_budget": 50.00
   }'
 ```
 
 Virtual keys can include:
 
-- model allowlists
 - spend limits
 - RPM and TPM limits
 - team or organization ownership
+
+Runtime model and route-group access is governed separately through callable-target bindings and scope policies. Keys no longer carry model allowlists on the key record.
 
 ### Rotation and Revocation
 

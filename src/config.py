@@ -216,6 +216,7 @@ class GeneralSettings(BaseModel):
     embeddings_batch_gc_enabled: bool = True
     embeddings_batch_gc_interval_seconds: float = 86400.0
     embeddings_batch_gc_scan_limit: int = 200
+    callable_target_scope_policy_mode: Literal["legacy", "shadow", "enforce"] = "enforce"
     audit_enabled: bool = True
     audit_retention_worker_enabled: bool = True
     audit_retention_interval_seconds: float = 86400.0
@@ -261,6 +262,7 @@ class Settings(BaseSettings):
     redis_password: str | None = None
     redis_degraded_mode: Literal["fail_open", "fail_closed"] = "fail_open"
     salt_key: str | None = None
+    callable_target_scope_policy_mode: Literal["legacy", "shadow", "enforce"] = "enforce"
 
     @field_validator("master_key")
     @classmethod

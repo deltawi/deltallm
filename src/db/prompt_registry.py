@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from src.services.asset_ownership import normalize_owner_scope_type, owner_scope_from_metadata
+from src.services.asset_scopes import normalize_scope_type, scope_lookup_candidates
+
 
 def _parse_json_object(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
@@ -37,6 +40,8 @@ class PromptTemplateRecord:
     description: str | None = None
     owner_scope: str | None = None
     metadata: dict[str, Any] | None = None
+    owner_scope_type: str = "global"
+    owner_scope_id: str | None = None
     version_count: int = 0
     label_count: int = 0
     binding_count: int = 0
@@ -571,8 +576,12 @@ class PromptRegistryRepository:
         clauses: list[str] = []
         params: list[Any] = []
         if scope_type:
-            params.append(scope_type)
-            clauses.append(f"b.scope_type = ${len(params)}")
+            aliases = scope_lookup_candidates(scope_type)
+            placeholders: list[str] = []
+            for alias in aliases:
+                params.append(alias)
+                placeholders.append(f"${len(params)}")
+            clauses.append(f"b.scope_type IN ({', '.join(placeholders)})")
         if scope_id:
             params.append(scope_id)
             clauses.append(f"b.scope_id = ${len(params)}")
@@ -800,7 +809,7 @@ class PromptRegistryRepository:
             scope_type = str(row.get("scope_type") or "").strip()
             scope_id = str(row.get("scope_id") or "").strip()
             if scope_type and scope_id:
-                out.append((scope_type, scope_id))
+                out.append((normalize_scope_type(scope_type), scope_id))
         return out
 
     async def create_render_log(
@@ -890,13 +899,22 @@ class PromptRegistryRepository:
         return value or None
 
     def _to_template_record(self, row: dict[str, Any]) -> PromptTemplateRecord:
+        metadata = _parse_json_object(row.get("metadata")) if row.get("metadata") is not None else None
+        owner_scope = owner_scope_from_metadata(metadata)
+        owner_scope_value = str(row.get("owner_scope")).strip() if row.get("owner_scope") is not None else None
+        if owner_scope_value and owner_scope.scope_type == "global" and owner_scope.scope_id is None:
+            owner_scope_type = normalize_owner_scope_type(owner_scope_value)
+        else:
+            owner_scope_type = owner_scope.scope_type
         return PromptTemplateRecord(
             prompt_template_id=str(row.get("prompt_template_id") or ""),
             template_key=str(row.get("template_key") or ""),
             name=str(row.get("name") or ""),
             description=str(row.get("description")) if row.get("description") is not None else None,
-            owner_scope=str(row.get("owner_scope")) if row.get("owner_scope") is not None else None,
-            metadata=_parse_json_object(row.get("metadata")) if row.get("metadata") is not None else None,
+            owner_scope=owner_scope_value if owner_scope_value is not None else owner_scope_type,
+            metadata=metadata,
+            owner_scope_type=owner_scope_type,
+            owner_scope_id=owner_scope.scope_id,
             version_count=int(row.get("version_count") or 0),
             label_count=int(row.get("label_count") or 0),
             binding_count=int(row.get("binding_count") or 0),
@@ -937,7 +955,7 @@ class PromptRegistryRepository:
     def _to_binding_record(self, row: dict[str, Any]) -> PromptBindingRecord:
         return PromptBindingRecord(
             prompt_binding_id=str(row.get("prompt_binding_id") or ""),
-            scope_type=str(row.get("scope_type") or ""),
+            scope_type=normalize_scope_type(str(row.get("scope_type") or "")),
             scope_id=str(row.get("scope_id") or ""),
             prompt_template_id=str(row.get("prompt_template_id") or ""),
             template_key=str(row.get("template_key") or ""),

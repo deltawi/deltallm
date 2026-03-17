@@ -22,6 +22,14 @@ class AuthScope:
     team_ids: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class ResolvedScopeTarget:
+    scope_type: str
+    scope_id: str
+    organization_id: str | None = None
+    team_id: str | None = None
+
+
 ALLOWED_USER_PROFILE_TYPES = {
     "internal_user",
     "internal_user_viewer",
@@ -91,6 +99,127 @@ def db_or_503(request: Request) -> Any:
     if db is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable")
     return db
+
+
+async def get_runtime_user_row(db: Any, user_id: str) -> dict[str, Any]:
+    rows = await db.query_raw(
+        """
+        SELECT
+            u.user_id,
+            u.team_id,
+            t.organization_id
+        FROM deltallm_usertable u
+        LEFT JOIN deltallm_teamtable t ON t.team_id = u.team_id
+        WHERE u.user_id = $1
+        LIMIT 1
+        """,
+        user_id,
+    )
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id not found")
+    return dict(rows[0])
+
+
+async def validate_runtime_user_scope(
+    db: Any,
+    user_id: str,
+    *,
+    team_id: str | None = None,
+    organization_id: str | None = None,
+) -> dict[str, Any]:
+    row = await get_runtime_user_row(db, user_id)
+    user_team_id = str(row.get("team_id") or "").strip() or None
+    user_organization_id = str(row.get("organization_id") or "").strip() or None
+    if team_id and user_team_id != team_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id does not belong to team_id")
+    if organization_id and user_organization_id != organization_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id does not belong to organization_id")
+    return row
+
+
+async def resolve_runtime_scope_target(
+    db: Any,
+    *,
+    scope_type: str,
+    scope_id: str,
+) -> ResolvedScopeTarget:
+    normalized_scope_type = str(scope_type or "").strip()
+    normalized_scope_id = str(scope_id or "").strip()
+    if not normalized_scope_type or not normalized_scope_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scope_type and scope_id are required")
+
+    if normalized_scope_type == "organization":
+        rows = await db.query_raw(
+            """
+            SELECT organization_id
+            FROM deltallm_organizationtable
+            WHERE organization_id = $1
+            LIMIT 1
+            """,
+            normalized_scope_id,
+        )
+        if not rows:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+        return ResolvedScopeTarget(
+            scope_type="organization",
+            scope_id=normalized_scope_id,
+            organization_id=normalized_scope_id,
+        )
+
+    if normalized_scope_type == "team":
+        rows = await db.query_raw(
+            """
+            SELECT team_id, organization_id
+            FROM deltallm_teamtable
+            WHERE team_id = $1
+            LIMIT 1
+            """,
+            normalized_scope_id,
+        )
+        if not rows:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+        row = rows[0]
+        return ResolvedScopeTarget(
+            scope_type="team",
+            scope_id=normalized_scope_id,
+            organization_id=str(row.get("organization_id") or "").strip() or None,
+            team_id=normalized_scope_id,
+        )
+
+    if normalized_scope_type == "api_key":
+        rows = await db.query_raw(
+            """
+            SELECT vt.token, vt.team_id, t.organization_id
+            FROM deltallm_verificationtoken vt
+            LEFT JOIN deltallm_teamtable t ON vt.team_id = t.team_id
+            WHERE vt.token = $1
+            LIMIT 1
+            """,
+            normalized_scope_id,
+        )
+        if not rows:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
+        row = rows[0]
+        team_id = str(row.get("team_id") or "").strip() or None
+        if team_id is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="API key must belong to a team")
+        return ResolvedScopeTarget(
+            scope_type="api_key",
+            scope_id=normalized_scope_id,
+            organization_id=str(row.get("organization_id") or "").strip() or None,
+            team_id=team_id,
+        )
+
+    if normalized_scope_type == "user":
+        row = await validate_runtime_user_scope(db, normalized_scope_id)
+        return ResolvedScopeTarget(
+            scope_type="user",
+            scope_id=normalized_scope_id,
+            organization_id=str(row.get("organization_id") or "").strip() or None,
+            team_id=str(row.get("team_id") or "").strip() or None,
+        )
+
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported scope_type")
 
 
 def to_json_value(value: Any) -> Any:

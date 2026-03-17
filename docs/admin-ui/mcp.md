@@ -10,6 +10,7 @@ Use this area when you need to:
 - refresh the tool catalog after the upstream server changes
 - run a health check before exposing the server to applications
 - bind a server to an organization, team, or API key
+- bind a server to an organization, team, API key, or user
 - set policy for a specific tool
 - review and decide manual approval requests
 
@@ -77,18 +78,19 @@ Supported binding scopes:
 - `organization`
 - `team`
 - `api_key`
+- `user`
 
 If you leave the binding allowlist empty, every tool from that server is eligible to be visible at that scope. If you set a `tool_allowlist`, only those tools are eligible.
 
-### Resolution Order
+### Resolution Model
 
-DeltaLLM chooses the most specific matching binding:
+MCP now follows the same scoped-governance model used by callable targets:
 
-```text
-api_key -> team -> organization
-```
+- organization bindings are the ceiling
+- team, API key, and user policies can narrow access with `restrict`
+- tool allowlists intersect as scope becomes more specific
 
-This means an API-key-specific binding can narrow or override what the broader team or organization binding would otherwise expose.
+If an organization has not been migrated yet, DeltaLLM still supports a compatibility fallback. Use the MCP migration report and backfill endpoints to move orgs to the explicit org-ceiling model.
 
 ## Tool Policies
 
@@ -163,3 +165,4 @@ DeltaLLM strips the prefix and forwards only the allowlisted header names.
 - [MCP Quick Start](../getting-started/mcp-quickstart.md)
 - [MCP Gateway & Tools](../features/mcp.md)
 - [API Reference: MCP Gateway & Tooling](../api/mcp.md)
+- [Governance Rollout](../deployment/governance.md)

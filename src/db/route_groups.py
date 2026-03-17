@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from src.services.asset_ownership import owner_scope_from_metadata
+
 
 def _parse_json_object(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
@@ -106,6 +108,8 @@ class RouteGroupRecord:
     member_count: int = 0
     metadata: dict[str, Any] | None = None
     default_prompt: dict[str, str] | None = None
+    owner_scope_type: str = "global"
+    owner_scope_id: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -131,6 +135,19 @@ class RoutePolicyRecord:
     policy_json: dict[str, Any]
     published_at: datetime | None = None
     published_by: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@dataclass
+class RouteGroupBindingRecord:
+    route_group_binding_id: str
+    route_group_id: str
+    group_key: str
+    scope_type: str
+    scope_id: str
+    enabled: bool = True
+    metadata: dict[str, Any] | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -319,6 +336,151 @@ class RouteGroupRepository:
             RETURNING route_group_id
             """,
             group_key,
+        )
+        return bool(rows)
+
+    async def list_bindings(
+        self,
+        *,
+        group_key: str | None = None,
+        scope_type: str | None = None,
+        scope_id: str | None = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> tuple[list[RouteGroupBindingRecord], int]:
+        if self.prisma is None:
+            return [], 0
+
+        clauses: list[str] = []
+        params: list[Any] = []
+        if group_key:
+            params.append(group_key)
+            clauses.append(f"g.group_key = ${len(params)}")
+        if scope_type:
+            params.append(scope_type)
+            clauses.append(f"b.scope_type = ${len(params)}")
+        if scope_id:
+            params.append(scope_id)
+            clauses.append(f"b.scope_id = ${len(params)}")
+
+        where_sql = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        count_rows = await self.prisma.query_raw(
+            f"""
+            SELECT COUNT(*)::int AS total
+            FROM deltallm_routegroupbinding b
+            JOIN deltallm_routegroup g ON g.route_group_id = b.route_group_id
+            {where_sql}
+            """,
+            *params,
+        )
+        total = int((count_rows[0] if count_rows else {}).get("total") or 0)
+
+        page_params = [*params, limit, offset]
+        rows = await self.prisma.query_raw(
+            f"""
+            SELECT
+                b.route_group_binding_id,
+                b.route_group_id,
+                g.group_key,
+                b.scope_type,
+                b.scope_id,
+                b.enabled,
+                b.metadata,
+                b.created_at,
+                b.updated_at
+            FROM deltallm_routegroupbinding b
+            JOIN deltallm_routegroup g ON g.route_group_id = b.route_group_id
+            {where_sql}
+            ORDER BY b.created_at DESC, g.group_key ASC, b.scope_type ASC, b.scope_id ASC
+            LIMIT ${len(page_params) - 1} OFFSET ${len(page_params)}
+            """,
+            *page_params,
+        )
+        return [self._to_binding_record(row) for row in rows], total
+
+    async def upsert_binding(
+        self,
+        group_key: str,
+        *,
+        scope_type: str,
+        scope_id: str,
+        enabled: bool,
+        metadata: dict[str, Any] | None,
+    ) -> RouteGroupBindingRecord | None:
+        if self.prisma is None:
+            return None
+
+        group_id = await self._resolve_group_id(group_key)
+        if group_id is None:
+            return None
+
+        rows = await self.prisma.query_raw(
+            """
+            INSERT INTO deltallm_routegroupbinding (
+                route_group_binding_id,
+                route_group_id,
+                scope_type,
+                scope_id,
+                enabled,
+                metadata,
+                created_at,
+                updated_at
+            )
+            VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5::jsonb, NOW(), NOW())
+            ON CONFLICT (route_group_id, scope_type, scope_id)
+            DO UPDATE SET
+                enabled = EXCLUDED.enabled,
+                metadata = EXCLUDED.metadata,
+                updated_at = NOW()
+            RETURNING route_group_binding_id
+            """,
+            group_id,
+            scope_type,
+            scope_id,
+            enabled,
+            json.dumps(metadata) if metadata is not None else None,
+        )
+        if not rows:
+            return None
+        binding_id = str(rows[0].get("route_group_binding_id") or "")
+        return await self.get_binding(binding_id)
+
+    async def get_binding(self, binding_id: str) -> RouteGroupBindingRecord | None:
+        if self.prisma is None:
+            return None
+
+        rows = await self.prisma.query_raw(
+            """
+            SELECT
+                b.route_group_binding_id,
+                b.route_group_id,
+                g.group_key,
+                b.scope_type,
+                b.scope_id,
+                b.enabled,
+                b.metadata,
+                b.created_at,
+                b.updated_at
+            FROM deltallm_routegroupbinding b
+            JOIN deltallm_routegroup g ON g.route_group_id = b.route_group_id
+            WHERE b.route_group_binding_id = $1
+            LIMIT 1
+            """,
+            binding_id,
+        )
+        return self._to_binding_record(rows[0]) if rows else None
+
+    async def delete_binding(self, binding_id: str) -> bool:
+        if self.prisma is None:
+            return False
+
+        rows = await self.prisma.query_raw(
+            """
+            DELETE FROM deltallm_routegroupbinding
+            WHERE route_group_binding_id = $1
+            RETURNING route_group_binding_id
+            """,
+            binding_id,
         )
         return bool(rows)
 
@@ -711,6 +873,7 @@ class RouteGroupRepository:
     @staticmethod
     def _to_group_record(row: dict[str, Any]) -> RouteGroupRecord:
         metadata = _parse_json_object(row.get("metadata")) or None
+        owner_scope = owner_scope_from_metadata(metadata)
         return RouteGroupRecord(
             route_group_id=str(row.get("route_group_id") or ""),
             group_key=str(row.get("group_key") or ""),
@@ -721,6 +884,8 @@ class RouteGroupRepository:
             member_count=int(row.get("member_count") or 0),
             metadata=metadata,
             default_prompt=_extract_default_prompt(metadata),
+            owner_scope_type=owner_scope.scope_type,
+            owner_scope_id=owner_scope.scope_id,
             created_at=_parse_datetime(row.get("created_at")),
             updated_at=_parse_datetime(row.get("updated_at")),
         )
@@ -748,6 +913,20 @@ class RouteGroupRepository:
             policy_json=_parse_json_object(row.get("policy_json")),
             published_at=_parse_datetime(row.get("published_at")),
             published_by=row.get("published_by"),
+            created_at=_parse_datetime(row.get("created_at")),
+            updated_at=_parse_datetime(row.get("updated_at")),
+        )
+
+    @staticmethod
+    def _to_binding_record(row: dict[str, Any]) -> RouteGroupBindingRecord:
+        return RouteGroupBindingRecord(
+            route_group_binding_id=str(row.get("route_group_binding_id") or ""),
+            route_group_id=str(row.get("route_group_id") or ""),
+            group_key=str(row.get("group_key") or ""),
+            scope_type=str(row.get("scope_type") or ""),
+            scope_id=str(row.get("scope_id") or ""),
+            enabled=bool(row.get("enabled", True)),
+            metadata=_parse_json_object(row.get("metadata")) if row.get("metadata") is not None else None,
             created_at=_parse_datetime(row.get("created_at")),
             updated_at=_parse_datetime(row.get("updated_at")),
         )

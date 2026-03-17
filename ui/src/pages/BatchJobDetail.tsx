@@ -4,6 +4,7 @@ import { useApi } from '../lib/hooks';
 import { batches } from '../lib/api';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
+import { RecordDetailShell } from '../components/admin/shells';
 import { ArrowLeft, XCircle, Clock, DollarSign, Hash, ChevronDown, ChevronUp } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -207,30 +208,34 @@ export default function BatchJobDetail() {
   ];
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
-      <button onClick={() => navigate('/batches')} className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-900 transition-colors">
-        <ArrowLeft className="w-4 h-4" /> Back to Batch Jobs
-      </button>
-
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold text-gray-900">Batch Job</h1>
-            <StatusBadge status={job.status} />
+    <RecordDetailShell
+      backAction={(
+        <button onClick={() => navigate('/batches')} className="flex items-center gap-1 text-sm text-gray-500 transition-colors hover:text-gray-900">
+          <ArrowLeft className="w-4 h-4" /> Back to Batch Jobs
+        </button>
+      )}
+      header={(
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="flex items-center gap-3">
+              <h1 className="text-2xl font-bold text-gray-900">Batch Job</h1>
+              <StatusBadge status={job.status} />
+            </div>
+            <p className="mt-1 font-mono text-sm text-gray-500">{job.batch_id}</p>
           </div>
-          <p className="text-sm text-gray-500 mt-1 font-mono">{job.batch_id}</p>
+          {canCancel && (
+            <button
+              onClick={handleCancel}
+              disabled={cancelling}
+              className="inline-flex items-center gap-2 rounded-lg bg-red-50 px-4 py-2 text-sm font-medium text-red-700 transition-colors hover:bg-red-100 disabled:opacity-50"
+            >
+              <XCircle className="w-4 h-4" />
+              {cancelling ? 'Cancelling...' : 'Cancel Batch'}
+            </button>
+          )}
         </div>
-        {canCancel && (
-          <button
-            onClick={handleCancel}
-            disabled={cancelling}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-700 bg-red-50 rounded-lg hover:bg-red-100 disabled:opacity-50 transition-colors"
-          >
-            <XCircle className="w-4 h-4" />
-            {cancelling ? 'Cancelling...' : 'Cancel Batch'}
-          </button>
-        )}
-      </div>
+      )}
+    >
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card>
@@ -336,7 +341,7 @@ export default function BatchJobDetail() {
           <ExpandedItemView item={itemsData.find((item: any) => item.item_id === expandedItem)!} />
         )}
       </Card>
-    </div>
+    </RecordDetailShell>
   );
 }
 

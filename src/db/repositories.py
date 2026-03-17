@@ -44,6 +44,7 @@ class KeyRecord:
     user_id: str | None = None
     team_id: str | None = None
     models: list[str] | None = None
+    team_models: list[str] | None = None
     max_budget: float | None = None
     spend: float = 0.0
     tpm_limit: int | None = None
@@ -81,6 +82,7 @@ class KeyRepository:
                 COALESCE(v.team_id, u.team_id) AS team_id,
                 t.organization_id,
                 v.models,
+                t.models AS team_models,
                 v.max_budget,
                 v.spend,
                 v.tpm_limit AS key_tpm_limit,
@@ -122,6 +124,7 @@ class KeyRepository:
             user_id=row.get("user_id"),
             team_id=row.get("team_id"),
             models=row.get("models") or [],
+            team_models=row.get("team_models") or [],
             max_budget=row.get("max_budget"),
             spend=float(row.get("spend") or 0.0),
             tpm_limit=row.get("key_tpm_limit"),

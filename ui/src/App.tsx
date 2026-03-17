@@ -16,6 +16,8 @@ import SettingsPage from './pages/SettingsPage';
 import BatchJobs from './pages/BatchJobs';
 import BatchJobDetail from './pages/BatchJobDetail';
 import OrganizationDetail from './pages/OrganizationDetail';
+import OrganizationCreate from './pages/OrganizationCreate';
+import TeamCreate from './pages/TeamCreate';
 import TeamDetail from './pages/TeamDetail';
 import ModelDetail from './pages/ModelDetail';
 import ModelEdit from './pages/ModelEdit';
@@ -35,6 +37,7 @@ function AppRoutes() {
   const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
   const isPlatformAdmin = userRole === 'platform_admin';
   const permissions = new Set(session?.effective_permissions || []);
+  const canCreateTeam = isPlatformAdmin || permissions.has('team.update');
   const canReadMcp = isPlatformAdmin || permissions.has('key.read');
   const canReviewMcp = isPlatformAdmin || permissions.has('key.update');
   const canReadAudit = isPlatformAdmin || (session?.effective_permissions || []).includes('audit.read');
@@ -76,8 +79,10 @@ function AppRoutes() {
         <Route path="/mcp-approvals" element={canReviewMcp ? <MCPApprovalQueue /> : <Navigate to="/" replace />} />
         <Route path="/keys" element={<ApiKeys />} />
         <Route path="/organizations" element={<Organizations />} />
+        <Route path="/organizations/new" element={isPlatformAdmin ? <OrganizationCreate /> : <Navigate to="/organizations" replace />} />
         <Route path="/organizations/:orgId" element={<OrganizationDetail />} />
         <Route path="/teams" element={<Teams />} />
+        <Route path="/teams/new" element={canCreateTeam ? <TeamCreate /> : <Navigate to="/teams" replace />} />
         <Route path="/teams/:teamId" element={<TeamDetail />} />
         <Route path="/users" element={<UsersPage />} />
         <Route path="/audit" element={canReadAudit ? <AuditLogs /> : <Navigate to="/" replace />} />

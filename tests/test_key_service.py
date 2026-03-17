@@ -104,3 +104,26 @@ async def test_key_cache_ttl_capped_by_key_expiry() -> None:
     await service.validate_key(raw_key)
     cache_key = f"key:{token_hash}"
     assert 1 <= redis.ttls[cache_key] <= 20
+
+
+@pytest.mark.asyncio
+async def test_validate_key_preserves_key_and_team_model_scopes() -> None:
+    salt = "test-salt"
+    raw_key = "sk-scoped-models"
+    token_hash = hashlib.sha256(f"{salt}:{raw_key}".encode("utf-8")).hexdigest()
+    repo = InMemoryRepo(
+        {
+            token_hash: KeyRecord(
+                token=token_hash,
+                models=["gpt-4o-mini", "text-embedding-3-small"],
+                team_models=["gpt-4o-mini", "text-embedding-3-small"],
+                expires=datetime.now(tz=UTC) + timedelta(hours=1),
+            )
+        }
+    )
+    service = KeyService(repository=repo, salt=salt)
+
+    auth = await service.validate_key(raw_key)
+
+    assert auth.models == ["gpt-4o-mini", "text-embedding-3-small"]
+    assert auth.team_models == ["gpt-4o-mini", "text-embedding-3-small"]

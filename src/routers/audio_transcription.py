@@ -20,7 +20,7 @@ from src.metrics import (
     observe_api_latency,
     observe_request_latency,
 )
-from src.models.errors import InvalidRequestError, PermissionDeniedError
+from src.models.errors import InvalidRequestError
 from src.providers.resolution import (
     is_openai_compatible_provider,
     resolve_provider,
@@ -37,6 +37,7 @@ from src.routers.routing_decision import (
     update_served_route_decision,
 )
 from src.routers.utils import enforce_budget_if_configured, fire_and_forget
+from src.services.model_visibility import ensure_model_allowed, get_callable_target_policy_mode_from_app
 
 router = APIRouter(prefix="/v1", tags=["audio"])
 
@@ -127,8 +128,13 @@ async def audio_transcriptions(
     request_start = perf_counter()
     callback_start = datetime.now(tz=UTC)
     auth = request.state.user_api_key
-    if auth.models and model not in auth.models:
-        raise PermissionDeniedError(message=f"Model '{model}' is not allowed for this key")
+    ensure_model_allowed(
+        auth,
+        model,
+        callable_target_grant_service=getattr(request.app.state, "callable_target_grant_service", None),
+        policy_mode=get_callable_target_policy_mode_from_app(request.app),
+        emit_shadow_log=True,
+    )
     await enforce_budget_if_configured(request, model=model, auth=auth)
 
     callback_manager: CallbackManager = getattr(request.app.state, "callback_manager", CallbackManager())
