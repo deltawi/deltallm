@@ -296,7 +296,7 @@ export default function OrganizationCreate() {
                       <p className="text-xs text-gray-500">Cap total spend for this org</p>
                     </div>
                   </div>
-                  <ToggleSwitch enabled={budgetEnabled} onToggle={() => setBudgetEnabled((v) => !v)} />
+                  <ToggleSwitch checked={budgetEnabled} onCheckedChange={setBudgetEnabled} aria-label="Toggle budget limit" />
                 </div>
                 {budgetEnabled && (
                   <div className="ml-6 pl-3 border-l-2 border-green-200">
@@ -328,7 +328,7 @@ export default function OrganizationCreate() {
                       <p className="text-xs text-gray-500">Max requests per minute</p>
                     </div>
                   </div>
-                  <ToggleSwitch enabled={rpmEnabled} onToggle={() => setRpmEnabled((v) => !v)} />
+                  <ToggleSwitch checked={rpmEnabled} onCheckedChange={setRpmEnabled} aria-label="Toggle RPM limit" />
                 </div>
                 {rpmEnabled && (
                   <div className="ml-6 pl-3 border-l-2 border-purple-200">
@@ -356,7 +356,7 @@ export default function OrganizationCreate() {
                       <p className="text-xs text-gray-500">Max tokens per minute</p>
                     </div>
                   </div>
-                  <ToggleSwitch enabled={tpmEnabled} onToggle={() => setTpmEnabled((v) => !v)} />
+                  <ToggleSwitch checked={tpmEnabled} onCheckedChange={setTpmEnabled} aria-label="Toggle TPM limit" />
                 </div>
                 {tpmEnabled && (
                   <div className="ml-6 pl-3 border-l-2 border-indigo-200">
@@ -389,7 +389,7 @@ export default function OrganizationCreate() {
                     Store request and response payloads in audit logs for compliance review.
                   </p>
                 </div>
-                <ToggleSwitch enabled={auditStorage} onToggle={() => setAuditStorage((v) => !v)} />
+                <ToggleSwitch checked={auditStorage} onCheckedChange={setAuditStorage} aria-label="Toggle audit content storage" />
               </div>
               {auditStorage && (
                 <div className="mt-3 flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">

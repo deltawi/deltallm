@@ -1,5 +1,6 @@
 import { Save } from 'lucide-react';
 import { ROUTE_GROUP_MODE_OPTIONS } from '../../lib/routeGroups';
+import ToggleSwitch from '../ToggleSwitch';
 
 interface GroupFormValues {
   name: string;
@@ -60,21 +61,11 @@ export default function RouteGroupSettingsCard({ form, saving, onChange, onSave 
               : 'Disabled — no requests will be routed through this group.'}
           </div>
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={form.enabled}
-          onClick={() => onChange({ ...form, enabled: !form.enabled })}
-          className={`relative h-6 w-10 shrink-0 cursor-pointer rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
-            form.enabled ? 'bg-blue-600' : 'bg-gray-300'
-          }`}
-        >
-          <span
-            className={`absolute top-[3px] h-[18px] w-[18px] rounded-full bg-white shadow-sm transition-transform ${
-              form.enabled ? 'translate-x-[19px]' : 'translate-x-[3px]'
-            }`}
-          />
-        </button>
+        <ToggleSwitch
+          checked={form.enabled}
+          onCheckedChange={(enabled) => onChange({ ...form, enabled })}
+          aria-label="Toggle live traffic"
+        />
       </div>
 
       {/* Save */}

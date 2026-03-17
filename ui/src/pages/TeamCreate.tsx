@@ -362,9 +362,10 @@ export default function TeamCreate() {
                     </div>
                   </div>
                   <ToggleSwitch
-                    enabled={budgetEnabled}
-                    onToggle={() => setBudgetEnabled((v) => !v)}
+                    checked={budgetEnabled}
+                    onCheckedChange={setBudgetEnabled}
                     disabled={saving}
+                    aria-label="Toggle budget limit"
                   />
                 </div>
                 {budgetEnabled && (
@@ -402,9 +403,10 @@ export default function TeamCreate() {
                     </div>
                   </div>
                   <ToggleSwitch
-                    enabled={rpmEnabled}
-                    onToggle={() => setRpmEnabled((v) => !v)}
+                    checked={rpmEnabled}
+                    onCheckedChange={setRpmEnabled}
                     disabled={saving}
+                    aria-label="Toggle RPM limit"
                   />
                 </div>
                 {rpmEnabled && (
@@ -433,9 +435,10 @@ export default function TeamCreate() {
                     </div>
                   </div>
                   <ToggleSwitch
-                    enabled={tpmEnabled}
-                    onToggle={() => setTpmEnabled((v) => !v)}
+                    checked={tpmEnabled}
+                    onCheckedChange={setTpmEnabled}
                     disabled={saving}
+                    aria-label="Toggle TPM limit"
                   />
                 </div>
                 {tpmEnabled && (
@@ -553,10 +556,11 @@ export default function TeamCreate() {
                   </div>
                 </div>
                 <ToggleSwitch
-                  enabled={blocked}
-                  onToggle={() => setBlocked((v) => !v)}
+                  checked={blocked}
+                  onCheckedChange={setBlocked}
                   activeColor="#ef4444"
                   disabled={saving}
+                  aria-label="Toggle blocked state"
                 />
               </div>
               {blocked && (
