@@ -34,6 +34,7 @@ import RouteGroupPolicyEditorCard from '../components/route-groups/RouteGroupPol
 import RouteGroupPolicyVersionsCard from '../components/route-groups/RouteGroupPolicyVersionsCard';
 import RouteGroupUsageCard from '../components/route-groups/RouteGroupUsageCard';
 import RouteGroupPromptBindingCard from '../components/route-groups/RouteGroupPromptBindingCard';
+import { HeroTabbedDetailShell, IconTabs, InlineStat, PanelCard } from '../components/admin/shells';
 
 /* ─── Visual helpers ─────────────────────────────────────────────────────── */
 
@@ -66,15 +67,6 @@ const ROUTING_LABELS: Record<string, string> = {
   'priority-based-routing':'Priority',
   'rate-limit-aware':      'Rate Limit',
 };
-
-function StatBadge({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">{label}</span>
-      <span className="text-sm font-bold text-gray-900 truncate max-w-[140px]">{value}</span>
-    </div>
-  );
-}
 
 /* ─── Tab definitions ────────────────────────────────────────────────────── */
 
@@ -485,115 +477,89 @@ export default function RouteGroupDetail() {
   const RoutingIcon = !group.routing_strategy || group.routing_strategy === 'simple-shuffle' ? Shuffle : GitBranch;
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Top nav bar */}
-      <div className="border-b border-gray-200 bg-white px-6 py-3">
+    <>
+      <HeroTabbedDetailShell
+      backBar={(
         <button
           onClick={() => navigate('/route-groups')}
           className="flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-gray-800"
         >
           <ArrowLeft className="h-4 w-4" /> Back to Model Groups
         </button>
-      </div>
+      )}
+      hero={(
+        <div className="relative overflow-hidden border-b border-gray-200 bg-white">
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-blue-50 via-white to-slate-50 opacity-70" />
+          <div className="pointer-events-none absolute right-0 top-0 h-40 w-40 rounded-full bg-blue-100/40 blur-3xl" />
 
-      {/* ── Hero header ── */}
-      <div className="relative overflow-hidden border-b border-gray-200 bg-white">
-        {/* Gradient + glow */}
-        <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-blue-50 via-white to-slate-50 opacity-70" />
-        <div className="pointer-events-none absolute right-0 top-0 h-40 w-40 rounded-full bg-blue-100/40 blur-3xl" />
+          <div className="relative px-6 pb-5 pt-6">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${modeColor}`}>
+                <ModeIcon className="h-3.5 w-3.5" />
+                {group.mode.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
+              </span>
+              <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${group.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
+                {group.enabled ? <><CheckCircle2 className="h-3.5 w-3.5" /> Live</> : <><XCircle className="h-3.5 w-3.5" /> Off</>}
+              </span>
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                <RoutingIcon className="h-3.5 w-3.5" />
+                {publishedPolicy ? `Override v${publishedPolicy.version}` : `${routingLabel} routing`}
+              </span>
+            </div>
 
-        <div className="relative px-6 pb-5 pt-6">
-          {/* Badge row */}
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${modeColor}`}>
-              <ModeIcon className="h-3.5 w-3.5" />
-              {group.mode.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
-            </span>
-            <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${group.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
-              {group.enabled ? <><CheckCircle2 className="h-3.5 w-3.5" /> Live</> : <><XCircle className="h-3.5 w-3.5" /> Off</>}
-            </span>
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
-              <RoutingIcon className="h-3.5 w-3.5" />
-              {publishedPolicy ? `Override v${publishedPolicy.version}` : `${routingLabel} routing`}
-            </span>
-          </div>
-
-          {/* Name + key + actions */}
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">{group.name || group.group_key}</h1>
-              <p className="mt-0.5 text-sm text-gray-500">
-                Group key:{' '}
-                <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-700">{group.group_key}</code>
-              </p>
-            </div>
-            <div className="flex shrink-0 gap-2">
-              <button
-                onClick={() => setActiveTab('settings')}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 shadow-sm hover:bg-gray-50"
-              >
-                <Pencil className="h-4 w-4" /> Edit
-              </button>
-              <button
-                onClick={() => setConfirmDeleteGroup(true)}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-500 shadow-sm hover:bg-red-50"
-                title="Delete group"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-
-          {/* Stat strip */}
-          <div className="mt-5 flex flex-wrap items-center gap-6 divide-x divide-gray-100">
-            <StatBadge label="Members" value={String(members.length)} />
-            <div className="pl-6">
-              <StatBadge
-                label="Healthy"
-                value={members.length > 0 ? `${healthyMembers}/${members.length}` : '—'}
-              />
-            </div>
-            <div className="pl-6">
-              <StatBadge
-                label="Policy"
-                value={publishedPolicy ? `v${publishedPolicy.version} published` : 'Default shuffle'}
-              />
-            </div>
-            <div className="pl-6">
-              <StatBadge label="Prompt" value={promptSummary ? promptSummary.templateKey : 'None bound'} />
-            </div>
-            {missingMembers > 0 && (
-              <div className="pl-6">
-                <StatBadge label="Registry Gaps" value={`${missingMembers} missing`} />
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">{group.name || group.group_key}</h1>
+                <p className="mt-0.5 text-sm text-gray-500">
+                  Group key:{' '}
+                  <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-700">{group.group_key}</code>
+                </p>
               </div>
-            )}
+              <div className="flex shrink-0 gap-2">
+                <button
+                  onClick={() => setActiveTab('settings')}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 shadow-sm hover:bg-gray-50"
+                >
+                  <Pencil className="h-4 w-4" /> Edit
+                </button>
+                <button
+                  onClick={() => setConfirmDeleteGroup(true)}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-500 shadow-sm hover:bg-red-50"
+                  title="Delete group"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-5 flex flex-wrap items-center gap-6 divide-x divide-gray-100">
+              <InlineStat label="Members" value={String(members.length)} />
+              <div className="pl-6">
+                <InlineStat label="Healthy" value={members.length > 0 ? `${healthyMembers}/${members.length}` : '—'} />
+              </div>
+              <div className="pl-6">
+                <InlineStat label="Policy" value={publishedPolicy ? `v${publishedPolicy.version} published` : 'Default shuffle'} />
+              </div>
+              <div className="pl-6">
+                <InlineStat label="Prompt" value={promptSummary ? promptSummary.templateKey : 'None bound'} />
+              </div>
+              {missingMembers > 0 && (
+                <div className="pl-6">
+                  <InlineStat label="Registry Gaps" value={`${missingMembers} missing`} />
+                </div>
+              )}
+            </div>
           </div>
         </div>
-      </div>
-
-      {/* ── Tabs + content ── */}
-      <div className="px-6 pb-8 pt-0">
-        {/* Tab bar */}
-        <div className="mb-4 flex gap-1 border-b border-gray-200">
-          {TABS.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setActiveTab(id)}
-              className={`flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-sm font-medium transition ${
-                activeTab === id
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              <Icon className="h-4 w-4" /> {label}
-            </button>
-          ))}
-        </div>
-
-        {/* Tab panel */}
-        <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-          {activeTab === 'models' && (
+      )}
+      body={(
+        <>
+          <IconTabs
+            active={activeTab}
+            onChange={setActiveTab}
+            items={TABS.map(({ id, label, icon }) => ({ id, label, icon }))}
+          />
+          {activeTab === 'models' ? (
             <RouteGroupMembersCard
               mode={form.mode}
               memberForm={memberForm}
@@ -610,73 +576,76 @@ export default function RouteGroupDetail() {
               onAddMember={handleAddMember}
               onRequestRemoveMember={setMemberToRemove}
             />
-          )}
-
-          {activeTab === 'test' && (
-            <RouteGroupUsageCard
-              groupKey={group.group_key}
-              mode={form.mode}
-              liveTrafficEnabled={group.enabled}
-              boundPrompt={promptSummary}
-            />
-          )}
-
-          {activeTab === 'settings' && (
-            <RouteGroupSettingsCard form={form} saving={savingGroup} onChange={setForm} onSave={handleSaveGroup} />
-          )}
-
-          {activeTab === 'advanced' && (
-            <div className="space-y-5">
-              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
-                Configure prompts, routing overrides, and rollback history here after the model inventory looks correct.
-              </div>
-
-              <RouteGroupPromptBindingCard
-                bindings={bindings}
-                templates={promptTemplates.data?.data || []}
-                bindingForm={bindingForm}
-                loadingTemplates={promptTemplates.loading}
-                savingBinding={savingBinding}
-                deletingBinding={deletingBinding}
-                onBindingFormChange={setBindingForm}
-                onSaveBinding={handleSaveBinding}
-                onDeleteBinding={handleDeleteBinding}
+          ) : (
+            <PanelCard>
+              {activeTab === 'test' && (
+              <RouteGroupUsageCard
+                groupKey={group.group_key}
+                mode={form.mode}
+                liveTrafficEnabled={group.enabled}
+                boundPrompt={promptSummary}
               />
+              )}
 
-              <RouteGroupPolicyEditorCard
-                guidedPolicy={guidedPolicy}
-                memberIds={memberIds}
-                guidedPreview={guidedPreview}
-                policyText={policyText}
-                policyMessage={policyMessage}
-                policyError={policyError}
-                isPolicyBusy={isPolicyBusy}
-                policyAction={policyAction}
-                showAdvancedJson={showAdvancedJson}
-                hasMembers={memberIds.length > 0}
-                onToggleAdvancedJson={() => setShowAdvancedJson((cur) => !cur)}
-                onGuidedPolicyChange={setGuidedPolicy}
-                onPolicyTextChange={setPolicyText}
-                onValidate={handleValidatePolicy}
-                onSaveDraft={handleSaveDraft}
-                onPublish={handlePublish}
-              />
+              {activeTab === 'settings' && (
+                <RouteGroupSettingsCard form={form} saving={savingGroup} onChange={setForm} onSave={handleSaveGroup} />
+              )}
 
-              <RouteGroupPolicyVersionsCard
-                policies={policies}
-                canRollbackVersions={canRollbackVersions}
-                selectedRollbackVersion={selectedRollbackVersion}
-                loading={policyHistory.loading}
-                hasError={!!policyHistory.error}
-                isPolicyBusy={isPolicyBusy}
-                policyAction={policyAction}
-                onRollbackVersionChange={setSelectedRollbackVersion}
-                onRollback={handleRollback}
-              />
-            </div>
+              {activeTab === 'advanced' && (
+                <div className="space-y-5">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
+                    Configure prompts, routing overrides, and rollback history here after the model inventory looks correct.
+                  </div>
+
+                  <RouteGroupPromptBindingCard
+                    bindings={bindings}
+                    templates={promptTemplates.data?.data || []}
+                    bindingForm={bindingForm}
+                    loadingTemplates={promptTemplates.loading}
+                    savingBinding={savingBinding}
+                    deletingBinding={deletingBinding}
+                    onBindingFormChange={setBindingForm}
+                    onSaveBinding={handleSaveBinding}
+                    onDeleteBinding={handleDeleteBinding}
+                  />
+
+                  <RouteGroupPolicyEditorCard
+                    guidedPolicy={guidedPolicy}
+                    memberIds={memberIds}
+                    guidedPreview={guidedPreview}
+                    policyText={policyText}
+                    policyMessage={policyMessage}
+                    policyError={policyError}
+                    isPolicyBusy={isPolicyBusy}
+                    policyAction={policyAction}
+                    showAdvancedJson={showAdvancedJson}
+                    hasMembers={memberIds.length > 0}
+                    onToggleAdvancedJson={() => setShowAdvancedJson((cur) => !cur)}
+                    onGuidedPolicyChange={setGuidedPolicy}
+                    onPolicyTextChange={setPolicyText}
+                    onValidate={handleValidatePolicy}
+                    onSaveDraft={handleSaveDraft}
+                    onPublish={handlePublish}
+                  />
+
+                  <RouteGroupPolicyVersionsCard
+                    policies={policies}
+                    canRollbackVersions={canRollbackVersions}
+                    selectedRollbackVersion={selectedRollbackVersion}
+                    loading={policyHistory.loading}
+                    hasError={!!policyHistory.error}
+                    isPolicyBusy={isPolicyBusy}
+                    policyAction={policyAction}
+                    onRollbackVersionChange={setSelectedRollbackVersion}
+                    onRollback={handleRollback}
+                  />
+                </div>
+              )}
+            </PanelCard>
           )}
-        </div>
-      </div>
+        </>
+      )}
+      />
 
       {/* Remove member confirmation */}
       <ConfirmDialog
@@ -701,6 +670,6 @@ export default function RouteGroupDetail() {
         onConfirm={handleDeleteGroup}
         onClose={() => { if (!deletingGroup) setConfirmDeleteGroup(false); }}
       />
-    </div>
+    </>
   );
 }

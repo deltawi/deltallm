@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { callableTargets, organizations, teams as teamsApi } from '../lib/api';
 import { buildCatalogAssetTargets, buildParentScopedAssetTargets } from '../lib/assetAccess';
@@ -7,6 +7,11 @@ import { useAuth } from '../lib/auth';
 import Modal from '../components/Modal';
 import UserSearchSelect from '../components/UserSearchSelect';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
+import {
+  DetailMetricCard,
+  EntityDetailShell,
+  TextTabs,
+} from '../components/admin/shells';
 import {
   ArrowLeft, Building2, Users, DollarSign, Gauge, TrendingUp, Pencil, Plus,
   UserPlus, Trash2, ChevronRight, Shield, CheckCircle2, AlertTriangle,
@@ -51,40 +56,6 @@ type TabId = 'overview' | 'teams' | 'members' | 'assets';
 
 /* ─────────────── sub-components ─────────────── */
 
-function StatCard({ icon: Icon, label, value, sub, bg, iconCls }: {
-  icon: any; label: string; value: string; sub?: string; bg: string; iconCls: string;
-}) {
-  return (
-    <div className="flex items-center gap-3 px-4 py-3 bg-white rounded-xl border border-gray-200">
-      <div className={`p-2 rounded-lg ${bg} shrink-0`}>
-        <Icon className={`w-4 h-4 ${iconCls}`} />
-      </div>
-      <div>
-        <p className="text-lg font-bold text-gray-900 leading-none">{value}</p>
-        <p className="text-xs text-gray-400 mt-0.5">{label}</p>
-        {sub && <p className="text-[10px] text-gray-400">{sub}</p>}
-      </div>
-    </div>
-  );
-}
-
-function TabButton({ active, onClick, children }: {
-  active: boolean; onClick: () => void; children: React.ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`pb-3 text-sm font-medium transition-colors border-b-2 ${
-        active
-          ? 'border-blue-600 text-blue-600'
-          : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
 function SpendBar({ spend, budget }: { spend: number; budget: number | null }) {
   if (!budget) return <span className="text-xs text-gray-400">No limit</span>;
   const pct = Math.min(100, (spend / budget) * 100);
@@ -107,6 +78,7 @@ function SpendBar({ spend, budget }: { spend: number; budget: number | null }) {
 export default function OrganizationDetail() {
   const { orgId } = useParams<{ orgId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const { session, authMode } = useAuth();
   const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
   const isPlatformAdmin = userRole === 'platform_admin';
@@ -152,7 +124,11 @@ export default function OrganizationDetail() {
     selected_callable_keys: [] as string[],
   });
   const [saving, setSaving] = useState(false);
-  const [pageError, setPageError] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<string | null>(
+    typeof location.state === 'object' && location.state && 'pageWarning' in location.state
+      ? String((location.state as { pageWarning?: string }).pageWarning || '') || null
+      : null,
+  );
   const [orgError, setOrgError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -404,129 +380,119 @@ export default function OrganizationDetail() {
   const orgName = org.organization_name || org.organization_id;
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* ── Header ── */}
-      <div className="bg-white border-b border-gray-200">
-        <div className="px-6 py-4">
-          {/* Breadcrumb */}
-          <div className="flex items-center gap-1.5 text-xs text-gray-400 mb-3">
-            <button
-              onClick={() => navigate('/organizations')}
-              className="hover:text-gray-700 flex items-center gap-1 transition-colors"
-            >
-              <ArrowLeft className="w-3 h-3" /> Organizations
-            </button>
-            <ChevronRight className="w-3 h-3" />
-            <span className="text-gray-600 font-medium">{orgName}</span>
-          </div>
-
-          {/* Title row */}
-          <div className="flex items-start justify-between">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center shadow-sm shrink-0">
-                <span className="text-lg font-bold text-white">{orgName[0].toUpperCase()}</span>
-              </div>
-              <div>
-                <div className="flex items-center gap-2.5 flex-wrap">
-                  <h1 className="text-xl font-bold text-gray-900">{orgName}</h1>
-                  <span className="inline-flex items-center gap-1 text-xs text-emerald-600 font-medium">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> Active
-                  </span>
-                </div>
-                <div className="flex items-center gap-3 mt-1">
-                  <code className="text-xs text-gray-400 font-mono bg-gray-100 px-1.5 py-0.5 rounded">
-                    {org.organization_id}
-                  </code>
-                  {org.created_at && (
-                    <span className="text-xs text-gray-400">
-                      Created {new Date(org.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+    <EntityDetailShell
+      breadcrumbs={[
+        { label: 'Organizations', onClick: () => navigate('/organizations'), icon: ArrowLeft },
+        { label: orgName },
+      ]}
+      avatar={(
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 shadow-sm">
+          <span className="text-lg font-bold text-white">{orgName[0].toUpperCase()}</span>
+        </div>
+      )}
+      title={orgName}
+      badges={(
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600">
+          <CheckCircle2 className="h-3.5 w-3.5" /> Active
+        </span>
+      )}
+      meta={(
+        <div className="flex items-center gap-3">
+          <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-400">
+            {org.organization_id}
+          </code>
+          {org.created_at && (
+            <span className="text-xs text-gray-400">
+              Created {new Date(org.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+            </span>
+          )}
+        </div>
+      )}
+      action={(
+        <button
+          onClick={openEditSettings}
+          className="flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+        >
+          <Pencil className="h-3.5 w-3.5" /> Edit
+        </button>
+      )}
+      metrics={(
+        <>
+          <DetailMetricCard
+            icon={DollarSign}
+            label="Budget used"
+            value={spendPct != null ? `${spendPct}%` : `$${spend.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+            sub={budget ? `$${spend.toLocaleString(undefined, { maximumFractionDigits: 0 })} of $${budget.toLocaleString()}` : 'No limit'}
+            tone={spendPct != null && spendPct > 80 ? 'amber' : 'green'}
+          />
+          <DetailMetricCard
+            icon={Building2}
+            label="Teams"
+            value={String(teamList.length)}
+            sub={`${teamList.filter((t: any) => (t.spend || 0) > 0).length} active`}
+            tone="blue"
+          />
+          <DetailMetricCard
+            icon={Users}
+            label="Members"
+            value={String(memberList.length)}
+            sub="across all teams"
+            tone="violet"
+          />
+          <DetailMetricCard
+            icon={Shield}
+            label="Assets granted"
+            value={
+              orgAssetSummary
+                ? `${orgAssetSummary.selected_total}/${orgAssetSummary.selectable_total}`
+                : isPlatformAdmin ? '—' : 'N/A'
+            }
+            sub={assetPct != null ? `${assetPct}% of catalog` : 'of catalog'}
+            tone="indigo"
+          />
+        </>
+      )}
+      tabs={(
+        <TextTabs
+          active={tab}
+          onChange={setTab}
+          items={[
+            { id: 'overview', label: 'Overview' },
+            {
+              id: 'teams',
+              label: (
+                <>
+                  Teams
+                  {teamList.length > 0 && (
+                    <span className="ml-1.5 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-gray-100 px-1.5 text-xs font-semibold text-gray-600">
+                      {teamList.length}
                     </span>
                   )}
-                </div>
-              </div>
-            </div>
-            <button
-              onClick={openEditSettings}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-            >
-              <Pencil className="w-3.5 h-3.5" /> Edit
-            </button>
-          </div>
-
-          {/* Metrics strip */}
-          <div className="mt-5 grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <StatCard
-              icon={DollarSign}
-              label="Budget used"
-              value={spendPct != null ? `${spendPct}%` : `$${spend.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
-              sub={budget ? `$${spend.toLocaleString(undefined, { maximumFractionDigits: 0 })} of $${budget.toLocaleString()}` : 'No limit'}
-              bg={spendPct != null && spendPct > 80 ? 'bg-amber-50' : 'bg-green-50'}
-              iconCls={spendPct != null && spendPct > 80 ? 'text-amber-500' : 'text-green-500'}
-            />
-            <StatCard
-              icon={Building2}
-              label="Teams"
-              value={String(teamList.length)}
-              sub={`${teamList.filter((t: any) => (t.spend || 0) > 0).length} active`}
-              bg="bg-blue-50"
-              iconCls="text-blue-600"
-            />
-            <StatCard
-              icon={Users}
-              label="Members"
-              value={String(memberList.length)}
-              sub="across all teams"
-              bg="bg-violet-50"
-              iconCls="text-violet-600"
-            />
-            <StatCard
-              icon={Shield}
-              label="Assets granted"
-              value={
-                orgAssetSummary
-                  ? `${orgAssetSummary.selected_total}/${orgAssetSummary.selectable_total}`
-                  : isPlatformAdmin ? '—' : 'N/A'
-              }
-              sub={assetPct != null ? `${assetPct}% of catalog` : 'of catalog'}
-              bg="bg-indigo-50"
-              iconCls="text-indigo-600"
-            />
-          </div>
-
-          {/* Tabs */}
-          <div className="mt-5 -mb-px flex gap-6">
-            <TabButton active={tab === 'overview'} onClick={() => setTab('overview')}>Overview</TabButton>
-            <TabButton active={tab === 'teams'} onClick={() => setTab('teams')}>
-              Teams
-              {teamList.length > 0 && (
-                <span className="ml-1.5 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 rounded-full bg-gray-100 text-xs font-semibold text-gray-600">
-                  {teamList.length}
-                </span>
-              )}
-            </TabButton>
-            <TabButton active={tab === 'members'} onClick={() => setTab('members')}>
-              Members
-              {memberList.length > 0 && (
-                <span className="ml-1.5 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 rounded-full bg-gray-100 text-xs font-semibold text-gray-600">
-                  {memberList.length}
-                </span>
-              )}
-            </TabButton>
-            {isPlatformAdmin && (
-              <TabButton active={tab === 'assets'} onClick={() => setTab('assets')}>Asset Access</TabButton>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* ── Content ── */}
-      <div className="px-6 py-5">
-        {pageError && (
-          <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">{pageError}</div>
-        )}
-
-        {/* ── OVERVIEW ── */}
-        {tab === 'overview' && (
+                </>
+              ),
+            },
+            {
+              id: 'members',
+              label: (
+                <>
+                  Members
+                  {memberList.length > 0 && (
+                    <span className="ml-1.5 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-gray-100 px-1.5 text-xs font-semibold text-gray-600">
+                      {memberList.length}
+                    </span>
+                  )}
+                </>
+              ),
+            },
+            ...(isPlatformAdmin ? [{ id: 'assets' as const, label: 'Asset Access' }] : []),
+          ]}
+        />
+      )}
+      notice={pageError ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{pageError}</div>
+      ) : undefined}
+    >
+      {tab === 'overview' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
             <div className="lg:col-span-2 space-y-5">
               {/* Budget & Spend */}
@@ -1177,7 +1143,6 @@ export default function OrganizationDetail() {
             </div>
           </div>
         )}
-      </div>
 
       {/* ── Create Team Modal ── */}
       <Modal open={showCreateTeam} onClose={() => setShowCreateTeam(false)} title="Add Team to Organization">
@@ -1303,6 +1268,6 @@ export default function OrganizationDetail() {
           </div>
         </div>
       </Modal>
-    </div>
+    </EntityDetailShell>
   );
 }

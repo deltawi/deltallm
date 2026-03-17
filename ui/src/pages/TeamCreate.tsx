@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { teams, organizations } from '../lib/api';
 import { buildParentScopedAssetTargets } from '../lib/assetAccess';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import ToggleSwitch from '../components/ToggleSwitch';
+import { useAuth } from '../lib/auth';
 import {
   Users, X, DollarSign, Gauge, TrendingUp, Info,
   ChevronRight, Check, AlertCircle, Building2,
@@ -113,6 +114,14 @@ export default function TeamCreate() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const preselectedOrgId = searchParams.get('organization_id') || '';
+  const { session, authMode } = useAuth();
+  const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
+  const permissions = new Set(session?.effective_permissions || []);
+  const canCreateTeam = userRole === 'platform_admin' || permissions.has('team.update');
+
+  if (!canCreateTeam) {
+    return <Navigate to="/teams" replace />;
+  }
 
   /* background teams list */
   const { data: teamsResult } = useApi(() => teams.list({ limit: 8, offset: 0 }), []);
@@ -184,6 +193,7 @@ export default function TeamCreate() {
       };
 
       const created = await teams.create(payload);
+      let pageWarning: string | null = null;
 
       /* block if requested (best-effort patch) */
       if (blocked) {
@@ -197,10 +207,14 @@ export default function TeamCreate() {
             mode: 'restrict',
             selected_callable_keys: selectedKeys,
           });
-        } catch { /* non-fatal — team still created */ }
+        } catch (err: any) {
+          pageWarning = err?.message || 'Team created, but restricted asset access could not be applied.';
+        }
       }
 
-      navigate(`/teams/${created.team_id}`);
+      navigate(`/teams/${created.team_id}`, {
+        state: pageWarning ? { pageWarning } : undefined,
+      });
     } catch (err: any) {
       setError(err?.message || 'Failed to create team');
     } finally {

@@ -3,6 +3,7 @@ import { organizations, rbac, teams, users, type Principal, type ScopedAssetAcce
 import { Plus, UserCog, ShieldCheck, Search, ChevronDown, ChevronRight, Building2, UsersRound, Trash2 } from 'lucide-react';
 import Modal from '../components/Modal';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
+import { IndexShell } from '../components/admin/shells';
 
 const PLATFORM_ROLES = [
   { value: 'platform_admin', label: 'Platform Admin' },
@@ -250,13 +251,21 @@ export default function RBACAccounts() {
   };
 
   const openUserAssetAccess = async (acct: Principal) => {
+    if (!acct.runtime_user_id) {
+      setSelectedRuntimeUser(acct);
+      setShowUserAccessModal(true);
+      setUserAssetLoading(false);
+      setUserAssetAccess(null);
+      setUserAssetError('This account is not linked to a runtime user yet.');
+      return;
+    }
     setSelectedRuntimeUser(acct);
     setShowUserAccessModal(true);
     setUserAssetLoading(true);
     setUserAssetError('');
     setUserAssetAccess(null);
     try {
-      const access = await users.assetAccess(acct.account_id, { include_targets: true });
+      const access = await users.assetAccess(acct.runtime_user_id, { include_targets: true });
       setUserAssetAccess(access);
       setUserAssetMode(access.mode === 'restrict' ? 'restrict' : 'inherit');
       setUserAssetSelectedKeys(access.selected_callable_keys || []);
@@ -268,11 +277,11 @@ export default function RBACAccounts() {
   };
 
   const saveUserAssetAccess = async () => {
-    if (!selectedRuntimeUser) return;
+    if (!selectedRuntimeUser?.runtime_user_id) return;
     setSaving(true);
     setUserAssetError('');
     try {
-      const response = await users.updateAssetAccess(selectedRuntimeUser.account_id, {
+      const response = await users.updateAssetAccess(selectedRuntimeUser.runtime_user_id, {
         mode: userAssetMode,
         selected_callable_keys: userAssetMode === 'inherit' ? [] : userAssetSelectedKeys,
       });
@@ -298,41 +307,40 @@ export default function RBACAccounts() {
   };
 
   return (
-    <div className="p-4 sm:p-6">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">People & Access</h1>
-          <p className="text-sm text-gray-500 mt-1">Manage people, RBAC roles, and organization/team memberships</p>
-        </div>
+    <IndexShell
+      title="People & Access"
+      titleIcon={UserCog}
+      count={principalPagination.total}
+      description="Manage people, RBAC roles, and organization/team memberships"
+      action={(
         <button
           onClick={openCreateAccount}
-          className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+          className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
         >
-          <Plus className="w-4 h-4" />
+          <Plus className="h-4 w-4" />
           Add User
         </button>
-      </div>
-
-      <div className="mb-4">
+      )}
+      toolbar={(
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
           <input
             type="text"
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             placeholder="Search accounts..."
-            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            className="w-full rounded-lg border border-gray-300 py-2 pl-10 pr-4 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
-      </div>
-
+      )}
+    >
       {loading ? (
         <div className="flex items-center justify-center py-12">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+          <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-blue-600" />
         </div>
       ) : principals.length === 0 ? (
-        <div className="text-center py-12 bg-white rounded-xl border border-gray-200">
-          <UserCog className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+        <div className="rounded-xl border border-gray-200 bg-white py-12 text-center">
+          <UserCog className="mx-auto mb-3 h-12 w-12 text-gray-300" />
           <p className="text-gray-500">No accounts found</p>
         </div>
       ) : (
@@ -376,7 +384,13 @@ export default function RBACAccounts() {
                   <div className="flex items-center gap-3">
                     <button
                       onClick={(e) => { e.stopPropagation(); openUserAssetAccess(acct); }}
-                      className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+                      disabled={!acct.runtime_user_id}
+                      title={acct.runtime_user_id ? 'Manage runtime asset access' : 'No linked runtime user'}
+                      className={`text-sm font-medium ${
+                        acct.runtime_user_id
+                          ? 'text-indigo-600 hover:text-indigo-800'
+                          : 'cursor-not-allowed text-gray-300'
+                      }`}
                     >
                       Asset Access
                     </button>
@@ -586,9 +600,9 @@ export default function RBACAccounts() {
           {userAssetError && (
             <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">{userAssetError}</div>
           )}
-          {!userAssetError && (
+          {!userAssetError && selectedRuntimeUser?.runtime_user_id && (
             <p className="text-sm text-gray-500">
-              This edits the runtime user scope used by callable-target governance. If this account does not have a runtime user profile yet, the gateway will reject the request.
+              This edits the runtime user scope used by callable-target governance.
             </p>
           )}
           <AssetAccessEditor
@@ -736,6 +750,6 @@ export default function RBACAccounts() {
           </div>
         </div>
       </Modal>
-    </div>
+    </IndexShell>
   );
 }

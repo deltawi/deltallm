@@ -6,9 +6,10 @@ import { callableTargets, organizations } from '../lib/api';
 import { buildCatalogAssetTargets } from '../lib/assetAccess';
 import Modal from '../components/Modal';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
+import { ContentCard, IndexShell } from '../components/admin/shells';
 import {
   Plus, Building2, Users, DollarSign, Gauge, TrendingUp,
-  Shield, AlertCircle, Search, MoreHorizontal, ChevronRight,
+  Shield, AlertCircle, Search, MoreHorizontal,
 } from 'lucide-react';
 
 /* ─────────────── sub-components ─────────────── */
@@ -249,54 +250,37 @@ export default function Organizations() {
 
   /* ─────────────── render ─────────────── */
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* ── Top bar ── */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="flex items-center gap-1.5 text-xs text-gray-400 mb-1">
-              <span>Platform</span>
-              <ChevronRight className="w-3 h-3" />
-              <span className="text-gray-600 font-medium">Organizations</span>
-            </div>
-            <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-              <Building2 className="w-5 h-5 text-blue-600" /> Organizations
-              {total > 0 && (
-                <span className="inline-flex items-center justify-center min-w-[1.5rem] h-5 px-1.5 rounded-full bg-gray-100 text-xs font-semibold text-gray-600 ml-1">
-                  {total}
-                </span>
-              )}
-            </h1>
-          </div>
-          {isPlatformAdmin && (
-            <button
-              onClick={() => navigate('/organizations/new')}
-              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              <Plus className="w-4 h-4" /> Create Organization
-            </button>
-          )}
-        </div>
-
-        {/* Search + filter row */}
-        <div className="flex items-center gap-3 mt-4">
+    <IndexShell
+      title="Organizations"
+      titleIcon={Building2}
+      count={total}
+      action={isPlatformAdmin ? (
+        <button
+          onClick={() => navigate('/organizations/new')}
+          className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+        >
+          <Plus className="h-4 w-4" /> Create Organization
+        </button>
+      ) : undefined}
+      toolbar={(
+        <div className="flex items-center gap-3">
           <div className="relative w-72">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+            <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
             <input
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Search organizations…"
-              className="w-full pl-8 pr-3 h-8 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="h-8 w-full rounded-lg border border-gray-300 pl-8 pr-3 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
-          <div className="flex gap-1.5 ml-auto">
+          <div className="ml-auto flex gap-1.5">
             {STATUS_TABS.map((f) => (
               <button
                 key={f}
                 onClick={() => setStatusTab(f)}
-                className={`px-3 py-1 text-xs rounded-full transition-colors ${
+                className={`rounded-full px-3 py-1 text-xs transition-colors ${
                   statusTab === f
-                    ? 'bg-blue-50 text-blue-700 font-medium'
+                    ? 'bg-blue-50 font-medium text-blue-700'
                     : 'text-gray-500 hover:bg-gray-100'
                 }`}
               >
@@ -305,39 +289,40 @@ export default function Organizations() {
             ))}
           </div>
         </div>
-      </div>
-
-      {/* ── Summary strip ── */}
-      <div className="bg-white border-b border-gray-100 px-6 py-3 flex gap-8 flex-wrap">
-        {[
-          {
-            label: 'Total spend',
-            value: `$${totalSpend.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
-            icon: DollarSign,
-            color: 'text-green-600',
-          },
-          { label: 'Active teams', value: String(totalTeams), icon: Users, color: 'text-blue-600' },
-          { label: 'Scoped assets', value: '—', icon: Shield, color: 'text-purple-600' },
-          { label: 'Over budget', value: String(overCount), icon: AlertCircle, color: 'text-red-500' },
-        ].map((s) => (
-          <div key={s.label} className="flex items-center gap-2">
-            <s.icon className={`w-3.5 h-3.5 ${s.color}`} />
-            <span className="text-xs text-gray-500">{s.label}</span>
-            <span className="text-xs font-semibold text-gray-900">{s.value}</span>
-          </div>
-        ))}
-      </div>
-
-      {/* ── Page-level error ── */}
-      {pageError && (
-        <div className="mx-6 mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+      )}
+      summaryItems={[
+        {
+          label: 'Total spend',
+          value: `$${totalSpend.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+          icon: DollarSign,
+          iconClassName: 'text-green-600',
+        },
+        {
+          label: 'Active teams',
+          value: String(totalTeams),
+          icon: Users,
+          iconClassName: 'text-blue-600',
+        },
+        {
+          label: 'Scoped assets',
+          value: '—',
+          icon: Shield,
+          iconClassName: 'text-purple-600',
+        },
+        {
+          label: 'Over budget',
+          value: String(overCount),
+          icon: AlertCircle,
+          iconClassName: 'text-red-500',
+        },
+      ]}
+      notice={pageError ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           {pageError}
         </div>
-      )}
-
-      {/* ── Table ── */}
-      <div className="px-6 py-4">
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+      ) : undefined}
+    >
+      <ContentCard>
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
@@ -494,8 +479,7 @@ export default function Organizations() {
               </button>
             </div>
           </div>
-        </div>
-      </div>
+      </ContentCard>
 
       {/* ─────────────── Create / Edit Modal ─────────────── */}
       <Modal
@@ -644,6 +628,6 @@ export default function Organizations() {
           </div>
         </div>
       </Modal>
-    </div>
+    </IndexShell>
   );
 }

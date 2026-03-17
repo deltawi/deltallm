@@ -2,10 +2,10 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { batches } from '../lib/api';
-import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import { Layers, Search, Clock, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 import clsx from 'clsx';
+import { ContentCard, IndexShell } from '../components/admin/shells';
 
 const STATUS_COLORS: Record<string, string> = {
   validating: 'bg-purple-100 text-purple-700',
@@ -171,49 +171,50 @@ export default function BatchJobs() {
   ];
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Batch Jobs</h1>
-        <p className="text-sm text-gray-500 mt-1">Monitor and manage batch embedding jobs</p>
-      </div>
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {summaryCards.map((card) => (
-          <div key={card.label} className="bg-white rounded-xl border border-gray-200 p-4">
-            <div className="flex items-center gap-3">
-              <div className={clsx('p-2 rounded-lg', card.bg)}>
-                <card.icon className={clsx('w-5 h-5', card.color)} />
-              </div>
-              <div>
-                <p className="text-2xl font-bold text-gray-900">{card.value}</p>
-                <p className="text-xs text-gray-500">{card.label}</p>
+    <IndexShell
+      title="Batch Jobs"
+      titleIcon={Layers}
+      count={pagination?.total ?? null}
+      description="Monitor and manage batch embedding jobs."
+      summary={(
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+          {summaryCards.map((card) => (
+            <div key={card.label} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+              <div className="flex items-center gap-3">
+                <div className={clsx('rounded-lg p-2', card.bg)}>
+                  <card.icon className={clsx('h-5 w-5', card.color)} />
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-gray-900">{card.value}</p>
+                  <p className="text-xs text-gray-500">{card.label}</p>
+                </div>
               </div>
             </div>
+          ))}
+        </div>
+      )}
+      toolbar={(
+        <div className="space-y-3">
+          <div className="relative max-w-sm">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search by batch ID or model..."
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              className="w-full rounded-lg border border-gray-200 py-2 pl-9 pr-3 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
           </div>
-        ))}
-      </div>
-
-      <Card>
-        <div className="p-4 border-b border-gray-100 space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-            <div className="relative flex-1 max-w-sm">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search by batch ID or model..."
-                value={searchInput}
-                onChange={(e) => setSearchInput(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-            </div>
-          </div>
-          <div className="flex gap-1 flex-wrap">
+          <div className="flex flex-wrap gap-1">
             {STATUS_TABS.map((tab) => (
               <button
                 key={tab.value}
-                onClick={() => { setStatusFilter(tab.value); setPageOffset(0); }}
+                onClick={() => {
+                  setStatusFilter(tab.value);
+                  setPageOffset(0);
+                }}
                 className={clsx(
-                  'px-3 py-1.5 text-xs font-medium rounded-lg transition-colors',
+                  'rounded-lg px-3 py-1.5 text-xs font-medium transition-colors',
                   statusFilter === tab.value
                     ? 'bg-blue-100 text-blue-700'
                     : 'text-gray-500 hover:bg-gray-100 hover:text-gray-700'
@@ -224,6 +225,9 @@ export default function BatchJobs() {
             ))}
           </div>
         </div>
+      )}
+    >
+      <ContentCard>
         <DataTable
           columns={columns}
           data={items}
@@ -233,7 +237,7 @@ export default function BatchJobs() {
           pagination={pagination}
           onPageChange={setPageOffset}
         />
-      </Card>
-    </div>
+      </ContentCard>
+    </IndexShell>
   );
 }

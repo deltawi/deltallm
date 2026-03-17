@@ -16,6 +16,7 @@ import {
   Zap,
 } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
+import IndexShell from '../components/admin/shells/IndexShell';
 import { routeGroups } from '../lib/api';
 import type { RouteGroup } from '../lib/api';
 import { ROUTE_GROUP_MODE_OPTIONS } from '../lib/routeGroups';
@@ -274,7 +275,56 @@ export default function RouteGroups() {
   const pagination = result?.pagination;
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <IndexShell
+      title="Model Groups"
+      titleIcon={Layers}
+      count={pagination?.total ?? null}
+      description="Group deployments behind a single key — clients call the group, DeltaLLM routes traffic."
+      action={(
+        <button
+          onClick={() => setCreateOpen(true)}
+          className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700"
+        >
+          <Plus className="h-4 w-4" /> Create Group
+        </button>
+      )}
+      intro={(
+        <div className="overflow-hidden rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 via-white to-slate-50">
+          <div className="flex items-center gap-4 px-5 py-4">
+            <div className="flex-1">
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1 text-xs font-semibold text-blue-700 shadow-sm ring-1 ring-blue-100">
+                <Sparkles className="h-3 w-3" /> Recommended setup order
+              </div>
+              <p className="mt-2 text-sm text-slate-600">
+                Create the group shell, add members, then start with default shuffle. Upgrade to a routing policy only when you need it.
+              </p>
+            </div>
+            <div className="hidden sm:flex items-center gap-2">
+              {['Create shell', 'Add members', 'Use default shuffle'].map((step, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-center shadow-sm">
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Step {i + 1}</div>
+                    <div className="mt-0.5 text-xs font-semibold text-slate-700">{step}</div>
+                  </div>
+                  {i < 2 && <ChevronRight className="h-4 w-4 shrink-0 text-slate-300" />}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+      toolbar={(
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+          <input
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Search model groups…"
+            className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-9 pr-4 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+      )}
+    >
       <CreateDrawer
         open={createOpen}
         onClose={() => { if (!creating) setCreateOpen(false); }}
@@ -285,71 +335,13 @@ export default function RouteGroups() {
         creating={creating}
         onCreate={handleCreate}
       />
-
-      {/* Page header */}
-      <div className="border-b border-gray-200 bg-white px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">Model Groups</h1>
-            <p className="mt-0.5 text-sm text-gray-500">
-              Group deployments behind a single key — clients call the group, DeltaLLM routes traffic.
-            </p>
-          </div>
-          <button
-            onClick={() => setCreateOpen(true)}
-            className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700"
-          >
-            <Plus className="h-4 w-4" /> Create Group
-          </button>
-        </div>
-      </div>
-
-      {/* Setup guide banner */}
-      <div className="mx-6 mt-4 overflow-hidden rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 via-white to-slate-50">
-        <div className="flex items-center gap-4 px-5 py-4">
-          <div className="flex-1">
-            <div className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1 text-xs font-semibold text-blue-700 shadow-sm ring-1 ring-blue-100">
-              <Sparkles className="h-3 w-3" /> Recommended setup order
-            </div>
-            <p className="mt-2 text-sm text-slate-600">
-              Create the group shell, add members, then start with default shuffle. Upgrade to a routing policy only when you need it.
-            </p>
-          </div>
-          <div className="hidden sm:flex items-center gap-2">
-            {['Create shell', 'Add members', 'Use default shuffle'].map((step, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-center shadow-sm">
-                  <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Step {i + 1}</div>
-                  <div className="mt-0.5 text-xs font-semibold text-slate-700">{step}</div>
-                </div>
-                {i < 2 && <ChevronRight className="h-4 w-4 shrink-0 text-slate-300" />}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Search + table */}
-      <div className="px-6 py-4 space-y-3">
-        {/* Search bar */}
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-          <input
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Search model groups…"
-            className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-9 pr-4 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
-
-        {/* Error state */}
+      <div className="space-y-3">
         {result === null && !loading && (
           <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
             Failed to load model groups.
           </div>
         )}
 
-        {/* Table */}
         <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
           {/* Header row */}
           <div className="grid items-center gap-4 border-b border-gray-100 bg-gray-50 px-4 py-2.5 text-[10px] font-semibold uppercase tracking-widest text-gray-400"
@@ -497,6 +489,6 @@ export default function RouteGroups() {
         onConfirm={handleDelete}
         onClose={() => { if (!deletingKey) setDeleteTarget(null); }}
       />
-    </div>
+    </IndexShell>
   );
 }

@@ -4,12 +4,12 @@ import { keys, serviceAccounts, teams } from '../lib/api';
 import { buildParentScopedAssetTargets, buildScopedSelectableTargets } from '../lib/assetAccess';
 import type { ApiKey, ServiceAccount } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import StatusBadge from '../components/StatusBadge';
 import Modal from '../components/Modal';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import { Plus, RefreshCw, Trash2, Copy, Check, Pencil } from 'lucide-react';
+import { ContentCard, IndexShell } from '../components/admin/shells';
 
 type OwnerMode = 'self' | 'service_account';
 
@@ -392,26 +392,37 @@ export default function ApiKeys() {
       : editAssetAccessTargetsLoading || editAssetAccessLoading;
 
   return (
-    <div className="p-4 sm:p-6">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">API Keys</h1>
-          <p className="text-sm text-gray-500 mt-1">Manage API keys, ownership, budgets, and rate limits</p>
-          <p className="text-xs text-gray-400 mt-1">Create keys that inherit their team asset set or restrict them to a smaller callable-target subset.</p>
-        </div>
-        <button onClick={openCreate} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
-          <Plus className="w-4 h-4" /> Create Key
-        </button>
-      </div>
-      {pageError && (
-        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">{pageError}</div>
+    <IndexShell
+      title="API Keys"
+      count={pagination?.total ?? null}
+      description={(
+        <>
+          Manage API keys, ownership, budgets, and rate limits
+          <span className="mt-1 block text-xs text-gray-400">
+            Create keys that inherit their team asset set or restrict them to a smaller callable-target subset.
+          </span>
+        </>
       )}
-      <Card>
-        <div className="px-4 pt-3 pb-2">
-          <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search keys..." className="w-full sm:w-72 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-        </div>
+      action={(
+        <button onClick={openCreate} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700">
+          <Plus className="h-4 w-4" /> Create Key
+        </button>
+      )}
+      notice={pageError ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">{pageError}</div>
+      ) : null}
+      toolbar={(
+        <input
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder="Search keys..."
+          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 sm:w-72"
+        />
+      )}
+    >
+      <ContentCard>
         <DataTable columns={columns} data={items} loading={loading} emptyMessage="No API keys created yet" pagination={pagination} onPageChange={setPageOffset} />
-      </Card>
+      </ContentCard>
 
       <Modal open={showCreate || !!editItem} onClose={closeEditor} title={editItem ? 'Edit API Key' : 'Create API Key'}>
         <div className="space-y-4">
@@ -579,6 +590,6 @@ export default function ApiKeys() {
           </div>
         </div>
       </Modal>
-    </div>
+    </IndexShell>
   );
 }

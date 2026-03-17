@@ -3,12 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { models } from '../lib/api';
 import { modelDetailPath, modelEditPath } from '../lib/modelRoutes';
-import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import ProviderBadge from '../components/ProviderBadge';
 import StatusBadge from '../components/StatusBadge';
+import { ContentCard, IndexShell } from '../components/admin/shells';
 import { MODE_OPTIONS, MODE_BADGE_COLORS } from '../components/ModelForm';
-import { Plus, Pencil, Trash2 } from 'lucide-react';
+import { Box, Plus, Pencil, Search, Trash2 } from 'lucide-react';
 
 export default function Models() {
   const navigate = useNavigate();
@@ -60,22 +60,42 @@ export default function Models() {
   ];
 
   return (
-    <div className="p-4 sm:p-6">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Models</h1>
-          <p className="text-sm text-gray-500 mt-1">Manage model deployments and providers</p>
-        </div>
-        <button onClick={() => navigate('/models/new')} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
-          <Plus className="w-4 h-4" /> Add Model
+    <IndexShell
+      title="Models"
+      titleIcon={Box}
+      count={pagination?.total ?? null}
+      description="Manage model deployments and providers"
+      action={(
+        <button
+          onClick={() => navigate('/models/new')}
+          className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+        >
+          <Plus className="h-4 w-4" /> Add Model
         </button>
-      </div>
-      <Card>
-        <div className="px-4 pt-3 pb-2">
-          <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search models..." className="w-full sm:w-72 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+      )}
+      toolbar={(
+        <div className="relative w-full sm:w-72">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+          <input
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Search models..."
+            className="h-9 w-full rounded-lg border border-gray-300 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
         </div>
-        <DataTable columns={columns} data={items} loading={loading} emptyMessage="No models configured" onRowClick={(row) => navigate(modelDetailPath(row.deployment_id))} pagination={pagination} onPageChange={setPageOffset} />
-      </Card>
-    </div>
+      )}
+    >
+      <ContentCard>
+        <DataTable
+          columns={columns}
+          data={items}
+          loading={loading}
+          emptyMessage="No models configured"
+          onRowClick={(row) => navigate(modelDetailPath(row.deployment_id))}
+          pagination={pagination}
+          onPageChange={setPageOffset}
+        />
+      </ContentCard>
+    </IndexShell>
   );
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Navigate, useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
 import { callableTargets, organizations } from '../lib/api';
@@ -113,6 +113,10 @@ export default function OrganizationCreate() {
   const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
   const isPlatformAdmin = userRole === 'platform_admin';
 
+  if (!isPlatformAdmin) {
+    return <Navigate to="/organizations" replace />;
+  }
+
   /* live list for background */
   const { data: listResult } = useApi(
     () => organizations.list({ limit: 8, offset: 0 }),
@@ -186,18 +190,21 @@ export default function OrganizationCreate() {
       };
       const created = await organizations.create(payload);
 
+      let pageWarning: string | null = null;
       if (isPlatformAdmin && selectAll) {
         try {
           await organizations.updateAssetAccess(created.organization_id, {
             selected_callable_keys: [],
             select_all_selectable: true,
           });
-        } catch {
-          /* non-fatal — org created */
+        } catch (err: any) {
+          pageWarning = err?.message || 'Organization created, but all-asset access could not be applied.';
         }
       }
 
-      navigate(`/organizations/${created.organization_id}`);
+      navigate(`/organizations/${created.organization_id}`, {
+        state: pageWarning ? { pageWarning } : undefined,
+      });
     } catch (err: any) {
       setError(err?.message || 'Failed to create organization');
     } finally {

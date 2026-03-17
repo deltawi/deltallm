@@ -23,6 +23,7 @@ import { ApiError, models, type DeploymentHealth } from '../lib/api';
 import { modelEditPath } from '../lib/modelRoutes';
 import ModelUsageExamplesCard from '../components/ModelUsageExamplesCard';
 import { MODE_OPTIONS } from '../components/ModelForm';
+import { HeroTabbedDetailShell, IconTabs, InlineStat, PanelCard } from '../components/admin/shells';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -157,15 +158,6 @@ function ProviderPill({ provider }: { provider: string }) {
       <span className={`h-1.5 w-1.5 rounded-full ${colors.dot}`} />
       {provider.charAt(0).toUpperCase() + provider.slice(1)}
     </span>
-  );
-}
-
-function StatBadge({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">{label}</span>
-      <span className="text-sm font-semibold text-gray-900">{value}</span>
-    </div>
   );
 }
 
@@ -523,9 +515,8 @@ export default function ModelDetail() {
   const inputCostDisplay = primaryCost(mode, mi);
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* ── Top bar ── */}
-      <div className="border-b border-gray-200 bg-white px-6 py-3">
+    <HeroTabbedDetailShell
+      backBar={(
         <button
           onClick={() => navigate('/models')}
           className="flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-gray-800"
@@ -533,158 +524,140 @@ export default function ModelDetail() {
           <ArrowLeft className="h-4 w-4" />
           Back to Models
         </button>
-      </div>
+      )}
+      hero={(
+        <div className="relative overflow-hidden border-b border-gray-200 bg-white">
+          <div className="absolute inset-0 bg-gradient-to-br from-blue-50 via-white to-violet-50 opacity-60" />
+          <div className="absolute right-0 top-0 h-40 w-40 rounded-full bg-blue-100/40 blur-3xl" />
+          <div className="absolute bottom-0 left-1/4 h-32 w-64 rounded-full bg-violet-100/30 blur-3xl" />
 
-      {/* ── Hero header ── */}
-      <div className="relative overflow-hidden border-b border-gray-200 bg-white">
-        <div className="absolute inset-0 bg-gradient-to-br from-blue-50 via-white to-violet-50 opacity-60" />
-        <div className="absolute right-0 top-0 h-40 w-40 rounded-full bg-blue-100/40 blur-3xl" />
-        <div className="absolute bottom-0 left-1/4 h-32 w-64 rounded-full bg-violet-100/30 blur-3xl" />
-
-        <div className="relative px-6 pb-5 pt-6">
-          {/* Badges row */}
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-700">
-              <Brain className="h-3.5 w-3.5" />
-              {modeLabel}
-            </span>
-            <span
-              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${
-                model.healthy
-                  ? 'bg-emerald-100 text-emerald-700'
-                  : 'bg-red-100 text-red-700'
-              }`}
-            >
-              {model.healthy
-                ? <><CheckCircle2 className="h-3.5 w-3.5" /> Healthy</>
-                : <><AlertTriangle className="h-3.5 w-3.5" /> Unhealthy</>}
-            </span>
-            {model.provider && <ProviderPill provider={model.provider} />}
-          </div>
-
-          {/* Name + actions row */}
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <h1 className="break-words text-2xl font-bold text-gray-900">{model.model_name}</h1>
-              {lp.model && (
-                <p className="mt-0.5 text-sm text-gray-500">
-                  Routes to{' '}
-                  <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs font-mono text-gray-700">
-                    {lp.model}
-                  </code>
-                  {model.provider && (
-                    <> via <span className="font-medium capitalize">{model.provider}</span></>
-                  )}
-                </p>
-              )}
-            </div>
-
-            <div className="flex shrink-0 flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={handleCheckHealth}
-                disabled={checkingHealth}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 shadow-sm transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+          <div className="relative px-6 pb-5 pt-6">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                <Brain className="h-3.5 w-3.5" />
+                {modeLabel}
+              </span>
+              <span
+                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${
+                  model.healthy ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+                }`}
               >
-                <RefreshCw className={`h-4 w-4 ${checkingHealth ? 'animate-spin' : ''}`} />
-                Check Health
-              </button>
-              {canEdit && (
-                <>
-                  <button
-                    onClick={() => navigate(modelEditPath(deploymentId!))}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-blue-700"
-                  >
-                    <Pencil className="h-4 w-4" /> Edit
-                  </button>
-                  <button
-                    onClick={handleDelete}
-                    className="inline-flex items-center gap-1.5 rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 shadow-sm transition hover:bg-red-50"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </>
-              )}
+                {model.healthy
+                  ? <><CheckCircle2 className="h-3.5 w-3.5" /> Healthy</>
+                  : <><AlertTriangle className="h-3.5 w-3.5" /> Unhealthy</>}
+              </span>
+              {model.provider && <ProviderPill provider={model.provider} />}
             </div>
-          </div>
 
-          {/* Health action banners */}
-          {healthActionMessage && (
-            <div className="mt-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
-              {healthActionMessage}
-            </div>
-          )}
-          {healthActionError && (
-            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-              {healthActionError}
-            </div>
-          )}
-          {!model.healthy && health.last_error && !healthActionError && (
-            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-              <div className="flex items-start gap-3">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                <div>
-                  <div className="font-medium">Why this deployment is unhealthy</div>
-                  <div className="mt-1">{health.last_error}</div>
-                  {health.last_error_at && (
-                    <div className="mt-1 text-xs text-red-700">
-                      Last failed check: {formatUnixTimestamp(health.last_error_at)}
-                    </div>
-                  )}
-                </div>
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h1 className="break-words text-2xl font-bold text-gray-900">{model.model_name}</h1>
+                {lp.model && (
+                  <p className="mt-0.5 text-sm text-gray-500">
+                    Routes to{' '}
+                    <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs font-mono text-gray-700">
+                      {lp.model}
+                    </code>
+                    {model.provider && (
+                      <> via <span className="font-medium capitalize">{model.provider}</span></>
+                    )}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCheckHealth}
+                  disabled={checkingHealth}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 shadow-sm transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <RefreshCw className={`h-4 w-4 ${checkingHealth ? 'animate-spin' : ''}`} />
+                  Check Health
+                </button>
+                {canEdit && (
+                  <>
+                    <button
+                      onClick={() => navigate(modelEditPath(deploymentId!))}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-blue-700"
+                    >
+                      <Pencil className="h-4 w-4" /> Edit
+                    </button>
+                    <button
+                      onClick={handleDelete}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 shadow-sm transition hover:bg-red-50"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </>
+                )}
               </div>
             </div>
-          )}
 
-          {/* Stat strip */}
-          {(contextWindow || rpmLimit || tpmLimit || weight != null || inputCostDisplay) && (
-            <div className="mt-5 flex flex-wrap items-center gap-6 divide-x divide-gray-100">
-              {contextWindow  && <StatBadge label="Context Window" value={contextWindow} />}
-              {rpmLimit != null && <div className="pl-6"><StatBadge label="RPM" value={Number(rpmLimit).toLocaleString()} /></div>}
-              {tpmLimit != null && (
-                <div className="pl-6">
-                  <StatBadge
-                    label="TPM"
-                    value={Number(tpmLimit) >= 1_000_000
-                      ? `${(Number(tpmLimit) / 1_000_000).toFixed(1)}M`
-                      : Number(tpmLimit).toLocaleString()}
-                  />
+            {healthActionMessage && (
+              <div className="mt-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
+                {healthActionMessage}
+              </div>
+            )}
+            {healthActionError && (
+              <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+                {healthActionError}
+              </div>
+            )}
+            {!model.healthy && health.last_error && !healthActionError && (
+              <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <div>
+                    <div className="font-medium">Why this deployment is unhealthy</div>
+                    <div className="mt-1">{health.last_error}</div>
+                    {health.last_error_at && (
+                      <div className="mt-1 text-xs text-red-700">
+                        Last failed check: {formatUnixTimestamp(health.last_error_at)}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              )}
-              {weight != null && <div className="pl-6"><StatBadge label="Weight" value={`${weight} / 10`} /></div>}
-              {inputCostDisplay && <div className="pl-6"><StatBadge label="Input Cost" value={`${inputCostDisplay} / tok`} /></div>}
-            </div>
-          )}
-        </div>
-      </div>
+              </div>
+            )}
 
-      {/* ── Tabs + body ── */}
-      <div className="px-6 pb-8 pt-0">
-        <div className="mb-4 flex gap-1 border-b border-gray-200">
-          {TAB_LIST.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              onClick={() => setActiveTab(id)}
-              className={`flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-sm font-medium transition ${
-                activeTab === id
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              <Icon className="h-4 w-4" />
-              {label}
-            </button>
-          ))}
+            {(contextWindow || rpmLimit || tpmLimit || weight != null || inputCostDisplay) && (
+              <div className="mt-5 flex flex-wrap items-center gap-6 divide-x divide-gray-100">
+                {contextWindow && <InlineStat label="Context Window" value={contextWindow} />}
+                {rpmLimit != null && <div className="pl-6"><InlineStat label="RPM" value={Number(rpmLimit).toLocaleString()} /></div>}
+                {tpmLimit != null && (
+                  <div className="pl-6">
+                    <InlineStat
+                      label="TPM"
+                      value={Number(tpmLimit) >= 1_000_000
+                        ? `${(Number(tpmLimit) / 1_000_000).toFixed(1)}M`
+                        : Number(tpmLimit).toLocaleString()}
+                    />
+                  </div>
+                )}
+                {weight != null && <div className="pl-6"><InlineStat label="Weight" value={`${weight} / 10`} /></div>}
+                {inputCostDisplay && <div className="pl-6"><InlineStat label="Input Cost" value={`${inputCostDisplay} / tok`} /></div>}
+              </div>
+            )}
+          </div>
         </div>
-
-        <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-          {activeTab === 'overview' && <OverviewTab model={model} />}
-          {activeTab === 'runtime'  && <RuntimeTab  model={model} />}
-          {activeTab === 'routing'  && <RoutingTab  model={model} />}
-          {activeTab === 'costs'    && <CostsTab    model={model} />}
-          {activeTab === 'usage'    && <UsageTab modelName={model.model_name} mode={mode} />}
-        </div>
-      </div>
-    </div>
+      )}
+      body={(
+        <>
+          <IconTabs
+            active={activeTab}
+            onChange={setActiveTab}
+            items={TAB_LIST.map(({ id, label, icon }) => ({ id, label, icon }))}
+          />
+          <PanelCard>
+            {activeTab === 'overview' && <OverviewTab model={model} />}
+            {activeTab === 'runtime' && <RuntimeTab model={model} />}
+            {activeTab === 'routing' && <RoutingTab model={model} />}
+            {activeTab === 'costs' && <CostsTab model={model} />}
+            {activeTab === 'usage' && <UsageTab modelName={model.model_name} mode={mode} />}
+          </PanelCard>
+        </>
+      )}
+    />
   );
 }

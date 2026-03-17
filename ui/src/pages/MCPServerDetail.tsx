@@ -41,6 +41,7 @@ import {
 import { useAuth } from '../lib/auth';
 import { useApi } from '../lib/hooks';
 import { useToast } from '../components/ToastProvider';
+import { HeroTabbedDetailShell } from '../components/admin/shells';
 
 function fmtDate(value?: string | null) {
   if (!value) return '—';
@@ -457,22 +458,23 @@ export default function MCPServerDetail() {
   ];
 
   return (
-    <div className="min-h-full bg-[#f5f6f7] pb-12 font-sans text-gray-900">
-      <div className="border-b border-gray-200 bg-white px-6 py-3">
-        <button
-          type="button"
-          onClick={() => navigate('/mcp-servers')}
-          className="group flex items-center text-sm text-gray-500 transition-colors hover:text-gray-900"
-        >
-          <ArrowLeft className="mr-2 h-4 w-4 text-gray-400 group-hover:text-gray-600" />
-          <span className="font-medium text-gray-600">MCP Servers</span>
-          <span className="mx-2 text-gray-300">/</span>
-          <span className="font-semibold text-gray-900">{server.name}</span>
-        </button>
-      </div>
-
-      <div className="mx-auto max-w-7xl space-y-5 px-6 pt-6">
-        <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+    <>
+      <HeroTabbedDetailShell
+        layout="contained"
+        backBar={(
+          <button
+            type="button"
+            onClick={() => navigate('/mcp-servers')}
+            className="group flex items-center text-sm text-gray-500 transition-colors hover:text-gray-900"
+          >
+            <ArrowLeft className="mr-2 h-4 w-4 text-gray-400 group-hover:text-gray-600" />
+            <span className="font-medium text-gray-600">MCP Servers</span>
+            <span className="mx-2 text-gray-300">/</span>
+            <span className="font-semibold text-gray-900">{server.name}</span>
+          </button>
+        )}
+        hero={(
+          <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
           <div className="flex flex-col items-start justify-between gap-6 p-6 md:p-8 lg:flex-row lg:items-center">
             <div className="flex flex-col gap-5 sm:flex-row">
               <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-blue-600 shadow-sm">
@@ -620,9 +622,10 @@ export default function MCPServerDetail() {
               </div>
             ))}
           </div>
-        </div>
-
-        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+          </div>
+        )}
+        body={(
+          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
           <div className="flex overflow-x-auto border-b border-gray-100">
             {tabs.map((tab) => (
               <button
@@ -1277,8 +1280,9 @@ export default function MCPServerDetail() {
               )}
             </div>
           ) : null}
-        </div>
-      </div>
+          </div>
+        )}
+      />
 
       <ConfirmDialog
         open={deleteOpen}
@@ -1290,6 +1294,6 @@ export default function MCPServerDetail() {
         onClose={() => setDeleteOpen(false)}
         onConfirm={() => void handleDelete()}
       />
-    </div>
+    </>
   );
 }

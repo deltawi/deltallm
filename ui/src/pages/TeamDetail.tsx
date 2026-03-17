@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { organizations, teams } from '../lib/api';
 import { buildParentScopedAssetTargets, buildScopedSelectableTargets } from '../lib/assetAccess';
@@ -7,8 +7,13 @@ import Modal from '../components/Modal';
 import UserSearchSelect from '../components/UserSearchSelect';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import {
+  DetailMetricCard,
+  EntityDetailShell,
+  TextTabs,
+} from '../components/admin/shells';
+import {
   ArrowLeft, Users, DollarSign, Gauge, Shield, Pencil, UserPlus, Trash2,
-  ChevronRight, Building2, AlertOctagon, CheckCircle2, TrendingUp,
+  Building2, AlertOctagon, CheckCircle2, TrendingUp,
   Lock, Unlock, Info,
 } from 'lucide-react';
 
@@ -47,43 +52,12 @@ type TabId = 'overview' | 'members' | 'assets';
 
 /* ─────────────── subcomponents ─────────────── */
 
-function StatCard({ icon: Icon, label, value, sub, bg, iconCls }: {
-  icon: any; label: string; value: string; sub?: string; bg: string; iconCls: string;
-}) {
-  return (
-    <div className="flex items-center gap-3 px-4 py-3 bg-white rounded-xl border border-gray-200">
-      <div className={`p-2 rounded-lg ${bg} shrink-0`}>
-        <Icon className={`w-4 h-4 ${iconCls}`} />
-      </div>
-      <div>
-        <p className="text-lg font-bold text-gray-900 leading-none">{value}</p>
-        <p className="text-xs text-gray-400 mt-0.5">{label}</p>
-        {sub && <p className="text-[10px] text-gray-400">{sub}</p>}
-      </div>
-    </div>
-  );
-}
-
-function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`pb-3 text-sm font-medium transition-colors border-b-2 ${
-        active
-          ? 'border-indigo-600 text-indigo-600'
-          : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
 /* ─────────────── page ─────────────── */
 
 export default function TeamDetail() {
   const { teamId } = useParams<{ teamId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const [tab, setTab] = useState<TabId>('overview');
 
   /* ── data ── */
@@ -123,7 +97,11 @@ export default function TeamDetail() {
     selected_callable_keys: [] as string[],
   });
   const [saving, setSaving] = useState(false);
-  const [teamError, setTeamError] = useState<string | null>(null);
+  const [teamError, setTeamError] = useState<string | null>(
+    typeof location.state === 'object' && location.state && 'pageWarning' in location.state
+      ? String((location.state as { pageWarning?: string }).pageWarning || '') || null
+      : null,
+  );
 
   const selectedOrganizationId = form.organization_id.trim();
   const usesParentPreview = selectedOrganizationId !== (team?.organization_id || '');
@@ -290,136 +268,120 @@ export default function TeamDetail() {
   const orgName = orgData?.organization_name || orgData?.organization_id || team.organization_id;
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* ── Header ── */}
-      <div className="bg-white border-b border-gray-200">
-        <div className="px-6 py-4">
-          {/* Breadcrumb */}
-          <div className="flex items-center gap-1.5 text-xs text-gray-400 mb-3">
-            <button
-              onClick={() => navigate('/teams')}
-              className="hover:text-gray-700 flex items-center gap-1 transition-colors"
-            >
-              <ArrowLeft className="w-3 h-3" /> Teams
-            </button>
-            {team.organization_id && (
-              <>
-                <ChevronRight className="w-3 h-3" />
-                <button
-                  onClick={() => navigate(`/organizations/${team.organization_id}`)}
-                  className="hover:text-gray-700 flex items-center gap-1 transition-colors"
-                >
-                  <Building2 className="w-3 h-3" /> {orgName}
-                </button>
-              </>
-            )}
-            <ChevronRight className="w-3 h-3" />
-            <span className="text-gray-600 font-medium">{teamName}</span>
-          </div>
-
-          {/* Title row */}
-          <div className="flex items-start justify-between">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-700 flex items-center justify-center shadow-sm shrink-0">
-                <Users className="w-6 h-6 text-white" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2.5 flex-wrap">
-                  <h1 className="text-xl font-bold text-gray-900">{teamName}</h1>
-                  {team.blocked ? (
-                    <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-red-100 text-red-700">
-                      <AlertOctagon className="w-3.5 h-3.5" /> Blocked
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 text-xs text-emerald-600 font-medium">
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Active
-                    </span>
-                  )}
-                  {orgName && (
-                    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
-                      <Building2 className="w-3 h-3" /> {orgName}
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-3 mt-1.5">
-                  <code className="text-xs text-gray-400 font-mono bg-gray-100 px-1.5 py-0.5 rounded">{team.team_id}</code>
-                  {team.created_at && (
-                    <span className="text-xs text-gray-400">
-                      Created {new Date(team.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-            <button
-              onClick={openEditSettings}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-            >
-              <Pencil className="w-3.5 h-3.5" /> Edit
-            </button>
-          </div>
-
-          {/* Metrics strip */}
-          <div className="mt-5 grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <StatCard
-              icon={DollarSign}
-              label="Budget used"
-              value={spendPct != null ? `${spendPct}%` : `$${spend.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
-              sub={budget ? `$${spend.toLocaleString(undefined, { maximumFractionDigits: 0 })} of $${budget.toLocaleString()}` : 'No limit'}
-              bg={spendPct != null && spendPct > 80 ? 'bg-amber-50' : 'bg-green-50'}
-              iconCls={spendPct != null && spendPct > 80 ? 'text-amber-500' : 'text-green-500'}
-            />
-            <StatCard
-              icon={Users}
-              label="Members"
-              value={String(memberList.length || team.member_count || 0)}
-              sub="in this team"
-              bg="bg-indigo-50"
-              iconCls="text-indigo-600"
-            />
-            <StatCard
-              icon={Gauge}
-              label="RPM Limit"
-              value={team.rpm_limit != null ? Number(team.rpm_limit).toLocaleString() : 'Unlimited'}
-              sub="requests / min"
-              bg="bg-purple-50"
-              iconCls="text-purple-600"
-            />
-            <StatCard
-              icon={Shield}
-              label="Asset access"
-              value={
-                assetMode === 'restrict' && assetSummary
-                  ? `${assetSummary.selected_total}/${assetSummary.selectable_total}`
-                  : assetMode === 'restrict' ? 'Restricted' : 'Inherited'
-              }
-              sub={assetMode === 'restrict' ? 'from org ceiling' : 'full org access'}
-              bg="bg-blue-50"
-              iconCls="text-blue-600"
-            />
-          </div>
-
-          {/* Tabs */}
-          <div className="mt-5 -mb-px flex gap-6">
-            <TabButton active={tab === 'overview'} onClick={() => setTab('overview')}>Overview</TabButton>
-            <TabButton active={tab === 'members'} onClick={() => setTab('members')}>
-              Members
-              {memberList.length > 0 && (
-                <span className="ml-1.5 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 rounded-full bg-gray-100 text-xs font-semibold text-gray-600">
-                  {memberList.length}
-                </span>
-              )}
-            </TabButton>
-            <TabButton active={tab === 'assets'} onClick={() => setTab('assets')}>Asset Access</TabButton>
-          </div>
+    <EntityDetailShell
+      breadcrumbs={[
+        { label: 'Teams', onClick: () => navigate('/teams'), icon: ArrowLeft },
+        ...(team.organization_id
+          ? [{ label: orgName, onClick: () => navigate(`/organizations/${team.organization_id}`), icon: Building2 }]
+          : []),
+        { label: teamName },
+      ]}
+      avatar={(
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 shadow-sm">
+          <Users className="h-6 w-6 text-white" />
         </div>
-      </div>
-
-      {/* ── Content ── */}
-      <div className="px-6 py-5">
-
-        {/* ── OVERVIEW ── */}
-        {tab === 'overview' && (
+      )}
+      title={teamName}
+      badges={(
+        <>
+          {team.blocked ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">
+              <AlertOctagon className="h-3.5 w-3.5" /> Blocked
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600">
+              <CheckCircle2 className="h-3.5 w-3.5" /> Active
+            </span>
+          )}
+          {orgName && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
+              <Building2 className="h-3 w-3" /> {orgName}
+            </span>
+          )}
+        </>
+      )}
+      meta={(
+        <div className="flex items-center gap-3">
+          <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-400">{team.team_id}</code>
+          {team.created_at && (
+            <span className="text-xs text-gray-400">
+              Created {new Date(team.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+            </span>
+          )}
+        </div>
+      )}
+      action={(
+        <button
+          onClick={openEditSettings}
+          className="flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+        >
+          <Pencil className="h-3.5 w-3.5" /> Edit
+        </button>
+      )}
+      metrics={(
+        <>
+          <DetailMetricCard
+            icon={DollarSign}
+            label="Budget used"
+            value={spendPct != null ? `${spendPct}%` : `$${spend.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+            sub={budget ? `$${spend.toLocaleString(undefined, { maximumFractionDigits: 0 })} of $${budget.toLocaleString()}` : 'No limit'}
+            tone={spendPct != null && spendPct > 80 ? 'amber' : 'green'}
+          />
+          <DetailMetricCard
+            icon={Users}
+            label="Members"
+            value={String(memberList.length || team.member_count || 0)}
+            sub="in this team"
+            tone="blue"
+          />
+          <DetailMetricCard
+            icon={Gauge}
+            label="RPM Limit"
+            value={team.rpm_limit != null ? Number(team.rpm_limit).toLocaleString() : 'Unlimited'}
+            sub="requests / min"
+            tone="violet"
+          />
+          <DetailMetricCard
+            icon={Shield}
+            label="Asset access"
+            value={
+              assetMode === 'restrict' && assetSummary
+                ? `${assetSummary.selected_total}/${assetSummary.selectable_total}`
+                : assetMode === 'restrict' ? 'Restricted' : 'Inherited'
+            }
+            sub={assetMode === 'restrict' ? 'from org ceiling' : 'full org access'}
+            tone="indigo"
+          />
+        </>
+      )}
+      tabs={(
+        <TextTabs
+          active={tab}
+          onChange={setTab}
+          items={[
+            { id: 'overview', label: 'Overview' },
+            {
+              id: 'members',
+              label: (
+                <>
+                  Members
+                  {memberList.length > 0 && (
+                    <span className="ml-1.5 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-gray-100 px-1.5 text-xs font-semibold text-gray-600">
+                      {memberList.length}
+                    </span>
+                  )}
+                </>
+              ),
+            },
+            { id: 'assets', label: 'Asset Access' },
+          ]}
+        />
+      )}
+      notice={teamError ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{teamError}</div>
+      ) : undefined}
+    >
+      {tab === 'overview' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
             <div className="lg:col-span-2 space-y-5">
               {/* Budget & Spend */}
@@ -938,7 +900,6 @@ export default function TeamDetail() {
             </div>
           </div>
         )}
-      </div>
 
       {/* ── Add Member Modal ── */}
       <Modal open={showAddMember} onClose={() => setShowAddMember(false)} title="Add Member">
@@ -982,6 +943,6 @@ export default function TeamDetail() {
           </div>
         </div>
       </Modal>
-    </div>
+    </EntityDetailShell>
   );
 }

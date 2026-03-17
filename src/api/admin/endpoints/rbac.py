@@ -90,6 +90,15 @@ async def list_principals(
         """,
         *account_ids,
     )
+    runtime_user_rows = await db.query_raw(
+        f"""
+        SELECT pa.account_id, u.user_id
+        FROM deltallm_platformaccount pa
+        JOIN deltallm_usertable u ON lower(u.user_email) = lower(pa.email)
+        WHERE pa.account_id IN ({account_ph})
+        """,
+        *account_ids,
+    )
 
     org_by_account: dict[str, list[dict[str, Any]]] = {}
     for row in org_rows:
@@ -111,6 +120,17 @@ async def list_principals(
             continue
         team_by_account.setdefault(account_id, []).append(item)
 
+    runtime_user_by_account: dict[str, str] = {}
+    for row in runtime_user_rows:
+        item = to_json_value(dict(row))
+        if not isinstance(item, dict):
+            continue
+        account_id = str(item.get("account_id") or "")
+        runtime_user_id = str(item.get("user_id") or "")
+        if not account_id or not runtime_user_id:
+            continue
+        runtime_user_by_account[account_id] = runtime_user_id
+
     principals: list[dict[str, Any]] = []
     for row in account_rows:
         base = to_json_value(dict(row))
@@ -124,6 +144,7 @@ async def list_principals(
         principals.append(
             {
                 **base,
+                "runtime_user_id": runtime_user_by_account.get(account_id),
                 "organization_memberships": org_memberships,
                 "team_memberships": team_memberships,
             }

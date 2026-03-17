@@ -25,6 +25,7 @@ import { mcpServers, type MCPServer } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useApi } from '../lib/hooks';
 import { useToast } from '../components/ToastProvider';
+import { IndexShell } from '../components/admin/shells';
 
 function HealthBadge({ server }: { server: MCPServer }) {
   const status = server.last_health_status;
@@ -224,29 +225,26 @@ export default function MCPServers() {
   };
 
   return (
-    <div className="min-h-full bg-[#f5f6f7] p-6 font-sans text-gray-900 sm:p-8">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">MCP Servers</h1>
-            <p className="mt-1 text-sm text-gray-500">Connect and manage external tool servers for your AI models.</p>
-          </div>
-          {canManageMcp ? (
-            <button
-              type="button"
-              onClick={() => setCreateOpen(true)}
-              className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-700"
-            >
-              <Plus className="h-4 w-4" />
-              Register server
-            </button>
-          ) : (
-            <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-900">
-              Read-only. MCP registration requires organization or platform admin permissions.
-            </div>
-          )}
+    <IndexShell
+      title="MCP Servers"
+      count={pagination?.total ?? null}
+      description="Connect and manage external tool servers for your AI models."
+      action={canManageMcp ? (
+        <button
+          type="button"
+          onClick={() => setCreateOpen(true)}
+          className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-700"
+        >
+          <Plus className="h-4 w-4" />
+          Register server
+        </button>
+      ) : null}
+      notice={!canManageMcp ? (
+        <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+          Read-only. MCP registration requires organization or platform admin permissions.
         </div>
-
+      ) : null}
+      summary={(
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           {stats.map((stat) => (
             <div key={stat.label} className="flex items-center gap-4 rounded-xl border border-gray-200/60 bg-white p-5 shadow-sm">
@@ -260,55 +258,61 @@ export default function MCPServers() {
             </div>
           ))}
         </div>
-
-        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-          <div className="flex flex-col items-center justify-between gap-3 border-b border-gray-100 p-4 sm:flex-row">
-            <div className="relative w-full sm:w-80">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search servers..."
-                value={searchInput}
-                onChange={(event) => setSearchInput(event.target.value)}
-                className="w-full rounded-lg border border-gray-200 bg-gray-50 py-2 pl-9 pr-4 text-sm transition focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-              />
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1 rounded-lg border border-gray-200 bg-white p-1">
-                <span className="inline-flex items-center gap-1.5 px-2 text-xs font-medium text-gray-500">
-                  <Filter className="h-3.5 w-3.5" />
-                  Status
-                </span>
-                {([
-                  ['all', 'All'],
-                  ['enabled', 'Enabled'],
-                  ['disabled', 'Disabled'],
-                ] as const).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => {
-                      setEnabledFilter(value);
-                      setPageOffset(0);
-                    }}
-                    className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
-                      enabledFilter === value ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-50'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <button
-                type="button"
-                onClick={() => refetch()}
-                className="rounded-lg p-2 text-gray-400 transition hover:bg-blue-50 hover:text-blue-600"
-                title="Refresh list"
-              >
-                <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-              </button>
-            </div>
+      )}
+      toolbar={(
+        <div className="flex flex-col items-center justify-between gap-3 sm:flex-row">
+          <div className="relative w-full sm:w-80">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search servers..."
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.target.value)}
+              className="w-full rounded-lg border border-gray-200 bg-gray-50 py-2 pl-9 pr-4 text-sm transition focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+            />
           </div>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 rounded-lg border border-gray-200 bg-white p-1">
+              <span className="inline-flex items-center gap-1.5 px-2 text-xs font-medium text-gray-500">
+                <Filter className="h-3.5 w-3.5" />
+                Status
+              </span>
+              {([
+                ['all', 'All'],
+                ['enabled', 'Enabled'],
+                ['disabled', 'Disabled'],
+              ] as const).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => {
+                    setEnabledFilter(value);
+                    setPageOffset(0);
+                  }}
+                  className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                    enabledFilter === value ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => refetch()}
+              className="rounded-lg p-2 text-gray-400 transition hover:bg-blue-50 hover:text-blue-600"
+              title="Refresh list"
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+        </div>
+      )}
+    >
+      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div className="border-b border-gray-100 px-4 py-3 text-sm text-gray-500">
+          Review health, tools, ownership, and scope before drilling into per-server bindings and policies.
+        </div>
 
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -470,7 +474,6 @@ export default function MCPServers() {
               </button>
             </div>
           </div>
-        </div>
       </div>
 
       <Modal open={createOpen && canManageMcp} onClose={() => setCreateOpen(false)} title="Register MCP Server" wide>
@@ -524,6 +527,6 @@ export default function MCPServers() {
         onClose={() => setDeleteTarget(null)}
         onConfirm={() => void handleDelete()}
       />
-    </div>
+    </IndexShell>
   );
 }

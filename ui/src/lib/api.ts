@@ -880,6 +880,7 @@ export interface TeamMembership {
 }
 
 export interface Principal extends RBACAccount {
+  runtime_user_id?: string | null;
   organization_memberships: OrgMembership[];
   team_memberships: TeamMembership[];
 }

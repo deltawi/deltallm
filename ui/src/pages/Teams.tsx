@@ -6,8 +6,9 @@ import { buildParentScopedAssetTargets, buildScopedSelectableTargets } from '../
 import Modal from '../components/Modal';
 import UserSearchSelect from '../components/UserSearchSelect';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
+import { ContentCard, IndexShell } from '../components/admin/shells';
 import {
-  Plus, Users, Trash2, UserPlus, Pencil, Search, ChevronRight,
+  Plus, Users, Trash2, UserPlus, Pencil, Search,
   Building2, AlertOctagon, Gauge, X,
 } from 'lucide-react';
 
@@ -101,6 +102,11 @@ export default function Teams() {
   /* summary stats */
   const totalMembers = items.reduce((s, t) => s + (t.member_count || 0), 0);
   const blockedCount = items.filter((t) => t.blocked).length;
+  const total = pagination?.total ?? filteredItems.length;
+  const currentPage = Math.floor(pageOffset / pageSize) + 1;
+  const totalPages = Math.ceil(total / pageSize);
+  const hasPrev = pageOffset > 0;
+  const hasNext = pagination?.has_more ?? false;
   /* ── create / edit modal ── */
   const [editItem, setEditItem] = useState<any>(null);
   const [form, setForm] = useState({
@@ -250,53 +256,35 @@ export default function Teams() {
 
   /* ── render ── */
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* ── Header ── */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="flex items-center gap-1.5 text-xs text-gray-400 mb-1">
-              <span>Platform</span>
-              <ChevronRight className="w-3 h-3" />
-              <span className="text-gray-600 font-medium">Teams</span>
-            </div>
-            <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-              <Users className="w-5 h-5 text-indigo-600" />
-              Teams
-              {pagination && (
-                <span className="ml-1 inline-flex items-center justify-center min-w-[1.5rem] h-6 px-2 rounded-full bg-gray-100 text-xs font-semibold text-gray-600">
-                  {pagination.total}
-                </span>
-              )}
-            </h1>
-          </div>
-          <button
-            onClick={() => navigate('/teams/new')}
-            className="flex items-center gap-1.5 bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors"
-          >
-            <Plus className="w-4 h-4" /> Create Team
-          </button>
-        </div>
-
-        {/* Search + filters row */}
-        <div className="flex items-center gap-3 mt-4 flex-wrap">
+    <IndexShell
+      title="Teams"
+      titleIcon={Users}
+      count={pagination?.total ?? null}
+      action={(
+        <button
+          onClick={() => navigate('/teams/new')}
+          className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+        >
+          <Plus className="h-4 w-4" /> Create Team
+        </button>
+      )}
+      toolbar={(
+        <div className="flex flex-wrap items-center gap-3">
           <div className="relative w-64">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+            <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
             <input
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Search teams…"
-              className="w-full pl-8 pr-3 h-8 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="h-8 w-full rounded-lg border border-gray-300 pl-8 pr-3 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
-
-          {/* Org filter */}
           <div className="relative flex items-center gap-1.5">
-            <Building2 className="absolute left-2.5 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+            <Building2 className="pointer-events-none absolute left-2.5 h-3.5 w-3.5 text-gray-400" />
             <select
               value={orgFilter}
               onChange={(e) => { setOrgFilter(e.target.value); setPageOffset(0); }}
-              className="appearance-none pl-8 pr-7 h-8 text-xs border border-gray-300 rounded-lg bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="h-8 appearance-none rounded-lg border border-gray-300 bg-white pl-8 pr-7 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="">All organizations</option>
               {orgList.map((o: any) => (
@@ -306,25 +294,22 @@ export default function Teams() {
               ))}
             </select>
           </div>
-
           {orgFilter && (
             <button
               onClick={() => { setOrgFilter(''); setPageOffset(0); }}
               className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800"
             >
-              <X className="w-3.5 h-3.5" /> Clear
+              <X className="h-3.5 w-3.5" /> Clear
             </button>
           )}
-
-          {/* Status tabs */}
-          <div className="flex gap-1 ml-auto">
+          <div className="ml-auto flex gap-1">
             {STATUS_TABS.map((tab) => (
               <button
                 key={tab.key}
                 onClick={() => setStatusFilter(tab.key)}
-                className={`px-3 py-1 text-xs rounded-full transition-colors ${
+                className={`rounded-full px-3 py-1 text-xs transition-colors ${
                   statusFilter === tab.key
-                    ? 'bg-indigo-50 text-indigo-700 font-medium'
+                    ? 'bg-blue-50 font-medium text-blue-700'
                     : 'text-gray-500 hover:bg-gray-100'
                 }`}
               >
@@ -333,32 +318,34 @@ export default function Teams() {
             ))}
           </div>
         </div>
-      </div>
-
-      {/* ── Stats strip ── */}
-      <div className="bg-white border-b border-gray-100 px-6 py-3 flex gap-8">
-        {[
-          { label: 'Total teams', value: String(pagination?.total ?? items.length) },
-          { label: 'Total members', value: String(totalMembers) },
-          { label: 'Blocked', value: String(blockedCount) },
-        ].map((s) => (
-          <div key={s.label} className="flex items-center gap-2">
-            <span className="text-xs text-gray-500">{s.label}</span>
-            <span className="text-xs font-semibold text-gray-900">{s.value}</span>
-          </div>
-        ))}
-      </div>
-
-      {/* ── Page-level error ── */}
-      {pageError && (
-        <div className="mx-6 mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+      )}
+      summaryItems={[
+        {
+          label: 'Total teams',
+          value: String(pagination?.total ?? items.length),
+          icon: Users,
+          iconClassName: 'text-blue-600',
+        },
+        {
+          label: 'Total members',
+          value: String(totalMembers),
+          icon: UserPlus,
+          iconClassName: 'text-violet-600',
+        },
+        {
+          label: 'Blocked',
+          value: String(blockedCount),
+          icon: AlertOctagon,
+          iconClassName: 'text-red-500',
+        },
+      ]}
+      notice={pageError ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           {pageError}
         </div>
-      )}
-
-      {/* ── Table ── */}
-      <div className="px-6 py-4">
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+      ) : undefined}
+    >
+      <ContentCard>
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
@@ -396,15 +383,15 @@ export default function Teams() {
                   <tr
                     key={t.team_id}
                     onClick={() => navigate(`/teams/${t.team_id}`)}
-                    className={`border-b border-gray-100 hover:bg-indigo-50/30 cursor-pointer transition-colors ${
+                    className={`border-b border-gray-100 cursor-pointer transition-colors hover:bg-blue-50/40 ${
                       i === filteredItems.length - 1 ? 'border-b-0' : ''
                     } ${t.blocked ? 'opacity-60' : ''}`}
                   >
                     {/* Team name */}
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-3">
-                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${t.blocked ? 'bg-red-50' : 'bg-indigo-50'}`}>
-                          <Users className={`w-4 h-4 ${t.blocked ? 'text-red-500' : 'text-indigo-600'}`} />
+                        <div className={`flex h-8 w-8 items-center justify-center rounded-lg shrink-0 ${t.blocked ? 'bg-red-50' : 'bg-gradient-to-br from-blue-100 to-blue-200'}`}>
+                          <Users className={`h-4 w-4 ${t.blocked ? 'text-red-500' : 'text-blue-700'}`} />
                         </div>
                         <div>
                           <div className="flex items-center gap-2">
@@ -426,7 +413,7 @@ export default function Teams() {
                         <Building2 className="w-3 h-3 text-gray-400 shrink-0" />
                         <span
                           onClick={(e) => { e.stopPropagation(); if (t.organization_id) navigate(`/organizations/${t.organization_id}`); }}
-                          className="text-xs text-indigo-600 hover:underline cursor-pointer font-medium"
+                          className="cursor-pointer text-xs font-medium text-blue-600 hover:underline"
                         >
                           {orgNameMap[t.organization_id] || t.organization_id || '—'}
                         </span>
@@ -499,41 +486,33 @@ export default function Teams() {
             <span className="text-xs text-gray-500">
               {loading
                 ? 'Loading…'
-                : `Showing ${filteredItems.length} of ${pagination?.total ?? filteredItems.length} teams`}
+                : statusFilter !== 'all'
+                ? `${filteredItems.length} result${filteredItems.length !== 1 ? 's' : ''} (filtered)`
+                : `Showing ${Math.min(pageOffset + 1, total)}–${Math.min(pageOffset + pageSize, total)} of ${total}`}
             </span>
-            {pagination && pagination.total > pageSize && (
-              <div className="flex gap-1">
-                <button
-                  onClick={() => setPageOffset(Math.max(0, pageOffset - pageSize))}
-                  disabled={pageOffset === 0}
-                  className="px-3 py-1 text-xs text-gray-500 border border-gray-200 rounded-md disabled:opacity-40"
-                >
-                  Previous
+            <div className="flex gap-1">
+              <button
+                onClick={() => setPageOffset(Math.max(0, pageOffset - pageSize))}
+                disabled={!hasPrev || statusFilter !== 'all'}
+                className="rounded-md border border-gray-200 px-3 py-1 text-xs text-gray-500 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Previous
+              </button>
+              {totalPages > 0 && (
+                <button className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-600">
+                  {currentPage}
                 </button>
-                {Array.from({ length: Math.ceil(pagination.total / pageSize) }).map((_, i) => {
-                  const active = i * pageSize === pageOffset;
-                  return (
-                    <button
-                      key={i}
-                      onClick={() => setPageOffset(i * pageSize)}
-                      className={`px-3 py-1 text-xs border rounded-md ${active ? 'text-indigo-600 border-indigo-200 bg-indigo-50 font-medium' : 'text-gray-500 border-gray-200'}`}
-                    >
-                      {i + 1}
-                    </button>
-                  );
-                })}
-                <button
-                  onClick={() => setPageOffset(pageOffset + pageSize)}
-                  disabled={!pagination.has_more}
-                  className="px-3 py-1 text-xs text-gray-500 border border-gray-200 rounded-md disabled:opacity-40"
-                >
-                  Next
-                </button>
-              </div>
-            )}
+              )}
+              <button
+                onClick={() => setPageOffset(pageOffset + pageSize)}
+                disabled={!hasNext || statusFilter !== 'all'}
+                className="rounded-md border border-gray-200 px-3 py-1 text-xs text-gray-500 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
           </div>
-        </div>
-      </div>
+      </ContentCard>
 
       {/* ── Create / Edit Modal ── */}
       <Modal
@@ -719,6 +698,6 @@ export default function Teams() {
           </div>
         </div>
       </Modal>
-    </div>
+    </IndexShell>
   );
 }

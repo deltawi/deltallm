@@ -5,6 +5,7 @@ import DataTable from '../components/DataTable';
 import StatusBadge from '../components/StatusBadge';
 import { audit, type AuditEvent, type Pagination } from '../lib/api';
 import { useApi } from '../lib/hooks';
+import { ContentCard, IndexShell } from '../components/admin/shells';
 
 type Category = 'all' | 'admin' | 'auth' | 'data_plane' | 'spend';
 
@@ -360,53 +361,50 @@ export default function AuditLogs() {
   ];
 
   return (
-    <div className="p-6 max-w-[1400px] mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Audit Logs</h1>
-          <p className="text-sm text-gray-500 mt-1">Track security and platform activity</p>
-        </div>
+    <IndexShell
+      title="Audit Logs"
+      count={pagination?.total ?? null}
+      description="Track security and platform activity."
+      action={(
         <div className="relative" ref={exportRef}>
           <button
             type="button"
             onClick={() => setExportOpen((v) => !v)}
             disabled={exporting}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 shadow-sm disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-50"
           >
-            <Download className="w-4 h-4" />
+            <Download className="h-4 w-4" />
             {exporting ? 'Exporting...' : 'Export'}
-            <ChevronDown className="w-3 h-3" />
+            <ChevronDown className="h-3 w-3" />
           </button>
           {exportOpen && !exporting ? (
-            <div className="absolute right-0 mt-1 w-40 bg-white border border-gray-200 rounded-lg shadow-lg z-30 py-1">
-              <button type="button" onClick={() => exportAudit('csv')} className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+            <div className="absolute right-0 z-30 mt-1 w-40 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+              <button type="button" onClick={() => exportAudit('csv')} className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50">
                 Export as CSV
               </button>
-              <button type="button" onClick={() => exportAudit('jsonl')} className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+              <button type="button" onClick={() => exportAudit('jsonl')} className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50">
                 Export as JSONL
               </button>
             </div>
           ) : null}
         </div>
-      </div>
-
-      {requestIdFilter ? (
-        <div className="mb-4 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 flex items-center justify-between">
+      )}
+      notice={requestIdFilter ? (
+        <div className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
           <div className="text-sm text-blue-800">
-            Showing timeline for request: <code className="font-mono text-xs bg-blue-100 px-1.5 py-0.5 rounded">{requestIdFilter}</code>
+            Showing timeline for request: <code className="rounded bg-blue-100 px-1.5 py-0.5 font-mono text-xs">{requestIdFilter}</code>
           </div>
-          <button type="button" onClick={clearRequestIdFilter} className="text-blue-600 hover:text-blue-800 text-sm font-medium">
+          <button type="button" onClick={clearRequestIdFilter} className="text-sm font-medium text-blue-600 hover:text-blue-800">
             Clear filter
           </button>
         </div>
       ) : null}
-
-      <div className="bg-white border border-gray-200 rounded-lg p-4 mb-4 space-y-3">
+      toolbar={(
         <div className="flex flex-wrap gap-3">
           <select
             value={category}
             onChange={(e) => setCategory(e.target.value as Category)}
-            className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
           >
             {CATEGORY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
@@ -414,7 +412,7 @@ export default function AuditLogs() {
           <select
             value={action}
             onChange={(e) => setAction(e.target.value)}
-            className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 max-w-[260px]"
+            className="max-w-[260px] rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
           >
             <option value="">All Actions</option>
             {availableActions.map((item) => <option key={item} value={item}>{formatActionLabel(item)}</option>)}
@@ -423,7 +421,7 @@ export default function AuditLogs() {
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
           >
             <option value="">All Statuses</option>
             <option value="success">Success</option>
@@ -434,43 +432,45 @@ export default function AuditLogs() {
             type="date"
             value={startDate}
             onChange={(e) => setStartDate(e.target.value)}
-            className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
           />
           <input
             type="date"
             value={endDate}
             onChange={(e) => setEndDate(e.target.value)}
-            className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
           />
 
-          <div className="relative flex-1 min-w-[220px]">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <div className="relative min-w-[220px] flex-1">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
             <input
               type="text"
               value={actorIdFilter}
               onChange={(e) => setActorIdFilter(e.target.value)}
               placeholder="Search by actor ID"
-              className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              className="w-full rounded-lg border border-gray-300 py-2 pl-9 pr-3 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
             />
           </div>
           <button
             type="button"
             onClick={resetFilters}
-            className="px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50"
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
           >
             Reset Filters
           </button>
         </div>
-      </div>
-
+      )}
+    >
       {error ? (
-        <div className="bg-white border border-red-200 rounded-lg p-8 text-center">
-          <AlertTriangle className="w-8 h-8 text-red-400 mx-auto mb-2" />
-          <p className="text-red-600 font-medium">Failed to load audit events</p>
-          <p className="text-sm text-gray-500 mt-1">Check your permissions or try refreshing</p>
-        </div>
+        <ContentCard>
+          <div className="p-8 text-center">
+            <AlertTriangle className="mx-auto mb-2 h-8 w-8 text-red-400" />
+            <p className="font-medium text-red-600">Failed to load audit events</p>
+            <p className="mt-1 text-sm text-gray-500">Check your permissions or try refreshing</p>
+          </div>
+        </ContentCard>
       ) : (
-        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <ContentCard>
           <DataTable
             columns={columns}
             data={events}
@@ -480,7 +480,7 @@ export default function AuditLogs() {
             pagination={pagination}
             onPageChange={setOffset}
           />
-        </div>
+        </ContentCard>
       )}
 
       {selectedEventId ? (
@@ -490,6 +490,6 @@ export default function AuditLogs() {
           onViewTimeline={handleViewTimeline}
         />
       ) : null}
-    </div>
+    </IndexShell>
   );
 }
