@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.auth.roles import Permission
 from src.audit.actions import AuditAction
-from src.api.admin.endpoints.common import db_or_503, get_auth_scope, serialize_guardrail, emit_admin_mutation_audit
+from src.api.admin.endpoints.common import db_or_503, serialize_guardrail, emit_admin_mutation_audit
 from src.config import GuardrailConfig
 from src.middleware.admin import require_admin_permission
 

@@ -39,19 +39,24 @@ def test_resolve_app_config_with_secrets_wraps_validation_errors():
         resolve_app_config_with_secrets({"general_settings": {"cache_ttl": "not-an-int"}}, secret_resolver=PassthroughResolver())
 
 
-def test_resolve_salt_key_uses_general_settings_value():
+def test_resolve_salt_key_uses_general_settings_value(monkeypatch):
+    monkeypatch.delenv("DELTALLM_MASTER_KEY", raising=False)
+    monkeypatch.delenv("DELTALLM_SALT_KEY", raising=False)
     cfg = AppConfig.model_validate({"general_settings": {"salt_key": "cfg-salt-123"}})
     settings = Settings.model_validate({"salt_key": "env-salt-123"})
     assert resolve_salt_key(cfg, settings) == "cfg-salt-123"
 
 
-def test_resolve_salt_key_falls_back_to_environment_settings():
+def test_resolve_salt_key_falls_back_to_environment_settings(monkeypatch):
+    monkeypatch.delenv("DELTALLM_MASTER_KEY", raising=False)
+    monkeypatch.delenv("DELTALLM_SALT_KEY", raising=False)
     cfg = AppConfig.model_validate({"general_settings": {}})
     settings = Settings.model_validate({"salt_key": "env-salt-123"})
     assert resolve_salt_key(cfg, settings) == "env-salt-123"
 
 
 def test_resolve_salt_key_rejects_missing_values(monkeypatch):
+    monkeypatch.delenv("DELTALLM_MASTER_KEY", raising=False)
     monkeypatch.delenv("DELTALLM_SALT_KEY", raising=False)
     cfg = AppConfig.model_validate({"general_settings": {}})
     settings = Settings()
@@ -59,7 +64,9 @@ def test_resolve_salt_key_rejects_missing_values(monkeypatch):
         resolve_salt_key(cfg, settings)
 
 
-def test_resolve_salt_key_rejects_change_me_default():
+def test_resolve_salt_key_rejects_change_me_default(monkeypatch):
+    monkeypatch.delenv("DELTALLM_MASTER_KEY", raising=False)
+    monkeypatch.delenv("DELTALLM_SALT_KEY", raising=False)
     cfg = AppConfig.model_validate({"general_settings": {"salt_key": "change-me"}})
     settings = Settings.model_validate({})
     with pytest.raises(ValueError, match="Insecure salt key"):

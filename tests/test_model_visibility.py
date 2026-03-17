@@ -63,7 +63,9 @@ def test_effective_model_allowlist_denies_without_explicit_scope_bindings() -> N
     assert resolve_effective_model_allowlist(auth) == set()
 
 
-def test_callable_target_policy_mode_accepts_legacy_config_alias() -> None:
+def test_callable_target_policy_mode_accepts_legacy_config_alias(monkeypatch) -> None:
+    monkeypatch.delenv("DELTALLM_MASTER_KEY", raising=False)
+    monkeypatch.delenv("DELTALLM_SALT_KEY", raising=False)
     assert GeneralSettings(callable_target_scope_policy_mode="legacy").callable_target_scope_policy_mode == "legacy"
     assert Settings(callable_target_scope_policy_mode="legacy").callable_target_scope_policy_mode == "legacy"
 

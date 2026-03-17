@@ -28,6 +28,8 @@ async def test_rate_limit_rpm_enforced(client, test_app):
 
 @pytest.mark.asyncio
 async def test_rate_limit_org_rpm_enforced_before_key_limit(client, test_app):
+    from src.db.callable_targets import CallableTargetBindingRecord
+
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
     body = {
         "model": "gpt-4o-mini",
@@ -37,6 +39,18 @@ async def test_rate_limit_org_rpm_enforced_before_key_limit(client, test_app):
     record.rpm_limit = 50
     record.org_rpm_limit = 1
     record.organization_id = "org-test"
+
+    # Add callable-target binding for org-test to allow model access
+    test_app.state.callable_target_grant_service.repository.bindings.append(
+        CallableTargetBindingRecord(
+            callable_target_binding_id="ctb-test-1",
+            callable_key="gpt-4o-mini",
+            scope_type="organization",
+            scope_id="org-test",
+            enabled=True,
+        )
+    )
+    await test_app.state.callable_target_grant_service.reload()
 
     ok = await client.post("/v1/chat/completions", headers=headers, json=body)
     blocked = await client.post("/v1/chat/completions", headers=headers, json=body)

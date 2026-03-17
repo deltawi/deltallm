@@ -22,7 +22,6 @@ from src.services.asset_binding_mirror import (
     route_group_repository,
 )
 from src.api.admin.endpoints.common import (
-    AuthScope,
     db_or_503,
     emit_admin_mutation_audit,
     get_auth_scope,

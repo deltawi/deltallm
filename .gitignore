@@ -206,5 +206,5 @@ config.yaml
 replit.md
 attached_assets/
 scripts/run_backend_local.sh
-
 scripts/e2e_embeddings.sh
+scripts/ci-local.sh

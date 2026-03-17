@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from urllib.parse import parse_qs, urlparse
 
 import httpx
