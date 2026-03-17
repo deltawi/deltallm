@@ -7,7 +7,7 @@ import pytest
 from prometheus_client import generate_latest
 
 from src.audit.actions import AuditAction
-from src.auth.roles import OrganizationRole, PlatformRole, TeamRole
+from src.auth.roles import OrganizationRole, TeamRole
 from src.db.mcp import MCPApprovalRequestRecord, MCPRepository, MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
 from src.db.mcp_scope_policies import MCPScopePolicyRecord
 from src.metrics import get_prometheus_registry

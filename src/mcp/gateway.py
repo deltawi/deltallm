@@ -21,6 +21,7 @@ from .exceptions import (
     MCPToolNotFoundError,
     MCPToolTimeoutError,
 )
+from .governance import MCPGovernanceService
 from .metrics import record_mcp_tool_call, record_mcp_tools_list
 from .models import MCPBindingResolution, MCPToolCallResult
 from .policy import MCPToolPolicyEnforcer, resolve_policy_timeout_ms
@@ -29,7 +30,6 @@ from .registry import MCPRegistryService, server_record_to_config
 from .transport_http import StreamableHTTPMCPClient
 
 _ScopeRecordT = TypeVar("_ScopeRecordT", MCPServerBindingRecord, MCPToolPolicyRecord)
-from .governance import MCPGovernanceService
 
 
 @dataclass(frozen=True)

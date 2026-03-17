@@ -1148,7 +1148,7 @@ async def create_mcp_server(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
-    registry = _registry_or_503(request)
+    _registry_or_503(request)  # Health check only
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
 
     server_key = _normalize_server_key(payload.get("server_key"))

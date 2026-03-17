@@ -20,6 +20,7 @@ __all__ = [
     "audit_router",
     "auth_ui_router",
     "batches_router",
+    "callable_targets_router",
     "config_router",
     "guardrails_router",
     "keys_router",

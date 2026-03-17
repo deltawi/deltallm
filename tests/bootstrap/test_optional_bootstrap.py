@@ -127,10 +127,19 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
     created: dict[str, object] = {}
 
     class FakeBatchService:
-        def __init__(self, repository, storage, metadata_retention_days) -> None:  # noqa: ANN001
+        def __init__(
+            self,
+            repository,  # noqa: ANN001
+            storage,  # noqa: ANN001
+            metadata_retention_days,  # noqa: ANN001
+            callable_target_grant_service=None,  # noqa: ANN001
+            callable_target_scope_policy_mode="enforce",  # noqa: ANN001
+        ) -> None:
             self.repository = repository
             self.storage = storage
             self.metadata_retention_days = metadata_retention_days
+            self.callable_target_grant_service = callable_target_grant_service
+            self.callable_target_scope_policy_mode = callable_target_scope_policy_mode
             created["service"] = self
 
     class FakeBatchWorker:

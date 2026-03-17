@@ -7,7 +7,7 @@ import logging
 from time import perf_counter
 from typing import Any
 
-from fastapi import Header, HTTPException, Request, status
+from fastapi import HTTPException, Request, status
 
 from src.api.audit import emit_control_audit_event
 from src.audit.actions import AuditAction

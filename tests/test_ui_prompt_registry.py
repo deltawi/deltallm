@@ -11,7 +11,7 @@ from src.db.prompt_registry import (
     PromptVersionRecord,
 )
 from src.services.asset_ownership import normalize_owner_scope_type, owner_scope_from_metadata
-from src.services.asset_scopes import normalize_scope_type, scope_lookup_candidates
+from src.services.asset_scopes import scope_lookup_candidates
 
 
 class _FakePromptRepository:

@@ -172,8 +172,10 @@ async def test_cache_partitioned_by_api_key_scope(client, test_app):
 
     key2 = "sk-test-2"
     token_hash2 = hashlib.sha256(f"{test_app.state.key_service.salt}:{key2}".encode("utf-8")).hexdigest()
+    # Create key2 under org-default so it has model access via callable-target grants
     test_app.state._test_repo.records[token_hash2] = KeyRecord(
         token=token_hash2,
+        organization_id="org-default",
         models=["gpt-4o-mini"],
         rpm_limit=10,
         tpm_limit=10000,

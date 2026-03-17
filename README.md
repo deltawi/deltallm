@@ -1,6 +1,53 @@
 # DeltaLLM
 
-Open-source LLM gateway with an OpenAI-compatible API, multi-provider routing, API key management, budgets, caching, and an admin UI.
+<p align="center">
+  <a href="https://github.com/deltawi/deltallm/actions"><img src="https://img.shields.io/github/actions/workflow/status/deltawi/deltallm/ci.yml?label=tests" alt="Tests"></a>
+  <a href="https://deltallm.readthedocs.io"><img src="https://img.shields.io/badge/docs-readthedocs-blue" alt="Documentation"></a>
+  <img src="https://img.shields.io/badge/version-0.1.4-blue" alt="Version">
+  <img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python">
+  <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
+  <img src="https://img.shields.io/github/last-commit/deltawi/deltallm" alt="Last Commit">
+  <a href="https://github.com/deltawi/deltallm/stargazers"><img src="https://img.shields.io/github/stars/deltawi/deltallm?style=social" alt="Stars"></a>
+</p>
+
+
+## What is DeltaLLM?
+
+**DeltaLLM is a self-hosted AI gateway** that gives you a single OpenAI-compatible API for 100+ LLM providers — with enterprise controls like routing, budgets, guardrails, and team management built in.
+
+### One Line Change
+
+```python
+# Before: Direct to OpenAI
+client = OpenAI(api_key="sk-...")
+
+# After: Through DeltaLLM
+client = OpenAI(
+    base_url="http://localhost:4000/v1",  # ← Just change this
+    api_key="sk-deltallm-key"
+)
+```
+
+That's it. Your existing code works unchanged — now with routing, spend tracking, and guardrails.
+
+## Admin UI
+
+Manage all your model deployments, API keys, teams, and usage from a clean web interface:
+
+![DeltaLLM Admin UI - Models List](docs/admin-ui/images/models-list.png)
+
+## Key Features
+
+- **Unified API** — One OpenAI-compatible endpoint for 100+ LLM providers
+- **Virtual API Keys** — Scoped keys with budgets, rate limits, and model restrictions
+- **MCP Gateway** — Register external MCP servers, expose approved tools safely
+- **Routing & Failover** — Multiple strategies with automatic retries
+- **Guardrails** — Built-in PII detection and prompt injection protection
+- **Spend Tracking** — Per-key, per-team, per-model cost attribution
+- **RBAC** — Role-based access at platform, organization, and team levels
+- **Admin Dashboard** — Full-featured web UI for managing everything
+- **Response Caching** — Memory, Redis, or S3 backends for lower latency and cost
+- **Observability** — Prometheus metrics, request logging, and spend analytics
 
 **Docs:** https://deltallm.readthedocs.io/en/latest
 
@@ -186,17 +233,6 @@ npm run dev
 
 The local development UI runs at `http://localhost:5000` and proxies API requests to the backend on `http://localhost:8000`.
 
-## Features
-
-- OpenAI-compatible endpoints for chat, embeddings, images, speech, transcription, and rerank
-- Multi-provider routing and failover
-- Admin UI for models, route groups, API keys, organizations, teams, and usage
-- RBAC with platform, organization, and team scopes
-- Budgets and spend tracking
-- Response caching with memory or Redis
-- Guardrails and audit logging
-- Prometheus metrics and health endpoints
-
 ## Useful Links
 
 - [Docker quick start](docs/getting-started/docker.md)
@@ -211,6 +247,15 @@ The local development UI runs at `http://localhost:5000` and proxies API request
 ```bash
 uv run pytest
 ```
+
+## Support & Contribute
+
+⭐ **Star this repo** if you find it useful!
+
+- 🐛 [Report issues](https://github.com/deltawi/deltallm/issues)
+- 💡 [Request features](https://github.com/deltawi/deltallm/discussions)
+- 📖 [Read the docs](https://deltallm.readthedocs.io)
+- 🤝 PRs welcome — see [Local Development](#local-development) to get started
 
 ## License
 

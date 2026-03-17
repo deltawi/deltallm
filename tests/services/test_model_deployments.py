@@ -162,7 +162,8 @@ async def test_bootstrap_model_deployments_from_config_prepares_records():
 
 
 @pytest.mark.asyncio
-async def test_load_model_registry_groups_duplicate_model_names_from_db() -> None:
+async def test_load_model_registry_rejects_duplicate_model_names_from_db() -> None:
+    """Duplicate model names in DB records are rejected per current contract."""
     settings = SimpleNamespace(openai_api_key="default-key", openai_base_url="https://api.openai.com/v1")
     cfg = AppConfig.model_validate({})
     repo = FakeModelRepository(
@@ -182,9 +183,7 @@ async def test_load_model_registry_groups_duplicate_model_names_from_db() -> Non
         ]
     )
 
-    model_registry, source = await load_model_registry(repo, cfg, settings)
+    from src.services.model_deployments import DuplicateModelNameError
 
-    assert source == "db"
-    assert sorted(model_registry.keys()) == ["shared-model"]
-    assert [item["deployment_id"] for item in model_registry["shared-model"]] == ["db-1", "db-2"]
-    assert model_registry["shared-model"][1]["deltallm_params"]["api_key"] == "default-key"
+    with pytest.raises(DuplicateModelNameError, match="Duplicate model_name 'shared-model' is not allowed"):
+        await load_model_registry(repo, cfg, settings)
