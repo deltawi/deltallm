@@ -20,15 +20,6 @@ function baseUrl(): string {
   return `${typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8000'}/v1`;
 }
 
-function endpoint(mode: string): string {
-  if (mode === 'embedding') return '/embeddings';
-  if (mode === 'image_generation') return '/images/generations';
-  if (mode === 'audio_speech') return '/audio/speech';
-  if (mode === 'audio_transcription') return '/audio/transcriptions';
-  if (mode === 'rerank') return '/rerank';
-  return '/chat/completions';
-}
-
 function buildCurl(base: string, model: string, mode: string, meta?: Record<string, unknown>): string {
   const metaStr = meta && Object.keys(meta).length > 0 ? `, "metadata": ${JSON.stringify(meta)}` : '';
   if (mode === 'audio_transcription') {

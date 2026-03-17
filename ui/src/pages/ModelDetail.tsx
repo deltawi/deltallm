@@ -6,7 +6,6 @@ import {
   Brain,
   CheckCircle2,
   ChevronRight,
-  Copy,
   DollarSign,
   Layers,
   Pencil,
@@ -20,7 +19,7 @@ import {
 } from 'lucide-react';
 import { useApi } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
-import { ApiError, models } from '../lib/api';
+import { ApiError, models, type DeploymentHealth } from '../lib/api';
 import { modelEditPath } from '../lib/modelRoutes';
 import ModelUsageExamplesCard from '../components/ModelUsageExamplesCard';
 import { MODE_OPTIONS } from '../components/ModelForm';
@@ -189,42 +188,20 @@ function Field({
   );
 }
 
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      className="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-gray-400 transition hover:bg-gray-100 hover:text-gray-700"
-      onClick={() => {
-        navigator.clipboard?.writeText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      }}
-    >
-      {copied
-        ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-        : <Copy className="h-3.5 w-3.5" />}
-      {copied ? 'Copied' : 'Copy'}
-    </button>
-  );
-}
-
-function CodeBlock({ lang, code }: { lang: string; code: string }) {
-  return (
-    <div className="overflow-hidden rounded-xl border border-gray-200 bg-gray-950">
-      <div className="flex items-center justify-between border-b border-gray-800 px-4 py-2">
-        <span className="text-xs font-medium text-gray-400">{lang}</span>
-        <CopyButton text={code} />
-      </div>
-      <pre className="overflow-x-auto px-4 py-3 text-xs leading-relaxed text-gray-100">{code}</pre>
-    </div>
-  );
-}
-
 // ─── Tab content panels ───────────────────────────────────────────────────────
+
+const EMPTY_DEPLOYMENT_HEALTH: DeploymentHealth = {
+  healthy: false,
+  in_cooldown: false,
+  consecutive_failures: 0,
+  last_error: null,
+  last_error_at: null,
+  last_success_at: null,
+};
 
 function OverviewTab({ model }: { model: any }) {
   const lp = model.deltallm_params || {};
-  const health = model.health || {};
+  const health: DeploymentHealth = model.health || EMPTY_DEPLOYMENT_HEALTH;
   const maskedKey = lp.api_key
     ? `${lp.api_key.slice(0, 8)}${'•'.repeat(12)}${lp.api_key.slice(-4)}`
     : null;
@@ -359,7 +336,6 @@ function RoutingTab({ model }: { model: any }) {
 
 function CostsTab({ model }: { model: any }) {
   const mi = model.model_info || {};
-  const mode = mi.mode || model.mode || 'chat';
   const rows = [
     { label: 'Input Cost / Token',        value: formatCost(mi.input_cost_per_token),           hint: 'Standard request' },
     { label: 'Output Cost / Token',       value: formatCost(mi.output_cost_per_token),          hint: 'Standard request' },
@@ -535,7 +511,7 @@ export default function ModelDetail() {
   const mode = mi.mode || model.mode || 'chat';
   const modeOpt = MODE_OPTIONS.find((o) => o.value === mode);
   const modeLabel = modeOpt?.label || mode;
-  const health = model.health || {};
+  const health: DeploymentHealth = model.health || EMPTY_DEPLOYMENT_HEALTH;
 
   // Compact stat strip values
   const rpmLimit = lp.rpm ?? mi.rpm_limit;

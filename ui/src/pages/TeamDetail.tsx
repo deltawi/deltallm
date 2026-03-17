@@ -176,13 +176,6 @@ export default function TeamDetail() {
     setIsEditingAssets(true);
   };
 
-  const handleOrganizationChange = (orgId: string) => {
-    setForm((c) => {
-      const changed = c.organization_id !== orgId;
-      return { ...c, organization_id: orgId, asset_access_mode: changed ? 'inherit' : c.asset_access_mode, selected_callable_keys: changed ? [] : c.selected_callable_keys };
-    });
-  };
-
   const assetTargets = usesParentPreview
     ? buildParentScopedAssetTargets(parentOrgAssetVisibility?.callable_targets?.items || [], form.selected_callable_keys, form.asset_access_mode)
     : buildScopedSelectableTargets(teamAssetAccessTargets?.selectable_targets || [], form.selected_callable_keys, form.asset_access_mode);

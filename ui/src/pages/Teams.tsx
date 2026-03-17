@@ -8,7 +8,7 @@ import UserSearchSelect from '../components/UserSearchSelect';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import {
   Plus, Users, Trash2, UserPlus, Pencil, Search, ChevronRight,
-  Building2, Shield, AlertOctagon, Gauge, MoreHorizontal, Filter, X,
+  Building2, AlertOctagon, Gauge, X,
 } from 'lucide-react';
 
 /* ─────────────── small visual helpers ─────────────── */
@@ -101,8 +101,6 @@ export default function Teams() {
   /* summary stats */
   const totalMembers = items.reduce((s, t) => s + (t.member_count || 0), 0);
   const blockedCount = items.filter((t) => t.blocked).length;
-  const inheritCount = items.filter((t) => !t.blocked).length; // placeholder until API returns mode
-
   /* ── create / edit modal ── */
   const [editItem, setEditItem] = useState<any>(null);
   const [form, setForm] = useState({
