@@ -30,10 +30,8 @@ import {
 } from '../lib/routeGroups';
 import RouteGroupSettingsCard from '../components/route-groups/RouteGroupSettingsCard';
 import RouteGroupMembersCard from '../components/route-groups/RouteGroupMembersCard';
-import RouteGroupPolicyEditorCard from '../components/route-groups/RouteGroupPolicyEditorCard';
-import RouteGroupPolicyVersionsCard from '../components/route-groups/RouteGroupPolicyVersionsCard';
 import RouteGroupUsageCard from '../components/route-groups/RouteGroupUsageCard';
-import RouteGroupPromptBindingCard from '../components/route-groups/RouteGroupPromptBindingCard';
+import RouteGroupAdvancedTab from '../components/route-groups/RouteGroupAdvancedTab';
 import { HeroTabbedDetailShell, IconTabs, InlineStat, PanelCard } from '../components/admin/shells';
 
 /* ─── Visual helpers ─────────────────────────────────────────────────────── */
@@ -576,70 +574,53 @@ export default function RouteGroupDetail() {
               onAddMember={handleAddMember}
               onRequestRemoveMember={setMemberToRemove}
             />
+          ) : activeTab === 'advanced' ? (
+            <RouteGroupAdvancedTab
+              bindings={bindings}
+              templates={promptTemplates.data?.data || []}
+              bindingForm={bindingForm}
+              loadingTemplates={promptTemplates.loading}
+              savingBinding={savingBinding}
+              deletingBinding={deletingBinding}
+              onBindingFormChange={setBindingForm}
+              onSaveBinding={handleSaveBinding}
+              onDeleteBinding={handleDeleteBinding}
+              guidedPolicy={guidedPolicy}
+              memberIds={memberIds}
+              guidedPreview={guidedPreview}
+              policyText={policyText}
+              policyMessage={policyMessage}
+              policyError={policyError}
+              isPolicyBusy={isPolicyBusy}
+              policyAction={policyAction}
+              showAdvancedJson={showAdvancedJson}
+              hasMembers={memberIds.length > 0}
+              onToggleAdvancedJson={() => setShowAdvancedJson((cur) => !cur)}
+              onGuidedPolicyChange={setGuidedPolicy}
+              onPolicyTextChange={setPolicyText}
+              onValidate={handleValidatePolicy}
+              onSaveDraft={handleSaveDraft}
+              onPublish={handlePublish}
+              policies={policies}
+              canRollbackVersions={canRollbackVersions}
+              selectedRollbackVersion={selectedRollbackVersion}
+              loadingPolicies={policyHistory.loading}
+              hasPoliciesError={!!policyHistory.error}
+              onRollbackVersionChange={setSelectedRollbackVersion}
+              onRollback={handleRollback}
+            />
           ) : (
             <PanelCard>
               {activeTab === 'test' && (
-              <RouteGroupUsageCard
-                groupKey={group.group_key}
-                mode={form.mode}
-                liveTrafficEnabled={group.enabled}
-                boundPrompt={promptSummary}
-              />
+                <RouteGroupUsageCard
+                  groupKey={group.group_key}
+                  mode={form.mode}
+                  liveTrafficEnabled={group.enabled}
+                  boundPrompt={promptSummary}
+                />
               )}
-
               {activeTab === 'settings' && (
                 <RouteGroupSettingsCard form={form} saving={savingGroup} onChange={setForm} onSave={handleSaveGroup} />
-              )}
-
-              {activeTab === 'advanced' && (
-                <div className="space-y-5">
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
-                    Configure prompts, routing overrides, and rollback history here after the model inventory looks correct.
-                  </div>
-
-                  <RouteGroupPromptBindingCard
-                    bindings={bindings}
-                    templates={promptTemplates.data?.data || []}
-                    bindingForm={bindingForm}
-                    loadingTemplates={promptTemplates.loading}
-                    savingBinding={savingBinding}
-                    deletingBinding={deletingBinding}
-                    onBindingFormChange={setBindingForm}
-                    onSaveBinding={handleSaveBinding}
-                    onDeleteBinding={handleDeleteBinding}
-                  />
-
-                  <RouteGroupPolicyEditorCard
-                    guidedPolicy={guidedPolicy}
-                    memberIds={memberIds}
-                    guidedPreview={guidedPreview}
-                    policyText={policyText}
-                    policyMessage={policyMessage}
-                    policyError={policyError}
-                    isPolicyBusy={isPolicyBusy}
-                    policyAction={policyAction}
-                    showAdvancedJson={showAdvancedJson}
-                    hasMembers={memberIds.length > 0}
-                    onToggleAdvancedJson={() => setShowAdvancedJson((cur) => !cur)}
-                    onGuidedPolicyChange={setGuidedPolicy}
-                    onPolicyTextChange={setPolicyText}
-                    onValidate={handleValidatePolicy}
-                    onSaveDraft={handleSaveDraft}
-                    onPublish={handlePublish}
-                  />
-
-                  <RouteGroupPolicyVersionsCard
-                    policies={policies}
-                    canRollbackVersions={canRollbackVersions}
-                    selectedRollbackVersion={selectedRollbackVersion}
-                    loading={policyHistory.loading}
-                    hasError={!!policyHistory.error}
-                    isPolicyBusy={isPolicyBusy}
-                    policyAction={policyAction}
-                    onRollbackVersionChange={setSelectedRollbackVersion}
-                    onRollback={handleRollback}
-                  />
-                </div>
               )}
             </PanelCard>
           )}
