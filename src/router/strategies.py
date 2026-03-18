@@ -6,6 +6,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from src.billing.cost import compute_billing_result
+
 
 @dataclass
 class DeploymentLike:
@@ -13,10 +15,15 @@ class DeploymentLike:
     weight: int = 1
     priority: int = 0
     tags: list[str] | None = None
+    model_info: dict[str, Any] | None = None
     input_cost_per_token: float = 0.0
     output_cost_per_token: float = 0.0
     rpm_limit: int | None = None
     tpm_limit: int | None = None
+    image_pm_limit: int | None = None
+    audio_seconds_pm_limit: int | None = None
+    char_pm_limit: int | None = None
+    rerank_units_pm_limit: int | None = None
 
 
 class StateBackendLike(Protocol):
@@ -39,6 +46,12 @@ class RoutingStrategyImpl(Protocol):
     ) -> DeploymentLike | None: ...
 
 
+def random_choice(deployments: list[DeploymentLike]) -> DeploymentLike | None:
+    if not deployments:
+        return None
+    return random.choice(deployments)
+
+
 def weighted_random_choice(deployments: list[DeploymentLike]) -> DeploymentLike | None:
     if not deployments:
         return None
@@ -46,7 +59,7 @@ def weighted_random_choice(deployments: list[DeploymentLike]) -> DeploymentLike 
     weights = [max(0, int(d.weight)) for d in deployments]
     total = sum(weights)
     if total <= 0:
-        return random.choice(deployments)
+        return random_choice(deployments)
 
     pick = random.uniform(0, total)
     cumulative = 0.0
@@ -64,7 +77,7 @@ class SimpleShuffleStrategy:
         deployments: list[DeploymentLike],
         context: dict[str, Any],
     ) -> DeploymentLike | None:
-        return weighted_random_choice(deployments)
+        return random_choice(deployments)
 
 
 class LeastBusyStrategy:
@@ -102,15 +115,23 @@ class LatencyBasedStrategy:
             [d.deployment_id for d in deployments],
             window_ms=self.window_size_ms,
         )
-        best: DeploymentLike | None = None
-        best_latency = float("inf")
+        scored: list[tuple[DeploymentLike, float]] = []
+        unsampled: list[DeploymentLike] = []
         for deployment in deployments:
             avg = self._weighted_avg(windows.get(deployment.deployment_id, []))
-            if avg < best_latency:
-                best_latency = avg
-                best = deployment
+            if math.isfinite(avg):
+                scored.append((deployment, avg))
+            else:
+                unsampled.append(deployment)
 
-        return best or weighted_random_choice(deployments)
+        if not scored:
+            return weighted_random_choice(deployments)
+
+        best_latency = min(score for _, score in scored)
+        candidates = [deployment for deployment, score in scored if score == best_latency]
+        if unsampled:
+            candidates.extend(unsampled)
+        return weighted_random_choice(candidates)
 
     def _weighted_avg(self, window: list[tuple[int, float]]) -> float:
         if not window:
@@ -137,10 +158,55 @@ class CostBasedStrategy:
         if not deployments:
             return None
 
-        return min(
-            deployments,
-            key=lambda d: float(d.input_cost_per_token) + float(d.output_cost_per_token),
+        best_deployment: DeploymentLike | None = None
+        best_cost = float("inf")
+        for deployment in deployments:
+            estimated_cost = self._estimated_unit_cost(deployment)
+            if estimated_cost < best_cost:
+                best_cost = estimated_cost
+                best_deployment = deployment
+        return best_deployment or weighted_random_choice(deployments)
+
+    @staticmethod
+    def _estimated_unit_cost(deployment: DeploymentLike) -> float:
+        info = dict(deployment.model_info or {})
+        info.setdefault("input_cost_per_token", float(deployment.input_cost_per_token))
+        info.setdefault("output_cost_per_token", float(deployment.output_cost_per_token))
+        mode = str(info.get("mode") or "chat").strip() or "chat"
+        result = compute_billing_result(
+            mode=mode,
+            usage=CostBasedStrategy._synthetic_usage_for_mode(mode),
+            model_info=info,
         )
+        if not result.pricing_fields_used:
+            return float("inf")
+        return float(result.cost)
+
+    @staticmethod
+    def _synthetic_usage_for_mode(mode: str) -> dict[str, int | float]:
+        if mode == "embedding":
+            return {"prompt_tokens": 1, "completion_tokens": 0}
+        if mode == "image_generation":
+            return {"images": 1}
+        if mode == "audio_speech":
+            return {
+                "prompt_tokens": 1,
+                "completion_tokens": 1,
+                "input_audio_tokens": 1,
+                "output_audio_tokens": 1,
+                "input_characters": 1,
+                "output_characters": 1,
+                "duration_seconds": 1.0,
+            }
+        if mode == "audio_transcription":
+            return {
+                "prompt_tokens": 1,
+                "completion_tokens": 1,
+                "input_audio_tokens": 1,
+                "duration_seconds": 1.0,
+                "billable_duration_seconds": 1.0,
+            }
+        return {"prompt_tokens": 1, "completion_tokens": 1}
 
 
 class UsageBasedStrategy:
@@ -161,49 +227,31 @@ class UsageBasedStrategy:
 
         for deployment in deployments:
             dep_usage = usage.get(deployment.deployment_id, {})
-            rpm_util = self._calc_utilization(dep_usage.get("rpm", 0), deployment.rpm_limit)
-            tpm_util = self._calc_utilization(dep_usage.get("tpm", 0), deployment.tpm_limit)
-            utilization = max(rpm_util, tpm_util)
+            utilization = usage_utilization_for_deployment(deployment, dep_usage)
             if utilization < best_utilization:
                 best_utilization = utilization
                 best = deployment
 
         return best or weighted_random_choice(deployments)
 
-    @staticmethod
-    def _calc_utilization(current: int, limit: int | None) -> float:
-        if not limit or limit <= 0:
-            return 0.0
-        return current / limit
-
-
 class TagBasedStrategy:
     def __init__(self, fallback_strategy: RoutingStrategyImpl | None = None):
-        self.fallback = fallback_strategy or SimpleShuffleStrategy()
+        self.fallback = fallback_strategy or WeightedStrategy()
 
     async def select(
         self,
         deployments: list[DeploymentLike],
         context: dict[str, Any],
     ) -> DeploymentLike | None:
-        request_tags = context.get("metadata", {}).get("tags") or []
-        if not request_tags:
-            return await self.fallback.select(deployments, context)
-
-        filtered = [
-            d
-            for d in deployments
-            if d.tags and all(tag in d.tags for tag in request_tags)
-        ]
-        if not filtered:
-            return None
-
-        return await self.fallback.select(filtered, context)
+        # Request-tag eligibility is already enforced by the router before strategy
+        # selection, so tag-based routing is intentionally just weighted selection on
+        # the remaining tag-matched pool.
+        return await self.fallback.select(deployments, context)
 
 
 class PriorityBasedStrategy:
     def __init__(self, fallback_strategy: RoutingStrategyImpl | None = None):
-        self.fallback = fallback_strategy or SimpleShuffleStrategy()
+        self.fallback = fallback_strategy or WeightedStrategy()
 
     async def select(
         self,
@@ -251,9 +299,57 @@ class RateLimitAwareStrategy:
         available: list[DeploymentLike] = []
         for deployment in deployments:
             dep_usage = usage.get(deployment.deployment_id, {})
-            rpm_util = dep_usage.get("rpm", 0) / (deployment.rpm_limit or float("inf"))
-            tpm_util = dep_usage.get("tpm", 0) / (deployment.tpm_limit or float("inf"))
-            if rpm_util < self.utilization_threshold and tpm_util < self.utilization_threshold:
+            utilization = usage_utilization_for_deployment(deployment, dep_usage)
+            if utilization < self.utilization_threshold:
                 available.append(deployment)
 
         return weighted_random_choice(available)
+
+
+def usage_utilization_for_deployment(
+    deployment: DeploymentLike,
+    usage: dict[str, int] | None,
+) -> float:
+    dep_usage = usage or {}
+    utilizations: list[float] = []
+
+    rpm_util = _calc_utilization(dep_usage.get("rpm", 0), deployment.rpm_limit)
+    if deployment.rpm_limit is not None:
+        utilizations.append(rpm_util)
+
+    mode = str((deployment.model_info or {}).get("mode") or "chat").strip().lower() or "chat"
+    if mode in {"chat", "embedding"}:
+        if deployment.tpm_limit is not None:
+            utilizations.append(_calc_utilization(dep_usage.get("tpm", 0), deployment.tpm_limit))
+    elif mode == "image_generation":
+        if deployment.image_pm_limit is not None:
+            utilizations.append(_calc_utilization(dep_usage.get("image_pm", 0), deployment.image_pm_limit))
+    elif mode in {"audio_speech", "audio_transcription"}:
+        if deployment.audio_seconds_pm_limit is not None:
+            utilizations.append(
+                _calc_utilization(dep_usage.get("audio_seconds_pm", 0), deployment.audio_seconds_pm_limit)
+            )
+        if deployment.char_pm_limit is not None:
+            utilizations.append(_calc_utilization(dep_usage.get("char_pm", 0), deployment.char_pm_limit))
+    elif mode == "rerank":
+        if deployment.rerank_units_pm_limit is not None:
+            utilizations.append(
+                _calc_utilization(dep_usage.get("rerank_units_pm", 0), deployment.rerank_units_pm_limit)
+            )
+    elif deployment.tpm_limit is not None:
+        utilizations.append(_calc_utilization(dep_usage.get("tpm", 0), deployment.tpm_limit))
+
+    return max(utilizations, default=0.0)
+
+
+def usage_within_limits(
+    deployment: DeploymentLike,
+    usage: dict[str, int] | None,
+) -> bool:
+    return usage_utilization_for_deployment(deployment, usage) < 1.0
+
+
+def _calc_utilization(current: int, limit: int | None) -> float:
+    if not limit or limit <= 0:
+        return 0.0
+    return current / limit

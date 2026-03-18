@@ -27,6 +27,7 @@ from src.providers.resolution import (
     resolve_upstream_model,
 )
 from src.router.router import Deployment
+from src.router.usage import record_router_usage
 from src.audit.actions import AuditAction
 from src.routers.audit_helpers import emit_audit_event
 from src.routers.routing_decision import (
@@ -142,6 +143,12 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
 
         num_images = len(data.get("data", []))
         usage = {"images": num_images}
+        await record_router_usage(
+            request.app.state.router_state_backend,
+            served_deployment.deployment_id,
+            mode="image_generation",
+            usage=usage,
+        )
         request_cost = compute_cost(mode="image_generation", usage=usage, model_info=model_info)
         increment_request(
             model=payload.model, api_provider=api_provider,

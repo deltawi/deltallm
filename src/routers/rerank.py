@@ -23,6 +23,7 @@ from src.models.errors import InvalidRequestError
 from src.models.requests import RerankRequest
 from src.providers.resolution import resolve_provider, resolve_upstream_model
 from src.router.router import Deployment
+from src.router.usage import record_router_usage
 from src.audit.actions import AuditAction
 from src.routers.audit_helpers import emit_audit_event
 from src.routers.routing_decision import (
@@ -133,6 +134,12 @@ async def rerank(request: Request, payload: RerankRequest):
         doc_count = len(payload.documents)
         query_tokens = len(payload.query.split())
         usage = {"prompt_tokens": query_tokens + doc_count * 50}
+        await record_router_usage(
+            request.app.state.router_state_backend,
+            served_deployment.deployment_id,
+            mode="rerank",
+            usage={"rerank_units": doc_count},
+        )
         request_cost = compute_cost(mode="rerank", usage=usage, model_info=model_info)
         increment_request(
             model=payload.model, api_provider=api_provider,

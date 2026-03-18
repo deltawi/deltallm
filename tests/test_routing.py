@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from src.models.errors import ServiceUnavailableError
+import src.router.strategies as strategies_module
 from src.router import (
     HealthEndpointHandler,
     RedisStateBackend,
@@ -12,6 +13,7 @@ from src.router import (
     build_deployment_registry,
     build_route_group_policies,
 )
+from src.router.usage import normalize_router_usage
 
 
 @pytest.mark.asyncio
@@ -46,6 +48,412 @@ async def test_least_busy_strategy_selects_lowest_active_requests():
     selected = await router.select_deployment("gpt-4o-mini", {})
     assert selected is not None
     assert selected.deployment_id == "dep-b"
+
+
+@pytest.mark.asyncio
+async def test_request_tags_filter_candidates_before_strategy(monkeypatch):
+    monkeypatch.setattr(strategies_module.random, "choice", lambda deployments: deployments[-1])
+    state = RedisStateBackend(redis=None)
+    registry = build_deployment_registry(
+        {
+            "gpt-4o-mini": [
+                {
+                    "deployment_id": "dep-tagged",
+                    "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                    "model_info": {"tags": ["vip"]},
+                },
+                {
+                    "deployment_id": "dep-untagged",
+                    "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                    "model_info": {"tags": []},
+                },
+            ]
+        }
+    )
+    router = Router(
+        strategy=RoutingStrategy.SIMPLE_SHUFFLE,
+        state_backend=state,
+        config=RouterConfig(),
+        deployment_registry=registry,
+    )
+
+    selected = await router.select_deployment("gpt-4o-mini", {"metadata": {"tags": ["vip"]}})
+
+    assert selected is not None
+    assert selected.deployment_id == "dep-tagged"
+
+
+@pytest.mark.asyncio
+async def test_tag_based_strategy_applies_tag_filtering():
+    state = RedisStateBackend(redis=None)
+    registry = build_deployment_registry(
+        {
+            "gpt-4o-mini": [
+                {
+                    "deployment_id": "dep-tagged",
+                    "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                    "model_info": {"tags": ["vip"]},
+                },
+                {
+                    "deployment_id": "dep-untagged",
+                    "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                },
+            ]
+        }
+    )
+    router = Router(
+        strategy=RoutingStrategy.TAG_BASED,
+        state_backend=state,
+        config=RouterConfig(),
+        deployment_registry=registry,
+    )
+
+    selected = await router.select_deployment("gpt-4o-mini", {"metadata": {"tags": ["vip"]}})
+
+    assert selected is not None
+    assert selected.deployment_id == "dep-tagged"
+
+
+def test_tag_based_strategy_is_weighted_selection_on_prefiltered_pool():
+    strategy = strategies_module.TagBasedStrategy()
+    assert isinstance(strategy.fallback, strategies_module.WeightedStrategy)
+
+
+@pytest.mark.asyncio
+async def test_priority_based_strategy_applies_priority_filtering(monkeypatch):
+    monkeypatch.setattr(strategies_module.random, "choice", lambda deployments: deployments[-1])
+    state = RedisStateBackend(redis=None)
+    registry = build_deployment_registry(
+        {
+            "gpt-4o-mini": [
+                {
+                    "deployment_id": "dep-primary",
+                    "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                    "model_info": {"priority": 0},
+                },
+                {
+                    "deployment_id": "dep-secondary",
+                    "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                    "model_info": {"priority": 10},
+                },
+            ]
+        }
+    )
+    simple_router = Router(
+        strategy=RoutingStrategy.SIMPLE_SHUFFLE,
+        state_backend=state,
+        config=RouterConfig(),
+        deployment_registry=registry,
+    )
+    priority_router = Router(
+        strategy=RoutingStrategy.PRIORITY_BASED,
+        state_backend=state,
+        config=RouterConfig(),
+        deployment_registry=registry,
+    )
+
+    simple_selected = await simple_router.select_deployment("gpt-4o-mini", {})
+    priority_selected = await priority_router.select_deployment("gpt-4o-mini", {})
+
+    assert simple_selected is not None
+    assert simple_selected.deployment_id == "dep-secondary"
+    assert priority_selected is not None
+    assert priority_selected.deployment_id == "dep-primary"
+
+
+@pytest.mark.asyncio
+async def test_latency_based_strategy_keeps_unsampled_members_eligible(monkeypatch):
+    monkeypatch.setattr(strategies_module.random, "uniform", lambda start, end: (start + end) * 0.75)
+    state = RedisStateBackend(redis=None)
+    registry = build_deployment_registry(
+        {
+            "gpt-4o-mini": [
+                {"deployment_id": "dep-sampled", "deltallm_params": {"model": "openai/gpt-4o-mini"}},
+                {"deployment_id": "dep-unsampled", "deltallm_params": {"model": "openai/gpt-4o-mini"}},
+            ]
+        }
+    )
+    await state.record_latency("dep-sampled", 10.0)
+    router = Router(
+        strategy=RoutingStrategy.LATENCY_BASED,
+        state_backend=state,
+        config=RouterConfig(),
+        deployment_registry=registry,
+    )
+
+    selected = await router.select_deployment("gpt-4o-mini", {})
+
+    assert selected is not None
+    assert selected.deployment_id == "dep-unsampled"
+
+
+@pytest.mark.asyncio
+async def test_cost_based_strategy_uses_mode_specific_pricing():
+    state = RedisStateBackend(redis=None)
+    registry = build_deployment_registry(
+        {
+            "image-group": [
+                {
+                    "deployment_id": "dep-expensive",
+                    "deltallm_params": {"model": "openai/image"},
+                    "model_info": {"mode": "image_generation", "input_cost_per_image": 0.10},
+                },
+                {
+                    "deployment_id": "dep-cheap",
+                    "deltallm_params": {"model": "openai/image"},
+                    "model_info": {"mode": "image_generation", "input_cost_per_image": 0.02},
+                },
+            ]
+        }
+    )
+    router = Router(
+        strategy=RoutingStrategy.COST_BASED,
+        state_backend=state,
+        config=RouterConfig(),
+        deployment_registry=registry,
+    )
+
+    selected = await router.select_deployment("image-group", {})
+
+    assert selected is not None
+    assert selected.deployment_id == "dep-cheap"
+
+
+@pytest.mark.asyncio
+async def test_usage_based_strategy_uses_router_state_usage():
+    state = RedisStateBackend(redis=None)
+    registry = build_deployment_registry(
+        {
+            "gpt-4o-mini": [
+                {
+                    "deployment_id": "dep-a",
+                    "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                    "model_info": {"rpm_limit": 10, "tpm_limit": 100},
+                },
+                {
+                    "deployment_id": "dep-b",
+                    "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                    "model_info": {"rpm_limit": 10, "tpm_limit": 100},
+                },
+            ]
+        }
+    )
+    await state.increment_usage("dep-a", 80)
+    await state.increment_usage("dep-a", 0)
+    await state.increment_usage("dep-b", 5)
+    router = Router(
+        strategy=RoutingStrategy.USAGE_BASED,
+        state_backend=state,
+        config=RouterConfig(),
+        deployment_registry=registry,
+    )
+
+    selected = await router.select_deployment("gpt-4o-mini", {})
+
+    assert selected is not None
+    assert selected.deployment_id == "dep-b"
+
+
+@pytest.mark.asyncio
+async def test_usage_based_strategy_uses_image_limits_when_configured():
+    state = RedisStateBackend(redis=None)
+    registry = build_deployment_registry(
+        {
+            "image-group": [
+                {
+                    "deployment_id": "dep-hot",
+                    "deltallm_params": {"model": "openai/image"},
+                    "model_info": {"mode": "image_generation", "rpm_limit": 10, "image_pm_limit": 10},
+                },
+                {
+                    "deployment_id": "dep-cool",
+                    "deltallm_params": {"model": "openai/image"},
+                    "model_info": {"mode": "image_generation", "rpm_limit": 10, "image_pm_limit": 10},
+                },
+            ]
+        }
+    )
+    await state.increment_usage_counters("dep-hot", {"rpm": 1, "image_pm": 9})
+    await state.increment_usage_counters("dep-cool", {"rpm": 1, "image_pm": 1})
+    router = Router(
+        strategy=RoutingStrategy.USAGE_BASED,
+        state_backend=state,
+        config=RouterConfig(),
+        deployment_registry=registry,
+    )
+
+    selected = await router.select_deployment("image-group", {})
+
+    assert selected is not None
+    assert selected.deployment_id == "dep-cool"
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_aware_strategy_skips_hot_deployments():
+    state = RedisStateBackend(redis=None)
+    registry = build_deployment_registry(
+        {
+            "gpt-4o-mini": [
+                {
+                    "deployment_id": "dep-hot",
+                    "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                    "model_info": {"rpm_limit": 10, "tpm_limit": 100},
+                },
+                {
+                    "deployment_id": "dep-cool",
+                    "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                    "model_info": {"rpm_limit": 10, "tpm_limit": 100},
+                },
+            ]
+        }
+    )
+    for _ in range(9):
+        await state.increment_usage("dep-hot", 0)
+    await state.increment_usage("dep-hot", 95)
+    router = Router(
+        strategy=RoutingStrategy.RATE_LIMIT_AWARE,
+        state_backend=state,
+        config=RouterConfig(),
+        deployment_registry=registry,
+    )
+
+    selected = await router.select_deployment("gpt-4o-mini", {})
+
+    assert selected is not None
+    assert selected.deployment_id == "dep-cool"
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_aware_strategy_uses_audio_limits_when_configured():
+    state = RedisStateBackend(redis=None)
+    registry = build_deployment_registry(
+        {
+            "audio-group": [
+                {
+                    "deployment_id": "dep-hot",
+                    "deltallm_params": {"model": "openai/audio"},
+                    "model_info": {"mode": "audio_transcription", "rpm_limit": 10, "audio_seconds_pm_limit": 10},
+                },
+                {
+                    "deployment_id": "dep-cool",
+                    "deltallm_params": {"model": "openai/audio"},
+                    "model_info": {"mode": "audio_transcription", "rpm_limit": 10, "audio_seconds_pm_limit": 10},
+                },
+            ]
+        }
+    )
+    await state.increment_usage_counters("dep-hot", {"rpm": 1, "audio_seconds_pm": 9})
+    await state.increment_usage_counters("dep-cool", {"rpm": 1, "audio_seconds_pm": 1})
+    router = Router(
+        strategy=RoutingStrategy.RATE_LIMIT_AWARE,
+        state_backend=state,
+        config=RouterConfig(),
+        deployment_registry=registry,
+    )
+
+    selected = await router.select_deployment("audio-group", {})
+
+    assert selected is not None
+    assert selected.deployment_id == "dep-cool"
+
+
+@pytest.mark.asyncio
+async def test_pre_call_checks_use_router_state_usage():
+    state = RedisStateBackend(redis=None)
+    registry = build_deployment_registry(
+        {
+            "gpt-4o-mini": [
+                {
+                    "deployment_id": "dep-over",
+                    "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                    "model_info": {"rpm_limit": 1, "tpm_limit": 10},
+                },
+                {
+                    "deployment_id": "dep-ok",
+                    "deltallm_params": {"model": "openai/gpt-4o-mini"},
+                    "model_info": {"rpm_limit": 10, "tpm_limit": 100},
+                },
+            ]
+        }
+    )
+    await state.increment_usage("dep-over", 20)
+    router = Router(
+        strategy=RoutingStrategy.SIMPLE_SHUFFLE,
+        state_backend=state,
+        config=RouterConfig(enable_pre_call_checks=True),
+        deployment_registry=registry,
+    )
+
+    selected = await router.select_deployment("gpt-4o-mini", {})
+
+    assert selected is not None
+    assert selected.deployment_id == "dep-ok"
+
+
+@pytest.mark.asyncio
+async def test_pre_call_checks_use_mode_specific_limits():
+    state = RedisStateBackend(redis=None)
+    registry = build_deployment_registry(
+        {
+            "rerank-group": [
+                {
+                    "deployment_id": "dep-over",
+                    "deltallm_params": {"model": "openai/rerank"},
+                    "model_info": {"mode": "rerank", "rpm_limit": 10, "rerank_units_pm_limit": 5},
+                },
+                {
+                    "deployment_id": "dep-ok",
+                    "deltallm_params": {"model": "openai/rerank"},
+                    "model_info": {"mode": "rerank", "rpm_limit": 10, "rerank_units_pm_limit": 5},
+                },
+            ]
+        }
+    )
+    await state.increment_usage_counters("dep-over", {"rpm": 1, "rerank_units_pm": 5})
+    router = Router(
+        strategy=RoutingStrategy.SIMPLE_SHUFFLE,
+        state_backend=state,
+        config=RouterConfig(enable_pre_call_checks=True),
+        deployment_registry=registry,
+    )
+
+    selected = await router.select_deployment("rerank-group", {})
+
+    assert selected is not None
+    assert selected.deployment_id == "dep-ok"
+
+
+def test_normalize_router_usage_keeps_non_token_modes_out_of_tpm():
+    image_usage = normalize_router_usage(mode="image_generation", usage={"images": 2})
+    assert image_usage == {"rpm": 1, "image_pm": 2}
+
+    audio_usage = normalize_router_usage(
+        mode="audio_transcription",
+        usage={"duration_seconds": 1.2, "prompt_tokens": 99},
+    )
+    assert audio_usage == {"rpm": 1, "audio_seconds_pm": 2}
+
+    rerank_usage = normalize_router_usage(mode="rerank", usage={"rerank_units": 4, "prompt_tokens": 120})
+    assert rerank_usage == {"rpm": 1, "rerank_units_pm": 4}
+
+
+def test_normalize_router_usage_counts_multimodal_chat_tokens_without_total_tokens():
+    usage = normalize_router_usage(
+        mode="chat",
+        usage={
+            "prompt_tokens": 2,
+            "completion_tokens": 3,
+            "input_audio_tokens": 5,
+            "output_audio_tokens": 7,
+        },
+    )
+    assert usage == {"rpm": 1, "tpm": 17}
+
+    fallback_usage = normalize_router_usage(
+        mode="chat",
+        usage={"prompt_tokens": 2, "completion_tokens": 3, "audio_tokens": 11},
+    )
+    assert fallback_usage == {"rpm": 1, "tpm": 16}
 
 
 def test_build_deployment_registry_supports_explicit_route_groups():
