@@ -194,8 +194,7 @@ export default function RouteGroupAdvancedTab({
   const strategyLabel = STRATEGY_LABELS[activeStrategy] ?? activeStrategy;
 
   return (
-    <div className="-m-5 rounded-2xl bg-slate-50 px-6 py-6">
-      <div className="max-w-3xl mx-auto space-y-3">
+    <div className="space-y-3">
 
       {/* ── 1. Prompt Binding ── */}
       <AccordionCard
@@ -595,7 +594,6 @@ export default function RouteGroupAdvancedTab({
         </div>
       </AccordionCard>
 
-      </div>
     </div>
   );
 }
