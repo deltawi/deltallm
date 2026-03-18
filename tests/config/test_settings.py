@@ -80,6 +80,7 @@ def test_resolve_salt_key_rejects_change_me_default(monkeypatch):
 
 
 def test_resolve_database_settings_prefers_env_over_config(monkeypatch):
+    monkeypatch.delenv("DELTALLM_MASTER_KEY", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
     cfg = AppConfig.model_validate(
         {
@@ -110,6 +111,7 @@ def test_resolve_database_settings_prefers_env_over_config(monkeypatch):
 
 
 def test_resolve_database_settings_uses_database_url_env_fallback(monkeypatch):
+    monkeypatch.delenv("DELTALLM_MASTER_KEY", raising=False)
     monkeypatch.setenv("DATABASE_URL", "postgresql://runtime:secret@db:5432/deltallm?schema=public")
     cfg = AppConfig.model_validate({"general_settings": {"db_pool_size": 9, "db_pool_timeout": 12}})
     settings = Settings.model_validate({})
@@ -126,6 +128,7 @@ def test_resolve_database_settings_uses_database_url_env_fallback(monkeypatch):
 
 
 def test_resolve_database_settings_returns_none_without_database_url(monkeypatch):
+    monkeypatch.delenv("DELTALLM_MASTER_KEY", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
     cfg = AppConfig.model_validate({"general_settings": {}})
     settings = Settings.model_validate({})
@@ -134,6 +137,7 @@ def test_resolve_database_settings_returns_none_without_database_url(monkeypatch
 
 
 def test_settings_load_database_pool_overrides_from_environment(monkeypatch):
+    monkeypatch.delenv("DELTALLM_MASTER_KEY", raising=False)
     monkeypatch.setenv("DELTALLM_DB_POOL_SIZE", "13")
     monkeypatch.setenv("DELTALLM_DB_POOL_TIMEOUT", "21")
 
