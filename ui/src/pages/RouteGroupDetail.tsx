@@ -574,56 +574,53 @@ export default function RouteGroupDetail() {
               onAddMember={handleAddMember}
               onRequestRemoveMember={setMemberToRemove}
             />
+          ) : activeTab === 'advanced' ? (
+            <RouteGroupAdvancedTab
+              bindings={bindings}
+              templates={promptTemplates.data?.data || []}
+              bindingForm={bindingForm}
+              loadingTemplates={promptTemplates.loading}
+              savingBinding={savingBinding}
+              deletingBinding={deletingBinding}
+              onBindingFormChange={setBindingForm}
+              onSaveBinding={handleSaveBinding}
+              onDeleteBinding={handleDeleteBinding}
+              guidedPolicy={guidedPolicy}
+              memberIds={memberIds}
+              guidedPreview={guidedPreview}
+              policyText={policyText}
+              policyMessage={policyMessage}
+              policyError={policyError}
+              isPolicyBusy={isPolicyBusy}
+              policyAction={policyAction}
+              showAdvancedJson={showAdvancedJson}
+              hasMembers={memberIds.length > 0}
+              onToggleAdvancedJson={() => setShowAdvancedJson((cur) => !cur)}
+              onGuidedPolicyChange={setGuidedPolicy}
+              onPolicyTextChange={setPolicyText}
+              onValidate={handleValidatePolicy}
+              onSaveDraft={handleSaveDraft}
+              onPublish={handlePublish}
+              policies={policies}
+              canRollbackVersions={canRollbackVersions}
+              selectedRollbackVersion={selectedRollbackVersion}
+              loadingPolicies={policyHistory.loading}
+              hasPoliciesError={!!policyHistory.error}
+              onRollbackVersionChange={setSelectedRollbackVersion}
+              onRollback={handleRollback}
+            />
           ) : (
             <PanelCard>
               {activeTab === 'test' && (
-              <RouteGroupUsageCard
-                groupKey={group.group_key}
-                mode={form.mode}
-                liveTrafficEnabled={group.enabled}
-                boundPrompt={promptSummary}
-              />
+                <RouteGroupUsageCard
+                  groupKey={group.group_key}
+                  mode={form.mode}
+                  liveTrafficEnabled={group.enabled}
+                  boundPrompt={promptSummary}
+                />
               )}
-
               {activeTab === 'settings' && (
                 <RouteGroupSettingsCard form={form} saving={savingGroup} onChange={setForm} onSave={handleSaveGroup} />
-              )}
-
-              {activeTab === 'advanced' && (
-                <RouteGroupAdvancedTab
-                  bindings={bindings}
-                  templates={promptTemplates.data?.data || []}
-                  bindingForm={bindingForm}
-                  loadingTemplates={promptTemplates.loading}
-                  savingBinding={savingBinding}
-                  deletingBinding={deletingBinding}
-                  onBindingFormChange={setBindingForm}
-                  onSaveBinding={handleSaveBinding}
-                  onDeleteBinding={handleDeleteBinding}
-                  guidedPolicy={guidedPolicy}
-                  memberIds={memberIds}
-                  guidedPreview={guidedPreview}
-                  policyText={policyText}
-                  policyMessage={policyMessage}
-                  policyError={policyError}
-                  isPolicyBusy={isPolicyBusy}
-                  policyAction={policyAction}
-                  showAdvancedJson={showAdvancedJson}
-                  hasMembers={memberIds.length > 0}
-                  onToggleAdvancedJson={() => setShowAdvancedJson((cur) => !cur)}
-                  onGuidedPolicyChange={setGuidedPolicy}
-                  onPolicyTextChange={setPolicyText}
-                  onValidate={handleValidatePolicy}
-                  onSaveDraft={handleSaveDraft}
-                  onPublish={handlePublish}
-                  policies={policies}
-                  canRollbackVersions={canRollbackVersions}
-                  selectedRollbackVersion={selectedRollbackVersion}
-                  loadingPolicies={policyHistory.loading}
-                  hasPoliciesError={!!policyHistory.error}
-                  onRollbackVersionChange={setSelectedRollbackVersion}
-                  onRollback={handleRollback}
-                />
               )}
             </PanelCard>
           )}
