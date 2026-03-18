@@ -194,7 +194,8 @@ export default function RouteGroupAdvancedTab({
   const strategyLabel = STRATEGY_LABELS[activeStrategy] ?? activeStrategy;
 
   return (
-    <div className="space-y-3 py-2">
+    <div className="-m-5 rounded-2xl bg-slate-50 px-6 py-6">
+      <div className="max-w-3xl mx-auto space-y-3">
 
       {/* ── 1. Prompt Binding ── */}
       <AccordionCard
@@ -281,18 +282,21 @@ export default function RouteGroupAdvancedTab({
               <div className="flex flex-wrap items-end gap-3">
                 <div className="flex-1 min-w-[180px]">
                   <label className="mb-1.5 block text-xs font-medium text-slate-700">Prompt Template</label>
-                  <select
-                    value={bindingForm.template_key}
-                    onChange={(e) => onBindingFormChange({ ...bindingForm, template_key: e.target.value })}
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 shadow-sm"
-                  >
-                    <option value="">{loadingTemplates ? 'Loading…' : 'Select a prompt…'}</option>
-                    {templates.map((t) => (
-                      <option key={t.prompt_template_id} value={t.template_key}>
-                        {t.name} ({t.template_key})
-                      </option>
-                    ))}
-                  </select>
+                  <div className="relative">
+                    <select
+                      value={bindingForm.template_key}
+                      onChange={(e) => onBindingFormChange({ ...bindingForm, template_key: e.target.value })}
+                      className="w-full appearance-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 shadow-sm"
+                    >
+                      <option value="" disabled>{loadingTemplates ? 'Loading…' : 'Select a template...'}</option>
+                      {templates.map((t) => (
+                        <option key={t.prompt_template_id} value={t.template_key}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown className="pointer-events-none absolute right-2.5 top-2.5 h-4 w-4 text-slate-400" />
+                  </div>
                 </div>
                 <div className="w-36">
                   <label className="mb-1.5 block text-xs font-medium text-slate-700">Label</label>
@@ -591,6 +595,7 @@ export default function RouteGroupAdvancedTab({
         </div>
       </AccordionCard>
 
+      </div>
     </div>
   );
 }
