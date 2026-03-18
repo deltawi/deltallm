@@ -8,7 +8,7 @@ from redis.asyncio import Redis
 
 from src.bootstrap.status import BootstrapStatus
 from src.batch import BatchRepository
-from src.config import get_settings, resolve_salt_key
+from src.config import get_settings, resolve_database_settings, resolve_salt_key
 from src.config_runtime import DynamicConfigManager, SecretResolver, build_app_config, load_yaml_dict
 from src.db.callable_targets import CallableTargetBindingRepository
 from src.db.callable_target_policies import CallableTargetScopePolicyRepository
@@ -57,7 +57,8 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
     app.state.redis = redis_client
     app.state.route_group_runtime_cache = RouteGroupRuntimeCache(redis_client=redis_client)
 
-    await prisma_manager.connect()
+    database_settings = resolve_database_settings(cfg, settings)
+    await prisma_manager.connect(database_settings)
     app.state.prisma_manager = prisma_manager
 
     dynamic_config_manager = DynamicConfigManager(

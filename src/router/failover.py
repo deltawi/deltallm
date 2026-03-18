@@ -4,6 +4,7 @@ import asyncio
 import logging
 import random
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
@@ -28,6 +29,7 @@ class FallbackConfig:
     backoff_multiplier: float = 2.0
     backoff_max: float = 30.0
     backoff_jitter: bool = True
+    event_history_size: int = 1000
 
 
 class ErrorClassification:
@@ -153,11 +155,12 @@ class FailoverManager:
         self.registry = deployment_registry
         self.state = state_backend
         self.cooldown = cooldown_manager
-        self._fallback_events: list[FallbackEvent] = []
-        self._max_events = 1000
+        self._fallback_events: deque[FallbackEvent] = deque(
+            maxlen=max(1, int(self.config.event_history_size or 1000))
+        )
 
     def get_recent_fallback_events(self, limit: int = 50) -> list[dict[str, Any]]:
-        events = self._fallback_events[-limit:]
+        events = list(self._fallback_events)[-max(0, int(limit)) :]
         return [
             {
                 "timestamp": e.timestamp,
@@ -196,8 +199,6 @@ class FailoverManager:
             success=success,
         )
         self._fallback_events.append(event)
-        if len(self._fallback_events) > self._max_events:
-            self._fallback_events = self._fallback_events[-self._max_events:]
 
         if success:
             logger.info(

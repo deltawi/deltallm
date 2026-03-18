@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from src.config import AppConfig, Settings, resolve_app_config_with_secrets, resolve_salt_key
+from src.config import (
+    AppConfig,
+    Settings,
+    resolve_app_config_with_secrets,
+    resolve_database_settings,
+    resolve_salt_key,
+)
 
 
 def test_master_key_validation_accepts_strong_values():
@@ -71,3 +77,67 @@ def test_resolve_salt_key_rejects_change_me_default(monkeypatch):
     settings = Settings.model_validate({})
     with pytest.raises(ValueError, match="Insecure salt key"):
         resolve_salt_key(cfg, settings)
+
+
+def test_resolve_database_settings_prefers_env_over_config(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    cfg = AppConfig.model_validate(
+        {
+            "general_settings": {
+                "database_url": "postgresql://cfg-user:cfg-pass@cfg-host:5432/cfg-db?schema=public",
+                "db_pool_size": 7,
+                "db_pool_timeout": 14,
+            }
+        }
+    )
+    settings = Settings.model_validate(
+        {
+            "database_url": "postgresql://env-user:env-pass@env-host:5432/env-db?sslmode=require",
+            "db_pool_size": 11,
+            "db_pool_timeout": 22,
+        }
+    )
+
+    resolved = resolve_database_settings(cfg, settings)
+
+    assert resolved is not None
+    assert resolved.pool_size == 11
+    assert resolved.pool_timeout == 22
+    assert resolved.url == (
+        "postgresql://env-user:env-pass@env-host:5432/env-db"
+        "?sslmode=require&connection_limit=11&pool_timeout=22"
+    )
+
+
+def test_resolve_database_settings_uses_database_url_env_fallback(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://runtime:secret@db:5432/deltallm?schema=public")
+    cfg = AppConfig.model_validate({"general_settings": {"db_pool_size": 9, "db_pool_timeout": 12}})
+    settings = Settings.model_validate({})
+
+    resolved = resolve_database_settings(cfg, settings)
+
+    assert resolved is not None
+    assert resolved.pool_size == 9
+    assert resolved.pool_timeout == 12
+    assert resolved.url == (
+        "postgresql://runtime:secret@db:5432/deltallm"
+        "?schema=public&connection_limit=9&pool_timeout=12"
+    )
+
+
+def test_resolve_database_settings_returns_none_without_database_url(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    cfg = AppConfig.model_validate({"general_settings": {}})
+    settings = Settings.model_validate({})
+
+    assert resolve_database_settings(cfg, settings) is None
+
+
+def test_settings_load_database_pool_overrides_from_environment(monkeypatch):
+    monkeypatch.setenv("DELTALLM_DB_POOL_SIZE", "13")
+    monkeypatch.setenv("DELTALLM_DB_POOL_TIMEOUT", "21")
+
+    settings = Settings()
+
+    assert settings.db_pool_size == 13
+    assert settings.db_pool_timeout == 21

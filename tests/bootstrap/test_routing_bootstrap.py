@@ -13,6 +13,8 @@ def _routing_config(*, bootstrap_models: bool, health_checks: bool) -> SimpleNam
         general_settings=SimpleNamespace(
             model_deployment_bootstrap_from_config=bootstrap_models,
             model_deployment_source="db_only",
+            redis_degraded_mode="fail_closed",
+            failover_event_history_size=321,
             background_health_checks=health_checks,
             health_check_interval=60,
         ),
@@ -40,7 +42,10 @@ def _base_app_state() -> SimpleNamespace:
         route_group_repository=object(),
         route_group_runtime_cache=object(),
         http_client=object(),
-        settings=SimpleNamespace(openai_base_url="https://api.openai.com/v1"),
+        settings=SimpleNamespace(
+            openai_base_url="https://api.openai.com/v1",
+            redis_degraded_mode="fail_open",
+        ),
     )
 
 
@@ -110,7 +115,9 @@ async def test_init_routing_runtime_wires_router_state(monkeypatch: pytest.Monke
     assert app.state.route_groups[0]["key"] == "support"
     assert app.state.router is not None
     assert app.state.router_state_backend is not None
+    assert app.state.router_state_backend.degraded_mode == "fail_closed"
     assert app.state.failover_manager is not None
+    assert app.state.failover_manager.config.event_history_size == 321
     assert app.state.router_health_handler is not None
     assert app.state.background_health_checker is not None
     assert app.state.model_hot_reload_manager == {"dynamic_config": dynamic_config_manager}

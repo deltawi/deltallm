@@ -10,6 +10,8 @@ general_settings:
   deltallm_key_header_name: Authorization
   salt_key: os.environ/DELTALLM_SALT_KEY
   database_url: os.environ/DATABASE_URL
+  db_pool_size: 20
+  db_pool_timeout: 30
   redis_host: localhost
   redis_port: 6379
   redis_password: os.environ/REDIS_PASSWORD
@@ -17,6 +19,9 @@ general_settings:
   cache_backend: memory
   cache_ttl: 3600
   cache_max_size: 10000
+  stream_cache_max_bytes: 262144
+  stream_cache_max_fragments: 2048
+  failover_event_history_size: 1000
   platform_bootstrap_admin_email: os.environ/PLATFORM_BOOTSTRAP_ADMIN_EMAIL
   platform_bootstrap_admin_password: os.environ/PLATFORM_BOOTSTRAP_ADMIN_PASSWORD
   auth_session_ttl_hours: 12
@@ -69,6 +74,15 @@ Recommended steady state:
 | `db_pool_size` | `20` | Maximum database connection pool size |
 | `db_pool_timeout` | `30` | Connection pool timeout in seconds |
 
+Pool settings are applied by appending Prisma's `connection_limit` and `pool_timeout` query parameters to the effective database URL at startup.
+
+Environment overrides:
+- `DELTALLM_DATABASE_URL`
+- `DELTALLM_DB_POOL_SIZE`
+- `DELTALLM_DB_POOL_TIMEOUT`
+
+If those overrides are unset, DeltaLLM falls back to `general_settings.database_url`, `general_settings.db_pool_size`, and `general_settings.db_pool_timeout`. If no application-level database URL is configured, it will still honor the raw `DATABASE_URL` environment variable used by Prisma.
+
 ## Redis Settings
 
 | Setting | Default | Description |
@@ -86,6 +100,9 @@ Recommended steady state:
 | `cache_backend` | `memory` | Cache backend: `memory`, `redis`, or `s3` |
 | `cache_ttl` | `3600` | Cache entry time-to-live in seconds |
 | `cache_max_size` | `10000` | Maximum entries for memory cache |
+| `stream_cache_max_bytes` | `262144` | Max buffered streaming response bytes before streaming cache is disabled for that stream |
+| `stream_cache_max_fragments` | `2048` | Max buffered streaming content fragments before streaming cache is disabled for that stream |
+| `failover_event_history_size` | `1000` | Max in-memory failover events retained per instance for `/health/fallback-events` |
 
 ## Health Check Settings
 

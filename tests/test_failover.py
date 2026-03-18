@@ -72,3 +72,53 @@ async def test_failover_applies_timeout_override():
             timeout_seconds=0.01,
             retry_max_attempts=0,
         )
+
+
+def test_failover_event_history_is_bounded_and_preserves_recent_order():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    manager = FailoverManager(
+        config=FallbackConfig(event_history_size=3),
+        deployment_registry={"group-a": [primary]},
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+
+    manager._record_fallback_event("group-a", "dep-1", "dep-2", "retry", "timeout", "one", 1, False)
+    manager._record_fallback_event("group-a", "dep-2", "dep-3", "retry", "timeout", "two", 2, False)
+    manager._record_fallback_event("group-a", "dep-3", "dep-4", "retry", "timeout", "three", 3, False)
+    manager._record_fallback_event("group-a", "dep-4", "dep-5", "retry", "timeout", "four", 4, True)
+
+    events = manager.get_recent_fallback_events(limit=10)
+
+    assert len(events) == 3
+    assert [event["from_deployment"] for event in events] == ["dep-2", "dep-3", "dep-4"]
+    assert events[-1]["success"] is True
+
+
+def test_failover_event_history_limit_returns_tail_subset():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    manager = FailoverManager(
+        config=FallbackConfig(event_history_size=5),
+        deployment_registry={"group-a": [primary]},
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+
+    for attempt in range(1, 5):
+        manager._record_fallback_event(
+            "group-a",
+            f"dep-{attempt}",
+            f"dep-{attempt + 1}",
+            "retry",
+            "timeout",
+            f"event-{attempt}",
+            attempt,
+            False,
+        )
+
+    events = manager.get_recent_fallback_events(limit=2)
+
+    assert len(events) == 2
+    assert [event["attempt"] for event in events] == [3, 4]

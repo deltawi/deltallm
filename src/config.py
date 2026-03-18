@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import yaml
 from pydantic import AliasChoices, BaseModel, Field, ValidationError, field_validator
@@ -165,8 +167,8 @@ class GeneralSettings(BaseModel):
     deltallm_key_header_name: str = "Authorization"
     salt_key: str | None = None
     database_url: str | None = None
-    db_pool_size: int = 20
-    db_pool_timeout: int = 30
+    db_pool_size: int = Field(default=20, gt=0)
+    db_pool_timeout: int = Field(default=30, ge=0)
     redis_host: str = "localhost"
     redis_port: int = 6379
     redis_password: str | None = None
@@ -176,6 +178,9 @@ class GeneralSettings(BaseModel):
     cache_backend: Literal["memory", "redis", "s3"] = "memory"
     cache_ttl: int = 3600
     cache_max_size: int = 10000
+    stream_cache_max_bytes: int = Field(default=262_144, gt=0)
+    stream_cache_max_fragments: int = Field(default=2_048, gt=0)
+    failover_event_history_size: int = Field(default=1_000, gt=0)
     background_health_checks: bool = False
     health_check_interval: int = 300
     health_check_model: str = "gpt-3.5-turbo"
@@ -256,6 +261,8 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     master_key: str | None = None
     database_url: str | None = None
+    db_pool_size: int | None = Field(default=None, gt=0)
+    db_pool_timeout: int | None = Field(default=None, ge=0)
     redis_url: str | None = None
     redis_host: str = "localhost"
     redis_port: int = 6379
@@ -270,6 +277,13 @@ class Settings(BaseSettings):
         return _validate_master_key_strength(value)
 
 
+@dataclass(frozen=True)
+class DatabaseConnectionSettings:
+    url: str
+    pool_size: int
+    pool_timeout: int
+
+
 def resolve_salt_key(config: AppConfig, settings: Settings) -> str:
     candidate = config.general_settings.salt_key or settings.salt_key
     if candidate is None or not candidate.strip():
@@ -278,6 +292,46 @@ def resolve_salt_key(config: AppConfig, settings: Settings) -> str:
     if normalized == "change-me":
         raise ValueError("Insecure salt key is not allowed. Configure a unique non-default salt key.")
     return normalized
+
+
+def _normalize_optional_str(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _apply_database_pool_settings(database_url: str, *, pool_size: int, pool_timeout: int) -> str:
+    parsed = urlsplit(database_url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["connection_limit"] = str(pool_size)
+    query["pool_timeout"] = str(pool_timeout)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
+
+
+def resolve_database_settings(config: AppConfig, settings: Settings) -> DatabaseConnectionSettings | None:
+    candidate_url = (
+        _normalize_optional_str(settings.database_url)
+        or _normalize_optional_str(config.general_settings.database_url)
+        or _normalize_optional_str(os.getenv("DATABASE_URL"))
+    )
+    if candidate_url is None:
+        return None
+
+    pool_size = settings.db_pool_size or config.general_settings.db_pool_size
+    pool_timeout = settings.db_pool_timeout
+    if pool_timeout is None:
+        pool_timeout = config.general_settings.db_pool_timeout
+
+    return DatabaseConnectionSettings(
+        url=_apply_database_pool_settings(
+            candidate_url,
+            pool_size=pool_size,
+            pool_timeout=pool_timeout,
+        ),
+        pool_size=pool_size,
+        pool_timeout=pool_timeout,
+    )
 
 
 def _resolve_env_token(value: Any) -> Any:

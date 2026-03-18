@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import pytest
 
+from src.models.errors import ServiceUnavailableError
 from src.router import (
+    HealthEndpointHandler,
     RedisStateBackend,
     Router,
     RouterConfig,
@@ -207,3 +209,74 @@ async def test_router_exposes_failover_overrides_from_policy():
     assert policy["timeout_seconds"] == 0.75
     assert policy["retry_max_attempts"] == 2
     assert policy["retryable_error_classes"] == ["rate_limit", "timeout"]
+
+
+@pytest.mark.asyncio
+async def test_router_state_fail_open_uses_bounded_local_fallback():
+    state = RedisStateBackend(redis=None, degraded_mode="fail_open", max_local_latency_samples=2)
+
+    await state.increment_active("dep-a")
+    await state.record_latency("dep-a", 10.0)
+    await state.record_latency("dep-a", 20.0)
+    await state.record_latency("dep-a", 30.0)
+
+    assert await state.get_active_requests("dep-a") == 1
+    latency_window = await state.get_latency_window("dep-a", 300_000)
+    assert [lat for _, lat in latency_window] == [20.0, 30.0]
+    assert state.get_backend_status()["mode"] == "degraded"
+
+
+@pytest.mark.asyncio
+async def test_router_state_fail_closed_raises_when_backend_unavailable():
+    state = RedisStateBackend(redis=None, degraded_mode="fail_closed")
+
+    with pytest.raises(ServiceUnavailableError, match="Router state backend unavailable"):
+        await state.get_active_requests("dep-a")
+
+    assert state.get_backend_status()["mode"] == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_router_state_drops_zero_active_local_entries():
+    state = RedisStateBackend(redis=None, degraded_mode="fail_open")
+
+    await state.increment_active("dep-a")
+    value = await state.decrement_active("dep-a")
+
+    assert value == 0
+    assert await state.get_active_requests("dep-a") == 0
+    assert "dep-a" not in state._active
+    assert "dep-a" not in state._local_last_seen
+
+
+@pytest.mark.asyncio
+async def test_router_state_prunes_stale_local_entries(monkeypatch: pytest.MonkeyPatch):
+    state = RedisStateBackend(redis=None, degraded_mode="fail_open", local_state_ttl_sec=1)
+    now = {"value": 1_000.0}
+
+    monkeypatch.setattr("src.router.state.time.time", lambda: now["value"])
+    await state.record_failure("dep-a", "boom")
+
+    now["value"] = 1_005.0
+    health = await state.get_health("dep-a")
+
+    assert health == {}
+    assert "dep-a" not in state._local_last_seen
+
+
+@pytest.mark.asyncio
+async def test_health_handler_surfaces_degraded_router_state():
+    registry = build_deployment_registry(
+        {
+            "gpt-4o-mini": [
+                {"deployment_id": "dep-a", "deltallm_params": {"model": "openai/gpt-4o-mini"}},
+            ]
+        }
+    )
+    state = RedisStateBackend(redis=None, degraded_mode="fail_open")
+    handler = HealthEndpointHandler(deployment_registry=registry, state_backend=state)
+
+    payload = await handler.get_health_status()
+
+    assert payload["status"] == "degraded"
+    assert payload["state_backend"]["mode"] == "degraded"
