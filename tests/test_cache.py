@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 
+from src.cache import CacheKeyBuilder, InMemoryBackend, NoopCacheMetrics, StreamWriteContext, StreamingCacheHandler
+from src.cache.backends.base import CacheBackend, CacheEntry
 from src.db.repositories import KeyRecord
-from src.cache import CacheKeyBuilder, InMemoryBackend, NoopCacheMetrics, StreamingCacheHandler
 from src.router import build_deployment_registry
 
 
@@ -25,6 +27,64 @@ def _enable_cache(test_app):
     test_app.state.cache_key_builder = CacheKeyBuilder(custom_salt="test-cache")
     test_app.state.cache_metrics = NoopCacheMetrics()
     test_app.state.streaming_cache_handler = StreamingCacheHandler(backend)
+
+
+def _enable_stream_cache(
+    test_app,
+    *,
+    backend: CacheBackend | None = None,
+    max_buffer_bytes: int = 262_144,
+    max_fragments: int = 2_048,
+) -> CacheBackend:
+    cache_backend = backend or InMemoryBackend(max_size=100)
+    test_app.state.cache_backend = cache_backend
+    test_app.state.cache_key_builder = CacheKeyBuilder(custom_salt="test-cache")
+    test_app.state.cache_metrics = NoopCacheMetrics()
+    test_app.state.streaming_cache_handler = StreamingCacheHandler(
+        cache_backend,
+        max_buffer_bytes=max_buffer_bytes,
+        max_fragments=max_fragments,
+    )
+    return cache_backend
+
+
+class _StreamContext:
+    def __init__(self, lines: list[str], status_code: int = 200) -> None:
+        self.status_code = status_code
+        self._lines = lines
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    def raise_for_status(self) -> None:
+        return None
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+
+class _FailingCacheBackend(CacheBackend):
+    def __init__(self) -> None:
+        self.set_calls = 0
+
+    async def get(self, key: str) -> CacheEntry | None:
+        del key
+        return None
+
+    async def set(self, key: str, entry: CacheEntry, ttl: int | None = None) -> None:
+        del key, entry, ttl
+        self.set_calls += 1
+        raise RuntimeError("backend unavailable")
+
+    async def delete(self, key: str) -> None:
+        del key
+
+    async def clear(self) -> None:
+        return None
 
 
 def _refresh_runtime_registry(test_app) -> None:
@@ -141,6 +201,80 @@ async def test_streaming_cache_miss_populates_cache_entry(client, test_app):
     assert len(backend._cache) == 1
     stored = next(iter(backend._cache.values()))
     assert stored.response.get("object") == "chat.completion"
+
+
+@pytest.mark.asyncio
+async def test_streaming_cache_handler_skips_store_when_buffer_limit_exceeded():
+    backend = InMemoryBackend(max_size=10)
+    handler = StreamingCacheHandler(backend, max_buffer_bytes=5, max_fragments=10)
+    stream_id = "stream-overflow"
+
+    handler.start_stream(stream_id)
+    handler.add_chunk_from_line(
+        stream_id,
+        'data: {"id":"chatcmpl-overflow","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}]}',
+    )
+    handler.add_chunk_from_line(
+        stream_id,
+        'data: {"id":"chatcmpl-overflow","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"!"},"finish_reason":"stop"}]}',
+    )
+    await handler.finalize_and_store(
+        stream_id,
+        StreamWriteContext(cache_key="cache-key", ttl=60, model="gpt-4o-mini"),
+    )
+
+    assert len(backend._cache) == 0
+    assert handler.disabled_streams_total == 1
+    assert handler.active_stream_count == 0
+
+
+@pytest.mark.asyncio
+async def test_streaming_cache_skips_store_after_invalid_chunk_without_breaking_stream(client, test_app):
+    _enable_stream_cache(test_app)
+    calls = {"count": 0}
+
+    def stream(method: str, url: str, headers: dict[str, str], json: dict[str, Any], timeout: int):  # noqa: ANN001
+        del method, url, headers, json, timeout
+        calls["count"] += 1
+        return _StreamContext(
+            lines=[
+                'data: {"id":"chatcmpl-invalid","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}',
+                'data: {"id":"chatcmpl-invalid"',
+                "data: [DONE]",
+            ]
+        )
+
+    test_app.state.http_client.stream = stream
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": True}
+
+    first = await client.post("/v1/chat/completions", headers=headers, json=body)
+    second = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert "data: [DONE]" in first.text
+    assert "data: [DONE]" in second.text
+    assert calls["count"] == 2
+    assert len(test_app.state.cache_backend._cache) == 0
+    assert test_app.state.streaming_cache_handler.disabled_streams_total == 2
+    assert test_app.state.streaming_cache_handler.active_stream_count == 0
+
+
+@pytest.mark.asyncio
+async def test_streaming_cache_write_failure_does_not_fail_stream_response(client, test_app):
+    failing_backend = _FailingCacheBackend()
+    _enable_stream_cache(test_app, backend=failing_backend)
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": True}
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert response.status_code == 200
+    assert "data: [DONE]" in response.text
+    assert failing_backend.set_calls == 1
+    assert test_app.state.streaming_cache_handler.write_failures_total == 1
+    assert test_app.state.streaming_cache_handler.active_stream_count == 0
 
 
 @pytest.mark.asyncio

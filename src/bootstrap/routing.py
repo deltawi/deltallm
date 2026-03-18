@@ -81,7 +81,11 @@ async def init_routing_runtime(
         app.state.route_groups,
     )
 
-    state_backend = RedisStateBackend(redis_client)
+    degraded_mode = str(
+        getattr(cfg.general_settings, "redis_degraded_mode", None)
+        or getattr(settings, "redis_degraded_mode", "fail_open")
+    )
+    state_backend = RedisStateBackend(redis_client, degraded_mode=degraded_mode)
     route_groups = list(getattr(app.state, "route_groups", []))
     deployment_registry = build_deployment_registry(app.state.model_registry, route_groups=route_groups)
     router_config = RouterConfig(
@@ -114,6 +118,7 @@ async def init_routing_runtime(
             fallbacks=_normalize_fallbacks(cfg.deltallm_settings.fallbacks),
             context_window_fallbacks=_normalize_fallbacks(cfg.deltallm_settings.context_window_fallbacks),
             content_policy_fallbacks=_normalize_fallbacks(cfg.deltallm_settings.content_policy_fallbacks),
+            event_history_size=cfg.general_settings.failover_event_history_size,
         ),
         deployment_registry=deployment_registry,
         state_backend=state_backend,

@@ -54,9 +54,11 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
             self.client = "db-client"
             self.connected = False
             self.disconnected = False
+            self.database_settings = None
 
-        async def connect(self) -> None:
+        async def connect(self, database_settings=None) -> None:  # noqa: ANN001
             self.connected = True
+            self.database_settings = database_settings
 
         async def disconnect(self) -> None:
             self.disconnected = True
@@ -65,6 +67,9 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
         "src.bootstrap.infrastructure.get_settings",
         lambda: SimpleNamespace(
             config_path="config.yaml",
+            database_url="postgresql://env-user:env-pass@env-host:5432/env-db",
+            db_pool_size=25,
+            db_pool_timeout=45,
             redis_url="redis://localhost:6379/0",
             redis_host="localhost",
             redis_port=6379,
@@ -76,6 +81,9 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
         "src.bootstrap.infrastructure.build_app_config",
         lambda file_config, secret_resolver: SimpleNamespace(  # noqa: ARG005
             general_settings=SimpleNamespace(
+                database_url="postgresql://cfg-user:cfg-pass@cfg-host:5432/cfg-db?schema=public",
+                db_pool_size=20,
+                db_pool_timeout=30,
                 redis_url=None,
                 redis_host="localhost",
                 redis_port=6379,
@@ -109,6 +117,13 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
     assert app.state.redis is created["redis"]
     assert app.state.route_group_runtime_cache == ("route-cache", created["redis"])
     assert app.state.prisma_manager.client == "db-client"
+    assert app.state.prisma_manager.database_settings is not None
+    assert app.state.prisma_manager.database_settings.pool_size == 25
+    assert app.state.prisma_manager.database_settings.pool_timeout == 45
+    assert app.state.prisma_manager.database_settings.url == (
+        "postgresql://env-user:env-pass@env-host:5432/env-db"
+        "?connection_limit=25&pool_timeout=45"
+    )
     assert app.state.dynamic_config_manager is runtime.dynamic_config_manager
     assert app.state.salt_key == "salt"
     assert app.state.openai_adapter[0] == "openai"

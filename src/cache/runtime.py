@@ -38,7 +38,11 @@ def configure_cache_runtime(
 
     app.state.cache_backend = cache_backend
     app.state.cache_key_builder = CacheKeyBuilder(custom_salt=salt_key)
-    app.state.streaming_cache_handler = StreamingCacheHandler(cache_backend)
+    app.state.streaming_cache_handler = StreamingCacheHandler(
+        cache_backend,
+        max_buffer_bytes=cache_settings.stream_cache_max_bytes,
+        max_fragments=cache_settings.stream_cache_max_fragments,
+    )
     try:
         app.state.cache_metrics = PrometheusCacheMetrics(cache_type=cache_settings.cache_backend)
     except Exception:

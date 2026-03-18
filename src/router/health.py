@@ -11,6 +11,7 @@ from src.metrics import (
     set_deployment_latency_per_output_token,
     set_deployment_state,
 )
+from src.models.errors import ServiceUnavailableError
 from src.providers.healthcheck import HealthProbeResult
 from src.router.router import Deployment
 from src.router.state import DeploymentStateBackend
@@ -126,9 +127,35 @@ class HealthEndpointHandler:
             deployments = [d for d in deployments if d.model_name == model_filter]
 
         deployment_ids = [deployment.deployment_id for deployment in deployments]
-        health = await self.state.get_health_batch(deployment_ids)
-        active = await self.state.get_active_requests_batch(deployment_ids)
-        latencies = await self.state.get_latency_windows_batch(deployment_ids, 300_000)
+        backend_status_fn = getattr(self.state, "get_backend_status", None)
+        backend_status = backend_status_fn() if callable(backend_status_fn) else None
+        try:
+            health = await self.state.get_health_batch(deployment_ids)
+            active = await self.state.get_active_requests_batch(deployment_ids)
+            latencies = await self.state.get_latency_windows_batch(deployment_ids, 300_000)
+        except ServiceUnavailableError as exc:
+            return {
+                "status": "unhealthy",
+                "timestamp": int(time.time()),
+                "healthy_count": 0,
+                "total_count": len(deployments),
+                "deployments": [
+                    {
+                        "deployment_id": deployment.deployment_id,
+                        "model": deployment.model_name,
+                        "healthy": False,
+                        "in_cooldown": False,
+                        "active_requests": 0,
+                        "consecutive_failures": 0,
+                        "last_error": str(exc),
+                        "last_error_at": None,
+                        "last_success_at": None,
+                        "avg_latency_ms": None,
+                    }
+                    for deployment in deployments
+                ],
+                "state_backend": backend_status,
+            }
 
         items: list[dict[str, Any]] = []
         healthy_count = 0
@@ -187,10 +214,16 @@ class HealthEndpointHandler:
         else:
             status = "degraded"
 
-        return {
+        if backend_status is not None and backend_status.get("mode") != "redis" and status == "healthy":
+            status = "degraded"
+
+        payload = {
             "status": status,
             "timestamp": int(time.time()),
             "healthy_count": healthy_count,
             "total_count": total,
             "deployments": items,
         }
+        if backend_status is not None:
+            payload["state_backend"] = backend_status
+        return payload
