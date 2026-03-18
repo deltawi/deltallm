@@ -17,6 +17,7 @@ from src.router.strategies import (
     TagBasedStrategy,
     UsageBasedStrategy,
     WeightedStrategy,
+    usage_within_limits,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,10 @@ class Deployment:
     output_cost_per_token: float = 0.0
     rpm_limit: int | None = None
     tpm_limit: int | None = None
+    image_pm_limit: int | None = None
+    audio_seconds_pm_limit: int | None = None
+    char_pm_limit: int | None = None
+    rerank_units_pm_limit: int | None = None
 
 
 @dataclass
@@ -185,16 +190,17 @@ class Router:
         if not deployments:
             return []
 
-        tags = request_context.get("metadata", {}).get("tags") or []
-        filtered = deployments
-        if tags:
-            filtered = [d for d in filtered if d.tags and all(tag in d.tags for tag in tags)]
+        metadata = request_context.get("metadata")
+        request_tags = metadata.get("tags") if isinstance(metadata, dict) else None
+        normalized_tags = [tag.strip() for tag in request_tags if isinstance(tag, str) and tag.strip()] if isinstance(request_tags, list) else []
+        if not normalized_tags:
+            return list(deployments)
 
-        if not filtered:
-            return []
-
-        top_priority = min(int(d.priority) for d in filtered)
-        return [d for d in filtered if int(d.priority) == top_priority]
+        return [
+            deployment
+            for deployment in deployments
+            if deployment.tags and all(tag in deployment.tags for tag in normalized_tags)
+        ]
 
     async def _apply_pre_call_checks(self, deployments: list[Deployment]) -> list[Deployment]:
         if not deployments:
@@ -204,12 +210,7 @@ class Router:
         candidates: list[Deployment] = []
         for deployment in deployments:
             dep_usage = usage.get(deployment.deployment_id, {})
-            rpm = dep_usage.get("rpm", 0)
-            tpm = dep_usage.get("tpm", 0)
-
-            rpm_ok = deployment.rpm_limit is None or rpm < deployment.rpm_limit
-            tpm_ok = deployment.tpm_limit is None or tpm < deployment.tpm_limit
-            if rpm_ok and tpm_ok:
+            if usage_within_limits(deployment, dep_usage):
                 candidates.append(deployment)
 
         return candidates
@@ -437,4 +438,12 @@ def _deployment_from_entry(model_name: str, entry: dict[str, Any], index: int) -
         output_cost_per_token=float(model_info.get("output_cost_per_token", 0.0) or 0.0),
         rpm_limit=(int(model_info["rpm_limit"]) if model_info.get("rpm_limit") is not None else params.get("rpm")),
         tpm_limit=(int(model_info["tpm_limit"]) if model_info.get("tpm_limit") is not None else params.get("tpm")),
+        image_pm_limit=(int(model_info["image_pm_limit"]) if model_info.get("image_pm_limit") is not None else None),
+        audio_seconds_pm_limit=(
+            int(model_info["audio_seconds_pm_limit"]) if model_info.get("audio_seconds_pm_limit") is not None else None
+        ),
+        char_pm_limit=(int(model_info["char_pm_limit"]) if model_info.get("char_pm_limit") is not None else None),
+        rerank_units_pm_limit=(
+            int(model_info["rerank_units_pm_limit"]) if model_info.get("rerank_units_pm_limit") is not None else None
+        ),
     )

@@ -46,7 +46,44 @@ These strategy names are valid today:
 - `weighted`
 - `rate-limit-aware`
 
-See [Routing & Failover](../features/routing.md) for when to use each one.
+Short version:
+
+- `simple-shuffle`: best default when deployments are equivalent
+- `weighted`: use for planned traffic splits
+- `priority-based-routing`: use for primary and standby routing
+- `least-busy`: use for burst balancing
+- `latency-based-routing`: use for latency-sensitive traffic
+- `cost-based-routing`: use for lowest-cost routing
+- `usage-based-routing`: use to spread quota usage
+- `rate-limit-aware`: use to avoid hot deployments near RPM or TPM caps
+- `tag-based-routing`: use when tags decide eligibility and you want the route group to make that explicit
+
+For non-text workloads, usage-aware routing can also use these deployment fields when they are configured:
+
+- `image_pm_limit`
+- `audio_seconds_pm_limit`
+- `char_pm_limit`
+- `rerank_units_pm_limit`
+
+See [Routing & Failover](../features/routing.md) for the full behavior and setup examples.
+
+## Route-Group Policy Support
+
+Route-group policies currently support:
+
+- `mode`
+- `strategy`
+- `members`
+- `timeouts.global_ms` or `timeouts.global_seconds`
+- `retry.max_attempts`
+- `retry.retryable_error_classes`
+
+Helpful shortcut modes:
+
+- `weighted` maps to `weighted`
+- `fallback` maps to `priority-based-routing`
+
+Do not treat `conditional` or `adaptive` as active runtime policy behaviors today.
 
 ## Fallback Configuration
 

@@ -28,6 +28,7 @@ from src.models.errors import InvalidRequestError
 from src.models.requests import AudioSpeechRequest
 from src.providers.resolution import resolve_provider, resolve_upstream_model
 from src.router.router import Deployment
+from src.router.usage import record_router_usage
 from src.audit.actions import AuditAction
 from src.routers.audit_helpers import emit_audit_event
 from src.routers.routing_decision import (
@@ -174,6 +175,12 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
             request_text=payload.input,
             response_payload=billing_payload,
             provider=api_provider,
+        )
+        await record_router_usage(
+            request.app.state.router_state_backend,
+            served_deployment.deployment_id,
+            mode="audio_speech",
+            usage=usage,
         )
         billing = compute_billing_result(mode="audio_speech", usage=usage, model_info=model_info)
         request_cost = billing.cost

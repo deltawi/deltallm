@@ -40,6 +40,8 @@ async def test_multimodal_endpoints_emit_route_decision_headers(client, test_app
     assert image_response.headers.get("x-deltallm-route-strategy") == "simple-shuffle"
     assert image_response.headers.get("x-deltallm-route-deployment")
     assert image_response.headers.get("x-deltallm-route-fallback-used") == "false"
+    image_usage = await test_app.state.router_state_backend.get_usage(image_response.headers["x-deltallm-route-deployment"])
+    assert image_usage == {"rpm": 1, "tpm": 0, "image_pm": 1}
     test_app.state.redis.store.clear()
 
     speech_response = await client.post(
@@ -52,6 +54,10 @@ async def test_multimodal_endpoints_emit_route_decision_headers(client, test_app
     assert speech_response.headers.get("x-deltallm-route-strategy") == "simple-shuffle"
     assert speech_response.headers.get("x-deltallm-route-deployment")
     assert speech_response.headers.get("x-deltallm-route-fallback-used") == "false"
+    speech_usage = await test_app.state.router_state_backend.get_usage(speech_response.headers["x-deltallm-route-deployment"])
+    assert speech_usage["rpm"] == 1
+    assert speech_usage.get("tpm", 0) == 0
+    assert speech_usage["char_pm"] > 0
     test_app.state.redis.store.clear()
 
     transcription_response = await client.post(
@@ -65,6 +71,12 @@ async def test_multimodal_endpoints_emit_route_decision_headers(client, test_app
     assert transcription_response.headers.get("x-deltallm-route-strategy") == "simple-shuffle"
     assert transcription_response.headers.get("x-deltallm-route-deployment")
     assert transcription_response.headers.get("x-deltallm-route-fallback-used") == "false"
+    transcription_usage = await test_app.state.router_state_backend.get_usage(
+        transcription_response.headers["x-deltallm-route-deployment"]
+    )
+    assert transcription_usage["rpm"] == 1
+    assert transcription_usage.get("tpm", 0) == 0
+    assert transcription_usage["audio_seconds_pm"] > 0
     test_app.state.redis.store.clear()
 
     rerank_response = await client.post(
@@ -77,3 +89,5 @@ async def test_multimodal_endpoints_emit_route_decision_headers(client, test_app
     assert rerank_response.headers.get("x-deltallm-route-strategy") == "simple-shuffle"
     assert rerank_response.headers.get("x-deltallm-route-deployment")
     assert rerank_response.headers.get("x-deltallm-route-fallback-used") == "false"
+    rerank_usage = await test_app.state.router_state_backend.get_usage(rerank_response.headers["x-deltallm-route-deployment"])
+    assert rerank_usage == {"rpm": 1, "tpm": 0, "rerank_units_pm": 2}

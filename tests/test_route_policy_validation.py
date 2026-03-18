@@ -17,7 +17,7 @@ def test_validate_route_policy_normalizes_members():
     assert normalized["mode"] == "weighted"
     assert normalized["members"][0]["weight"] == 3
     assert normalized["members"][0]["priority"] == 1
-    assert warnings == []
+    assert warnings == ["Weighted mode is advisory when strategy is set explicitly; strategy takes precedence."]
 
 
 def test_validate_route_policy_rejects_unknown_fields():
@@ -40,6 +40,31 @@ def test_validate_route_policy_validates_retry_and_timeouts_schema():
     assert normalized["timeouts"]["global_ms"] == 1200
     assert normalized["retry"]["max_attempts"] == 2
     assert normalized["retry"]["retryable_error_classes"] == ["timeout", "rate_limit"]
+
+
+def test_validate_route_policy_maps_fallback_mode_to_priority_strategy():
+    normalized, warnings = validate_route_policy(
+        {
+            "mode": "fallback",
+            "members": [{"deployment_id": "dep-a"}, {"deployment_id": "dep-b"}],
+        },
+        available_member_ids={"dep-a", "dep-b"},
+    )
+
+    assert warnings == []
+    assert normalized["strategy"] == "priority-based-routing"
+    assert normalized["members"][0]["priority"] == 0
+    assert normalized["members"][1]["priority"] == 1
+
+
+def test_validate_route_policy_rejects_unsupported_modes():
+    with pytest.raises(ValueError, match="mode 'adaptive' is not supported"):
+        validate_route_policy({"mode": "adaptive", "members": [{"deployment_id": "dep-a"}]})
+
+
+def test_validate_route_policy_rejects_runtime_unsupported_fields():
+    with pytest.raises(ValueError, match="unknown policy fields"):
+        validate_route_policy({"strategy": "weighted", "conditions": []})
 
 
 def test_validate_route_policy_rejects_unknown_member_reference():
