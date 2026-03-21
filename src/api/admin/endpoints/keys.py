@@ -290,14 +290,17 @@ async def list_keys(
             return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
 
     if not scope.is_platform_admin:
+        scope_parts: list[str] = []
         if scope.org_ids:
             ph = ", ".join(f"${len(params) + i + 1}" for i in range(len(scope.org_ids)))
             params.extend(scope.org_ids)
-            clauses.append(f"t.organization_id IN ({ph})")
-        elif scope.team_ids:
+            scope_parts.append(f"t.organization_id IN ({ph})")
+        if scope.team_ids:
             ph = ", ".join(f"${len(params) + i + 1}" for i in range(len(scope.team_ids)))
             params.extend(scope.team_ids)
-            clauses.append(f"vt.team_id IN ({ph})")
+            scope_parts.append(f"vt.team_id IN ({ph})")
+        if scope_parts:
+            clauses.append(f"({' OR '.join(scope_parts)})")
         else:
             return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
 
