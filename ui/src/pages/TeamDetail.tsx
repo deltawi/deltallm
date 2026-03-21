@@ -767,7 +767,7 @@ export default function TeamDetail() {
               </div>
 
               {/* Self-Service Key Policy */}
-              <div className={`bg-white rounded-xl border p-4 transition-colors ${isEditingPolicy ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-gray-200'}`}>
+              {canEditTeam && <div className={`bg-white rounded-xl border p-4 transition-colors ${isEditingPolicy ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-gray-200'}`}>
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-1.5">
                     <Key className="w-3.5 h-3.5 text-indigo-600" />
@@ -904,7 +904,7 @@ export default function TeamDetail() {
                     )}
                   </div>
                 )}
-              </div>
+              </div>}
             </div>
           </div>
         )}

@@ -162,7 +162,7 @@ export default function ApiKeys() {
   const availableServiceAccounts = serviceAccountsResult?.data || [];
   const hasServiceAccounts = availableServiceAccounts.length > 0;
 
-  const isSelfServiceCreate = myKeysMode;
+  const isSelfServiceCreate = myKeysMode && !isAdmin;
 
   const { data: selectedTeamPolicy } = useApi(
     () => selectedTeamId && isSelfServiceCreate
