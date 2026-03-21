@@ -114,8 +114,18 @@ class KeyService:
             rows = await self.repository.prisma.query_raw(
                 """
                 SELECT v.token FROM deltallm_verificationtoken v
-                JOIN deltallm_teamtable t ON t.team_id = COALESCE(v.team_id, (SELECT u.team_id FROM deltallm_usertable u WHERE u.user_id = v.user_id LIMIT 1))
+                LEFT JOIN deltallm_usertable u ON u.user_id = v.user_id
+                LEFT JOIN deltallm_teamtable t ON t.team_id = COALESCE(v.team_id, u.team_id)
                 WHERE t.organization_id = $1
+                """,
+                scope_value,
+            )
+        elif scope_column == "team_id":
+            rows = await self.repository.prisma.query_raw(
+                """
+                SELECT v.token FROM deltallm_verificationtoken v
+                LEFT JOIN deltallm_usertable u ON u.user_id = v.user_id
+                WHERE COALESCE(v.team_id, u.team_id) = $1
                 """,
                 scope_value,
             )
