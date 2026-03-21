@@ -650,6 +650,24 @@ export default function TeamDetail() {
                         <span className="text-xs font-semibold text-gray-800">{Number(team.tpm_limit).toLocaleString()}</span>
                       </div>
                     )}
+                    {team.rph_limit != null && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-500">RPH limit</span>
+                        <span className="text-xs font-semibold text-gray-800">{Number(team.rph_limit).toLocaleString()}</span>
+                      </div>
+                    )}
+                    {team.rpd_limit != null && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-500">RPD limit</span>
+                        <span className="text-xs font-semibold text-gray-800">{Number(team.rpd_limit).toLocaleString()}</span>
+                      </div>
+                    )}
+                    {team.tpd_limit != null && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-500">TPD limit</span>
+                        <span className="text-xs font-semibold text-gray-800">{Number(team.tpd_limit).toLocaleString()}</span>
+                      </div>
+                    )}
                     <div className="flex justify-between items-center">
                       <span className="text-gray-500">Status</span>
                       {team.blocked
