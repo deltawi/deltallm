@@ -119,6 +119,9 @@ class KeyService:
     async def invalidate_keys_for_org(self, organization_id: str) -> int:
         return await self._invalidate_keys_by_scope("organization_id", organization_id)
 
+    async def invalidate_keys_for_user(self, user_id: str) -> int:
+        return await self._invalidate_keys_by_scope("user_id", user_id)
+
     async def _invalidate_keys_by_scope(self, scope_column: str, scope_value: str) -> int:
         if self.redis is None or self.repository.prisma is None:
             return 0
