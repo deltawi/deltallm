@@ -734,15 +734,16 @@ async def remove_team_member(
                 except Exception:
                     import logging
                     logging.getLogger(__name__).exception("failed to invalidate key cache after membership removal auto-revoke")
-                await emit_admin_mutation_audit(
-                    request=request,
-                    request_start=request_start,
-                    action=AuditAction.ADMIN_KEY_AUTO_REVOKE_MEMBERSHIP_REMOVED,
-                    scope=scope,
-                    resource_type="api_key",
-                    resource_id=f"{team_id}:{user_id}",
-                    response_payload={"revoked_count": revoked_keys},
-                )
+                for kr in owned_key_rows:
+                    await emit_admin_mutation_audit(
+                        request=request,
+                        request_start=request_start,
+                        action=AuditAction.ADMIN_KEY_AUTO_REVOKE_MEMBERSHIP_REMOVED,
+                        scope=scope,
+                        resource_type="api_key",
+                        resource_id=str(kr["token"]),
+                        response_payload={"team_id": team_id, "removed_account_id": user_id},
+                    )
 
     response = {"removed": int(removed or 0) > 0, "revoked_keys": revoked_keys}
     await emit_admin_mutation_audit(

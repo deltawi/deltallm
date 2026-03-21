@@ -56,6 +56,7 @@ async def _validate_self_service_constraints(
     policy: dict[str, Any],
     max_budget: Any,
     expires: str | None,
+    **kwargs: Any,
 ) -> None:
     if not policy.get("enabled"):
         raise HTTPException(
@@ -104,6 +105,29 @@ async def _validate_self_service_constraints(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="An expiry date is required for self-service keys on this team",
         )
+
+    team_rows = await db.query_raw(
+        "SELECT rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
+        team_id,
+    )
+    if team_rows:
+        team_limits = dict(team_rows[0])
+        for limit_field in ("rpm_limit", "tpm_limit", "rph_limit", "rpd_limit", "tpd_limit"):
+            team_val = team_limits.get(limit_field)
+            if team_val is not None:
+                from_payload = kwargs.get(limit_field)
+                if from_payload is not None:
+                    try:
+                        if int(from_payload) > int(team_val):
+                            raise HTTPException(
+                                status_code=status.HTTP_400_BAD_REQUEST,
+                                detail=f"{limit_field} ({from_payload}) cannot exceed team limit ({team_val})",
+                            )
+                    except (TypeError, ValueError):
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"{limit_field} must be a valid integer",
+                        )
 
     if max_expiry_days is not None and expires:
         from datetime import datetime, timedelta, timezone
@@ -385,6 +409,11 @@ async def create_key(
             policy=policy,
             max_budget=max_budget,
             expires=expires,
+            rpm_limit=rpm_limit,
+            tpm_limit=tpm_limit,
+            rph_limit=rph_limit,
+            rpd_limit=rpd_limit,
+            tpd_limit=tpd_limit,
         )
 
     team = await _get_team_row(db, team_id)
