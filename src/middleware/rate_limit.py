@@ -18,6 +18,41 @@ def estimate_tokens(payload: Any) -> int:
     return max(1, len(json.dumps(payload, default=str)) // 4)
 
 
+def _extract_model(body: bytes) -> str | None:
+    try:
+        parsed = json.loads(body)
+        if isinstance(parsed, dict):
+            model = parsed.get("model")
+            if isinstance(model, str) and model.strip():
+                return model.strip()
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        pass
+    return None
+
+
+def _model_limit(limits: dict[str, int] | None, model: str | None) -> int | None:
+    if limits is None or not model:
+        return None
+    exact = limits.get(model)
+    if exact is not None:
+        try:
+            v = int(exact)
+            return v if v > 0 else None
+        except (TypeError, ValueError):
+            return None
+    best_match: tuple[int, int | None] = (-1, None)
+    for pattern, value in limits.items():
+        if pattern.endswith("*"):
+            prefix = pattern[:-1]
+            if model.startswith(prefix) and len(prefix) > best_match[0]:
+                try:
+                    v = int(value)
+                    best_match = (len(prefix), v if v > 0 else None)
+                except (TypeError, ValueError):
+                    pass
+    return best_match[1] if best_match[0] >= 0 else None
+
+
 async def enforce_rate_limits(request: Request):
     await _check_and_acquire_rate_limits(request)
 
@@ -44,13 +79,12 @@ async def _check_and_acquire_rate_limits(request: Request) -> None:
         tokens = estimate_tokens(body)
     except RuntimeError as exc:
         if "Stream consumed" in str(exc):
-            # For multipart/form-data requests (file uploads), FastAPI may have already
-            # consumed the request stream while parsing `UploadFile`/`Form` params.
-            # Fall back to a minimal TPM estimate so we can still enforce RPM and
-            # max-parallel limits without failing the request.
             tokens = 1
+            body = b""
         else:
             raise InvalidRequestError(message="Could not parse request body for rate limiting") from exc
+
+    model = _extract_model(body) if body else None
 
     key_rpm_limit = auth.key_rpm_limit if auth.key_rpm_limit is not None else auth.rpm_limit
     key_tpm_limit = auth.key_tpm_limit if auth.key_tpm_limit is not None else auth.tpm_limit
@@ -70,6 +104,17 @@ async def _check_and_acquire_rate_limits(request: Request) -> None:
     _add("team_tpm", auth.team_id, auth.team_tpm_limit, tokens)
     _add("user_tpm", auth.user_id, auth.user_tpm_limit, tokens)
     _add("key_tpm", auth.api_key, key_tpm_limit, tokens)
+
+    if model:
+        team_model_rpm = _model_limit(auth.team_model_rpm_limit, model)
+        team_model_tpm = _model_limit(auth.team_model_tpm_limit, model)
+        org_model_rpm = _model_limit(auth.org_model_rpm_limit, model)
+        org_model_tpm = _model_limit(auth.org_model_tpm_limit, model)
+
+        _add("team_model_rpm", f"{auth.team_id}:{model}" if auth.team_id else None, team_model_rpm, 1)
+        _add("team_model_tpm", f"{auth.team_id}:{model}" if auth.team_id else None, team_model_tpm, tokens)
+        _add("org_model_rpm", f"{auth.organization_id}:{model}" if auth.organization_id else None, org_model_rpm, 1)
+        _add("org_model_tpm", f"{auth.organization_id}:{model}" if auth.organization_id else None, org_model_tpm, tokens)
 
     await limiter.check_rate_limits_atomic(checks)
     await limiter.acquire_parallel("key", auth.api_key, auth.max_parallel_requests)

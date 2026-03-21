@@ -55,6 +55,10 @@ class KeyRecord:
     team_rpm_limit: int | None = None
     org_tpm_limit: int | None = None
     org_rpm_limit: int | None = None
+    team_model_rpm_limit: dict[str, int] | None = None
+    team_model_tpm_limit: dict[str, int] | None = None
+    org_model_rpm_limit: dict[str, int] | None = None
+    org_model_tpm_limit: dict[str, int] | None = None
     max_parallel_requests: int | None = None
     organization_id: str | None = None
     guardrails: list[str] | None = None
@@ -93,6 +97,10 @@ class KeyRepository:
                 t.rpm_limit AS team_rpm_limit,
                 o.tpm_limit AS org_tpm_limit,
                 o.rpm_limit AS org_rpm_limit,
+                t.model_rpm_limit AS team_model_rpm_limit,
+                t.model_tpm_limit AS team_model_tpm_limit,
+                o.model_rpm_limit AS org_model_rpm_limit,
+                o.model_tpm_limit AS org_model_tpm_limit,
                 v.max_parallel_requests,
                 v.metadata,
                 t.metadata AS team_metadata,
@@ -135,6 +143,10 @@ class KeyRepository:
             team_rpm_limit=row.get("team_rpm_limit"),
             org_tpm_limit=row.get("org_tpm_limit"),
             org_rpm_limit=row.get("org_rpm_limit"),
+            team_model_rpm_limit=_parse_metadata(row.get("team_model_rpm_limit")),
+            team_model_tpm_limit=_parse_metadata(row.get("team_model_tpm_limit")),
+            org_model_rpm_limit=_parse_metadata(row.get("org_model_rpm_limit")),
+            org_model_tpm_limit=_parse_metadata(row.get("org_model_tpm_limit")),
             max_parallel_requests=row.get("max_parallel_requests"),
             organization_id=row.get("organization_id"),
             guardrails=row.get("guardrails"),

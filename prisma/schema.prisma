@@ -140,6 +140,8 @@ model DeltaLLM_TeamTable {
   budget_duration  String?
   budget_reset_at  DateTime?
   model_max_budget Json?
+  model_rpm_limit  Json?
+  model_tpm_limit  Json?
   tpm_limit        Int?
   rpm_limit        Int?
   models           String[]
@@ -185,6 +187,8 @@ model DeltaLLM_OrganizationTable {
   max_budget        Float?
   rpm_limit         Int?
   tpm_limit         Int?
+  model_rpm_limit   Json?
+  model_tpm_limit   Json?
   spend             Float    @default(0)
   budget_duration   String?
   budget_reset_at   DateTime?
