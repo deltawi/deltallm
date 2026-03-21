@@ -24,6 +24,115 @@ router = APIRouter(tags=["Admin Keys"])
 logger = logging.getLogger(__name__)
 
 
+async def _get_self_service_policy(db: Any, team_id: str) -> dict[str, Any]:
+    rows = await db.query_raw(
+        """
+        SELECT self_service_keys_enabled, self_service_max_keys_per_user,
+               self_service_budget_ceiling, self_service_require_expiry,
+               self_service_max_expiry_days
+        FROM deltallm_teamtable
+        WHERE team_id = $1
+        LIMIT 1
+        """,
+        team_id,
+    )
+    if not rows:
+        return {"enabled": False}
+    row = dict(rows[0])
+    return {
+        "enabled": bool(row.get("self_service_keys_enabled", False)),
+        "max_keys_per_user": row.get("self_service_max_keys_per_user"),
+        "budget_ceiling": row.get("self_service_budget_ceiling"),
+        "require_expiry": bool(row.get("self_service_require_expiry", False)),
+        "max_expiry_days": row.get("self_service_max_expiry_days"),
+    }
+
+
+async def _validate_self_service_constraints(
+    db: Any,
+    *,
+    team_id: str,
+    account_id: str,
+    policy: dict[str, Any],
+    max_budget: Any,
+    expires: str | None,
+) -> None:
+    if not policy.get("enabled"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Self-service key creation is not enabled for this team",
+        )
+
+    max_keys = policy.get("max_keys_per_user")
+    if max_keys is not None:
+        count_rows = await db.query_raw(
+            "SELECT COUNT(*) AS cnt FROM deltallm_verificationtoken WHERE team_id = $1 AND owner_account_id = $2",
+            team_id,
+            account_id,
+        )
+        current_count = int((count_rows[0] if count_rows else {}).get("cnt") or 0)
+        if current_count >= max_keys:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"You have reached the maximum of {max_keys} self-service keys for this team",
+            )
+
+    budget_ceiling = policy.get("budget_ceiling")
+    if budget_ceiling is not None:
+        if max_budget is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"A budget (max_budget) is required for self-service keys on this team (ceiling: ${budget_ceiling})",
+            )
+        try:
+            budget_val = float(max_budget)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="max_budget must be a valid number",
+            )
+        if budget_val < 0 or budget_val > float(budget_ceiling):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Budget must be between $0 and ${budget_ceiling}",
+            )
+
+    require_expiry = policy.get("require_expiry", False)
+    max_expiry_days = policy.get("max_expiry_days")
+    if require_expiry and not expires:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="An expiry date is required for self-service keys on this team",
+        )
+
+    if max_expiry_days is not None and expires:
+        from datetime import datetime, timedelta, timezone
+        try:
+            exp_dt = datetime.fromisoformat(expires.replace("Z", "+00:00"))
+            if exp_dt.tzinfo is None:
+                exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="expires must be a valid ISO 8601 datetime string",
+            )
+        max_allowed = datetime.now(timezone.utc) + timedelta(days=max_expiry_days)
+        if exp_dt > max_allowed:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Expiry date cannot be more than {max_expiry_days} days from now",
+            )
+
+
+def _is_self_service_only(scope: Any) -> bool:
+    if scope.is_platform_admin:
+        return False
+    return (
+        Permission.KEY_CREATE_SELF in scope.granted_permissions
+        and Permission.KEY_UPDATE not in scope.granted_permissions
+    )
+
+
 def _key_response_payload(row: dict[str, Any]) -> dict[str, Any]:
     payload = to_json_value(dict(row))
     if isinstance(payload, dict):
@@ -136,22 +245,35 @@ async def list_keys(
     request: Request,
     search: str | None = Query(default=None),
     team_id: str | None = Query(default=None),
+    my_keys: bool = Query(default=False),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_READ, Permission.KEY_CREATE_SELF])
     db = db_or_503(request)
+    self_service_only = _is_self_service_only(scope)
 
     clauses: list[str] = []
     params: list[Any] = []
+
+    if self_service_only or my_keys:
+        if scope.account_id:
+            params.append(scope.account_id)
+            clauses.append(f"vt.owner_account_id = ${len(params)}")
+        else:
+            return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
 
     if not scope.is_platform_admin:
         if scope.org_ids:
             ph = ", ".join(f"${len(params) + i + 1}" for i in range(len(scope.org_ids)))
             params.extend(scope.org_ids)
             clauses.append(f"t.organization_id IN ({ph})")
+        elif scope.team_ids:
+            ph = ", ".join(f"${len(params) + i + 1}" for i in range(len(scope.team_ids)))
+            params.extend(scope.team_ids)
+            clauses.append(f"vt.team_id IN ({ph})")
         else:
             return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
 
@@ -222,8 +344,9 @@ async def create_key(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     _reject_legacy_models_field(payload)
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
+    scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_UPDATE, Permission.KEY_CREATE_SELF])
     db = db_or_503(request)
+    self_service_only = _is_self_service_only(scope)
 
     key_name = str(payload.get("key_name") or "").strip()
     user_id = str(payload.get("user_id") or "").strip() or None
@@ -246,25 +369,45 @@ async def create_key(
     if not team_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="team_id is required")
 
+    if self_service_only:
+        owner_account_id = scope.account_id
+        owner_service_account_id = None
+        user_id = None
+
+        if team_id not in scope.team_ids:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only create self-service keys for teams you belong to")
+
+        policy = await _get_self_service_policy(db, team_id)
+        await _validate_self_service_constraints(
+            db,
+            team_id=team_id,
+            account_id=scope.account_id,
+            policy=policy,
+            max_budget=max_budget,
+            expires=expires,
+        )
+
     team = await _get_team_row(db, team_id)
     team_org = team.get("organization_id")
-    if not scope.is_platform_admin:
+    if not scope.is_platform_admin and not self_service_only:
         if not team_org or team_org not in scope.org_ids:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only create keys for teams in your organizations")
     if user_id:
         await _validate_runtime_user(db, user_id, team_id)
-    owner_account_id, owner_service_account_id = await _validate_owner_references(
-        request,
-        db,
-        team_id=team_id,
-        owner_account_id=owner_account_id,
-        owner_service_account_id=owner_service_account_id,
-        require_owner=True,
-    )
+    if not self_service_only:
+        owner_account_id, owner_service_account_id = await _validate_owner_references(
+            request,
+            db,
+            team_id=team_id,
+            owner_account_id=owner_account_id,
+            owner_service_account_id=owner_service_account_id,
+            require_owner=True,
+        )
 
     raw_key = f"sk-{secrets.token_urlsafe(24)}"
     key_service = request.app.state.key_service
     token_hash = key_service.hash_key(raw_key)
+    audit_action = AuditAction.ADMIN_KEY_SELF_CREATE if self_service_only else AuditAction.ADMIN_KEY_CREATE
 
     try:
         await db.execute_raw(
@@ -306,11 +449,12 @@ async def create_key(
             "rpd_limit": rpd_limit,
             "tpd_limit": tpd_limit,
             "expires": expires,
+            "self_service": self_service_only,
         }
         await emit_admin_mutation_audit(
             request=request,
             request_start=request_start,
-            action=AuditAction.ADMIN_KEY_CREATE,
+            action=audit_action,
             scope=scope,
             resource_type="api_key",
             resource_id=token_hash,
@@ -322,7 +466,7 @@ async def create_key(
         await emit_admin_mutation_audit(
             request=request,
             request_start=request_start,
-            action=AuditAction.ADMIN_KEY_CREATE,
+            action=audit_action,
             scope=scope,
             resource_type="api_key",
             resource_id=token_hash,
@@ -496,10 +640,20 @@ async def update_key(
         raise
 
 
-async def _require_key_access(scope, db, token_hash: str) -> None:
+async def _require_key_access(scope, db, token_hash: str, *, allow_self_service: bool = False) -> None:
     if scope.is_platform_admin:
         return
     row = await _get_key_scope_row(db, token_hash)
+
+    if allow_self_service and _is_self_service_only(scope):
+        owner_rows = await db.query_raw(
+            "SELECT owner_account_id FROM deltallm_verificationtoken WHERE token = $1 LIMIT 1",
+            token_hash,
+        )
+        if owner_rows and str(owner_rows[0].get("owner_account_id") or "") == scope.account_id:
+            return
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only manage your own keys")
+
     if not row.get("organization_id") or row["organization_id"] not in scope.org_ids:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
 
@@ -609,9 +763,10 @@ async def regenerate_key(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
+    scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_UPDATE, Permission.KEY_CREATE_SELF])
     db = db_or_503(request)
-    await _require_key_access(scope, db, token_hash)
+    self_service_only = _is_self_service_only(scope)
+    await _require_key_access(scope, db, token_hash, allow_self_service=True)
 
     rows = await db.query_raw("SELECT token FROM deltallm_verificationtoken WHERE token = $1 LIMIT 1", token_hash)
     if not rows:
@@ -629,11 +784,12 @@ async def regenerate_key(
         await request.app.state.key_service.invalidate_key_cache_by_hash(new_hash)
     except Exception:
         logger.exception("failed to invalidate key auth cache after regenerate")
+    audit_action = AuditAction.ADMIN_KEY_SELF_ROTATE if self_service_only else AuditAction.ADMIN_KEY_REGENERATE
     response = {"token": new_hash, "raw_key": raw_key}
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action=AuditAction.ADMIN_KEY_REGENERATE,
+        action=audit_action,
         scope=scope,
         resource_type="api_key",
         resource_id=new_hash,
@@ -651,20 +807,22 @@ async def revoke_key(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, bool]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_REVOKE)
+    scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_REVOKE, Permission.KEY_CREATE_SELF])
     db = db_or_503(request)
-    await _require_key_access(scope, db, token_hash)
+    self_service_only = _is_self_service_only(scope)
+    await _require_key_access(scope, db, token_hash, allow_self_service=True)
     deleted = await db.execute_raw("DELETE FROM deltallm_verificationtoken WHERE token = $1", token_hash)
     if int(deleted or 0) > 0:
         try:
             await request.app.state.key_service.invalidate_key_cache_by_hash(token_hash)
         except Exception:
             logger.exception("failed to invalidate key auth cache after revoke")
+    audit_action = AuditAction.ADMIN_KEY_SELF_REVOKE if self_service_only else AuditAction.ADMIN_KEY_REVOKE
     response = {"revoked": int(deleted or 0) > 0}
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action=AuditAction.ADMIN_KEY_REVOKE,
+        action=audit_action,
         scope=scope,
         resource_type="api_key",
         resource_id=token_hash,
@@ -681,20 +839,22 @@ async def delete_key(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, bool]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
+    scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_UPDATE, Permission.KEY_CREATE_SELF])
     db = db_or_503(request)
-    await _require_key_access(scope, db, token_hash)
+    self_service_only = _is_self_service_only(scope)
+    await _require_key_access(scope, db, token_hash, allow_self_service=True)
     deleted = await db.execute_raw("DELETE FROM deltallm_verificationtoken WHERE token = $1", token_hash)
     if int(deleted or 0) > 0:
         try:
             await request.app.state.key_service.invalidate_key_cache_by_hash(token_hash)
         except Exception:
             logger.exception("failed to invalidate key auth cache after delete")
+    audit_action = AuditAction.ADMIN_KEY_SELF_REVOKE if self_service_only else AuditAction.ADMIN_KEY_DELETE
     response = {"deleted": int(deleted or 0) > 0}
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action=AuditAction.ADMIN_KEY_DELETE,
+        action=audit_action,
         scope=scope,
         resource_type="api_key",
         resource_id=token_hash,

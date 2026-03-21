@@ -72,7 +72,11 @@ async def _require_team_access(
 ) -> dict[str, Any]:
     rows = await db.query_raw(
         """
-        SELECT team_id, team_alias, organization_id, max_budget, spend, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, blocked, created_at, updated_at
+        SELECT team_id, team_alias, organization_id, max_budget, spend, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit,
+               model_rpm_limit, model_tpm_limit, blocked,
+               self_service_keys_enabled, self_service_max_keys_per_user, self_service_budget_ceiling,
+               self_service_require_expiry, self_service_max_expiry_days,
+               created_at, updated_at
         FROM deltallm_teamtable
         WHERE team_id = $1
         LIMIT 1
@@ -144,6 +148,8 @@ async def list_teams(
     select_cols = """t.team_id, t.team_alias, t.organization_id, t.max_budget, t.spend, t.rpm_limit, t.tpm_limit,
                    t.rph_limit, t.rpd_limit, t.tpd_limit,
                    t.model_rpm_limit, t.model_tpm_limit, t.blocked,
+                   t.self_service_keys_enabled, t.self_service_max_keys_per_user,
+                   t.self_service_budget_ceiling, t.self_service_require_expiry, t.self_service_max_expiry_days,
                    t.created_at, t.updated_at,
                    (SELECT COUNT(*) FROM deltallm_teammembership tm WHERE tm.team_id = t.team_id) AS member_count"""
 
@@ -301,11 +307,28 @@ async def create_team(
     tpd_limit = optional_int(payload.get("tpd_limit"), "tpd_limit")
     model_rpm_limit = _validate_model_limit_dict(payload.get("model_rpm_limit"), "model_rpm_limit")
     model_tpm_limit = _validate_model_limit_dict(payload.get("model_tpm_limit"), "model_tpm_limit")
+    ss_keys_enabled = bool(payload.get("self_service_keys_enabled", False))
+    ss_max_keys = optional_int(payload.get("self_service_max_keys_per_user"), "self_service_max_keys_per_user")
+    ss_budget_ceiling = payload.get("self_service_budget_ceiling")
+    if ss_budget_ceiling is not None:
+        try:
+            ss_budget_ceiling = float(ss_budget_ceiling)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="self_service_budget_ceiling must be a number")
+    ss_require_expiry = bool(payload.get("self_service_require_expiry", False))
+    ss_max_expiry_days = optional_int(payload.get("self_service_max_expiry_days"), "self_service_max_expiry_days")
 
     await db.execute_raw(
         """
-        INSERT INTO deltallm_teamtable (team_id, team_alias, organization_id, max_budget, spend, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, blocked, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, 0, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, false, NOW(), NOW())
+        INSERT INTO deltallm_teamtable (
+            team_id, team_alias, organization_id, max_budget, spend,
+            rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit,
+            model_rpm_limit, model_tpm_limit, blocked,
+            self_service_keys_enabled, self_service_max_keys_per_user,
+            self_service_budget_ceiling, self_service_require_expiry, self_service_max_expiry_days,
+            created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, 0, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, false, $12, $13, $14, $15, $16, NOW(), NOW())
         """,
         team_id,
         team_alias,
@@ -318,6 +341,11 @@ async def create_team(
         tpd_limit,
         json.dumps(model_rpm_limit) if model_rpm_limit else None,
         json.dumps(model_tpm_limit) if model_tpm_limit else None,
+        ss_keys_enabled,
+        ss_max_keys,
+        ss_budget_ceiling,
+        ss_require_expiry,
+        ss_max_expiry_days,
     )
 
     response = {
@@ -332,6 +360,11 @@ async def create_team(
         "tpd_limit": tpd_limit,
         "model_rpm_limit": model_rpm_limit,
         "model_tpm_limit": model_tpm_limit,
+        "self_service_keys_enabled": ss_keys_enabled,
+        "self_service_max_keys_per_user": ss_max_keys,
+        "self_service_budget_ceiling": ss_budget_ceiling,
+        "self_service_require_expiry": ss_require_expiry,
+        "self_service_max_expiry_days": ss_max_expiry_days,
         "blocked": False,
     }
     await emit_admin_mutation_audit(
@@ -379,6 +412,16 @@ async def update_team(
     model_tpm_limit = _validate_model_limit_dict(
         payload.get("model_tpm_limit", existing_team.get("model_tpm_limit")), "model_tpm_limit"
     )
+    ss_keys_enabled = bool(payload.get("self_service_keys_enabled", existing_team.get("self_service_keys_enabled", False)))
+    ss_max_keys = optional_int(payload.get("self_service_max_keys_per_user", existing_team.get("self_service_max_keys_per_user")), "self_service_max_keys_per_user")
+    ss_budget_ceiling = payload.get("self_service_budget_ceiling", existing_team.get("self_service_budget_ceiling"))
+    if ss_budget_ceiling is not None:
+        try:
+            ss_budget_ceiling = float(ss_budget_ceiling)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="self_service_budget_ceiling must be a number")
+    ss_require_expiry = bool(payload.get("self_service_require_expiry", existing_team.get("self_service_require_expiry", False)))
+    ss_max_expiry_days = optional_int(payload.get("self_service_max_expiry_days", existing_team.get("self_service_max_expiry_days")), "self_service_max_expiry_days")
 
     await db.execute_raw(
         """
@@ -393,8 +436,13 @@ async def update_team(
             tpd_limit = $8,
             model_rpm_limit = $9::jsonb,
             model_tpm_limit = $10::jsonb,
+            self_service_keys_enabled = $11,
+            self_service_max_keys_per_user = $12,
+            self_service_budget_ceiling = $13,
+            self_service_require_expiry = $14,
+            self_service_max_expiry_days = $15,
             updated_at = NOW()
-        WHERE team_id = $11
+        WHERE team_id = $16
         """,
         team_alias,
         organization_id,
@@ -406,11 +454,20 @@ async def update_team(
         tpd_limit,
         json.dumps(model_rpm_limit) if model_rpm_limit else None,
         json.dumps(model_tpm_limit) if model_tpm_limit else None,
+        ss_keys_enabled,
+        ss_max_keys,
+        ss_budget_ceiling,
+        ss_require_expiry,
+        ss_max_expiry_days,
         team_id,
     )
     updated_rows = await db.query_raw(
         """
-        SELECT team_id, team_alias, organization_id, max_budget, spend, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, blocked, created_at, updated_at
+        SELECT team_id, team_alias, organization_id, max_budget, spend, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit,
+               model_rpm_limit, model_tpm_limit, blocked,
+               self_service_keys_enabled, self_service_max_keys_per_user, self_service_budget_ceiling,
+               self_service_require_expiry, self_service_max_expiry_days,
+               created_at, updated_at
         FROM deltallm_teamtable
         WHERE team_id = $1
         LIMIT 1
@@ -652,7 +709,42 @@ async def remove_team_member(
         team_id,
         user_id,
     )
-    response = {"removed": int(removed or 0) > 0}
+
+    revoked_keys = 0
+    if int(removed or 0) > 0:
+        owned_key_rows = await db.query_raw(
+            "SELECT token FROM deltallm_verificationtoken WHERE team_id = $1 AND owner_account_id = $2",
+            team_id,
+            user_id,
+        )
+        if owned_key_rows:
+            revoked_keys = int(
+                await db.execute_raw(
+                    "DELETE FROM deltallm_verificationtoken WHERE team_id = $1 AND owner_account_id = $2",
+                    team_id,
+                    user_id,
+                )
+                or 0
+            )
+            if revoked_keys > 0:
+                try:
+                    key_service = request.app.state.key_service
+                    for kr in owned_key_rows:
+                        await key_service.invalidate_key_cache_by_hash(str(kr["token"]))
+                except Exception:
+                    import logging
+                    logging.getLogger(__name__).exception("failed to invalidate key cache after membership removal auto-revoke")
+                await emit_admin_mutation_audit(
+                    request=request,
+                    request_start=request_start,
+                    action=AuditAction.ADMIN_KEY_AUTO_REVOKE_MEMBERSHIP_REMOVED,
+                    scope=scope,
+                    resource_type="api_key",
+                    resource_id=f"{team_id}:{user_id}",
+                    response_payload={"revoked_count": revoked_keys},
+                )
+
+    response = {"removed": int(removed or 0) > 0, "revoked_keys": revoked_keys}
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
