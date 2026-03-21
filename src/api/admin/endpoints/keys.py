@@ -868,7 +868,7 @@ async def delete_key(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, bool]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_UPDATE, Permission.KEY_CREATE_SELF])
+    scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_REVOKE, Permission.KEY_CREATE_SELF])
     db = db_or_503(request)
     self_service_only = _is_self_service_only(scope)
     await _require_key_access(scope, db, token_hash, allow_self_service=True)
