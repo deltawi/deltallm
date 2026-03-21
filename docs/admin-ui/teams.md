@@ -30,6 +30,30 @@ Teams are the working unit for developers, applications, keys, and team-level bu
 
 All limits are optional. Only configured limits are enforced. Team limits act as a shared cap — all keys within the team contribute to the same counters. Team limits must fall within the parent organization's limits.
 
+## Self-Service Key Policy
+
+Teams can allow their developers to create their own API keys without admin involvement. This is configured per team in the Team Detail page under the **Self-Service Keys** card (visible to team admins and above).
+
+### Policy fields
+
+| Field | Description |
+| --- | --- |
+| Enabled | Whether self-service key creation is allowed for this team |
+| Max keys per user | How many active keys each developer can hold at once |
+| Budget ceiling | Maximum budget a self-service key can be assigned |
+| Require expiry | Whether every self-service key must have an expiration date |
+| Max expiry days | Longest allowed key lifetime in days |
+
+When a developer creates a key through self-service, the backend enforces all of these constraints and rejects requests that violate any of them. See [API Keys: Self-Service Key Creation](api-keys.md#self-service-key-creation) for the full list of enforced constraints.
+
+### Enabling self-service
+
+1. Open the team detail page
+2. Find the **Self-Service Keys** card
+3. Toggle the switch to enable
+4. Set the constraint fields as needed
+5. Save — developers with `team_developer` role can now create keys
+
 ## Why this matters
 
 Team scope is where most day-to-day ownership lives. API keys, usage, and user access are typically understood in team context.
