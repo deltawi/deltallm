@@ -25,6 +25,7 @@ from src.models.errors import InvalidRequestError
 from src.models.requests import EmbeddingRequest
 from src.providers.resolution import resolve_provider, resolve_upstream_model
 from src.router.router import Deployment
+from src.router.usage import record_router_usage
 from src.routers.routing_decision import (
     capture_initial_route_decision,
     route_failover_kwargs,
@@ -210,6 +211,12 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         deployment_model = data.pop("_deployment_model", None)
 
         usage = data.get("usage") or {}
+        await record_router_usage(
+            request.app.state.router_state_backend,
+            served_deployment.deployment_id,
+            mode="embedding",
+            usage=usage,
+        )
         _deploy_pricing = pricing_from_model_info(
             served_deployment.model_info,
             fallback_input_cost_per_token=served_deployment.input_cost_per_token,

@@ -12,6 +12,7 @@ from src.models.requests import ChatCompletionRequest
 from src.providers.registry import resolve_chat_upstream
 from src.providers.signing import apply_request_signing
 from src.router.router import Deployment
+from src.router.usage import record_router_usage
 
 
 @dataclass
@@ -52,51 +53,47 @@ async def execute_chat(
 
     apply_default_params(upstream_payload, deployment.model_info)
 
-    await request.app.state.router_state_backend.increment_active(deployment.deployment_id)
     upstream_start = perf_counter()
-    try:
-        request_url = f"{api_base}{endpoint}"
-        signed_headers, body_override = apply_request_signing(
-            params=params,
-            method="POST",
-            url=request_url,
-            headers=headers,
-            json_body=upstream_payload,
+    request_url = f"{api_base}{endpoint}"
+    signed_headers, body_override = apply_request_signing(
+        params=params,
+        method="POST",
+        url=request_url,
+        headers=headers,
+        json_body=upstream_payload,
+    )
+    if body_override is not None:
+        response = await request.app.state.http_client.post(
+            request_url,
+            headers=signed_headers,
+            content=body_override,
+            timeout=timeout,
         )
-        if body_override is not None:
-            response = await request.app.state.http_client.post(
-                request_url,
-                headers=signed_headers,
-                content=body_override,
-                timeout=timeout,
-            )
-        else:
-            response = await request.app.state.http_client.post(
-                request_url,
-                headers=signed_headers,
-                json=upstream_payload,
-                timeout=timeout,
-            )
-        if response.status_code >= 400:
-            status_exc = httpx.HTTPStatusError(
-                f"Upstream chat call failed with status {response.status_code}",
-                request=httpx.Request("POST", request_url),
-                response=response,
-            )
-            raise adapter.map_error(status_exc)
-        data = response.json()
-        canonical = await adapter.translate_response(data, payload.model)
-        canonical_payload = canonical.model_dump(mode="json")
+    else:
+        response = await request.app.state.http_client.post(
+            request_url,
+            headers=signed_headers,
+            json=upstream_payload,
+            timeout=timeout,
+        )
+    if response.status_code >= 400:
+        status_exc = httpx.HTTPStatusError(
+            f"Upstream chat call failed with status {response.status_code}",
+            request=httpx.Request("POST", request_url),
+            response=response,
+        )
+        raise adapter.map_error(status_exc)
+    data = response.json()
+    canonical = await adapter.translate_response(data, payload.model)
+    canonical_payload = canonical.model_dump(mode="json")
 
-        total_tokens = int((canonical_payload.get("usage") or {}).get("total_tokens") or 0)
-        await request.app.state.router_state_backend.increment_usage(deployment.deployment_id, total_tokens)
-        return canonical_payload, (perf_counter() - upstream_start) * 1000
-    finally:
-        await request.app.state.router_state_backend.decrement_active(deployment.deployment_id)
-        await request.app.state.router_state_backend.record_latency(
-            deployment.deployment_id,
-            (perf_counter() - upstream_start) * 1000,
-        )
+    await record_router_usage(
+        request.app.state.router_state_backend,
+        deployment.deployment_id,
+        mode="chat",
+        usage=canonical_payload.get("usage"),
+    )
+    return canonical_payload, (perf_counter() - upstream_start) * 1000
 
 
 async def open_stream_with_first_chunk(

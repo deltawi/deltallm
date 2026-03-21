@@ -4,11 +4,13 @@ import json
 import logging
 import time
 from datetime import UTC, datetime
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Mapping, Protocol
 
 from src.models.errors import ServiceUnavailableError
 
 logger = logging.getLogger(__name__)
+
+USAGE_COUNTER_NAMES = ("rpm", "tpm", "image_pm", "audio_seconds_pm", "char_pm", "rerank_units_pm")
 
 
 class DeploymentStateBackend(Protocol):
@@ -31,6 +33,13 @@ class DeploymentStateBackend(Protocol):
     ) -> dict[str, list[tuple[int, float]]]: ...
 
     async def increment_usage(self, deployment_id: str, tokens: int, window: str | None = None) -> None: ...
+
+    async def increment_usage_counters(
+        self,
+        deployment_id: str,
+        counters: Mapping[str, int],
+        window: str | None = None,
+    ) -> None: ...
 
     async def get_usage(self, deployment_id: str) -> dict[str, int]: ...
 
@@ -72,7 +81,7 @@ class RedisStateBackend:
         self.max_local_latency_samples = max(1, int(max_local_latency_samples))
         self._active: dict[str, int] = {}
         self._latency: dict[str, list[tuple[int, float]]] = {}
-        self._usage: dict[str, dict[str, int]] = {}
+        self._usage: dict[str, dict[str, Any]] = {}
         self._cooldown_until: dict[str, float] = {}
         self._health: dict[str, dict[str, Any]] = {}
         self._failures: dict[str, int] = {}
@@ -287,37 +296,66 @@ class RedisStateBackend:
         return windows
 
     async def increment_usage(self, deployment_id: str, tokens: int, window: str | None = None) -> None:
+        await self.increment_usage_counters(
+            deployment_id,
+            {"rpm": 1, "tpm": max(0, int(tokens))},
+            window=window,
+        )
+
+    async def increment_usage_counters(
+        self,
+        deployment_id: str,
+        counters: Mapping[str, int],
+        window: str | None = None,
+    ) -> None:
         minute = window or self._minute_window()
-        rpm_key = f"usage_rpm:{deployment_id}:{minute}"
-        tpm_key = f"usage_tpm:{deployment_id}:{minute}"
+        normalized = self._normalize_usage_counters(counters)
+        keys = {
+            counter_name: f"usage_{counter_name}:{deployment_id}:{minute}"
+            for counter_name in normalized
+        }
         try:
             pipe = self.redis.pipeline()
-            pipe.incr(rpm_key)
-            pipe.incrby(tpm_key, int(tokens))
-            pipe.expire(rpm_key, 120)
-            pipe.expire(tpm_key, 120)
+            for counter_name, counter_value in normalized.items():
+                key = keys[counter_name]
+                if counter_name == "rpm":
+                    pipe.incr(key)
+                elif counter_value > 0:
+                    pipe.incrby(key, int(counter_value))
+                pipe.expire(key, 120)
             await pipe.execute()
             self._mark_backend_healthy()
             return
         except Exception as exc:
             self._handle_backend_failure(exc)
-            usage = self._usage.setdefault(deployment_id, {"rpm": 0, "tpm": 0, "window": minute, "updated_at": int(time.time())})
+            usage = self._usage.setdefault(
+                deployment_id,
+                {"rpm": 0, "tpm": 0, "window": minute, "updated_at": int(time.time())},
+            )
             if usage.get("window") != minute:
-                usage["rpm"] = 0
-                usage["tpm"] = 0
-                usage["window"] = minute
-            usage["rpm"] = int(usage.get("rpm", 0)) + 1
-            usage["tpm"] = int(usage.get("tpm", 0)) + int(tokens)
+                usage = {"rpm": 0, "tpm": 0, "window": minute, "updated_at": int(time.time())}
+                self._usage[deployment_id] = usage
+            for counter_name, counter_value in normalized.items():
+                if counter_name == "rpm":
+                    usage["rpm"] = int(usage.get("rpm", 0)) + 1
+                    continue
+                if counter_value <= 0:
+                    continue
+                usage[counter_name] = int(usage.get(counter_name, 0)) + int(counter_value)
             usage["updated_at"] = int(time.time())
             self._touch_local_state(deployment_id, now=time.time())
 
     async def get_usage(self, deployment_id: str) -> dict[str, int]:
         minute = self._minute_window()
-        rpm_key = f"usage_rpm:{deployment_id}:{minute}"
-        tpm_key = f"usage_tpm:{deployment_id}:{minute}"
+        keys = [f"usage_{counter_name}:{deployment_id}:{minute}" for counter_name in USAGE_COUNTER_NAMES]
         try:
-            values = await self._redis_call("mget", [rpm_key, tpm_key])
-            return {"rpm": int(values[0] or 0), "tpm": int(values[1] or 0)}
+            values = await self._redis_call("mget", keys)
+            usage = {"rpm": int(values[0] or 0), "tpm": int(values[1] or 0)}
+            for counter_name, value in zip(USAGE_COUNTER_NAMES[2:], values[2:], strict=False):
+                parsed = int(value or 0)
+                if parsed > 0:
+                    usage[counter_name] = parsed
+            return usage
         except Exception as exc:
             self._handle_backend_failure(exc)
             self._prune_local_state()
@@ -327,10 +365,36 @@ class RedisStateBackend:
                 self._drop_local_state_if_unused(deployment_id)
                 return {"rpm": 0, "tpm": 0}
             self._touch_local_state(deployment_id, now=time.time())
-            return {"rpm": int(usage.get("rpm", 0)), "tpm": int(usage.get("tpm", 0))}
+            return self._materialize_usage_snapshot(usage)
 
     async def get_usage_batch(self, deployment_ids: list[str]) -> dict[str, dict[str, int]]:
         return {deployment_id: await self.get_usage(deployment_id) for deployment_id in deployment_ids}
+
+    @staticmethod
+    def _normalize_usage_counters(counters: Mapping[str, int]) -> dict[str, int]:
+        normalized = {"rpm": 1, "tpm": 0}
+        for counter_name in USAGE_COUNTER_NAMES:
+            if counter_name == "rpm":
+                continue
+            value = counters.get(counter_name)
+            if value is None:
+                continue
+            normalized[counter_name] = max(0, int(value))
+        if counters.get("rpm") is not None:
+            normalized["rpm"] = max(1, int(counters.get("rpm") or 1))
+        return normalized
+
+    @staticmethod
+    def _materialize_usage_snapshot(usage: Mapping[str, Any]) -> dict[str, int]:
+        snapshot = {
+            "rpm": int(usage.get("rpm", 0) or 0),
+            "tpm": int(usage.get("tpm", 0) or 0),
+        }
+        for counter_name in USAGE_COUNTER_NAMES[2:]:
+            value = int(usage.get(counter_name, 0) or 0)
+            if value > 0:
+                snapshot[counter_name] = value
+        return snapshot
 
     async def set_cooldown(self, deployment_id: str, duration_sec: int, reason: str) -> None:
         key = f"cooldown:{deployment_id}"

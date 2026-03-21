@@ -14,6 +14,7 @@ from src.mcp.exceptions import MCPRateLimitError
 from src.mcp.exceptions import MCPToolTimeoutError
 from src.mcp.exceptions import MCPTransportError
 from src.mcp.models import MCPToolCallResult
+from src.models.errors import ServiceUnavailableError
 
 
 class BlockingChatGuardrail(CustomGuardrail):
@@ -143,9 +144,34 @@ async def test_chat_completion_success(client, test_app):
     assert response.headers.get("x-deltallm-route-strategy") == "simple-shuffle"
     assert response.headers.get("x-deltallm-route-deployment")
     assert response.headers.get("x-deltallm-route-fallback-used") == "false"
+    deployment_id = str(response.headers["x-deltallm-route-deployment"])
     payload = response.json()
     assert payload["object"] == "chat.completion"
     assert payload["choices"][0]["message"]["content"] == "ok"
+    usage = await test_app.state.router_state_backend.get_usage(deployment_id)
+    assert usage == {"rpm": 1, "tpm": 2}
+    latency = await test_app.state.router_state_backend.get_latency_window(deployment_id, 300_000)
+    assert len(latency) == 1
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_success_ignores_router_usage_write_failure(client, test_app):
+    async def fail_usage(*args, **kwargs):  # noqa: ANN001, ANN201
+        del args, kwargs
+        raise ServiceUnavailableError(message="router usage unavailable")
+
+    test_app.state.router_state_backend.increment_usage_counters = fail_usage
+
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+    assert response.status_code == 200
+    assert response.json()["object"] == "chat.completion"
 
 
 @pytest.mark.asyncio
@@ -487,6 +513,29 @@ async def test_chat_completion_streaming_success(client, test_app):
     assert response.headers["content-type"].startswith("text/event-stream")
     assert response.headers.get("x-deltallm-route-group") == "gpt-4o-mini"
     assert response.headers.get("x-deltallm-route-strategy") == "simple-shuffle"
+    assert "data: [DONE]" in response.text
+    deployment_id = str(response.headers["x-deltallm-route-deployment"])
+    usage = await test_app.state.router_state_backend.get_usage(deployment_id)
+    assert usage == {"rpm": 1, "tpm": 0}
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_streaming_success_ignores_router_usage_write_failure(client, test_app):
+    async def fail_usage(*args, **kwargs):  # noqa: ANN001, ANN201
+        del args, kwargs
+        raise ServiceUnavailableError(message="router usage unavailable")
+
+    test_app.state.router_state_backend.increment_usage_counters = fail_usage
+
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": True,
+    }
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+    assert response.status_code == 200
     assert "data: [DONE]" in response.text
 
 

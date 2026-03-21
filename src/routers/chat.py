@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
 from time import perf_counter
 from typing import Any, Callable
 
@@ -26,6 +27,7 @@ from src.models.errors import InvalidRequestError, ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
 from src.providers.registry import resolve_chat_upstream
 from src.providers.resolution import resolve_provider
+from src.router.usage import record_router_usage
 from src.routers.routing_decision import (
     capture_initial_route_decision,
     route_failover_kwargs,
@@ -34,6 +36,31 @@ from src.routers.routing_decision import (
 )
 
 router = APIRouter(prefix="/v1", tags=["chat"])
+
+
+class _StreamUsageTracker:
+    def __init__(self) -> None:
+        self._usage: dict[str, Any] = {}
+
+    def add_line(self, line: str) -> None:
+        if not line.startswith("data:"):
+            return
+        payload = line[len("data:") :].strip()
+        if not payload or payload == "[DONE]" or '"usage"' not in payload:
+            return
+        try:
+            chunk = json.loads(payload)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(chunk, dict):
+            return
+        usage = chunk.get("usage")
+        if isinstance(usage, dict):
+            self._usage = dict(usage)
+
+    @property
+    def usage(self) -> dict[str, Any]:
+        return dict(self._usage)
 
 
 @router.post("/chat/completions", dependencies=[Depends(require_api_key), Depends(enforce_rate_limits)])
@@ -90,6 +117,7 @@ async def handle_chat_like_request(
                 stream_handler = getattr(request.app.state, "streaming_cache_handler", None)
                 stream_id = None
                 stream_write_context: StreamWriteContext | None = None
+                stream_usage = _StreamUsageTracker()
                 opened_stream = await request.app.state.failover_manager.execute_with_failover(
                     primary_deployment=primary,
                     model_group=model_group,
@@ -135,6 +163,7 @@ async def handle_chat_like_request(
                     try:
                         initial = opened_stream.first_line
                         if initial:
+                            stream_usage.add_line(initial)
                             if stream_id is not None and stream_handler is not None:
                                 stream_handler.add_chunk_from_line(stream_id, initial)
                             out_line = stream_line_transform(initial) if stream_line_transform is not None else initial
@@ -144,6 +173,7 @@ async def handle_chat_like_request(
                             if not line:
                                 continue
 
+                            stream_usage.add_line(line)
                             if stream_id is not None and stream_handler is not None:
                                 stream_handler.add_chunk_from_line(stream_id, line)
                                 if line.strip() == "data: [DONE]" and stream_write_context is not None:
@@ -153,6 +183,12 @@ async def handle_chat_like_request(
                             if out_line is None:
                                 continue
                             yield f"{out_line}\n\n"
+                        await record_router_usage(
+                            request.app.state.router_state_backend,
+                            served_deployment.deployment_id,
+                            mode="chat",
+                            usage=stream_usage.usage,
+                        )
                         await emit_stream_success(
                             request=request,
                             auth=auth,

@@ -75,6 +75,10 @@ class ModelInfo(BaseModel):
     output_vector_size: int | None = None
     rpm_limit: int | None = None
     tpm_limit: int | None = None
+    image_pm_limit: int | None = None
+    audio_seconds_pm_limit: int | None = None
+    char_pm_limit: int | None = None
+    rerank_units_pm_limit: int | None = None
     max_tokens: int | None = None
     max_input_tokens: int | None = None
     max_output_tokens: int | None = None

@@ -38,8 +38,11 @@ async def test_embeddings_runs_success_callback(client, test_app):
     assert response.headers.get("x-deltallm-route-strategy") == "simple-shuffle"
     assert response.headers.get("x-deltallm-route-deployment")
     assert response.headers.get("x-deltallm-route-fallback-used") == "false"
+    deployment_id = str(response.headers["x-deltallm-route-deployment"])
     await asyncio.sleep(0.05)
     assert recorder.success == 1
+    usage = await test_app.state.router_state_backend.get_usage(deployment_id)
+    assert usage == {"rpm": 1, "tpm": 2}
 
 
 @pytest.mark.asyncio
