@@ -14,7 +14,7 @@ import {
 import {
   ArrowLeft, Users, DollarSign, Gauge, Shield, Pencil, UserPlus, Trash2,
   Building2, AlertOctagon, CheckCircle2, TrendingUp,
-  Lock, Unlock, Info,
+  Lock, Unlock, Info, Key, ToggleLeft, ToggleRight,
 } from 'lucide-react';
 
 /* ─────────────── helpers ─────────────── */
@@ -237,6 +237,51 @@ export default function TeamDetail() {
     if (!confirm('Remove this member from the team?')) return;
     await teams.removeMember(teamId!, userId);
     refetchMembers();
+  };
+
+  /* ── self-service policy editing ── */
+  const [isEditingPolicy, setIsEditingPolicy] = useState(false);
+  const [policyForm, setPolicyForm] = useState({
+    self_service_keys_enabled: false,
+    self_service_max_keys_per_user: '',
+    self_service_budget_ceiling: '',
+    self_service_require_expiry: false,
+    self_service_max_expiry_days: '',
+  });
+  const [policySaving, setPolicySaving] = useState(false);
+  const [policyError, setPolicyError] = useState<string | null>(null);
+
+  const openEditPolicy = () => {
+    if (!team) return;
+    setPolicyError(null);
+    setPolicyForm({
+      self_service_keys_enabled: !!team.self_service_keys_enabled,
+      self_service_max_keys_per_user: team.self_service_max_keys_per_user != null ? String(team.self_service_max_keys_per_user) : '',
+      self_service_budget_ceiling: team.self_service_budget_ceiling != null ? String(team.self_service_budget_ceiling) : '',
+      self_service_require_expiry: !!team.self_service_require_expiry,
+      self_service_max_expiry_days: team.self_service_max_expiry_days != null ? String(team.self_service_max_expiry_days) : '',
+    });
+    setIsEditingPolicy(true);
+  };
+
+  const handleSavePolicy = async () => {
+    setPolicySaving(true);
+    setPolicyError(null);
+    try {
+      await teams.update(teamId!, {
+        self_service_keys_enabled: policyForm.self_service_keys_enabled,
+        self_service_max_keys_per_user: policyForm.self_service_max_keys_per_user ? Number(policyForm.self_service_max_keys_per_user) : null,
+        self_service_budget_ceiling: policyForm.self_service_budget_ceiling ? Number(policyForm.self_service_budget_ceiling) : null,
+        self_service_require_expiry: policyForm.self_service_require_expiry,
+        self_service_max_expiry_days: policyForm.self_service_max_expiry_days ? Number(policyForm.self_service_max_expiry_days) : null,
+      });
+      setIsEditingPolicy(false);
+      refetchTeam();
+    } catch (err: any) {
+      setPolicyError(err?.message || 'Failed to update self-service policy');
+    } finally {
+      setPolicySaving(false);
+    }
   };
 
   /* ── derived ── */
@@ -714,6 +759,146 @@ export default function TeamDetail() {
                 >
                   Manage asset access →
                 </button>
+              </div>
+
+              {/* Self-Service Key Policy */}
+              <div className={`bg-white rounded-xl border p-4 transition-colors ${isEditingPolicy ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-gray-200'}`}>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-1.5">
+                    <Key className="w-3.5 h-3.5 text-indigo-600" />
+                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Self-Service Keys</h4>
+                  </div>
+                  {!isEditingPolicy && (
+                    <button
+                      onClick={openEditPolicy}
+                      className="p-1 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-gray-600 transition-colors"
+                      title="Edit policy"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+                {isEditingPolicy ? (
+                  <div className="space-y-3">
+                    {policyError && (
+                      <div className="p-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">{policyError}</div>
+                    )}
+                    <label className="flex items-center justify-between cursor-pointer">
+                      <span className="text-xs font-medium text-gray-700">Enable self-service keys</span>
+                      <button
+                        type="button"
+                        onClick={() => setPolicyForm((c) => ({ ...c, self_service_keys_enabled: !c.self_service_keys_enabled }))}
+                        className="focus:outline-none"
+                      >
+                        {policyForm.self_service_keys_enabled
+                          ? <ToggleRight className="w-6 h-6 text-indigo-600" />
+                          : <ToggleLeft className="w-6 h-6 text-gray-400" />}
+                      </button>
+                    </label>
+                    {policyForm.self_service_keys_enabled && (
+                      <>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Max keys per user</label>
+                          <input
+                            type="number"
+                            value={policyForm.self_service_max_keys_per_user}
+                            onChange={(e) => setPolicyForm({ ...policyForm, self_service_max_keys_per_user: e.target.value })}
+                            className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            placeholder="Unlimited"
+                            min="1"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Budget ceiling ($)</label>
+                          <input
+                            type="number"
+                            value={policyForm.self_service_budget_ceiling}
+                            onChange={(e) => setPolicyForm({ ...policyForm, self_service_budget_ceiling: e.target.value })}
+                            className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            placeholder="No ceiling"
+                            min="0"
+                            step="0.01"
+                          />
+                        </div>
+                        <label className="flex items-center justify-between cursor-pointer">
+                          <span className="text-xs font-medium text-gray-700">Require expiry date</span>
+                          <button
+                            type="button"
+                            onClick={() => setPolicyForm((c) => ({ ...c, self_service_require_expiry: !c.self_service_require_expiry }))}
+                            className="focus:outline-none"
+                          >
+                            {policyForm.self_service_require_expiry
+                              ? <ToggleRight className="w-6 h-6 text-indigo-600" />
+                              : <ToggleLeft className="w-6 h-6 text-gray-400" />}
+                          </button>
+                        </label>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Max expiry (days)</label>
+                          <input
+                            type="number"
+                            value={policyForm.self_service_max_expiry_days}
+                            onChange={(e) => setPolicyForm({ ...policyForm, self_service_max_expiry_days: e.target.value })}
+                            className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            placeholder="No limit"
+                            min="1"
+                          />
+                        </div>
+                      </>
+                    )}
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        onClick={() => { setIsEditingPolicy(false); setPolicyError(null); }}
+                        className="flex-1 px-3 py-1.5 text-xs text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleSavePolicy}
+                        disabled={policySaving}
+                        className="flex-1 px-3 py-1.5 text-xs text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+                      >
+                        {policySaving ? 'Saving…' : 'Save'}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between items-center">
+                      <span className="text-gray-500">Status</span>
+                      {team?.self_service_keys_enabled
+                        ? <span className="text-xs font-medium text-emerald-600 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Enabled</span>
+                        : <span className="text-xs font-medium text-gray-400">Disabled</span>}
+                    </div>
+                    {team?.self_service_keys_enabled && (
+                      <>
+                        <div className="flex justify-between items-center">
+                          <span className="text-gray-500">Max keys/user</span>
+                          <span className="text-xs font-medium text-gray-800">
+                            {team.self_service_max_keys_per_user != null ? team.self_service_max_keys_per_user : 'Unlimited'}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-gray-500">Budget ceiling</span>
+                          <span className="text-xs font-medium text-gray-800">
+                            {team.self_service_budget_ceiling != null ? `$${Number(team.self_service_budget_ceiling).toLocaleString()}` : 'No ceiling'}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-gray-500">Require expiry</span>
+                          <span className="text-xs font-medium text-gray-800">
+                            {team.self_service_require_expiry ? 'Yes' : 'No'}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-gray-500">Max expiry</span>
+                          <span className="text-xs font-medium text-gray-800">
+                            {team.self_service_max_expiry_days != null ? `${team.self_service_max_expiry_days} days` : 'No limit'}
+                          </span>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </div>

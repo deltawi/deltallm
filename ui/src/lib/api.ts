@@ -734,6 +734,14 @@ export const organizations = {
     apiFetch<ScopedAssetAccess>(`/ui/api/organizations/${encodeURIComponent(orgId)}/asset-access`, { method: 'PUT', json: payload }),
 };
 
+export interface SelfServicePolicy {
+  self_service_keys_enabled: boolean;
+  self_service_max_keys_per_user: number | null;
+  self_service_budget_ceiling: number | null;
+  self_service_require_expiry: boolean;
+  self_service_max_expiry_days: number | null;
+}
+
 export const teams = {
   list: (params?: { search?: string; organization_id?: string; limit?: number; offset?: number }) =>
     apiFetch<Paginated<any>>(withQuery('/ui/api/teams', params as any)),
@@ -801,7 +809,7 @@ export const mcpServers = {
 };
 
 export const keys = {
-  list: (params?: { search?: string; team_id?: string; limit?: number; offset?: number }) =>
+  list: (params?: { search?: string; team_id?: string; my_keys?: boolean; limit?: number; offset?: number }) =>
     apiFetch<Paginated<ApiKey>>(withQuery('/ui/api/keys', params as any)),
   create: (payload: any) => apiFetch<ApiKey & { raw_key: string }>('/ui/api/keys', { method: 'POST', json: payload }),
   update: (tokenHash: string, payload: any) =>
