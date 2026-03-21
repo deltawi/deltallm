@@ -60,6 +60,18 @@ class KeyRecord:
     org_model_rpm_limit: dict[str, int] | None = None
     org_model_tpm_limit: dict[str, int] | None = None
     max_parallel_requests: int | None = None
+    key_rph_limit: int | None = None
+    key_rpd_limit: int | None = None
+    key_tpd_limit: int | None = None
+    user_rph_limit: int | None = None
+    user_rpd_limit: int | None = None
+    user_tpd_limit: int | None = None
+    team_rph_limit: int | None = None
+    team_rpd_limit: int | None = None
+    team_tpd_limit: int | None = None
+    org_rph_limit: int | None = None
+    org_rpd_limit: int | None = None
+    org_tpd_limit: int | None = None
     organization_id: str | None = None
     guardrails: list[str] | None = None
     metadata: dict[str, Any] | None = None
@@ -102,6 +114,18 @@ class KeyRepository:
                 o.model_rpm_limit AS org_model_rpm_limit,
                 o.model_tpm_limit AS org_model_tpm_limit,
                 v.max_parallel_requests,
+                v.rph_limit AS key_rph_limit,
+                v.rpd_limit AS key_rpd_limit,
+                v.tpd_limit AS key_tpd_limit,
+                u.rph_limit AS user_rph_limit,
+                u.rpd_limit AS user_rpd_limit,
+                u.tpd_limit AS user_tpd_limit,
+                t.rph_limit AS team_rph_limit,
+                t.rpd_limit AS team_rpd_limit,
+                t.tpd_limit AS team_tpd_limit,
+                o.rph_limit AS org_rph_limit,
+                o.rpd_limit AS org_rpd_limit,
+                o.tpd_limit AS org_tpd_limit,
                 v.metadata,
                 t.metadata AS team_metadata,
                 o.metadata AS org_metadata,
@@ -148,6 +172,18 @@ class KeyRepository:
             org_model_rpm_limit=_parse_metadata(row.get("org_model_rpm_limit")),
             org_model_tpm_limit=_parse_metadata(row.get("org_model_tpm_limit")),
             max_parallel_requests=row.get("max_parallel_requests"),
+            key_rph_limit=row.get("key_rph_limit"),
+            key_rpd_limit=row.get("key_rpd_limit"),
+            key_tpd_limit=row.get("key_tpd_limit"),
+            user_rph_limit=row.get("user_rph_limit"),
+            user_rpd_limit=row.get("user_rpd_limit"),
+            user_tpd_limit=row.get("user_tpd_limit"),
+            team_rph_limit=row.get("team_rph_limit"),
+            team_rpd_limit=row.get("team_rpd_limit"),
+            team_tpd_limit=row.get("team_tpd_limit"),
+            org_rph_limit=row.get("org_rph_limit"),
+            org_rpd_limit=row.get("org_rpd_limit"),
+            org_tpd_limit=row.get("org_tpd_limit"),
             organization_id=row.get("organization_id"),
             guardrails=row.get("guardrails"),
             metadata=_parse_metadata(row.get("metadata")),

@@ -72,7 +72,7 @@ async def _require_team_access(
 ) -> dict[str, Any]:
     rows = await db.query_raw(
         """
-        SELECT team_id, team_alias, organization_id, max_budget, spend, rpm_limit, tpm_limit, model_rpm_limit, model_tpm_limit, blocked, created_at, updated_at
+        SELECT team_id, team_alias, organization_id, max_budget, spend, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, blocked, created_at, updated_at
         FROM deltallm_teamtable
         WHERE team_id = $1
         LIMIT 1
@@ -142,6 +142,7 @@ async def list_teams(
     where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 
     select_cols = """t.team_id, t.team_alias, t.organization_id, t.max_budget, t.spend, t.rpm_limit, t.tpm_limit,
+                   t.rph_limit, t.rpd_limit, t.tpd_limit,
                    t.model_rpm_limit, t.model_tpm_limit, t.blocked,
                    t.created_at, t.updated_at,
                    (SELECT COUNT(*) FROM deltallm_teammembership tm WHERE tm.team_id = t.team_id) AS member_count"""
@@ -295,13 +296,16 @@ async def create_team(
     max_budget = payload.get("max_budget")
     rpm_limit = optional_int(payload.get("rpm_limit"), "rpm_limit")
     tpm_limit = optional_int(payload.get("tpm_limit"), "tpm_limit")
+    rph_limit = optional_int(payload.get("rph_limit"), "rph_limit")
+    rpd_limit = optional_int(payload.get("rpd_limit"), "rpd_limit")
+    tpd_limit = optional_int(payload.get("tpd_limit"), "tpd_limit")
     model_rpm_limit = _validate_model_limit_dict(payload.get("model_rpm_limit"), "model_rpm_limit")
     model_tpm_limit = _validate_model_limit_dict(payload.get("model_tpm_limit"), "model_tpm_limit")
 
     await db.execute_raw(
         """
-        INSERT INTO deltallm_teamtable (team_id, team_alias, organization_id, max_budget, spend, rpm_limit, tpm_limit, model_rpm_limit, model_tpm_limit, blocked, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, 0, $5, $6, $7::jsonb, $8::jsonb, false, NOW(), NOW())
+        INSERT INTO deltallm_teamtable (team_id, team_alias, organization_id, max_budget, spend, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, blocked, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, 0, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, false, NOW(), NOW())
         """,
         team_id,
         team_alias,
@@ -309,6 +313,9 @@ async def create_team(
         max_budget,
         rpm_limit,
         tpm_limit,
+        rph_limit,
+        rpd_limit,
+        tpd_limit,
         json.dumps(model_rpm_limit) if model_rpm_limit else None,
         json.dumps(model_tpm_limit) if model_tpm_limit else None,
     )
@@ -320,6 +327,9 @@ async def create_team(
         "max_budget": max_budget,
         "rpm_limit": rpm_limit,
         "tpm_limit": tpm_limit,
+        "rph_limit": rph_limit,
+        "rpd_limit": rpd_limit,
+        "tpd_limit": tpd_limit,
         "model_rpm_limit": model_rpm_limit,
         "model_tpm_limit": model_tpm_limit,
         "blocked": False,
@@ -360,6 +370,9 @@ async def update_team(
     max_budget = payload.get("max_budget", existing_team.get("max_budget"))
     rpm_limit = optional_int(payload.get("rpm_limit", existing_team.get("rpm_limit")), "rpm_limit")
     tpm_limit = optional_int(payload.get("tpm_limit", existing_team.get("tpm_limit")), "tpm_limit")
+    rph_limit = optional_int(payload.get("rph_limit", existing_team.get("rph_limit")), "rph_limit")
+    rpd_limit = optional_int(payload.get("rpd_limit", existing_team.get("rpd_limit")), "rpd_limit")
+    tpd_limit = optional_int(payload.get("tpd_limit", existing_team.get("tpd_limit")), "tpd_limit")
     model_rpm_limit = _validate_model_limit_dict(
         payload.get("model_rpm_limit", existing_team.get("model_rpm_limit")), "model_rpm_limit"
     )
@@ -375,23 +388,29 @@ async def update_team(
             max_budget = $3,
             rpm_limit = $4,
             tpm_limit = $5,
-            model_rpm_limit = $6::jsonb,
-            model_tpm_limit = $7::jsonb,
+            rph_limit = $6,
+            rpd_limit = $7,
+            tpd_limit = $8,
+            model_rpm_limit = $9::jsonb,
+            model_tpm_limit = $10::jsonb,
             updated_at = NOW()
-        WHERE team_id = $8
+        WHERE team_id = $11
         """,
         team_alias,
         organization_id,
         max_budget,
         rpm_limit,
         tpm_limit,
+        rph_limit,
+        rpd_limit,
+        tpd_limit,
         json.dumps(model_rpm_limit) if model_rpm_limit else None,
         json.dumps(model_tpm_limit) if model_tpm_limit else None,
         team_id,
     )
     updated_rows = await db.query_raw(
         """
-        SELECT team_id, team_alias, organization_id, max_budget, spend, rpm_limit, tpm_limit, model_rpm_limit, model_tpm_limit, blocked, created_at, updated_at
+        SELECT team_id, team_alias, organization_id, max_budget, spend, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, blocked, created_at, updated_at
         FROM deltallm_teamtable
         WHERE team_id = $1
         LIMIT 1

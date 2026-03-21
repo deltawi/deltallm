@@ -360,6 +360,7 @@ async def list_organizations(
     where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 
     select_cols = """o.organization_id, o.organization_name, o.max_budget, o.spend, o.rpm_limit, o.tpm_limit,
+                   o.rph_limit, o.rpd_limit, o.tpd_limit,
                    o.model_rpm_limit, o.model_tpm_limit,
                    o.audit_content_storage_enabled, o.metadata, o.created_at, o.updated_at,
                    (SELECT COUNT(*) FROM deltallm_teamtable t WHERE t.organization_id = o.organization_id) AS team_count"""
@@ -394,7 +395,7 @@ async def get_organization(request: Request, organization_id: str) -> dict[str, 
     db = db_or_503(request)
     rows = await db.query_raw(
         """
-        SELECT organization_id, organization_name, max_budget, spend, rpm_limit, tpm_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
+        SELECT organization_id, organization_name, max_budget, spend, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
         FROM deltallm_organizationtable
         WHERE organization_id = $1
         LIMIT 1
@@ -516,6 +517,9 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
     max_budget = payload.get("max_budget")
     rpm_limit = optional_int(payload.get("rpm_limit"), "rpm_limit")
     tpm_limit = optional_int(payload.get("tpm_limit"), "tpm_limit")
+    rph_limit = optional_int(payload.get("rph_limit"), "rph_limit")
+    rpd_limit = optional_int(payload.get("rpd_limit"), "rpd_limit")
+    tpd_limit = optional_int(payload.get("tpd_limit"), "tpd_limit")
     model_rpm_limit = _validate_model_limit_dict(payload.get("model_rpm_limit"), "model_rpm_limit")
     model_tpm_limit = _validate_model_limit_dict(payload.get("model_tpm_limit"), "model_tpm_limit")
     audit_content_storage_enabled = _optional_bool(
@@ -537,6 +541,9 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
             spend,
             rpm_limit,
             tpm_limit,
+            rph_limit,
+            rpd_limit,
+            tpd_limit,
             model_rpm_limit,
             model_tpm_limit,
             audit_content_storage_enabled,
@@ -544,13 +551,16 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
             created_at,
             updated_at
         )
-        VALUES (gen_random_uuid(), $1, $2, $3, 0, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, NOW(), NOW())
+        VALUES (gen_random_uuid(), $1, $2, $3, 0, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12::jsonb, NOW(), NOW())
         ON CONFLICT (organization_id)
         DO UPDATE SET
             organization_name = EXCLUDED.organization_name,
             max_budget = EXCLUDED.max_budget,
             rpm_limit = EXCLUDED.rpm_limit,
             tpm_limit = EXCLUDED.tpm_limit,
+            rph_limit = EXCLUDED.rph_limit,
+            rpd_limit = EXCLUDED.rpd_limit,
+            tpd_limit = EXCLUDED.tpd_limit,
             model_rpm_limit = EXCLUDED.model_rpm_limit,
             model_tpm_limit = EXCLUDED.model_tpm_limit,
             audit_content_storage_enabled = EXCLUDED.audit_content_storage_enabled,
@@ -562,6 +572,9 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
         max_budget,
         rpm_limit,
         tpm_limit,
+        rph_limit,
+        rpd_limit,
+        tpd_limit,
         json.dumps(model_rpm_limit) if model_rpm_limit else None,
         json.dumps(model_tpm_limit) if model_tpm_limit else None,
         bool(audit_content_storage_enabled) if audit_content_storage_enabled is not None else False,
@@ -586,6 +599,9 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
         "max_budget": max_budget,
         "rpm_limit": rpm_limit,
         "tpm_limit": tpm_limit,
+        "rph_limit": rph_limit,
+        "rpd_limit": rpd_limit,
+        "tpd_limit": tpd_limit,
         "model_rpm_limit": model_rpm_limit,
         "model_tpm_limit": model_tpm_limit,
         "audit_content_storage_enabled": bool(audit_content_storage_enabled) if audit_content_storage_enabled is not None else False,
@@ -618,7 +634,7 @@ async def update_organization(
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
     rows = await db.query_raw(
         """
-        SELECT organization_id, organization_name, max_budget, spend, rpm_limit, tpm_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
+        SELECT organization_id, organization_name, max_budget, spend, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
         FROM deltallm_organizationtable
         WHERE organization_id = $1
         LIMIT 1
@@ -633,6 +649,9 @@ async def update_organization(
     max_budget = payload.get("max_budget", existing.get("max_budget"))
     rpm_limit = optional_int(payload.get("rpm_limit", existing.get("rpm_limit")), "rpm_limit")
     tpm_limit = optional_int(payload.get("tpm_limit", existing.get("tpm_limit")), "tpm_limit")
+    rph_limit = optional_int(payload.get("rph_limit", existing.get("rph_limit")), "rph_limit")
+    rpd_limit = optional_int(payload.get("rpd_limit", existing.get("rpd_limit")), "rpd_limit")
+    tpd_limit = optional_int(payload.get("tpd_limit", existing.get("tpd_limit")), "tpd_limit")
     model_rpm_limit = _validate_model_limit_dict(
         payload.get("model_rpm_limit", existing.get("model_rpm_limit")), "model_rpm_limit"
     )
@@ -668,17 +687,23 @@ async def update_organization(
             max_budget = $2,
             rpm_limit = $3,
             tpm_limit = $4,
-            model_rpm_limit = $5::jsonb,
-            model_tpm_limit = $6::jsonb,
-            audit_content_storage_enabled = $7,
-            metadata = COALESCE($8::jsonb, metadata),
+            rph_limit = $5,
+            rpd_limit = $6,
+            tpd_limit = $7,
+            model_rpm_limit = $8::jsonb,
+            model_tpm_limit = $9::jsonb,
+            audit_content_storage_enabled = $10,
+            metadata = COALESCE($11::jsonb, metadata),
             updated_at = NOW()
-        WHERE organization_id = $9
+        WHERE organization_id = $12
         """,
         organization_name,
         max_budget,
         rpm_limit,
         tpm_limit,
+        rph_limit,
+        rpd_limit,
+        tpd_limit,
         json.dumps(model_rpm_limit) if model_rpm_limit else None,
         json.dumps(model_tpm_limit) if model_tpm_limit else None,
         bool(audit_content_storage_enabled),
@@ -687,7 +712,7 @@ async def update_organization(
     )
     updated_rows = await db.query_raw(
         """
-        SELECT organization_id, organization_name, max_budget, spend, rpm_limit, tpm_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
+        SELECT organization_id, organization_name, max_budget, spend, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
         FROM deltallm_organizationtable
         WHERE organization_id = $1
         LIMIT 1

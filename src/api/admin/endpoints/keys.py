@@ -193,6 +193,9 @@ async def list_keys(
             vt.max_budget,
             vt.rpm_limit,
             vt.tpm_limit,
+            vt.rph_limit,
+            vt.rpd_limit,
+            vt.tpd_limit,
             vt.expires,
             vt.created_at,
             vt.updated_at
@@ -230,6 +233,9 @@ async def create_key(
     max_budget = payload.get("max_budget")
     rpm_limit = payload.get("rpm_limit")
     tpm_limit = payload.get("tpm_limit")
+    rph_limit = payload.get("rph_limit")
+    rpd_limit = payload.get("rpd_limit")
+    tpd_limit = payload.get("tpd_limit")
     expires = payload.get("expires")
     if expires is not None and not isinstance(expires, str):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="expires must be a string datetime")
@@ -265,9 +271,9 @@ async def create_key(
             """
             INSERT INTO deltallm_verificationtoken (
                 id, token, key_name, user_id, team_id, owner_account_id, owner_service_account_id,
-                spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at
+                spend, max_budget, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, expires, created_at, updated_at
             )
-            VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10::timestamp, NOW(), NOW())
+            VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13::timestamp, NOW(), NOW())
             """,
             token_hash,
             key_name,
@@ -278,6 +284,9 @@ async def create_key(
             max_budget,
             rpm_limit,
             tpm_limit,
+            rph_limit,
+            rpd_limit,
+            tpd_limit,
             expires,
         )
 
@@ -293,6 +302,9 @@ async def create_key(
             "max_budget": max_budget,
             "rpm_limit": rpm_limit,
             "tpm_limit": tpm_limit,
+            "rph_limit": rph_limit,
+            "rpd_limit": rpd_limit,
+            "tpd_limit": tpd_limit,
             "expires": expires,
         }
         await emit_admin_mutation_audit(
@@ -336,7 +348,7 @@ async def update_key(
     await _require_key_access(scope, db, token_hash)
     rows = await db.query_raw(
         """
-        SELECT token, key_name, user_id, team_id, owner_account_id, owner_service_account_id, spend, max_budget, rpm_limit, tpm_limit, expires, created_at, updated_at
+        SELECT token, key_name, user_id, team_id, owner_account_id, owner_service_account_id, spend, max_budget, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, expires, created_at, updated_at
         FROM deltallm_verificationtoken
         WHERE token = $1
         LIMIT 1
@@ -359,6 +371,9 @@ async def update_key(
     max_budget = payload.get("max_budget", existing.get("max_budget"))
     rpm_limit = payload.get("rpm_limit", existing.get("rpm_limit"))
     tpm_limit = payload.get("tpm_limit", existing.get("tpm_limit"))
+    rph_limit = payload.get("rph_limit", existing.get("rph_limit"))
+    rpd_limit = payload.get("rpd_limit", existing.get("rpd_limit"))
+    tpd_limit = payload.get("tpd_limit", existing.get("tpd_limit"))
 
     if not key_name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="key_name is required")
@@ -393,9 +408,12 @@ async def update_key(
                 max_budget = $6,
                 rpm_limit = $7,
                 tpm_limit = $8,
-                expires = $9::timestamp,
+                rph_limit = $9,
+                rpd_limit = $10,
+                tpd_limit = $11,
+                expires = $12::timestamp,
                 updated_at = NOW()
-            WHERE token = $10
+            WHERE token = $13
             """,
             key_name,
             user_id,
@@ -405,6 +423,9 @@ async def update_key(
             max_budget,
             rpm_limit,
             tpm_limit,
+            rph_limit,
+            rpd_limit,
+            tpd_limit,
             expires,
             token_hash,
         )
@@ -425,6 +446,9 @@ async def update_key(
                 vt.max_budget,
                 vt.rpm_limit,
                 vt.tpm_limit,
+                vt.rph_limit,
+                vt.rpd_limit,
+                vt.tpd_limit,
                 vt.expires,
                 vt.created_at,
                 vt.updated_at

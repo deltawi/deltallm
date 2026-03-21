@@ -15,6 +15,7 @@ class RateLimitCheck:
     entity_id: str
     limit: int
     amount: int = 1
+    window_seconds: int = 60
 
 
 @dataclass
@@ -22,6 +23,7 @@ class RateLimitResult:
     checks: list[RateLimitCheck] = field(default_factory=list)
     current_values: list[int] = field(default_factory=list)
     window_reset_at: int = 0
+    window_resets: list[int] = field(default_factory=list)
 
 
 class LimitCounter:
@@ -64,7 +66,10 @@ class LimitCounter:
             raise RateLimitError(retry_after=retry_after)
 
     async def check_rate_limits_atomic(self, checks: list[RateLimitCheck]) -> RateLimitResult:
-        """Atomically validate and increment minute-bucket limits for multiple scopes.
+        """Atomically validate and increment rate limits for multiple scopes.
+
+        Each check carries its own ``window_seconds`` so minute, hour and day
+        windows can be enforced in a single atomic call.
 
         Returns a RateLimitResult with post-increment counter values for each check.
         """
@@ -72,18 +77,23 @@ class LimitCounter:
         if not normalized:
             return RateLimitResult()
 
-        window_seconds = 60
         now = time.time()
-        window_reset_at = int((math.floor(now / window_seconds) + 1) * window_seconds)
+        per_check_resets = [
+            int((math.floor(now / c.window_seconds) + 1) * c.window_seconds) for c in normalized
+        ]
+        min_window = min(c.window_seconds for c in normalized)
+        window_reset_at = int((math.floor(now / min_window) + 1) * min_window)
 
         if self.redis is None:
-            return await self._check_rate_limits_fallback(normalized, window_reset_at)
+            return await self._check_rate_limits_fallback(normalized, window_reset_at, per_check_resets)
 
-        window_id = self._window_id(window_seconds)
-        retry_after = window_seconds - int(now % window_seconds)
-        keys = [f"ratelimit:{check.scope}:{check.entity_id}:{window_id}" for check in normalized]
-        limits = [str(int(check.limit)) for check in normalized]
+        keys = [
+            f"ratelimit:{check.scope}:{check.entity_id}:{self._window_id(check.window_seconds)}"
+            for check in normalized
+        ]
         amounts = [str(int(check.amount)) for check in normalized]
+        limits = [str(int(check.limit)) for check in normalized]
+        ttls = [str(int(check.window_seconds)) for check in normalized]
 
         script = """
 local n = #KEYS
@@ -98,17 +108,18 @@ end
 local results = {1, 0}
 for i = 1, n do
   local amount = tonumber(ARGV[i]) or 0
+  local ttl = tonumber(ARGV[(2 * n) + i]) or 60
   local new_val = redis.call('INCRBY', KEYS[i], amount)
-  redis.call('EXPIRE', KEYS[i], tonumber(ARGV[(2 * n) + 1]))
+  redis.call('EXPIRE', KEYS[i], ttl)
   results[i + 2] = new_val
 end
 return results
 """
         try:
-            raw = await self.redis.eval(script, len(keys), *keys, *amounts, *limits, str(window_seconds))
+            raw = await self.redis.eval(script, len(keys), *keys, *amounts, *limits, *ttls)
         except Exception:
             await self._handle_redis_degraded()
-            return await self._check_rate_limits_fallback(normalized, window_reset_at)
+            return await self._check_rate_limits_fallback(normalized, window_reset_at, per_check_resets)
         ok = int(raw[0]) if isinstance(raw, (list, tuple)) and len(raw) >= 1 else 1
         if ok == 1:
             current_values = []
@@ -118,10 +129,12 @@ return results
                 checks=normalized,
                 current_values=current_values,
                 window_reset_at=window_reset_at,
+                window_resets=per_check_resets,
             )
 
         failed_index = int(raw[1]) - 1 if isinstance(raw, (list, tuple)) and len(raw) >= 2 else 0
         failed = normalized[max(0, failed_index)]
+        retry_after = failed.window_seconds - int(now % failed.window_seconds)
         raise RateLimitError(
             message=f"Rate limit exceeded for scope '{failed.scope}'",
             param=failed.scope,
@@ -172,6 +185,7 @@ return results
 
     async def _check_rate_limits_fallback(
         self, checks: list[RateLimitCheck], window_reset_at: int = 0,
+        per_check_resets: list[int] | None = None,
     ) -> RateLimitResult:
         if self.degraded_mode == "fail_closed":
             raise ServiceUnavailableError(message="Rate limit backend unavailable")
@@ -180,19 +194,24 @@ return results
         if not normalized:
             return RateLimitResult()
 
-        window_seconds = 60
-        window_id = self._window_id(window_seconds)
         now = int(time.time())
         if window_reset_at == 0:
-            window_reset_at = int((math.floor(now / window_seconds) + 1) * window_seconds)
+            min_window = min(c.window_seconds for c in normalized)
+            window_reset_at = int((math.floor(now / min_window) + 1) * min_window)
+        if per_check_resets is None:
+            per_check_resets = [
+                int((math.floor(now / c.window_seconds) + 1) * c.window_seconds) for c in normalized
+            ]
         pending_updates: list[tuple[str, int, int]] = []
 
         async with self._fallback_lock:
             for check in normalized:
+                ws = check.window_seconds
+                window_id = self._window_id(ws)
                 key = f"{check.scope}:{check.entity_id}:{window_id}"
-                expiry, current = self._fallback_counters.get(key, (now + window_seconds, 0))
+                expiry, current = self._fallback_counters.get(key, (now + ws, 0))
                 if expiry <= now:
-                    expiry, current = now + window_seconds, 0
+                    expiry, current = now + ws, 0
                 next_value = current + check.amount
                 if next_value > check.limit:
                     retry_after = max(1, expiry - now)
@@ -213,6 +232,7 @@ return results
             checks=normalized,
             current_values=current_values,
             window_reset_at=window_reset_at,
+            window_resets=per_check_resets,
         )
 
     async def _check_rate_limit_fallback(self, scope: str, entity_id: str, limit: int, amount: int) -> None:

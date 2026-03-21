@@ -119,6 +119,18 @@ class UserAPIKeyAuth(BaseModel):
     org_model_rpm_limit: dict[str, int] | None = None
     org_model_tpm_limit: dict[str, int] | None = None
     max_parallel_requests: int | None = None
+    key_rph_limit: int | None = None
+    key_rpd_limit: int | None = None
+    key_tpd_limit: int | None = None
+    user_rph_limit: int | None = None
+    user_rpd_limit: int | None = None
+    user_tpd_limit: int | None = None
+    team_rph_limit: int | None = None
+    team_rpd_limit: int | None = None
+    team_tpd_limit: int | None = None
+    org_rph_limit: int | None = None
+    org_rpd_limit: int | None = None
+    org_tpd_limit: int | None = None
     guardrails: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] | None = None
     team_metadata: dict[str, Any] | None = None

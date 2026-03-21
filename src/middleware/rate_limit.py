@@ -90,8 +90,8 @@ def _compute_rate_limit_state(result: RateLimitResult, checks: list[RateLimitChe
         if ratio > max_usage_ratio:
             max_usage_ratio = ratio
 
-        is_rpm = check.scope.endswith("_rpm") or check.scope.endswith("_rpm_limit")
-        is_tpm = check.scope.endswith("_tpm") or check.scope.endswith("_tpm_limit")
+        is_rpm = check.scope.endswith("_rpm") or check.scope.endswith("_rpm_limit") or check.scope.endswith("_rph") or check.scope.endswith("_rpd")
+        is_tpm = check.scope.endswith("_tpm") or check.scope.endswith("_tpm_limit") or check.scope.endswith("_tpd")
 
         if not is_rpm and not is_tpm:
             if check.amount == 1:
@@ -99,18 +99,20 @@ def _compute_rate_limit_state(result: RateLimitResult, checks: list[RateLimitChe
             else:
                 is_tpm = True
 
+        check_reset = result.window_resets[i] if i < len(result.window_resets) else reset_at
+
         if is_rpm and ratio > best_rpm_ratio:
             best_rpm_ratio = ratio
             state.rpm_limit = check.limit
             state.rpm_remaining = remaining
-            state.rpm_reset = reset_at
+            state.rpm_reset = check_reset
             state.rpm_scope = check.scope
 
         if is_tpm and ratio > best_tpm_ratio:
             best_tpm_ratio = ratio
             state.tpm_limit = check.limit
             state.tpm_remaining = remaining
-            state.tpm_reset = reset_at
+            state.tpm_reset = check_reset
             state.tpm_scope = check.scope
 
     if max_usage_ratio >= 0.95:
@@ -127,22 +129,25 @@ def _build_429_state(
     state = RateLimitState(warning="near_limit")
     violated_scope = getattr(exc, "param", None) or ""
 
+    now = time.time()
     for check in checks:
-        is_rpm = check.scope.endswith("_rpm")
-        is_tpm = check.scope.endswith("_tpm")
+        is_rpm = check.scope.endswith("_rpm") or check.scope.endswith("_rph") or check.scope.endswith("_rpd")
+        is_tpm = check.scope.endswith("_tpm") or check.scope.endswith("_tpd")
         if not is_rpm and not is_tpm:
             is_rpm = check.amount == 1
             is_tpm = not is_rpm
 
+        check_reset = int((math.floor(now / check.window_seconds) + 1) * check.window_seconds)
+
         if is_rpm and (state.rpm_limit == 0 or check.scope == violated_scope):
             state.rpm_limit = check.limit
             state.rpm_remaining = 0
-            state.rpm_reset = window_reset_at
+            state.rpm_reset = check_reset
             state.rpm_scope = check.scope
         if is_tpm and (state.tpm_limit == 0 or check.scope == violated_scope):
             state.tpm_limit = check.limit
             state.tpm_remaining = 0
-            state.tpm_reset = window_reset_at
+            state.tpm_reset = check_reset
             state.tpm_scope = check.scope
 
     return state
@@ -225,6 +230,35 @@ async def _check_and_acquire_rate_limits(request: Request) -> None:
     _add("user_tpm", auth.user_id, auth.user_tpm_limit, tokens)
     _add("key_tpm", auth.api_key, key_tpm_limit, tokens)
 
+    key_rph = auth.key_rph_limit
+    key_rpd = auth.key_rpd_limit
+    key_tpd = auth.key_tpd_limit
+
+    def _add_h(scope: str, entity_id: str | None, limit: int | None, amount: int) -> None:
+        if not entity_id or limit is None or limit <= 0 or amount <= 0:
+            return
+        checks.append(RateLimitCheck(scope=scope, entity_id=entity_id, limit=int(limit), amount=int(amount), window_seconds=3600))
+
+    def _add_d(scope: str, entity_id: str | None, limit: int | None, amount: int) -> None:
+        if not entity_id or limit is None or limit <= 0 or amount <= 0:
+            return
+        checks.append(RateLimitCheck(scope=scope, entity_id=entity_id, limit=int(limit), amount=int(amount), window_seconds=86400))
+
+    _add_h("org_rph", auth.organization_id, auth.org_rph_limit, 1)
+    _add_h("team_rph", auth.team_id, auth.team_rph_limit, 1)
+    _add_h("user_rph", auth.user_id, auth.user_rph_limit, 1)
+    _add_h("key_rph", auth.api_key, key_rph, 1)
+
+    _add_d("org_rpd", auth.organization_id, auth.org_rpd_limit, 1)
+    _add_d("team_rpd", auth.team_id, auth.team_rpd_limit, 1)
+    _add_d("user_rpd", auth.user_id, auth.user_rpd_limit, 1)
+    _add_d("key_rpd", auth.api_key, key_rpd, 1)
+
+    _add_d("org_tpd", auth.organization_id, auth.org_tpd_limit, tokens)
+    _add_d("team_tpd", auth.team_id, auth.team_tpd_limit, tokens)
+    _add_d("user_tpd", auth.user_id, auth.user_tpd_limit, tokens)
+    _add_d("key_tpd", auth.api_key, key_tpd, tokens)
+
     if model:
         team_model_rpm = _model_limit(auth.team_model_rpm_limit, model)
         team_model_tpm = _model_limit(auth.team_model_tpm_limit, model)
@@ -236,9 +270,9 @@ async def _check_and_acquire_rate_limits(request: Request) -> None:
         _add("org_model_rpm", f"{auth.organization_id}:{model}" if auth.organization_id else None, org_model_rpm, 1)
         _add("org_model_tpm", f"{auth.organization_id}:{model}" if auth.organization_id else None, org_model_tpm, tokens)
 
-    window_seconds = 60
     now = time.time()
-    window_reset_at = int((math.floor(now / window_seconds) + 1) * window_seconds)
+    min_window = min((c.window_seconds for c in checks), default=60)
+    window_reset_at = int((math.floor(now / min_window) + 1) * min_window)
     try:
         result = await limiter.check_rate_limits_atomic(checks)
         rate_limit_state = _compute_rate_limit_state(result, checks)
