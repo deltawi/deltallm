@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
+import { useAuth } from '../lib/auth';
 import { organizations, teams } from '../lib/api';
 import { buildParentScopedAssetTargets, buildScopedSelectableTargets } from '../lib/assetAccess';
 import Modal from '../components/Modal';
@@ -58,6 +59,10 @@ export default function TeamDetail() {
   const { teamId } = useParams<{ teamId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
+  const { session, authMode } = useAuth();
+  const permissions = useMemo(() => new Set(session?.effective_permissions || []), [session?.effective_permissions]);
+  const isPlatformAdmin = authMode === 'master_key' || session?.role === 'platform_admin';
+  const canEditTeam = isPlatformAdmin || permissions.has('team.update');
   const [tab, setTab] = useState<TabId>('overview');
 
   /* ── data ── */
@@ -768,7 +773,7 @@ export default function TeamDetail() {
                     <Key className="w-3.5 h-3.5 text-indigo-600" />
                     <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Self-Service Keys</h4>
                   </div>
-                  {!isEditingPolicy && (
+                  {!isEditingPolicy && canEditTeam && (
                     <button
                       onClick={openEditPolicy}
                       className="p-1 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-gray-600 transition-colors"

@@ -746,6 +746,16 @@ export const teams = {
   list: (params?: { search?: string; organization_id?: string; limit?: number; offset?: number }) =>
     apiFetch<Paginated<any>>(withQuery('/ui/api/teams', params as any)),
   get: (teamId: string) => apiFetch<any>(`/ui/api/teams/${encodeURIComponent(teamId)}`),
+  getSelfServicePolicy: async (teamId: string): Promise<SelfServicePolicy> => {
+    const t = await apiFetch<any>(`/ui/api/teams/${encodeURIComponent(teamId)}`);
+    return {
+      self_service_keys_enabled: !!t.self_service_keys_enabled,
+      self_service_max_keys_per_user: t.self_service_max_keys_per_user ?? null,
+      self_service_budget_ceiling: t.self_service_budget_ceiling ?? null,
+      self_service_require_expiry: !!t.self_service_require_expiry,
+      self_service_max_expiry_days: t.self_service_max_expiry_days ?? null,
+    };
+  },
   create: (payload: any) => apiFetch<any>('/ui/api/teams', { method: 'POST', json: payload }),
   update: (teamId: string, payload: any) => apiFetch<any>(`/ui/api/teams/${encodeURIComponent(teamId)}`, { method: 'PUT', json: payload }),
   delete: (teamId: string) => apiFetch<any>(`/ui/api/teams/${encodeURIComponent(teamId)}`, { method: 'DELETE' }),

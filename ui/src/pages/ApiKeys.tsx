@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useApi } from '../lib/hooks';
 import { keys, serviceAccounts, teams } from '../lib/api';
 import { buildParentScopedAssetTargets, buildScopedSelectableTargets } from '../lib/assetAccess';
-import type { ApiKey, ServiceAccount, SelfServicePolicy } from '../lib/api';
+import type { ApiKey, ServiceAccount } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import DataTable from '../components/DataTable';
 import StatusBadge from '../components/StatusBadge';
@@ -162,20 +162,14 @@ export default function ApiKeys() {
   const availableServiceAccounts = serviceAccountsResult?.data || [];
   const hasServiceAccounts = availableServiceAccounts.length > 0;
 
-  const selectedTeamPolicy: SelfServicePolicy | null = useMemo(() => {
-    if (!selectedTeamId) return null;
-    const t = (teamsList || []).find((t: any) => t.team_id === selectedTeamId);
-    if (!t) return null;
-    return {
-      self_service_keys_enabled: !!t.self_service_keys_enabled,
-      self_service_max_keys_per_user: t.self_service_max_keys_per_user ?? null,
-      self_service_budget_ceiling: t.self_service_budget_ceiling ?? null,
-      self_service_require_expiry: !!t.self_service_require_expiry,
-      self_service_max_expiry_days: t.self_service_max_expiry_days ?? null,
-    };
-  }, [selectedTeamId, teamsList]);
+  const isSelfServiceCreate = myKeysMode;
 
-  const isSelfServiceCreate = myKeysMode && !isAdmin;
+  const { data: selectedTeamPolicy } = useApi(
+    () => selectedTeamId && isSelfServiceCreate
+      ? teams.getSelfServicePolicy(selectedTeamId)
+      : Promise.resolve(null),
+    [selectedTeamId, isSelfServiceCreate],
+  );
 
   useEffect(() => {
     const t = setTimeout(() => { setSearch(searchInput); setPageOffset(0); }, 300);
