@@ -430,6 +430,10 @@ async def update_key(
             token_hash,
         )
 
+        key_service = getattr(request.app.state, "key_service", None)
+        if key_service:
+            await key_service.invalidate_key_cache_by_hash(token_hash)
+
         updated_rows = await db.query_raw(
             """
             SELECT
