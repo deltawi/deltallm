@@ -136,6 +136,9 @@ export default function Organizations() {
     max_budget: '',
     rpm_limit: '',
     tpm_limit: '',
+    rph_limit: '',
+    rpd_limit: '',
+    tpd_limit: '',
     audit_content_storage_enabled: false,
     select_all_current_assets: false,
     selected_callable_keys: [] as string[],
@@ -168,6 +171,9 @@ export default function Organizations() {
       max_budget: '',
       rpm_limit: '',
       tpm_limit: '',
+      rph_limit: '',
+      rpd_limit: '',
+      tpd_limit: '',
       audit_content_storage_enabled: false,
       select_all_current_assets: false,
       selected_callable_keys: [],
@@ -200,6 +206,9 @@ export default function Organizations() {
         max_budget: form.max_budget ? Number(form.max_budget) : undefined,
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
+        rph_limit: form.rph_limit ? Number(form.rph_limit) : undefined,
+        rpd_limit: form.rpd_limit ? Number(form.rpd_limit) : undefined,
+        tpd_limit: form.tpd_limit ? Number(form.tpd_limit) : undefined,
         audit_content_storage_enabled: !!form.audit_content_storage_enabled,
       };
       await organizations.update(editItem.organization_id, payload);
@@ -227,6 +236,9 @@ export default function Organizations() {
       max_budget: row.max_budget != null ? String(row.max_budget) : '',
       rpm_limit: row.rpm_limit != null ? String(row.rpm_limit) : '',
       tpm_limit: row.tpm_limit != null ? String(row.tpm_limit) : '',
+      rph_limit: row.rph_limit != null ? String(row.rph_limit) : '',
+      rpd_limit: row.rpd_limit != null ? String(row.rpd_limit) : '',
+      tpd_limit: row.tpd_limit != null ? String(row.tpd_limit) : '',
       audit_content_storage_enabled: !!row.audit_content_storage_enabled,
       select_all_current_assets: false,
       selected_callable_keys: [],
@@ -406,6 +418,18 @@ export default function Organizations() {
                             <TrendingUp className="w-3 h-3 text-gray-400" />
                             <RateTag value={row.tpm_limit} unit="TPM" />
                           </div>
+                          <div className="flex items-center gap-1.5">
+                            <Gauge className="w-3 h-3 text-gray-400" />
+                            <RateTag value={row.rph_limit} unit="RPH" />
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <Gauge className="w-3 h-3 text-gray-400" />
+                            <RateTag value={row.rpd_limit} unit="RPD" />
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <TrendingUp className="w-3 h-3 text-gray-400" />
+                            <RateTag value={row.tpd_limit} unit="TPD" />
+                          </div>
                         </div>
                       </td>
 
@@ -532,6 +556,39 @@ export default function Organizations() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
               <p className="text-xs text-gray-400 mt-1">Tokens per minute</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">RPH Limit</label>
+              <input
+                type="number"
+                value={form.rph_limit}
+                onChange={(e) => setForm({ ...form, rph_limit: e.target.value })}
+                placeholder="5000"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-gray-400 mt-1">Requests per hour</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">RPD Limit</label>
+              <input
+                type="number"
+                value={form.rpd_limit}
+                onChange={(e) => setForm({ ...form, rpd_limit: e.target.value })}
+                placeholder="50000"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-gray-400 mt-1">Requests per day</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">TPD Limit</label>
+              <input
+                type="number"
+                value={form.tpd_limit}
+                onChange={(e) => setForm({ ...form, tpd_limit: e.target.value })}
+                placeholder="2000000"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-gray-400 mt-1">Tokens per day</p>
             </div>
           </div>
           <label className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg bg-gray-50 cursor-pointer">

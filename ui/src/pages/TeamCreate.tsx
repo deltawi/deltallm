@@ -9,7 +9,7 @@ import { useAuth } from '../lib/auth';
 import {
   Users, X, DollarSign, Gauge, TrendingUp, Info,
   ChevronRight, Check, AlertCircle, Building2,
-  Shield, Lock, Unlock, AlertOctagon,
+  Shield, Lock, Unlock, AlertOctagon, Clock, CalendarDays,
 } from 'lucide-react';
 
 /* ─────────────── helpers ─────────────── */
@@ -141,6 +141,12 @@ export default function TeamCreate() {
   const [budgetValue, setBudgetValue] = useState('');
   const [rpmValue, setRpmValue] = useState('');
   const [tpmValue, setTpmValue] = useState('');
+  const [rphEnabled, setRphEnabled] = useState(false);
+  const [rpdEnabled, setRpdEnabled] = useState(false);
+  const [tpdEnabled, setTpdEnabled] = useState(false);
+  const [rphValue, setRphValue] = useState('');
+  const [rpdValue, setRpdValue] = useState('');
+  const [tpdValue, setTpdValue] = useState('');
   const [assetMode, setAssetMode] = useState<'inherit' | 'restrict'>('inherit');
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [blocked, setBlocked] = useState(false);
@@ -190,6 +196,9 @@ export default function TeamCreate() {
         max_budget: budgetEnabled && budgetValue ? Number(budgetValue) : undefined,
         rpm_limit: rpmEnabled && rpmValue ? Number(rpmValue) : undefined,
         tpm_limit: tpmEnabled && tpmValue ? Number(tpmValue) : undefined,
+        rph_limit: rphEnabled && rphValue ? Number(rphValue) : undefined,
+        rpd_limit: rpdEnabled && rpdValue ? Number(rpdValue) : undefined,
+        tpd_limit: tpdEnabled && tpdValue ? Number(tpdValue) : undefined,
       };
 
       const created = await teams.create(payload);
@@ -312,6 +321,24 @@ export default function TeamCreate() {
                       <>
                         <span className="text-indigo-300">·</span>
                         <span>TPM: {selectedOrg.tpm_limit.toLocaleString()}</span>
+                      </>
+                    )}
+                    {selectedOrg.rph_limit != null && (
+                      <>
+                        <span className="text-indigo-300">·</span>
+                        <span>RPH: {selectedOrg.rph_limit.toLocaleString()}</span>
+                      </>
+                    )}
+                    {selectedOrg.rpd_limit != null && (
+                      <>
+                        <span className="text-indigo-300">·</span>
+                        <span>RPD: {selectedOrg.rpd_limit.toLocaleString()}</span>
+                      </>
+                    )}
+                    {selectedOrg.tpd_limit != null && (
+                      <>
+                        <span className="text-indigo-300">·</span>
+                        <span>TPD: {selectedOrg.tpd_limit.toLocaleString()}</span>
                       </>
                     )}
                   </div>
@@ -451,6 +478,102 @@ export default function TeamCreate() {
                       type="number"
                       min="1"
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* RPH */}
+              <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <Clock className="w-4 h-4 text-teal-600" />
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">RPH limit</p>
+                      <InheritBadge value={selectedOrg?.rph_limit} unit="RPH" />
+                    </div>
+                  </div>
+                  <ToggleSwitch
+                    checked={rphEnabled}
+                    onCheckedChange={setRphEnabled}
+                    disabled={saving}
+                    aria-label="Toggle RPH limit"
+                  />
+                </div>
+                {rphEnabled && (
+                  <div className="ml-6 pl-3 border-l-2 border-teal-200">
+                    <FieldLabel label="Requests per hour" />
+                    <input
+                      value={rphValue}
+                      onChange={(e) => setRphValue(e.target.value)}
+                      placeholder={selectedOrg?.rph_limit ? `max ${selectedOrg.rph_limit.toLocaleString()}` : 'unlimited'}
+                      type="number"
+                      min="1"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* RPD */}
+              <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <CalendarDays className="w-4 h-4 text-amber-600" />
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">RPD limit</p>
+                      <InheritBadge value={selectedOrg?.rpd_limit} unit="RPD" />
+                    </div>
+                  </div>
+                  <ToggleSwitch
+                    checked={rpdEnabled}
+                    onCheckedChange={setRpdEnabled}
+                    disabled={saving}
+                    aria-label="Toggle RPD limit"
+                  />
+                </div>
+                {rpdEnabled && (
+                  <div className="ml-6 pl-3 border-l-2 border-amber-200">
+                    <FieldLabel label="Requests per day" />
+                    <input
+                      value={rpdValue}
+                      onChange={(e) => setRpdValue(e.target.value)}
+                      placeholder={selectedOrg?.rpd_limit ? `max ${selectedOrg.rpd_limit.toLocaleString()}` : 'unlimited'}
+                      type="number"
+                      min="1"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* TPD */}
+              <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <TrendingUp className="w-4 h-4 text-rose-600" />
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">TPD limit</p>
+                      <InheritBadge value={selectedOrg?.tpd_limit} unit="TPD" />
+                    </div>
+                  </div>
+                  <ToggleSwitch
+                    checked={tpdEnabled}
+                    onCheckedChange={setTpdEnabled}
+                    disabled={saving}
+                    aria-label="Toggle TPD limit"
+                  />
+                </div>
+                {tpdEnabled && (
+                  <div className="ml-6 pl-3 border-l-2 border-rose-200">
+                    <FieldLabel label="Tokens per day" />
+                    <input
+                      value={tpdValue}
+                      onChange={(e) => setTpdValue(e.target.value)}
+                      placeholder={selectedOrg?.tpd_limit ? `max ${selectedOrg.tpd_limit.toLocaleString()}` : 'unlimited'}
+                      type="number"
+                      min="1"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-rose-500"
                     />
                   </div>
                 )}
