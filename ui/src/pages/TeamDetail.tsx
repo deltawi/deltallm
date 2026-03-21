@@ -93,6 +93,9 @@ export default function TeamDetail() {
     max_budget: '',
     rpm_limit: '',
     tpm_limit: '',
+    rph_limit: '',
+    rpd_limit: '',
+    tpd_limit: '',
     asset_access_mode: 'inherit' as 'inherit' | 'restrict',
     selected_callable_keys: [] as string[],
   });
@@ -138,6 +141,9 @@ export default function TeamDetail() {
       max_budget: team.max_budget != null ? String(team.max_budget) : '',
       rpm_limit: team.rpm_limit != null ? String(team.rpm_limit) : '',
       tpm_limit: team.tpm_limit != null ? String(team.tpm_limit) : '',
+      rph_limit: team.rph_limit != null ? String(team.rph_limit) : '',
+      rpd_limit: team.rpd_limit != null ? String(team.rpd_limit) : '',
+      tpd_limit: team.tpd_limit != null ? String(team.tpd_limit) : '',
     }));
     setIsEditingSettings(true);
   };
@@ -170,6 +176,9 @@ export default function TeamDetail() {
         max_budget: form.max_budget ? Number(form.max_budget) : undefined,
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
+        rph_limit: form.rph_limit ? Number(form.rph_limit) : undefined,
+        rpd_limit: form.rpd_limit ? Number(form.rpd_limit) : undefined,
+        tpd_limit: form.tpd_limit ? Number(form.tpd_limit) : undefined,
       });
       setIsEditingSettings(false);
       refetchTeam();
@@ -432,6 +441,30 @@ export default function TeamDetail() {
                       ? <p className="text-sm font-semibold">{Number(team.tpm_limit).toLocaleString()} <span className="text-xs font-normal text-gray-400">tok/min</span></p>
                       : <p className="text-sm text-gray-400">Unlimited</p>}
                   </div>
+                  <div>
+                    <p className="text-xs text-gray-500 flex items-center gap-1 mb-1">
+                      <Gauge className="w-3.5 h-3.5" /> RPH Limit
+                    </p>
+                    {team.rph_limit != null
+                      ? <p className="text-sm font-semibold">{Number(team.rph_limit).toLocaleString()} <span className="text-xs font-normal text-gray-400">req/hr</span></p>
+                      : <p className="text-sm text-gray-400">Unlimited</p>}
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 flex items-center gap-1 mb-1">
+                      <Gauge className="w-3.5 h-3.5" /> RPD Limit
+                    </p>
+                    {team.rpd_limit != null
+                      ? <p className="text-sm font-semibold">{Number(team.rpd_limit).toLocaleString()} <span className="text-xs font-normal text-gray-400">req/day</span></p>
+                      : <p className="text-sm text-gray-400">Unlimited</p>}
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 flex items-center gap-1 mb-1">
+                      <TrendingUp className="w-3.5 h-3.5" /> TPD Limit
+                    </p>
+                    {team.tpd_limit != null
+                      ? <p className="text-sm font-semibold">{Number(team.tpd_limit).toLocaleString()} <span className="text-xs font-normal text-gray-400">tok/day</span></p>
+                      : <p className="text-sm text-gray-400">Unlimited</p>}
+                  </div>
                 </div>
               </div>
 
@@ -527,6 +560,36 @@ export default function TeamDetail() {
                           type="number"
                           value={form.tpm_limit}
                           onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })}
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          placeholder="Unlimited"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">RPH Limit</label>
+                        <input
+                          type="number"
+                          value={form.rph_limit}
+                          onChange={(e) => setForm({ ...form, rph_limit: e.target.value })}
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          placeholder="Unlimited"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">RPD Limit</label>
+                        <input
+                          type="number"
+                          value={form.rpd_limit}
+                          onChange={(e) => setForm({ ...form, rpd_limit: e.target.value })}
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          placeholder="Unlimited"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">TPD Limit</label>
+                        <input
+                          type="number"
+                          value={form.tpd_limit}
+                          onChange={(e) => setForm({ ...form, tpd_limit: e.target.value })}
                           className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                           placeholder="Unlimited"
                         />

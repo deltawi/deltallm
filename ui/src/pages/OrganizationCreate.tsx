@@ -7,7 +7,7 @@ import { buildCatalogAssetTargets } from '../lib/assetAccess';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import {
   Building2, X, DollarSign, Gauge, TrendingUp, Info,
-  ChevronRight, Check, AlertCircle, Shield,
+  ChevronRight, Check, AlertCircle, Shield, Clock, CalendarDays,
 } from 'lucide-react';
 import ToggleSwitch from '../components/ToggleSwitch';
 
@@ -133,6 +133,12 @@ export default function OrganizationCreate() {
   const [budgetValue, setBudgetValue] = useState('');
   const [rpmValue, setRpmValue] = useState('');
   const [tpmValue, setTpmValue] = useState('');
+  const [rphEnabled, setRphEnabled] = useState(false);
+  const [rpdEnabled, setRpdEnabled] = useState(false);
+  const [tpdEnabled, setTpdEnabled] = useState(false);
+  const [rphValue, setRphValue] = useState('');
+  const [rpdValue, setRpdValue] = useState('');
+  const [tpdValue, setTpdValue] = useState('');
   const [auditStorage, setAuditStorage] = useState(false);
   const [selectAll, setSelectAll] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
@@ -183,6 +189,9 @@ export default function OrganizationCreate() {
         max_budget: budgetEnabled && budgetValue ? Number(budgetValue) : undefined,
         rpm_limit: rpmEnabled && rpmValue ? Number(rpmValue) : undefined,
         tpm_limit: tpmEnabled && tpmValue ? Number(tpmValue) : undefined,
+        rph_limit: rphEnabled && rphValue ? Number(rphValue) : undefined,
+        rpd_limit: rpdEnabled && rpdValue ? Number(rpdValue) : undefined,
+        tpd_limit: tpdEnabled && tpdValue ? Number(tpdValue) : undefined,
         audit_content_storage_enabled: auditStorage,
         callable_target_bindings: selectAll
           ? []
@@ -370,6 +379,90 @@ export default function OrganizationCreate() {
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                     <p className="text-xs text-gray-400 mt-1">Applies across input + output tokens.</p>
+                  </div>
+                )}
+              </div>
+
+              {/* RPH */}
+              <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <Clock className="w-4 h-4 text-teal-600" />
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">RPH limit</p>
+                      <p className="text-xs text-gray-500">Max requests per hour</p>
+                    </div>
+                  </div>
+                  <ToggleSwitch checked={rphEnabled} onCheckedChange={setRphEnabled} aria-label="Toggle RPH limit" />
+                </div>
+                {rphEnabled && (
+                  <div className="ml-6 pl-3 border-l-2 border-teal-200">
+                    <FieldLabel label="Requests per hour" />
+                    <input
+                      value={rphValue}
+                      onChange={(e) => setRphValue(e.target.value)}
+                      placeholder="5000"
+                      type="number"
+                      min="1"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">Shared across all teams and API keys in this org.</p>
+                  </div>
+                )}
+              </div>
+
+              {/* RPD */}
+              <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <CalendarDays className="w-4 h-4 text-amber-600" />
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">RPD limit</p>
+                      <p className="text-xs text-gray-500">Max requests per day</p>
+                    </div>
+                  </div>
+                  <ToggleSwitch checked={rpdEnabled} onCheckedChange={setRpdEnabled} aria-label="Toggle RPD limit" />
+                </div>
+                {rpdEnabled && (
+                  <div className="ml-6 pl-3 border-l-2 border-amber-200">
+                    <FieldLabel label="Requests per day" />
+                    <input
+                      value={rpdValue}
+                      onChange={(e) => setRpdValue(e.target.value)}
+                      placeholder="50000"
+                      type="number"
+                      min="1"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">Resets at midnight UTC each day.</p>
+                  </div>
+                )}
+              </div>
+
+              {/* TPD */}
+              <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <TrendingUp className="w-4 h-4 text-rose-600" />
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">TPD limit</p>
+                      <p className="text-xs text-gray-500">Max tokens per day</p>
+                    </div>
+                  </div>
+                  <ToggleSwitch checked={tpdEnabled} onCheckedChange={setTpdEnabled} aria-label="Toggle TPD limit" />
+                </div>
+                {tpdEnabled && (
+                  <div className="ml-6 pl-3 border-l-2 border-rose-200">
+                    <FieldLabel label="Tokens per day" />
+                    <input
+                      value={tpdValue}
+                      onChange={(e) => setTpdValue(e.target.value)}
+                      placeholder="2000000"
+                      type="number"
+                      min="1"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">Applies across input + output tokens. Resets at midnight UTC.</p>
                   </div>
                 )}
               </div>

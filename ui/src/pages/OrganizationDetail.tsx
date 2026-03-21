@@ -119,6 +119,9 @@ export default function OrganizationDetail() {
     max_budget: '',
     rpm_limit: '',
     tpm_limit: '',
+    rph_limit: '',
+    rpd_limit: '',
+    tpd_limit: '',
     audit_content_storage_enabled: false,
     select_all_current_assets: false,
     selected_callable_keys: [] as string[],
@@ -170,6 +173,9 @@ export default function OrganizationDetail() {
       max_budget: org.max_budget != null ? String(org.max_budget) : '',
       rpm_limit: org.rpm_limit != null ? String(org.rpm_limit) : '',
       tpm_limit: org.tpm_limit != null ? String(org.tpm_limit) : '',
+      rph_limit: org.rph_limit != null ? String(org.rph_limit) : '',
+      rpd_limit: org.rpd_limit != null ? String(org.rpd_limit) : '',
+      tpd_limit: org.tpd_limit != null ? String(org.tpd_limit) : '',
       audit_content_storage_enabled: !!org.audit_content_storage_enabled,
     }));
     setIsEditingSettings(true);
@@ -199,6 +205,9 @@ export default function OrganizationDetail() {
         max_budget: form.max_budget ? Number(form.max_budget) : undefined,
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
+        rph_limit: form.rph_limit ? Number(form.rph_limit) : undefined,
+        rpd_limit: form.rpd_limit ? Number(form.rpd_limit) : undefined,
+        tpd_limit: form.tpd_limit ? Number(form.tpd_limit) : undefined,
         audit_content_storage_enabled: !!form.audit_content_storage_enabled,
       });
       setIsEditingSettings(false);
@@ -235,6 +244,9 @@ export default function OrganizationDetail() {
     max_budget: '',
     rpm_limit: '',
     tpm_limit: '',
+    rph_limit: '',
+    rpd_limit: '',
+    tpd_limit: '',
     asset_access_mode: 'inherit' as 'inherit' | 'restrict',
     selected_callable_keys: [] as string[],
   });
@@ -259,6 +271,9 @@ export default function OrganizationDetail() {
         max_budget: teamForm.max_budget ? Number(teamForm.max_budget) : undefined,
         rpm_limit: teamForm.rpm_limit ? Number(teamForm.rpm_limit) : undefined,
         tpm_limit: teamForm.tpm_limit ? Number(teamForm.tpm_limit) : undefined,
+        rph_limit: teamForm.rph_limit ? Number(teamForm.rph_limit) : undefined,
+        rpd_limit: teamForm.rpd_limit ? Number(teamForm.rpd_limit) : undefined,
+        tpd_limit: teamForm.tpd_limit ? Number(teamForm.tpd_limit) : undefined,
       });
       let assetAccessError: string | null = null;
       if (teamForm.asset_access_mode === 'restrict') {
@@ -272,7 +287,7 @@ export default function OrganizationDetail() {
         }
       }
       setShowCreateTeam(false);
-      setTeamForm({ team_alias: '', max_budget: '', rpm_limit: '', tpm_limit: '', asset_access_mode: 'inherit', selected_callable_keys: [] });
+      setTeamForm({ team_alias: '', max_budget: '', rpm_limit: '', tpm_limit: '', rph_limit: '', rpd_limit: '', tpd_limit: '', asset_access_mode: 'inherit', selected_callable_keys: [] });
       refetchTeams();
       setPageError(assetAccessError);
     } catch (err: any) {
@@ -551,6 +566,30 @@ export default function OrganizationDetail() {
                       ? <p className="text-sm font-semibold text-gray-800">{Number(org.tpm_limit).toLocaleString()} <span className="text-xs font-normal text-gray-400">tok/min</span></p>
                       : <p className="text-sm text-gray-400">Unlimited</p>}
                   </div>
+                  <div>
+                    <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">
+                      <Gauge className="w-3.5 h-3.5" /> RPH Limit
+                    </div>
+                    {org.rph_limit != null
+                      ? <p className="text-sm font-semibold text-gray-800">{Number(org.rph_limit).toLocaleString()} <span className="text-xs font-normal text-gray-400">req/hr</span></p>
+                      : <p className="text-sm text-gray-400">Unlimited</p>}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">
+                      <Gauge className="w-3.5 h-3.5" /> RPD Limit
+                    </div>
+                    {org.rpd_limit != null
+                      ? <p className="text-sm font-semibold text-gray-800">{Number(org.rpd_limit).toLocaleString()} <span className="text-xs font-normal text-gray-400">req/day</span></p>
+                      : <p className="text-sm text-gray-400">Unlimited</p>}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">
+                      <TrendingUp className="w-3.5 h-3.5" /> TPD Limit
+                    </div>
+                    {org.tpd_limit != null
+                      ? <p className="text-sm font-semibold text-gray-800">{Number(org.tpd_limit).toLocaleString()} <span className="text-xs font-normal text-gray-400">tok/day</span></p>
+                      : <p className="text-sm text-gray-400">Unlimited</p>}
+                  </div>
                 </div>
               </div>
 
@@ -559,7 +598,7 @@ export default function OrganizationDetail() {
                 <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
                   <h3 className="text-sm font-semibold text-gray-900">Teams</h3>
                   <button
-                    onClick={() => { setTeamError(null); setTeamForm({ team_alias: '', max_budget: '', rpm_limit: '', tpm_limit: '', asset_access_mode: 'inherit', selected_callable_keys: [] }); setShowCreateTeam(true); }}
+                    onClick={() => { setTeamError(null); setTeamForm({ team_alias: '', max_budget: '', rpm_limit: '', tpm_limit: '', rph_limit: '', rpd_limit: '', tpd_limit: '', asset_access_mode: 'inherit', selected_callable_keys: [] }); setShowCreateTeam(true); }}
                     className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-blue-600 border border-blue-200 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
                   >
                     <Plus className="w-3 h-3" /> Add Team
@@ -683,6 +722,36 @@ export default function OrganizationDetail() {
                           type="number"
                           value={form.tpm_limit}
                           onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })}
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="Unlimited"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">RPH Limit</label>
+                        <input
+                          type="number"
+                          value={form.rph_limit}
+                          onChange={(e) => setForm({ ...form, rph_limit: e.target.value })}
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="Unlimited"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">RPD Limit</label>
+                        <input
+                          type="number"
+                          value={form.rpd_limit}
+                          onChange={(e) => setForm({ ...form, rpd_limit: e.target.value })}
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="Unlimited"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">TPD Limit</label>
+                        <input
+                          type="number"
+                          value={form.tpd_limit}
+                          onChange={(e) => setForm({ ...form, tpd_limit: e.target.value })}
                           className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                           placeholder="Unlimited"
                         />
@@ -815,7 +884,7 @@ export default function OrganizationDetail() {
                 All Teams {teamList.length > 0 && `(${teamList.length})`}
               </h3>
               <button
-                onClick={() => { setTeamError(null); setTeamForm({ team_alias: '', max_budget: '', rpm_limit: '', tpm_limit: '', asset_access_mode: 'inherit', selected_callable_keys: [] }); setShowCreateTeam(true); }}
+                onClick={() => { setTeamError(null); setTeamForm({ team_alias: '', max_budget: '', rpm_limit: '', tpm_limit: '', rph_limit: '', rpd_limit: '', tpd_limit: '', asset_access_mode: 'inherit', selected_callable_keys: [] }); setShowCreateTeam(true); }}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
               >
                 <Plus className="w-3.5 h-3.5" /> Add Team
@@ -1190,6 +1259,36 @@ export default function OrganizationDetail() {
                 value={teamForm.tpm_limit}
                 onChange={(e) => setTeamForm({ ...teamForm, tpm_limit: e.target.value })}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">RPH Limit</label>
+              <input
+                type="number"
+                value={teamForm.rph_limit}
+                onChange={(e) => setTeamForm({ ...teamForm, rph_limit: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Requests per hour"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">RPD Limit</label>
+              <input
+                type="number"
+                value={teamForm.rpd_limit}
+                onChange={(e) => setTeamForm({ ...teamForm, rpd_limit: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Requests per day"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">TPD Limit</label>
+              <input
+                type="number"
+                value={teamForm.tpd_limit}
+                onChange={(e) => setTeamForm({ ...teamForm, tpd_limit: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Tokens per day"
               />
             </div>
           </div>
