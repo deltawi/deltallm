@@ -401,6 +401,12 @@ async def update_team(
     if not updated_rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
     updated = _team_response_payload(dict(updated_rows[0]))
+    key_service = getattr(request.app.state, "key_service", None)
+    if key_service is not None:
+        try:
+            await key_service.invalidate_keys_for_team(team_id)
+        except Exception:
+            pass
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,

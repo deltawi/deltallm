@@ -101,6 +101,37 @@ class KeyService:
         cache_key = self._cache_key(token_hash)
         await self.redis.delete(cache_key)
 
+    async def invalidate_keys_for_team(self, team_id: str) -> int:
+        return await self._invalidate_keys_by_scope("team_id", team_id)
+
+    async def invalidate_keys_for_org(self, organization_id: str) -> int:
+        return await self._invalidate_keys_by_scope("organization_id", organization_id)
+
+    async def _invalidate_keys_by_scope(self, scope_column: str, scope_value: str) -> int:
+        if self.redis is None or self.repository.prisma is None:
+            return 0
+        if scope_column == "organization_id":
+            rows = await self.repository.prisma.query_raw(
+                """
+                SELECT v.token FROM deltallm_verificationtoken v
+                JOIN deltallm_teamtable t ON t.team_id = COALESCE(v.team_id, (SELECT u.team_id FROM deltallm_usertable u WHERE u.user_id = v.user_id LIMIT 1))
+                WHERE t.organization_id = $1
+                """,
+                scope_value,
+            )
+        else:
+            rows = await self.repository.prisma.query_raw(
+                f"SELECT token FROM deltallm_verificationtoken WHERE {scope_column} = $1",
+                scope_value,
+            )
+        count = 0
+        for row in (rows or []):
+            token_hash = row.get("token")
+            if token_hash:
+                await self.redis.delete(self._cache_key(token_hash))
+                count += 1
+        return count
+
     @staticmethod
     def _cache_key(token_hash: str) -> str:
         return f"key:{token_hash}"

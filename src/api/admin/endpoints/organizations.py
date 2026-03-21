@@ -719,6 +719,12 @@ async def update_organization(
         )
         if route_group_bindings is not None or callable_target_bindings is not None:
             await reload_callable_target_grants(request)
+    key_service = getattr(request.app.state, "key_service", None)
+    if key_service is not None:
+        try:
+            await key_service.invalidate_keys_for_org(organization_id)
+        except Exception:
+            pass
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,

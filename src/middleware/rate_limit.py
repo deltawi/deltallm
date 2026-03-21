@@ -85,6 +85,7 @@ async def _check_and_acquire_rate_limits(request: Request) -> None:
             raise InvalidRequestError(message="Could not parse request body for rate limiting") from exc
 
     model = _extract_model(body) if body else None
+    request.state._rate_limit_model = model
 
     key_rpm_limit = auth.key_rpm_limit if auth.key_rpm_limit is not None else auth.rpm_limit
     key_tpm_limit = auth.key_tpm_limit if auth.key_tpm_limit is not None else auth.tpm_limit
