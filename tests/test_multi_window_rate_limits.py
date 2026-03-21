@@ -289,3 +289,50 @@ class TestMultiWindowHeaderClassification:
         now = time.time()
         expected_hour_reset = int((math.floor(now / 3600) + 1) * 3600)
         assert abs(state.rpm_reset - expected_hour_reset) <= 1
+
+
+class TestRetryAfterDailyWindow:
+    @pytest.mark.asyncio
+    async def test_retry_after_daily_block(self, counter):
+        checks_fill = [
+            RateLimitCheck(scope="key_rpd", entity_id="ra1", limit=5, amount=5, window_seconds=86400),
+        ]
+        await counter.check_rate_limits_atomic(checks_fill)
+
+        checks_exceed = [
+            RateLimitCheck(scope="key_rpd", entity_id="ra1", limit=5, amount=1, window_seconds=86400),
+        ]
+        with pytest.raises(RateLimitError) as exc_info:
+            await counter.check_rate_limits_atomic(checks_exceed)
+        assert exc_info.value.retry_after > 0
+        assert exc_info.value.retry_after <= 86400
+
+    @pytest.mark.asyncio
+    async def test_retry_after_hourly_block(self, counter):
+        checks_fill = [
+            RateLimitCheck(scope="org_rph", entity_id="ra2", limit=3, amount=3, window_seconds=3600),
+        ]
+        await counter.check_rate_limits_atomic(checks_fill)
+
+        checks_exceed = [
+            RateLimitCheck(scope="org_rph", entity_id="ra2", limit=3, amount=1, window_seconds=3600),
+        ]
+        with pytest.raises(RateLimitError) as exc_info:
+            await counter.check_rate_limits_atomic(checks_exceed)
+        assert exc_info.value.retry_after > 0
+        assert exc_info.value.retry_after <= 3600
+
+    @pytest.mark.asyncio
+    async def test_retry_after_fallback_daily_block(self, counter_no_redis):
+        checks_fill = [
+            RateLimitCheck(scope="team_tpd", entity_id="ra3", limit=100, amount=100, window_seconds=86400),
+        ]
+        await counter_no_redis.check_rate_limits_atomic(checks_fill)
+
+        checks_exceed = [
+            RateLimitCheck(scope="team_tpd", entity_id="ra3", limit=100, amount=1, window_seconds=86400),
+        ]
+        with pytest.raises(RateLimitError) as exc_info:
+            await counter_no_redis.check_rate_limits_atomic(checks_exceed)
+        assert exc_info.value.retry_after > 0
+        assert exc_info.value.retry_after <= 86400
