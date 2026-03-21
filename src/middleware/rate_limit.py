@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import math
+import time
+from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import Request
 
 from src.models.errors import InvalidRequestError, RateLimitError
-from src.services.limit_counter import LimitCounter, RateLimitCheck
+from src.services.limit_counter import LimitCounter, RateLimitCheck, RateLimitResult
 
 
 def estimate_tokens(payload: Any) -> int:
@@ -51,6 +54,122 @@ def _model_limit(limits: dict[str, int] | None, model: str | None) -> int | None
                 except (TypeError, ValueError):
                     pass
     return best_match[1] if best_match[0] >= 0 else None
+
+
+@dataclass
+class RateLimitState:
+    rpm_limit: int = 0
+    rpm_remaining: int = 0
+    rpm_reset: int = 0
+    rpm_scope: str = ""
+    tpm_limit: int = 0
+    tpm_remaining: int = 0
+    tpm_reset: int = 0
+    tpm_scope: str = ""
+    warning: str | None = None
+
+
+def _compute_rate_limit_state(result: RateLimitResult, checks: list[RateLimitCheck]) -> RateLimitState:
+    if not result.checks or not result.current_values:
+        return RateLimitState()
+
+    state = RateLimitState()
+    reset_at = result.window_reset_at
+
+    best_rpm_ratio = -1.0
+    best_tpm_ratio = -1.0
+    max_usage_ratio = 0.0
+
+    for i, check in enumerate(result.checks):
+        if i >= len(result.current_values):
+            break
+        current = result.current_values[i]
+        remaining = max(0, check.limit - current)
+        ratio = current / check.limit if check.limit > 0 else 0.0
+
+        if ratio > max_usage_ratio:
+            max_usage_ratio = ratio
+
+        is_rpm = check.scope.endswith("_rpm") or check.scope.endswith("_rpm_limit")
+        is_tpm = check.scope.endswith("_tpm") or check.scope.endswith("_tpm_limit")
+
+        if not is_rpm and not is_tpm:
+            if check.amount == 1:
+                is_rpm = True
+            else:
+                is_tpm = True
+
+        if is_rpm and ratio > best_rpm_ratio:
+            best_rpm_ratio = ratio
+            state.rpm_limit = check.limit
+            state.rpm_remaining = remaining
+            state.rpm_reset = reset_at
+            state.rpm_scope = check.scope
+
+        if is_tpm and ratio > best_tpm_ratio:
+            best_tpm_ratio = ratio
+            state.tpm_limit = check.limit
+            state.tpm_remaining = remaining
+            state.tpm_reset = reset_at
+            state.tpm_scope = check.scope
+
+    if max_usage_ratio >= 0.95:
+        state.warning = "near_limit"
+    elif max_usage_ratio >= 0.80:
+        state.warning = "approaching_limit"
+
+    return state
+
+
+def _build_429_state(
+    checks: list[RateLimitCheck], exc: RateLimitError, window_reset_at: int,
+) -> RateLimitState:
+    state = RateLimitState(warning="near_limit")
+    violated_scope = getattr(exc, "param", None) or ""
+
+    for check in checks:
+        is_rpm = check.scope.endswith("_rpm")
+        is_tpm = check.scope.endswith("_tpm")
+        if not is_rpm and not is_tpm:
+            is_rpm = check.amount == 1
+            is_tpm = not is_rpm
+
+        if is_rpm and (state.rpm_limit == 0 or check.scope == violated_scope):
+            state.rpm_limit = check.limit
+            state.rpm_remaining = 0
+            state.rpm_reset = window_reset_at
+            state.rpm_scope = check.scope
+        if is_tpm and (state.tpm_limit == 0 or check.scope == violated_scope):
+            state.tpm_limit = check.limit
+            state.tpm_remaining = 0
+            state.tpm_reset = window_reset_at
+            state.tpm_scope = check.scope
+
+    return state
+
+
+def build_rate_limit_headers(state: RateLimitState) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if state.rpm_limit > 0 or state.tpm_limit > 0:
+        headers["x-ratelimit-limit-requests"] = str(state.rpm_limit)
+        headers["x-ratelimit-remaining-requests"] = str(state.rpm_remaining)
+        headers["x-ratelimit-reset-requests"] = str(state.rpm_reset)
+        headers["x-ratelimit-limit-tokens"] = str(state.tpm_limit)
+        headers["x-ratelimit-remaining-tokens"] = str(state.tpm_remaining)
+        headers["x-ratelimit-reset-tokens"] = str(state.tpm_reset)
+
+        scope_parts = []
+        if state.rpm_scope:
+            scope_parts.append(state.rpm_scope)
+        if state.tpm_scope:
+            scope_parts.append(state.tpm_scope)
+        if scope_parts:
+            headers["x-deltallm-ratelimit-scope"] = ",".join(scope_parts)
+
+    if state.warning:
+        headers["x-ratelimit-warning"] = state.warning
+
+    return headers
 
 
 async def enforce_rate_limits(request: Request):
@@ -117,7 +236,18 @@ async def _check_and_acquire_rate_limits(request: Request) -> None:
         _add("org_model_rpm", f"{auth.organization_id}:{model}" if auth.organization_id else None, org_model_rpm, 1)
         _add("org_model_tpm", f"{auth.organization_id}:{model}" if auth.organization_id else None, org_model_tpm, tokens)
 
-    await limiter.check_rate_limits_atomic(checks)
+    window_seconds = 60
+    now = time.time()
+    window_reset_at = int((math.floor(now / window_seconds) + 1) * window_seconds)
+    try:
+        result = await limiter.check_rate_limits_atomic(checks)
+        rate_limit_state = _compute_rate_limit_state(result, checks)
+        request.state._rate_limit_state = rate_limit_state
+    except RateLimitError as exc:
+        state_429 = _build_429_state(checks, exc, window_reset_at)
+        request.state._rate_limit_state = state_429
+        raise
+
     await limiter.acquire_parallel("key", auth.api_key, auth.max_parallel_requests)
     request.state._rate_limit_checked = True
     request.state._rate_limit_parallel_key = auth.api_key

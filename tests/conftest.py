@@ -140,10 +140,13 @@ class FakeRedis:
             if current + amounts[idx] > limits[idx]:
                 return [0, idx + 1]
 
+        result = [1, 0]
         for idx, key in enumerate(keys):
-            self.store[key] = int(self.store.get(key, 0)) + amounts[idx]
+            new_val = int(self.store.get(key, 0)) + amounts[idx]
+            self.store[key] = new_val
+            result.append(new_val)
 
-        return [1, 0]
+        return result
 
 
 class FakePipeline:
