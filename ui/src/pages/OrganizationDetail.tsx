@@ -810,6 +810,24 @@ export default function OrganizationDetail() {
                         <span className="text-xs font-semibold text-gray-800">{Number(org.tpm_limit).toLocaleString()}</span>
                       </div>
                     )}
+                    {org.rph_limit != null && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-gray-500">RPH limit</span>
+                        <span className="text-xs font-semibold text-gray-800">{Number(org.rph_limit).toLocaleString()}</span>
+                      </div>
+                    )}
+                    {org.rpd_limit != null && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-gray-500">RPD limit</span>
+                        <span className="text-xs font-semibold text-gray-800">{Number(org.rpd_limit).toLocaleString()}</span>
+                      </div>
+                    )}
+                    {org.tpd_limit != null && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-gray-500">TPD limit</span>
+                        <span className="text-xs font-semibold text-gray-800">{Number(org.tpd_limit).toLocaleString()}</span>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
