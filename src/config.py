@@ -253,6 +253,13 @@ class GeneralSettings(BaseModel):
         return _validate_master_key_strength(value)
 
 
+class GrpcSettings(BaseModel):
+    max_pool_size: int = Field(default=8, ge=1, le=128, description="Maximum number of cached gRPC channels")
+    keepalive_time_ms: int = Field(default=30_000, ge=1000, description="Interval between keepalive pings (ms)")
+    keepalive_timeout_ms: int = Field(default=10_000, ge=1000, description="Timeout waiting for keepalive ack (ms)")
+    max_message_length: int = Field(default=64 * 1024 * 1024, ge=1024, description="Max send/receive message size in bytes")
+
+
 class AppConfig(BaseModel):
     model_config = {"populate_by_name": True}
 
@@ -260,6 +267,7 @@ class AppConfig(BaseModel):
     router_settings: RouterSettings = Field(default_factory=RouterSettings)
     deltallm_settings: DeltaLLMSettings = Field(default_factory=DeltaLLMSettings, validation_alias=AliasChoices("deltallm_settings", "litellm_settings"))
     general_settings: GeneralSettings = Field(default_factory=GeneralSettings)
+    grpc_settings: GrpcSettings = Field(default_factory=GrpcSettings)
 
 
 class Settings(BaseSettings):

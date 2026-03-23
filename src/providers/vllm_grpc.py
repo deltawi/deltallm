@@ -25,6 +25,14 @@ VLLM_GRPC_STREAM_METHOD = "/vllm.EntrypointsService/ChatStream"
 
 
 def _build_chat_request_bytes(payload: dict[str, Any]) -> bytes:
+    """Serialize an OpenAI-compatible chat payload to bytes for gRPC transport.
+
+    vLLM's gRPC interface accepts JSON-serialized OpenAI-compatible payloads
+    as raw bytes, mirroring the HTTP API contract. This is by design — vLLM
+    does not publish a compiled proto schema for external callers; instead the
+    gRPC methods accept and return JSON byte strings directly. We use identity
+    serializer/deserializer on the gRPC channel accordingly.
+    """
     return json.dumps(payload).encode("utf-8")
 
 

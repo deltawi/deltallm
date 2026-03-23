@@ -22,6 +22,23 @@ except ImportError:
     grpc = None  # type: ignore[assignment]
 
 
+"""Triton gRPC adapter with inline protobuf wire format.
+
+The Triton Inference Server gRPC protocol uses protobuf-encoded
+ModelInferRequest/ModelInferResponse messages as defined in Triton's
+GRPCInferenceService proto. Rather than depending on generated stubs
+(which would require grpc-tools at build time and tight coupling to a
+specific Triton version), this module encodes/decodes the wire format
+inline using standard protobuf varint + length-delimited encoding.
+
+This approach is portable, has zero extra build dependencies, and
+matches the Triton wire format precisely (field numbers and wire types
+correspond 1:1 to the official proto schema). The encoding is
+covered by round-trip unit tests in tests/test_grpc_adapters.py and
+tests/test_grpc_integration.py.
+"""
+
+
 def _encode_varint(value: int) -> bytes:
     result = bytearray()
     while value > 0x7F:

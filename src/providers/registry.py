@@ -30,6 +30,19 @@ def resolve_chat_upstream(
 ) -> ChatUpstream:
     provider = resolve_provider(params)
     timeout = int(params.get("timeout") or 300)
+
+    transport_early = str(params.get("transport", "http")).lower()
+    api_base_early = str(params.get("api_base") or "")
+    if api_base_early.startswith("grpc://"):
+        transport_early = "grpc"
+    if transport_early == "grpc":
+        from src.providers.resolution import GRPC_CAPABLE_PROVIDERS
+        if provider not in GRPC_CAPABLE_PROVIDERS:
+            raise InvalidRequestError(
+                message=f"Provider '{provider}' does not support gRPC transport. "
+                f"Supported: {', '.join(sorted(GRPC_CAPABLE_PROVIDERS))}",
+            )
+
     if provider == "anthropic":
         api_key = params.get("api_key")
         if not api_key:
@@ -96,13 +109,6 @@ def resolve_chat_upstream(
             grpc_address = api_base_raw[len("grpc://"):].rstrip("/")
 
     if transport == "grpc" and grpc_address:
-        from src.providers.resolution import GRPC_CAPABLE_PROVIDERS
-        if provider not in GRPC_CAPABLE_PROVIDERS:
-            raise InvalidRequestError(
-                message=f"Provider '{provider}' does not support gRPC transport. "
-                f"Supported: {', '.join(sorted(GRPC_CAPABLE_PROVIDERS))}",
-            )
-
         if provider == "triton":
             adapter = getattr(request.app.state, "triton_grpc_adapter", None)
             if adapter is None:
