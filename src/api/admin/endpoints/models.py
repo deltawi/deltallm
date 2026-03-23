@@ -126,6 +126,14 @@ def _normalized_model_payload_or_400(
     transport = str(params.get("transport", "http")).lower()
     grpc_address = str(params.get("grpc_address") or "").strip()
     from src.providers.resolution import GRPC_CAPABLE_PROVIDERS
+    if transport == "grpc" and provider not in GRPC_CAPABLE_PROVIDERS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Provider '{provider}' does not support gRPC transport. "
+                f"Supported providers: {', '.join(sorted(GRPC_CAPABLE_PROVIDERS))}"
+            ),
+        )
     is_grpc = transport == "grpc" and provider in GRPC_CAPABLE_PROVIDERS
 
     api_base_has_grpc = api_base.startswith("grpc://") if api_base else False
