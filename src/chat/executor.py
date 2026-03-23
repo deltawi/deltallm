@@ -262,49 +262,121 @@ async def _open_grpc_stream(
 
     provider = resolve_provider(params)
 
-    if provider == "triton":
-        triton_model = upstream.grpc_metadata.get("triton_model_name", "")
-        triton_version = upstream.grpc_metadata.get("triton_model_version", "")
-        raw_stream = adapter.execute_grpc_stream(
-            grpc_address,
-            upstream_payload,
-            model_name=triton_model,
-            model_version=triton_version,
-            timeout=upstream.timeout,
+    try:
+        if provider == "triton":
+            triton_model = upstream.grpc_metadata.get("triton_model_name", "")
+            triton_version = upstream.grpc_metadata.get("triton_model_version", "")
+            raw_stream = adapter.execute_grpc_stream(
+                grpc_address,
+                upstream_payload,
+                model_name=triton_model,
+                model_version=triton_version,
+                timeout=upstream.timeout,
+            )
+        else:
+            raw_stream = adapter.execute_grpc_stream(
+                grpc_address,
+                upstream_payload,
+                timeout=upstream.timeout,
+            )
+
+        context_manager = _GrpcStreamContextManager()
+        await context_manager.__aenter__()
+
+        first_line: str | None = None
+        async for line in raw_stream:
+            if line:
+                first_line = line
+                break
+
+        if first_line is None:
+            await context_manager.__aexit__(None, None, None)
+            raise ServiceUnavailableError(message="Provider gRPC stream ended before first chunk")
+
+        async def remaining_stream() -> AsyncIterator[str]:
+            async for line in raw_stream:
+                yield line
+
+        return OpenedStream(
+            context_manager=context_manager,
+            response=None,
+            translated_stream=remaining_stream(),
+            first_line=first_line,
+            deployment=deployment,
+            params=params,
+            api_base=upstream.api_base,
+        )
+    except Exception as grpc_exc:
+        http_fallback = upstream.api_base
+        if http_fallback and _is_grpc_retryable(grpc_exc):
+            import logging
+            logging.getLogger(__name__).warning(
+                "gRPC stream failed (%s), falling back to HTTP at %s",
+                grpc_exc,
+                http_fallback,
+            )
+            return await _open_http_fallback_stream(request, payload, deployment, upstream, upstream_payload)
+        raise
+
+
+async def _open_http_fallback_stream(
+    request: Request,
+    payload: ChatCompletionRequest,
+    deployment: Deployment,
+    upstream: Any,
+    upstream_payload: dict[str, Any],
+) -> OpenedStream:
+    http_adapter = request.app.state.openai_adapter
+    api_base = upstream.api_base
+    api_key = deployment.deltallm_params.get("api_key", "")
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    request_url = f"{api_base}/chat/completions"
+    signed_headers, body_override = apply_request_signing(
+        params=deployment.deltallm_params,
+        method="POST",
+        url=request_url,
+        headers=headers,
+        json_body=upstream_payload,
+    )
+    if body_override is not None:
+        context_manager = request.app.state.http_client.stream(
+            "POST", request_url, headers=signed_headers, content=body_override, timeout=upstream.timeout,
         )
     else:
-        raw_stream = adapter.execute_grpc_stream(
-            grpc_address,
-            upstream_payload,
-            timeout=upstream.timeout,
+        context_manager = request.app.state.http_client.stream(
+            "POST", request_url, headers=signed_headers, json=upstream_payload, timeout=upstream.timeout,
         )
-
-    context_manager = _GrpcStreamContextManager()
-    await context_manager.__aenter__()
-
-    first_line: str | None = None
-    async for line in raw_stream:
-        if line:
-            first_line = line
-            break
-
-    if first_line is None:
-        await context_manager.__aexit__(None, None, None)
-        raise ServiceUnavailableError(message="Provider gRPC stream ended before first chunk")
-
-    async def remaining_stream() -> AsyncIterator[str]:
-        async for line in raw_stream:
-            yield line
-
-    return OpenedStream(
-        context_manager=context_manager,
-        response=None,
-        translated_stream=remaining_stream(),
-        first_line=first_line,
-        deployment=deployment,
-        params=params,
-        api_base=upstream.api_base,
-    )
+    response = await context_manager.__aenter__()
+    try:
+        if response.status_code >= 400:
+            status_exc = httpx.HTTPStatusError(
+                f"HTTP fallback stream failed with status {response.status_code}",
+                request=httpx.Request("POST", request_url),
+                response=response,
+            )
+            raise http_adapter.map_error(status_exc)
+        translated_stream = http_adapter.translate_stream(response.aiter_lines())
+        first_line: str | None = None
+        async for line in translated_stream:
+            if line:
+                first_line = line
+                break
+        if first_line is None:
+            raise ServiceUnavailableError(message="HTTP fallback stream ended before first chunk")
+        return OpenedStream(
+            context_manager=context_manager,
+            response=response,
+            translated_stream=translated_stream,
+            first_line=first_line,
+            deployment=deployment,
+            params=deployment.deltallm_params,
+            api_base=api_base,
+        )
+    except Exception as exc:
+        await context_manager.__aexit__(type(exc), exc, exc.__traceback__)
+        raise
 
 
 async def open_stream_with_first_chunk(

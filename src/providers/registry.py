@@ -100,7 +100,8 @@ def resolve_chat_upstream(
             adapter = getattr(request.app.state, "triton_grpc_adapter", None)
             if adapter is None:
                 raise InvalidRequestError(message="Triton gRPC adapter is not available")
-            http_fallback = str(params.get("http_fallback_base") or params.get("api_base") or "").rstrip("/")
+            http_fallback_raw = str(params.get("http_fallback_base") or params.get("api_base") or "").rstrip("/")
+            http_fallback = "" if http_fallback_raw.startswith("grpc://") else http_fallback_raw
             return ChatUpstream(
                 adapter=adapter,
                 api_base=http_fallback,
@@ -118,7 +119,8 @@ def resolve_chat_upstream(
             adapter = getattr(request.app.state, "vllm_grpc_adapter", None)
             if adapter is None:
                 raise InvalidRequestError(message="vLLM gRPC adapter is not available")
-            http_fallback = str(params.get("http_fallback_base") or params.get("api_base") or "").rstrip("/")
+            http_fallback_raw = str(params.get("http_fallback_base") or params.get("api_base") or "").rstrip("/")
+            http_fallback = "" if http_fallback_raw.startswith("grpc://") else http_fallback_raw
             api_key = params.get("api_key")
             headers: dict[str, str] = {}
             if api_key:

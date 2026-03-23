@@ -123,12 +123,24 @@ def _normalized_model_payload_or_400(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="provider is required")
     if not model:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params.model is required")
-    if not api_base:
+    transport = str(params.get("transport", "http")).lower()
+    grpc_address = str(params.get("grpc_address") or "").strip()
+    from src.providers.resolution import GRPC_CAPABLE_PROVIDERS
+    is_grpc = transport == "grpc" and provider in GRPC_CAPABLE_PROVIDERS
+
+    if not is_grpc and not api_base:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params.api_base is required")
+    if is_grpc and not grpc_address:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params.grpc_address is required for gRPC transport")
+    if is_grpc and provider == "triton":
+        triton_model_name = str(params.get("triton_model_name") or "").strip()
+        if not triton_model_name:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params.triton_model_name is required for Triton gRPC deployments")
 
     params["provider"] = provider
     params["model"] = model
-    params["api_base"] = api_base
+    if api_base:
+        params["api_base"] = api_base
 
     api_version = params.get("api_version")
     if api_version is not None:

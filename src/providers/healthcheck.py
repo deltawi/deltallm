@@ -106,6 +106,36 @@ async def probe_provider_health(
             return HealthProbeResult(healthy=False, error="AWS region is missing")
         return HealthProbeResult(healthy=True)
 
+    transport = str(params.get("transport", "http")).lower()
+    grpc_address = str(params.get("grpc_address") or "").strip()
+    api_base_raw = str(params.get("api_base") or "")
+    if api_base_raw.startswith("grpc://"):
+        transport = "grpc"
+        if not grpc_address:
+            grpc_address = api_base_raw[len("grpc://"):].rstrip("/")
+
+    if transport == "grpc" and grpc_address and provider in {"vllm", "triton"}:
+        from src.providers.grpc_channel import GrpcChannelManager, GRPC_AVAILABLE
+        if not GRPC_AVAILABLE:
+            return HealthProbeResult(healthy=False, error="grpcio is not installed; cannot check gRPC health")
+        try:
+            mgr = GrpcChannelManager(max_pool_size=2)
+            channel = await mgr.get_channel(grpc_address)
+            try:
+                import grpc as _grpc
+                state = channel.get_state(try_to_connect=True)
+                if state == _grpc.ChannelConnectivity.READY:
+                    return HealthProbeResult(healthy=True)
+                import asyncio
+                await asyncio.wait_for(channel.channel_ready(), timeout=5.0)
+                return HealthProbeResult(healthy=True)
+            except asyncio.TimeoutError:
+                return HealthProbeResult(healthy=False, error=f"gRPC channel to {grpc_address} not ready (timeout)")
+            except Exception as exc:
+                return HealthProbeResult(healthy=False, error=f"gRPC connectivity check failed: {exc}")
+        except Exception as exc:
+            return HealthProbeResult(healthy=False, error=f"gRPC health check failed: {exc}")
+
     if provider in {"unknown", ""}:
         return HealthProbeResult(healthy=False, error="Provider could not be resolved for this deployment")
 

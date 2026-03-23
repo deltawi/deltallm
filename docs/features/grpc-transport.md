@@ -32,6 +32,17 @@ model_list:
       triton_model_version: "1"                          # optional, defaults to latest
 ```
 
+You can also use the `grpc://` shorthand in `api_base` instead of setting `transport` and `grpc_address` separately:
+
+```yaml
+model_list:
+  - model_name: llama-3-8b
+    deployment_id: vllm-grpc-short
+    deltallm_params:
+      model: vllm/meta-llama/Llama-3-8b
+      api_base: "grpc://vllm-host:50051"
+```
+
 Verify with a normal chat request — the gateway handles the protocol translation:
 
 ```bash
