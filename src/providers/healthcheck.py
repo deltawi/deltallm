@@ -26,6 +26,7 @@ async def probe_provider_health(
     params: dict[str, Any],
     *,
     default_openai_base_url: str,
+    grpc_channel_manager: Any | None = None,
 ) -> HealthProbeResult:
     provider = resolve_provider(params)
 
@@ -118,21 +119,30 @@ async def probe_provider_health(
         from src.providers.grpc_channel import GrpcChannelManager, GRPC_AVAILABLE
         if not GRPC_AVAILABLE:
             return HealthProbeResult(healthy=False, error="grpcio is not installed; cannot check gRPC health")
+        mgr = grpc_channel_manager if isinstance(grpc_channel_manager, GrpcChannelManager) else GrpcChannelManager(max_pool_size=2)
         try:
-            mgr = GrpcChannelManager(max_pool_size=2)
             channel = await mgr.get_channel(grpc_address)
+            import grpc as _grpc
+            import asyncio
             try:
-                import grpc as _grpc
-                state = channel.get_state(try_to_connect=True)
-                if state == _grpc.ChannelConnectivity.READY:
-                    return HealthProbeResult(healthy=True)
-                import asyncio
+                health_call = channel.unary_unary(
+                    "/grpc.health.v1.Health/Check",
+                    request_serializer=lambda x: x,
+                    response_deserializer=lambda x: x,
+                )
+                await asyncio.wait_for(health_call(b"\n\x00", timeout=5), timeout=6.0)
+                return HealthProbeResult(healthy=True)
+            except Exception:
+                pass
+
+            state = channel.get_state(try_to_connect=True)
+            if state == _grpc.ChannelConnectivity.READY:
+                return HealthProbeResult(healthy=True)
+            try:
                 await asyncio.wait_for(channel.channel_ready(), timeout=5.0)
                 return HealthProbeResult(healthy=True)
             except asyncio.TimeoutError:
                 return HealthProbeResult(healthy=False, error=f"gRPC channel to {grpc_address} not ready (timeout)")
-            except Exception as exc:
-                return HealthProbeResult(healthy=False, error=f"gRPC connectivity check failed: {exc}")
         except Exception as exc:
             return HealthProbeResult(healthy=False, error=f"gRPC health check failed: {exc}")
 

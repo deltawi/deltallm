@@ -96,6 +96,13 @@ def resolve_chat_upstream(
             grpc_address = api_base_raw[len("grpc://"):].rstrip("/")
 
     if transport == "grpc" and grpc_address:
+        from src.providers.resolution import GRPC_CAPABLE_PROVIDERS
+        if provider not in GRPC_CAPABLE_PROVIDERS:
+            raise InvalidRequestError(
+                message=f"Provider '{provider}' does not support gRPC transport. "
+                f"Supported: {', '.join(sorted(GRPC_CAPABLE_PROVIDERS))}",
+            )
+
         if provider == "triton":
             adapter = getattr(request.app.state, "triton_grpc_adapter", None)
             if adapter is None:

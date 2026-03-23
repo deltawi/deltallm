@@ -227,6 +227,7 @@ async def check_model_health(request: Request, deployment_id: str) -> dict[str, 
             request.app.state.http_client,
             deployment.deltallm_params,
             default_openai_base_url=request.app.state.settings.openai_base_url,
+            grpc_channel_manager=getattr(request.app.state, "grpc_channel_manager", None),
         )
 
     health = await _serialize_deployment_health(request.app, deployment_id)

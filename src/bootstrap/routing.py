@@ -141,6 +141,7 @@ async def init_routing_runtime(
             app.state.http_client,
             deployment.deltallm_params,
             default_openai_base_url=app.state.settings.openai_base_url,
+            grpc_channel_manager=getattr(app.state, "grpc_channel_manager", None),
         )
 
     health_checker = BackgroundHealthChecker(

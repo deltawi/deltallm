@@ -131,3 +131,30 @@ class TestResolveGrpcUpstream:
         upstream = resolve_chat_upstream(request, params)
         assert upstream.transport == "grpc"
         assert upstream.grpc_address == "actual-host:50051"
+
+    def test_unsupported_provider_grpc_rejected(self):
+        state = _make_app_state()
+        request = _make_request(state)
+        params = {
+            "provider": "openai",
+            "model": "gpt-4",
+            "transport": "grpc",
+            "grpc_address": "localhost:50051",
+            "api_key": "test-key",
+        }
+        from src.models.errors import InvalidRequestError
+        with pytest.raises(InvalidRequestError, match="does not support gRPC"):
+            resolve_chat_upstream(request, params)
+
+    def test_grpc_prefix_strips_for_http_fallback(self):
+        state = _make_app_state()
+        request = _make_request(state)
+        params = {
+            "provider": "vllm",
+            "model": "meta-llama/Llama-3-8b",
+            "api_base": "grpc://localhost:50051",
+            "api_key": "test-key",
+        }
+        upstream = resolve_chat_upstream(request, params)
+        assert upstream.transport == "grpc"
+        assert upstream.api_base == ""

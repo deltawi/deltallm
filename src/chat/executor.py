@@ -43,7 +43,9 @@ def _is_grpc_retryable(exc: Exception) -> bool:
     except ImportError:
         pass
     if isinstance(exc, ServiceUnavailableError):
-        return True
+        msg = str(exc).lower()
+        if "unavailable" in msg or "timeout" in msg:
+            return True
     return False
 
 
