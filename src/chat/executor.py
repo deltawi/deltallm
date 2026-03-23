@@ -32,6 +32,21 @@ class OpenedStream:
         await self.context_manager.__aexit__(type(exc), exc, exc.__traceback__)
 
 
+_GRPC_RETRYABLE_CODES: set[str] = {"UNAVAILABLE", "DEADLINE_EXCEEDED"}
+
+
+def _is_grpc_retryable(exc: Exception) -> bool:
+    try:
+        import grpc
+        if isinstance(exc, grpc.aio.AioRpcError):
+            return exc.code().name in _GRPC_RETRYABLE_CODES
+    except ImportError:
+        pass
+    if isinstance(exc, ServiceUnavailableError):
+        return True
+    return False
+
+
 async def _execute_grpc_chat(
     request: Request,
     payload: ChatCompletionRequest,
@@ -54,27 +69,90 @@ async def _execute_grpc_chat(
 
     provider = resolve_provider(params)
 
-    if provider == "triton":
-        triton_model = upstream.grpc_metadata.get("triton_model_name", "")
-        triton_version = upstream.grpc_metadata.get("triton_model_version", "")
-        data = await adapter.execute_grpc_chat(
-            grpc_address,
-            upstream_payload,
-            model_name=triton_model,
-            model_version=triton_version,
-            timeout=upstream.timeout,
-            display_model=payload.model,
-        )
-    else:
-        data = await adapter.execute_grpc_chat(
-            grpc_address,
-            upstream_payload,
-            timeout=upstream.timeout,
-        )
+    try:
+        if provider == "triton":
+            triton_model = upstream.grpc_metadata.get("triton_model_name", "")
+            triton_version = upstream.grpc_metadata.get("triton_model_version", "")
+            data = await adapter.execute_grpc_chat(
+                grpc_address,
+                upstream_payload,
+                model_name=triton_model,
+                model_version=triton_version,
+                timeout=upstream.timeout,
+                display_model=payload.model,
+            )
+        else:
+            data = await adapter.execute_grpc_chat(
+                grpc_address,
+                upstream_payload,
+                timeout=upstream.timeout,
+            )
+    except Exception as grpc_exc:
+        http_fallback = upstream.api_base
+        if http_fallback and _is_grpc_retryable(grpc_exc):
+            import logging
+            logging.getLogger(__name__).warning(
+                "gRPC call failed (%s), falling back to HTTP at %s",
+                grpc_exc,
+                http_fallback,
+            )
+            return await _execute_http_fallback_chat(
+                request, payload, deployment, upstream, upstream_payload, upstream_start,
+            )
+        raise
 
     canonical = await adapter.translate_response(data, payload.model)
     canonical_payload = canonical.model_dump(mode="json")
 
+    await record_router_usage(
+        request.app.state.router_state_backend,
+        deployment.deployment_id,
+        mode="chat",
+        usage=canonical_payload.get("usage"),
+    )
+    return canonical_payload, (perf_counter() - upstream_start) * 1000
+
+
+async def _execute_http_fallback_chat(
+    request: Request,
+    payload: ChatCompletionRequest,
+    deployment: Deployment,
+    upstream: Any,
+    upstream_payload: dict[str, Any],
+    upstream_start: float,
+) -> tuple[dict[str, Any], float]:
+    http_adapter = request.app.state.openai_adapter
+    api_base = upstream.api_base
+    api_key = deployment.deltallm_params.get("api_key", "")
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    request_url = f"{api_base}/chat/completions"
+    signed_headers, body_override = apply_request_signing(
+        params=deployment.deltallm_params,
+        method="POST",
+        url=request_url,
+        headers=headers,
+        json_body=upstream_payload,
+    )
+    if body_override is not None:
+        response = await request.app.state.http_client.post(
+            request_url, headers=signed_headers, content=body_override, timeout=upstream.timeout,
+        )
+    else:
+        response = await request.app.state.http_client.post(
+            request_url, headers=signed_headers, json=upstream_payload, timeout=upstream.timeout,
+        )
+    if response.status_code >= 400:
+        status_exc = httpx.HTTPStatusError(
+            f"HTTP fallback call failed with status {response.status_code}",
+            request=httpx.Request("POST", request_url),
+            response=response,
+        )
+        raise http_adapter.map_error(status_exc)
+    data = response.json()
+    canonical = await http_adapter.translate_response(data, payload.model)
+    canonical_payload = canonical.model_dump(mode="json")
     await record_router_usage(
         request.app.state.router_state_backend,
         deployment.deployment_id,

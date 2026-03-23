@@ -69,8 +69,9 @@ These fields go inside `deltallm_params`:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `transport` | `"http"` \| `"grpc"` | `"http"` | Protocol to use when calling the provider |
+| `api_base` | string | — | Set to `grpc://host:port` as a shorthand for gRPC transport (auto-sets transport + grpc_address) |
 | `grpc_address` | string | — | Host and port for the gRPC endpoint (e.g. `"localhost:50051"`) |
-| `http_fallback_base` | string | — | Base URL used if the gateway needs to fall back to HTTP |
+| `http_fallback_base` | string | — | Base URL used if the gateway needs to fall back to HTTP on retryable gRPC errors |
 | `triton_model_name` | string | — | Triton model repository name (Triton only) |
 | `triton_model_version` | string | `""` (latest) | Triton model version (Triton only) |
 
@@ -94,8 +95,8 @@ The adapter sends chat messages as a JSON payload over gRPC and parses the respo
 
 ### NVIDIA Triton Inference Server
 
-Triton uses a tensor-based gRPC protocol on port **8001** (default).
-The adapter translates chat messages into the `text_input` tensor format that Triton expects and parses the `text_output` tensor from the response.
+Triton uses a protobuf-based gRPC protocol on port **8001** (default).
+The adapter constructs protobuf-encoded `ModelInferRequest` messages with the prompt serialized as a `text_input` BYTES tensor, and parses the `text_output` tensor from the protobuf response.
 
 Messages are concatenated into a prompt using a chat-template style format:
 
@@ -121,10 +122,14 @@ The Models list shows a transport badge (HTTP or gRPC) next to each deployment, 
 
 ## Failover
 
-When `http_fallback_base` is set, the gateway can retry a failed gRPC call over HTTP.
+When `http_fallback_base` (or `api_base`) is set on a gRPC deployment, the gateway will automatically retry failed gRPC calls over HTTP for retryable errors:
+
+- **UNAVAILABLE** — the gRPC server is down or unreachable
+- **DEADLINE_EXCEEDED** — the gRPC call timed out
+
 This is useful during rolling deployments where the gRPC port may be temporarily unavailable while the HTTP endpoint is still serving.
 
-The failover path uses the same OpenAI-compatible adapter that handles normal HTTP providers.
+The fallback path uses the standard OpenAI-compatible HTTP adapter, so the upstream must also expose an OpenAI-compatible HTTP API at the fallback URL.
 
 ## Soft Dependency
 

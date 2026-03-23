@@ -5,7 +5,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.providers.grpc_channel import GrpcChannelManager
 from src.providers.vllm_grpc import VLLMGrpcAdapter
-from src.providers.triton_grpc import TritonGrpcAdapter
+from src.providers.triton_grpc import (
+    TritonGrpcAdapter,
+    _build_triton_infer_request_pb,
+    _parse_triton_response_pb,
+    _encode_string_for_triton,
+)
 
 
 class TestVLLMGrpcAdapter:
@@ -147,3 +152,32 @@ class TestTritonGrpcAdapter:
         adapter = TritonGrpcAdapter(cm)
         original = RuntimeError("test")
         assert adapter.map_error(original) is original
+
+
+class TestTritonProtobufWireFormat:
+    def test_encode_string_for_triton(self):
+        encoded = _encode_string_for_triton("hello")
+        assert len(encoded) == 4 + 5
+        import struct
+        str_len = struct.unpack("<I", encoded[:4])[0]
+        assert str_len == 5
+        assert encoded[4:].decode("utf-8") == "hello"
+
+    def test_build_infer_request_pb_is_bytes(self):
+        payload = {"messages": [{"role": "user", "content": "test"}]}
+        result = _build_triton_infer_request_pb(payload, "my_model", "1")
+        assert isinstance(result, bytes)
+        assert len(result) > 0
+
+    def test_build_infer_request_contains_model_name(self):
+        payload = {"messages": [{"role": "user", "content": "test"}]}
+        result = _build_triton_infer_request_pb(payload, "ensemble_llm", "")
+        assert b"ensemble_llm" in result
+
+    def test_parse_response_pb_returns_dict(self):
+        empty_response = b""
+        result = _parse_triton_response_pb(empty_response, "test-model")
+        assert isinstance(result, dict)
+        assert result["model"] == "test-model"
+        assert len(result["choices"]) == 1
+        assert result["choices"][0]["message"]["role"] == "assistant"

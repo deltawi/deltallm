@@ -104,3 +104,30 @@ class TestResolveGrpcUpstream:
         }
         upstream = resolve_chat_upstream(request, params)
         assert upstream.transport == "http"
+
+    def test_grpc_prefix_in_api_base(self):
+        state = _make_app_state()
+        request = _make_request(state)
+        params = {
+            "provider": "vllm",
+            "model": "meta-llama/Llama-3-8b",
+            "api_base": "grpc://localhost:50051",
+            "api_key": "test-key",
+        }
+        upstream = resolve_chat_upstream(request, params)
+        assert upstream.transport == "grpc"
+        assert upstream.grpc_address == "localhost:50051"
+
+    def test_grpc_prefix_with_explicit_grpc_address(self):
+        state = _make_app_state()
+        request = _make_request(state)
+        params = {
+            "provider": "vllm",
+            "model": "meta-llama/Llama-3-8b",
+            "api_base": "grpc://some-host:50051",
+            "grpc_address": "actual-host:50051",
+            "api_key": "test-key",
+        }
+        upstream = resolve_chat_upstream(request, params)
+        assert upstream.transport == "grpc"
+        assert upstream.grpc_address == "actual-host:50051"

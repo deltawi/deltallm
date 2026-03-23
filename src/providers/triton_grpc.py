@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import struct
 import uuid
 from typing import Any, AsyncIterator
 
@@ -21,7 +22,51 @@ except ImportError:
     grpc = None  # type: ignore[assignment]
 
 
-def _build_triton_infer_request(
+def _encode_varint(value: int) -> bytes:
+    result = bytearray()
+    while value > 0x7F:
+        result.append((value & 0x7F) | 0x80)
+        value >>= 7
+    result.append(value & 0x7F)
+    return bytes(result)
+
+
+def _encode_field(field_number: int, wire_type: int, data: bytes) -> bytes:
+    tag = _encode_varint((field_number << 3) | wire_type)
+    if wire_type == 2:
+        return tag + _encode_varint(len(data)) + data
+    return tag + data
+
+
+def _build_infer_input_tensor_pb(name: str, datatype: str, shape: list[int], raw_data: bytes) -> bytes:
+    msg = b""
+    msg += _encode_field(1, 2, name.encode("utf-8"))
+    msg += _encode_field(2, 2, datatype.encode("utf-8"))
+    for s in shape:
+        msg += _encode_field(3, 0, _encode_varint(s))
+    msg += _encode_field(5, 2, raw_data)
+    return msg
+
+
+def _build_model_infer_request_pb(
+    model_name: str,
+    model_version: str,
+    inputs: list[bytes],
+) -> bytes:
+    msg = b""
+    msg += _encode_field(1, 2, model_name.encode("utf-8"))
+    msg += _encode_field(2, 2, model_version.encode("utf-8"))
+    for inp in inputs:
+        msg += _encode_field(5, 2, inp)
+    return msg
+
+
+def _encode_string_for_triton(text: str) -> bytes:
+    text_bytes = text.encode("utf-8")
+    return struct.pack("<I", len(text_bytes)) + text_bytes
+
+
+def _build_triton_infer_request_pb(
     payload: dict[str, Any],
     model_name: str,
     model_version: str = "",
@@ -37,42 +82,79 @@ def _build_triton_infer_request(
         prompt += f"<|{role}|>\n{content}\n"
     prompt += "<|assistant|>\n"
 
-    request_body: dict[str, Any] = {
-        "model_name": model_name,
-        "model_version": model_version,
-        "inputs": [
-            {
-                "name": "text_input",
-                "shape": [1, 1],
-                "datatype": "BYTES",
-                "data": [prompt],
-            }
-        ],
-        "parameters": {},
-    }
+    raw_data = _encode_string_for_triton(prompt)
+    input_tensor = _build_infer_input_tensor_pb(
+        name="text_input",
+        datatype="BYTES",
+        shape=[1, 1],
+        raw_data=raw_data,
+    )
 
-    if "temperature" in payload:
-        request_body["parameters"]["temperature"] = str(payload["temperature"])
-    if "top_p" in payload:
-        request_body["parameters"]["top_p"] = str(payload["top_p"])
-    if "max_tokens" in payload:
-        request_body["parameters"]["max_tokens"] = str(payload["max_tokens"])
-    if payload.get("stream"):
-        request_body["parameters"]["stream"] = "true"
-
-    return json.dumps(request_body).encode("utf-8")
+    return _build_model_infer_request_pb(
+        model_name=model_name,
+        model_version=model_version,
+        inputs=[input_tensor],
+    )
 
 
-def _parse_triton_response(data: bytes, model_name_display: str) -> dict[str, Any]:
-    response = json.loads(data.decode("utf-8"))
+def _decode_varint(data: bytes, offset: int) -> tuple[int, int]:
+    result = 0
+    shift = 0
+    while offset < len(data):
+        byte = data[offset]
+        result |= (byte & 0x7F) << shift
+        offset += 1
+        if not (byte & 0x80):
+            break
+        shift += 7
+    return result, offset
 
+
+def _parse_triton_response_pb(data: bytes, model_name_display: str) -> dict[str, Any]:
     text_output = ""
-    outputs = response.get("outputs", [])
-    for output in outputs:
-        if output.get("name") == "text_output":
-            output_data = output.get("data", [])
-            if output_data:
-                text_output = str(output_data[0])
+    offset = 0
+    while offset < len(data):
+        tag, offset = _decode_varint(data, offset)
+        field_number = tag >> 3
+        wire_type = tag & 0x07
+
+        if wire_type == 2:
+            length, offset = _decode_varint(data, offset)
+            field_data = data[offset:offset + length]
+            offset += length
+
+            if field_number == 6:
+                inner_offset = 0
+                output_name = ""
+                raw_output_data = b""
+                while inner_offset < len(field_data):
+                    inner_tag, inner_offset = _decode_varint(field_data, inner_offset)
+                    inner_field = inner_tag >> 3
+                    inner_wire = inner_tag & 0x07
+                    if inner_wire == 2:
+                        inner_len, inner_offset = _decode_varint(field_data, inner_offset)
+                        inner_field_data = field_data[inner_offset:inner_offset + inner_len]
+                        inner_offset += inner_len
+                        if inner_field == 1:
+                            output_name = inner_field_data.decode("utf-8")
+                        elif inner_field == 5:
+                            raw_output_data = inner_field_data
+                    elif inner_wire == 0:
+                        _, inner_offset = _decode_varint(field_data, inner_offset)
+                    else:
+                        break
+
+                if output_name == "text_output" and raw_output_data:
+                    if len(raw_output_data) >= 4:
+                        str_len = struct.unpack("<I", raw_output_data[:4])[0]
+                        text_output = raw_output_data[4:4 + str_len].decode("utf-8")
+        elif wire_type == 0:
+            _, offset = _decode_varint(data, offset)
+        elif wire_type == 1:
+            offset += 8
+        elif wire_type == 5:
+            offset += 4
+        else:
             break
 
     return {
@@ -146,7 +228,7 @@ class TritonGrpcAdapter(ProviderAdapter):
         from src.models.responses import ChatCompletionResponse
 
         if isinstance(provider_response, bytes):
-            provider_response = _parse_triton_response(provider_response, model_name)
+            provider_response = _parse_triton_response_pb(provider_response, model_name)
 
         if isinstance(provider_response, dict):
             choices = []
@@ -216,7 +298,7 @@ class TritonGrpcAdapter(ProviderAdapter):
             raise RuntimeError("grpcio is not installed")
 
         channel = await self._channel_manager.get_channel(address)
-        request_bytes = _build_triton_infer_request(payload, model_name, model_version)
+        request_bytes = _build_triton_infer_request_pb(payload, model_name, model_version)
 
         try:
             response_bytes = await channel.unary_unary(
@@ -224,7 +306,7 @@ class TritonGrpcAdapter(ProviderAdapter):
                 request_serializer=lambda x: x,
                 response_deserializer=lambda x: x,
             )(request_bytes, timeout=timeout)
-            return _parse_triton_response(response_bytes, display_model or model_name)
+            return _parse_triton_response_pb(response_bytes, display_model or model_name)
         except Exception as exc:
             raise self.map_error(exc) from exc
 
@@ -241,7 +323,7 @@ class TritonGrpcAdapter(ProviderAdapter):
             raise RuntimeError("grpcio is not installed")
 
         channel = await self._channel_manager.get_channel(address)
-        request_bytes = _build_triton_infer_request(payload, model_name, model_version)
+        request_bytes = _build_triton_infer_request_pb(payload, model_name, model_version)
 
         try:
             call = channel.unary_stream(
@@ -251,14 +333,10 @@ class TritonGrpcAdapter(ProviderAdapter):
             )(request_bytes, timeout=timeout)
 
             async for response_bytes in call:
-                chunk_data = json.loads(response_bytes.decode("utf-8"))
+                parsed = _parse_triton_response_pb(response_bytes, model_name)
                 text_output = ""
-                for output in chunk_data.get("outputs", []):
-                    if output.get("name") == "text_output":
-                        data = output.get("data", [])
-                        if data:
-                            text_output = str(data[0])
-                        break
+                if parsed.get("choices"):
+                    text_output = parsed["choices"][0].get("message", {}).get("content", "")
                 chunk = {
                     "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
                     "object": "chat.completion.chunk",

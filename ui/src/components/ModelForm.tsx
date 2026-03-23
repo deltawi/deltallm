@@ -290,7 +290,7 @@ interface ModelFormProps {
 }
 
 const inputClass = "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500";
-type RequiredField = 'model_name' | 'provider' | 'model' | 'api_base';
+type RequiredField = 'model_name' | 'provider' | 'model' | 'api_base' | 'grpc_address' | 'triton_model_name';
 
 function inputClasses(hasError = false): string {
   return `${inputClass} ${hasError ? 'border-red-300 bg-red-50/40 focus:ring-red-500' : ''}`;
@@ -354,6 +354,8 @@ export default function ModelForm({
     const upstreamModel = form.model.trim();
     const apiBase = form.api_base.trim();
 
+    const isGrpc = form.transport === 'grpc' && selectedProviderPreset?.grpc_capable;
+
     if (!modelName) {
       nextFieldErrors.model_name = 'Model Name is required.';
     }
@@ -363,8 +365,14 @@ export default function ModelForm({
     if (!upstreamModel) {
       nextFieldErrors.model = 'Provider Model is required.';
     }
-    if (!apiBase) {
+    if (!isGrpc && !apiBase) {
       nextFieldErrors.api_base = 'API Base URL is required.';
+    }
+    if (isGrpc && !form.grpc_address.trim()) {
+      nextFieldErrors.grpc_address = 'gRPC Address is required when using gRPC transport.';
+    }
+    if (isGrpc && provider === 'triton' && !form.triton_model_name.trim()) {
+      nextFieldErrors.triton_model_name = 'Triton Model Name is required for Triton gRPC deployments.';
     }
     if (Object.keys(nextFieldErrors).length > 0) {
       setFieldErrors(nextFieldErrors);
@@ -462,15 +470,17 @@ export default function ModelForm({
               <input type="password" value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })} placeholder="sk-..." className={inputClass} />
             </div>
             <div>
-              <FieldLabel label="API Base URL" required />
+              <FieldLabel label={form.transport === 'grpc' && selectedProviderPreset?.grpc_capable ? 'API Base URL (HTTP Fallback)' : 'API Base URL'} required={!(form.transport === 'grpc' && selectedProviderPreset?.grpc_capable)} />
               <input value={form.api_base} onChange={(e) => { setForm({ ...form, api_base: e.target.value }); clearValidation('api_base'); }} placeholder={selectedProviderPreset?.api_base || 'https://your-provider.example/v1'} className={inputClasses(Boolean(fieldErrors.api_base))} />
               {fieldErrors.api_base ? <p className="mt-1 text-xs text-red-600">{fieldErrors.api_base}</p> : null}
               <p className="mt-1 text-xs text-gray-400">
-                {selectedProviderPreset?.api_base
-                  ? 'Filled from the selected provider. Override it if your deployment uses a custom endpoint.'
-                  : form.provider
-                    ? 'This provider has no built-in default. You must enter the API base URL.'
-                    : 'Choose a provider to auto-fill its default API base URL when one is available.'}
+                {form.transport === 'grpc' && selectedProviderPreset?.grpc_capable
+                  ? 'Optional. Used as fallback when gRPC is unavailable.'
+                  : selectedProviderPreset?.api_base
+                    ? 'Filled from the selected provider. Override it if your deployment uses a custom endpoint.'
+                    : form.provider
+                      ? 'This provider has no built-in default. You must enter the API base URL.'
+                      : 'Choose a provider to auto-fill its default API base URL when one is available.'}
               </p>
             </div>
           </div>
@@ -537,10 +547,11 @@ export default function ModelForm({
                   <FieldLabel label="gRPC Address" required />
                   <input
                     value={form.grpc_address}
-                    onChange={(e) => setForm({ ...form, grpc_address: e.target.value })}
+                    onChange={(e) => { setForm({ ...form, grpc_address: e.target.value }); clearValidation('grpc_address' as RequiredField); }}
                     placeholder={form.provider === 'triton' ? 'localhost:8001' : 'localhost:50051'}
-                    className={inputClass}
+                    className={inputClasses(Boolean(fieldErrors.grpc_address))}
                   />
+                  {fieldErrors.grpc_address ? <p className="mt-1 text-xs text-red-600">{fieldErrors.grpc_address}</p> : null}
                   <p className="text-xs text-gray-400 mt-1">
                     {form.provider === 'triton'
                       ? 'Triton Inference Server gRPC endpoint (default port 8001)'
@@ -560,14 +571,15 @@ export default function ModelForm({
                 {form.provider === 'triton' && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <FieldLabel label="Triton Model Name" />
+                      <FieldLabel label="Triton Model Name" required />
                       <input
                         value={form.triton_model_name}
-                        onChange={(e) => setForm({ ...form, triton_model_name: e.target.value })}
+                        onChange={(e) => { setForm({ ...form, triton_model_name: e.target.value }); clearValidation('triton_model_name' as RequiredField); }}
                         placeholder="ensemble_llm"
-                        className={inputClass}
+                        className={inputClasses(Boolean(fieldErrors.triton_model_name))}
                       />
-                      <p className="text-xs text-gray-400 mt-1">Model name as registered in Triton</p>
+                      {fieldErrors.triton_model_name ? <p className="mt-1 text-xs text-red-600">{fieldErrors.triton_model_name}</p> : null}
+                      <p className="text-xs text-gray-400 mt-1">Model name as registered in Triton model repository</p>
                     </div>
                     <div>
                       <FieldLabel label="Triton Model Version" />

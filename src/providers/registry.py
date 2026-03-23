@@ -89,6 +89,12 @@ def resolve_chat_upstream(
     transport = str(params.get("transport", "http")).lower()
     grpc_address = params.get("grpc_address")
 
+    api_base_raw = str(params.get("api_base") or "")
+    if api_base_raw.startswith("grpc://"):
+        transport = "grpc"
+        if not grpc_address:
+            grpc_address = api_base_raw[len("grpc://"):].rstrip("/")
+
     if transport == "grpc" and grpc_address:
         if provider == "triton":
             adapter = getattr(request.app.state, "triton_grpc_adapter", None)
