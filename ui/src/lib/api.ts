@@ -360,6 +360,7 @@ export interface ProviderPreset {
   api_base: string | null;
   compat: string;
   supported_modes: string[];
+  grpc_capable?: boolean;
 }
 
 export interface DeploymentHealth {

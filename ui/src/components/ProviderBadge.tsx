@@ -36,6 +36,7 @@ const PROVIDER_STYLES: Record<string, ProviderStyle> = {
   gemini: { Icon: Sparkles, logoUrl: PROVIDER_LOGOS.gemini, tone: 'bg-blue-50 text-blue-700 border-blue-100' },
   bedrock: { Icon: Triangle, tone: 'bg-stone-100 text-stone-700 border-stone-200' },
   vllm: { Icon: Bot, logoUrl: PROVIDER_LOGOS.vllm, tone: 'bg-lime-50 text-lime-700 border-lime-100' },
+  triton: { Icon: Cpu, tone: 'bg-green-50 text-green-700 border-green-100' },
   lmstudio: { Icon: Bot, tone: 'bg-slate-100 text-slate-700 border-slate-200' },
   ollama: { Icon: Bot, logoUrl: PROVIDER_LOGOS.ollama, tone: 'bg-teal-50 text-teal-700 border-teal-100' },
   unknown: { Icon: Bot, tone: 'bg-gray-100 text-gray-700 border-gray-200' },

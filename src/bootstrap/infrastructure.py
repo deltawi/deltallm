@@ -22,7 +22,10 @@ from src.providers.anthropic import AnthropicAdapter
 from src.providers.bedrock import BedrockAdapter
 from src.providers.azure import AzureOpenAIAdapter
 from src.providers.gemini import GeminiAdapter
+from src.providers.grpc_channel import GrpcChannelManager
 from src.providers.openai import OpenAIAdapter
+from src.providers.triton_grpc import TritonGrpcAdapter
+from src.providers.vllm_grpc import VLLMGrpcAdapter
 from src.services.route_groups import RouteGroupRuntimeCache
 
 
@@ -31,6 +34,7 @@ class InfrastructureRuntime:
     redis_client: Redis | None
     dynamic_config_manager: DynamicConfigManager
     http_client: httpx.AsyncClient
+    grpc_channel_manager: GrpcChannelManager | None = None
     statuses: tuple[BootstrapStatus, ...] = ()
 
 
@@ -81,6 +85,11 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
     app.state.gemini_adapter = GeminiAdapter(http_client)
     app.state.bedrock_adapter = BedrockAdapter(http_client)
 
+    grpc_channel_manager = GrpcChannelManager()
+    app.state.grpc_channel_manager = grpc_channel_manager
+    app.state.vllm_grpc_adapter = VLLMGrpcAdapter(grpc_channel_manager)
+    app.state.triton_grpc_adapter = TritonGrpcAdapter(grpc_channel_manager)
+
     app.state.model_deployment_repository = ModelDeploymentRepository(prisma_manager.client)
     app.state.callable_target_binding_repository = CallableTargetBindingRepository(prisma_manager.client)
     app.state.callable_target_scope_policy_repository = CallableTargetScopePolicyRepository(prisma_manager.client)
@@ -94,6 +103,7 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
         redis_client=redis_client,
         dynamic_config_manager=dynamic_config_manager,
         http_client=http_client,
+        grpc_channel_manager=grpc_channel_manager,
         statuses=(
             BootstrapStatus("config", "ready"),
             BootstrapStatus("redis", "ready"),
@@ -101,6 +111,7 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
             BootstrapStatus("dynamic_config", "ready"),
             BootstrapStatus("http_client", "ready"),
             BootstrapStatus("provider_adapters", "ready"),
+            BootstrapStatus("grpc_channel_manager", "ready"),
         ),
     )
 
@@ -108,6 +119,8 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
 async def shutdown_infrastructure_runtime(runtime: InfrastructureRuntime) -> None:
     await runtime.dynamic_config_manager.close()
     await runtime.http_client.aclose()
+    if runtime.grpc_channel_manager is not None:
+        await runtime.grpc_channel_manager.close_all()
     if runtime.redis_client is not None:
         await runtime.redis_client.close()
     await prisma_manager.disconnect()

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import Request
@@ -17,6 +17,9 @@ class ChatUpstream:
     endpoint: str
     headers: dict[str, str]
     timeout: int
+    transport: str = "http"
+    grpc_address: str | None = None
+    grpc_metadata: dict[str, str] = field(default_factory=dict)
 
 
 def resolve_chat_upstream(
@@ -82,6 +85,47 @@ def resolve_chat_upstream(
             headers={"Content-Type": "application/json"},
             timeout=timeout,
         )
+
+    transport = str(params.get("transport", "http")).lower()
+    grpc_address = params.get("grpc_address")
+
+    if transport == "grpc" and grpc_address:
+        if provider == "triton":
+            adapter = getattr(request.app.state, "triton_grpc_adapter", None)
+            if adapter is None:
+                raise InvalidRequestError(message="Triton gRPC adapter is not available")
+            http_fallback = str(params.get("http_fallback_base") or params.get("api_base") or "").rstrip("/")
+            return ChatUpstream(
+                adapter=adapter,
+                api_base=http_fallback,
+                endpoint="/chat/completions",
+                headers={},
+                timeout=timeout,
+                transport="grpc",
+                grpc_address=str(grpc_address),
+                grpc_metadata={
+                    "triton_model_name": str(params.get("triton_model_name") or resolve_upstream_model(params)),
+                    "triton_model_version": str(params.get("triton_model_version") or ""),
+                },
+            )
+        else:
+            adapter = getattr(request.app.state, "vllm_grpc_adapter", None)
+            if adapter is None:
+                raise InvalidRequestError(message="vLLM gRPC adapter is not available")
+            http_fallback = str(params.get("http_fallback_base") or params.get("api_base") or "").rstrip("/")
+            api_key = params.get("api_key")
+            headers: dict[str, str] = {}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            return ChatUpstream(
+                adapter=adapter,
+                api_base=http_fallback,
+                endpoint="/chat/completions",
+                headers=headers,
+                timeout=timeout,
+                transport="grpc",
+                grpc_address=str(grpc_address),
+            )
 
     if provider not in {"unknown", ""} and not is_openai_compatible_provider(provider):
         raise InvalidRequestError(message=f"Unsupported provider '{provider}' for chat endpoint")

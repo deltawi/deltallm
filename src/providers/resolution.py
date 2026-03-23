@@ -19,6 +19,7 @@ OPENAI_COMPATIBLE_PROVIDERS = {
     "ollama",
     "azure",
     "azure_openai",
+    "triton",
 }
 
 # Providers that use OpenAI-owned request semantics rather than generic OpenAI-compatible proxy behavior.
@@ -51,9 +52,12 @@ PROVIDER_CAPABILITIES: dict[str, set[ModelMode]] = {
     "gemini": {"chat", "audio_speech"},
     "bedrock": {"chat"},
     "vllm": {"chat", "embedding", "image_generation", "audio_speech", "audio_transcription"},
+    "triton": {"chat", "embedding"},
     "lmstudio": {"chat", "embedding"},
     "ollama": {"chat", "embedding"},
 }
+
+GRPC_CAPABLE_PROVIDERS = {"vllm", "triton"}
 
 PROVIDER_PRESETS: dict[str, dict[str, str | None]] = {
     "openai": {"provider": "openai", "api_base": "https://api.openai.com/v1", "compat": "openai"},
@@ -68,6 +72,7 @@ PROVIDER_PRESETS: dict[str, dict[str, str | None]] = {
     "gemini": {"provider": "gemini", "api_base": "https://generativelanguage.googleapis.com/v1beta", "compat": "native"},
     "bedrock": {"provider": "bedrock", "api_base": "https://bedrock-runtime.{region}.amazonaws.com", "compat": "native"},
     "vllm": {"provider": "vllm", "api_base": None, "compat": "openai"},
+    "triton": {"provider": "triton", "api_base": None, "compat": "openai"},
     "lmstudio": {"provider": "lmstudio", "api_base": None, "compat": "openai"},
     "ollama": {"provider": "ollama", "api_base": None, "compat": "openai"},
 }
@@ -167,14 +172,15 @@ def is_openai_compatible_provider(provider: str) -> bool:
     return (provider or "").strip().lower() in OPENAI_COMPATIBLE_PROVIDERS
 
 
-def provider_presets() -> list[dict[str, str | None | list[str]]]:
-    items: list[dict[str, str | None | list[str]]] = []
+def provider_presets() -> list[dict[str, str | None | list[str] | bool]]:
+    items: list[dict[str, str | None | list[str] | bool]] = []
     for key in sorted(PROVIDER_PRESETS.keys()):
         preset = PROVIDER_PRESETS[key]
         items.append(
             {
                 **preset,
                 "supported_modes": sorted(PROVIDER_CAPABILITIES.get(key, set())),
+                "grpc_capable": key in GRPC_CAPABLE_PROVIDERS,
             }
         )
     return items

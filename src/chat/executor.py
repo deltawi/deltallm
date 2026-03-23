@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Any
+from typing import Any, AsyncIterator
 
 import httpx
 from fastapi import Request
@@ -32,6 +32,58 @@ class OpenedStream:
         await self.context_manager.__aexit__(type(exc), exc, exc.__traceback__)
 
 
+async def _execute_grpc_chat(
+    request: Request,
+    payload: ChatCompletionRequest,
+    deployment: Deployment,
+    upstream: Any,
+) -> tuple[dict[str, Any], float]:
+    adapter = upstream.adapter
+    params = deployment.deltallm_params
+    upstream_request = payload.model_copy(update={"metadata": None})
+    upstream_payload = await adapter.translate_request(upstream_request, params)
+
+    from src.routers.utils import apply_default_params
+
+    apply_default_params(upstream_payload, deployment.model_info)
+
+    upstream_start = perf_counter()
+    grpc_address = upstream.grpc_address
+
+    from src.providers.resolution import resolve_provider
+
+    provider = resolve_provider(params)
+
+    if provider == "triton":
+        triton_model = upstream.grpc_metadata.get("triton_model_name", "")
+        triton_version = upstream.grpc_metadata.get("triton_model_version", "")
+        data = await adapter.execute_grpc_chat(
+            grpc_address,
+            upstream_payload,
+            model_name=triton_model,
+            model_version=triton_version,
+            timeout=upstream.timeout,
+            display_model=payload.model,
+        )
+    else:
+        data = await adapter.execute_grpc_chat(
+            grpc_address,
+            upstream_payload,
+            timeout=upstream.timeout,
+        )
+
+    canonical = await adapter.translate_response(data, payload.model)
+    canonical_payload = canonical.model_dump(mode="json")
+
+    await record_router_usage(
+        request.app.state.router_state_backend,
+        deployment.deployment_id,
+        mode="chat",
+        usage=canonical_payload.get("usage"),
+    )
+    return canonical_payload, (perf_counter() - upstream_start) * 1000
+
+
 async def execute_chat(
     request: Request,
     payload: ChatCompletionRequest,
@@ -39,6 +91,10 @@ async def execute_chat(
 ) -> tuple[dict[str, Any], float]:
     params = deployment.deltallm_params
     upstream = resolve_chat_upstream(request, params, is_stream=bool(payload.stream))
+
+    if upstream.transport == "grpc" and upstream.grpc_address:
+        return await _execute_grpc_chat(request, payload, deployment, upstream)
+
     adapter, api_base, endpoint, headers, timeout = (
         upstream.adapter,
         upstream.api_base,
@@ -96,6 +152,83 @@ async def execute_chat(
     return canonical_payload, (perf_counter() - upstream_start) * 1000
 
 
+class _GrpcStreamContextManager:
+    def __init__(self) -> None:
+        self._closed = False
+
+    async def __aenter__(self) -> "_GrpcStreamContextManager":
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        self._closed = True
+
+
+async def _open_grpc_stream(
+    request: Request,
+    payload: ChatCompletionRequest,
+    deployment: Deployment,
+    upstream: Any,
+) -> OpenedStream:
+    adapter = upstream.adapter
+    params = deployment.deltallm_params
+    upstream_request = payload.model_copy(update={"metadata": None})
+    upstream_payload = await adapter.translate_request(upstream_request, params)
+
+    from src.routers.utils import apply_default_params
+
+    apply_default_params(upstream_payload, deployment.model_info)
+
+    grpc_address = upstream.grpc_address
+
+    from src.providers.resolution import resolve_provider
+
+    provider = resolve_provider(params)
+
+    if provider == "triton":
+        triton_model = upstream.grpc_metadata.get("triton_model_name", "")
+        triton_version = upstream.grpc_metadata.get("triton_model_version", "")
+        raw_stream = adapter.execute_grpc_stream(
+            grpc_address,
+            upstream_payload,
+            model_name=triton_model,
+            model_version=triton_version,
+            timeout=upstream.timeout,
+        )
+    else:
+        raw_stream = adapter.execute_grpc_stream(
+            grpc_address,
+            upstream_payload,
+            timeout=upstream.timeout,
+        )
+
+    context_manager = _GrpcStreamContextManager()
+    await context_manager.__aenter__()
+
+    first_line: str | None = None
+    async for line in raw_stream:
+        if line:
+            first_line = line
+            break
+
+    if first_line is None:
+        await context_manager.__aexit__(None, None, None)
+        raise ServiceUnavailableError(message="Provider gRPC stream ended before first chunk")
+
+    async def remaining_stream() -> AsyncIterator[str]:
+        async for line in raw_stream:
+            yield line
+
+    return OpenedStream(
+        context_manager=context_manager,
+        response=None,
+        translated_stream=remaining_stream(),
+        first_line=first_line,
+        deployment=deployment,
+        params=params,
+        api_base=upstream.api_base,
+    )
+
+
 async def open_stream_with_first_chunk(
     request: Request,
     payload: ChatCompletionRequest,
@@ -103,6 +236,10 @@ async def open_stream_with_first_chunk(
 ) -> OpenedStream:
     params = deployment.deltallm_params
     upstream = resolve_chat_upstream(request, params, is_stream=bool(payload.stream))
+
+    if upstream.transport == "grpc" and upstream.grpc_address:
+        return await _open_grpc_stream(request, payload, deployment, upstream)
+
     adapter, api_base, endpoint, headers, timeout = (
         upstream.adapter,
         upstream.api_base,

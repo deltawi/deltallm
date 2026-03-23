@@ -9,6 +9,7 @@ import {
   DollarSign,
   Layers,
   Pencil,
+  Radio,
   RefreshCw,
   Route,
   Tag,
@@ -36,6 +37,8 @@ const PROVIDER_COLORS: Record<string, { bg: string; text: string; dot: string }>
   gemini:     { bg: 'bg-sky-50',      text: 'text-sky-700',      dot: 'bg-sky-500'      },
   mistral:    { bg: 'bg-rose-50',     text: 'text-rose-700',     dot: 'bg-rose-500'     },
   cohere:     { bg: 'bg-indigo-50',   text: 'text-indigo-700',   dot: 'bg-indigo-500'   },
+  vllm:       { bg: 'bg-lime-50',     text: 'text-lime-700',     dot: 'bg-lime-500'     },
+  triton:     { bg: 'bg-green-50',    text: 'text-green-700',    dot: 'bg-green-500'    },
 };
 
 const TAB_LIST = [
@@ -191,12 +194,26 @@ const EMPTY_DEPLOYMENT_HEALTH: DeploymentHealth = {
   last_success_at: null,
 };
 
+function TransportBadge({ transport }: { transport: string }) {
+  if (transport === 'grpc') {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-violet-100 px-2.5 py-1 text-xs font-semibold text-violet-700">
+        <Radio className="h-3.5 w-3.5" />
+        gRPC
+      </span>
+    );
+  }
+  return <span className="text-sm font-medium text-gray-700">HTTP</span>;
+}
+
 function OverviewTab({ model }: { model: any }) {
   const lp = model.deltallm_params || {};
   const health: DeploymentHealth = model.health || EMPTY_DEPLOYMENT_HEALTH;
   const maskedKey = lp.api_key
     ? `${lp.api_key.slice(0, 8)}${'•'.repeat(12)}${lp.api_key.slice(-4)}`
     : null;
+  const transport = lp.transport || 'http';
+  const isGrpc = transport === 'grpc';
 
   return (
     <div className="grid grid-cols-2 gap-3">
@@ -204,8 +221,18 @@ function OverviewTab({ model }: { model: any }) {
       <Field label="Deployment ID"        value={model.deployment_id} mono />
       <Field label="Provider"             value={<ProviderPill provider={model.provider} />} />
       <Field label="Provider Model"       value={lp.model || '—'} mono />
-      <Field label="API Base"             value={lp.api_base || '—'} mono full />
+      <Field label="Transport"            value={<TransportBadge transport={transport} />} />
+      {isGrpc && lp.grpc_address && (
+        <Field label="gRPC Address" value={lp.grpc_address} mono />
+      )}
+      <Field label={isGrpc ? 'HTTP Fallback URL' : 'API Base'} value={isGrpc ? (lp.http_fallback_base || lp.api_base || '—') : (lp.api_base || '—')} mono full />
       <Field label="API Key"              value={maskedKey || 'Managed outside this deployment'} mono full />
+      {isGrpc && lp.triton_model_name && (
+        <Field label="Triton Model Name" value={lp.triton_model_name} mono />
+      )}
+      {isGrpc && lp.triton_model_version && (
+        <Field label="Triton Model Version" value={lp.triton_model_version} mono />
+      )}
       <Field label="Timeout"              value={formatDurationSeconds(lp.timeout) || '—'} />
       <Field label="Consecutive Failures" value={String(health.consecutive_failures ?? 0)} />
       <Field label="Last Success"         value={timeSince(health.last_success_at) || '—'} />
@@ -547,6 +574,12 @@ export default function ModelDetail() {
                   : <><AlertTriangle className="h-3.5 w-3.5" /> Unhealthy</>}
               </span>
               {model.provider && <ProviderPill provider={model.provider} />}
+              {(lp.transport === 'grpc') && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2.5 py-1 text-xs font-semibold text-violet-700">
+                  <Radio className="h-3.5 w-3.5" />
+                  gRPC
+                </span>
+              )}
             </div>
 
             <div className="flex items-start justify-between gap-4">

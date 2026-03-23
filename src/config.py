@@ -34,6 +34,9 @@ RoutingStrategyName = Literal[
 ]
 
 
+TransportType = Literal["http", "grpc"]
+
+
 class DeltaLLMParams(BaseModel):
     model: str
     provider: str | None = None
@@ -50,6 +53,11 @@ class DeltaLLMParams(BaseModel):
     weight: int = 1
     stream_timeout: int | None = None
     max_tokens: int | None = None
+    transport: TransportType = "http"
+    grpc_address: str | None = None
+    http_fallback_base: str | None = None
+    triton_model_name: str | None = None
+    triton_model_version: str | None = None
 
 
 class ModelInfo(BaseModel):

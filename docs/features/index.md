@@ -15,6 +15,7 @@ Use this section when DeltaLLM is already running and you want to turn on a capa
 | Track or cap spend | [Budgets & Spend](budgets.md) |
 | Export evidence for compliance or investigations | [Audit Log](audit-log.md) |
 | Monitor health, latency, and request volume | [Observability](observability.md) |
+| Use gRPC for vLLM or Triton inference servers | [gRPC Transport](grpc-transport.md) |
 
 ## Quick Success Pattern
 

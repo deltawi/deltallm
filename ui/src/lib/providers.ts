@@ -12,6 +12,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   gemini: 'Google Gemini',
   bedrock: 'AWS Bedrock',
   vllm: 'vLLM',
+  triton: 'NVIDIA Triton',
   lmstudio: 'LM Studio',
   ollama: 'Ollama',
   unknown: 'Unknown',

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import Card from './Card';
-import { MessageSquare, FileText, Image, Mic, Volume2, ArrowUpDown, Plus, X, ChevronDown } from 'lucide-react';
+import { MessageSquare, FileText, Image, Mic, Volume2, ArrowUpDown, Plus, X, ChevronDown, Wifi, Radio } from 'lucide-react';
 import ProviderBadge from './ProviderBadge';
 import { useApi } from '../lib/hooks';
 import { models } from '../lib/api';
@@ -48,6 +48,8 @@ export const MODE_BADGE_COLORS: Record<string, string> = {
   rerank: 'bg-orange-100 text-orange-700',
 };
 
+export type TransportType = 'http' | 'grpc';
+
 export interface ModelFormValues {
   mode: ModelMode;
   model_name: string;
@@ -82,6 +84,11 @@ export interface ModelFormValues {
   batch_price_multiplier: string;
   batch_input_cost_per_token: string;
   batch_output_cost_per_token: string;
+  transport: TransportType;
+  grpc_address: string;
+  http_fallback_base: string;
+  triton_model_name: string;
+  triton_model_version: string;
 }
 
 export const EMPTY_FORM: ModelFormValues = {
@@ -118,6 +125,11 @@ export const EMPTY_FORM: ModelFormValues = {
   batch_price_multiplier: '',
   batch_input_cost_per_token: '',
   batch_output_cost_per_token: '',
+  transport: 'http',
+  grpc_address: '',
+  http_fallback_base: '',
+  triton_model_name: '',
+  triton_model_version: '',
 };
 
 function numOrUndef(val: string): number | undefined {
@@ -139,6 +151,11 @@ export function buildModelPayload(form: ModelFormValues, defaultParams: { key: s
     tpm: numOrUndef(form.tpm),
     timeout: numOrUndef(form.timeout),
     weight: numOrUndef(form.weight),
+    transport: form.transport || 'http',
+    grpc_address: form.grpc_address.trim() || undefined,
+    http_fallback_base: form.http_fallback_base.trim() || undefined,
+    triton_model_name: form.triton_model_name.trim() || undefined,
+    triton_model_version: form.triton_model_version.trim() || undefined,
   };
 
   if (form.mode === 'chat') {
@@ -248,6 +265,11 @@ export function formFromModel(model: any): { form: ModelFormValues; defaultParam
     batch_price_multiplier: strOrEmpty(mi.batch_price_multiplier),
     batch_input_cost_per_token: strOrEmpty(mi.batch_input_cost_per_token),
     batch_output_cost_per_token: strOrEmpty(mi.batch_output_cost_per_token),
+    transport: (lp.transport || 'http') as TransportType,
+    grpc_address: lp.grpc_address || '',
+    http_fallback_base: lp.http_fallback_base || '',
+    triton_model_name: lp.triton_model_name || '',
+    triton_model_version: lp.triton_model_version || '',
   };
   const existingDefaults = mi.default_params;
   let defaultParams: { key: string; value: string }[] = [];
@@ -452,18 +474,117 @@ export default function ModelForm({
               </p>
             </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <FieldLabel label="API Version" />
-              <input value={form.api_version} onChange={(e) => setForm({ ...form, api_version: e.target.value })} placeholder="e.g. 2024-02-01 (Azure)" className={inputClass} />
+          {form.transport !== 'grpc' && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <FieldLabel label="API Version" />
+                <input value={form.api_version} onChange={(e) => setForm({ ...form, api_version: e.target.value })} placeholder="e.g. 2024-02-01 (Azure)" className={inputClass} />
+              </div>
+              <div>
+                <FieldLabel label="Timeout (s)" />
+                <input type="number" value={form.timeout} onChange={(e) => setForm({ ...form, timeout: e.target.value })} placeholder="300" className={inputClass} />
+              </div>
             </div>
+          )}
+          {form.transport === 'grpc' && (
             <div>
               <FieldLabel label="Timeout (s)" />
               <input type="number" value={form.timeout} onChange={(e) => setForm({ ...form, timeout: e.target.value })} placeholder="300" className={inputClass} />
             </div>
-          </div>
+          )}
         </div>
       </Card>
+
+      {selectedProviderPreset?.grpc_capable && (
+        <Card title="Transport">
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setForm({ ...form, transport: 'http' })}
+                className={`flex items-center gap-2 p-2.5 rounded-lg border text-left text-sm transition-colors ${
+                  form.transport === 'http'
+                    ? 'border-blue-500 bg-blue-50 text-blue-700'
+                    : 'border-gray-200 hover:border-gray-300 text-gray-600'
+                }`}
+              >
+                <Wifi className="w-4 h-4" />
+                <div>
+                  <div className="font-medium text-xs">HTTP / REST</div>
+                  <div className="text-[10px] text-gray-400 leading-tight">Standard OpenAI-compatible API</div>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setForm({ ...form, transport: 'grpc' })}
+                className={`flex items-center gap-2 p-2.5 rounded-lg border text-left text-sm transition-colors ${
+                  form.transport === 'grpc'
+                    ? 'border-violet-500 bg-violet-50 text-violet-700'
+                    : 'border-gray-200 hover:border-gray-300 text-gray-600'
+                }`}
+              >
+                <Radio className="w-4 h-4" />
+                <div>
+                  <div className="font-medium text-xs">gRPC</div>
+                  <div className="text-[10px] text-gray-400 leading-tight">High-performance binary protocol</div>
+                </div>
+              </button>
+            </div>
+
+            {form.transport === 'grpc' && (
+              <div className="space-y-3 border-t border-gray-100 pt-4">
+                <div>
+                  <FieldLabel label="gRPC Address" required />
+                  <input
+                    value={form.grpc_address}
+                    onChange={(e) => setForm({ ...form, grpc_address: e.target.value })}
+                    placeholder={form.provider === 'triton' ? 'localhost:8001' : 'localhost:50051'}
+                    className={inputClass}
+                  />
+                  <p className="text-xs text-gray-400 mt-1">
+                    {form.provider === 'triton'
+                      ? 'Triton Inference Server gRPC endpoint (default port 8001)'
+                      : 'vLLM gRPC endpoint (default port 50051)'}
+                  </p>
+                </div>
+                <div>
+                  <FieldLabel label="HTTP Fallback URL" />
+                  <input
+                    value={form.http_fallback_base}
+                    onChange={(e) => setForm({ ...form, http_fallback_base: e.target.value })}
+                    placeholder={form.provider === 'triton' ? 'http://localhost:8000/v2' : 'http://localhost:8000/v1'}
+                    className={inputClass}
+                  />
+                  <p className="text-xs text-gray-400 mt-1">Optional HTTP endpoint used when gRPC is unavailable</p>
+                </div>
+                {form.provider === 'triton' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <FieldLabel label="Triton Model Name" />
+                      <input
+                        value={form.triton_model_name}
+                        onChange={(e) => setForm({ ...form, triton_model_name: e.target.value })}
+                        placeholder="ensemble_llm"
+                        className={inputClass}
+                      />
+                      <p className="text-xs text-gray-400 mt-1">Model name as registered in Triton</p>
+                    </div>
+                    <div>
+                      <FieldLabel label="Triton Model Version" />
+                      <input
+                        value={form.triton_model_version}
+                        onChange={(e) => setForm({ ...form, triton_model_version: e.target.value })}
+                        placeholder="1 (leave empty for latest)"
+                        className={inputClass}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
 
       <CollapsibleCard title="Rate Limits & Routing">
         <div className="space-y-4">

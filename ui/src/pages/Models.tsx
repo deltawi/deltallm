@@ -8,7 +8,7 @@ import ProviderBadge from '../components/ProviderBadge';
 import StatusBadge from '../components/StatusBadge';
 import { ContentCard, IndexShell } from '../components/admin/shells';
 import { MODE_OPTIONS, MODE_BADGE_COLORS } from '../components/ModelForm';
-import { Box, Plus, Pencil, Search, Trash2 } from 'lucide-react';
+import { Box, Plus, Pencil, Search, Trash2, Radio } from 'lucide-react';
 
 export default function Models() {
   const navigate = useNavigate();
@@ -47,6 +47,17 @@ export default function Models() {
       return <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${MODE_BADGE_COLORS[mode] || 'bg-gray-100 text-gray-700'}`}>{modeLabel(mode)}</span>;
     }},
     { key: 'provider', header: 'Provider', render: (r: any) => <ProviderBadge provider={r.provider} model={r.deltallm_params?.model} /> },
+    { key: 'transport', header: 'Transport', render: (r: any) => {
+      const transport = r.deltallm_params?.transport || 'http';
+      if (transport === 'grpc') {
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-violet-100 text-violet-700">
+            <Radio className="w-3 h-3" /> gRPC
+          </span>
+        );
+      }
+      return <span className="text-xs text-gray-400">HTTP</span>;
+    }},
     { key: 'deployment_id', header: 'Deployment ID', render: (r: any) => <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{r.deployment_id}</code> },
     { key: 'healthy', header: 'Health', render: (r: any) => <StatusBadge status={r.healthy ? 'healthy' : 'unhealthy'} /> },
     {
