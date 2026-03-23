@@ -16,20 +16,40 @@ except ImportError:
     grpc = None  # type: ignore[assignment]
 
 
-_DEFAULT_KEEPALIVE_OPTIONS = [
-    ("grpc.keepalive_time_ms", 30_000),
-    ("grpc.keepalive_timeout_ms", 10_000),
-    ("grpc.keepalive_permit_without_calls", 1),
-    ("grpc.http2.max_pings_without_data", 0),
-    ("grpc.max_receive_message_length", 64 * 1024 * 1024),
-    ("grpc.max_send_message_length", 64 * 1024 * 1024),
-]
+DEFAULT_KEEPALIVE_TIME_MS = 30_000
+DEFAULT_KEEPALIVE_TIMEOUT_MS = 10_000
+DEFAULT_MAX_MESSAGE_LENGTH = 64 * 1024 * 1024
+DEFAULT_MAX_POOL_SIZE = 8
+
+
+def _build_channel_options(
+    keepalive_time_ms: int = DEFAULT_KEEPALIVE_TIME_MS,
+    keepalive_timeout_ms: int = DEFAULT_KEEPALIVE_TIMEOUT_MS,
+    max_message_length: int = DEFAULT_MAX_MESSAGE_LENGTH,
+) -> list[tuple[str, Any]]:
+    return [
+        ("grpc.keepalive_time_ms", keepalive_time_ms),
+        ("grpc.keepalive_timeout_ms", keepalive_timeout_ms),
+        ("grpc.keepalive_permit_without_calls", 1),
+        ("grpc.http2.max_pings_without_data", 0),
+        ("grpc.max_receive_message_length", max_message_length),
+        ("grpc.max_send_message_length", max_message_length),
+    ]
 
 
 class GrpcChannelManager:
-    def __init__(self, max_pool_size: int = 8) -> None:
+    def __init__(
+        self,
+        max_pool_size: int = DEFAULT_MAX_POOL_SIZE,
+        keepalive_time_ms: int = DEFAULT_KEEPALIVE_TIME_MS,
+        keepalive_timeout_ms: int = DEFAULT_KEEPALIVE_TIMEOUT_MS,
+        max_message_length: int = DEFAULT_MAX_MESSAGE_LENGTH,
+    ) -> None:
         self._channels: dict[str, Any] = {}
         self._max_pool_size = max_pool_size
+        self._keepalive_time_ms = keepalive_time_ms
+        self._keepalive_timeout_ms = keepalive_timeout_ms
+        self._max_message_length = max_message_length
         self._lock = asyncio.Lock()
 
     def _ensure_available(self) -> None:
@@ -59,7 +79,11 @@ class GrpcChannelManager:
                 await old_channel.close()
                 logger.info("Evicted gRPC channel for %s (pool full)", oldest_key)
 
-            options = list(_DEFAULT_KEEPALIVE_OPTIONS)
+            options = _build_channel_options(
+                keepalive_time_ms=self._keepalive_time_ms,
+                keepalive_timeout_ms=self._keepalive_timeout_ms,
+                max_message_length=self._max_message_length,
+            )
             if extra_options:
                 options.extend(extra_options)
 

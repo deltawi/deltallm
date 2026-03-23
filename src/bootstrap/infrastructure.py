@@ -85,7 +85,17 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
     app.state.gemini_adapter = GeminiAdapter(http_client)
     app.state.bedrock_adapter = BedrockAdapter(http_client)
 
-    grpc_channel_manager = GrpcChannelManager()
+    grpc_settings = getattr(cfg, "grpc_settings", None)
+    grpc_pool_size = getattr(grpc_settings, "max_pool_size", 8) if grpc_settings else 8
+    grpc_keepalive_ms = getattr(grpc_settings, "keepalive_time_ms", 30_000) if grpc_settings else 30_000
+    grpc_keepalive_timeout_ms = getattr(grpc_settings, "keepalive_timeout_ms", 10_000) if grpc_settings else 10_000
+    grpc_max_msg_len = getattr(grpc_settings, "max_message_length", 64 * 1024 * 1024) if grpc_settings else 64 * 1024 * 1024
+    grpc_channel_manager = GrpcChannelManager(
+        max_pool_size=grpc_pool_size,
+        keepalive_time_ms=grpc_keepalive_ms,
+        keepalive_timeout_ms=grpc_keepalive_timeout_ms,
+        max_message_length=grpc_max_msg_len,
+    )
     app.state.grpc_channel_manager = grpc_channel_manager
     app.state.vllm_grpc_adapter = VLLMGrpcAdapter(grpc_channel_manager)
     app.state.triton_grpc_adapter = TritonGrpcAdapter(grpc_channel_manager)

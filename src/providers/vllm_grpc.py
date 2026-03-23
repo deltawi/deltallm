@@ -20,6 +20,9 @@ except ImportError:
     GRPC_AVAILABLE = False
     grpc = None  # type: ignore[assignment]
 
+VLLM_GRPC_UNARY_METHOD = "/vllm.EntrypointsService/Chat"
+VLLM_GRPC_STREAM_METHOD = "/vllm.EntrypointsService/ChatStream"
+
 
 def _build_chat_request_bytes(payload: dict[str, Any]) -> bytes:
     return json.dumps(payload).encode("utf-8")
@@ -27,6 +30,12 @@ def _build_chat_request_bytes(payload: dict[str, Any]) -> bytes:
 
 def _parse_response_bytes(data: bytes) -> dict[str, Any]:
     return json.loads(data.decode("utf-8"))
+
+
+def _build_auth_metadata(api_key: str | None) -> list[tuple[str, str]]:
+    if api_key:
+        return [("authorization", f"Bearer {api_key}")]
+    return []
 
 
 class VLLMGrpcAdapter(ProviderAdapter):
@@ -144,19 +153,21 @@ class VLLMGrpcAdapter(ProviderAdapter):
         payload: dict[str, Any],
         *,
         timeout: int = 300,
+        api_key: str | None = None,
     ) -> dict[str, Any]:
         if not GRPC_AVAILABLE:
             raise RuntimeError("grpcio is not installed")
 
         channel = await self._channel_manager.get_channel(address)
         request_bytes = _build_chat_request_bytes(payload)
+        metadata = _build_auth_metadata(api_key)
 
         try:
             response_bytes = await channel.unary_unary(
-                "/inference.GRPCInferenceService/Chat",
+                VLLM_GRPC_UNARY_METHOD,
                 request_serializer=lambda x: x,
                 response_deserializer=lambda x: x,
-            )(request_bytes, timeout=timeout)
+            )(request_bytes, timeout=timeout, metadata=metadata or None)
             return _parse_response_bytes(response_bytes)
         except Exception as exc:
             raise self.map_error(exc) from exc
@@ -167,19 +178,21 @@ class VLLMGrpcAdapter(ProviderAdapter):
         payload: dict[str, Any],
         *,
         timeout: int = 300,
+        api_key: str | None = None,
     ) -> AsyncIterator[str]:
         if not GRPC_AVAILABLE:
             raise RuntimeError("grpcio is not installed")
 
         channel = await self._channel_manager.get_channel(address)
         request_bytes = _build_chat_request_bytes(payload)
+        metadata = _build_auth_metadata(api_key)
 
         try:
             call = channel.unary_stream(
-                "/inference.GRPCInferenceService/ChatStream",
+                VLLM_GRPC_STREAM_METHOD,
                 request_serializer=lambda x: x,
                 response_deserializer=lambda x: x,
-            )(request_bytes, timeout=timeout)
+            )(request_bytes, timeout=timeout, metadata=metadata or None)
 
             async for response_bytes in call:
                 chunk = _parse_response_bytes(response_bytes)

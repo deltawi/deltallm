@@ -71,6 +71,8 @@ async def _execute_grpc_chat(
 
     provider = resolve_provider(params)
 
+    api_key = params.get("api_key")
+
     try:
         if provider == "triton":
             triton_model = upstream.grpc_metadata.get("triton_model_name", "")
@@ -82,12 +84,14 @@ async def _execute_grpc_chat(
                 model_version=triton_version,
                 timeout=upstream.timeout,
                 display_model=payload.model,
+                api_key=api_key,
             )
         else:
             data = await adapter.execute_grpc_chat(
                 grpc_address,
                 upstream_payload,
                 timeout=upstream.timeout,
+                api_key=api_key,
             )
     except Exception as grpc_exc:
         http_fallback = upstream.api_base
@@ -264,6 +268,8 @@ async def _open_grpc_stream(
 
     provider = resolve_provider(params)
 
+    api_key = params.get("api_key")
+
     try:
         if provider == "triton":
             triton_model = upstream.grpc_metadata.get("triton_model_name", "")
@@ -274,12 +280,14 @@ async def _open_grpc_stream(
                 model_name=triton_model,
                 model_version=triton_version,
                 timeout=upstream.timeout,
+                api_key=api_key,
             )
         else:
             raw_stream = adapter.execute_grpc_stream(
                 grpc_address,
                 upstream_payload,
                 timeout=upstream.timeout,
+                api_key=api_key,
             )
 
         context_manager = _GrpcStreamContextManager()

@@ -86,21 +86,35 @@ These fields go inside `deltallm_params`:
 | `triton_model_name` | string | — | Triton model repository name (Triton only) |
 | `triton_model_version` | string | `""` (latest) | Triton model version (Triton only) |
 
+## Authentication
+
+API keys are automatically propagated as gRPC metadata (`authorization: Bearer <key>`) on both unary and streaming calls.
+Set `api_key` in `deltallm_params` as you would for any other provider — the gateway handles the transport-level translation.
+
 ## gRPC Channel Manager
 
 DeltaLLM maintains a connection pool so channels are reused across requests:
 
 - Channels are created on first use and cached by address.
 - Keepalive pings are sent every 30 seconds to detect dead connections.
-- The pool has a configurable maximum size (default 16). When full, the least-recently-used channel is closed.
+- The pool has a configurable maximum size (default 8). When full, the least-recently-used channel is closed.
 - All channels are closed gracefully on shutdown.
+
+Pool settings can be configured via `grpc_settings` in the application config:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `max_pool_size` | 8 | Maximum number of cached gRPC channels |
+| `keepalive_time_ms` | 30000 | Interval between keepalive pings (ms) |
+| `keepalive_timeout_ms` | 10000 | Timeout waiting for keepalive ack (ms) |
+| `max_message_length` | 67108864 | Max send/receive message size in bytes (64 MB) |
 
 ## Provider Details
 
 ### vLLM
 
-vLLM exposes an OpenAI-compatible gRPC service at port **50051** (by default when started with `--enable-grpc`).
-The adapter sends chat messages as a JSON payload over gRPC and parses the response as a standard completion object.
+vLLM exposes a gRPC service at port **50051** (by default when started with `--enable-grpc`).
+The adapter uses the `vllm.EntrypointsService/Chat` and `vllm.EntrypointsService/ChatStream` RPC methods, sending chat messages as a JSON payload over gRPC and parsing the response as a standard OpenAI-compatible completion object.
 
 **Supported operations:** chat completions (non-streaming and streaming).
 

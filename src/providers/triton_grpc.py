@@ -293,19 +293,23 @@ class TritonGrpcAdapter(ProviderAdapter):
         *,
         timeout: int = 300,
         display_model: str = "",
+        api_key: str | None = None,
     ) -> dict[str, Any]:
         if not GRPC_AVAILABLE:
             raise RuntimeError("grpcio is not installed")
 
         channel = await self._channel_manager.get_channel(address)
         request_bytes = _build_triton_infer_request_pb(payload, model_name, model_version)
+        metadata: list[tuple[str, str]] | None = None
+        if api_key:
+            metadata = [("authorization", f"Bearer {api_key}")]
 
         try:
             response_bytes = await channel.unary_unary(
                 "/inference.GRPCInferenceService/ModelInfer",
                 request_serializer=lambda x: x,
                 response_deserializer=lambda x: x,
-            )(request_bytes, timeout=timeout)
+            )(request_bytes, timeout=timeout, metadata=metadata)
             return _parse_triton_response_pb(response_bytes, display_model or model_name)
         except Exception as exc:
             raise self.map_error(exc) from exc
@@ -318,19 +322,23 @@ class TritonGrpcAdapter(ProviderAdapter):
         model_version: str = "",
         *,
         timeout: int = 300,
+        api_key: str | None = None,
     ) -> AsyncIterator[str]:
         if not GRPC_AVAILABLE:
             raise RuntimeError("grpcio is not installed")
 
         channel = await self._channel_manager.get_channel(address)
         request_bytes = _build_triton_infer_request_pb(payload, model_name, model_version)
+        metadata: list[tuple[str, str]] | None = None
+        if api_key:
+            metadata = [("authorization", f"Bearer {api_key}")]
 
         try:
             call = channel.unary_stream(
                 "/inference.GRPCInferenceService/ModelStreamInfer",
                 request_serializer=lambda x: x,
                 response_deserializer=lambda x: x,
-            )(request_bytes, timeout=timeout)
+            )(request_bytes, timeout=timeout, metadata=metadata)
 
             async for response_bytes in call:
                 parsed = _parse_triton_response_pb(response_bytes, model_name)
