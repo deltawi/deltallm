@@ -128,6 +128,14 @@ def _normalized_model_payload_or_400(
     from src.providers.resolution import GRPC_CAPABLE_PROVIDERS
     is_grpc = transport == "grpc" and provider in GRPC_CAPABLE_PROVIDERS
 
+    api_base_has_grpc = api_base.startswith("grpc://") if api_base else False
+    if api_base_has_grpc:
+        is_grpc = True
+        if not grpc_address:
+            grpc_address = api_base[len("grpc://"):].rstrip("/")
+            params["grpc_address"] = grpc_address
+        params["transport"] = "grpc"
+
     if not is_grpc and not api_base:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params.api_base is required")
     if is_grpc and not grpc_address:
