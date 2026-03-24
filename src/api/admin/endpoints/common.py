@@ -20,6 +20,8 @@ class AuthScope:
     is_platform_admin: bool = False
     org_ids: list[str] = field(default_factory=list)
     team_ids: list[str] = field(default_factory=list)
+    org_permissions_by_id: dict[str, set[str]] = field(default_factory=dict)
+    team_permissions_by_id: dict[str, set[str]] = field(default_factory=dict)
     granted_permissions: set[str] = field(default_factory=set)
     effective_permissions: set[str] = field(default_factory=set)
     account_id: str | None = None
@@ -80,13 +82,27 @@ def get_auth_scope(
     if has_platform_permission(context.role, Perm.PLATFORM_ADMIN):
         return AuthScope(is_platform_admin=True, account_id=account_id)
 
-    effective_permissions: set[str] = set()
+    org_permissions_by_id: dict[str, set[str]] = {}
     for membership in context.organization_memberships:
         role_perms = ORG_ROLE_PERMISSIONS.get(str(membership.get("role") or ""), set())
-        effective_permissions.update(role_perms)
+        organization_id = str(membership.get("organization_id") or "").strip()
+        if not organization_id:
+            continue
+        org_permissions_by_id.setdefault(organization_id, set()).update(role_perms)
+
+    team_permissions_by_id: dict[str, set[str]] = {}
     for membership in context.team_memberships:
         role_perms = TEAM_ROLE_PERMISSIONS.get(str(membership.get("role") or ""), set())
-        effective_permissions.update(role_perms)
+        team_id = str(membership.get("team_id") or "").strip()
+        if not team_id:
+            continue
+        team_permissions_by_id.setdefault(team_id, set()).update(role_perms)
+
+    effective_permissions: set[str] = set()
+    for permissions in org_permissions_by_id.values():
+        effective_permissions.update(permissions)
+    for permissions in team_permissions_by_id.values():
+        effective_permissions.update(permissions)
 
     permissions_to_check: list[str] = []
     if required_permission:
@@ -97,38 +113,32 @@ def get_auth_scope(
     if permissions_to_check:
         org_ids_set: set[str] = set()
         granted: set[str] = set()
-        for m in context.organization_memberships:
-            oid = m.get("organization_id")
-            if not oid:
-                continue
-            role_perms = ORG_ROLE_PERMISSIONS.get(str(m.get("role") or ""), set())
+        for organization_id, role_perms in org_permissions_by_id.items():
             matched = [p for p in permissions_to_check if p in role_perms]
             if matched:
-                org_ids_set.add(str(oid))
+                org_ids_set.add(organization_id)
                 granted.update(matched)
 
         team_ids_set: set[str] = set()
-        for m in context.team_memberships:
-            tid = m.get("team_id")
-            if not tid:
-                continue
-            role_perms = TEAM_ROLE_PERMISSIONS.get(str(m.get("role") or ""), set())
+        for team_id, role_perms in team_permissions_by_id.items():
             matched = [p for p in permissions_to_check if p in role_perms]
             if matched:
-                team_ids_set.add(str(tid))
+                team_ids_set.add(team_id)
                 granted.update(matched)
 
         org_ids = list(org_ids_set)
         team_ids = list(team_ids_set)
     else:
-        org_ids = [str(m.get("organization_id")) for m in context.organization_memberships if m.get("organization_id")]
-        team_ids = [str(m.get("team_id")) for m in context.team_memberships if m.get("team_id")]
+        org_ids = list(org_permissions_by_id)
+        team_ids = list(team_permissions_by_id)
         granted = set()
 
     return AuthScope(
         is_platform_admin=False,
         org_ids=org_ids,
         team_ids=team_ids,
+        org_permissions_by_id=org_permissions_by_id,
+        team_permissions_by_id=team_permissions_by_id,
         granted_permissions=granted,
         effective_permissions=effective_permissions,
         account_id=account_id,
