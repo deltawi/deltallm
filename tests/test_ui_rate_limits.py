@@ -93,7 +93,12 @@ class FakeAdminDB:
                 tpd_limit,
                 model_rpm_limit,
                 model_tpm_limit,
-            ) = params[:11]
+                self_service_keys_enabled,
+                self_service_max_keys_per_user,
+                self_service_budget_ceiling,
+                self_service_require_expiry,
+                self_service_max_expiry_days,
+            ) = params
             self.teams[team_id] = {
                 "team_id": team_id,
                 "team_alias": team_alias,
@@ -136,7 +141,7 @@ class FakeAdminDB:
                 self_service_require_expiry,
                 self_service_max_expiry_days,
                 team_id,
-            ) = params[:11]
+            ) = params
             row = self.teams[team_id]
             row.update(
                 {
