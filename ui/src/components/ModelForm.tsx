@@ -3,7 +3,7 @@ import Card from './Card';
 import { MessageSquare, FileText, Image, Mic, Volume2, ArrowUpDown, Plus, X, ChevronDown, Wifi, Radio } from 'lucide-react';
 import ProviderBadge from './ProviderBadge';
 import { useApi } from '../lib/hooks';
-import { models } from '../lib/api';
+import { models, type ProviderPreset } from '../lib/api';
 import { normalizeProvider, providerDisplayName } from '../lib/providers';
 
 let collapsibleIdCounter = 0;
@@ -141,6 +141,7 @@ export function strOrEmpty(val: any): string {
 }
 
 export function buildModelPayload(form: ModelFormValues, defaultParams: { key: string; value: string }[]) {
+  const isGrpc = form.transport === 'grpc';
   const deltallm_params: Record<string, any> = {
     provider: form.provider.trim() || undefined,
     model: form.model.trim(),
@@ -152,10 +153,10 @@ export function buildModelPayload(form: ModelFormValues, defaultParams: { key: s
     timeout: numOrUndef(form.timeout),
     weight: numOrUndef(form.weight),
     transport: form.transport || 'http',
-    grpc_address: form.grpc_address.trim() || undefined,
-    http_fallback_base: form.http_fallback_base.trim() || undefined,
-    triton_model_name: form.triton_model_name.trim() || undefined,
-    triton_model_version: form.triton_model_version.trim() || undefined,
+    grpc_address: isGrpc ? form.grpc_address.trim() || undefined : undefined,
+    http_fallback_base: isGrpc ? form.http_fallback_base.trim() || undefined : undefined,
+    triton_model_name: isGrpc ? form.triton_model_name.trim() || undefined : undefined,
+    triton_model_version: isGrpc ? form.triton_model_version.trim() || undefined : undefined,
   };
 
   if (form.mode === 'chat') {
@@ -323,6 +324,9 @@ export default function ModelForm({
   const mode = form.mode;
   const providerPresets = providerPresetResponse?.data || [];
   const selectedProviderPreset = providerPresets.find((preset) => preset.provider === form.provider);
+  const grpcSupportedModes = selectedProviderPreset?.grpc_supported_modes || [];
+  const grpcAvailableForMode = grpcSupportedModes.includes(mode);
+  const isGrpc = form.transport === 'grpc' && grpcAvailableForMode;
 
   const clearValidation = (field?: RequiredField) => {
     if (validationError) setValidationError(null);
@@ -335,15 +339,47 @@ export default function ModelForm({
     }
   };
 
+  const clearGrpcValidation = () => {
+    setFieldErrors((current) => {
+      const next = { ...current };
+      delete next.grpc_address;
+      delete next.triton_model_name;
+      return next;
+    });
+    if (validationError) {
+      setValidationError(null);
+    }
+  };
+
+  const resetInvalidGrpcState = (
+    current: ModelFormValues,
+    providerPreset: ProviderPreset | undefined,
+    nextMode: ModelMode,
+  ): ModelFormValues => {
+    const nextGrpcModes = providerPreset?.grpc_supported_modes || [];
+    if (current.transport !== 'grpc' || nextGrpcModes.includes(nextMode)) {
+      return current;
+    }
+    return {
+      ...current,
+      transport: 'http',
+      grpc_address: '',
+      http_fallback_base: '',
+      triton_model_name: '',
+      triton_model_version: '',
+    };
+  };
+
   const applyProvider = (provider: string) => {
     const preset = providerPresets.find((item) => item.provider === provider);
-    setForm((current) => ({
+    setForm((current) => resetInvalidGrpcState({
       ...current,
       provider,
       api_base: preset?.api_base || '',
-    }));
+    }, preset, current.mode));
     clearValidation('provider');
     clearValidation('api_base');
+    clearGrpcValidation();
   };
 
   const handleSubmit = async () => {
@@ -353,8 +389,6 @@ export default function ModelForm({
     const provider = form.provider.trim();
     const upstreamModel = form.model.trim();
     const apiBase = form.api_base.trim();
-
-    const isGrpc = form.transport === 'grpc' && selectedProviderPreset?.grpc_capable;
 
     if (!modelName) {
       nextFieldErrors.model_name = 'Model Name is required.';
@@ -390,6 +424,16 @@ export default function ModelForm({
       );
       return;
     }
+    if (form.transport === 'grpc' && selectedProviderPreset && !grpcAvailableForMode) {
+      const modeLabel = MODE_OPTIONS.find((m) => m.value === mode)?.label || mode;
+      const supportedGrpcModes = grpcSupportedModes
+        .map((m) => MODE_OPTIONS.find((opt) => opt.value === m)?.label || m)
+        .join(', ');
+      setValidationError(
+        `Provider "${providerDisplayName(selectedProviderPreset.provider)}" does not support gRPC transport for "${modeLabel}". Supported gRPC types: ${supportedGrpcModes || 'none'}.`,
+      );
+      return;
+    }
     const payload = buildModelPayload({ ...form, model_name: modelName, provider, model: upstreamModel, api_base: apiBase }, defaultParams);
     await onSubmit(payload);
   };
@@ -402,7 +446,10 @@ export default function ModelForm({
             <button
               key={opt.value}
               type="button"
-              onClick={() => setForm({ ...form, mode: opt.value })}
+              onClick={() => {
+                setForm((current) => resetInvalidGrpcState({ ...current, mode: opt.value }, selectedProviderPreset, opt.value));
+                clearGrpcValidation();
+              }}
               className={`flex items-center gap-2 p-2.5 rounded-lg border text-left text-sm transition-colors ${
                 mode === opt.value
                   ? 'border-blue-500 bg-blue-50 text-blue-700'
@@ -458,9 +505,16 @@ export default function ModelForm({
               {form.provider ? <ProviderBadge provider={form.provider} model={form.model} /> : <span className="text-xs text-gray-400">Choose a provider first</span>}
             </div>
             {selectedProviderPreset && (
-              <p className="text-xs text-gray-500 mt-1">
-                Supported model types: {selectedProviderPreset.supported_modes.join(', ')}
-              </p>
+              <div className="mt-1 space-y-1">
+                <p className="text-xs text-gray-500">
+                  Supported model types: {selectedProviderPreset.supported_modes.join(', ')}
+                </p>
+                {selectedProviderPreset.grpc_capable ? (
+                  <p className="text-xs text-gray-500">
+                    Supported gRPC types: {grpcSupportedModes.join(', ') || 'none'}
+                  </p>
+                ) : null}
+              </div>
             )}
             <p className="text-xs text-gray-400 mt-1">Enter the upstream model name only. Example for Groq: <code>openai/gpt-oss-120b</code>.</p>
           </div>
@@ -470,12 +524,12 @@ export default function ModelForm({
               <input type="password" value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })} placeholder="sk-..." className={inputClass} />
             </div>
             <div>
-              <FieldLabel label={form.transport === 'grpc' && selectedProviderPreset?.grpc_capable ? 'API Base URL (HTTP Fallback)' : 'API Base URL'} required={!(form.transport === 'grpc' && selectedProviderPreset?.grpc_capable)} />
+              <FieldLabel label={isGrpc ? 'API Base URL (HTTP Fallback)' : 'API Base URL'} required={!isGrpc} />
               <input value={form.api_base} onChange={(e) => { setForm({ ...form, api_base: e.target.value }); clearValidation('api_base'); }} placeholder={selectedProviderPreset?.api_base || 'https://your-provider.example/v1'} className={inputClasses(Boolean(fieldErrors.api_base))} />
               {fieldErrors.api_base ? <p className="mt-1 text-xs text-red-600">{fieldErrors.api_base}</p> : null}
               <p className="mt-1 text-xs text-gray-400">
-                {form.transport === 'grpc' && selectedProviderPreset?.grpc_capable
-                  ? 'Optional. Used as fallback when gRPC is unavailable.'
+                {isGrpc
+                  ? 'Optional. Used as an OpenAI-compatible HTTP fallback when retryable gRPC failures occur.'
                   : selectedProviderPreset?.api_base
                     ? 'Filled from the selected provider. Override it if your deployment uses a custom endpoint.'
                     : form.provider
@@ -527,16 +581,21 @@ export default function ModelForm({
               <button
                 type="button"
                 onClick={() => setForm({ ...form, transport: 'grpc' })}
+                disabled={!grpcAvailableForMode}
                 className={`flex items-center gap-2 p-2.5 rounded-lg border text-left text-sm transition-colors ${
                   form.transport === 'grpc'
                     ? 'border-violet-500 bg-violet-50 text-violet-700'
-                    : 'border-gray-200 hover:border-gray-300 text-gray-600'
+                    : grpcAvailableForMode
+                      ? 'border-gray-200 hover:border-gray-300 text-gray-600'
+                      : 'border-gray-200 text-gray-400 cursor-not-allowed'
                 }`}
               >
                 <Radio className="w-4 h-4" />
                 <div>
                   <div className="font-medium text-xs">gRPC</div>
-                  <div className="text-[10px] text-gray-400 leading-tight">High-performance binary protocol</div>
+                  <div className="text-[10px] text-gray-400 leading-tight">
+                    {grpcAvailableForMode ? 'High-performance binary protocol' : 'Available for chat deployments only'}
+                  </div>
                 </div>
               </button>
             </div>
@@ -563,10 +622,10 @@ export default function ModelForm({
                   <input
                     value={form.http_fallback_base}
                     onChange={(e) => setForm({ ...form, http_fallback_base: e.target.value })}
-                    placeholder={form.provider === 'triton' ? 'http://localhost:8000/v2' : 'http://localhost:8000/v1'}
+                    placeholder="http://localhost:8000/v1"
                     className={inputClass}
                   />
-                  <p className="text-xs text-gray-400 mt-1">Optional HTTP endpoint used when gRPC is unavailable</p>
+                  <p className="text-xs text-gray-400 mt-1">Optional OpenAI-compatible HTTP base used when retryable gRPC failures fall back to <code>/chat/completions</code></p>
                 </div>
                 {form.provider === 'triton' && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

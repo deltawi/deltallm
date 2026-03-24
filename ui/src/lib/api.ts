@@ -361,6 +361,7 @@ export interface ProviderPreset {
   compat: string;
   supported_modes: string[];
   grpc_capable?: boolean;
+  grpc_supported_modes?: string[];
 }
 
 export interface DeploymentHealth {

@@ -3,6 +3,8 @@
 DeltaLLM can talk to **vLLM** and **NVIDIA Triton Inference Server** over gRPC instead of HTTP.
 gRPC typically reduces per-request overhead and gives better streaming throughput for high-volume inference workloads.
 
+Current scope: gRPC transport is supported for **chat deployments only**.
+
 ## Quick Path
 
 ### vLLM over gRPC
@@ -82,7 +84,7 @@ These fields go inside `deltallm_params`:
 | `transport` | `"http"` \| `"grpc"` | `"http"` | Protocol to use when calling the provider |
 | `api_base` | string | — | Set to `grpc://host:port` as a shorthand for gRPC transport (auto-sets transport + grpc_address) |
 | `grpc_address` | string | — | Host and port for the gRPC endpoint (e.g. `"localhost:50051"`) |
-| `http_fallback_base` | string | — | Base URL used if the gateway needs to fall back to HTTP on retryable gRPC errors |
+| `http_fallback_base` | string | — | OpenAI-compatible HTTP base URL used if the gateway needs to fall back to HTTP on retryable gRPC errors |
 | `triton_model_name` | string | — | Triton model repository name (Triton only) |
 | `triton_model_version` | string | `""` (latest) | Triton model version (Triton only) |
 
@@ -136,11 +138,11 @@ Messages are concatenated into a prompt using a chat-template style format:
 
 ## Admin UI
 
-When creating or editing a model deployment for a gRPC-capable provider (vLLM or Triton), the admin UI shows additional fields:
+When creating or editing a chat deployment for a gRPC-capable provider (vLLM or Triton), the admin UI shows additional fields:
 
 - **Transport** — toggle between HTTP and gRPC
 - **gRPC Address** — the `host:port` of the gRPC endpoint
-- **HTTP Fallback URL** — optional fallback for when gRPC is unavailable
+- **HTTP Fallback URL** — optional OpenAI-compatible fallback base used when gRPC is unavailable
 - **Triton Model Name / Version** — shown only when the provider is Triton
 
 The Models list shows a transport badge (HTTP or gRPC) next to each deployment, and the Model Detail page displays the full gRPC configuration in the overview tab.
@@ -154,7 +156,7 @@ When `http_fallback_base` (or `api_base`) is set on a gRPC deployment, the gatew
 
 This is useful during rolling deployments where the gRPC port may be temporarily unavailable while the HTTP endpoint is still serving.
 
-The fallback path uses the standard OpenAI-compatible HTTP adapter, so the upstream must also expose an OpenAI-compatible HTTP API at the fallback URL.
+The fallback path uses the standard OpenAI-compatible HTTP adapter and calls `/chat/completions`, so the upstream must expose an OpenAI-compatible HTTP API at the fallback URL. Native Triton `/v2` endpoints are not used as the HTTP fallback path in this release.
 
 ## Soft Dependency
 

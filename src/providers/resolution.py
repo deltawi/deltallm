@@ -58,6 +58,10 @@ PROVIDER_CAPABILITIES: dict[str, set[ModelMode]] = {
 }
 
 GRPC_CAPABLE_PROVIDERS = {"vllm", "triton"}
+GRPC_TRANSPORT_CAPABILITIES: dict[str, set[ModelMode]] = {
+    "vllm": {"chat"},
+    "triton": {"chat"},
+}
 
 PROVIDER_PRESETS: dict[str, dict[str, str | None]] = {
     "openai": {"provider": "openai", "api_base": "https://api.openai.com/v1", "compat": "openai"},
@@ -168,6 +172,31 @@ def provider_supports_mode(provider: str, mode: ModelMode) -> bool:
     return mode in caps
 
 
+def grpc_supported_modes(provider: str) -> set[ModelMode]:
+    return set(GRPC_TRANSPORT_CAPABILITIES.get((provider or "").strip().lower(), set()))
+
+
+def provider_supports_grpc_transport(provider: str, mode: ModelMode) -> bool:
+    return mode in grpc_supported_modes(provider)
+
+
+def normalize_transport_params(params: MutableMapping[str, object]) -> None:
+    transport = str(params.get("transport") or "http").strip().lower() or "http"
+    api_base = str(params.get("api_base") or "").strip()
+    grpc_address = str(params.get("grpc_address") or "").strip()
+
+    if api_base.startswith("grpc://"):
+        transport = "grpc"
+        if not grpc_address:
+            grpc_address = api_base[len("grpc://"):].rstrip("/")
+
+    params["transport"] = transport
+    if grpc_address:
+        params["grpc_address"] = grpc_address
+    else:
+        params.pop("grpc_address", None)
+
+
 def is_openai_compatible_provider(provider: str) -> bool:
     return (provider or "").strip().lower() in OPENAI_COMPATIBLE_PROVIDERS
 
@@ -176,11 +205,13 @@ def provider_presets() -> list[dict[str, str | None | list[str] | bool]]:
     items: list[dict[str, str | None | list[str] | bool]] = []
     for key in sorted(PROVIDER_PRESETS.keys()):
         preset = PROVIDER_PRESETS[key]
+        grpc_modes = sorted(grpc_supported_modes(key))
         items.append(
             {
                 **preset,
                 "supported_modes": sorted(PROVIDER_CAPABILITIES.get(key, set())),
-                "grpc_capable": key in GRPC_CAPABLE_PROVIDERS,
+                "grpc_capable": bool(grpc_modes),
+                "grpc_supported_modes": grpc_modes,
             }
         )
     return items
@@ -189,6 +220,24 @@ def provider_presets() -> list[dict[str, str | None | list[str] | bool]]:
 def validate_provider_mode_compatibility(config: dict[str, object]) -> None:
     deployment = ModelDeployment.model_validate(config)
     mode = deployment.model_info.mode if deployment.model_info else "chat"
-    provider = resolve_provider(deployment.deltallm_params.model_dump(exclude_none=True))
+    params = deployment.deltallm_params.model_dump(exclude_none=True)
+    normalize_transport_params(params)
+    provider = resolve_provider(params)
     if not provider_supports_mode(provider, mode):
         raise ValueError(f"Provider '{provider}' does not support mode '{mode}'")
+
+    if str(params.get("transport") or "http").lower() != "grpc":
+        return
+
+    if provider not in GRPC_CAPABLE_PROVIDERS:
+        raise ValueError(
+            f"Provider '{provider}' does not support gRPC transport. "
+            f"Supported providers: {', '.join(sorted(GRPC_CAPABLE_PROVIDERS))}"
+        )
+
+    if not provider_supports_grpc_transport(provider, mode):
+        supported_modes = ", ".join(sorted(grpc_supported_modes(provider))) or "none"
+        raise ValueError(
+            f"Provider '{provider}' does not support gRPC transport for mode '{mode}'. "
+            f"Supported gRPC modes: {supported_modes}"
+        )

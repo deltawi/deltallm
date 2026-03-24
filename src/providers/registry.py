@@ -7,7 +7,13 @@ from fastapi import Request
 
 from src.models.errors import InvalidRequestError
 from src.providers.base import ProviderAdapter
-from src.providers.resolution import is_openai_compatible_provider, resolve_provider, resolve_upstream_model
+from src.providers.resolution import (
+    is_openai_compatible_provider,
+    normalize_transport_params,
+    provider_supports_grpc_transport,
+    resolve_provider,
+    resolve_upstream_model,
+)
 
 
 @dataclass
@@ -28,19 +34,22 @@ def resolve_chat_upstream(
     *,
     is_stream: bool = False,
 ) -> ChatUpstream:
-    provider = resolve_provider(params)
+    normalized_params = dict(params)
+    normalize_transport_params(normalized_params)
+    provider = resolve_provider(normalized_params)
     timeout = int(params.get("timeout") or 300)
 
-    transport_early = str(params.get("transport", "http")).lower()
-    api_base_early = str(params.get("api_base") or "")
-    if api_base_early.startswith("grpc://"):
-        transport_early = "grpc"
+    transport_early = str(normalized_params.get("transport") or "http").lower()
     if transport_early == "grpc":
         from src.providers.resolution import GRPC_CAPABLE_PROVIDERS
         if provider not in GRPC_CAPABLE_PROVIDERS:
             raise InvalidRequestError(
                 message=f"Provider '{provider}' does not support gRPC transport. "
                 f"Supported: {', '.join(sorted(GRPC_CAPABLE_PROVIDERS))}",
+            )
+        if not provider_supports_grpc_transport(provider, "chat"):
+            raise InvalidRequestError(
+                message=f"Provider '{provider}' does not support gRPC transport for mode 'chat'",
             )
 
     if provider == "anthropic":
@@ -99,14 +108,8 @@ def resolve_chat_upstream(
             timeout=timeout,
         )
 
-    transport = str(params.get("transport", "http")).lower()
-    grpc_address = params.get("grpc_address")
-
-    api_base_raw = str(params.get("api_base") or "")
-    if api_base_raw.startswith("grpc://"):
-        transport = "grpc"
-        if not grpc_address:
-            grpc_address = api_base_raw[len("grpc://"):].rstrip("/")
+    transport = str(normalized_params.get("transport") or "http").lower()
+    grpc_address = normalized_params.get("grpc_address")
 
     if transport == "grpc" and grpc_address:
         if provider == "triton":

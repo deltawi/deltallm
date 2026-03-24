@@ -8,6 +8,7 @@ from typing import Any, AsyncIterator
 from src.models.errors import ServiceUnavailableError
 from src.providers.base import ProviderAdapter
 from src.providers.grpc_channel import GrpcChannelManager
+from src.providers.grpc_stream import GrpcStreamHandle
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +189,26 @@ class VLLMGrpcAdapter(ProviderAdapter):
         timeout: int = 300,
         api_key: str | None = None,
     ) -> AsyncIterator[str]:
+        stream = await self.open_grpc_stream(
+            address,
+            payload,
+            timeout=timeout,
+            api_key=api_key,
+        )
+        try:
+            async for line in stream.lines:
+                yield line
+        finally:
+            await stream.aclose()
+
+    async def open_grpc_stream(
+        self,
+        address: str,
+        payload: dict[str, Any],
+        *,
+        timeout: int = 300,
+        api_key: str | None = None,
+    ) -> GrpcStreamHandle:
         if not GRPC_AVAILABLE:
             raise RuntimeError("grpcio is not installed")
 
@@ -202,9 +223,24 @@ class VLLMGrpcAdapter(ProviderAdapter):
                 response_deserializer=lambda x: x,
             )(request_bytes, timeout=timeout, metadata=metadata or None)
 
-            async for response_bytes in call:
-                chunk = _parse_response_bytes(response_bytes)
-                yield f"data: {json.dumps(chunk)}"
-            yield "data: [DONE]"
+            closed = False
+
+            async def aclose() -> None:
+                nonlocal closed
+                if closed:
+                    return
+                closed = True
+                call.cancel()
+
+            async def lines() -> AsyncIterator[str]:
+                try:
+                    async for response_bytes in call:
+                        chunk = _parse_response_bytes(response_bytes)
+                        yield f"data: {json.dumps(chunk)}"
+                    yield "data: [DONE]"
+                finally:
+                    await aclose()
+
+            return GrpcStreamHandle(lines=lines(), aclose=aclose)
         except Exception as exc:
             raise self.map_error(exc) from exc

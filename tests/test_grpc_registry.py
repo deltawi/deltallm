@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, PropertyMock
+from unittest.mock import MagicMock
 
 from src.providers.registry import resolve_chat_upstream
 from src.providers.grpc_channel import GrpcChannelManager
@@ -140,6 +140,19 @@ class TestResolveGrpcUpstream:
             "model": "gpt-4",
             "transport": "grpc",
             "grpc_address": "localhost:50051",
+            "api_key": "test-key",
+        }
+        from src.models.errors import InvalidRequestError
+        with pytest.raises(InvalidRequestError, match="does not support gRPC"):
+            resolve_chat_upstream(request, params)
+
+    def test_unsupported_provider_grpc_prefix_rejected(self):
+        state = _make_app_state()
+        request = _make_request(state)
+        params = {
+            "provider": "openai",
+            "model": "gpt-4",
+            "api_base": "grpc://localhost:50051",
             "api_key": "test-key",
         }
         from src.models.errors import InvalidRequestError

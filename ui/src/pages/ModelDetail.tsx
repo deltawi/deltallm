@@ -225,7 +225,7 @@ function OverviewTab({ model }: { model: any }) {
       {isGrpc && lp.grpc_address && (
         <Field label="gRPC Address" value={lp.grpc_address} mono />
       )}
-      <Field label={isGrpc ? 'HTTP Fallback URL' : 'API Base'} value={isGrpc ? (lp.http_fallback_base || lp.api_base || '—') : (lp.api_base || '—')} mono full />
+      <Field label={isGrpc ? 'HTTP Fallback URL (OpenAI-compatible)' : 'API Base'} value={isGrpc ? (lp.http_fallback_base || lp.api_base || '—') : (lp.api_base || '—')} mono full />
       <Field label="API Key"              value={maskedKey || 'Managed outside this deployment'} mono full />
       {isGrpc && lp.triton_model_name && (
         <Field label="Triton Model Name" value={lp.triton_model_name} mono />

@@ -12,7 +12,7 @@ from src.audit.actions import AuditAction
 from src.config_runtime.models import ModelHotReloadManager
 from src.middleware.admin import require_authenticated, require_master_key
 from src.providers.healthcheck import probe_provider_health
-from src.providers.resolution import provider_presets, validate_provider_mode_compatibility
+from src.providers.resolution import normalize_transport_params, provider_presets, validate_provider_mode_compatibility
 from src.router import build_deployment_registry
 from src.services.model_deployments import DuplicateModelNameError, ensure_model_name_available
 
@@ -123,26 +123,10 @@ def _normalized_model_payload_or_400(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="provider is required")
     if not model:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params.model is required")
-    transport = str(params.get("transport", "http")).lower()
+    normalize_transport_params(params)
+    transport = str(params.get("transport") or "http").lower()
     grpc_address = str(params.get("grpc_address") or "").strip()
-    from src.providers.resolution import GRPC_CAPABLE_PROVIDERS
-    if transport == "grpc" and provider not in GRPC_CAPABLE_PROVIDERS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"Provider '{provider}' does not support gRPC transport. "
-                f"Supported providers: {', '.join(sorted(GRPC_CAPABLE_PROVIDERS))}"
-            ),
-        )
-    is_grpc = transport == "grpc" and provider in GRPC_CAPABLE_PROVIDERS
-
-    api_base_has_grpc = api_base.startswith("grpc://") if api_base else False
-    if api_base_has_grpc:
-        is_grpc = True
-        if not grpc_address:
-            grpc_address = api_base[len("grpc://"):].rstrip("/")
-            params["grpc_address"] = grpc_address
-        params["transport"] = "grpc"
+    is_grpc = transport == "grpc"
 
     if not is_grpc and not api_base:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params.api_base is required")

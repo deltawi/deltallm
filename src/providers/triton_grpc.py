@@ -9,6 +9,7 @@ from typing import Any, AsyncIterator
 from src.models.errors import ServiceUnavailableError
 from src.providers.base import ProviderAdapter
 from src.providers.grpc_channel import GrpcChannelManager
+from src.providers.grpc_stream import GrpcStreamHandle
 
 logger = logging.getLogger(__name__)
 
@@ -341,6 +342,30 @@ class TritonGrpcAdapter(ProviderAdapter):
         timeout: int = 300,
         api_key: str | None = None,
     ) -> AsyncIterator[str]:
+        stream = await self.open_grpc_stream(
+            address,
+            payload,
+            model_name,
+            model_version,
+            timeout=timeout,
+            api_key=api_key,
+        )
+        try:
+            async for line in stream.lines:
+                yield line
+        finally:
+            await stream.aclose()
+
+    async def open_grpc_stream(
+        self,
+        address: str,
+        payload: dict[str, Any],
+        model_name: str,
+        model_version: str = "",
+        *,
+        timeout: int = 300,
+        api_key: str | None = None,
+    ) -> GrpcStreamHandle:
         if not GRPC_AVAILABLE:
             raise RuntimeError("grpcio is not installed")
 
@@ -357,17 +382,32 @@ class TritonGrpcAdapter(ProviderAdapter):
                 response_deserializer=lambda x: x,
             )(request_bytes, timeout=timeout, metadata=metadata)
 
-            async for response_bytes in call:
-                parsed = _parse_triton_response_pb(response_bytes, model_name)
-                text_output = ""
-                if parsed.get("choices"):
-                    text_output = parsed["choices"][0].get("message", {}).get("content", "")
-                chunk = {
-                    "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
-                    "object": "chat.completion.chunk",
-                    "choices": [{"index": 0, "delta": {"content": text_output}, "finish_reason": None}],
-                }
-                yield f"data: {json.dumps(chunk)}"
-            yield "data: [DONE]"
+            closed = False
+
+            async def aclose() -> None:
+                nonlocal closed
+                if closed:
+                    return
+                closed = True
+                call.cancel()
+
+            async def lines() -> AsyncIterator[str]:
+                try:
+                    async for response_bytes in call:
+                        parsed = _parse_triton_response_pb(response_bytes, model_name)
+                        text_output = ""
+                        if parsed.get("choices"):
+                            text_output = parsed["choices"][0].get("message", {}).get("content", "")
+                        chunk = {
+                            "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+                            "object": "chat.completion.chunk",
+                            "choices": [{"index": 0, "delta": {"content": text_output}, "finish_reason": None}],
+                        }
+                        yield f"data: {json.dumps(chunk)}"
+                    yield "data: [DONE]"
+                finally:
+                    await aclose()
+
+            return GrpcStreamHandle(lines=lines(), aclose=aclose)
         except Exception as exc:
             raise self.map_error(exc) from exc

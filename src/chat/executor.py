@@ -237,13 +237,16 @@ async def execute_chat(
 
 
 class _GrpcStreamContextManager:
-    def __init__(self) -> None:
+    def __init__(self, close_callback: Any) -> None:
         self._closed = False
+        self._close_callback = close_callback
 
     async def __aenter__(self) -> "_GrpcStreamContextManager":
         return self
 
     async def __aexit__(self, *args: Any) -> None:
+        if not self._closed:
+            await self._close_callback()
         self._closed = True
 
 
@@ -274,7 +277,7 @@ async def _open_grpc_stream(
         if provider == "triton":
             triton_model = upstream.grpc_metadata.get("triton_model_name", "")
             triton_version = upstream.grpc_metadata.get("triton_model_version", "")
-            raw_stream = adapter.execute_grpc_stream(
+            raw_stream = await adapter.open_grpc_stream(
                 grpc_address,
                 upstream_payload,
                 model_name=triton_model,
@@ -283,18 +286,18 @@ async def _open_grpc_stream(
                 api_key=api_key,
             )
         else:
-            raw_stream = adapter.execute_grpc_stream(
+            raw_stream = await adapter.open_grpc_stream(
                 grpc_address,
                 upstream_payload,
                 timeout=upstream.timeout,
                 api_key=api_key,
             )
 
-        context_manager = _GrpcStreamContextManager()
+        context_manager = _GrpcStreamContextManager(raw_stream.aclose)
         await context_manager.__aenter__()
 
         first_line: str | None = None
-        async for line in raw_stream:
+        async for line in raw_stream.lines:
             if line:
                 first_line = line
                 break
@@ -304,7 +307,7 @@ async def _open_grpc_stream(
             raise ServiceUnavailableError(message="Provider gRPC stream ended before first chunk")
 
         async def remaining_stream() -> AsyncIterator[str]:
-            async for line in raw_stream:
+            async for line in raw_stream.lines:
                 yield line
 
         return OpenedStream(
