@@ -358,6 +358,62 @@ async def test_rate_limit_aware_strategy_uses_audio_limits_when_configured():
 
 
 @pytest.mark.asyncio
+async def test_rate_limit_aware_strategy_uses_audio_character_limits_when_duration_is_also_present():
+    state = RedisStateBackend(redis=None)
+    registry = build_deployment_registry(
+        {
+            "audio-group": [
+                {
+                    "deployment_id": "dep-hot",
+                    "deltallm_params": {"model": "openai/audio"},
+                    "model_info": {
+                        "mode": "audio_speech",
+                        "rpm_limit": 10,
+                        "audio_seconds_pm_limit": 10,
+                        "char_pm_limit": 20,
+                    },
+                },
+                {
+                    "deployment_id": "dep-cool",
+                    "deltallm_params": {"model": "openai/audio"},
+                    "model_info": {
+                        "mode": "audio_speech",
+                        "rpm_limit": 10,
+                        "audio_seconds_pm_limit": 10,
+                        "char_pm_limit": 20,
+                    },
+                },
+            ]
+        }
+    )
+    await state.increment_usage_counters(
+        "dep-hot",
+        normalize_router_usage(
+            mode="audio_speech",
+            usage={"duration_seconds": 1.2, "input_characters": 20},
+        ),
+    )
+    await state.increment_usage_counters(
+        "dep-cool",
+        normalize_router_usage(
+            mode="audio_speech",
+            usage={"duration_seconds": 1.2, "input_characters": 5},
+        ),
+    )
+    router = Router(
+        strategy=RoutingStrategy.RATE_LIMIT_AWARE,
+        state_backend=state,
+        config=RouterConfig(),
+        deployment_registry=registry,
+    )
+
+    selected = await router.select_deployment("audio-group", {})
+
+    assert selected is not None
+    assert selected.deployment_id == "dep-cool"
+
+
+@pytest.mark.asyncio
 async def test_pre_call_checks_use_router_state_usage():
     state = RedisStateBackend(redis=None)
     registry = build_deployment_registry(
@@ -435,6 +491,15 @@ def test_normalize_router_usage_keeps_non_token_modes_out_of_tpm():
 
     rerank_usage = normalize_router_usage(mode="rerank", usage={"rerank_units": 4, "prompt_tokens": 120})
     assert rerank_usage == {"rpm": 1, "rerank_units_pm": 4}
+
+
+def test_normalize_router_usage_records_both_audio_duration_and_character_counters():
+    audio_usage = normalize_router_usage(
+        mode="audio_speech",
+        usage={"duration_seconds": 1.2, "input_characters": 11},
+    )
+
+    assert audio_usage == {"rpm": 1, "audio_seconds_pm": 2, "char_pm": 11}
 
 
 def test_normalize_router_usage_counts_multimodal_chat_tokens_without_total_tokens():

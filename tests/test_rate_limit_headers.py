@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import math
 import time
 
 import pytest
 
-from src.models.errors import RateLimitError
 from src.services.limit_counter import LimitCounter, RateLimitCheck, RateLimitResult
 from src.middleware.rate_limit import (
     RateLimitState,

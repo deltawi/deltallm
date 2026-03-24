@@ -32,7 +32,6 @@ def normalize_router_usage(
         duration_seconds = _duration_units(data)
         if duration_seconds > 0:
             counters["audio_seconds_pm"] = duration_seconds
-            return counters
         character_count = _character_units(data)
         if character_count > 0:
             counters["char_pm"] = character_count

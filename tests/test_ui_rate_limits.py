@@ -13,7 +13,20 @@ class FakeAdminDB:
 
     async def execute_raw(self, query: str, *params):
         if "INSERT INTO deltallm_organizationtable" in query:
-            organization_id, organization_name, max_budget, rpm_limit, tpm_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata = params[:9]
+            (
+                organization_id,
+                organization_name,
+                max_budget,
+                rpm_limit,
+                tpm_limit,
+                rph_limit,
+                rpd_limit,
+                tpd_limit,
+                model_rpm_limit,
+                model_tpm_limit,
+                audit_content_storage_enabled,
+                metadata,
+            ) = params[:12]
             self.organizations[organization_id] = {
                 "organization_id": organization_id,
                 "organization_name": organization_name,
@@ -21,6 +34,9 @@ class FakeAdminDB:
                 "spend": 0.0,
                 "rpm_limit": rpm_limit,
                 "tpm_limit": tpm_limit,
+                "rph_limit": rph_limit,
+                "rpd_limit": rpd_limit,
+                "tpd_limit": tpd_limit,
                 "model_rpm_limit": model_rpm_limit,
                 "model_tpm_limit": model_tpm_limit,
                 "audit_content_storage_enabled": bool(audit_content_storage_enabled) if audit_content_storage_enabled is not None else False,
@@ -31,7 +47,20 @@ class FakeAdminDB:
             return 1
 
         if "UPDATE deltallm_organizationtable" in query:
-            organization_name, max_budget, rpm_limit, tpm_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, organization_id = params[:9]
+            (
+                organization_name,
+                max_budget,
+                rpm_limit,
+                tpm_limit,
+                rph_limit,
+                rpd_limit,
+                tpd_limit,
+                model_rpm_limit,
+                model_tpm_limit,
+                audit_content_storage_enabled,
+                metadata,
+                organization_id,
+            ) = params[:12]
             row = self.organizations[organization_id]
             row.update(
                 {
@@ -39,6 +68,9 @@ class FakeAdminDB:
                     "max_budget": max_budget,
                     "rpm_limit": rpm_limit,
                     "tpm_limit": tpm_limit,
+                    "rph_limit": rph_limit,
+                    "rpd_limit": rpd_limit,
+                    "tpd_limit": tpd_limit,
                     "model_rpm_limit": model_rpm_limit,
                     "model_tpm_limit": model_tpm_limit,
                     "audit_content_storage_enabled": bool(audit_content_storage_enabled),
@@ -49,7 +81,19 @@ class FakeAdminDB:
             return 1
 
         if "INSERT INTO deltallm_teamtable" in query:
-            team_id, team_alias, organization_id, max_budget, rpm_limit, tpm_limit, model_rpm_limit, model_tpm_limit = params[:8]
+            (
+                team_id,
+                team_alias,
+                organization_id,
+                max_budget,
+                rpm_limit,
+                tpm_limit,
+                rph_limit,
+                rpd_limit,
+                tpd_limit,
+                model_rpm_limit,
+                model_tpm_limit,
+            ) = params[:11]
             self.teams[team_id] = {
                 "team_id": team_id,
                 "team_alias": team_alias,
@@ -58,6 +102,9 @@ class FakeAdminDB:
                 "spend": 0.0,
                 "rpm_limit": rpm_limit,
                 "tpm_limit": tpm_limit,
+                "rph_limit": rph_limit,
+                "rpd_limit": rpd_limit,
+                "tpd_limit": tpd_limit,
                 "model_rpm_limit": model_rpm_limit,
                 "model_tpm_limit": model_tpm_limit,
                 "blocked": False,
@@ -67,7 +114,19 @@ class FakeAdminDB:
             return 1
 
         if "UPDATE deltallm_teamtable" in query:
-            team_alias, organization_id, max_budget, rpm_limit, tpm_limit, model_rpm_limit, model_tpm_limit, team_id = params[:8]
+            (
+                team_alias,
+                organization_id,
+                max_budget,
+                rpm_limit,
+                tpm_limit,
+                rph_limit,
+                rpd_limit,
+                tpd_limit,
+                model_rpm_limit,
+                model_tpm_limit,
+                team_id,
+            ) = params[:11]
             row = self.teams[team_id]
             row.update(
                 {
@@ -76,6 +135,9 @@ class FakeAdminDB:
                     "max_budget": max_budget,
                     "rpm_limit": rpm_limit,
                     "tpm_limit": tpm_limit,
+                    "rph_limit": rph_limit,
+                    "rpd_limit": rpd_limit,
+                    "tpd_limit": tpd_limit,
                     "model_rpm_limit": model_rpm_limit,
                     "model_tpm_limit": model_tpm_limit,
                     "updated_at": datetime.now(tz=UTC),
