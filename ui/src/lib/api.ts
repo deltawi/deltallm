@@ -290,6 +290,9 @@ export interface ApiKey {
   max_budget: number | null;
   rpm_limit: number | null;
   tpm_limit: number | null;
+  rph_limit: number | null;
+  rpd_limit: number | null;
+  tpd_limit: number | null;
   expires: string | null;
   created_at?: string | null;
   updated_at?: string | null;

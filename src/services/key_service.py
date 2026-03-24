@@ -70,7 +70,23 @@ class KeyService:
             team_rpm_limit=record.team_rpm_limit,
             org_tpm_limit=record.org_tpm_limit,
             org_rpm_limit=record.org_rpm_limit,
+            team_model_rpm_limit=record.team_model_rpm_limit,
+            team_model_tpm_limit=record.team_model_tpm_limit,
+            org_model_rpm_limit=record.org_model_rpm_limit,
+            org_model_tpm_limit=record.org_model_tpm_limit,
             max_parallel_requests=record.max_parallel_requests,
+            key_rph_limit=record.key_rph_limit,
+            key_rpd_limit=record.key_rpd_limit,
+            key_tpd_limit=record.key_tpd_limit,
+            user_rph_limit=record.user_rph_limit,
+            user_rpd_limit=record.user_rpd_limit,
+            user_tpd_limit=record.user_tpd_limit,
+            team_rph_limit=record.team_rph_limit,
+            team_rpd_limit=record.team_rpd_limit,
+            team_tpd_limit=record.team_tpd_limit,
+            org_rph_limit=record.org_rph_limit,
+            org_rpd_limit=record.org_rpd_limit,
+            org_tpd_limit=record.org_tpd_limit,
             guardrails=self._extract_guardrails(record),
             metadata=record.metadata,
             team_metadata=record.team_metadata,
@@ -96,6 +112,50 @@ class KeyService:
             return
         cache_key = self._cache_key(token_hash)
         await self.redis.delete(cache_key)
+
+    async def invalidate_keys_for_team(self, team_id: str) -> int:
+        return await self._invalidate_keys_by_scope("team_id", team_id)
+
+    async def invalidate_keys_for_org(self, organization_id: str) -> int:
+        return await self._invalidate_keys_by_scope("organization_id", organization_id)
+
+    async def invalidate_keys_for_user(self, user_id: str) -> int:
+        return await self._invalidate_keys_by_scope("user_id", user_id)
+
+    async def _invalidate_keys_by_scope(self, scope_column: str, scope_value: str) -> int:
+        if self.redis is None or self.repository.prisma is None:
+            return 0
+        if scope_column == "organization_id":
+            rows = await self.repository.prisma.query_raw(
+                """
+                SELECT v.token FROM deltallm_verificationtoken v
+                LEFT JOIN deltallm_usertable u ON u.user_id = v.user_id
+                LEFT JOIN deltallm_teamtable t ON t.team_id = COALESCE(v.team_id, u.team_id)
+                WHERE t.organization_id = $1
+                """,
+                scope_value,
+            )
+        elif scope_column == "team_id":
+            rows = await self.repository.prisma.query_raw(
+                """
+                SELECT v.token FROM deltallm_verificationtoken v
+                LEFT JOIN deltallm_usertable u ON u.user_id = v.user_id
+                WHERE COALESCE(v.team_id, u.team_id) = $1
+                """,
+                scope_value,
+            )
+        else:
+            rows = await self.repository.prisma.query_raw(
+                f"SELECT token FROM deltallm_verificationtoken WHERE {scope_column} = $1",
+                scope_value,
+            )
+        count = 0
+        for row in (rows or []):
+            token_hash = row.get("token")
+            if token_hash:
+                await self.redis.delete(self._cache_key(token_hash))
+                count += 1
+        return count
 
     @staticmethod
     def _cache_key(token_hash: str) -> str:

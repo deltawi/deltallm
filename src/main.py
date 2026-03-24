@@ -27,6 +27,7 @@ from src.cache import (
     CacheMiddleware,
 )
 from src.api.admin import admin_router
+from src.middleware.rate_limit_headers import RateLimitHeaderMiddleware
 from src.api.v1.router import v1_router
 from src.middleware.errors import register_exception_handlers
 from src.middleware.platform_auth import attach_platform_auth_context
@@ -87,6 +88,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="DeltaLLM Core API", version="0.1.0", lifespan=lifespan)
     register_exception_handlers(app)
     app.add_middleware(CacheMiddleware)
+    app.add_middleware(RateLimitHeaderMiddleware)
 
     @app.middleware("http")
     async def _platform_auth_context_middleware(request: Request, call_next):

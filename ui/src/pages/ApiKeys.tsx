@@ -21,6 +21,9 @@ type KeyFormState = {
   max_budget: string;
   rpm_limit: string;
   tpm_limit: string;
+  rph_limit: string;
+  rpd_limit: string;
+  tpd_limit: string;
   asset_access_mode: 'inherit' | 'restrict';
   selected_callable_keys: string[];
 };
@@ -36,6 +39,9 @@ function emptyForm(): KeyFormState {
     max_budget: '',
     rpm_limit: '',
     tpm_limit: '',
+    rph_limit: '',
+    rpd_limit: '',
+    tpd_limit: '',
     asset_access_mode: 'inherit',
     selected_callable_keys: [],
   };
@@ -227,6 +233,9 @@ export default function ApiKeys() {
         max_budget: form.max_budget ? Number(form.max_budget) : undefined,
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
+        rph_limit: form.rph_limit ? Number(form.rph_limit) : undefined,
+        rpd_limit: form.rpd_limit ? Number(form.rpd_limit) : undefined,
+        tpd_limit: form.tpd_limit ? Number(form.tpd_limit) : undefined,
       });
       let assetAccessError: string | null = null;
       if (form.asset_access_mode === 'restrict') {
@@ -275,6 +284,9 @@ export default function ApiKeys() {
         max_budget: form.max_budget ? Number(form.max_budget) : undefined,
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
+        rph_limit: form.rph_limit ? Number(form.rph_limit) : undefined,
+        rpd_limit: form.rpd_limit ? Number(form.rpd_limit) : undefined,
+        tpd_limit: form.tpd_limit ? Number(form.tpd_limit) : undefined,
       });
       await keys.updateAssetAccess(editItem.token, {
         mode: form.asset_access_mode,
@@ -299,6 +311,9 @@ export default function ApiKeys() {
       max_budget: row.max_budget != null ? String(row.max_budget) : '',
       rpm_limit: row.rpm_limit != null ? String(row.rpm_limit) : '',
       tpm_limit: row.tpm_limit != null ? String(row.tpm_limit) : '',
+      rph_limit: row.rph_limit != null ? String(row.rph_limit) : '',
+      rpd_limit: row.rpd_limit != null ? String(row.rpd_limit) : '',
+      tpd_limit: row.tpd_limit != null ? String(row.tpd_limit) : '',
       asset_access_mode: 'inherit',
       selected_callable_keys: [],
     });
@@ -364,6 +379,9 @@ export default function ApiKeys() {
     { key: 'budget', header: 'Budget', render: (r: any) => <BudgetBar spend={r.spend || 0} max_budget={r.max_budget} /> },
     { key: 'rpm_limit', header: 'RPM', render: (r: any) => r.rpm_limit != null ? <span className="text-xs font-medium">{Number(r.rpm_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
     { key: 'tpm_limit', header: 'TPM', render: (r: any) => r.tpm_limit != null ? <span className="text-xs font-medium">{Number(r.tpm_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
+    { key: 'rph_limit', header: 'RPH', render: (r: any) => r.rph_limit != null ? <span className="text-xs font-medium">{Number(r.rph_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
+    { key: 'rpd_limit', header: 'RPD', render: (r: any) => r.rpd_limit != null ? <span className="text-xs font-medium">{Number(r.rpd_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
+    { key: 'tpd_limit', header: 'TPD', render: (r: any) => r.tpd_limit != null ? <span className="text-xs font-medium">{Number(r.tpd_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
     {
       key: 'actions', header: '', render: (r: any) => (
         <div className="flex gap-1">
@@ -547,6 +565,18 @@ export default function ApiKeys() {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">TPM Limit</label>
               <input type="number" value={form.tpm_limit} onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">RPH Limit</label>
+              <input type="number" value={form.rph_limit} onChange={(e) => setForm({ ...form, rph_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Requests per hour" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">RPD Limit</label>
+              <input type="number" value={form.rpd_limit} onChange={(e) => setForm({ ...form, rpd_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Requests per day" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">TPD Limit</label>
+              <input type="number" value={form.tpd_limit} onChange={(e) => setForm({ ...form, tpd_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Tokens per day" />
             </div>
           </div>
           <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
