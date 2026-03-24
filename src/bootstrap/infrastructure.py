@@ -8,7 +8,7 @@ from redis.asyncio import Redis
 
 from src.bootstrap.status import BootstrapStatus
 from src.batch import BatchRepository
-from src.config import get_settings, resolve_database_settings, resolve_salt_key
+from src.config import GrpcSettings, get_settings, resolve_database_settings, resolve_salt_key
 from src.config_runtime import DynamicConfigManager, SecretResolver, build_app_config, load_yaml_dict
 from src.db.callable_targets import CallableTargetBindingRepository
 from src.db.callable_target_policies import CallableTargetScopePolicyRepository
@@ -85,7 +85,7 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
     app.state.gemini_adapter = GeminiAdapter(http_client)
     app.state.bedrock_adapter = BedrockAdapter(http_client)
 
-    grpc_cfg = cfg.grpc_settings
+    grpc_cfg = getattr(cfg, "grpc_settings", None) or GrpcSettings()
     grpc_channel_manager = GrpcChannelManager(
         max_pool_size=grpc_cfg.max_pool_size,
         keepalive_time_ms=grpc_cfg.keepalive_time_ms,
