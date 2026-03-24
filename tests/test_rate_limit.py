@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from src.middleware.rate_limit import _check_and_acquire_rate_limits
 from src.models.errors import InvalidRequestError
+from src.services.limit_counter import LimitCounter
 
 
 @pytest.mark.asyncio
@@ -81,6 +83,46 @@ async def test_rate_limit_user_tpm_enforced(client, test_app):
     payload = blocked.json()
     assert payload["error"]["code"] == "user_tpm_exceeded"
     assert payload["error"]["param"] == "user_tpm"
+
+
+@pytest.mark.asyncio
+async def test_audio_transcription_team_model_rpm_enforced_for_multipart_requests(client, test_app):
+    class RecordingLimitCounter(LimitCounter):
+        def __init__(self) -> None:
+            super().__init__(redis_client=None)
+            self.seen_checks = []
+
+        async def check_rate_limits_atomic(self, checks):
+            self.seen_checks.append(list(checks))
+            return await super().check_rate_limits_atomic(checks)
+
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    record = next(iter(test_app.state._test_repo.records.values()))
+    record.rpm_limit = 50
+    record.team_model_rpm_limit = {"gpt-4o-mini": 1}
+    test_app.state.limit_counter = RecordingLimitCounter()
+
+    async def stt_post(url: str, headers: dict[str, str], files, data, timeout: int):  # noqa: ANN001, ANN201
+        del headers, files, data, timeout
+        if url.endswith("/audio/transcriptions"):
+            return httpx.Response(200, json={"text": "hello"}, request=httpx.Request("POST", url))
+        return httpx.Response(404, json={"error": "not found"}, request=httpx.Request("POST", url))
+
+    test_app.state.http_client.post = stt_post
+
+    files = {"file": ("audio.wav", b"abc", "audio/wav")}
+    data = {"model": "gpt-4o-mini", "response_format": "json"}
+
+    ok = await client.post("/v1/audio/transcriptions", headers=headers, files=files, data=data)
+    blocked = await client.post("/v1/audio/transcriptions", headers=headers, files=files, data=data)
+
+    assert ok.status_code == 200
+    assert blocked.status_code == 429
+    scopes = {check.scope for check in test_app.state.limit_counter.seen_checks[0]}
+    assert "team_model_rpm" in scopes
+    payload = blocked.json()
+    assert payload["error"]["code"] == "team_model_rpm_exceeded"
+    assert payload["error"]["param"] == "team_model_rpm"
 
 
 @pytest.mark.asyncio

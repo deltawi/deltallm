@@ -3,7 +3,7 @@ from __future__ import annotations
 import secrets
 import logging
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
@@ -151,10 +151,60 @@ async def _validate_self_service_constraints(
 def _is_self_service_only(scope: Any) -> bool:
     if scope.is_platform_admin:
         return False
+    effective_permissions = set(getattr(scope, "effective_permissions", set()) or set())
     return (
-        Permission.KEY_CREATE_SELF in scope.granted_permissions
-        and Permission.KEY_UPDATE not in scope.granted_permissions
+        Permission.KEY_CREATE_SELF in effective_permissions
+        and Permission.KEY_UPDATE not in effective_permissions
+        and Permission.KEY_REVOKE not in effective_permissions
     )
+
+
+def _scope_has_permission(
+    scope: Any,
+    *,
+    organization_id: str | None,
+    team_id: str | None,
+    permission: str,
+) -> bool:
+    if scope.is_platform_admin:
+        return True
+
+    team_permissions = getattr(scope, "team_permissions_by_id", {}) or {}
+    if team_id and permission in set(team_permissions.get(team_id) or set()):
+        return True
+
+    org_permissions = getattr(scope, "org_permissions_by_id", {}) or {}
+    if organization_id and permission in set(org_permissions.get(organization_id) or set()):
+        return True
+
+    return False
+
+
+def _resolve_key_access_mode(
+    scope: Any,
+    *,
+    organization_id: str | None,
+    team_id: str | None,
+    admin_permission: str,
+    allow_self_service: bool = False,
+) -> Literal["admin", "self_service"]:
+    if _scope_has_permission(
+        scope,
+        organization_id=organization_id,
+        team_id=team_id,
+        permission=admin_permission,
+    ):
+        return "admin"
+
+    if allow_self_service and _scope_has_permission(
+        scope,
+        organization_id=organization_id,
+        team_id=team_id,
+        permission=Permission.KEY_CREATE_SELF,
+    ):
+        return "self_service"
+
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
 
 
 def _key_response_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -373,7 +423,6 @@ async def create_key(
     _reject_legacy_models_field(payload)
     scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_UPDATE, Permission.KEY_CREATE_SELF])
     db = db_or_503(request)
-    self_service_only = _is_self_service_only(scope)
 
     key_name = str(payload.get("key_name") or "").strip()
     user_id = str(payload.get("user_id") or "").strip() or None
@@ -396,13 +445,21 @@ async def create_key(
     if not team_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="team_id is required")
 
+    team = await _get_team_row(db, team_id)
+    team_org = str(team.get("organization_id") or "").strip() or None
+    access_mode = _resolve_key_access_mode(
+        scope,
+        organization_id=team_org,
+        team_id=team_id,
+        admin_permission=Permission.KEY_UPDATE,
+        allow_self_service=True,
+    )
+    self_service_only = access_mode == "self_service"
+
     if self_service_only:
         owner_account_id = scope.account_id
         owner_service_account_id = None
         user_id = None
-
-        if team_id not in scope.team_ids:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only create self-service keys for teams you belong to")
 
         policy = await _get_self_service_policy(db, team_id)
         await _validate_self_service_constraints(
@@ -418,12 +475,6 @@ async def create_key(
             rpd_limit=rpd_limit,
             tpd_limit=tpd_limit,
         )
-
-    team = await _get_team_row(db, team_id)
-    team_org = team.get("organization_id")
-    if not scope.is_platform_admin and not self_service_only:
-        if not team_org or team_org not in scope.org_ids:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only create keys for teams in your organizations")
     if user_id:
         await _validate_runtime_user(db, user_id, team_id)
     if not self_service_only:
@@ -521,7 +572,7 @@ async def update_key(
     _reject_legacy_models_field(payload)
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
     db = db_or_503(request)
-    await _require_key_access(scope, db, token_hash)
+    await _require_key_access(scope, db, token_hash, admin_permission=Permission.KEY_UPDATE)
     rows = await db.query_raw(
         """
         SELECT token, key_name, user_id, team_id, owner_account_id, owner_service_account_id, spend, max_budget, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, expires, created_at, updated_at
@@ -672,22 +723,35 @@ async def update_key(
         raise
 
 
-async def _require_key_access(scope, db, token_hash: str, *, allow_self_service: bool = False) -> None:
-    if scope.is_platform_admin:
-        return
+async def _require_key_access(
+    scope,
+    db,
+    token_hash: str,
+    *,
+    admin_permission: str,
+    allow_self_service: bool = False,
+) -> Literal["admin", "self_service"]:
     row = await _get_key_scope_row(db, token_hash)
+    organization_id = str(row.get("organization_id") or "").strip() or None
+    team_id = str(row.get("team_id") or "").strip() or None
+    access_mode = _resolve_key_access_mode(
+        scope,
+        organization_id=organization_id,
+        team_id=team_id,
+        admin_permission=admin_permission,
+        allow_self_service=allow_self_service,
+    )
 
-    if allow_self_service and _is_self_service_only(scope):
+    if access_mode == "self_service":
         owner_rows = await db.query_raw(
             "SELECT owner_account_id FROM deltallm_verificationtoken WHERE token = $1 LIMIT 1",
             token_hash,
         )
         if owner_rows and str(owner_rows[0].get("owner_account_id") or "") == scope.account_id:
-            return
+            return access_mode
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only manage your own keys")
 
-    if not row.get("organization_id") or row["organization_id"] not in scope.org_ids:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+    return access_mode
 
 
 @router.get("/ui/api/keys/{token_hash}/asset-visibility")
@@ -699,7 +763,7 @@ async def get_key_asset_visibility(
 ) -> dict[str, Any]:
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
     db = db_or_503(request)
-    await _require_key_access(scope, db, token_hash)
+    await _require_key_access(scope, db, token_hash, admin_permission=Permission.KEY_READ)
     key_row = await _get_key_scope_row(db, token_hash)
     organization_id = str(key_row.get("organization_id") or "").strip()
     team_id = str(key_row.get("team_id") or "").strip() or None
@@ -725,7 +789,7 @@ async def get_key_asset_access(
 ) -> dict[str, Any]:
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
     db = db_or_503(request)
-    await _require_key_access(scope, db, token_hash)
+    await _require_key_access(scope, db, token_hash, admin_permission=Permission.KEY_READ)
     key_row = await _get_key_scope_row(db, token_hash)
     organization_id = str(key_row.get("organization_id") or "").strip()
     team_id = str(key_row.get("team_id") or "").strip() or None
@@ -755,7 +819,7 @@ async def update_key_asset_access(
     request_start = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
     db = db_or_503(request)
-    await _require_key_access(scope, db, token_hash)
+    await _require_key_access(scope, db, token_hash, admin_permission=Permission.KEY_UPDATE)
     key_row = await _get_key_scope_row(db, token_hash)
     organization_id = str(key_row.get("organization_id") or "").strip()
     team_id = str(key_row.get("team_id") or "").strip() or None
@@ -797,8 +861,13 @@ async def regenerate_key(
     request_start = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_UPDATE, Permission.KEY_CREATE_SELF])
     db = db_or_503(request)
-    self_service_only = _is_self_service_only(scope)
-    await _require_key_access(scope, db, token_hash, allow_self_service=True)
+    access_mode = await _require_key_access(
+        scope,
+        db,
+        token_hash,
+        admin_permission=Permission.KEY_UPDATE,
+        allow_self_service=True,
+    )
 
     rows = await db.query_raw("SELECT token FROM deltallm_verificationtoken WHERE token = $1 LIMIT 1", token_hash)
     if not rows:
@@ -816,7 +885,7 @@ async def regenerate_key(
         await request.app.state.key_service.invalidate_key_cache_by_hash(new_hash)
     except Exception:
         logger.exception("failed to invalidate key auth cache after regenerate")
-    audit_action = AuditAction.ADMIN_KEY_SELF_ROTATE if self_service_only else AuditAction.ADMIN_KEY_REGENERATE
+    audit_action = AuditAction.ADMIN_KEY_SELF_ROTATE if access_mode == "self_service" else AuditAction.ADMIN_KEY_REGENERATE
     response = {"token": new_hash, "raw_key": raw_key}
     await emit_admin_mutation_audit(
         request=request,
@@ -841,15 +910,20 @@ async def revoke_key(
     request_start = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_REVOKE, Permission.KEY_CREATE_SELF])
     db = db_or_503(request)
-    self_service_only = _is_self_service_only(scope)
-    await _require_key_access(scope, db, token_hash, allow_self_service=True)
+    access_mode = await _require_key_access(
+        scope,
+        db,
+        token_hash,
+        admin_permission=Permission.KEY_REVOKE,
+        allow_self_service=True,
+    )
     deleted = await db.execute_raw("DELETE FROM deltallm_verificationtoken WHERE token = $1", token_hash)
     if int(deleted or 0) > 0:
         try:
             await request.app.state.key_service.invalidate_key_cache_by_hash(token_hash)
         except Exception:
             logger.exception("failed to invalidate key auth cache after revoke")
-    audit_action = AuditAction.ADMIN_KEY_SELF_REVOKE if self_service_only else AuditAction.ADMIN_KEY_REVOKE
+    audit_action = AuditAction.ADMIN_KEY_SELF_REVOKE if access_mode == "self_service" else AuditAction.ADMIN_KEY_REVOKE
     response = {"revoked": int(deleted or 0) > 0}
     await emit_admin_mutation_audit(
         request=request,
@@ -873,15 +947,20 @@ async def delete_key(
     request_start = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_REVOKE, Permission.KEY_CREATE_SELF])
     db = db_or_503(request)
-    self_service_only = _is_self_service_only(scope)
-    await _require_key_access(scope, db, token_hash, allow_self_service=True)
+    access_mode = await _require_key_access(
+        scope,
+        db,
+        token_hash,
+        admin_permission=Permission.KEY_REVOKE,
+        allow_self_service=True,
+    )
     deleted = await db.execute_raw("DELETE FROM deltallm_verificationtoken WHERE token = $1", token_hash)
     if int(deleted or 0) > 0:
         try:
             await request.app.state.key_service.invalidate_key_cache_by_hash(token_hash)
         except Exception:
             logger.exception("failed to invalidate key auth cache after delete")
-    audit_action = AuditAction.ADMIN_KEY_SELF_REVOKE if self_service_only else AuditAction.ADMIN_KEY_DELETE
+    audit_action = AuditAction.ADMIN_KEY_SELF_REVOKE if access_mode == "self_service" else AuditAction.ADMIN_KEY_DELETE
     response = {"deleted": int(deleted or 0) > 0}
     await emit_admin_mutation_audit(
         request=request,
