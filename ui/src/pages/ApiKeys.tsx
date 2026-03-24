@@ -13,6 +13,12 @@ import { ContentCard, IndexShell } from '../components/admin/shells';
 
 type OwnerMode = 'self' | 'service_account';
 type ViewTab = 'all' | 'my';
+type TeamOption = {
+  team_id: string;
+  team_alias?: string | null;
+  self_service_keys_enabled?: boolean;
+};
+type KeyMutationPayload = Record<string, number | string | null | undefined>;
 
 type KeyFormState = {
   key_name: string;
@@ -50,7 +56,11 @@ function emptyForm(): KeyFormState {
   };
 }
 
-function KeyStatus({ row }: { row: any }) {
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message.trim() ? error.message : fallback;
+}
+
+function KeyStatus({ row }: { row: ApiKey }) {
   if (row.expires) {
     const exp = new Date(row.expires);
     if (exp < new Date()) return <StatusBadge status="expired" />;
@@ -112,10 +122,13 @@ export default function ApiKeys() {
   const items = result?.data || [];
   const pagination = result?.pagination;
   const { data: teamsResult } = useApi(() => teams.list({ limit: 500 }), []);
-  const teamsList = teamsResult?.data || [];
+  const teamsList = useMemo<TeamOption[]>(
+    () => (Array.isArray(teamsResult?.data) ? (teamsResult.data as TeamOption[]) : []),
+    [teamsResult?.data],
+  );
 
   const selfServiceTeams = useMemo(
-    () => (teamsList || []).filter((t: any) => t.self_service_keys_enabled),
+    () => teamsList.filter((team) => team.self_service_keys_enabled),
     [teamsList],
   );
 
@@ -159,7 +172,10 @@ export default function ApiKeys() {
     ),
     [selectedTeamId]
   );
-  const availableServiceAccounts = serviceAccountsResult?.data || [];
+  const availableServiceAccounts = useMemo(
+    () => serviceAccountsResult?.data ?? [],
+    [serviceAccountsResult?.data],
+  );
   const hasServiceAccounts = availableServiceAccounts.length > 0;
 
   const isSelfServiceCreate = myKeysMode && !isAdmin;
@@ -246,8 +262,8 @@ export default function ApiKeys() {
         owner_service_account_id: created.service_account_id,
       }));
       setNewServiceAccountName('');
-    } catch (err: any) {
-      setError(err?.message || 'Failed to create service account');
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to create service account'));
     } finally {
       setCreatingServiceAccount(false);
     }
@@ -290,7 +306,7 @@ export default function ApiKeys() {
           }
         }
       }
-      const payload: any = {
+      const payload: KeyMutationPayload = {
         key_name: form.key_name.trim(),
         team_id: form.team_id || undefined,
         max_budget: form.max_budget ? Number(form.max_budget) : undefined,
@@ -315,16 +331,19 @@ export default function ApiKeys() {
             mode: 'restrict',
             selected_callable_keys: form.selected_callable_keys,
           });
-        } catch (err: any) {
-          assetAccessError = err?.message || 'API key created, but asset access could not be updated. Open the key again to finish access setup.';
+        } catch (err: unknown) {
+          assetAccessError = getErrorMessage(
+            err,
+            'API key created, but asset access could not be updated. Open the key again to finish access setup.',
+          );
         }
       }
       setCreatedKey(result.raw_key);
       closeEditor();
       refetch();
       setPageError(assetAccessError);
-    } catch (err: any) {
-      setError(err?.message || 'Failed to create key');
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to create key'));
     } finally {
       setSaving(false);
     }
@@ -347,7 +366,7 @@ export default function ApiKeys() {
         setError('Select a service account or switch ownership to You.');
         return;
       }
-      await keys.update(editItem.token, {
+      const payload: KeyMutationPayload = {
         key_name: form.key_name.trim(),
         team_id: form.team_id || undefined,
         owner_account_id: form.owner_mode === 'self' ? currentUserId || undefined : undefined,
@@ -358,15 +377,19 @@ export default function ApiKeys() {
         rph_limit: form.rph_limit ? Number(form.rph_limit) : undefined,
         rpd_limit: form.rpd_limit ? Number(form.rpd_limit) : undefined,
         tpd_limit: form.tpd_limit ? Number(form.tpd_limit) : undefined,
-      });
+      };
+      if (isSelfServiceCreate) {
+        payload.expires = form.expires ? new Date(form.expires).toISOString() : null;
+      }
+      await keys.update(editItem.token, payload);
       await keys.updateAssetAccess(editItem.token, {
         mode: form.asset_access_mode,
         selected_callable_keys: form.asset_access_mode === 'restrict' ? form.selected_callable_keys : [],
       });
       closeEditor();
       refetch();
-    } catch (err: any) {
-      setError(err?.message || 'Failed to update key');
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, 'Failed to update key'));
     } finally {
       setSaving(false);
     }
@@ -410,8 +433,8 @@ export default function ApiKeys() {
     try {
       await keys.revoke(hash);
       refetch();
-    } catch (err: any) {
-      alert(err?.message || 'Failed to revoke key');
+    } catch (err: unknown) {
+      alert(getErrorMessage(err, 'Failed to revoke key'));
     }
   };
 
@@ -421,8 +444,8 @@ export default function ApiKeys() {
       const result = await keys.regenerate(hash);
       setCreatedKey(result.raw_key);
       refetch();
-    } catch (err: any) {
-      alert(err?.message || 'Failed to regenerate key');
+    } catch (err: unknown) {
+      alert(getErrorMessage(err, 'Failed to regenerate key'));
     }
   };
 
@@ -443,23 +466,23 @@ export default function ApiKeys() {
   };
 
   const columns = [
-    { key: 'key_name', header: 'Name', render: (r: any) => <span className="font-medium">{r.key_name || '(unnamed)'}</span> },
-    { key: 'token', header: 'Token', render: (r: any) => <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{maskKey(r.token)}</code> },
-    { key: 'team', header: 'Team', render: (r: ApiKey) => <span className="text-sm">{r.team_alias || r.team_id}</span> },
-    { key: 'owner', header: 'Owner', render: (r: ApiKey) => <span className="text-sm">{ownerLabel(r)}</span> },
-    { key: 'status', header: 'Status', render: (r: any) => <KeyStatus row={r} /> },
-    { key: 'budget', header: 'Budget', render: (r: any) => <BudgetBar spend={r.spend || 0} max_budget={r.max_budget} /> },
-    { key: 'rpm_limit', header: 'RPM', render: (r: any) => r.rpm_limit != null ? <span className="text-xs font-medium">{Number(r.rpm_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
-    { key: 'tpm_limit', header: 'TPM', render: (r: any) => r.tpm_limit != null ? <span className="text-xs font-medium">{Number(r.tpm_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
-    { key: 'rph_limit', header: 'RPH', render: (r: any) => r.rph_limit != null ? <span className="text-xs font-medium">{Number(r.rph_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
-    { key: 'rpd_limit', header: 'RPD', render: (r: any) => r.rpd_limit != null ? <span className="text-xs font-medium">{Number(r.rpd_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
-    { key: 'tpd_limit', header: 'TPD', render: (r: any) => r.tpd_limit != null ? <span className="text-xs font-medium">{Number(r.tpd_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
+    { key: 'key_name', header: 'Name', render: (row: ApiKey) => <span className="font-medium">{row.key_name || '(unnamed)'}</span> },
+    { key: 'token', header: 'Token', render: (row: ApiKey) => <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{maskKey(row.token)}</code> },
+    { key: 'team', header: 'Team', render: (row: ApiKey) => <span className="text-sm">{row.team_alias || row.team_id}</span> },
+    { key: 'owner', header: 'Owner', render: (row: ApiKey) => <span className="text-sm">{ownerLabel(row)}</span> },
+    { key: 'status', header: 'Status', render: (row: ApiKey) => <KeyStatus row={row} /> },
+    { key: 'budget', header: 'Budget', render: (row: ApiKey) => <BudgetBar spend={row.spend || 0} max_budget={row.max_budget} /> },
+    { key: 'rpm_limit', header: 'RPM', render: (row: ApiKey) => row.rpm_limit != null ? <span className="text-xs font-medium">{Number(row.rpm_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
+    { key: 'tpm_limit', header: 'TPM', render: (row: ApiKey) => row.tpm_limit != null ? <span className="text-xs font-medium">{Number(row.tpm_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
+    { key: 'rph_limit', header: 'RPH', render: (row: ApiKey) => row.rph_limit != null ? <span className="text-xs font-medium">{Number(row.rph_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
+    { key: 'rpd_limit', header: 'RPD', render: (row: ApiKey) => row.rpd_limit != null ? <span className="text-xs font-medium">{Number(row.rpd_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
+    { key: 'tpd_limit', header: 'TPD', render: (row: ApiKey) => row.tpd_limit != null ? <span className="text-xs font-medium">{Number(row.tpd_limit).toLocaleString()}</span> : <span className="text-gray-400 text-xs">No limit</span> },
     {
-      key: 'actions', header: '', render: (r: any) => (
+      key: 'actions', header: '', render: (row: ApiKey) => (
         <div className="flex gap-1">
-          {isAdmin && <button onClick={() => openEdit(r)} className="p-1.5 hover:bg-gray-100 rounded-lg" title="Edit"><Pencil className="w-4 h-4 text-gray-500" /></button>}
-          {canRegenerate && <button onClick={() => handleRegenerate(r.token)} className="p-1.5 hover:bg-gray-100 rounded-lg" title="Regenerate"><RefreshCw className="w-4 h-4 text-gray-500" /></button>}
-          {canRevoke && <button onClick={() => handleRevoke(r.token)} className="p-1.5 hover:bg-red-50 rounded-lg" title="Revoke"><Trash2 className="w-4 h-4 text-red-500" /></button>}
+          {isAdmin && <button onClick={() => openEdit(row)} className="p-1.5 hover:bg-gray-100 rounded-lg" title="Edit"><Pencil className="w-4 h-4 text-gray-500" /></button>}
+          {canRegenerate && <button onClick={() => handleRegenerate(row.token)} className="p-1.5 hover:bg-gray-100 rounded-lg" title="Regenerate"><RefreshCw className="w-4 h-4 text-gray-500" /></button>}
+          {canRevoke && <button onClick={() => handleRevoke(row.token)} className="p-1.5 hover:bg-red-50 rounded-lg" title="Revoke"><Trash2 className="w-4 h-4 text-red-500" /></button>}
         </div>
       ),
     },
@@ -549,11 +572,11 @@ export default function ApiKeys() {
             <label className="block text-sm font-medium text-gray-700 mb-1">Team *</label>
             <select value={form.team_id} onChange={(e) => handleTeamChange(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
               <option value="">Select a team</option>
-              {form.team_id && !(createTeamOptions || []).some((t: any) => t.team_id === form.team_id) && (
+              {form.team_id && !createTeamOptions.some((team) => team.team_id === form.team_id) && (
                 <option value={form.team_id} disabled>{form.team_id} (inaccessible)</option>
               )}
-              {(createTeamOptions || []).map((t: any) => (
-                <option key={t.team_id} value={t.team_id}>{t.team_alias || t.team_id}</option>
+              {createTeamOptions.map((team) => (
+                <option key={team.team_id} value={team.team_id}>{team.team_alias || team.team_id}</option>
               ))}
             </select>
             <p className="mt-1 text-xs text-gray-500">
