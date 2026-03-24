@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.providers.grpc_channel import GrpcChannelManager, GRPC_AVAILABLE
 

@@ -10,7 +10,6 @@ from src.providers.triton_grpc import (
     TritonGrpcAdapter,
     _build_triton_infer_request_pb,
     _parse_triton_response_pb,
-    _encode_string_for_triton,
 )
 from src.config import GrpcSettings
 
@@ -165,7 +164,7 @@ class TestTritonAuthMetadata:
         mock_channel = _mock_grpc_unary(mock_response)
 
         with patch.object(cm, "get_channel", new_callable=AsyncMock, return_value=mock_channel):
-            result = await adapter.execute_grpc_chat(
+            await adapter.execute_grpc_chat(
                 "localhost:8001",
                 {"model": "test", "messages": [{"role": "user", "content": "hi"}]},
                 model_name="ensemble_llm",
