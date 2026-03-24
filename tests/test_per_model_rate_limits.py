@@ -10,6 +10,31 @@ class TestExtractModel:
         body = b'{"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]}'
         assert _extract_model(body) == "gpt-4"
 
+    def test_extracts_model_from_multipart_form_data(self):
+        body = (
+            b"------boundary\r\n"
+            b'Content-Disposition: form-data; name="model"\r\n\r\n'
+            b"whisper-1\r\n"
+            b"------boundary\r\n"
+            b'Content-Disposition: form-data; name="file"; filename="audio.wav"\r\n'
+            b"Content-Type: audio/wav\r\n\r\n"
+            b"RIFFDATA\r\n"
+            b"------boundary--\r\n"
+        )
+        content_type = "multipart/form-data; boundary=----boundary"
+        assert _extract_model(body, content_type) == "whisper-1"
+
+    def test_returns_none_for_multipart_without_model_field(self):
+        body = (
+            b"------boundary\r\n"
+            b'Content-Disposition: form-data; name="file"; filename="audio.wav"\r\n'
+            b"Content-Type: audio/wav\r\n\r\n"
+            b"RIFFDATA\r\n"
+            b"------boundary--\r\n"
+        )
+        content_type = "multipart/form-data; boundary=----boundary"
+        assert _extract_model(body, content_type) is None
+
     def test_strips_whitespace(self):
         body = b'{"model": "  claude-3-opus  "}'
         assert _extract_model(body) == "claude-3-opus"

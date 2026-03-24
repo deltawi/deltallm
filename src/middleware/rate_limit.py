@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from email.parser import BytesParser
+from email.policy import default
 import json
 import math
 import time
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import parse_qs
 
 from fastapi import Request
 
@@ -21,16 +24,101 @@ def estimate_tokens(payload: Any) -> int:
     return max(1, len(json.dumps(payload, default=str)) // 4)
 
 
-def _extract_model(body: bytes) -> str | None:
+def _normalize_model(model: Any) -> str | None:
+    if not isinstance(model, str):
+        return None
+    normalized = model.strip()
+    return normalized or None
+
+
+def _extract_model_from_json(body: bytes) -> str | None:
     try:
         parsed = json.loads(body)
         if isinstance(parsed, dict):
-            model = parsed.get("model")
-            if isinstance(model, str) and model.strip():
-                return model.strip()
+            return _normalize_model(parsed.get("model"))
     except (json.JSONDecodeError, UnicodeDecodeError):
         pass
     return None
+
+
+def _extract_model_from_form_urlencoded(body: bytes) -> str | None:
+    try:
+        parsed = parse_qs(body.decode("utf-8"), keep_blank_values=True)
+    except UnicodeDecodeError:
+        return None
+    values = parsed.get("model")
+    if not values:
+        return None
+    return _normalize_model(values[0])
+
+
+def _extract_model_from_multipart(body: bytes, content_type: str) -> str | None:
+    if not body or "boundary=" not in content_type.lower():
+        return None
+
+    try:
+        message = BytesParser(policy=default).parsebytes(
+            f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8") + body
+        )
+    except ValueError:
+        return None
+
+    if not message.is_multipart():
+        return None
+
+    for part in message.iter_parts():
+        if part.get_content_disposition() != "form-data":
+            continue
+        if part.get_param("name", header="content-disposition") != "model":
+            continue
+
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            continue
+
+        charset = part.get_content_charset() or "utf-8"
+        try:
+            model = payload.decode(charset, errors="ignore")
+        except LookupError:
+            model = payload.decode("utf-8", errors="ignore")
+        return _normalize_model(model)
+
+    return None
+
+
+def _extract_model(body: bytes, content_type: str | None = None) -> str | None:
+    if not body:
+        return None
+
+    raw_content_type = content_type or ""
+    media_type = raw_content_type.split(";", 1)[0].strip().lower()
+
+    if media_type == "multipart/form-data":
+        return _extract_model_from_multipart(body, raw_content_type)
+    if media_type == "application/x-www-form-urlencoded":
+        return _extract_model_from_form_urlencoded(body)
+
+    return _extract_model_from_json(body)
+
+
+async def _extract_model_from_request(request: Request, body: bytes) -> str | None:
+    content_type = request.headers.get("content-type")
+    model = _extract_model(body, content_type)
+    if model is not None:
+        return model
+
+    media_type = (content_type or "").split(";", 1)[0].strip().lower()
+    if media_type not in {"multipart/form-data", "application/x-www-form-urlencoded"}:
+        return None
+
+    try:
+        form = await request.form()
+    except RuntimeError as exc:
+        if "Stream consumed" in str(exc):
+            return None
+        raise InvalidRequestError(message="Could not parse request form for rate limiting") from exc
+
+    return _normalize_model(form.get("model"))
 
 
 def _model_limit(limits: dict[str, int] | None, model: str | None) -> int | None:
@@ -208,7 +296,7 @@ async def _check_and_acquire_rate_limits(request: Request) -> None:
         else:
             raise InvalidRequestError(message="Could not parse request body for rate limiting") from exc
 
-    model = _extract_model(body) if body else None
+    model = await _extract_model_from_request(request, body)
     request.state._rate_limit_model = model
 
     key_rpm_limit = auth.key_rpm_limit if auth.key_rpm_limit is not None else auth.rpm_limit

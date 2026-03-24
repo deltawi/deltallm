@@ -26,7 +26,7 @@ class FakeAdminDB:
                 model_tpm_limit,
                 audit_content_storage_enabled,
                 metadata,
-            ) = params
+            ) = params[:12]
             self.organizations[organization_id] = {
                 "organization_id": organization_id,
                 "organization_name": organization_name,
@@ -60,7 +60,7 @@ class FakeAdminDB:
                 audit_content_storage_enabled,
                 metadata,
                 organization_id,
-            ) = params
+            ) = params[:12]
             row = self.organizations[organization_id]
             row.update(
                 {
@@ -93,12 +93,7 @@ class FakeAdminDB:
                 tpd_limit,
                 model_rpm_limit,
                 model_tpm_limit,
-                self_service_keys_enabled,
-                self_service_max_keys_per_user,
-                self_service_budget_ceiling,
-                self_service_require_expiry,
-                self_service_max_expiry_days,
-            ) = params
+            ) = params[:11]
             self.teams[team_id] = {
                 "team_id": team_id,
                 "team_alias": team_alias,
@@ -141,7 +136,7 @@ class FakeAdminDB:
                 self_service_require_expiry,
                 self_service_max_expiry_days,
                 team_id,
-            ) = params
+            ) = params[:11]
             row = self.teams[team_id]
             row.update(
                 {
