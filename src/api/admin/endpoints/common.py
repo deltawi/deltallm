@@ -21,6 +21,7 @@ class AuthScope:
     org_ids: list[str] = field(default_factory=list)
     team_ids: list[str] = field(default_factory=list)
     granted_permissions: set[str] = field(default_factory=set)
+    effective_permissions: set[str] = field(default_factory=set)
     account_id: str | None = None
 
 
@@ -79,6 +80,14 @@ def get_auth_scope(
     if has_platform_permission(context.role, Perm.PLATFORM_ADMIN):
         return AuthScope(is_platform_admin=True, account_id=account_id)
 
+    effective_permissions: set[str] = set()
+    for membership in context.organization_memberships:
+        role_perms = ORG_ROLE_PERMISSIONS.get(str(membership.get("role") or ""), set())
+        effective_permissions.update(role_perms)
+    for membership in context.team_memberships:
+        role_perms = TEAM_ROLE_PERMISSIONS.get(str(membership.get("role") or ""), set())
+        effective_permissions.update(role_perms)
+
     permissions_to_check: list[str] = []
     if required_permission:
         permissions_to_check = [required_permission]
@@ -116,7 +125,14 @@ def get_auth_scope(
         team_ids = [str(m.get("team_id")) for m in context.team_memberships if m.get("team_id")]
         granted = set()
 
-    return AuthScope(is_platform_admin=False, org_ids=org_ids, team_ids=team_ids, granted_permissions=granted, account_id=account_id)
+    return AuthScope(
+        is_platform_admin=False,
+        org_ids=org_ids,
+        team_ids=team_ids,
+        granted_permissions=granted,
+        effective_permissions=effective_permissions,
+        account_id=account_id,
+    )
 
 
 def db_or_503(request: Request) -> Any:

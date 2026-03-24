@@ -151,9 +151,11 @@ async def _validate_self_service_constraints(
 def _is_self_service_only(scope: Any) -> bool:
     if scope.is_platform_admin:
         return False
+    effective_permissions = set(getattr(scope, "effective_permissions", set()) or set())
     return (
-        Permission.KEY_CREATE_SELF in scope.granted_permissions
-        and Permission.KEY_UPDATE not in scope.granted_permissions
+        Permission.KEY_CREATE_SELF in effective_permissions
+        and Permission.KEY_UPDATE not in effective_permissions
+        and Permission.KEY_REVOKE not in effective_permissions
     )
 
 
@@ -676,8 +678,16 @@ async def _require_key_access(scope, db, token_hash: str, *, allow_self_service:
     if scope.is_platform_admin:
         return
     row = await _get_key_scope_row(db, token_hash)
+    organization_id = str(row.get("organization_id") or "").strip() or None
+    team_id = str(row.get("team_id") or "").strip() or None
+    in_scope = (
+        (organization_id is not None and organization_id in scope.org_ids)
+        or (team_id is not None and team_id in scope.team_ids)
+    )
 
     if allow_self_service and _is_self_service_only(scope):
+        if not in_scope:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
         owner_rows = await db.query_raw(
             "SELECT owner_account_id FROM deltallm_verificationtoken WHERE token = $1 LIMIT 1",
             token_hash,
@@ -686,7 +696,7 @@ async def _require_key_access(scope, db, token_hash: str, *, allow_self_service:
             return
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only manage your own keys")
 
-    if not row.get("organization_id") or row["organization_id"] not in scope.org_ids:
+    if not in_scope:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
 
 
