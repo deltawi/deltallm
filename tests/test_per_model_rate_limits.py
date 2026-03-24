@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import pytest
-
-from src.middleware.rate_limit import _extract_model, _model_limit, estimate_tokens
+from src.middleware.rate_limit import _extract_model, _model_limit
 from src.models.responses import UserAPIKeyAuth
 from src.services.limit_counter import RateLimitCheck
 

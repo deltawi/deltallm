@@ -13,7 +13,20 @@ class FakeAdminDB:
 
     async def execute_raw(self, query: str, *params):
         if "INSERT INTO deltallm_organizationtable" in query:
-            organization_id, organization_name, max_budget, rpm_limit, tpm_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata = params[:9]
+            (
+                organization_id,
+                organization_name,
+                max_budget,
+                rpm_limit,
+                tpm_limit,
+                rph_limit,
+                rpd_limit,
+                tpd_limit,
+                model_rpm_limit,
+                model_tpm_limit,
+                audit_content_storage_enabled,
+                metadata,
+            ) = params
             self.organizations[organization_id] = {
                 "organization_id": organization_id,
                 "organization_name": organization_name,
@@ -21,6 +34,9 @@ class FakeAdminDB:
                 "spend": 0.0,
                 "rpm_limit": rpm_limit,
                 "tpm_limit": tpm_limit,
+                "rph_limit": rph_limit,
+                "rpd_limit": rpd_limit,
+                "tpd_limit": tpd_limit,
                 "model_rpm_limit": model_rpm_limit,
                 "model_tpm_limit": model_tpm_limit,
                 "audit_content_storage_enabled": bool(audit_content_storage_enabled) if audit_content_storage_enabled is not None else False,
@@ -31,7 +47,20 @@ class FakeAdminDB:
             return 1
 
         if "UPDATE deltallm_organizationtable" in query:
-            organization_name, max_budget, rpm_limit, tpm_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, organization_id = params[:9]
+            (
+                organization_name,
+                max_budget,
+                rpm_limit,
+                tpm_limit,
+                rph_limit,
+                rpd_limit,
+                tpd_limit,
+                model_rpm_limit,
+                model_tpm_limit,
+                audit_content_storage_enabled,
+                metadata,
+                organization_id,
+            ) = params
             row = self.organizations[organization_id]
             row.update(
                 {
@@ -39,6 +68,9 @@ class FakeAdminDB:
                     "max_budget": max_budget,
                     "rpm_limit": rpm_limit,
                     "tpm_limit": tpm_limit,
+                    "rph_limit": rph_limit,
+                    "rpd_limit": rpd_limit,
+                    "tpd_limit": tpd_limit,
                     "model_rpm_limit": model_rpm_limit,
                     "model_tpm_limit": model_tpm_limit,
                     "audit_content_storage_enabled": bool(audit_content_storage_enabled),
@@ -49,7 +81,24 @@ class FakeAdminDB:
             return 1
 
         if "INSERT INTO deltallm_teamtable" in query:
-            team_id, team_alias, organization_id, max_budget, rpm_limit, tpm_limit, model_rpm_limit, model_tpm_limit = params[:8]
+            (
+                team_id,
+                team_alias,
+                organization_id,
+                max_budget,
+                rpm_limit,
+                tpm_limit,
+                rph_limit,
+                rpd_limit,
+                tpd_limit,
+                model_rpm_limit,
+                model_tpm_limit,
+                self_service_keys_enabled,
+                self_service_max_keys_per_user,
+                self_service_budget_ceiling,
+                self_service_require_expiry,
+                self_service_max_expiry_days,
+            ) = params
             self.teams[team_id] = {
                 "team_id": team_id,
                 "team_alias": team_alias,
@@ -58,16 +107,41 @@ class FakeAdminDB:
                 "spend": 0.0,
                 "rpm_limit": rpm_limit,
                 "tpm_limit": tpm_limit,
+                "rph_limit": rph_limit,
+                "rpd_limit": rpd_limit,
+                "tpd_limit": tpd_limit,
                 "model_rpm_limit": model_rpm_limit,
                 "model_tpm_limit": model_tpm_limit,
                 "blocked": False,
+                "self_service_keys_enabled": self_service_keys_enabled,
+                "self_service_max_keys_per_user": self_service_max_keys_per_user,
+                "self_service_budget_ceiling": self_service_budget_ceiling,
+                "self_service_require_expiry": self_service_require_expiry,
+                "self_service_max_expiry_days": self_service_max_expiry_days,
                 "created_at": datetime.now(tz=UTC),
                 "updated_at": datetime.now(tz=UTC),
             }
             return 1
 
         if "UPDATE deltallm_teamtable" in query:
-            team_alias, organization_id, max_budget, rpm_limit, tpm_limit, model_rpm_limit, model_tpm_limit, team_id = params[:8]
+            (
+                team_alias,
+                organization_id,
+                max_budget,
+                rpm_limit,
+                tpm_limit,
+                rph_limit,
+                rpd_limit,
+                tpd_limit,
+                model_rpm_limit,
+                model_tpm_limit,
+                self_service_keys_enabled,
+                self_service_max_keys_per_user,
+                self_service_budget_ceiling,
+                self_service_require_expiry,
+                self_service_max_expiry_days,
+                team_id,
+            ) = params
             row = self.teams[team_id]
             row.update(
                 {
@@ -76,8 +150,16 @@ class FakeAdminDB:
                     "max_budget": max_budget,
                     "rpm_limit": rpm_limit,
                     "tpm_limit": tpm_limit,
+                    "rph_limit": rph_limit,
+                    "rpd_limit": rpd_limit,
+                    "tpd_limit": tpd_limit,
                     "model_rpm_limit": model_rpm_limit,
                     "model_tpm_limit": model_tpm_limit,
+                    "self_service_keys_enabled": self_service_keys_enabled,
+                    "self_service_max_keys_per_user": self_service_max_keys_per_user,
+                    "self_service_budget_ceiling": self_service_budget_ceiling,
+                    "self_service_require_expiry": self_service_require_expiry,
+                    "self_service_max_expiry_days": self_service_max_expiry_days,
                     "updated_at": datetime.now(tz=UTC),
                 }
             )
