@@ -24,8 +24,21 @@ DeltaLLM records:
 
 - control-plane actions from the Admin UI and `/ui/api/*`
 - selected data-plane actions such as files, batches, rerank, images, audio, and spend access
+- self-service key operations performed by team developers
 
 The audit log is meant for operational review, security investigations, and compliance workflows.
+
+### Self-Service Key Audit Actions
+
+When team developers create or manage their own keys, DeltaLLM records distinct audit actions:
+
+| Action | When |
+| --- | --- |
+| `ADMIN_KEY_SELF_CREATE` | Developer creates a self-service key |
+| `ADMIN_KEY_SELF_ROTATE` | Developer regenerates their own key |
+| `ADMIN_KEY_SELF_REVOKE` | Developer revokes their own key |
+
+These events include the `actor_id` (the developer's account ID) and `resource_id` (the key token hash), allowing admins to trace all self-service activity.
 
 ## Who Can Read It
 

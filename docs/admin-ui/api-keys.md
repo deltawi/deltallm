@@ -10,6 +10,7 @@ The API Keys page is where operators issue credentials for applications, teams, 
 - Apply budgets and rate limits across multiple time windows (per-minute, per-hour, per-day)
 - Regenerate or revoke keys without changing the integration pattern
 - Review ownership and key-level scope context
+- Allow team developers to create and manage their own keys via self-service
 
 ## Quick steps
 
@@ -20,6 +21,34 @@ The API Keys page is where operators issue credentials for applications, teams, 
 4. Set optional limits such as budget, RPM, TPM, RPH, RPD, or TPD.
 5. Choose whether the key inherits the team asset set or narrows it to selected assets.
 6. Create the key and copy the raw secret immediately. It is only shown once.
+
+## Self-Service Key Creation
+
+Team developers with the `key.create_self` permission can create their own API keys without involving an admin. The page shows two tabs when self-service is available:
+
+- **All Keys** — visible to admins, showing every key in scope
+- **My Keys** — shows only keys owned by the current user
+
+### How it works
+
+1. An admin enables self-service on the team (see [Teams](teams.md#self-service-key-policy))
+2. A team developer signs in and navigates to API Keys
+3. The simplified creation form shows policy constraints (max budget, required expiry, etc.)
+4. The developer creates a key — the backend forces the owner to the current session user
+5. The developer can regenerate, revoke, or delete their own keys
+
+### Policy constraints enforced by the backend
+
+| Constraint | Effect |
+| --- | --- |
+| Self-service disabled on team | Creation blocked with 403 |
+| Max keys per user reached | Creation blocked with 403 |
+| Budget exceeds team ceiling | Creation blocked |
+| Missing expiry when team requires it | Creation blocked |
+| Expiry exceeds team max expiry days | Creation blocked |
+| Rate limits exceed team limits | Creation blocked |
+
+Self-service users cannot see or manage keys owned by other users through the My Keys view.
 
 ## Key fields
 

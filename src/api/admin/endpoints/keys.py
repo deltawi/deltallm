@@ -3,7 +3,7 @@ from __future__ import annotations
 import secrets
 import logging
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
@@ -22,6 +22,189 @@ from src.services.scoped_asset_access import apply_scope_asset_access, build_sco
 
 router = APIRouter(tags=["Admin Keys"])
 logger = logging.getLogger(__name__)
+
+
+async def _get_self_service_policy(db: Any, team_id: str) -> dict[str, Any]:
+    rows = await db.query_raw(
+        """
+        SELECT self_service_keys_enabled, self_service_max_keys_per_user,
+               self_service_budget_ceiling, self_service_require_expiry,
+               self_service_max_expiry_days
+        FROM deltallm_teamtable
+        WHERE team_id = $1
+        LIMIT 1
+        """,
+        team_id,
+    )
+    if not rows:
+        return {"enabled": False}
+    row = dict(rows[0])
+    return {
+        "enabled": bool(row.get("self_service_keys_enabled", False)),
+        "max_keys_per_user": row.get("self_service_max_keys_per_user"),
+        "budget_ceiling": row.get("self_service_budget_ceiling"),
+        "require_expiry": bool(row.get("self_service_require_expiry", False)),
+        "max_expiry_days": row.get("self_service_max_expiry_days"),
+    }
+
+
+async def _validate_self_service_constraints(
+    db: Any,
+    *,
+    team_id: str,
+    account_id: str,
+    policy: dict[str, Any],
+    max_budget: Any,
+    expires: str | None,
+    **kwargs: Any,
+) -> None:
+    if not policy.get("enabled"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Self-service key creation is not enabled for this team",
+        )
+
+    max_keys = policy.get("max_keys_per_user")
+    if max_keys is not None:
+        count_rows = await db.query_raw(
+            "SELECT COUNT(*) AS cnt FROM deltallm_verificationtoken WHERE team_id = $1 AND owner_account_id = $2",
+            team_id,
+            account_id,
+        )
+        current_count = int((count_rows[0] if count_rows else {}).get("cnt") or 0)
+        if current_count >= max_keys:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"You have reached the maximum of {max_keys} self-service keys for this team",
+            )
+
+    budget_ceiling = policy.get("budget_ceiling")
+    if budget_ceiling is not None:
+        if max_budget is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"A budget (max_budget) is required for self-service keys on this team (ceiling: ${budget_ceiling})",
+            )
+        try:
+            budget_val = float(max_budget)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="max_budget must be a valid number",
+            )
+        if budget_val < 0 or budget_val > float(budget_ceiling):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Budget must be between $0 and ${budget_ceiling}",
+            )
+
+    require_expiry = policy.get("require_expiry", False)
+    max_expiry_days = policy.get("max_expiry_days")
+    if require_expiry and not expires:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="An expiry date is required for self-service keys on this team",
+        )
+
+    team_rows = await db.query_raw(
+        "SELECT rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
+        team_id,
+    )
+    if team_rows:
+        team_limits = dict(team_rows[0])
+        for limit_field in ("rpm_limit", "tpm_limit", "rph_limit", "rpd_limit", "tpd_limit"):
+            team_val = team_limits.get(limit_field)
+            if team_val is not None:
+                from_payload = kwargs.get(limit_field)
+                if from_payload is not None:
+                    try:
+                        if int(from_payload) > int(team_val):
+                            raise HTTPException(
+                                status_code=status.HTTP_400_BAD_REQUEST,
+                                detail=f"{limit_field} ({from_payload}) cannot exceed team limit ({team_val})",
+                            )
+                    except (TypeError, ValueError):
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"{limit_field} must be a valid integer",
+                        )
+
+    if max_expiry_days is not None and expires:
+        from datetime import datetime, timedelta, timezone
+        try:
+            exp_dt = datetime.fromisoformat(expires.replace("Z", "+00:00"))
+            if exp_dt.tzinfo is None:
+                exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="expires must be a valid ISO 8601 datetime string",
+            )
+        max_allowed = datetime.now(timezone.utc) + timedelta(days=max_expiry_days)
+        if exp_dt > max_allowed:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Expiry date cannot be more than {max_expiry_days} days from now",
+            )
+
+
+def _is_self_service_only(scope: Any) -> bool:
+    if scope.is_platform_admin:
+        return False
+    effective_permissions = set(getattr(scope, "effective_permissions", set()) or set())
+    return (
+        Permission.KEY_CREATE_SELF in effective_permissions
+        and Permission.KEY_UPDATE not in effective_permissions
+        and Permission.KEY_REVOKE not in effective_permissions
+    )
+
+
+def _scope_has_permission(
+    scope: Any,
+    *,
+    organization_id: str | None,
+    team_id: str | None,
+    permission: str,
+) -> bool:
+    if scope.is_platform_admin:
+        return True
+
+    team_permissions = getattr(scope, "team_permissions_by_id", {}) or {}
+    if team_id and permission in set(team_permissions.get(team_id) or set()):
+        return True
+
+    org_permissions = getattr(scope, "org_permissions_by_id", {}) or {}
+    if organization_id and permission in set(org_permissions.get(organization_id) or set()):
+        return True
+
+    return False
+
+
+def _resolve_key_access_mode(
+    scope: Any,
+    *,
+    organization_id: str | None,
+    team_id: str | None,
+    admin_permission: str,
+    allow_self_service: bool = False,
+) -> Literal["admin", "self_service"]:
+    if _scope_has_permission(
+        scope,
+        organization_id=organization_id,
+        team_id=team_id,
+        permission=admin_permission,
+    ):
+        return "admin"
+
+    if allow_self_service and _scope_has_permission(
+        scope,
+        organization_id=organization_id,
+        team_id=team_id,
+        permission=Permission.KEY_CREATE_SELF,
+    ):
+        return "self_service"
+
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
 
 
 def _key_response_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -136,22 +319,38 @@ async def list_keys(
     request: Request,
     search: str | None = Query(default=None),
     team_id: str | None = Query(default=None),
+    my_keys: bool = Query(default=False),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_READ, Permission.KEY_CREATE_SELF])
     db = db_or_503(request)
+    self_service_only = _is_self_service_only(scope)
 
     clauses: list[str] = []
     params: list[Any] = []
 
+    if self_service_only or my_keys:
+        if scope.account_id:
+            params.append(scope.account_id)
+            clauses.append(f"vt.owner_account_id = ${len(params)}")
+        else:
+            return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
+
     if not scope.is_platform_admin:
+        scope_parts: list[str] = []
         if scope.org_ids:
             ph = ", ".join(f"${len(params) + i + 1}" for i in range(len(scope.org_ids)))
             params.extend(scope.org_ids)
-            clauses.append(f"t.organization_id IN ({ph})")
+            scope_parts.append(f"t.organization_id IN ({ph})")
+        if scope.team_ids:
+            ph = ", ".join(f"${len(params) + i + 1}" for i in range(len(scope.team_ids)))
+            params.extend(scope.team_ids)
+            scope_parts.append(f"vt.team_id IN ({ph})")
+        if scope_parts:
+            clauses.append(f"({' OR '.join(scope_parts)})")
         else:
             return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
 
@@ -222,7 +421,7 @@ async def create_key(
 ) -> dict[str, Any]:
     request_start = perf_counter()
     _reject_legacy_models_field(payload)
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
+    scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_UPDATE, Permission.KEY_CREATE_SELF])
     db = db_or_503(request)
 
     key_name = str(payload.get("key_name") or "").strip()
@@ -247,24 +446,51 @@ async def create_key(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="team_id is required")
 
     team = await _get_team_row(db, team_id)
-    team_org = team.get("organization_id")
-    if not scope.is_platform_admin:
-        if not team_org or team_org not in scope.org_ids:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only create keys for teams in your organizations")
+    team_org = str(team.get("organization_id") or "").strip() or None
+    access_mode = _resolve_key_access_mode(
+        scope,
+        organization_id=team_org,
+        team_id=team_id,
+        admin_permission=Permission.KEY_UPDATE,
+        allow_self_service=True,
+    )
+    self_service_only = access_mode == "self_service"
+
+    if self_service_only:
+        owner_account_id = scope.account_id
+        owner_service_account_id = None
+        user_id = None
+
+        policy = await _get_self_service_policy(db, team_id)
+        await _validate_self_service_constraints(
+            db,
+            team_id=team_id,
+            account_id=scope.account_id,
+            policy=policy,
+            max_budget=max_budget,
+            expires=expires,
+            rpm_limit=rpm_limit,
+            tpm_limit=tpm_limit,
+            rph_limit=rph_limit,
+            rpd_limit=rpd_limit,
+            tpd_limit=tpd_limit,
+        )
     if user_id:
         await _validate_runtime_user(db, user_id, team_id)
-    owner_account_id, owner_service_account_id = await _validate_owner_references(
-        request,
-        db,
-        team_id=team_id,
-        owner_account_id=owner_account_id,
-        owner_service_account_id=owner_service_account_id,
-        require_owner=True,
-    )
+    if not self_service_only:
+        owner_account_id, owner_service_account_id = await _validate_owner_references(
+            request,
+            db,
+            team_id=team_id,
+            owner_account_id=owner_account_id,
+            owner_service_account_id=owner_service_account_id,
+            require_owner=True,
+        )
 
     raw_key = f"sk-{secrets.token_urlsafe(24)}"
     key_service = request.app.state.key_service
     token_hash = key_service.hash_key(raw_key)
+    audit_action = AuditAction.ADMIN_KEY_SELF_CREATE if self_service_only else AuditAction.ADMIN_KEY_CREATE
 
     try:
         await db.execute_raw(
@@ -306,11 +532,12 @@ async def create_key(
             "rpd_limit": rpd_limit,
             "tpd_limit": tpd_limit,
             "expires": expires,
+            "self_service": self_service_only,
         }
         await emit_admin_mutation_audit(
             request=request,
             request_start=request_start,
-            action=AuditAction.ADMIN_KEY_CREATE,
+            action=audit_action,
             scope=scope,
             resource_type="api_key",
             resource_id=token_hash,
@@ -322,7 +549,7 @@ async def create_key(
         await emit_admin_mutation_audit(
             request=request,
             request_start=request_start,
-            action=AuditAction.ADMIN_KEY_CREATE,
+            action=audit_action,
             scope=scope,
             resource_type="api_key",
             resource_id=token_hash,
@@ -345,7 +572,7 @@ async def update_key(
     _reject_legacy_models_field(payload)
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
     db = db_or_503(request)
-    await _require_key_access(scope, db, token_hash)
+    await _require_key_access(scope, db, token_hash, admin_permission=Permission.KEY_UPDATE)
     rows = await db.query_raw(
         """
         SELECT token, key_name, user_id, team_id, owner_account_id, owner_service_account_id, spend, max_budget, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, expires, created_at, updated_at
@@ -496,12 +723,35 @@ async def update_key(
         raise
 
 
-async def _require_key_access(scope, db, token_hash: str) -> None:
-    if scope.is_platform_admin:
-        return
+async def _require_key_access(
+    scope,
+    db,
+    token_hash: str,
+    *,
+    admin_permission: str,
+    allow_self_service: bool = False,
+) -> Literal["admin", "self_service"]:
     row = await _get_key_scope_row(db, token_hash)
-    if not row.get("organization_id") or row["organization_id"] not in scope.org_ids:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+    organization_id = str(row.get("organization_id") or "").strip() or None
+    team_id = str(row.get("team_id") or "").strip() or None
+    access_mode = _resolve_key_access_mode(
+        scope,
+        organization_id=organization_id,
+        team_id=team_id,
+        admin_permission=admin_permission,
+        allow_self_service=allow_self_service,
+    )
+
+    if access_mode == "self_service":
+        owner_rows = await db.query_raw(
+            "SELECT owner_account_id FROM deltallm_verificationtoken WHERE token = $1 LIMIT 1",
+            token_hash,
+        )
+        if owner_rows and str(owner_rows[0].get("owner_account_id") or "") == scope.account_id:
+            return access_mode
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only manage your own keys")
+
+    return access_mode
 
 
 @router.get("/ui/api/keys/{token_hash}/asset-visibility")
@@ -513,7 +763,7 @@ async def get_key_asset_visibility(
 ) -> dict[str, Any]:
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
     db = db_or_503(request)
-    await _require_key_access(scope, db, token_hash)
+    await _require_key_access(scope, db, token_hash, admin_permission=Permission.KEY_READ)
     key_row = await _get_key_scope_row(db, token_hash)
     organization_id = str(key_row.get("organization_id") or "").strip()
     team_id = str(key_row.get("team_id") or "").strip() or None
@@ -539,7 +789,7 @@ async def get_key_asset_access(
 ) -> dict[str, Any]:
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
     db = db_or_503(request)
-    await _require_key_access(scope, db, token_hash)
+    await _require_key_access(scope, db, token_hash, admin_permission=Permission.KEY_READ)
     key_row = await _get_key_scope_row(db, token_hash)
     organization_id = str(key_row.get("organization_id") or "").strip()
     team_id = str(key_row.get("team_id") or "").strip() or None
@@ -569,7 +819,7 @@ async def update_key_asset_access(
     request_start = perf_counter()
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
     db = db_or_503(request)
-    await _require_key_access(scope, db, token_hash)
+    await _require_key_access(scope, db, token_hash, admin_permission=Permission.KEY_UPDATE)
     key_row = await _get_key_scope_row(db, token_hash)
     organization_id = str(key_row.get("organization_id") or "").strip()
     team_id = str(key_row.get("team_id") or "").strip() or None
@@ -609,9 +859,15 @@ async def regenerate_key(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
+    scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_UPDATE, Permission.KEY_CREATE_SELF])
     db = db_or_503(request)
-    await _require_key_access(scope, db, token_hash)
+    access_mode = await _require_key_access(
+        scope,
+        db,
+        token_hash,
+        admin_permission=Permission.KEY_UPDATE,
+        allow_self_service=True,
+    )
 
     rows = await db.query_raw("SELECT token FROM deltallm_verificationtoken WHERE token = $1 LIMIT 1", token_hash)
     if not rows:
@@ -629,11 +885,12 @@ async def regenerate_key(
         await request.app.state.key_service.invalidate_key_cache_by_hash(new_hash)
     except Exception:
         logger.exception("failed to invalidate key auth cache after regenerate")
+    audit_action = AuditAction.ADMIN_KEY_SELF_ROTATE if access_mode == "self_service" else AuditAction.ADMIN_KEY_REGENERATE
     response = {"token": new_hash, "raw_key": raw_key}
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action=AuditAction.ADMIN_KEY_REGENERATE,
+        action=audit_action,
         scope=scope,
         resource_type="api_key",
         resource_id=new_hash,
@@ -651,20 +908,27 @@ async def revoke_key(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, bool]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_REVOKE)
+    scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_REVOKE, Permission.KEY_CREATE_SELF])
     db = db_or_503(request)
-    await _require_key_access(scope, db, token_hash)
+    access_mode = await _require_key_access(
+        scope,
+        db,
+        token_hash,
+        admin_permission=Permission.KEY_REVOKE,
+        allow_self_service=True,
+    )
     deleted = await db.execute_raw("DELETE FROM deltallm_verificationtoken WHERE token = $1", token_hash)
     if int(deleted or 0) > 0:
         try:
             await request.app.state.key_service.invalidate_key_cache_by_hash(token_hash)
         except Exception:
             logger.exception("failed to invalidate key auth cache after revoke")
+    audit_action = AuditAction.ADMIN_KEY_SELF_REVOKE if access_mode == "self_service" else AuditAction.ADMIN_KEY_REVOKE
     response = {"revoked": int(deleted or 0) > 0}
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action=AuditAction.ADMIN_KEY_REVOKE,
+        action=audit_action,
         scope=scope,
         resource_type="api_key",
         resource_id=token_hash,
@@ -681,20 +945,27 @@ async def delete_key(
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, bool]:
     request_start = perf_counter()
-    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
+    scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_REVOKE, Permission.KEY_CREATE_SELF])
     db = db_or_503(request)
-    await _require_key_access(scope, db, token_hash)
+    access_mode = await _require_key_access(
+        scope,
+        db,
+        token_hash,
+        admin_permission=Permission.KEY_REVOKE,
+        allow_self_service=True,
+    )
     deleted = await db.execute_raw("DELETE FROM deltallm_verificationtoken WHERE token = $1", token_hash)
     if int(deleted or 0) > 0:
         try:
             await request.app.state.key_service.invalidate_key_cache_by_hash(token_hash)
         except Exception:
             logger.exception("failed to invalidate key auth cache after delete")
+    audit_action = AuditAction.ADMIN_KEY_SELF_REVOKE if access_mode == "self_service" else AuditAction.ADMIN_KEY_DELETE
     response = {"deleted": int(deleted or 0) > 0}
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
-        action=AuditAction.ADMIN_KEY_DELETE,
+        action=audit_action,
         scope=scope,
         resource_type="api_key",
         resource_id=token_hash,

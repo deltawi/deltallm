@@ -164,8 +164,10 @@ DeltaLLM separates platform roles, organization roles, and team roles.
 | Role | Typical access |
 |------|----------------|
 | `team_admin` | Manage the team and its keys |
-| `team_developer` | Use and create keys |
+| `team_developer` | Use and create keys, self-service key creation (`key.create_self`) |
 | `team_viewer` | Read-only access |
+
+The `team_developer` role includes the `key.create_self` permission, which allows developers to create, regenerate, revoke, and delete their own API keys when the team has self-service enabled. See [API Keys: Self-Service](../admin-ui/api-keys.md#self-service-key-creation) for details.
 
 ### Important Note on `user_role`
 

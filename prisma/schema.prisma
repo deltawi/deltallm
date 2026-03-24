@@ -156,6 +156,11 @@ model DeltaLLM_TeamTable {
   models           String[]
   blocked          Boolean  @default(false)
   metadata         Json?
+  self_service_keys_enabled       Boolean @default(false)
+  self_service_max_keys_per_user  Int?
+  self_service_budget_ceiling     Float?
+  self_service_require_expiry     Boolean @default(false)
+  self_service_max_expiry_days    Int?
   created_at       DateTime @default(now())
   updated_at       DateTime @updatedAt
 
