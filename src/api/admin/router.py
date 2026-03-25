@@ -6,7 +6,10 @@ from src.api.admin.endpoints import (
     batches_router,
     callable_targets_router,
     config_router,
+    email_router,
+    email_feedback_router,
     guardrails_router,
+    invitations_router,
     keys_router,
     mcp_router,
     models_router,
@@ -25,6 +28,9 @@ admin_router = APIRouter()
 
 # Keep explicit order for predictable route registration.
 admin_router.include_router(auth_ui_router)
+admin_router.include_router(email_router)
+admin_router.include_router(email_feedback_router)
+admin_router.include_router(invitations_router)
 admin_router.include_router(keys_router)
 admin_router.include_router(mcp_router)
 admin_router.include_router(callable_targets_router)

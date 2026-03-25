@@ -22,11 +22,26 @@ class LoginResult:
     mfa_prompt: bool
 
 
+@dataclass(frozen=True)
+class AccountAuthState:
+    account_id: str
+    email: str
+    has_local_password: bool
+    has_sso_identity: bool
+
+
 class PlatformIdentityService:
     def __init__(self, db_client: Any, salt: str, session_ttl_hours: int = 12) -> None:
         self.db = db_client
         self.salt = salt or "change-me"
         self.session_ttl_hours = session_ttl_hours
+
+    def with_db(self, db_client: Any) -> PlatformIdentityService:
+        return PlatformIdentityService(
+            db_client=db_client,
+            salt=self.salt,
+            session_ttl_hours=self.session_ttl_hours,
+        )
 
     async def ensure_bootstrap_admin(self, email: str | None, password: str | None) -> None:
         if self.db is None or not email or not password:
@@ -60,10 +75,18 @@ class PlatformIdentityService:
             PlatformRole.ADMIN,
         )
 
+    def normalize_email(self, email: str | None) -> str:
+        return str(email or "").strip().lower()
+
+    def validate_password_policy(self, raw_password: str) -> None:
+        if len(raw_password or "") < 12:
+            raise ValueError("password must be at least 12 characters")
+
     async def login_internal(self, email: str, password: str, mfa_code: str | None = None) -> LoginResult | None:
         if self.db is None:
             return None
 
+        normalized_email = self.normalize_email(email)
         rows = await self.db.query_raw(
             """
             SELECT account_id, email, password_hash, role, is_active, force_password_change,
@@ -72,7 +95,7 @@ class PlatformIdentityService:
             WHERE lower(email) = lower($1)
             LIMIT 1
             """,
-            email,
+            normalized_email,
         )
         if not rows:
             return None
@@ -121,6 +144,7 @@ class PlatformIdentityService:
             return None
 
         role = PlatformRole.ADMIN if is_platform_admin else "org_user"
+        normalized_email = self.normalize_email(email)
         await self.db.execute_raw(
             """
             INSERT INTO deltallm_platformaccount (
@@ -131,7 +155,7 @@ class PlatformIdentityService:
             ON CONFLICT (email)
             DO UPDATE SET role = EXCLUDED.role, is_active = true, updated_at = NOW()
             """,
-            email,
+            normalized_email,
             role,
         )
         await self.db.execute_raw(
@@ -145,9 +169,9 @@ class PlatformIdentityService:
             ON CONFLICT (provider, subject)
             DO UPDATE SET email = EXCLUDED.email, updated_at = NOW()
             """,
-            email,
+            normalized_email,
             provider,
-            subject or email.lower(),
+            subject or normalized_email,
         )
         if not is_platform_admin and team_id:
             await self.db.execute_raw(
@@ -159,10 +183,10 @@ class PlatformIdentityService:
                 ON CONFLICT (account_id, team_id)
                 DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
                 """,
-                email,
-                team_id,
-                default_team_role,
-            )
+                    normalized_email,
+                    team_id,
+                    default_team_role,
+                )
             org_rows = await self.db.query_raw(
                 "SELECT organization_id FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
                 team_id,
@@ -178,12 +202,12 @@ class PlatformIdentityService:
                     ON CONFLICT (account_id, organization_id)
                     DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
                     """,
-                    email,
+                    normalized_email,
                     organization_id,
                     OrganizationRole.MEMBER,
                 )
 
-        token = await self._create_session_from_email(email=email, mfa_verified=False)
+        token = await self._create_session_from_email(email=normalized_email, mfa_verified=False)
         context = await self.get_context_for_session(token)
         if context is None:
             return None
@@ -321,9 +345,55 @@ class PlatformIdentityService:
 
         return True
 
+    async def mark_session_mfa_verified(self, session_token: str) -> bool:
+        if self.db is None or not session_token:
+            return False
+        token_hash = self._hash_session_token(session_token)
+        rows = await self.db.query_raw(
+            """
+            UPDATE deltallm_platformsession
+            SET mfa_verified = true,
+                updated_at = NOW(),
+                last_seen_at = NOW()
+            WHERE session_token_hash = $1
+              AND revoked_at IS NULL
+              AND expires_at > NOW()
+            RETURNING session_id
+            """,
+            token_hash,
+        )
+        return bool(rows)
+
+    async def verify_mfa_for_session(self, *, session_token: str, code: str) -> bool:
+        if self.db is None or not session_token:
+            return False
+        token_hash = self._hash_session_token(session_token)
+        rows = await self.db.query_raw(
+            """
+            SELECT a.mfa_enabled, a.mfa_secret, a.is_active
+            FROM deltallm_platformsession s
+            JOIN deltallm_platformaccount a ON a.account_id = s.account_id
+            WHERE s.session_token_hash = $1
+              AND s.revoked_at IS NULL
+              AND s.expires_at > NOW()
+            LIMIT 1
+            """,
+            token_hash,
+        )
+        if not rows:
+            return False
+        row = rows[0]
+        if not bool(row.get("is_active", True)) or not bool(row.get("mfa_enabled", False)):
+            return False
+        secret = row.get("mfa_secret")
+        if not isinstance(secret, str) or not self._verify_totp(secret, code):
+            return False
+        return await self.mark_session_mfa_verified(session_token)
+
     async def change_password(self, account_id: str, new_password: str, current_password: str | None = None) -> bool:
         if self.db is None:
             return False
+        self.validate_password_policy(new_password)
         rows = await self.db.query_raw(
             "SELECT password_hash FROM deltallm_platformaccount WHERE account_id = $1 LIMIT 1",
             account_id,
@@ -348,6 +418,202 @@ class PlatformIdentityService:
             account_id,
         )
         return True
+
+    async def get_account_by_email(self, email: str) -> dict[str, Any] | None:
+        if self.db is None:
+            return None
+        rows = await self.db.query_raw(
+            """
+            SELECT
+                account_id, email, password_hash, role, is_active, force_password_change,
+                mfa_enabled, created_at, updated_at, last_login_at
+            FROM deltallm_platformaccount
+            WHERE lower(email) = lower($1)
+            LIMIT 1
+            """,
+            self.normalize_email(email),
+        )
+        return dict(rows[0]) if rows else None
+
+    async def get_account_by_id(self, account_id: str) -> dict[str, Any] | None:
+        if self.db is None:
+            return None
+        rows = await self.db.query_raw(
+            """
+            SELECT
+                account_id, email, password_hash, role, is_active, force_password_change,
+                mfa_enabled, created_at, updated_at, last_login_at
+            FROM deltallm_platformaccount
+            WHERE account_id = $1
+            LIMIT 1
+            """,
+            account_id,
+        )
+        return dict(rows[0]) if rows else None
+
+    async def get_account_auth_state(self, account_id: str) -> AccountAuthState | None:
+        if self.db is None:
+            return None
+        rows = await self.db.query_raw(
+            """
+            SELECT
+                account_id,
+                email,
+                (password_hash IS NOT NULL AND password_hash <> '') AS has_local_password,
+                EXISTS (
+                    SELECT 1
+                    FROM deltallm_platformidentity identity_row
+                    WHERE identity_row.account_id = deltallm_platformaccount.account_id
+                ) AS has_sso_identity
+            FROM deltallm_platformaccount
+            WHERE account_id = $1
+            LIMIT 1
+            """,
+            account_id,
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return AccountAuthState(
+            account_id=str(row.get("account_id") or ""),
+            email=str(row.get("email") or ""),
+            has_local_password=bool(row.get("has_local_password")),
+            has_sso_identity=bool(row.get("has_sso_identity")),
+        )
+
+    async def ensure_account(self, *, email: str, role: str = PlatformRole.ORG_USER, is_active: bool = False) -> dict[str, Any]:
+        normalized_email = self.normalize_email(email)
+        if not normalized_email:
+            raise ValueError("email is required")
+        if self.db is None:
+            return {
+                "account_id": "",
+                "email": normalized_email,
+                "role": role,
+                "is_active": is_active,
+            }
+        await self.db.execute_raw(
+            """
+            INSERT INTO deltallm_platformaccount (
+                account_id, email, role, is_active, force_password_change, mfa_enabled, created_at, updated_at
+            )
+            VALUES (gen_random_uuid(), $1, $2, $3, false, false, NOW(), NOW())
+            ON CONFLICT (email)
+            DO UPDATE SET updated_at = NOW()
+            """,
+            normalized_email,
+            role,
+            is_active,
+        )
+        account = await self.get_account_by_email(normalized_email)
+        if account is None:
+            raise RuntimeError("failed to ensure account")
+        return account
+
+    async def upsert_organization_membership(self, *, account_id: str, organization_id: str, role: str) -> None:
+        if self.db is None:
+            return
+        await self.db.execute_raw(
+            """
+            INSERT INTO deltallm_organizationmembership (membership_id, account_id, organization_id, role, created_at, updated_at)
+            VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
+            ON CONFLICT (account_id, organization_id)
+            DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
+            """,
+            account_id,
+            organization_id,
+            role,
+        )
+
+    async def upsert_team_membership(self, *, account_id: str, team_id: str, role: str) -> None:
+        if self.db is None:
+            return
+        await self.db.execute_raw(
+            """
+            INSERT INTO deltallm_teammembership (membership_id, account_id, team_id, role, created_at, updated_at)
+            VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
+            ON CONFLICT (account_id, team_id)
+            DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
+            """,
+            account_id,
+            team_id,
+            role,
+        )
+
+    async def set_account_active(self, account_id: str, *, is_active: bool) -> None:
+        if self.db is None:
+            return
+        await self.db.execute_raw(
+            "UPDATE deltallm_platformaccount SET is_active = $2, updated_at = NOW() WHERE account_id = $1",
+            account_id,
+            is_active,
+        )
+
+    async def set_password(self, *, account_id: str, new_password: str) -> None:
+        self.validate_password_policy(new_password)
+        if self.db is None:
+            return
+        await self.db.execute_raw(
+            """
+            UPDATE deltallm_platformaccount
+            SET password_hash = $1,
+                force_password_change = false,
+                updated_at = NOW()
+            WHERE account_id = $2
+            """,
+            self._hash_password(new_password),
+            account_id,
+        )
+
+    async def admin_set_password(self, *, account_id: str, new_password: str) -> bool:
+        if self.db is None:
+            return False
+        rows = await self.db.query_raw(
+            "SELECT account_id FROM deltallm_platformaccount WHERE account_id = $1 LIMIT 1",
+            account_id,
+        )
+        if not rows:
+            return False
+        await self.set_password(account_id=account_id, new_password=new_password)
+        await self.revoke_all_sessions_for_account(account_id)
+        return True
+
+    async def revoke_all_sessions_for_account(self, account_id: str) -> None:
+        if self.db is None:
+            return
+        await self.db.execute_raw(
+            """
+            UPDATE deltallm_platformsession
+            SET revoked_at = NOW(),
+                updated_at = NOW()
+            WHERE account_id = $1
+              AND revoked_at IS NULL
+            """,
+            account_id,
+        )
+
+    async def mark_last_login(self, account_id: str) -> None:
+        if self.db is None:
+            return
+        await self.db.execute_raw(
+            "UPDATE deltallm_platformaccount SET last_login_at = NOW(), updated_at = NOW() WHERE account_id = $1",
+            account_id,
+        )
+
+    async def create_session_for_account(self, *, account_id: str, mfa_verified: bool) -> str:
+        return await self._create_session(account_id=account_id, mfa_verified=mfa_verified)
+
+    async def create_login_result_for_account(self, account_id: str) -> LoginResult | None:
+        token = await self.create_session_for_account(account_id=account_id, mfa_verified=False)
+        context = await self.get_context_for_session(token)
+        if context is None:
+            return None
+        return LoginResult(
+            context=context,
+            session_token=token,
+            mfa_required=False,
+            mfa_prompt=not context.mfa_enabled,
+        )
 
     async def _create_session_from_email(self, email: str, mfa_verified: bool) -> str:
         rows = await self.db.query_raw(

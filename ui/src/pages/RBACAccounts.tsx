@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { organizations, rbac, teams, users, type Principal, type ScopedAssetAccess } from '../lib/api';
 import { Plus, UserCog, ShieldCheck, Search, ChevronDown, ChevronRight, Building2, UsersRound, Trash2 } from 'lucide-react';
 import Modal from '../components/Modal';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import { IndexShell } from '../components/admin/shells';
+import InvitationPanel from '../components/admin/InvitationPanel';
 
 const PLATFORM_ROLES = [
   { value: 'platform_admin', label: 'Platform Admin' },
@@ -51,6 +53,7 @@ function RoleBadge({ role }: { role: string }) {
 }
 
 export default function RBACAccounts() {
+  const [searchParams] = useSearchParams();
   const [principals, setPrincipals] = useState<Principal[]>([]);
   const [principalPagination, setPrincipalPagination] = useState({ total: 0, limit: 20, offset: 0, has_more: false });
   const [orgList, setOrgList] = useState<any[]>([]);
@@ -60,6 +63,8 @@ export default function RBACAccounts() {
   const [searchTerm, setSearchTerm] = useState('');
   const [pageOffset, setPageOffset] = useState(0);
   const pageSize = 20;
+  const inviteOrganizationId = searchParams.get('invite_org_id');
+  const inviteTeamId = searchParams.get('invite_team_id');
 
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [editAccount, setEditAccount] = useState<Principal | null>(null);
@@ -334,6 +339,14 @@ export default function RBACAccounts() {
         </div>
       )}
     >
+      <div className="mb-6">
+        <InvitationPanel
+          orgList={orgList}
+          teamList={teamList}
+          initialOrganizationId={inviteOrganizationId}
+          initialTeamId={inviteTeamId}
+        />
+      </div>
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-blue-600" />

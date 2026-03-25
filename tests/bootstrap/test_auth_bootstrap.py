@@ -57,6 +57,7 @@ async def test_init_auth_runtime_wires_enabled_handlers(monkeypatch: pytest.Monk
     monkeypatch.setattr("src.bootstrap.auth.PlatformIdentityService", FakePlatformIdentityService)
     monkeypatch.setattr("src.bootstrap.auth.LimitCounter", lambda **kwargs: ("limit-counter", kwargs))
     monkeypatch.setattr("src.bootstrap.auth.InMemoryUserRepository", lambda: "user-repo")
+    monkeypatch.setattr("src.bootstrap.auth.SSOStateStore", lambda **kwargs: ("sso-state-store", kwargs))
     monkeypatch.setattr("src.bootstrap.auth.SSOAuthHandler", lambda **kwargs: ("sso-handler", kwargs))
     monkeypatch.setattr("src.bootstrap.auth.JWTAuthHandler", lambda **kwargs: ("jwt-handler", kwargs))
 
@@ -85,12 +86,14 @@ async def test_init_auth_runtime_wires_enabled_handlers(monkeypatch: pytest.Monk
     assert created["platform_identity_service"].bootstrap_calls == [("admin@example.com", "secret")]
     assert app.state.limit_counter[0] == "limit-counter"
     assert app.state.sso_user_repository == "user-repo"
+    assert app.state.sso_state_store[0] == "sso-state-store"
     assert app.state.sso_auth_handler[0] == "sso-handler"
     assert app.state.jwt_auth_handler[0] == "jwt-handler"
     assert app.state.custom_auth_manager.registered == ["module.handler"]
     assert runtime.statuses == (
         BootstrapStatus("key_service", "ready"),
         BootstrapStatus("platform_identity", "ready"),
+        BootstrapStatus("sso_state_store", "ready"),
         BootstrapStatus("sso_auth", "ready"),
         BootstrapStatus("jwt_auth", "ready"),
         BootstrapStatus("custom_auth", "ready"),
@@ -121,11 +124,13 @@ async def test_init_auth_runtime_leaves_optional_handlers_disabled(monkeypatch: 
     runtime = await init_auth_runtime(app, _auth_config(enable_sso=False, enable_jwt=False, custom_auth=None))
 
     assert app.state.sso_auth_handler is None
+    assert app.state.sso_state_store is None
     assert app.state.jwt_auth_handler is None
     assert app.state.custom_auth_manager is None
     assert runtime.statuses == (
         BootstrapStatus("key_service", "ready"),
         BootstrapStatus("platform_identity", "ready"),
+        BootstrapStatus("sso_state_store", "disabled"),
         BootstrapStatus("sso_auth", "disabled"),
         BootstrapStatus("jwt_auth", "disabled"),
         BootstrapStatus("custom_auth", "disabled"),
@@ -185,5 +190,6 @@ async def test_init_auth_runtime_marks_incomplete_sso_degraded(
 
     runtime = await init_auth_runtime(app, cfg)
 
+    assert BootstrapStatus("sso_state_store", "degraded", "configuration incomplete") in runtime.statuses
     assert BootstrapStatus("sso_auth", "degraded", "configuration incomplete") in runtime.statuses
     assert "sso enabled but configuration is incomplete" in caplog.text

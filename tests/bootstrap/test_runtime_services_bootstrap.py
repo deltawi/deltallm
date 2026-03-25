@@ -9,6 +9,9 @@ from src.bootstrap.runtime_services import init_runtime_services, shutdown_runti
 
 def _runtime_config() -> SimpleNamespace:
     return SimpleNamespace(
+        general_settings=SimpleNamespace(
+            budget_alert_ttl_seconds=3600,
+        ),
         deltallm_settings=SimpleNamespace(
             guardrails=[{"guardrail_name": "pii"}],
             success_callback=["success"],

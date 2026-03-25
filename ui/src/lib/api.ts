@@ -80,6 +80,19 @@ export interface Paginated<T> {
   pagination: Pagination;
 }
 
+export interface InvitationAcceptResult {
+  accepted: boolean;
+  session_established: boolean;
+  next_step: string;
+  account_id: string;
+  email: string;
+  role: string;
+  mfa_enabled: boolean;
+  mfa_required: boolean;
+  mfa_prompt: boolean;
+  force_password_change: boolean;
+}
+
 export interface SpendLog {
   id: string;
   request_id: string;
@@ -906,6 +919,23 @@ export interface Principal extends RBACAccount {
   team_memberships: TeamMembership[];
 }
 
+export interface Invitation {
+  invitation_id: string;
+  account_id: string;
+  email: string;
+  status: 'pending' | 'sent' | 'accepted' | 'cancelled' | 'expired';
+  invite_scope_type: 'organization' | 'team' | 'mixed';
+  expires_at: string;
+  accepted_at?: string | null;
+  cancelled_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  invited_by_account_id?: string | null;
+  inviter_email?: string | null;
+  message_email_id?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
 export const rbac = {
   principals: {
     list: (params?: { search?: string; limit?: number; offset?: number }) =>
@@ -930,6 +960,22 @@ export const rbac = {
   },
 };
 
+export const invitations = {
+  list: (params?: { status?: string; search?: string; limit?: number; offset?: number }) =>
+    apiFetch<Paginated<Invitation>>(withQuery('/ui/api/invitations', params as any)),
+  create: (payload: {
+    email: string;
+    organization_id?: string;
+    organization_role?: string;
+    team_id?: string;
+    team_role?: string;
+  }) => apiFetch<Invitation>('/ui/api/invitations', { method: 'POST', json: payload }),
+  resend: (invitationId: string) =>
+    apiFetch<Invitation>(`/ui/api/invitations/${encodeURIComponent(invitationId)}/resend`, { method: 'POST' }),
+  cancel: (invitationId: string) =>
+    apiFetch<{ cancelled: boolean; invitation_id: string }>(`/ui/api/invitations/${encodeURIComponent(invitationId)}/cancel`, { method: 'POST' }),
+};
+
 export const auth = {
   me: () => apiFetch<any>('/auth/me', { headers: new Headers({ 'Content-Type': 'application/json' }) }),
   internalLogin: (payload: { email: string; password: string; mfa_code?: string }) =>
@@ -937,8 +983,18 @@ export const auth = {
   internalLogout: () => apiFetch<any>('/auth/internal/logout', { method: 'POST' }),
   changePassword: (current_password: string | null, new_password: string) =>
     apiFetch<any>('/auth/internal/change-password', { method: 'POST', json: { current_password, new_password } }),
+  invitation: (token: string) => apiFetch<any>(`/auth/invitations/${encodeURIComponent(token)}`),
+  acceptInvitation: (payload: { token: string; password?: string | null }) =>
+    apiFetch<InvitationAcceptResult>('/auth/invitations/accept', { method: 'POST', json: payload }),
+  forgotPassword: (email: string) =>
+    apiFetch<{ requested: boolean }>('/auth/internal/forgot-password', { method: 'POST', json: { email } }),
+  validateResetPasswordToken: (token: string) =>
+    apiFetch<any>(`/auth/internal/reset-password/${encodeURIComponent(token)}`),
+  resetPassword: (token: string, new_password: string) =>
+    apiFetch<{ changed: boolean }>('/auth/internal/reset-password', { method: 'POST', json: { token, new_password } }),
   ssoConfig: () => apiFetch<{ sso_enabled: boolean; provider?: string }>('/auth/sso-config'),
   ssoLogin: (state: string) => apiFetch<{ authorize_url: string }>(`/auth/login?state=${encodeURIComponent(state)}`),
   mfaEnrollStart: () => apiFetch<{ secret: string; otpauth_url: string }>('/auth/mfa/enroll/start', { method: 'POST' }),
   mfaEnrollConfirm: (code: string) => apiFetch<{ mfa_enabled: boolean }>('/auth/mfa/enroll/confirm', { method: 'POST', json: { code } }),
+  mfaVerify: (code: string) => apiFetch<{ mfa_verified: boolean }>('/auth/mfa/verify', { method: 'POST', json: { code } }),
 };

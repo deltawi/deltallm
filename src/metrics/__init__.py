@@ -4,6 +4,12 @@ from src.metrics.audit import (
     observe_audit_ingestion_latency,
     set_audit_queue_depth,
 )
+from src.metrics.email import (
+    increment_email_delivery_attempt,
+    observe_email_delivery_latency,
+    set_email_queue_depth,
+)
+from src.metrics.notifications import increment_notification_enqueue
 from src.metrics.counters import (
     increment_cache_hit,
     increment_cache_miss,
@@ -29,9 +35,13 @@ __all__ = [
     "get_prometheus_registry",
     "infer_provider",
     "set_audit_queue_depth",
+    "set_email_queue_depth",
     "increment_audit_write_failure",
     "increment_audit_events_dropped",
     "observe_audit_ingestion_latency",
+    "increment_email_delivery_attempt",
+    "observe_email_delivery_latency",
+    "increment_notification_enqueue",
     "increment_request",
     "increment_request_failure",
     "increment_usage",

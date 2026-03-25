@@ -25,7 +25,10 @@
 - [x] Bootstrap first platform admin from config (internal login)
 - [x] Add password-change flow marker (force change flag)
 - [x] Integrate SSO callback with DB identity linking/upsert
+- [x] Persist SSO callback state in shared Redis storage
 - [x] Issue session cookie for SSO login
+- [x] Add current-session MFA verification flow for enrolled accounts
+- [x] Require MFA-verified session state before allowing session-authenticated admin access
 
 ## Phase 4 - RBAC Enforcement
 - [x] Add permission-based dependency for admin operations
@@ -42,5 +45,6 @@
 - [x] Compile checks on changed modules
 - [x] End-to-end login + admin route checks (internal path)
 - [x] End-to-end SSO login callback/session checks
+- [x] Verify unverified MFA sessions are blocked from admin APIs until MFA verification succeeds
 - [x] End-to-end tenant membership scoped access checks
 - [x] Verify master key remains functional (break-glass)

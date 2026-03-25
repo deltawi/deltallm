@@ -71,11 +71,14 @@ def get_auth_scope(
         return AuthScope(is_platform_admin=True)
 
     from src.middleware.platform_auth import get_platform_auth_context
+    from src.middleware.platform_auth import requires_mfa_verification
     from src.auth.roles import has_platform_permission, Permission as Perm, ORG_ROLE_PERMISSIONS, TEAM_ROLE_PERMISSIONS
 
     context = get_platform_auth_context(request)
     if context is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    if requires_mfa_verification(context):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="MFA verification required")
 
     account_id = str(context.account_id) if context.account_id else None
 

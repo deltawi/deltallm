@@ -6,7 +6,12 @@ from collections.abc import Callable
 from fastapi import Header, HTTPException, Request, status
 
 from src.auth.roles import Permission
-from src.middleware.platform_auth import get_platform_auth_context, has_platform_admin_session, has_scoped_permission
+from src.middleware.platform_auth import (
+    get_platform_auth_context,
+    has_platform_admin_session,
+    has_scoped_permission,
+    requires_mfa_verification,
+)
 
 
 def _extract_bearer_token(authorization: str | None) -> str | None:
@@ -27,6 +32,8 @@ async def require_authenticated(
 
     context = get_platform_auth_context(request)
     if context is not None:
+        if requires_mfa_verification(context):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="MFA verification required")
         return "platform_session"
 
     configured = None
@@ -90,6 +97,8 @@ def require_admin_permission(permission: str) -> Callable:
         context = get_platform_auth_context(request)
         if context is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+        if requires_mfa_verification(context):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="MFA verification required")
 
         if permission == Permission.PLATFORM_ADMIN and has_platform_admin_session(request):
             return "platform_session"

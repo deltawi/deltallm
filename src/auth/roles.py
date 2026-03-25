@@ -25,6 +25,26 @@ class TeamRole:
     VIEWER: str = "team_viewer"
 
 
+PLATFORM_ROLES: set[str] = {
+    PlatformRole.ADMIN,
+    PlatformRole.ORG_USER,
+}
+
+ORGANIZATION_ROLES: set[str] = {
+    OrganizationRole.MEMBER,
+    OrganizationRole.OWNER,
+    OrganizationRole.ADMIN,
+    OrganizationRole.BILLING,
+    OrganizationRole.AUDITOR,
+}
+
+TEAM_ROLES: set[str] = {
+    TeamRole.ADMIN,
+    TeamRole.DEVELOPER,
+    TeamRole.VIEWER,
+}
+
+
 class Permission:
     PLATFORM_ADMIN = "platform.admin"
     ORG_READ = "org.read"
@@ -89,3 +109,24 @@ def has_platform_permission(role: str | None, permission: str) -> bool:
     normalized = LEGACY_PLATFORM_ROLE_ALIASES.get(role, role)
     allowed = PLATFORM_ROLE_PERMISSIONS.get(normalized, set())
     return permission in allowed
+
+
+def validate_platform_role(role: str | None) -> str:
+    normalized = str(role or "").strip()
+    if normalized not in PLATFORM_ROLES:
+        raise ValueError("invalid role")
+    return normalized
+
+
+def validate_organization_role(role: str | None) -> str:
+    normalized = str(role or "").strip()
+    if normalized not in ORGANIZATION_ROLES:
+        raise ValueError("invalid organization role")
+    return normalized
+
+
+def validate_team_role(role: str | None) -> str:
+    normalized = str(role or "").strip()
+    if normalized not in TEAM_ROLES:
+        raise ValueError("invalid team role")
+    return normalized

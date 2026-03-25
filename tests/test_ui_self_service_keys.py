@@ -46,6 +46,27 @@ class _FakeKeyDB:
             return [{"owner_account_id": row.get("owner_account_id")}]
 
         if (
+            "select vt.token, vt.key_name, vt.team_id, t.team_alias, t.organization_id," in normalized
+            and "from deltallm_verificationtoken vt" in normalized
+        ):
+            row = self.keys.get(token_hash)
+            if row is None:
+                return []
+            team = self.teams.get(str(row.get("team_id") or ""), {})
+            return [
+                {
+                    "token": token_hash,
+                    "key_name": row.get("key_name"),
+                    "team_id": row.get("team_id"),
+                    "team_alias": team.get("team_alias"),
+                    "organization_id": row.get("organization_id") or team.get("organization_id"),
+                    "owner_account_id": row.get("owner_account_id"),
+                    "owner_service_account_id": row.get("owner_service_account_id"),
+                    "owner_service_account_name": None,
+                }
+            ]
+
+        if (
             "from deltallm_teamtable" in normalized
             and "where team_id = $1" in normalized
             and "team_alias" in normalized
@@ -78,6 +99,9 @@ class _FakeKeyDB:
         if normalized.startswith("select account_id from deltallm_platformaccount"):
             account_id = token_hash
             return [{"account_id": account_id}] if account_id in self.account_ids else []
+
+        if normalized.startswith("select token from deltallm_verificationtoken where token = $1"):
+            return [{"token": token_hash}] if token_hash in self.keys else []
 
         return []
 
@@ -119,6 +143,15 @@ class _FakeKeyDB:
                 "tpd_limit": tpd_limit,
                 "expires": expires,
             }
+            return 1
+        if normalized.startswith("update deltallm_verificationtoken set token = $1, updated_at = now() where token = $2"):
+            new_hash = str(params[0])
+            old_hash = str(params[1])
+            row = self.keys.pop(old_hash, None)
+            if row is None:
+                return 0
+            row["token"] = new_hash
+            self.keys[new_hash] = row
             return 1
         return 0
 

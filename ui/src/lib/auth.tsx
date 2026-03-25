@@ -12,6 +12,7 @@ export interface SessionInfo {
   organization_memberships?: Array<Record<string, unknown>>;
   team_memberships?: Array<Record<string, unknown>>;
   mfa_enabled?: boolean;
+  mfa_verified?: boolean;
   mfa_prompt?: boolean;
   force_password_change?: boolean;
 }

@@ -134,6 +134,7 @@ export default function Organizations() {
   const [form, setForm] = useState({
     organization_name: '',
     max_budget: '',
+    soft_budget: '',
     rpm_limit: '',
     tpm_limit: '',
     rph_limit: '',
@@ -169,6 +170,7 @@ export default function Organizations() {
     setForm({
       organization_name: '',
       max_budget: '',
+      soft_budget: '',
       rpm_limit: '',
       tpm_limit: '',
       rph_limit: '',
@@ -204,6 +206,7 @@ export default function Organizations() {
       const payload = {
         organization_name: form.organization_name || undefined,
         max_budget: form.max_budget ? Number(form.max_budget) : undefined,
+        soft_budget: form.soft_budget ? Number(form.soft_budget) : undefined,
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
         rph_limit: form.rph_limit ? Number(form.rph_limit) : undefined,
@@ -234,6 +237,7 @@ export default function Organizations() {
     setForm({
       organization_name: row.organization_name || '',
       max_budget: row.max_budget != null ? String(row.max_budget) : '',
+      soft_budget: row.soft_budget != null ? String(row.soft_budget) : '',
       rpm_limit: row.rpm_limit != null ? String(row.rpm_limit) : '',
       tpm_limit: row.tpm_limit != null ? String(row.tpm_limit) : '',
       rph_limit: row.rph_limit != null ? String(row.rph_limit) : '',
@@ -533,6 +537,17 @@ export default function Organizations() {
               placeholder="1000"
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Soft Budget Alert ($)</label>
+            <input
+              type="number"
+              value={form.soft_budget}
+              onChange={(e) => setForm({ ...form, soft_budget: e.target.value })}
+              placeholder="800"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <p className="text-xs text-gray-400 mt-1">Notification threshold. Must be less than or equal to max budget.</p>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>

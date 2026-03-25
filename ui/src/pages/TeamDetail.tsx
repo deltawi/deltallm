@@ -916,12 +916,20 @@ export default function TeamDetail() {
               <h3 className="text-sm font-semibold text-gray-900">
                 Members {memberList.length > 0 && `(${memberList.length})`}
               </h3>
-              <button
-                onClick={() => { setMemberSearch(''); setMemberForm({ user_id: '', user_email: '', user_role: 'team_viewer' }); setShowAddMember(true); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-              >
-                <UserPlus className="w-3.5 h-3.5" /> Add Member
-              </button>
+              <div className="flex items-center gap-2">
+                <Link
+                  to={`/users?invite_team_id=${encodeURIComponent(teamId || '')}`}
+                  className="flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-50"
+                >
+                  Invite by Email
+                </Link>
+                <button
+                  onClick={() => { setMemberSearch(''); setMemberForm({ user_id: '', user_email: '', user_role: 'team_viewer' }); setShowAddMember(true); }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                >
+                  <UserPlus className="w-3.5 h-3.5" /> Add Member
+                </button>
+              </div>
             </div>
             <table className="w-full text-sm">
               <thead>
@@ -946,6 +954,10 @@ export default function TeamDetail() {
                     <td colSpan={4} className="px-5 py-12 text-center text-sm text-gray-400">
                       No members yet.{' '}
                       <button onClick={() => setShowAddMember(true)} className="text-indigo-600 hover:underline">Add the first one</button>
+                      {' '}or{' '}
+                      <Link to={`/users?invite_team_id=${encodeURIComponent(teamId || '')}`} className="text-indigo-600 hover:underline">
+                        invite by email
+                      </Link>
                     </td>
                   </tr>
                 ) : (

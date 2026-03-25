@@ -5,11 +5,16 @@ import logging
 from typing import Any
 
 from src.bootstrap.status import BootstrapStatus
+from src.db.email_tokens import EmailTokenRepository
+from src.db.invitations import InvitationRepository
 from src.auth import CustomAuthManager, InMemoryUserRepository, JWTAuthHandler, SSOAuthHandler, SSOConfig, SSOProvider
 from src.db.repositories import KeyRepository
+from src.services.email_token_service import EmailTokenService
+from src.services.invitation_service import InvitationService
 from src.services.key_service import KeyService
 from src.services.limit_counter import LimitCounter
 from src.services.platform_identity_service import PlatformIdentityService
+from src.services.sso_state_store import SSOStateStore
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +50,23 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
         redis_client=app.state.redis,
         degraded_mode=str(cfg.general_settings.redis_degraded_mode or app.state.settings.redis_degraded_mode),
     )
+    app.state.email_token_service = EmailTokenService(
+        repository=getattr(app.state, "email_token_repository", EmailTokenRepository(app.state.prisma_manager.client)),
+        salt=app.state.salt_key,
+        config_getter=lambda: getattr(app.state, "app_config", cfg),
+    )
+    app.state.invitation_service = InvitationService(
+        db_client=app.state.prisma_manager.client,
+        repository=getattr(app.state, "invitation_repository", InvitationRepository(app.state.prisma_manager.client)),
+        token_service=app.state.email_token_service,
+        outbox_service=getattr(app.state, "email_outbox_service", None),
+        platform_identity_service=app.state.platform_identity_service,
+        config_getter=lambda: getattr(app.state, "app_config", cfg),
+    )
 
     app.state.sso_user_repository = InMemoryUserRepository()
     app.state.sso_auth_handler = None
+    app.state.sso_state_store = None
     if cfg.general_settings.enable_sso:
         required = (
             cfg.general_settings.sso_client_id,
@@ -58,6 +77,14 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
             cfg.general_settings.sso_redirect_uri,
         )
         if all(required):
+            if app.state.redis is None:
+                statuses.append(BootstrapStatus("sso_state_store", "degraded", "redis unavailable"))
+            else:
+                app.state.sso_state_store = SSOStateStore(
+                    redis_client=app.state.redis,
+                    ttl_seconds=getattr(cfg.general_settings, "sso_state_ttl_seconds", 600),
+                )
+                statuses.append(BootstrapStatus("sso_state_store", "ready"))
             app.state.sso_auth_handler = SSOAuthHandler(
                 config=SSOConfig(
                     provider=SSOProvider(cfg.general_settings.sso_provider),
@@ -78,8 +105,10 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
             statuses.append(BootstrapStatus("sso_auth", "ready"))
         else:
             logger.warning("sso enabled but configuration is incomplete")
+            statuses.append(BootstrapStatus("sso_state_store", "degraded", "configuration incomplete"))
             statuses.append(BootstrapStatus("sso_auth", "degraded", "configuration incomplete"))
     else:
+        statuses.append(BootstrapStatus("sso_state_store", "disabled"))
         statuses.append(BootstrapStatus("sso_auth", "disabled"))
 
     app.state.jwt_auth_handler = None

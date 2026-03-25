@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
-from src.auth.roles import Permission, ORG_ROLE_PERMISSIONS, TEAM_ROLE_PERMISSIONS, TeamRole
+from src.auth.roles import Permission, ORG_ROLE_PERMISSIONS, TEAM_ROLE_PERMISSIONS, TeamRole, validate_team_role
 from src.audit import AuditAction
 from src.api.admin.endpoints.common import (
     AuthScope,
@@ -596,10 +596,10 @@ async def add_team_member(
     db = db_or_503(request)
     team = await _require_team_access(request, scope, db, team_id, write=True)
     account_id = str(payload.get("account_id") or payload.get("user_id") or "").strip()
-    user_role = str(payload.get("user_role") or TeamRole.VIEWER).strip()
-    allowed_roles = {TeamRole.ADMIN, TeamRole.DEVELOPER, TeamRole.VIEWER}
-    if user_role not in allowed_roles:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid team role")
+    try:
+        user_role = validate_team_role(payload.get("user_role") or TeamRole.VIEWER)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if not account_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="account_id is required")
 
