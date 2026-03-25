@@ -62,6 +62,36 @@ def _validate_model_limit_dict(value: Any, field_name: str) -> dict[str, int] | 
     return result if result else None
 
 
+def _resolve_self_service_policy(
+    payload: dict[str, Any],
+    *,
+    existing_team: dict[str, Any] | None = None,
+    default_enabled: bool,
+) -> tuple[bool, int | None, float | None, bool, int | None]:
+    enabled_default = existing_team.get("self_service_keys_enabled", default_enabled) if existing_team is not None else default_enabled
+    max_keys_default = existing_team.get("self_service_max_keys_per_user") if existing_team is not None else None
+    budget_default = existing_team.get("self_service_budget_ceiling") if existing_team is not None else None
+    require_expiry_default = (
+        existing_team.get("self_service_require_expiry", False) if existing_team is not None else False
+    )
+    max_expiry_days_default = existing_team.get("self_service_max_expiry_days") if existing_team is not None else None
+
+    enabled = bool(payload.get("self_service_keys_enabled", enabled_default))
+    max_keys = optional_int(payload.get("self_service_max_keys_per_user", max_keys_default), "self_service_max_keys_per_user")
+    budget_ceiling = payload.get("self_service_budget_ceiling", budget_default)
+    if budget_ceiling is not None:
+        try:
+            budget_ceiling = float(budget_ceiling)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="self_service_budget_ceiling must be a number")
+    require_expiry = bool(payload.get("self_service_require_expiry", require_expiry_default))
+    max_expiry_days = optional_int(
+        payload.get("self_service_max_expiry_days", max_expiry_days_default),
+        "self_service_max_expiry_days",
+    )
+    return enabled, max_keys, budget_ceiling, require_expiry, max_expiry_days
+
+
 async def _require_team_access(
     request: Request,
     scope: AuthScope,
@@ -307,16 +337,10 @@ async def create_team(
     tpd_limit = optional_int(payload.get("tpd_limit"), "tpd_limit")
     model_rpm_limit = _validate_model_limit_dict(payload.get("model_rpm_limit"), "model_rpm_limit")
     model_tpm_limit = _validate_model_limit_dict(payload.get("model_tpm_limit"), "model_tpm_limit")
-    ss_keys_enabled = bool(payload.get("self_service_keys_enabled", False))
-    ss_max_keys = optional_int(payload.get("self_service_max_keys_per_user"), "self_service_max_keys_per_user")
-    ss_budget_ceiling = payload.get("self_service_budget_ceiling")
-    if ss_budget_ceiling is not None:
-        try:
-            ss_budget_ceiling = float(ss_budget_ceiling)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="self_service_budget_ceiling must be a number")
-    ss_require_expiry = bool(payload.get("self_service_require_expiry", False))
-    ss_max_expiry_days = optional_int(payload.get("self_service_max_expiry_days"), "self_service_max_expiry_days")
+    ss_keys_enabled, ss_max_keys, ss_budget_ceiling, ss_require_expiry, ss_max_expiry_days = _resolve_self_service_policy(
+        payload,
+        default_enabled=True,
+    )
 
     await db.execute_raw(
         """
@@ -412,16 +436,11 @@ async def update_team(
     model_tpm_limit = _validate_model_limit_dict(
         payload.get("model_tpm_limit", existing_team.get("model_tpm_limit")), "model_tpm_limit"
     )
-    ss_keys_enabled = bool(payload.get("self_service_keys_enabled", existing_team.get("self_service_keys_enabled", False)))
-    ss_max_keys = optional_int(payload.get("self_service_max_keys_per_user", existing_team.get("self_service_max_keys_per_user")), "self_service_max_keys_per_user")
-    ss_budget_ceiling = payload.get("self_service_budget_ceiling", existing_team.get("self_service_budget_ceiling"))
-    if ss_budget_ceiling is not None:
-        try:
-            ss_budget_ceiling = float(ss_budget_ceiling)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="self_service_budget_ceiling must be a number")
-    ss_require_expiry = bool(payload.get("self_service_require_expiry", existing_team.get("self_service_require_expiry", False)))
-    ss_max_expiry_days = optional_int(payload.get("self_service_max_expiry_days", existing_team.get("self_service_max_expiry_days")), "self_service_max_expiry_days")
+    ss_keys_enabled, ss_max_keys, ss_budget_ceiling, ss_require_expiry, ss_max_expiry_days = _resolve_self_service_policy(
+        payload,
+        existing_team=existing_team,
+        default_enabled=False,
+    )
 
     await db.execute_raw(
         """

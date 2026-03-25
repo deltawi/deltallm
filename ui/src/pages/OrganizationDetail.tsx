@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
-import { callableTargets, organizations, teams as teamsApi } from '../lib/api';
-import { buildCatalogAssetTargets, buildParentScopedAssetTargets } from '../lib/assetAccess';
+import { callableTargets, organizations } from '../lib/api';
+import { buildCatalogAssetTargets } from '../lib/assetAccess';
 import { useAuth } from '../lib/auth';
 import Modal from '../components/Modal';
 import UserSearchSelect from '../components/UserSearchSelect';
@@ -84,11 +84,18 @@ export default function OrganizationDetail() {
   const isPlatformAdmin = userRole === 'platform_admin';
   const [tab, setTab] = useState<TabId>('overview');
 
+  useEffect(() => {
+    const hashTab = location.hash.replace('#', '');
+    if (hashTab === 'overview' || hashTab === 'teams' || hashTab === 'members' || hashTab === 'assets') {
+      setTab(hashTab);
+    }
+  }, [location.hash]);
+
   /* ── data ── */
   const { data: org, loading: orgLoading, refetch: refetchOrg } = useApi(
     () => organizations.get(orgId!), [orgId],
   );
-  const { data: orgTeams, loading: teamsLoading, refetch: refetchTeams } = useApi(
+  const { data: orgTeams, loading: teamsLoading } = useApi(
     () => organizations.teams(orgId!), [orgId],
   );
   const { data: orgMembers, loading: membersLoading, refetch: refetchMembers } = useApi(
@@ -240,64 +247,11 @@ export default function OrganizationDetail() {
     }
   };
 
-  /* ── create team modal ── */
-  const [showCreateTeam, setShowCreateTeam] = useState(false);
-  const [teamForm, setTeamForm] = useState({
-    team_alias: '',
-    max_budget: '',
-    rpm_limit: '',
-    tpm_limit: '',
-    rph_limit: '',
-    rpd_limit: '',
-    tpd_limit: '',
-    asset_access_mode: 'inherit' as 'inherit' | 'restrict',
-    selected_callable_keys: [] as string[],
-  });
-  const [teamError, setTeamError] = useState<string | null>(null);
-
-  const { data: childTeamAssetVisibility, loading: childTeamAssetVisibilityLoading } = useApi(
-    () => (
-      showCreateTeam && teamForm.asset_access_mode === 'restrict'
-        ? organizations.assetVisibility(orgId!)
-        : Promise.resolve(null)
-    ),
-    [orgId, showCreateTeam, teamForm.asset_access_mode],
-  );
-
-  const handleCreateTeam = async () => {
-    setSaving(true);
-    setTeamError(null);
-    try {
-      const created = await teamsApi.create({
-        team_alias: teamForm.team_alias || undefined,
-        organization_id: orgId,
-        max_budget: teamForm.max_budget ? Number(teamForm.max_budget) : undefined,
-        rpm_limit: teamForm.rpm_limit ? Number(teamForm.rpm_limit) : undefined,
-        tpm_limit: teamForm.tpm_limit ? Number(teamForm.tpm_limit) : undefined,
-        rph_limit: teamForm.rph_limit ? Number(teamForm.rph_limit) : undefined,
-        rpd_limit: teamForm.rpd_limit ? Number(teamForm.rpd_limit) : undefined,
-        tpd_limit: teamForm.tpd_limit ? Number(teamForm.tpd_limit) : undefined,
-      });
-      let assetAccessError: string | null = null;
-      if (teamForm.asset_access_mode === 'restrict') {
-        try {
-          await teamsApi.updateAssetAccess(created.team_id, {
-            mode: 'restrict',
-            selected_callable_keys: teamForm.selected_callable_keys,
-          });
-        } catch (err: any) {
-          assetAccessError = err?.message || 'Team created, but asset access could not be updated.';
-        }
-      }
-      setShowCreateTeam(false);
-      setTeamForm({ team_alias: '', max_budget: '', rpm_limit: '', tpm_limit: '', rph_limit: '', rpd_limit: '', tpd_limit: '', asset_access_mode: 'inherit', selected_callable_keys: [] });
-      refetchTeams();
-      setPageError(assetAccessError);
-    } catch (err: any) {
-      setTeamError(err?.message || 'Failed to create team');
-    } finally {
-      setSaving(false);
-    }
+  const openCreateTeam = () => {
+    const params = new URLSearchParams();
+    params.set('organization_id', orgId || '');
+    params.set('return_to', `${location.pathname}#teams`);
+    navigate(`/teams/new?${params.toString()}`);
   };
 
   /* ── add member modal ── */
@@ -360,11 +314,6 @@ export default function OrganizationDetail() {
     ? Math.round((orgAssetSummary.selected_total / orgAssetSummary.selectable_total) * 100)
     : null;
 
-  const childTeamAssetTargets = buildParentScopedAssetTargets(
-    childTeamAssetVisibility?.callable_targets?.items || [],
-    teamForm.selected_callable_keys,
-    teamForm.asset_access_mode,
-  );
   const orgAssetTargets = buildCatalogAssetTargets(
     (callableTargetPage?.data || []) as any[],
     form.selected_callable_keys,
@@ -601,7 +550,7 @@ export default function OrganizationDetail() {
                 <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
                   <h3 className="text-sm font-semibold text-gray-900">Teams</h3>
                   <button
-                    onClick={() => { setTeamError(null); setTeamForm({ team_alias: '', max_budget: '', rpm_limit: '', tpm_limit: '', rph_limit: '', rpd_limit: '', tpd_limit: '', asset_access_mode: 'inherit', selected_callable_keys: [] }); setShowCreateTeam(true); }}
+                    onClick={openCreateTeam}
                     className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-blue-600 border border-blue-200 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
                   >
                     <Plus className="w-3 h-3" /> Add Team
@@ -921,7 +870,7 @@ export default function OrganizationDetail() {
                 All Teams {teamList.length > 0 && `(${teamList.length})`}
               </h3>
               <button
-                onClick={() => { setTeamError(null); setTeamForm({ team_alias: '', max_budget: '', rpm_limit: '', tpm_limit: '', rph_limit: '', rpd_limit: '', tpd_limit: '', asset_access_mode: 'inherit', selected_callable_keys: [] }); setShowCreateTeam(true); }}
+                onClick={openCreateTeam}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
               >
                 <Plus className="w-3.5 h-3.5" /> Add Team
@@ -952,7 +901,7 @@ export default function OrganizationDetail() {
                   <tr>
                     <td colSpan={5} className="px-5 py-12 text-center text-sm text-gray-400">
                       No teams yet.{' '}
-                      <button onClick={() => setShowCreateTeam(true)} className="text-blue-600 hover:underline">Add the first one</button>
+                      <button onClick={openCreateTeam} className="text-blue-600 hover:underline">Add the first one</button>
                     </td>
                   </tr>
                 ) : (
@@ -1261,114 +1210,6 @@ export default function OrganizationDetail() {
             </div>
           </div>
         )}
-
-      {/* ── Create Team Modal ── */}
-      <Modal open={showCreateTeam} onClose={() => setShowCreateTeam(false)} title="Add Team to Organization">
-        <div className="space-y-4">
-          {teamError && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{teamError}</div>
-          )}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Team Name</label>
-            <input
-              value={teamForm.team_alias}
-              onChange={(e) => setTeamForm({ ...teamForm, team_alias: e.target.value })}
-              placeholder="Engineering"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Max Budget ($)</label>
-              <input
-                type="number"
-                value={teamForm.max_budget}
-                onChange={(e) => setTeamForm({ ...teamForm, max_budget: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-            <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
-              Team access starts from this organization's allowed assets. Use the section below to keep the full set or narrow it.
-            </div>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">RPM Limit</label>
-              <input
-                type="number"
-                value={teamForm.rpm_limit}
-                onChange={(e) => setTeamForm({ ...teamForm, rpm_limit: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">TPM Limit</label>
-              <input
-                type="number"
-                value={teamForm.tpm_limit}
-                onChange={(e) => setTeamForm({ ...teamForm, tpm_limit: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">RPH Limit</label>
-              <input
-                type="number"
-                value={teamForm.rph_limit}
-                onChange={(e) => setTeamForm({ ...teamForm, rph_limit: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Requests per hour"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">RPD Limit</label>
-              <input
-                type="number"
-                value={teamForm.rpd_limit}
-                onChange={(e) => setTeamForm({ ...teamForm, rpd_limit: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Requests per day"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">TPD Limit</label>
-              <input
-                type="number"
-                value={teamForm.tpd_limit}
-                onChange={(e) => setTeamForm({ ...teamForm, tpd_limit: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Tokens per day"
-              />
-            </div>
-          </div>
-          <AssetAccessEditor
-            title="Team Asset Access"
-            description="New teams inherit the organization asset ceiling by default. Switch to restrict if this team should only use a smaller subset."
-            mode={teamForm.asset_access_mode}
-            allowModeSelection
-            onModeChange={(mode) => setTeamForm((c) => ({
-              ...c,
-              asset_access_mode: mode === 'restrict' ? 'restrict' : 'inherit',
-              selected_callable_keys: mode === 'restrict' ? c.selected_callable_keys : [],
-            }))}
-            targets={childTeamAssetTargets}
-            selectedKeys={teamForm.selected_callable_keys}
-            onSelectedKeysChange={(selected_callable_keys) => setTeamForm({ ...teamForm, selected_callable_keys })}
-            loading={childTeamAssetVisibilityLoading}
-            disabled={saving}
-          />
-          <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => setShowCreateTeam(false)} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-            <button
-              onClick={handleCreateTeam}
-              disabled={saving || childTeamAssetVisibilityLoading}
-              className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
-            >
-              {saving ? 'Creating…' : 'Create Team'}
-            </button>
-          </div>
-        </div>
-      </Modal>
 
       {/* ── Add Member Modal ── */}
       <Modal open={showAddMember} onClose={() => setShowAddMember(false)} title="Add Organization Member">

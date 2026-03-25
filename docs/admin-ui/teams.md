@@ -14,9 +14,10 @@ Teams are the working unit for developers, applications, keys, and team-level bu
 ## Typical workflow
 
 1. Create the team inside an organization
-2. Set team-specific budgets and rate limits across all time windows
-3. Add team members with the correct role
-4. Choose whether the team inherits the organization asset set or narrows it to selected assets
+2. Confirm the self-service key policy for developers
+3. Set team-specific budgets and rate limits across all time windows
+4. Add team members with the correct role
+5. Choose whether the team inherits the organization asset set or narrows it to selected assets
 
 ## Rate limit fields
 
@@ -32,7 +33,7 @@ All limits are optional. Only configured limits are enforced. Team limits act as
 
 ## Self-Service Key Policy
 
-Teams can allow their developers to create their own API keys without admin involvement. This is configured per team in the Team Detail page under the **Self-Service Keys** card (visible to team admins and above).
+Teams can allow their developers to create their own API keys without admin involvement. New teams start with self-service enabled by default in the create form, and you can review or tighten the policy later in the Team Detail page under the **Self-Service Keys** card (visible to team admins and above).
 
 ### Policy fields
 
@@ -48,11 +49,10 @@ When a developer creates a key through self-service, the backend enforces all of
 
 ### Enabling self-service
 
-1. Open the team detail page
-2. Find the **Self-Service Keys** card
-3. Toggle the switch to enable
-4. Set the constraint fields as needed
-5. Save — developers with `team_developer` role can now create keys
+1. Create a new team or open an existing team detail page
+2. Leave **Allow developers to create personal API keys** enabled, or turn it on in the **Self-Service Keys** card
+3. Set optional constraint fields only if the team needs tighter guardrails
+4. Save — developers with `team_developer` role can now create keys
 
 ## Why this matters
 

@@ -31,7 +31,7 @@ Team developers with the `key.create_self` permission can create their own API k
 
 ### How it works
 
-1. An admin enables self-service on the team (see [Teams](teams.md#self-service-key-policy))
+1. An admin leaves self-service enabled on the team or enables it later in team settings (see [Teams](teams.md#self-service-key-policy))
 2. A team developer signs in and navigates to API Keys
 3. The simplified creation form shows policy constraints (max budget, required expiry, etc.)
 4. The developer creates a key — the backend forces the owner to the current session user

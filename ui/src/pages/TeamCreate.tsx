@@ -4,6 +4,7 @@ import { useApi } from '../lib/hooks';
 import { teams, organizations } from '../lib/api';
 import { buildParentScopedAssetTargets } from '../lib/assetAccess';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
+import TeamSelfServicePolicySection from '../components/admin/TeamSelfServicePolicySection';
 import ToggleSwitch from '../components/ToggleSwitch';
 import { useAuth } from '../lib/auth';
 import {
@@ -114,6 +115,7 @@ export default function TeamCreate() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const preselectedOrgId = searchParams.get('organization_id') || '';
+  const returnTo = searchParams.get('return_to') || '';
   const { session, authMode } = useAuth();
   const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
   const permissions = new Set(session?.effective_permissions || []);
@@ -149,6 +151,11 @@ export default function TeamCreate() {
   const [tpdValue, setTpdValue] = useState('');
   const [assetMode, setAssetMode] = useState<'inherit' | 'restrict'>('inherit');
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+  const [selfServiceEnabled, setSelfServiceEnabled] = useState(true);
+  const [selfServiceMaxKeysPerUser, setSelfServiceMaxKeysPerUser] = useState('');
+  const [selfServiceBudgetCeiling, setSelfServiceBudgetCeiling] = useState('');
+  const [selfServiceRequireExpiry, setSelfServiceRequireExpiry] = useState(false);
+  const [selfServiceMaxExpiryDays, setSelfServiceMaxExpiryDays] = useState('');
   const [blocked, setBlocked] = useState(false);
 
   /* selected org details */
@@ -184,6 +191,13 @@ export default function TeamCreate() {
 
   const isReady = teamName.trim().length > 0 && selectedOrgId.length > 0;
 
+  const resetSelfServicePolicy = () => {
+    setSelfServiceMaxKeysPerUser('');
+    setSelfServiceBudgetCeiling('');
+    setSelfServiceRequireExpiry(false);
+    setSelfServiceMaxExpiryDays('');
+  };
+
   const handleCreate = async () => {
     if (!teamName.trim()) { setNameError(true); return; }
     if (!selectedOrgId) { setError('Please select an organization.'); return; }
@@ -199,6 +213,16 @@ export default function TeamCreate() {
         rph_limit: rphEnabled && rphValue ? Number(rphValue) : undefined,
         rpd_limit: rpdEnabled && rpdValue ? Number(rpdValue) : undefined,
         tpd_limit: tpdEnabled && tpdValue ? Number(tpdValue) : undefined,
+        self_service_keys_enabled: selfServiceEnabled,
+        self_service_max_keys_per_user:
+          selfServiceEnabled && selfServiceMaxKeysPerUser ? Number(selfServiceMaxKeysPerUser) : undefined,
+        self_service_budget_ceiling:
+          selfServiceEnabled && selfServiceBudgetCeiling ? Number(selfServiceBudgetCeiling) : undefined,
+        self_service_require_expiry: selfServiceEnabled && selfServiceRequireExpiry ? true : undefined,
+        self_service_max_expiry_days:
+          selfServiceEnabled && selfServiceRequireExpiry && selfServiceMaxExpiryDays
+            ? Number(selfServiceMaxExpiryDays)
+            : undefined,
       };
 
       const created = await teams.create(payload);
@@ -231,7 +255,7 @@ export default function TeamCreate() {
     }
   };
 
-  const handleCancel = () => navigate('/teams');
+  const handleCancel = () => navigate(returnTo || '/teams');
 
   /* ─────────────── render ─────────────── */
   return (
@@ -579,6 +603,36 @@ export default function TeamCreate() {
                 )}
               </div>
             </div>
+          </div>
+
+          <div className="border-t border-gray-200" />
+
+          {/* ── Developer Key Access ── */}
+          <div>
+            <SectionHeading>Developer Key Access</SectionHeading>
+            <TeamSelfServicePolicySection
+              enabled={selfServiceEnabled}
+              maxKeysPerUser={selfServiceMaxKeysPerUser}
+              budgetCeiling={selfServiceBudgetCeiling}
+              requireExpiry={selfServiceRequireExpiry}
+              maxExpiryDays={selfServiceMaxExpiryDays}
+              disabled={saving}
+              onEnabledChange={(value) => {
+                setSelfServiceEnabled(value);
+                if (!value) {
+                  resetSelfServicePolicy();
+                }
+              }}
+              onMaxKeysPerUserChange={setSelfServiceMaxKeysPerUser}
+              onBudgetCeilingChange={setSelfServiceBudgetCeiling}
+              onRequireExpiryChange={(value) => {
+                setSelfServiceRequireExpiry(value);
+                if (!value) {
+                  setSelfServiceMaxExpiryDays('');
+                }
+              }}
+              onMaxExpiryDaysChange={setSelfServiceMaxExpiryDays}
+            />
           </div>
 
           <div className="border-t border-gray-200" />
