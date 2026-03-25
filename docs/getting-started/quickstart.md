@@ -6,7 +6,7 @@ This page is the main "how do I call the gateway?" guide for first-time users.
 
 ## 1. Start the Gateway
 
-After completing [installation](installation.md), make sure the backend is running:
+After completing [installation](installation.md) or [Docker](docker.md), make sure the backend is running:
 
 ```bash
 # Optional: start Redis for distributed caching and rate limiting
@@ -40,6 +40,8 @@ curl http://localhost:8000/v1/models \
     If the response contains no models, either:
     1. enable `general_settings.model_deployment_bootstrap_from_config: true` in `config.yaml` and restart once, or
     2. create a model deployment from the Admin UI first.
+
+    The starter [`config.example.yaml`](https://github.com/deltawi/deltallm/blob/main/config.example.yaml) includes a sample `gpt-4o-mini` deployment for this bootstrap flow.
 
 ## 4. Make a Chat Request
 
@@ -110,6 +112,15 @@ curl -X POST http://localhost:8000/ui/api/keys \
 ```
 
 The response includes a `raw_key` — use this as the API key for your application.
+
+## 7. Next Admin Flows
+
+The current getting-started build also supports:
+
+- invitation-based onboarding from **People & Access**
+- password reset from the browser login page
+- SSO login with MFA-aware session enforcement when SSO is configured
+- opt-in governance notifications for budget thresholds and key lifecycle events when email delivery is enabled
 
 ## Next Steps
 

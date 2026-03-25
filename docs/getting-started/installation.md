@@ -99,6 +99,7 @@ The example config is ready for a quick local start:
 - It defines a sample `gpt-4o-mini` deployment
 - It reads secrets from environment variables instead of hardcoding them
 - It uses `model_deployment_source: db_only`, which is the recommended steady-state mode
+- It keeps advanced features such as email, SSO, and governance notifications commented until you need them
 
 ### Choose how to load your first models
 
@@ -118,6 +119,12 @@ general_settings:
 After your first successful startup, you can set `model_deployment_bootstrap_from_config` back to `false`.
 
 If you want to route to a different model or provider, edit `config.yaml` now. See the [model configuration guide](../configuration/models.md) for the full reference.
+
+When you are ready for more than the minimum setup:
+
+- uncomment the email block to enable invitation emails, password reset, admin test email, and governance notifications
+- uncomment the SSO block only after Redis and your identity provider settings are ready
+- leave governance notifications disabled until email delivery is configured
 
 ## 5. Initialize Prisma and apply the database schema
 

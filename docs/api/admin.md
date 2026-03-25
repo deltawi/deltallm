@@ -24,6 +24,30 @@ Admin endpoints require either:
 
 Some endpoints require specific admin permissions, so a valid session does not automatically mean full access.
 
+If the account has MFA enabled, session-authenticated admin access requires an MFA-verified session.
+
+## Auth and Account Lifecycle
+
+These endpoints back browser login, invitation acceptance, password recovery, MFA, and SSO.
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `POST` | `/auth/internal/login` | Email/password login for admin sessions |
+| `POST` | `/auth/internal/logout` | End the current admin session |
+| `GET` | `/auth/me` | Inspect the current session |
+| `POST` | `/auth/internal/change-password` | Change password for the current session |
+| `POST` | `/auth/internal/forgot-password` | Request a password reset link |
+| `GET` | `/auth/internal/reset-password/{token}` | Validate a reset token |
+| `POST` | `/auth/internal/reset-password` | Complete a password reset |
+| `GET` | `/auth/invitations/{token}` | Validate an invitation token |
+| `POST` | `/auth/invitations/accept` | Accept an invitation |
+| `POST` | `/auth/mfa/enroll/start` | Start MFA enrollment |
+| `POST` | `/auth/mfa/enroll/confirm` | Confirm MFA enrollment |
+| `POST` | `/auth/mfa/verify` | Verify the current session for MFA-enabled accounts |
+| `GET` | `/auth/sso-config` | Inspect whether SSO is enabled |
+| `GET` | `/auth/login` | Start the SSO login flow |
+| `GET` | `/auth/callback` | Complete the SSO callback |
+
 ## Governance Notes
 
 - Callable-target and MCP runtime checks are enforced from in-memory snapshots, not per-request database reads.
@@ -216,6 +240,15 @@ Callable targets are the public runtime names that callers can use, including bo
 | `POST` | `/ui/api/rbac/team-memberships` | Create team membership |
 | `DELETE` | `/ui/api/rbac/team-memberships/{membership_id}` | Delete team membership |
 
+### Invitations
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/ui/api/invitations` | List invitations visible to the caller |
+| `POST` | `/ui/api/invitations` | Create an invitation |
+| `POST` | `/ui/api/invitations/{invitation_id}/resend` | Resend an invitation |
+| `POST` | `/ui/api/invitations/{invitation_id}/cancel` | Cancel an invitation |
+
 ## Safety and Operations
 
 ### Guardrails
@@ -258,6 +291,16 @@ Supported report parameters include:
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
 | `GET` | `/ui/api/audit/events` | List audit events |
+
+### Email Operations
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/ui/api/email/outbox/summary` | Operator summary of outbox status and recent email records |
+| `POST` | `/ui/api/email/test` | Queue a test email and verify delivery is possible |
+| `GET` | `/ui/api/email/suppressions` | List suppressed email recipients |
+| `DELETE` | `/ui/api/email/suppressions/{email_address}` | Remove a suppressed recipient |
+| `POST` | `/webhooks/email/resend` | Ingest Resend delivery feedback and suppression events |
 | `GET` | `/ui/api/audit/events/{event_id}` | Fetch one audit event |
 | `GET` | `/ui/api/audit/timeline` | Timeline by request or correlation |
 | `GET` | `/ui/api/audit/export` | Export events as JSONL or CSV |

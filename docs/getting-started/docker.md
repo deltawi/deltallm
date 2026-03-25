@@ -5,7 +5,7 @@ Run DeltaLLM with Docker for a quick, reproducible setup.
 ## Prerequisites
 
 - Docker and Docker Compose v2+
-- A `config.yaml` file (copy from `config.example.yaml` and edit)
+- A `config.yaml` file copied from `config.example.yaml`
 
 ## Using Docker Compose (Recommended)
 
@@ -13,13 +13,19 @@ The project includes a `docker-compose.yaml` with two deployment profiles: **sin
 
 ## Before You Start
 
-Copy the example config:
+Copy the starter config:
 
 ```bash
 cp config.example.yaml config.yaml
 ```
 
-For the quickest first successful request, set this in `config.yaml` before starting:
+`config.example.yaml` is the curated starter config used by the docs:
+
+- the active settings are the minimum recommended local/dev setup
+- secrets come from environment variables
+- advanced features such as email, SSO, and governance notifications stay commented until you need them
+
+For the quickest first successful request, enable one-time model bootstrap before starting:
 
 ```yaml
 general_settings:
@@ -97,7 +103,7 @@ Create a `.env` file in the project root.
     `DELTALLM_MASTER_KEY` must be at least 32 characters long and include both letters and numbers.
     `DELTALLM_SALT_KEY` must be a real secret value and must not be `change-me`.
 
-Required for the sample `config.yaml`:
+Required for the starter `config.yaml`:
 
 ```env
 DELTALLM_MASTER_KEY=sk-your-master-key
@@ -118,6 +124,10 @@ Optional, only if you enable the related features in `config.yaml`:
 LAKERA_API_KEY=
 DELTALLM_S3_BUCKET=
 REDIS_PASSWORD=
+RESEND_API_KEY=
+SENDGRID_API_KEY=
+SSO_CLIENT_ID=
+SSO_CLIENT_SECRET=
 ```
 
 The `docker-compose.yaml` automatically sets these for the bundled services:
@@ -126,6 +136,16 @@ The `docker-compose.yaml` automatically sets these for the bundled services:
 - `REDIS_URL`
 
 You do not need to configure them manually for the default Compose setup.
+
+### Optional feature blocks in `config.yaml`
+
+The starter config keeps the common optional features commented out with guidance inline.
+
+- Email delivery: enable when you want invitation emails, password reset, admin test email, or governance notifications
+- Governance notifications: opt-in only, and intended to be enabled after email delivery is configured
+- SSO: requires Redis and identity-provider credentials
+- JWT auth: optional bearer-token validation for proxy traffic
+- Guardrails and S3 callbacks: enable only when the related provider credentials are configured
 
 The container applies the Prisma schema automatically on boot, so you do not need a separate schema initialization step for the default Compose setup.
 

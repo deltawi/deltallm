@@ -17,7 +17,8 @@ DeltaLLM acts as a proxy between your applications and LLM providers like OpenAI
 - **Rate Limiting** — Hierarchical limits at organization, team, user, and key levels
 - **Caching** — Response caching with memory, Redis, or S3 backends
 - **RBAC** — Role-based access control with platform, organization, and team scopes
-- **Authentication** — Session-based login, master key, SSO (Microsoft Entra, Google, Okta, OIDC)
+- **Authentication** — Session-based login, invitations, password recovery, MFA, and SSO (Microsoft Entra, Google, Okta, OIDC)
+- **Email Lifecycle** — Durable outbox-backed delivery for invitations, password reset, and operator test email
 - **Admin Dashboard** — Full-featured web UI for managing the gateway
 - **Observability** — Prometheus metrics, request logging, and spend analytics
 
@@ -40,6 +41,6 @@ Your applications use the standard OpenAI SDK — just change the `base_url` to 
 - [Installation](getting-started/installation.md) — Full local setup for development and contribution
 - [Quick Start](getting-started/quickstart.md) — Use the gateway with curl, Python, and JavaScript
 - [MCP Quick Start](getting-started/mcp-quickstart.md) — Register a server, expose a tool, and test `/mcp`
-- [Configuration Reference](configuration/index.md) — Full config.yaml documentation
+- [Configuration Reference](configuration/index.md) — Starter `config.yaml` and full settings reference
 - [API Reference](api/index.md) — OpenAI-compatible and admin API endpoints
 - [Admin UI Guide](admin-ui/index.md) — Managing the gateway through the web dashboard
