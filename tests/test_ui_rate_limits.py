@@ -212,6 +212,59 @@ async def test_ui_create_endpoints_accept_rate_limits(client, test_app):
 
 
 @pytest.mark.asyncio
+async def test_ui_create_team_defaults_self_service_enabled(client, test_app):
+    fake_db = FakeAdminDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    headers = {"Authorization": "Bearer mk-test"}
+
+    await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={"organization_id": "org-ss-default"},
+    )
+    team = await client.post(
+        "/ui/api/teams",
+        headers=headers,
+        json={"team_id": "team-ss-default", "organization_id": "org-ss-default"},
+    )
+
+    assert team.status_code == 200
+    payload = team.json()
+    assert payload["self_service_keys_enabled"] is True
+    assert payload["self_service_max_keys_per_user"] is None
+    assert payload["self_service_budget_ceiling"] is None
+    assert payload["self_service_require_expiry"] is False
+    assert payload["self_service_max_expiry_days"] is None
+
+
+@pytest.mark.asyncio
+async def test_ui_create_team_can_disable_self_service_explicitly(client, test_app):
+    fake_db = FakeAdminDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    headers = {"Authorization": "Bearer mk-test"}
+
+    await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={"organization_id": "org-ss-disabled"},
+    )
+    team = await client.post(
+        "/ui/api/teams",
+        headers=headers,
+        json={
+            "team_id": "team-ss-disabled",
+            "organization_id": "org-ss-disabled",
+            "self_service_keys_enabled": False,
+        },
+    )
+
+    assert team.status_code == 200
+    assert team.json()["self_service_keys_enabled"] is False
+
+
+@pytest.mark.asyncio
 async def test_ui_update_endpoints_persist_rate_limits(client, test_app):
     fake_db = FakeAdminDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
