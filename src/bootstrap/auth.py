@@ -79,30 +79,31 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
         if all(required):
             if app.state.redis is None:
                 statuses.append(BootstrapStatus("sso_state_store", "degraded", "redis unavailable"))
+                statuses.append(BootstrapStatus("sso_auth", "degraded", "redis unavailable"))
             else:
                 app.state.sso_state_store = SSOStateStore(
                     redis_client=app.state.redis,
                     ttl_seconds=getattr(cfg.general_settings, "sso_state_ttl_seconds", 600),
                 )
                 statuses.append(BootstrapStatus("sso_state_store", "ready"))
-            app.state.sso_auth_handler = SSOAuthHandler(
-                config=SSOConfig(
-                    provider=SSOProvider(cfg.general_settings.sso_provider),
-                    client_id=cfg.general_settings.sso_client_id or "",
-                    client_secret=cfg.general_settings.sso_client_secret or "",
-                    authorize_url=cfg.general_settings.sso_authorize_url or "",
-                    token_url=cfg.general_settings.sso_token_url or "",
-                    userinfo_url=cfg.general_settings.sso_userinfo_url or "",
-                    redirect_uri=cfg.general_settings.sso_redirect_uri or "",
-                    scope=cfg.general_settings.sso_scope,
-                    admin_email_list=cfg.general_settings.sso_admin_email_list,
-                    default_team_id=cfg.general_settings.sso_default_team_id,
-                ),
-                user_repository=app.state.sso_user_repository,
-                http_client=app.state.http_client,
-                rate_limiter=app.state.limit_counter,
-            )
-            statuses.append(BootstrapStatus("sso_auth", "ready"))
+                app.state.sso_auth_handler = SSOAuthHandler(
+                    config=SSOConfig(
+                        provider=SSOProvider(cfg.general_settings.sso_provider),
+                        client_id=cfg.general_settings.sso_client_id or "",
+                        client_secret=cfg.general_settings.sso_client_secret or "",
+                        authorize_url=cfg.general_settings.sso_authorize_url or "",
+                        token_url=cfg.general_settings.sso_token_url or "",
+                        userinfo_url=cfg.general_settings.sso_userinfo_url or "",
+                        redirect_uri=cfg.general_settings.sso_redirect_uri or "",
+                        scope=cfg.general_settings.sso_scope,
+                        admin_email_list=cfg.general_settings.sso_admin_email_list,
+                        default_team_id=cfg.general_settings.sso_default_team_id,
+                    ),
+                    user_repository=app.state.sso_user_repository,
+                    http_client=app.state.http_client,
+                    rate_limiter=app.state.limit_counter,
+                )
+                statuses.append(BootstrapStatus("sso_auth", "ready"))
         else:
             logger.warning("sso enabled but configuration is incomplete")
             statuses.append(BootstrapStatus("sso_state_store", "degraded", "configuration incomplete"))

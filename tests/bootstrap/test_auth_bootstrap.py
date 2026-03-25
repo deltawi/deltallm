@@ -193,3 +193,35 @@ async def test_init_auth_runtime_marks_incomplete_sso_degraded(
     assert BootstrapStatus("sso_state_store", "degraded", "configuration incomplete") in runtime.statuses
     assert BootstrapStatus("sso_auth", "degraded", "configuration incomplete") in runtime.statuses
     assert "sso enabled but configuration is incomplete" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_init_auth_runtime_keeps_sso_disabled_when_redis_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakePlatformIdentityService:
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            self.kwargs = kwargs
+
+        async def ensure_bootstrap_admin(self, email: str | None, password: str | None) -> None:  # noqa: ARG002
+            return None
+
+    monkeypatch.setattr("src.bootstrap.auth.PlatformIdentityService", FakePlatformIdentityService)
+    monkeypatch.setattr("src.bootstrap.auth.SSOAuthHandler", lambda **kwargs: ("sso-handler", kwargs))
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            prisma_manager=SimpleNamespace(client="db-client"),
+            redis=None,
+            salt_key="salt",
+            settings=SimpleNamespace(redis_degraded_mode="fail_open"),
+            http_client="http-client",
+        )
+    )
+
+    runtime = await init_auth_runtime(app, _auth_config(enable_sso=True, enable_jwt=False, custom_auth=None))
+
+    assert app.state.sso_state_store is None
+    assert app.state.sso_auth_handler is None
+    assert BootstrapStatus("sso_state_store", "degraded", "redis unavailable") in runtime.statuses
+    assert BootstrapStatus("sso_auth", "degraded", "redis unavailable") in runtime.statuses

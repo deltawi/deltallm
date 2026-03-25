@@ -18,6 +18,7 @@ def _config(**overrides):
         email_from_address="noreply@example.com",
         email_from_name="DeltaLLM",
         email_reply_to=None,
+        email_base_url="https://gateway.example.com",
         smtp_host="smtp.example.com",
         smtp_port=587,
         smtp_username="mailer",
@@ -56,6 +57,13 @@ def test_validate_current_config_requires_sender_address() -> None:
     service = _delivery_service(email_from_address=None)
 
     with pytest.raises(EmailConfigurationError, match="email_from_address"):
+        service.validate_current_config()
+
+
+def test_validate_current_config_requires_absolute_email_base_url() -> None:
+    service = _delivery_service(email_base_url="/relative")
+
+    with pytest.raises(EmailConfigurationError, match="email_base_url must be an absolute http\\(s\\) URL"):
         service.validate_current_config()
 
 

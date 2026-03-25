@@ -5,6 +5,7 @@ from typing import Any, Callable, Iterable
 
 import httpx
 
+from src.email.config import normalize_email_base_url
 from src.email.models import EmailConfigurationError, EmailDeliveryResult, EmailProviderName, PreparedEmail
 from src.email.providers import ResendEmailProvider, SMTPEmailProvider, SendGridEmailProvider
 from src.email.rendering import render_email_template
@@ -18,6 +19,7 @@ class EmailDeliveryService:
     def validate_current_config(self, *, provider_override: str | None = None) -> None:
         provider = self._resolve_provider(provider_override=provider_override)
         self._from_address()
+        self._base_url()
         self._provider_settings(provider)
 
     def prepare_template_email(
@@ -102,6 +104,10 @@ class EmailDeliveryService:
         if required and not normalized:
             raise EmailConfigurationError("at least one recipient is required")
         return tuple(normalized)
+
+    def _base_url(self) -> str:
+        general = self._general_settings()
+        return normalize_email_base_url(getattr(general, "email_base_url", None))
 
     def _provider_settings(self, provider: EmailProviderName) -> dict[str, Any]:
         general = self._general_settings()

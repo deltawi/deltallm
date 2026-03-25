@@ -23,6 +23,7 @@ def _config(**overrides):
         email_provider="smtp",
         email_from_address="noreply@example.com",
         email_from_name="DeltaLLM",
+        email_base_url="https://gateway.example.com",
         email_worker_enabled=True,
         email_worker_poll_interval_seconds=5.0,
         email_worker_max_concurrency=3,
@@ -60,6 +61,19 @@ async def test_init_email_runtime_marks_invalid_config_degraded() -> None:
 
     assert runtime.statuses == (
         BootstrapStatus("email", "degraded", "email_from_address is required when email is enabled"),
+        BootstrapStatus("email_worker", "disabled"),
+    )
+    await app.state.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_init_email_runtime_requires_absolute_email_base_url() -> None:
+    app = SimpleNamespace(state=_app_state())
+
+    runtime = await init_email_runtime(app, _config(email_base_url=None))
+
+    assert runtime.statuses == (
+        BootstrapStatus("email", "degraded", "email_base_url is required when email is enabled"),
         BootstrapStatus("email_worker", "disabled"),
     )
     await app.state.http_client.aclose()

@@ -195,9 +195,12 @@ Email delivery is optional but required for:
 Recommended rollout:
 
 1. enable email with SMTP or a provider
-2. verify `/ui/api/email/test`
-3. enable invite and recovery flows
-4. enable governance notifications only after delivery is confirmed
+2. set `email_base_url` to the canonical public app origin
+3. verify `/ui/api/email/test`
+4. enable invite and recovery flows
+5. enable governance notifications only after delivery is confirmed
+
+If `email_enabled: true`, `email_base_url` must be an absolute `http://` or `https://` URL. DeltaLLM fails email bootstrap when it is missing or relative.
 
 ## Cache Settings
 
@@ -236,7 +239,7 @@ Recommended rollout:
 | `sso_default_team_id` | — | Optional team automatically assigned to SSO users |
 | `sso_state_ttl_seconds` | `600` | TTL for Redis-backed SSO callback state |
 
-SSO callback state is stored in Redis. If SSO is enabled but Redis is unavailable, SSO login cannot start.
+SSO callback state is stored in Redis. If SSO is enabled but Redis is unavailable, DeltaLLM keeps SSO disabled instead of exposing a broken login flow.
 
 ## Governance Notification Settings
 

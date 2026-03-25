@@ -17,6 +17,7 @@ class FakeAdminDB:
                 organization_id,
                 organization_name,
                 max_budget,
+                soft_budget,
                 rpm_limit,
                 tpm_limit,
                 rph_limit,
@@ -26,11 +27,12 @@ class FakeAdminDB:
                 model_tpm_limit,
                 audit_content_storage_enabled,
                 metadata,
-            ) = params[:12]
+            ) = params[:13]
             self.organizations[organization_id] = {
                 "organization_id": organization_id,
                 "organization_name": organization_name,
                 "max_budget": max_budget,
+                "soft_budget": soft_budget,
                 "spend": 0.0,
                 "rpm_limit": rpm_limit,
                 "tpm_limit": tpm_limit,
@@ -50,6 +52,7 @@ class FakeAdminDB:
             (
                 organization_name,
                 max_budget,
+                soft_budget,
                 rpm_limit,
                 tpm_limit,
                 rph_limit,
@@ -60,12 +63,13 @@ class FakeAdminDB:
                 audit_content_storage_enabled,
                 metadata,
                 organization_id,
-            ) = params[:12]
+            ) = params[:13]
             row = self.organizations[organization_id]
             row.update(
                 {
                     "organization_name": organization_name,
                     "max_budget": max_budget,
+                    "soft_budget": soft_budget,
                     "rpm_limit": rpm_limit,
                     "tpm_limit": tpm_limit,
                     "rph_limit": rph_limit,

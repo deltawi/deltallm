@@ -129,6 +129,9 @@ POST /auth/internal/reset-password
 
 The forgot-password flow is intentionally non-enumerating: the API returns the same success response whether the account exists or not.
 
+!!! note
+    Invitation and reset emails require `general_settings.email_base_url` to be set to an absolute `http://` or `https://` URL. DeltaLLM now refuses to enable email delivery without it.
+
 ## Multi-Factor Authentication
 
 DeltaLLM supports TOTP-based MFA for session logins.
@@ -183,7 +186,7 @@ general_settings:
 4. DeltaLLM creates or updates the platform account and sets a session cookie
 
 !!! note
-    SSO callback state is stored in Redis. If Redis is unavailable, SSO login cannot start.
+    SSO callback state is stored in Redis. If Redis is unavailable, DeltaLLM keeps SSO disabled instead of advertising a broken login flow.
 
 ### Auto-Assign Platform Admins
 
