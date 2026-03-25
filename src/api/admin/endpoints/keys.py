@@ -24,6 +24,66 @@ router = APIRouter(tags=["Admin Keys"])
 logger = logging.getLogger(__name__)
 
 
+def _notification_record(row: dict[str, Any]) -> Any:
+    from src.services.key_notifications import KeyNotificationRecord
+
+    return KeyNotificationRecord(
+        token_hash=str(row.get("token") or ""),
+        key_name=str(row.get("key_name") or ""),
+        team_id=str(row.get("team_id") or "").strip() or None,
+        team_alias=str(row.get("team_alias") or "").strip() or None,
+        organization_id=str(row.get("organization_id") or "").strip() or None,
+        owner_account_id=str(row.get("owner_account_id") or "").strip() or None,
+        owner_service_account_id=str(row.get("owner_service_account_id") or "").strip() or None,
+        owner_service_account_name=str(row.get("owner_service_account_name") or "").strip() or None,
+    )
+
+
+async def _get_key_notification_row(db: Any, token_hash: str) -> dict[str, Any] | None:
+    rows = await db.query_raw(
+        """
+        SELECT
+            vt.token,
+            vt.key_name,
+            vt.team_id,
+            t.team_alias,
+            t.organization_id,
+            vt.owner_account_id,
+            vt.owner_service_account_id,
+            sa.name AS owner_service_account_name
+        FROM deltallm_verificationtoken vt
+        LEFT JOIN deltallm_teamtable t ON vt.team_id = t.team_id
+        LEFT JOIN deltallm_serviceaccount sa ON vt.owner_service_account_id = sa.service_account_id
+        WHERE vt.token = $1
+        LIMIT 1
+        """,
+        token_hash,
+    )
+    if not rows:
+        return None
+    return dict(rows[0])
+
+
+async def _notify_key_lifecycle(
+    request: Request,
+    *,
+    event_kind: str,
+    actor_account_id: str | None,
+    record: Any,
+) -> None:
+    service = getattr(request.app.state, "key_notification_service", None)
+    if service is None:
+        return
+    try:
+        await service.notify_lifecycle(
+            event_kind=event_kind,
+            actor_account_id=actor_account_id,
+            record=record,
+        )
+    except Exception:  # pragma: no cover - defensive guard
+        logger.exception("failed to enqueue key lifecycle notification", extra={"notification_kind": event_kind})
+
+
 async def _get_self_service_policy(db: Any, team_id: str) -> dict[str, Any]:
     rows = await db.query_raw(
         """
@@ -534,6 +594,22 @@ async def create_key(
             "expires": expires,
             "self_service": self_service_only,
         }
+        await _notify_key_lifecycle(
+            request,
+            event_kind="api_key_created",
+            actor_account_id=scope.account_id,
+            record=_notification_record(
+                {
+                    "token": token_hash,
+                    "key_name": key_name,
+                    "team_id": team_id,
+                    "team_alias": team.get("team_alias"),
+                    "organization_id": team_org,
+                    "owner_account_id": owner_account_id,
+                    "owner_service_account_id": owner_service_account_id,
+                }
+            ),
+        )
         await emit_admin_mutation_audit(
             request=request,
             request_start=request_start,
@@ -872,6 +948,7 @@ async def regenerate_key(
     rows = await db.query_raw("SELECT token FROM deltallm_verificationtoken WHERE token = $1 LIMIT 1", token_hash)
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
+    notification_row = await _get_key_notification_row(db, token_hash)
 
     raw_key = f"sk-{secrets.token_urlsafe(24)}"
     new_hash = request.app.state.key_service.hash_key(raw_key)
@@ -887,6 +964,14 @@ async def regenerate_key(
         logger.exception("failed to invalidate key auth cache after regenerate")
     audit_action = AuditAction.ADMIN_KEY_SELF_ROTATE if access_mode == "self_service" else AuditAction.ADMIN_KEY_REGENERATE
     response = {"token": new_hash, "raw_key": raw_key}
+    if notification_row is not None:
+        notification_row["token"] = new_hash
+        await _notify_key_lifecycle(
+            request,
+            event_kind="api_key_regenerated",
+            actor_account_id=scope.account_id,
+            record=_notification_record(notification_row),
+        )
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -917,12 +1002,20 @@ async def revoke_key(
         admin_permission=Permission.KEY_REVOKE,
         allow_self_service=True,
     )
+    notification_row = await _get_key_notification_row(db, token_hash)
     deleted = await db.execute_raw("DELETE FROM deltallm_verificationtoken WHERE token = $1", token_hash)
     if int(deleted or 0) > 0:
         try:
             await request.app.state.key_service.invalidate_key_cache_by_hash(token_hash)
         except Exception:
             logger.exception("failed to invalidate key auth cache after revoke")
+        if notification_row is not None:
+            await _notify_key_lifecycle(
+                request,
+                event_kind="api_key_revoked",
+                actor_account_id=scope.account_id,
+                record=_notification_record(notification_row),
+            )
     audit_action = AuditAction.ADMIN_KEY_SELF_REVOKE if access_mode == "self_service" else AuditAction.ADMIN_KEY_REVOKE
     response = {"revoked": int(deleted or 0) > 0}
     await emit_admin_mutation_audit(
@@ -954,12 +1047,20 @@ async def delete_key(
         admin_permission=Permission.KEY_REVOKE,
         allow_self_service=True,
     )
+    notification_row = await _get_key_notification_row(db, token_hash)
     deleted = await db.execute_raw("DELETE FROM deltallm_verificationtoken WHERE token = $1", token_hash)
     if int(deleted or 0) > 0:
         try:
             await request.app.state.key_service.invalidate_key_cache_by_hash(token_hash)
         except Exception:
             logger.exception("failed to invalidate key auth cache after delete")
+        if notification_row is not None:
+            await _notify_key_lifecycle(
+                request,
+                event_kind="api_key_deleted",
+                actor_account_id=scope.account_id,
+                record=_notification_record(notification_row),
+            )
     audit_action = AuditAction.ADMIN_KEY_SELF_REVOKE if access_mode == "self_service" else AuditAction.ADMIN_KEY_DELETE
     response = {"deleted": int(deleted or 0) > 0}
     await emit_admin_mutation_audit(

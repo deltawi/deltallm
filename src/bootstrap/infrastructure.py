@@ -13,6 +13,9 @@ from src.config_runtime import DynamicConfigManager, SecretResolver, build_app_c
 from src.db.callable_targets import CallableTargetBindingRepository
 from src.db.callable_target_policies import CallableTargetScopePolicyRepository
 from src.db.client import prisma_manager
+from src.db.email import EmailOutboxRepository
+from src.db.email_tokens import EmailTokenRepository
+from src.db.invitations import InvitationRepository
 from src.db.mcp import MCPRepository
 from src.db.mcp_scope_policies import MCPScopePolicyRepository
 from src.db.prompt_registry import PromptRegistryRepository
@@ -89,6 +92,9 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
     app.state.mcp_repository = MCPRepository(prisma_manager.client)
     app.state.mcp_scope_policy_repository = MCPScopePolicyRepository(prisma_manager.client)
     app.state.batch_repository = BatchRepository(prisma_manager.client)
+    app.state.email_outbox_repository = EmailOutboxRepository(prisma_manager.client)
+    app.state.email_token_repository = EmailTokenRepository(prisma_manager.client)
+    app.state.invitation_repository = InvitationRepository(prisma_manager.client)
 
     return InfrastructureRuntime(
         redis_client=redis_client,

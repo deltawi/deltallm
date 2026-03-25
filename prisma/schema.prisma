@@ -199,6 +199,7 @@ model DeltaLLM_OrganizationTable {
   organization_name String?
   audit_content_storage_enabled Boolean @default(false)
   max_budget        Float?
+  soft_budget       Float?
   rpm_limit         Int?
   tpm_limit         Int?
   rph_limit         Int?
@@ -296,6 +297,11 @@ model DeltaLLM_PlatformAccount {
   team_memberships    DeltaLLM_TeamMembership[]
   owned_keys          DeltaLLM_VerificationToken[] @relation("verificationtoken_account_owner")
   created_service_accounts DeltaLLM_ServiceAccount[] @relation("created_service_accounts")
+  created_emails      DeltaLLM_EmailOutbox[] @relation("created_email_messages")
+  invitations         DeltaLLM_PlatformInvitation[] @relation("platform_invitation_account")
+  sent_invitations    DeltaLLM_PlatformInvitation[] @relation("platform_invitation_inviter")
+  email_tokens        DeltaLLM_EmailToken[] @relation("email_token_account")
+  created_email_tokens DeltaLLM_EmailToken[] @relation("email_token_creator")
 
   @@map("deltallm_platformaccount")
 }
@@ -362,6 +368,126 @@ model DeltaLLM_TeamMembership {
   @@unique([account_id, team_id])
   @@index([team_id])
   @@map("deltallm_teammembership")
+}
+
+model DeltaLLM_EmailOutbox {
+  email_id                  String   @id @default(uuid())
+  kind                      String
+  provider                  String
+  to_addresses              String[]
+  cc_addresses              String[]
+  bcc_addresses             String[]
+  from_address              String
+  reply_to                  String?
+  template_key              String?
+  payload_json              Json?
+  subject                   String
+  text_body                 String
+  html_body                 String?
+  status                    String   @default("queued")
+  attempt_count             Int      @default(0)
+  max_attempts              Int      @default(5)
+  next_attempt_at           DateTime @default(now())
+  last_error                String?
+  last_provider_message_id  String?
+  created_by_account_id     String?
+  created_at                DateTime @default(now())
+  updated_at                DateTime @updatedAt
+  sent_at                   DateTime?
+
+  created_by DeltaLLM_PlatformAccount? @relation("created_email_messages", fields: [created_by_account_id], references: [account_id], onDelete: SetNull)
+  invitation_messages DeltaLLM_PlatformInvitation[] @relation("invitation_message_email")
+
+  @@index([status, next_attempt_at], map: "deltallm_emailoutbox_status_next_attempt_idx")
+  @@index([created_at], map: "deltallm_emailoutbox_created_at_idx")
+  @@index([created_by_account_id], map: "deltallm_emailoutbox_created_by_idx")
+  @@index([provider, last_provider_message_id], map: "deltallm_emailoutbox_provider_message_idx")
+  @@map("deltallm_emailoutbox")
+}
+
+model DeltaLLM_EmailWebhookEvent {
+  webhook_event_id     String   @id
+  provider             String
+  event_type           String
+  recipient_address    String?
+  provider_message_id  String?
+  email_id             String?
+  payload_json         Json?
+  occurred_at          DateTime?
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  @@index([provider, provider_message_id], map: "deltallm_emailwebhookevent_provider_msg_idx")
+  @@index([occurred_at], map: "deltallm_emailwebhookevent_occurred_idx")
+  @@map("deltallm_emailwebhookevent")
+}
+
+model DeltaLLM_EmailSuppression {
+  email_address        String   @id
+  provider             String
+  reason               String
+  source               String
+  provider_message_id  String?
+  webhook_event_id     String?
+  metadata             Json?
+  first_seen_at        DateTime @default(now())
+  last_seen_at         DateTime @default(now())
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  @@index([last_seen_at], map: "deltallm_emailsuppression_last_seen_idx")
+  @@index([provider, reason], map: "deltallm_emailsuppression_provider_reason_idx")
+  @@map("deltallm_emailsuppression")
+}
+
+model DeltaLLM_PlatformInvitation {
+  invitation_id        String   @id @default(uuid())
+  account_id           String
+  email                String
+  status               String   @default("pending")
+  invite_scope_type    String
+  invited_by_account_id String?
+  message_email_id     String?
+  expires_at           DateTime
+  accepted_at          DateTime?
+  cancelled_at         DateTime?
+  metadata             Json?
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  account              DeltaLLM_PlatformAccount @relation("platform_invitation_account", fields: [account_id], references: [account_id], onDelete: Cascade)
+  invited_by           DeltaLLM_PlatformAccount? @relation("platform_invitation_inviter", fields: [invited_by_account_id], references: [account_id], onDelete: SetNull)
+  message_email        DeltaLLM_EmailOutbox? @relation("invitation_message_email", fields: [message_email_id], references: [email_id], onDelete: SetNull)
+  email_tokens         DeltaLLM_EmailToken[] @relation("email_token_invitation")
+
+  @@index([account_id], map: "deltallm_platforminvitation_account_idx")
+  @@index([status, expires_at], map: "deltallm_platforminvitation_status_expires_idx")
+  @@index([email], map: "deltallm_platforminvitation_email_idx")
+  @@index([invited_by_account_id], map: "deltallm_platforminvitation_invited_by_idx")
+  @@map("deltallm_platforminvitation")
+}
+
+model DeltaLLM_EmailToken {
+  token_id             String   @id @default(uuid())
+  purpose              String
+  token_hash           String   @unique
+  account_id           String
+  email                String
+  invitation_id        String?
+  expires_at           DateTime
+  consumed_at          DateTime?
+  created_by_account_id String?
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  account              DeltaLLM_PlatformAccount @relation("email_token_account", fields: [account_id], references: [account_id], onDelete: Cascade)
+  invitation           DeltaLLM_PlatformInvitation? @relation("email_token_invitation", fields: [invitation_id], references: [invitation_id], onDelete: Cascade)
+  created_by           DeltaLLM_PlatformAccount? @relation("email_token_creator", fields: [created_by_account_id], references: [account_id], onDelete: SetNull)
+
+  @@index([purpose, expires_at], map: "deltallm_emailtoken_purpose_expires_idx")
+  @@index([account_id], map: "deltallm_emailtoken_account_idx")
+  @@index([invitation_id], map: "deltallm_emailtoken_invitation_idx")
+  @@map("deltallm_emailtoken")
 }
 
 model DeltaLLM_Config {

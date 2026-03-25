@@ -22,6 +22,7 @@ class _FakeAdminDB:
                 organization_id,
                 organization_name,
                 max_budget,
+                soft_budget,
                 rpm_limit,
                 tpm_limit,
                 rph_limit,
@@ -36,6 +37,7 @@ class _FakeAdminDB:
                 "organization_id": organization_id,
                 "organization_name": organization_name,
                 "max_budget": max_budget,
+                "soft_budget": soft_budget,
                 "spend": 0.0,
                 "rpm_limit": rpm_limit,
                 "tpm_limit": tpm_limit,
@@ -55,6 +57,7 @@ class _FakeAdminDB:
             (
                 organization_name,
                 max_budget,
+                soft_budget,
                 rpm_limit,
                 tpm_limit,
                 rph_limit,
@@ -71,6 +74,7 @@ class _FakeAdminDB:
                 {
                     "organization_name": organization_name,
                     "max_budget": max_budget,
+                    "soft_budget": soft_budget,
                     "rpm_limit": rpm_limit,
                     "tpm_limit": tpm_limit,
                     "rph_limit": rph_limit,
@@ -286,6 +290,37 @@ async def test_create_organization_applies_route_group_bootstrap_bindings(client
 
 
 @pytest.mark.asyncio
+async def test_create_organization_persists_soft_budget(client, test_app):
+    fake_db = _FakeAdminDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
+    test_app.state.callable_target_catalog = {}
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    headers = {"Authorization": "Bearer mk-test"}
+
+    response = await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={
+            "organization_id": "org-budget",
+            "organization_name": "Org Budget",
+            "max_budget": 100.0,
+            "soft_budget": 80.0,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["max_budget"] == 100.0
+    assert payload["soft_budget"] == 80.0
+
+    detail = await client.get("/ui/api/organizations/org-budget", headers=headers)
+    assert detail.status_code == 200
+    assert detail.json()["soft_budget"] == 80.0
+
+
+@pytest.mark.asyncio
 async def test_update_organization_resyncs_route_group_bootstrap_bindings(client, test_app):
     fake_db = _FakeAdminDB()
     route_groups = _FakeRouteGroupRepository()
@@ -349,6 +384,65 @@ async def test_update_organization_resyncs_route_group_bootstrap_bindings(client
 
 
 @pytest.mark.asyncio
+async def test_update_organization_persists_soft_budget(client, test_app):
+    fake_db = _FakeAdminDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
+    test_app.state.callable_target_catalog = {}
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    headers = {"Authorization": "Bearer mk-test"}
+
+    await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={
+            "organization_id": "org-budget",
+            "max_budget": 100.0,
+            "soft_budget": 75.0,
+        },
+    )
+
+    response = await client.put(
+        "/ui/api/organizations/org-budget",
+        headers=headers,
+        json={
+            "organization_name": "Updated Org Budget",
+            "soft_budget": 60.0,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["organization_name"] == "Updated Org Budget"
+    assert payload["soft_budget"] == 60.0
+
+
+@pytest.mark.asyncio
+async def test_create_organization_rejects_soft_budget_above_max_budget(client, test_app):
+    fake_db = _FakeAdminDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
+    test_app.state.callable_target_catalog = {}
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    headers = {"Authorization": "Bearer mk-test"}
+
+    response = await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={
+            "organization_id": "org-budget",
+            "max_budget": 50.0,
+            "soft_budget": 60.0,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "soft_budget must be less than or equal to max_budget"
+
+
+@pytest.mark.asyncio
 async def test_organization_asset_visibility_includes_owned_route_groups(client, test_app):
     fake_db = _FakeAdminDB()
     route_groups = _FakeRouteGroupRepository()
@@ -404,6 +498,7 @@ async def test_create_organization_rejects_unknown_route_group_binding(client, t
 
     assert response.status_code == 400
     assert "route_group_bindings.group_key does not exist" in response.text
+    assert fake_db.organizations == {}
 
 
 @pytest.mark.asyncio
@@ -428,3 +523,39 @@ async def test_create_organization_rejects_unknown_callable_target_binding(clien
 
     assert response.status_code == 400
     assert "callable_target_bindings.callable_key does not exist" in response.text
+    assert fake_db.organizations == {}
+
+
+@pytest.mark.asyncio
+async def test_update_organization_rejects_invalid_bindings_without_persisting_changes(client, test_app):
+    fake_db = _FakeAdminDB()
+    route_groups = _FakeRouteGroupRepository()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    test_app.state.route_group_repository = route_groups
+    test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
+    test_app.state.callable_target_catalog = {"gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model")}
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    headers = {"Authorization": "Bearer mk-test"}
+
+    await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={
+            "organization_id": "org-asset",
+            "organization_name": "Stable Org",
+            "max_budget": 100.0,
+        },
+    )
+
+    response = await client.put(
+        "/ui/api/organizations/org-asset",
+        headers=headers,
+        json={
+            "organization_name": "Broken Update",
+            "route_group_bindings": [{"group_key": "missing-route"}],
+        },
+    )
+
+    assert response.status_code == 400
+    assert fake_db.organizations["org-asset"]["organization_name"] == "Stable Org"
+    assert fake_db.organizations["org-asset"]["max_budget"] == 100.0

@@ -57,6 +57,31 @@ class TeamModelBudgetDB:
         return []
 
 
+class OrgBudgetDB:
+    async def query_raw(self, query: str, *args):
+        normalized = " ".join(query.lower().split())
+        if "from deltallm_organizationtable" in normalized:
+            return [
+                {
+                    "entity_id": args[0],
+                    "max_budget": 40.0,
+                    "soft_budget": 20.0,
+                    "spend": 25.0,
+                    "budget_duration": None,
+                    "budget_reset_at": None,
+                }
+            ]
+        return []
+
+
+class RecordingAlertService:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def send_budget_alert(self, **kwargs) -> None:  # noqa: ANN003
+        self.calls.append(kwargs)
+
+
 class SpendQueryDB:
     async def query_raw(self, query: str, *args):
         normalized = " ".join(query.lower().split())
@@ -278,6 +303,29 @@ async def test_budget_enforcement_falls_back_to_spend_events_when_counter_missin
         )
 
     assert any("from deltallm_spendlog_events" in query.lower() for query, _ in db.calls)
+
+
+@pytest.mark.asyncio
+async def test_budget_enforcement_sends_org_soft_budget_alerts() -> None:
+    alert_service = RecordingAlertService()
+    service = BudgetEnforcementService(db_client=OrgBudgetDB(), alert_service=alert_service)
+
+    await service.check_budgets(
+        api_key=None,
+        user_id=None,
+        team_id=None,
+        organization_id="org_1",
+    )
+
+    assert alert_service.calls == [
+        {
+            "entity_type": "org",
+            "entity_id": "org_1",
+            "current_spend": 25.0,
+            "soft_budget": 20.0,
+            "hard_budget": 40.0,
+        }
+    ]
 
 
 @pytest.mark.asyncio

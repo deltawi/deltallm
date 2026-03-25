@@ -14,11 +14,13 @@ from src.bootstrap import (
     init_audit_runtime,
     init_auth_runtime,
     init_batch_runtime,
+    init_email_runtime,
     init_infrastructure_runtime,
     init_runtime_services,
     init_routing_runtime,
     shutdown_audit_runtime,
     shutdown_batch_runtime,
+    shutdown_email_runtime,
     shutdown_infrastructure_runtime,
     shutdown_runtime_services,
     shutdown_routing_runtime,
@@ -53,6 +55,9 @@ async def lifespan(app: FastAPI):
         audit_runtime = await init_audit_runtime(app, cfg)
         exit_stack.push_async_callback(shutdown_audit_runtime, app, audit_runtime)
 
+        email_runtime = await init_email_runtime(app, cfg)
+        exit_stack.push_async_callback(shutdown_email_runtime, email_runtime)
+
         auth_runtime = await init_auth_runtime(app, cfg)
 
         routing_runtime = await init_routing_runtime(
@@ -74,6 +79,7 @@ async def lifespan(app: FastAPI):
         startup_statuses = _collect_startup_statuses(
             infrastructure_runtime.statuses,
             audit_runtime.statuses,
+            email_runtime.statuses,
             auth_runtime.statuses,
             routing_runtime.statuses,
             runtime_services.statuses,

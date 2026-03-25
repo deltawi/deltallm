@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { FormEvent } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import { auth as authApi } from '../lib/api';
 import { Zap, Mail, KeyRound, Globe } from 'lucide-react';
@@ -171,6 +172,11 @@ export default function Login() {
                     autoComplete="current-password"
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   />
+                </div>
+                <div className="mb-4 flex justify-end">
+                  <Link to="/forgot-password" className="text-sm font-medium text-blue-600 hover:text-blue-700">
+                    Forgot password?
+                  </Link>
                 </div>
                 {showMfa && (
                   <div className="mb-4">

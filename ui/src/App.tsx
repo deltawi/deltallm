@@ -1,9 +1,13 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './lib/auth';
 import Layout from './components/Layout';
+import AcceptInvite from './pages/AcceptInvite';
+import ForgotPassword from './pages/ForgotPassword';
 import Login from './pages/Login';
 import ForcePasswordChange from './pages/ForcePasswordChange';
 import MFAEnrollment from './pages/MFAEnrollment';
+import MFAVerify from './pages/MFAVerify';
+import ResetPassword from './pages/ResetPassword';
 import Dashboard from './pages/Dashboard';
 import Models from './pages/Models';
 import ApiKeys from './pages/ApiKeys';
@@ -51,7 +55,19 @@ function AppRoutes() {
   }
 
   if (!isAuthenticated) {
-    return <Login />;
+    return (
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+        <Route path="/accept-invite" element={<AcceptInvite />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+    );
+  }
+
+  if (authMode === 'session' && session?.mfa_enabled && !session?.mfa_verified) {
+    return <MFAVerify />;
   }
 
   if (authMode === 'session' && session?.force_password_change) {
@@ -92,6 +108,10 @@ function AppRoutes() {
         <Route path="/guardrails" element={isPlatformAdmin ? <Guardrails /> : <Navigate to="/" replace />} />
         <Route path="/settings" element={isPlatformAdmin ? <SettingsPage /> : <Navigate to="/" replace />} />
         <Route path="/access-control" element={<Navigate to="/users" replace />} />
+        <Route path="/login" element={<Navigate to="/" replace />} />
+        <Route path="/forgot-password" element={<Navigate to="/" replace />} />
+        <Route path="/reset-password" element={<Navigate to="/" replace />} />
+        <Route path="/accept-invite" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
   );

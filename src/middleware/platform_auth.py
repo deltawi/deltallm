@@ -36,6 +36,10 @@ def get_platform_auth_context(request: Request) -> PlatformAuthContext | None:
     return None
 
 
+def requires_mfa_verification(context: PlatformAuthContext | None) -> bool:
+    return bool(context is not None and context.mfa_enabled and not context.mfa_verified)
+
+
 def require_platform_permission(permission: str) -> Callable[[Request], Any]:
     async def _require(request: Request) -> PlatformAuthContext:
         context = get_platform_auth_context(request)

@@ -5,19 +5,12 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from src.auth.roles import OrganizationRole, Permission, PlatformRole, TeamRole
+from src.auth.roles import Permission, validate_organization_role, validate_platform_role, validate_team_role
 from src.audit import AuditAction
 from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, to_json_value
 from src.middleware.admin import require_admin_permission
 
 router = APIRouter(tags=["Admin RBAC"])
-
-
-def _require_valid_role(role: str, allowed: set[str], field_name: str) -> str:
-    if role not in allowed:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"invalid {field_name}")
-    return role
-
 
 @router.get("/ui/api/rbac/accounts", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def list_rbac_accounts(request: Request) -> list[dict[str, Any]]:
@@ -168,14 +161,17 @@ async def upsert_rbac_account(request: Request, payload: dict[str, Any]) -> dict
     if not email:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="email is required")
 
-    role = str(payload.get("role") or PlatformRole.ORG_USER)
-    role = _require_valid_role(
-        role,
-        {PlatformRole.ADMIN, PlatformRole.ORG_USER},
-        "role",
-    )
+    try:
+        role = validate_platform_role(payload.get("role") or "org_user")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     is_active = bool(payload.get("is_active", True))
     password = payload.get("password")
+    if isinstance(password, str) and password:
+        try:
+            service.validate_password_policy(password)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     await db.execute_raw(
         """
@@ -197,7 +193,12 @@ async def upsert_rbac_account(request: Request, payload: dict[str, Any]) -> dict
             email,
         )
         if rows:
-            await service.change_password(account_id=rows[0]["account_id"], new_password=password, current_password=None)
+            try:
+                updated = await service.admin_set_password(account_id=rows[0]["account_id"], new_password=password)
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            if not updated:
+                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="failed to set account password")
 
     rows = await db.query_raw(
         """
@@ -289,12 +290,10 @@ async def upsert_org_membership(request: Request, payload: dict[str, Any]) -> di
     account_id = payload.get("account_id")
     email = payload.get("email")
     organization_id = str(payload.get("organization_id") or "").strip()
-    role = str(payload.get("role") or OrganizationRole.MEMBER)
-    role = _require_valid_role(
-        role,
-        {OrganizationRole.MEMBER, OrganizationRole.OWNER, OrganizationRole.ADMIN, OrganizationRole.BILLING, OrganizationRole.AUDITOR},
-        "organization role",
-    )
+    try:
+        role = validate_organization_role(payload.get("role") or "org_member")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     if not organization_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="organization_id is required")
@@ -427,12 +426,10 @@ async def upsert_team_membership(request: Request, payload: dict[str, Any]) -> d
     account_id = payload.get("account_id")
     email = payload.get("email")
     team_id = str(payload.get("team_id") or "").strip()
-    role = str(payload.get("role") or TeamRole.VIEWER)
-    role = _require_valid_role(
-        role,
-        {TeamRole.ADMIN, TeamRole.DEVELOPER, TeamRole.VIEWER},
-        "team role",
-    )
+    try:
+        role = validate_team_role(payload.get("role") or "team_viewer")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     if not team_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="team_id is required")

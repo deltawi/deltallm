@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.bootstrap.status import BootstrapStatus
-from src.billing import AlertService, BudgetEnforcementService, SpendLedgerService, SpendTrackingService
+from src.billing import AlertConfig, AlertService, BudgetEnforcementService, SpendLedgerService, SpendTrackingService
 from src.callbacks import CallbackManager
 from src.guardrails.middleware import GuardrailMiddleware
 from src.guardrails.registry import GuardrailRegistry
@@ -20,6 +20,8 @@ from src.mcp import (
 )
 from src.services.callable_target_grants import CallableTargetGrantService
 from src.services.governance_invalidation import GovernanceInvalidationService
+from src.services.key_notifications import KeyNotificationService
+from src.services.notification_recipients import NotificationRecipientResolver
 from src.services.prompt_registry import PromptRegistryService
 
 
@@ -90,7 +92,24 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
     app.state.callback_manager = callback_manager
     app.state.turn_off_message_logging = cfg.deltallm_settings.turn_off_message_logging
 
-    app.state.alert_service = AlertService(redis_client=app.state.redis)
+    general_settings = getattr(cfg, "general_settings", None)
+    app.state.notification_recipient_resolver = NotificationRecipientResolver(app.state.prisma_manager.client)
+    app.state.key_notification_service = KeyNotificationService(
+        outbox_service=getattr(app.state, "email_outbox_service", None),
+        recipient_resolver=app.state.notification_recipient_resolver,
+        audit_service=getattr(app.state, "audit_service", None),
+        config_getter=lambda: getattr(app.state, "app_config", cfg),
+    )
+    app.state.alert_service = AlertService(
+        redis_client=app.state.redis,
+        outbox_service=getattr(app.state, "email_outbox_service", None),
+        recipient_resolver=app.state.notification_recipient_resolver,
+        audit_service=getattr(app.state, "audit_service", None),
+        config_getter=lambda: getattr(app.state, "app_config", cfg),
+        config=AlertConfig(
+            budget_alert_ttl=int(getattr(general_settings, "budget_alert_ttl_seconds", 3600) or 3600),
+        ),
+    )
     app.state.spend_ledger_service = SpendLedgerService(app.state.prisma_manager.client)
     app.state.spend_tracking_service = SpendTrackingService(
         db_client=app.state.prisma_manager.client,

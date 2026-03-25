@@ -56,8 +56,17 @@ class FakeRedis:
     async def setex(self, key: str, ttl: int, value: str):
         self.store[key] = value
 
-    async def set(self, key: str, value: str):
+    async def set(self, key: str, value: str, ex: int | None = None, nx: bool = False):
+        del ex
+        if nx and key in self.store:
+            return False
         self.store[key] = value
+        return True
+
+    async def getdel(self, key: str):
+        value = self.store.get(key)
+        self.store.pop(key, None)
+        return value
 
     async def incr(self, key: str):
         self.store[key] = int(self.store.get(key, 0)) + 1

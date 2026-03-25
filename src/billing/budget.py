@@ -131,7 +131,7 @@ class BudgetEnforcementService:
             "key": ("deltallm_verificationtoken", "token", "soft_budget"),
             "user": ("deltallm_usertable", "user_id", "soft_budget"),
             "team": ("deltallm_teamtable", "team_id", "soft_budget"),
-            "org": ("deltallm_organizationtable", "organization_id", "NULL::float AS soft_budget"),
+            "org": ("deltallm_organizationtable", "organization_id", "soft_budget"),
         }
         table_info = table_map.get(entity_type)
         if table_info is None:

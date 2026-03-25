@@ -131,6 +131,7 @@ export default function OrganizationCreate() {
   const [rpmEnabled, setRpmEnabled] = useState(false);
   const [tpmEnabled, setTpmEnabled] = useState(false);
   const [budgetValue, setBudgetValue] = useState('');
+  const [softBudgetValue, setSoftBudgetValue] = useState('');
   const [rpmValue, setRpmValue] = useState('');
   const [tpmValue, setTpmValue] = useState('');
   const [rphEnabled, setRphEnabled] = useState(false);
@@ -187,6 +188,7 @@ export default function OrganizationCreate() {
       const payload = {
         organization_name: name.trim(),
         max_budget: budgetEnabled && budgetValue ? Number(budgetValue) : undefined,
+        soft_budget: budgetEnabled && softBudgetValue ? Number(softBudgetValue) : undefined,
         rpm_limit: rpmEnabled && rpmValue ? Number(rpmValue) : undefined,
         tpm_limit: tpmEnabled && tpmValue ? Number(tpmValue) : undefined,
         rph_limit: rphEnabled && rphValue ? Number(rphValue) : undefined,
@@ -323,6 +325,22 @@ export default function OrganizationCreate() {
                       />
                     </div>
                     <p className="text-xs text-gray-400 mt-1">Requests will be rejected once spend reaches this amount.</p>
+                    <div className="mt-3">
+                      <FieldLabel label="Soft budget alert" />
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm font-medium">$</span>
+                        <input
+                          value={softBudgetValue}
+                          onChange={(e) => setSoftBudgetValue(e.target.value)}
+                          placeholder="4000.00"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          className="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <p className="text-xs text-gray-400 mt-1">Optional notification threshold before the hard budget cap.</p>
+                    </div>
                   </div>
                 )}
               </div>

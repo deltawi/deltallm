@@ -201,6 +201,7 @@ class GeneralSettings(BaseModel):
     sso_scope: str = "openid email profile"
     sso_admin_email_list: list[str] = Field(default_factory=list)
     sso_default_team_id: str | None = None
+    sso_state_ttl_seconds: int = Field(default=600, ge=60, le=3600)
     enable_jwt_auth: bool = False
     jwt_public_key_url: str | None = None
     jwt_audience: str | None = None
@@ -210,7 +211,35 @@ class GeneralSettings(BaseModel):
     platform_bootstrap_admin_email: str | None = None
     platform_bootstrap_admin_password: str | None = None
     auth_session_ttl_hours: int = 12
+    invitation_token_ttl_hours: int = Field(default=72, ge=1, le=720)
+    password_reset_token_ttl_minutes: int = Field(default=60, ge=5, le=1440)
     api_key_auth_cache_ttl_seconds: int = 300
+    governance_notifications_enabled: bool = False
+    budget_notifications_enabled: bool = False
+    key_lifecycle_notifications_enabled: bool = False
+    budget_alert_ttl_seconds: int = Field(default=3600, ge=60)
+    email_enabled: bool = False
+    email_provider: Literal["smtp", "resend", "sendgrid"] = "smtp"
+    email_from_address: str | None = None
+    email_from_name: str | None = None
+    email_reply_to: str | None = None
+    email_base_url: str | None = None
+    email_max_attempts: int = Field(default=5, ge=1, le=20)
+    email_retry_initial_seconds: int = Field(default=60, ge=1)
+    email_retry_max_seconds: int = Field(default=3600, ge=1)
+    email_worker_enabled: bool = True
+    email_worker_poll_interval_seconds: float = Field(default=5.0, gt=0)
+    email_worker_max_concurrency: int = Field(default=3, ge=1, le=20)
+    smtp_host: str | None = None
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_use_tls: bool = False
+    smtp_use_starttls: bool = True
+    resend_api_key: str | None = None
+    resend_webhook_signing_secret: str | None = None
+    resend_webhook_tolerance_seconds: int = Field(default=300, ge=30, le=3600)
+    sendgrid_api_key: str | None = None
     model_deployment_source: Literal["hybrid", "db_only", "config_only"] = "hybrid"
     model_deployment_bootstrap_from_config: bool = True
     embeddings_batch_enabled: bool = False

@@ -49,6 +49,51 @@ class MFAStartResponse(BaseModel):
     otpauth_url: str
 
 
+class InvitationTokenResponse(BaseModel):
+    valid: bool
+    invitation_id: str | None = None
+    email: str | None = None
+    status: str | None = None
+    invite_scope_type: str | None = None
+    inviter_email: str | None = None
+    expires_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    password_required: bool = False
+
+
+class InvitationAcceptRequest(BaseModel):
+    token: str
+    password: str | None = None
+
+
+class InvitationAcceptResponse(BaseModel):
+    accepted: bool
+    session_established: bool
+    next_step: str
+    account_id: str
+    email: str
+    role: str
+    mfa_enabled: bool = False
+    mfa_required: bool = False
+    mfa_prompt: bool = False
+    force_password_change: bool = False
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+class ResetPasswordTokenResponse(BaseModel):
+    valid: bool
+    email: str | None = None
+    expires_at: datetime | None = None
+
+
 class CurrentSessionResponse(BaseModel):
     authenticated: bool
     account_id: str | None = None

@@ -6,8 +6,19 @@ import pytest
 
 
 class DummyIdentityService:
+    def __init__(self) -> None:
+        self.admin_password_calls: list[tuple[str, str]] = []
+
+    def validate_password_policy(self, raw_password: str) -> None:
+        if len(raw_password or "") < 12:
+            raise ValueError("password must be at least 12 characters")
+
     async def change_password(self, account_id: str, new_password: str, current_password: str | None = None):
         return None
+
+    async def admin_set_password(self, *, account_id: str, new_password: str) -> bool:
+        self.admin_password_calls.append((account_id, new_password))
+        return True
 
 
 class FakeDB:
@@ -122,6 +133,42 @@ async def test_create_rbac_account_invalid_role_rejected(client, test_app):
 
     assert response.status_code == 400
     assert "invalid role" in response.text
+
+
+@pytest.mark.asyncio
+async def test_create_rbac_account_short_password_rejected_before_insert(client, test_app):
+    fake_db = FakeDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    test_app.state.platform_identity_service = DummyIdentityService()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.post(
+        "/ui/api/rbac/accounts",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"email": "shortpass@example.com", "password": "Budget123!", "role": "org_user"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "password must be at least 12 characters"
+    assert "shortpass@example.com" not in {account["email"] for account in fake_db.accounts.values()}
+
+
+@pytest.mark.asyncio
+async def test_create_rbac_account_uses_admin_password_setter(client, test_app):
+    fake_db = FakeDB()
+    identity_service = DummyIdentityService()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    test_app.state.platform_identity_service = identity_service
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.post(
+        "/ui/api/rbac/accounts",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"email": "owner@example.com", "password": "very-secure-password", "role": "org_user"},
+    )
+
+    assert response.status_code == 200
+    assert identity_service.admin_password_calls == [("acct-1", "very-secure-password")]
 
 
 @pytest.mark.asyncio

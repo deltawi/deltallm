@@ -117,6 +117,7 @@ export default function OrganizationDetail() {
   const [form, setForm] = useState({
     organization_name: '',
     max_budget: '',
+    soft_budget: '',
     rpm_limit: '',
     tpm_limit: '',
     rph_limit: '',
@@ -171,6 +172,7 @@ export default function OrganizationDetail() {
       ...c,
       organization_name: org.organization_name || '',
       max_budget: org.max_budget != null ? String(org.max_budget) : '',
+      soft_budget: org.soft_budget != null ? String(org.soft_budget) : '',
       rpm_limit: org.rpm_limit != null ? String(org.rpm_limit) : '',
       tpm_limit: org.tpm_limit != null ? String(org.tpm_limit) : '',
       rph_limit: org.rph_limit != null ? String(org.rph_limit) : '',
@@ -203,6 +205,7 @@ export default function OrganizationDetail() {
       await organizations.update(orgId!, {
         organization_name: form.organization_name || undefined,
         max_budget: form.max_budget ? Number(form.max_budget) : undefined,
+        soft_budget: form.soft_budget ? Number(form.soft_budget) : undefined,
         rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
         tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
         rph_limit: form.rph_limit ? Number(form.rph_limit) : undefined,
@@ -705,6 +708,16 @@ export default function OrganizationDetail() {
                         placeholder="No limit"
                       />
                     </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Soft Budget Alert ($)</label>
+                      <input
+                        type="number"
+                        value={form.soft_budget}
+                        onChange={(e) => setForm({ ...form, soft_budget: e.target.value })}
+                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Notify before cap"
+                      />
+                    </div>
                     <div className="grid grid-cols-2 gap-2">
                       <div>
                         <label className="block text-xs font-medium text-gray-600 mb-1">RPM Limit</label>
@@ -796,6 +809,12 @@ export default function OrganizationDetail() {
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-gray-500">Max budget</span>
                         <span className="text-xs font-semibold text-gray-800">${Number(org.max_budget).toLocaleString()}</span>
+                      </div>
+                    )}
+                    {org.soft_budget != null && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-gray-500">Soft budget alert</span>
+                        <span className="text-xs font-semibold text-gray-800">${Number(org.soft_budget).toLocaleString()}</span>
                       </div>
                     )}
                     {org.rpm_limit != null && (
@@ -983,12 +1002,20 @@ export default function OrganizationDetail() {
               <h3 className="text-sm font-semibold text-gray-900">
                 Organization Members {memberList.length > 0 && `(${memberList.length})`}
               </h3>
-              <button
-                onClick={openAddMember}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-              >
-                <UserPlus className="w-3.5 h-3.5" /> Add Member
-              </button>
+              <div className="flex items-center gap-2">
+                <Link
+                  to={`/users?invite_org_id=${encodeURIComponent(orgId || '')}`}
+                  className="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-50"
+                >
+                  Invite by Email
+                </Link>
+                <button
+                  onClick={openAddMember}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  <UserPlus className="w-3.5 h-3.5" /> Add Member
+                </button>
+              </div>
             </div>
             <table className="w-full text-sm">
               <thead>
@@ -1015,6 +1042,10 @@ export default function OrganizationDetail() {
                     <td colSpan={4} className="px-5 py-12 text-center text-sm text-gray-400">
                       No members yet.{' '}
                       <button onClick={openAddMember} className="text-blue-600 hover:underline">Add the first one</button>
+                      {' '}or{' '}
+                      <Link to={`/users?invite_org_id=${encodeURIComponent(orgId || '')}`} className="text-blue-600 hover:underline">
+                        invite by email
+                      </Link>
                     </td>
                   </tr>
                 ) : (
