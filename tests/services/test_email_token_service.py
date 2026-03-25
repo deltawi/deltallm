@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.db.email_tokens import EmailTokenRecord
+from src.email.models import EmailConfigurationError
 from src.services.email_token_service import EmailTokenService
 
 
@@ -42,7 +43,14 @@ class FakeEmailTokenRepository:
             return claimed
         return None
 
-    async def invalidate_active(self, *, purpose: str, account_id: str | None = None, invitation_id: str | None = None) -> int:
+    async def invalidate_active(
+        self,
+        *,
+        purpose: str,
+        account_id: str | None = None,
+        invitation_id: str | None = None,
+        exclude_token_id: str | None = None,
+    ) -> int:
         count = 0
         for token_id, record in list(self.records.items()):
             if record.purpose != purpose or record.consumed_at is not None:
@@ -50,6 +58,8 @@ class FakeEmailTokenRepository:
             if account_id and record.account_id != account_id:
                 continue
             if invitation_id and record.invitation_id != invitation_id:
+                continue
+            if exclude_token_id and record.token_id == exclude_token_id:
                 continue
             self.records[token_id] = replace(record, consumed_at=record.expires_at)
             count += 1
@@ -108,3 +118,25 @@ def test_build_action_url_uses_configured_base_url() -> None:
     service = EmailTokenService(repository=FakeEmailTokenRepository(), salt="test-salt", config_getter=lambda: _config())
 
     assert service.build_action_url(path="/accept-invite", raw_token="abc") == "https://gateway.example.com/accept-invite?token=abc"
+
+
+def test_build_action_url_requires_email_base_url() -> None:
+    service = EmailTokenService(
+        repository=FakeEmailTokenRepository(),
+        salt="test-salt",
+        config_getter=lambda: _config(email_base_url=None),
+    )
+
+    with pytest.raises(EmailConfigurationError, match="email_base_url is required"):
+        service.build_action_url(path="/accept-invite", raw_token="abc")
+
+
+def test_build_action_url_requires_absolute_email_base_url() -> None:
+    service = EmailTokenService(
+        repository=FakeEmailTokenRepository(),
+        salt="test-salt",
+        config_getter=lambda: _config(email_base_url="gateway.example.com"),
+    )
+
+    with pytest.raises(EmailConfigurationError, match="email_base_url must be an absolute http\\(s\\) URL"):
+        service.build_action_url(path="/accept-invite", raw_token="abc")

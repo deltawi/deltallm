@@ -76,6 +76,7 @@ general_settings:
   # Enable this when you want invitations, password reset, test email, or governance notifications.
   # For local/dev, point SMTP at Mailpit/MailHog.
   # For production, use smtp, resend, or sendgrid with real credentials.
+  # email_base_url must be the public app origin when email is enabled.
   #
   # email_enabled: true
   # email_provider: smtp
@@ -104,6 +105,7 @@ general_settings:
 
   # SSO is optional.
   # Enable this only after Redis is configured because SSO callback state is stored server-side.
+  # DeltaLLM keeps SSO disabled if Redis-backed state storage is unavailable.
   #
   # enable_sso: true
   # sso_provider: oidc

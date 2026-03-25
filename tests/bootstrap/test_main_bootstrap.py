@@ -45,6 +45,16 @@ async def test_lifespan_initializes_and_shuts_down_in_reverse_order(
         calls.append(f"init_auth:{cfg}")
         return SimpleNamespace(statuses=(BootstrapStatus("auth", "ready"),))
 
+    async def _init_email(app, cfg):  # noqa: ANN001, ANN202
+        calls.append(f"init_email:{cfg}")
+        return SimpleNamespace(
+            statuses=(BootstrapStatus("email", "ready"),),
+            marker="email-runtime",
+        )
+
+    async def _shutdown_email(runtime):  # noqa: ANN001, ANN202
+        calls.append(f"shutdown_email:{runtime.marker}")
+
     async def _init_routing(app, **kwargs):  # noqa: ANN001, ANN202
         calls.append(f"init_routing:{kwargs['cfg']}")
         return SimpleNamespace(
@@ -79,6 +89,8 @@ async def test_lifespan_initializes_and_shuts_down_in_reverse_order(
     monkeypatch.setattr("src.main.shutdown_infrastructure_runtime", _shutdown_infrastructure)
     monkeypatch.setattr("src.main.init_audit_runtime", _init_audit)
     monkeypatch.setattr("src.main.shutdown_audit_runtime", _shutdown_audit)
+    monkeypatch.setattr("src.main.init_email_runtime", _init_email)
+    monkeypatch.setattr("src.main.shutdown_email_runtime", _shutdown_email)
     monkeypatch.setattr("src.main.init_auth_runtime", _init_auth)
     monkeypatch.setattr("src.main.init_routing_runtime", _init_routing)
     monkeypatch.setattr("src.main.shutdown_routing_runtime", _shutdown_routing)
@@ -92,10 +104,11 @@ async def test_lifespan_initializes_and_shuts_down_in_reverse_order(
     async with lifespan(app):
         calls.append("yield")
 
-    assert "startup: config=ready, audit=ready, auth=ready, routing=ready, runtime_services=ready, batch=ready" in caplog.text
+    assert "startup: config=ready, audit=ready, email=ready, auth=ready, routing=ready, runtime_services=ready, batch=ready" in caplog.text
     assert calls == [
         "init_infrastructure",
         "init_audit:cfg",
+        "init_email:cfg",
         "init_auth:cfg",
         "init_routing:cfg",
         "init_runtime_services:cfg",
@@ -104,6 +117,7 @@ async def test_lifespan_initializes_and_shuts_down_in_reverse_order(
         "shutdown_batch:batch-runtime",
         "shutdown_runtime_services:runtime-services",
         "shutdown_routing:routing-runtime",
+        "shutdown_email:email-runtime",
         "shutdown_audit:audit-runtime",
         "shutdown_infrastructure:infrastructure-runtime",
     ]
@@ -143,6 +157,16 @@ async def test_lifespan_cleans_up_partial_startup_failure(monkeypatch: pytest.Mo
         calls.append(f"init_auth:{cfg}")
         return SimpleNamespace(statuses=(BootstrapStatus("auth", "ready"),))
 
+    async def _init_email(app, cfg):  # noqa: ANN001, ANN202
+        calls.append(f"init_email:{cfg}")
+        return SimpleNamespace(
+            statuses=(BootstrapStatus("email", "ready"),),
+            marker="email-runtime",
+        )
+
+    async def _shutdown_email(runtime):  # noqa: ANN001, ANN202
+        calls.append(f"shutdown_email:{runtime.marker}")
+
     async def _init_routing(app, **kwargs):  # noqa: ANN001, ANN202
         calls.append(f"init_routing:{kwargs['cfg']}")
         raise RuntimeError("routing failed")
@@ -151,6 +175,8 @@ async def test_lifespan_cleans_up_partial_startup_failure(monkeypatch: pytest.Mo
     monkeypatch.setattr("src.main.shutdown_infrastructure_runtime", _shutdown_infrastructure)
     monkeypatch.setattr("src.main.init_audit_runtime", _init_audit)
     monkeypatch.setattr("src.main.shutdown_audit_runtime", _shutdown_audit)
+    monkeypatch.setattr("src.main.init_email_runtime", _init_email)
+    monkeypatch.setattr("src.main.shutdown_email_runtime", _shutdown_email)
     monkeypatch.setattr("src.main.init_auth_runtime", _init_auth)
     monkeypatch.setattr("src.main.init_routing_runtime", _init_routing)
 
@@ -163,8 +189,10 @@ async def test_lifespan_cleans_up_partial_startup_failure(monkeypatch: pytest.Mo
     assert calls == [
         "init_infrastructure",
         "init_audit:cfg",
+        "init_email:cfg",
         "init_auth:cfg",
         "init_routing:cfg",
+        "shutdown_email:email-runtime",
         "shutdown_audit:audit-runtime",
         "shutdown_infrastructure:infrastructure-runtime",
     ]

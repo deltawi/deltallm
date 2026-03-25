@@ -150,6 +150,17 @@ async def test_auth_login_requires_shared_sso_state_store(client, test_app):
 
 
 @pytest.mark.asyncio
+async def test_sso_config_reports_disabled_when_handler_is_unavailable(client, test_app):
+    test_app.state.sso_auth_handler = None
+    test_app.state.sso_state_store = None
+
+    response = await client.get("/auth/sso-config")
+
+    assert response.status_code == 200
+    assert response.json() == {"sso_enabled": False}
+
+
+@pytest.mark.asyncio
 async def test_unverified_mfa_session_is_blocked_until_mfa_verify(client, test_app):
     class StubIdentityService:
         def __init__(self) -> None:

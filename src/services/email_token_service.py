@@ -7,6 +7,7 @@ import secrets
 from typing import Any
 
 from src.db.email_tokens import EmailTokenRecord, EmailTokenRepository
+from src.email.config import normalize_email_base_url
 
 
 @dataclass(frozen=True)
@@ -90,11 +91,9 @@ class EmailTokenService:
         )
 
     def build_action_url(self, *, path: str, raw_token: str) -> str:
-        base_url = str(getattr(self._general_settings(), "email_base_url", "") or "").rstrip("/")
+        base_url = normalize_email_base_url(getattr(self._general_settings(), "email_base_url", None))
         suffix = f"{path}?token={raw_token}"
-        if base_url:
-            return f"{base_url}{suffix}"
-        return suffix
+        return f"{base_url}{suffix}"
 
     async def _issue_token(
         self,
