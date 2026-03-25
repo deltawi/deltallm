@@ -1,6 +1,6 @@
 # Authentication & SSO
 
-DeltaLLM supports API authentication, browser-based admin sessions, MFA, SSO, and RBAC.
+DeltaLLM supports API authentication, browser-based admin sessions, invitation-based onboarding, password recovery, MFA, SSO, and RBAC.
 
 ## Choose the Simplest Working Method
 
@@ -96,6 +96,39 @@ POST /auth/internal/change-password
 
 Use this when an account is marked to change its password after first login.
 
+## Invitations and Password Recovery
+
+DeltaLLM now supports email-first account lifecycle flows:
+
+- invite a user by email from **People & Access**
+- let new users activate their account from an invite link
+- let existing users reset their password from the login page
+
+### Invitations
+
+Invitation acceptance uses a single-use token and applies organization and team access only when the invite is accepted.
+
+```text
+GET  /auth/invitations/{token}
+POST /auth/invitations/accept
+```
+
+Important behavior:
+
+- new accounts without any auth method must set a password during invite acceptance
+- SSO-only accounts can accept invites without creating a local password
+- accounts with MFA enabled accept the invitation first, then complete a normal login flow
+
+### Password Recovery
+
+```text
+POST /auth/internal/forgot-password
+GET  /auth/internal/reset-password/{token}
+POST /auth/internal/reset-password
+```
+
+The forgot-password flow is intentionally non-enumerating: the API returns the same success response whether the account exists or not.
+
 ## Multi-Factor Authentication
 
 DeltaLLM supports TOTP-based MFA for session logins.
@@ -103,6 +136,21 @@ DeltaLLM supports TOTP-based MFA for session logins.
 1. `POST /auth/mfa/enroll/start`
 2. `POST /auth/mfa/enroll/confirm`
 3. Include `mfa_code` during `/auth/internal/login`
+
+### Verified Sessions
+
+For session-authenticated admin access, DeltaLLM distinguishes between:
+
+- a valid browser session
+- an MFA-verified browser session
+
+If an account has MFA enabled, admin UI access is blocked until the session completes:
+
+```text
+POST /auth/mfa/verify
+```
+
+This also applies to SSO-created sessions when the account already has MFA enabled.
 
 ## Single Sign-On
 
@@ -133,6 +181,9 @@ general_settings:
 2. DeltaLLM redirects to the identity provider
 3. The provider redirects back to `/auth/callback`
 4. DeltaLLM creates or updates the platform account and sets a session cookie
+
+!!! note
+    SSO callback state is stored in Redis. If Redis is unavailable, SSO login cannot start.
 
 ### Auto-Assign Platform Admins
 

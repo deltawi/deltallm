@@ -1,17 +1,45 @@
 # General Settings
 
-The `general_settings` section configures authentication, database connections, caching, and platform-level options.
+The `general_settings` section configures authentication, database connections, email delivery, SSO, governance notifications, caching, and platform-level options.
+
+## Recommended Starter Shape
+
+The docs use `config.example.yaml` as the starter config. The intended pattern is:
+
+- keep the active settings minimal
+- source secrets from environment variables
+- leave advanced features commented until you need them
+
+Minimal starter example:
+
+```yaml
+general_settings:
+  master_key: os.environ/DELTALLM_MASTER_KEY
+  salt_key: os.environ/DELTALLM_SALT_KEY
+  database_url: os.environ/DATABASE_URL
+  redis_url: os.environ/REDIS_URL
+  platform_bootstrap_admin_email: os.environ/PLATFORM_BOOTSTRAP_ADMIN_EMAIL
+  platform_bootstrap_admin_password: os.environ/PLATFORM_BOOTSTRAP_ADMIN_PASSWORD
+  auth_session_ttl_hours: 12
+  model_deployment_source: db_only
+  model_deployment_bootstrap_from_config: true
+  governance_notifications_enabled: false
+  budget_notifications_enabled: false
+  key_lifecycle_notifications_enabled: false
+```
 
 ## Full Reference
 
 ```yaml
 general_settings:
+  instance_name: DeltaLLM
   master_key: os.environ/DELTALLM_MASTER_KEY
   deltallm_key_header_name: Authorization
   salt_key: os.environ/DELTALLM_SALT_KEY
   database_url: os.environ/DATABASE_URL
   db_pool_size: 20
   db_pool_timeout: 30
+  redis_url: os.environ/REDIS_URL
   redis_host: localhost
   redis_port: 6379
   redis_password: os.environ/REDIS_PASSWORD
@@ -25,9 +53,43 @@ general_settings:
   platform_bootstrap_admin_email: os.environ/PLATFORM_BOOTSTRAP_ADMIN_EMAIL
   platform_bootstrap_admin_password: os.environ/PLATFORM_BOOTSTRAP_ADMIN_PASSWORD
   auth_session_ttl_hours: 12
+  invitation_token_ttl_hours: 72
+  password_reset_token_ttl_minutes: 60
   api_key_auth_cache_ttl_seconds: 300
   model_deployment_source: db_only
   model_deployment_bootstrap_from_config: false
+  email_enabled: false
+  email_provider: smtp
+  email_from_address: no-reply@example.com
+  email_reply_to: support@example.com
+  email_base_url: http://localhost:4000
+  email_worker_enabled: true
+  email_max_attempts: 5
+  email_retry_initial_seconds: 60
+  email_retry_max_seconds: 3600
+  smtp_host: localhost
+  smtp_port: 1025
+  smtp_username: os.environ/SMTP_USERNAME
+  smtp_password: os.environ/SMTP_PASSWORD
+  smtp_use_tls: false
+  resend_api_key: os.environ/RESEND_API_KEY
+  sendgrid_api_key: os.environ/SENDGRID_API_KEY
+  governance_notifications_enabled: false
+  budget_notifications_enabled: false
+  key_lifecycle_notifications_enabled: false
+  budget_alert_ttl_seconds: 3600
+  enable_sso: false
+  sso_provider: oidc
+  sso_client_id: os.environ/SSO_CLIENT_ID
+  sso_client_secret: os.environ/SSO_CLIENT_SECRET
+  sso_authorize_url: https://idp.example.com/oauth2/authorize
+  sso_token_url: https://idp.example.com/oauth2/token
+  sso_userinfo_url: https://idp.example.com/oauth2/userinfo
+  sso_redirect_uri: https://your-domain.com/auth/callback
+  sso_scope: openid email profile
+  sso_admin_email_list: []
+  sso_default_team_id: null
+  sso_state_ttl_seconds: 600
   embeddings_batch_enabled: false
   embeddings_batch_worker_enabled: true
   embeddings_batch_storage_dir: .deltallm/batch-artifacts
@@ -58,6 +120,8 @@ general_settings:
 | `platform_bootstrap_admin_email` | — | Email for the initial platform admin account |
 | `platform_bootstrap_admin_password` | — | Password for the initial platform admin account |
 | `auth_session_ttl_hours` | `12` | Session cookie lifetime in hours |
+| `invitation_token_ttl_hours` | `72` | Invite acceptance link lifetime in hours |
+| `password_reset_token_ttl_minutes` | `60` | Password reset link lifetime in minutes |
 | `api_key_auth_cache_ttl_seconds` | `300` | Redis TTL for API key authentication cache entries |
 | `model_deployment_source` | `hybrid` | Model source mode: `hybrid`, `db_only`, `config_only` |
 | `model_deployment_bootstrap_from_config` | `true` | If `true`, seed DB model deployments from `model_list` when table is empty |
@@ -91,6 +155,49 @@ If those overrides are unset, DeltaLLM falls back to `general_settings.database_
 | `redis_port` | `6379` | Redis server port |
 | `redis_password` | — | Redis password (if required) |
 | `redis_url` | — | Full Redis URL (overrides host/port/password) |
+
+Redis is also used for:
+
+- API key auth caching
+- alert dedupe
+- SSO callback state storage
+
+If you plan to enable SSO, treat Redis as required rather than optional.
+
+## Email Settings
+
+Email delivery is optional but required for:
+
+- invitation emails
+- password reset
+- admin test email
+- governance notifications
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `email_enabled` | `false` | Enable outbound email features |
+| `email_provider` | `smtp` | Provider: `smtp`, `resend`, or `sendgrid` |
+| `email_from_address` | — | Sender address for transactional and governance email |
+| `email_reply_to` | — | Optional reply-to address |
+| `email_base_url` | — | Base URL used in invite and password-reset links |
+| `email_worker_enabled` | `true` | Run the internal outbox worker |
+| `email_max_attempts` | `5` | Max outbox delivery attempts |
+| `email_retry_initial_seconds` | `60` | Initial retry backoff |
+| `email_retry_max_seconds` | `3600` | Max retry backoff |
+| `smtp_host` | — | SMTP server hostname |
+| `smtp_port` | — | SMTP server port |
+| `smtp_username` | — | SMTP username |
+| `smtp_password` | — | SMTP password |
+| `smtp_use_tls` | `false` | Use TLS for SMTP |
+| `resend_api_key` | — | Resend API key |
+| `sendgrid_api_key` | — | SendGrid API key |
+
+Recommended rollout:
+
+1. enable email with SMTP or a provider
+2. verify `/ui/api/email/test`
+3. enable invite and recovery flows
+4. enable governance notifications only after delivery is confirmed
 
 ## Cache Settings
 
@@ -126,6 +233,21 @@ If those overrides are unset, DeltaLLM falls back to `general_settings.database_
 | `sso_redirect_uri` | — | OAuth redirect URI |
 | `sso_scope` | `openid email profile` | OAuth scopes |
 | `sso_admin_email_list` | `[]` | Emails that get platform admin role on first SSO login |
+| `sso_default_team_id` | — | Optional team automatically assigned to SSO users |
+| `sso_state_ttl_seconds` | `600` | TTL for Redis-backed SSO callback state |
+
+SSO callback state is stored in Redis. If SSO is enabled but Redis is unavailable, SSO login cannot start.
+
+## Governance Notification Settings
+
+Governance notifications are opt-in and disabled by default.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `governance_notifications_enabled` | `false` | Master switch for governance emails |
+| `budget_notifications_enabled` | `false` | Enable soft-budget threshold emails |
+| `key_lifecycle_notifications_enabled` | `false` | Enable key create/regenerate/revoke/delete emails |
+| `budget_alert_ttl_seconds` | `3600` | Deduplication window for budget alert emails |
 
 ## Metrics Settings
 

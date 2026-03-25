@@ -6,7 +6,7 @@ DeltaLLM exposes multiple API surfaces:
 |-----|-----------|---------|
 | [Proxy Endpoints](proxy.md) | `/v1/` | OpenAI-compatible inference endpoints used by applications |
 | [MCP Gateway & Tooling](mcp.md) | `/mcp`, `/v1/*`, `/ui/api/mcp-*` | Direct MCP access plus MCP-aware chat and admin workflows |
-| [Admin Endpoints](admin.md) | `/ui/api/` and `/auth/` | Gateway management, runtime configuration, accounts, and operations |
+| [Admin Endpoints](admin.md) | `/ui/api/` and `/auth/` | Gateway management, runtime configuration, invitations, recovery, accounts, and operations |
 | [Health & Metrics](health.md) | `/health` and `/metrics` | Monitoring and diagnostics |
 
 ## Start Here

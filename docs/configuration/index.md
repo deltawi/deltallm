@@ -18,8 +18,20 @@ general_settings:
   database_url: os.environ/DATABASE_URL
   redis_url: os.environ/REDIS_URL
   model_deployment_source: db_only
-  model_deployment_bootstrap_from_config: false
+  model_deployment_bootstrap_from_config: true
 ```
+
+For the starter file used by the getting-started guides, copy:
+
+```bash
+cp config.example.yaml config.yaml
+```
+
+`config.example.yaml` is intentionally curated rather than exhaustive:
+
+- active values cover the minimum local/dev setup
+- secrets come from environment variables
+- advanced blocks stay commented with guidance on when to enable them
 
 ## Main Sections
 
@@ -50,9 +62,9 @@ general_settings:
 
 This is the recommended way to handle secrets.
 
-## Full Example
+## Starter Example
 
-See [`config.example.yaml`](https://github.com/deltawi/deltallm/blob/main/config.example.yaml) for a complete sample.
+See [`config.example.yaml`](https://github.com/deltawi/deltallm/blob/main/config.example.yaml) for the maintained starter config used by the docs.
 
 ## Compatibility Note
 

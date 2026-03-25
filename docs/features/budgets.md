@@ -78,9 +78,38 @@ The legacy master-key spend endpoints also exist under `/global/spend`, `/global
 
 ## Soft Budgets and Resets
 
-DeltaLLM also supports soft-budget alerting for keys, users, and teams. A soft budget does not block traffic; it triggers an alert through the configured alert service.
+DeltaLLM also supports soft-budget alerting for keys, users, teams, and organizations. A soft budget does not block traffic; it triggers an alert through the configured notification flow.
+
+Soft-budget notifications are:
+
+- opt-in
+- disabled by default
+- email-based
+- deduplicated within the configured TTL window
+
+To enable them:
+
+```yaml
+general_settings:
+  email_enabled: true
+  governance_notifications_enabled: true
+  budget_notifications_enabled: true
+  budget_alert_ttl_seconds: 3600
+```
+
+Budget notifications require email delivery to be configured first.
 
 If an entity has both `budget_duration` and `budget_reset_at`, the runtime can reset tracked spend automatically when the reset window is reached.
+
+## Organization Soft Budgets
+
+Organizations now support `soft_budget` alongside `max_budget`.
+
+You can manage organization soft budgets from:
+
+- the organization create flow
+- the organization detail page
+- the organization admin API
 
 ## Admin UI
 
