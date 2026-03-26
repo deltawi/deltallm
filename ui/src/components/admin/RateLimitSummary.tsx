@@ -1,3 +1,6 @@
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+
 type RateLimitValue = number | null | undefined;
 
 type RateLimitSummaryProps = {
@@ -14,6 +17,15 @@ type RateLimitItem = {
   label: string;
   value: number;
 };
+
+type TooltipPosition = {
+  left: number;
+  top: number;
+};
+
+const TOOLTIP_OFFSET_PX = 8;
+const TOOLTIP_MAX_WIDTH_PX = 220;
+const VIEWPORT_PADDING_PX = 12;
 
 function formatRateLimitValue(value: number): string {
   return Number(value).toLocaleString();
@@ -44,12 +56,95 @@ function RateLimitChip({ label, value }: { label: string; value: number }) {
   );
 }
 
+function RateLimitTooltip({
+  anchorRef,
+  items,
+  open,
+  tooltipId,
+}: {
+  anchorRef: React.RefObject<HTMLSpanElement | null>;
+  items: RateLimitItem[];
+  open: boolean;
+  tooltipId: string;
+}) {
+  const [position, setPosition] = useState<TooltipPosition | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      setPosition(null);
+      return;
+    }
+
+    const updatePosition = () => {
+      if (typeof window === 'undefined') {
+        return;
+      }
+      const anchor = anchorRef.current;
+      if (!anchor) {
+        return;
+      }
+
+      const rect = anchor.getBoundingClientRect();
+      const preferredCenter = rect.left + rect.width / 2;
+      const minCenter = VIEWPORT_PADDING_PX + TOOLTIP_MAX_WIDTH_PX / 2;
+      const maxCenter = window.innerWidth - VIEWPORT_PADDING_PX - TOOLTIP_MAX_WIDTH_PX / 2;
+      const clampedCenter = Math.min(Math.max(preferredCenter, minCenter), maxCenter);
+
+      setPosition({
+        left: clampedCenter,
+        top: rect.bottom + TOOLTIP_OFFSET_PX,
+      });
+    };
+
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [anchorRef, open]);
+
+  if (!open || !position || typeof document === 'undefined') {
+    return null;
+  }
+
+  return createPortal(
+    <div
+      id={tooltipId}
+      role="tooltip"
+      className="pointer-events-none fixed z-[100] w-max min-w-[160px] max-w-[220px] rounded-lg border border-gray-200 bg-gray-900 px-3 py-2 text-left shadow-lg"
+      style={{
+        left: `${position.left}px`,
+        top: `${position.top}px`,
+        transform: 'translateX(-50%)',
+      }}
+    >
+      <div className="space-y-1">
+        {items.map((item) => (
+          <div key={item.key} className="flex items-center justify-between gap-3 text-[11px] text-white">
+            <span className="font-medium">{item.label}</span>
+            <span className="text-gray-200">{formatRateLimitValue(item.value)}</span>
+          </div>
+        ))}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 export default function RateLimitSummary(props: RateLimitSummaryProps) {
   const items = buildRateLimitItems(props);
   const visibleCount = props.visibleCount ?? 2;
   const visibleItems = items.slice(0, visibleCount);
   const hiddenItems = items.slice(visibleCount);
-  const hoverLabel = hiddenItems.map((item) => `${formatRateLimitValue(item.value)} ${item.label}`).join('\n');
+  const triggerRef = useRef<HTMLSpanElement | null>(null);
+  const tooltipId = useId();
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const hoverLabel = useMemo(
+    () => hiddenItems.map((item) => `${formatRateLimitValue(item.value)} ${item.label}`).join('\n'),
+    [hiddenItems],
+  );
 
   if (items.length === 0) {
     return <span className="text-xs text-gray-400">—</span>;
@@ -61,25 +156,22 @@ export default function RateLimitSummary(props: RateLimitSummaryProps) {
         <RateLimitChip key={item.key} label={item.label} value={item.value} />
       ))}
       {hiddenItems.length > 0 ? (
-        <div className="group relative inline-flex">
+        <>
           <span
+            ref={triggerRef}
             tabIndex={0}
             title={hoverLabel}
+            aria-describedby={tooltipOpen ? tooltipId : undefined}
+            onMouseEnter={() => setTooltipOpen(true)}
+            onMouseLeave={() => setTooltipOpen(false)}
+            onFocus={() => setTooltipOpen(true)}
+            onBlur={() => setTooltipOpen(false)}
             className="inline-flex cursor-default items-center rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-500"
           >
             +{hiddenItems.length} more
           </span>
-          <div className="pointer-events-none absolute left-1/2 top-full z-20 hidden w-max min-w-[160px] max-w-[220px] -translate-x-1/2 rounded-lg border border-gray-200 bg-gray-900 px-3 py-2 text-left shadow-lg group-hover:block group-focus-within:block">
-            <div className="space-y-1">
-              {hiddenItems.map((item) => (
-                <div key={item.key} className="flex items-center justify-between gap-3 text-[11px] text-white">
-                  <span className="font-medium">{item.label}</span>
-                  <span className="text-gray-200">{formatRateLimitValue(item.value)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+          <RateLimitTooltip anchorRef={triggerRef} items={hiddenItems} open={tooltipOpen} tooltipId={tooltipId} />
+        </>
       ) : null}
     </div>
   );

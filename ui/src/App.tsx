@@ -35,11 +35,12 @@ import MCPServers from './pages/MCPServers';
 import MCPServerDetail from './pages/MCPServerDetail';
 import MCPApprovalQueue from './pages/MCPApprovalQueue';
 import { ToastProvider } from './components/ToastProvider';
-import { resolveUiAccess } from './lib/authorization';
+import { defaultRouteForUiAccess, resolveUiAccess } from './lib/authorization';
 
 function AppRoutes() {
   const { isAuthenticated, isLoading, session, authMode, mfaSkipped } = useAuth();
   const uiAccess = resolveUiAccess(authMode, session);
+  const defaultRoute = defaultRouteForUiAccess(uiAccess);
 
   if (isLoading) {
     return (
@@ -76,7 +77,7 @@ function AppRoutes() {
   return (
     <Routes>
       <Route element={<Layout />}>
-        <Route path="/" element={<Dashboard />} />
+        <Route path="/" element={uiAccess.dashboard ? <Dashboard /> : <Navigate to={defaultRoute} replace />} />
         <Route path="/models" element={uiAccess.models ? <Models /> : <Navigate to="/" replace />} />
         <Route path="/models/new" element={uiAccess.model_admin ? <ModelCreate /> : <Navigate to="/models" replace />} />
         <Route path="/models/:deploymentId" element={uiAccess.models ? <ModelDetail /> : <Navigate to="/" replace />} />
@@ -102,11 +103,11 @@ function AppRoutes() {
         <Route path="/batches/:batchId" element={uiAccess.batches ? <BatchJobDetail /> : <Navigate to="/" replace />} />
         <Route path="/guardrails" element={uiAccess.guardrails ? <Guardrails /> : <Navigate to="/" replace />} />
         <Route path="/settings" element={uiAccess.settings ? <SettingsPage /> : <Navigate to="/" replace />} />
-        <Route path="/access-control" element={<Navigate to={uiAccess.people_access ? "/users" : "/"} replace />} />
-        <Route path="/login" element={<Navigate to="/" replace />} />
-        <Route path="/forgot-password" element={<Navigate to="/" replace />} />
-        <Route path="/reset-password" element={<Navigate to="/" replace />} />
-        <Route path="/accept-invite" element={<Navigate to="/" replace />} />
+        <Route path="/access-control" element={<Navigate to={uiAccess.people_access ? "/users" : defaultRoute} replace />} />
+        <Route path="/login" element={<Navigate to={defaultRoute} replace />} />
+        <Route path="/forgot-password" element={<Navigate to={defaultRoute} replace />} />
+        <Route path="/reset-password" element={<Navigate to={defaultRoute} replace />} />
+        <Route path="/accept-invite" element={<Navigate to={defaultRoute} replace />} />
       </Route>
     </Routes>
   );

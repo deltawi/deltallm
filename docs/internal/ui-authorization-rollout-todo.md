@@ -13,6 +13,8 @@
 - [x] Gate nav visibility from `ui_access`
 - [x] Gate routes from `ui_access`
 - [x] Hide dead-end pages from developer roles
+- [x] Keep dashboard behind the same spend-read contract as the current dashboard data sources
+- [x] Keep team creation behind org-scoped team-create authority, not team-scoped update alone
 
 ## Phase 3 - Action-Level Capability Gating
 - [x] Hide model mutation controls unless `model_admin`

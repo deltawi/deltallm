@@ -26,6 +26,7 @@ type SessionLike = {
   role?: string | null;
   effective_permissions?: string[] | null;
   ui_access?: Partial<UIAccess> | null;
+  organization_memberships?: Array<{ role?: string | null }> | null;
 };
 
 function emptyUiAccess(): UIAccess {
@@ -81,9 +82,13 @@ function deriveUiAccessFromPermissions(session: SessionLike | null | undefined):
   const permissions = new Set((session.effective_permissions || []).map((value) => String(value)));
   const isPlatformAdmin = session.role === 'platform_admin';
   const canReadKeys = permissions.has('key.read') || permissions.has('key.update') || permissions.has('key.create_self');
+  const canCreateTeamInOrganization = isPlatformAdmin || (session.organization_memberships || []).some((membership) => {
+    const role = String(membership?.role || '');
+    return role === 'org_admin' || role === 'org_owner';
+  });
 
   return {
-    dashboard: true,
+    dashboard: isPlatformAdmin || permissions.has('spend.read'),
     models: true,
     model_admin: isPlatformAdmin,
     route_groups: isPlatformAdmin,
@@ -94,7 +99,7 @@ function deriveUiAccessFromPermissions(session: SessionLike | null | undefined):
     organizations: isPlatformAdmin || permissions.has('org.read'),
     organization_create: isPlatformAdmin,
     teams: isPlatformAdmin || permissions.has('team.read'),
-    team_create: isPlatformAdmin || permissions.has('team.update'),
+    team_create: canCreateTeamInOrganization,
     people_access: isPlatformAdmin,
     usage: isPlatformAdmin || permissions.has('spend.read'),
     audit: isPlatformAdmin || permissions.has('audit.read'),
@@ -119,6 +124,24 @@ export function resolveUiAccess(
 
 export function canAccessPage(uiAccess: UIAccess, key: UIAccessKey): boolean {
   return Boolean(uiAccess[key]);
+}
+
+const DEFAULT_UI_ROUTE_ORDER: Array<[UIAccessKey, string]> = [
+  ['dashboard', '/'],
+  ['keys', '/keys'],
+  ['batches', '/batches'],
+  ['teams', '/teams'],
+  ['organizations', '/organizations'],
+  ['models', '/models'],
+  ['mcp_servers', '/mcp-servers'],
+  ['usage', '/usage'],
+  ['audit', '/audit'],
+  ['settings', '/settings'],
+];
+
+export function defaultRouteForUiAccess(uiAccess: UIAccess): string {
+  const match = DEFAULT_UI_ROUTE_ORDER.find(([key]) => canAccessPage(uiAccess, key));
+  return match?.[1] || '/models';
 }
 
 export function isPlatformAdminSession(

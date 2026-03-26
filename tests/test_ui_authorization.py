@@ -162,9 +162,10 @@ async def test_auth_me_returns_ui_access(client, test_app):
     assert response.status_code == 200
     payload = response.json()
     assert payload["effective_permissions"]
-    assert payload["ui_access"]["dashboard"] is True
+    assert payload["ui_access"]["dashboard"] is False
     assert payload["ui_access"]["organizations"] is True
     assert payload["ui_access"]["teams"] is True
+    assert payload["ui_access"]["team_create"] is True
     assert payload["ui_access"]["keys"] is True
     assert payload["ui_access"]["batches"] is True
     assert payload["ui_access"]["mcp_servers"] is True
@@ -172,6 +173,38 @@ async def test_auth_me_returns_ui_access(client, test_app):
     assert payload["ui_access"]["audit"] is True
     assert payload["ui_access"]["people_access"] is False
     assert payload["ui_access"]["usage"] is False
+
+
+@pytest.mark.asyncio
+async def test_auth_me_hides_team_create_for_team_scoped_admin_only(client, test_app):
+    class StubIdentityService:
+        async def get_context_for_session(self, token: str):
+            if token != "session-token":
+                return None
+            return PlatformAuthContext(
+                account_id="acct-2",
+                email="team-admin@example.com",
+                role="org_user",
+                permissions=[],
+                organization_memberships=[],
+                team_memberships=[{"team_id": "team-1", "role": "team_admin"}],
+                mfa_enabled=False,
+                mfa_verified=False,
+                force_password_change=False,
+            )
+
+    test_app.state.platform_identity_service = StubIdentityService()
+
+    response = await client.get("/auth/me", cookies={"deltallm_session": "session-token"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ui_access"]["dashboard"] is False
+    assert payload["ui_access"]["team_create"] is False
+    assert payload["ui_access"]["teams"] is True
+    assert payload["ui_access"]["organizations"] is False
+    assert payload["ui_access"]["keys"] is True
+    assert payload["ui_access"]["batches"] is True
 
 
 @pytest.mark.asyncio
