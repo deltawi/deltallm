@@ -112,6 +112,7 @@ class UIAccessResponse(BaseModel):
     audit: bool = False
     batches: bool = False
     guardrails: bool = False
+    playground: bool = False
     settings: bool = False
 
 

@@ -125,6 +125,7 @@ function SidebarContent({
   onNavClick,
   showExpanded,
   collapsed,
+  canCollapse,
   onToggleCollapsed,
 }: {
   visibleEntries: NavEntry[];
@@ -135,25 +136,43 @@ function SidebarContent({
   onNavClick?: () => void;
   showExpanded: boolean;
   collapsed: boolean;
+  canCollapse: boolean;
   onToggleCollapsed: () => void;
 }) {
   return (
     <>
-      <div className="flex items-center justify-between px-3 py-4 min-w-0 shrink-0">
+      <div
+        className={clsx(
+          'min-w-0 shrink-0 px-3 py-4',
+          showExpanded ? 'flex items-center justify-between' : 'flex flex-col items-center gap-2',
+        )}
+      >
         <div className={clsx('flex items-center gap-2.5 min-w-0', !showExpanded && 'justify-center w-full')}>
           <div className="w-8 h-8 rounded-[10px] bg-violet-100 border border-violet-200/60 flex items-center justify-center shrink-0 shadow-sm">
             <Zap className="w-4 h-4 text-violet-600 fill-violet-600" />
           </div>
           {showExpanded && <span className="text-lg font-bold text-gray-900 truncate">DeltaLLM</span>}
         </div>
-        {showExpanded && (
+        {canCollapse && showExpanded && (
           <button
             type="button"
             onClick={onToggleCollapsed}
             className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors shrink-0"
+            aria-label={collapsed ? 'Pin sidebar open' : 'Collapse sidebar'}
             title={collapsed ? 'Pin sidebar open' : 'Collapse sidebar'}
           >
             {collapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+          </button>
+        )}
+        {canCollapse && !showExpanded && (
+          <button
+            type="button"
+            onClick={onToggleCollapsed}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+            aria-label="Expand sidebar"
+            title="Expand sidebar"
+          >
+            <PanelLeftOpen className="w-4 h-4" />
           </button>
         )}
       </div>
@@ -169,6 +188,7 @@ function SidebarContent({
                   to={entry.to}
                   end={entry.to === '/'}
                   onClick={onNavClick}
+                  aria-label={entry.label}
                   title={!showExpanded ? entry.label : undefined}
                   className={() => navItemClass(active, !showExpanded)}
                 >
@@ -197,6 +217,7 @@ function SidebarContent({
                       to={child.to}
                       end={child.to === '/'}
                       onClick={onNavClick}
+                      aria-label={child.label}
                       title={!showExpanded ? child.label : undefined}
                       className={() => navItemClass(active, !showExpanded)}
                     >
@@ -300,6 +321,7 @@ export default function Layout() {
           pathname={location.pathname}
           showExpanded={showExpanded}
           collapsed={collapsed}
+          canCollapse={true}
           onToggleCollapsed={toggleCollapsed}
         />
 
@@ -348,6 +370,7 @@ export default function Layout() {
               onNavClick={() => setMobileOpen(false)}
               showExpanded={true}
               collapsed={false}
+              canCollapse={false}
               onToggleCollapsed={() => {}}
             />
           </aside>

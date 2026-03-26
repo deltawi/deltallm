@@ -64,6 +64,7 @@ def build_ui_access(
         "audit": authenticated and (is_platform_admin or Permission.AUDIT_READ in permissions),
         "batches": authenticated and (is_platform_admin or Permission.KEY_READ in permissions),
         "guardrails": is_platform_admin,
+        "playground": authenticated,
         "settings": is_platform_admin,
     }
 
