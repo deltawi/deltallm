@@ -56,11 +56,11 @@ prisma db push --schema=./prisma/schema.prisma --accept-data-loss
 Then it starts the API server.
 
 This starts:
-- DeltaLLM on port **4000**
+- DeltaLLM on port **4002** on the host (`4000` inside the container)
 - PostgreSQL 15 database
 - Redis 7 cache
 
-DeltaLLM is available at `http://localhost:4000`.
+DeltaLLM is available at `http://localhost:4002`.
 
 Once a model is available, see [Quick Start](quickstart.md) for `curl`, Python, and JavaScript usage examples.
 
@@ -162,7 +162,7 @@ volumes:
 
 ```bash
 docker build -t deltallm .
-docker run -p 4000:4000 \
+docker run -p 4002:4000 \
   -e DATABASE_URL="postgresql://..." \
   -e DELTALLM_MASTER_KEY="sk-your-key" \
   -e DELTALLM_SALT_KEY="your-salt-key" \
@@ -177,13 +177,13 @@ The image runs `prisma db push --schema=./prisma/schema.prisma --accept-data-los
 Verify the container is healthy:
 
 ```bash
-curl http://localhost:4000/health/liveliness
+curl http://localhost:4002/health/liveliness
 ```
 
 List the available models:
 
 ```bash
-curl http://localhost:4000/v1/models \
+curl http://localhost:4002/v1/models \
   -H "Authorization: Bearer $DELTALLM_MASTER_KEY"
 ```
 

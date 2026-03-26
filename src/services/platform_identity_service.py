@@ -510,6 +510,52 @@ class PlatformIdentityService:
             raise RuntimeError("failed to ensure account")
         return account
 
+    async def create_account(
+        self,
+        *,
+        email: str,
+        role: str = PlatformRole.ORG_USER,
+        is_active: bool = True,
+        password: str,
+    ) -> dict[str, Any]:
+        normalized_email = self.normalize_email(email)
+        if not normalized_email:
+            raise ValueError("email is required")
+        self.validate_password_policy(password)
+        if self.db is None:
+            return {
+                "account_id": "",
+                "email": normalized_email,
+                "role": role,
+                "is_active": is_active,
+            }
+
+        existing = await self.get_account_by_email(normalized_email)
+        if existing is not None:
+            raise ValueError("account already exists")
+
+        await self.db.execute_raw(
+            """
+            INSERT INTO deltallm_platformaccount (
+                account_id, email, role, is_active, force_password_change, mfa_enabled, created_at, updated_at
+            )
+            VALUES (gen_random_uuid(), $1, $2, $3, false, false, NOW(), NOW())
+            """,
+            normalized_email,
+            role,
+            is_active,
+        )
+        account = await self.get_account_by_email(normalized_email)
+        if account is None:
+            raise RuntimeError("failed to create account")
+        await self.set_password(account_id=str(account.get("account_id") or ""), new_password=password)
+        created = await self.get_account_by_email(normalized_email)
+        if created is None:
+            raise RuntimeError("failed to load created account")
+        if not str(created.get("password_hash") or "").strip():
+            raise RuntimeError("failed to set account password")
+        return created
+
     async def upsert_organization_membership(self, *, account_id: str, organization_id: str, role: str) -> None:
         if self.db is None:
             return

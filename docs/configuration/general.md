@@ -62,7 +62,7 @@ general_settings:
   email_provider: smtp
   email_from_address: no-reply@example.com
   email_reply_to: support@example.com
-  email_base_url: http://localhost:4000
+  email_base_url: http://localhost:4002
   email_worker_enabled: true
   email_max_attempts: 5
   email_retry_initial_seconds: 60

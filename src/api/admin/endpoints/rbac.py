@@ -5,10 +5,11 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from src.auth.roles import Permission, validate_organization_role, validate_platform_role, validate_team_role
+from src.auth.roles import Permission, PlatformRole, validate_organization_role, validate_platform_role, validate_team_role
 from src.audit import AuditAction
 from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, to_json_value
 from src.middleware.admin import require_admin_permission
+from src.services.access_provisioning_service import AccessProvisioningService
 
 router = APIRouter(tags=["Admin RBAC"])
 
@@ -149,6 +150,39 @@ async def list_principals(
     }
 
 
+@router.get("/ui/api/principals/summary", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+async def principals_summary(request: Request) -> dict[str, int]:
+    db = db_or_503(request)
+    rows = await db.query_raw(
+        """
+        SELECT
+            COUNT(*)::int AS total_accounts,
+            COUNT(*) FILTER (WHERE is_active)::int AS active_accounts,
+            COUNT(*) FILTER (WHERE role = $1)::int AS platform_admins,
+            COUNT(*) FILTER (WHERE mfa_enabled)::int AS mfa_enabled_accounts
+        FROM deltallm_platformaccount
+        """,
+        PlatformRole.ADMIN,
+    )
+    membership_rows = await db.query_raw(
+        """
+        SELECT
+            (SELECT COUNT(*)::int FROM deltallm_organizationmembership) AS organization_memberships,
+            (SELECT COUNT(*)::int FROM deltallm_teammembership) AS team_memberships
+        """
+    )
+    base = rows[0] if rows else {}
+    memberships = membership_rows[0] if membership_rows else {}
+    return {
+        "total_accounts": int(base.get("total_accounts") or 0),
+        "active_accounts": int(base.get("active_accounts") or 0),
+        "platform_admins": int(base.get("platform_admins") or 0),
+        "mfa_enabled_accounts": int(base.get("mfa_enabled_accounts") or 0),
+        "organization_memberships": int(memberships.get("organization_memberships") or 0),
+        "team_memberships": int(memberships.get("team_memberships") or 0),
+    }
+
+
 @router.post("/ui/api/rbac/accounts", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
 async def upsert_rbac_account(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     request_start = perf_counter()
@@ -220,6 +254,63 @@ async def upsert_rbac_account(request: Request, payload: dict[str, Any]) -> dict
         resource_id=str(rows[0].get("account_id") or ""),
         request_payload=payload,
         response_payload=response if isinstance(response, dict) else None,
+    )
+    return response
+
+
+@router.post("/ui/api/rbac/provision", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+async def provision_person(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    request_start = perf_counter()
+    db = db_or_503(request)
+    identity_service = getattr(request.app.state, "platform_identity_service", None)
+    invitation_service = getattr(request.app.state, "invitation_service", None)
+    if identity_service is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Provisioning service unavailable")
+
+    mode = str(payload.get("mode") or "").strip()
+    if mode == "invite_email" and invitation_service is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invitation service unavailable")
+
+    service = AccessProvisioningService(
+        db_client=db,
+        platform_identity_service=identity_service,
+        invitation_service=invitation_service,
+    )
+
+    try:
+        response = await service.provision_person(
+            email=str(payload.get("email") or ""),
+            mode=mode,
+            platform_role=str(payload.get("platform_role") or payload.get("role") or PlatformRole.ORG_USER),
+            password=str(payload.get("password") or "") or None,
+            is_active=bool(payload.get("is_active", True)),
+            organization_id=str(payload.get("organization_id") or "").strip() or None,
+            organization_role=str(payload.get("organization_role") or "") or None,
+            team_id=str(payload.get("team_id") or "").strip() or None,
+            team_role=str(payload.get("team_role") or "") or None,
+            invited_by_account_id=getattr(getattr(request.state, "platform_auth", None), "account_id", None),
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = status.HTTP_404_NOT_FOUND if "not found" in detail else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    except RuntimeError as exc:
+        if "invitation service unavailable" in str(exc):
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invitation service unavailable") from exc
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Provisioning failed") from exc
+
+    mode = str(response.get("mode") or "")
+    action = AuditAction.ADMIN_INVITATION_CREATE if mode == "invite_email" else AuditAction.ADMIN_RBAC_ACCOUNT_UPSERT
+    resource_type = "invitation" if mode == "invite_email" else "platform_account"
+    resource_id = str(response.get("invitation_id") or response.get("account_id") or "")
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        request_payload=payload,
+        response_payload=response,
     )
     return response
 

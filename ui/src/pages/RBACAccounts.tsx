@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { organizations, rbac, teams, users, type Principal, type ScopedAssetAccess } from '../lib/api';
-import { Plus, UserCog, ShieldCheck, Search, ChevronDown, ChevronRight, Building2, UsersRound, Trash2 } from 'lucide-react';
+import { invitations, organizations, rbac, teams, users, type Invitation, type Principal, type PrincipalSummary, type ScopedAssetAccess } from '../lib/api';
+import { Plus, UserCog, ShieldCheck, Search, Building2, UsersRound, Trash2, Mail } from 'lucide-react';
 import Modal from '../components/Modal';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
-import { IndexShell } from '../components/admin/shells';
+import { ContentCard, IndexShell } from '../components/admin/shells';
 import InvitationPanel from '../components/admin/InvitationPanel';
+import ProvisionPersonModal from '../components/admin/ProvisionPersonModal';
+import { useToast } from '../components/ToastProvider';
 
 const PLATFORM_ROLES = [
   { value: 'platform_admin', label: 'Platform Admin' },
@@ -52,20 +54,56 @@ function RoleBadge({ role }: { role: string }) {
   );
 }
 
+function MembershipCountBadge({ count, label }: { count: number; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-600">
+      <span>{count}</span>
+      <span>{label}</span>
+    </span>
+  );
+}
+
+type PeopleAccessTab = 'users' | 'invitations';
+type InvitationStatusFilter = Invitation['status'] | 'active';
+const EMPTY_PAGINATION = { total: 0, limit: 20, offset: 0, has_more: false };
+const EMPTY_SUMMARY: PrincipalSummary = {
+  total_accounts: 0,
+  active_accounts: 0,
+  platform_admins: 0,
+  mfa_enabled_accounts: 0,
+  organization_memberships: 0,
+  team_memberships: 0,
+};
+
 export default function RBACAccounts() {
-  const [searchParams] = useSearchParams();
+  const { pushToast } = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [viewTab, setViewTab] = useState<PeopleAccessTab>('users');
   const [principals, setPrincipals] = useState<Principal[]>([]);
-  const [principalPagination, setPrincipalPagination] = useState({ total: 0, limit: 20, offset: 0, has_more: false });
+  const [principalPagination, setPrincipalPagination] = useState(EMPTY_PAGINATION);
+  const [principalSummary, setPrincipalSummary] = useState<PrincipalSummary>(EMPTY_SUMMARY);
+  const [principalLoading, setPrincipalLoading] = useState(true);
+  const [principalError, setPrincipalError] = useState('');
+  const [principalSearchInput, setPrincipalSearchInput] = useState('');
+  const [principalSearchTerm, setPrincipalSearchTerm] = useState('');
+  const [principalPageOffset, setPrincipalPageOffset] = useState(0);
+  const [invitationItems, setInvitationItems] = useState<Invitation[]>([]);
+  const [invitationPagination, setInvitationPagination] = useState(EMPTY_PAGINATION);
+  const [invitationLoading, setInvitationLoading] = useState(false);
+  const [invitationSaving, setInvitationSaving] = useState(false);
+  const [invitationError, setInvitationError] = useState('');
+  const [invitationSearchInput, setInvitationSearchInput] = useState('');
+  const [invitationSearchTerm, setInvitationSearchTerm] = useState('');
+  const [invitationStatusFilter, setInvitationStatusFilter] = useState<InvitationStatusFilter>('active');
+  const [invitationPageOffset, setInvitationPageOffset] = useState(0);
   const [orgList, setOrgList] = useState<any[]>([]);
   const [teamList, setTeamList] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [searchInput, setSearchInput] = useState('');
-  const [searchTerm, setSearchTerm] = useState('');
-  const [pageOffset, setPageOffset] = useState(0);
+  const [referenceLoading, setReferenceLoading] = useState(true);
   const pageSize = 20;
   const inviteOrganizationId = searchParams.get('invite_org_id');
   const inviteTeamId = searchParams.get('invite_team_id');
 
+  const [showProvisionModal, setShowProvisionModal] = useState(false);
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [editAccount, setEditAccount] = useState<Principal | null>(null);
   const [formEmail, setFormEmail] = useState('');
@@ -73,7 +111,7 @@ export default function RBACAccounts() {
   const [formPassword, setFormPassword] = useState('');
   const [formActive, setFormActive] = useState(true);
 
-  const [expandedAccount, setExpandedAccount] = useState<string | null>(null);
+  const [selectedAccount, setSelectedAccount] = useState<Principal | null>(null);
 
   const [showOrgMembershipModal, setShowOrgMembershipModal] = useState(false);
   const [membershipAccountId, setMembershipAccountId] = useState('');
@@ -94,42 +132,103 @@ export default function RBACAccounts() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  const loadReferenceData = useCallback(async () => {
+    setReferenceLoading(true);
     try {
-      const [allPrincipals, orgs, tms] = await Promise.all([
-        rbac.principals.list({ search: searchTerm, limit: pageSize, offset: pageOffset }),
+      const [orgs, tms] = await Promise.all([
         organizations.list({ limit: 500 }).catch(() => ({ data: [], pagination: { total: 0, limit: 500, offset: 0, has_more: false } })),
         teams.list({ limit: 500 }).catch(() => ({ data: [], pagination: { total: 0, limit: 500, offset: 0, has_more: false } })),
       ]);
-      setPrincipals(allPrincipals?.data || []);
-      setPrincipalPagination(allPrincipals?.pagination || { total: 0, limit: pageSize, offset: pageOffset, has_more: false });
       setOrgList(orgs?.data || orgs || []);
       setTeamList(tms?.data || tms || []);
-    } catch (err: any) {
-      setError(err?.message || 'Failed to load accounts');
     } finally {
-      setLoading(false);
+      setReferenceLoading(false);
     }
-  }, [pageOffset, pageSize, searchTerm]);
+  }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  const loadPrincipals = useCallback(async () => {
+    setPrincipalLoading(true);
+    setPrincipalError('');
+    try {
+      const [response, summary] = await Promise.all([
+        rbac.principals.list({ search: principalSearchTerm, limit: pageSize, offset: principalPageOffset }),
+        rbac.principals.summary().catch(() => null),
+      ]);
+      setPrincipals(response?.data || []);
+      setPrincipalPagination(response?.pagination || { ...EMPTY_PAGINATION, limit: pageSize, offset: principalPageOffset });
+      if (summary) {
+        setPrincipalSummary(summary);
+      }
+    } catch (err: any) {
+      setPrincipalError(err?.message || 'Failed to load accounts');
+    } finally {
+      setPrincipalLoading(false);
+    }
+  }, [pageSize, principalPageOffset, principalSearchTerm]);
+
+  const loadInvitations = useCallback(async () => {
+    setInvitationLoading(true);
+    setInvitationError('');
+    try {
+      const response = await invitations.list({
+        status: invitationStatusFilter,
+        search: invitationSearchTerm || undefined,
+        limit: pageSize,
+        offset: invitationPageOffset,
+      });
+      setInvitationItems(response?.data || []);
+      setInvitationPagination(response?.pagination || { ...EMPTY_PAGINATION, limit: pageSize, offset: invitationPageOffset });
+    } catch (err: any) {
+      setInvitationError(err?.message || 'Failed to load invitations');
+    } finally {
+      setInvitationLoading(false);
+    }
+  }, [invitationPageOffset, invitationSearchTerm, invitationStatusFilter, pageSize]);
+
+  useEffect(() => { loadReferenceData(); }, [loadReferenceData]);
+  useEffect(() => { loadPrincipals(); }, [loadPrincipals]);
   useEffect(() => {
     const t = setTimeout(() => {
-      setSearchTerm(searchInput);
-      setPageOffset(0);
+      setPrincipalSearchTerm(principalSearchInput);
+      setPrincipalPageOffset(0);
     }, 250);
     return () => clearTimeout(t);
-  }, [searchInput]);
+  }, [principalSearchInput]);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setInvitationSearchTerm(invitationSearchInput.trim());
+      setInvitationPageOffset(0);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [invitationSearchInput]);
+  useEffect(() => {
+    if (viewTab !== 'invitations') return;
+    loadInvitations();
+  }, [loadInvitations, viewTab]);
+  useEffect(() => {
+    if (!selectedAccount) return;
+    const next = principals.find((acct) => acct.account_id === selectedAccount.account_id);
+    if (next) {
+      setSelectedAccount(next);
+    }
+  }, [principals, selectedAccount]);
+  useEffect(() => {
+    if (!inviteOrganizationId && !inviteTeamId) return;
+    if (referenceLoading) return;
+    setShowProvisionModal(true);
+  }, [inviteOrganizationId, inviteTeamId, referenceLoading]);
+
+  const clearInvitePrefill = useCallback(() => {
+    if (!inviteOrganizationId && !inviteTeamId) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('invite_org_id');
+    next.delete('invite_team_id');
+    setSearchParams(next, { replace: true });
+  }, [inviteOrganizationId, inviteTeamId, searchParams, setSearchParams]);
 
   const openCreateAccount = () => {
-    setEditAccount(null);
-    setFormEmail('');
-    setFormRole('org_user');
-    setFormPassword('');
-    setFormActive(true);
     setError('');
-    setShowAccountModal(true);
+    setShowProvisionModal(true);
   };
 
   const openEditAccount = (acct: Principal) => {
@@ -151,7 +250,7 @@ export default function RBACAccounts() {
       if (formPassword.trim()) data.password = formPassword.trim();
       await rbac.accounts.upsert(data);
       setShowAccountModal(false);
-      await loadData();
+      await loadPrincipals();
     } catch (err: any) {
       setError(err?.message || 'Failed to save account');
     } finally {
@@ -178,7 +277,7 @@ export default function RBACAccounts() {
         role: membershipOrgRole,
       });
       setShowOrgMembershipModal(false);
-      await loadData();
+      await loadPrincipals();
     } catch (err: any) {
       setError(err?.message || 'Failed to save membership');
     } finally {
@@ -205,7 +304,7 @@ export default function RBACAccounts() {
         role: membershipTeamRole,
       });
       setShowTeamMembershipModal(false);
-      await loadData();
+      await loadPrincipals();
     } catch (err: any) {
       setError(err?.message || 'Failed to save membership');
     } finally {
@@ -219,7 +318,10 @@ export default function RBACAccounts() {
     setError('');
     try {
       await rbac.accounts.delete(accountId);
-      await loadData();
+      if (selectedAccount?.account_id === accountId) {
+        setSelectedAccount(null);
+      }
+      await loadPrincipals();
     } catch (err: any) {
       setError(err?.message || 'Failed to delete account');
     } finally {
@@ -233,7 +335,7 @@ export default function RBACAccounts() {
     setError('');
     try {
       await rbac.orgMemberships.delete(membershipId);
-      await loadData();
+      await loadPrincipals();
     } catch (err: any) {
       setError(err?.message || 'Failed to delete organization membership');
     } finally {
@@ -247,7 +349,7 @@ export default function RBACAccounts() {
     setError('');
     try {
       await rbac.teamMemberships.delete(membershipId);
-      await loadData();
+      await loadPrincipals();
     } catch (err: any) {
       setError(err?.message || 'Failed to delete team membership');
     } finally {
@@ -311,231 +413,465 @@ export default function RBACAccounts() {
     return team?.team_alias || teamId.slice(0, 12) + '...';
   };
 
+  const handleInvitationResend = async (invitationId: string) => {
+    setInvitationSaving(true);
+    setInvitationError('');
+    try {
+      await invitations.resend(invitationId);
+      pushToast({ tone: 'success', message: 'Invitation resent.' });
+      await loadInvitations();
+    } catch (err: any) {
+      setInvitationError(err?.message || 'Failed to resend invitation');
+    } finally {
+      setInvitationSaving(false);
+    }
+  };
+
+  const handleInvitationCancel = async (invitationId: string) => {
+    if (!window.confirm('Cancel this invitation?')) return;
+    setInvitationSaving(true);
+    setInvitationError('');
+    try {
+      await invitations.cancel(invitationId);
+      pushToast({ tone: 'success', message: 'Invitation cancelled.' });
+      await loadInvitations();
+    } catch (err: any) {
+      setInvitationError(err?.message || 'Failed to cancel invitation');
+    } finally {
+      setInvitationSaving(false);
+    }
+  };
+
+  const totalAccounts = principalPagination.total;
+  const currentPage = Math.floor(principalPageOffset / pageSize) + 1;
+  const totalPages = Math.max(1, Math.ceil((principalPagination.total || 0) / pageSize));
+  const hasPrev = principalPageOffset > 0;
+  const hasNext = principalPagination.has_more;
+  const visibleCount = viewTab === 'users' ? principalPagination.total : invitationPagination.total;
+  const showPageNotice =
+    viewTab === 'users' &&
+    !!principalError &&
+    !showProvisionModal &&
+    !selectedAccount &&
+    !showAccountModal &&
+    !showOrgMembershipModal &&
+    !showTeamMembershipModal &&
+    !showUserAccessModal;
+
   return (
     <IndexShell
       title="People & Access"
       titleIcon={UserCog}
-      count={principalPagination.total}
-      description="Manage people, RBAC roles, and organization/team memberships"
+      count={visibleCount}
+      description={viewTab === 'users' ? 'Manage people, RBAC roles, and organization/team memberships. Summary cards reflect all platform accounts.' : 'Track and manage invitations across their lifecycle.'}
+      notice={showPageNotice ? (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{principalError}</div>
+      ) : undefined}
       action={(
         <button
           onClick={openCreateAccount}
           className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
         >
           <Plus className="h-4 w-4" />
-          Add User
+          Add Person
         </button>
       )}
       toolbar={(
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-          <input
-            type="text"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Search accounts..."
-            className="w-full rounded-lg border border-gray-300 py-2 pl-10 pr-4 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="inline-flex rounded-lg border border-gray-300 bg-white p-0.5">
+            <button
+              onClick={() => setViewTab('users')}
+              className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${viewTab === 'users' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-50'}`}
+            >
+              <UsersRound className="h-3.5 w-3.5" />
+              Users
+            </button>
+            <button
+              onClick={() => setViewTab('invitations')}
+              className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${viewTab === 'invitations' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-50'}`}
+            >
+              <Mail className="h-3.5 w-3.5" />
+              Invitations
+            </button>
+          </div>
+          <div className="relative flex-1 min-w-[260px]">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              value={viewTab === 'users' ? principalSearchInput : invitationSearchInput}
+              onChange={(e) => {
+                if (viewTab === 'users') {
+                  setPrincipalSearchInput(e.target.value);
+                  return;
+                }
+                setInvitationSearchInput(e.target.value);
+              }}
+              placeholder={viewTab === 'users' ? 'Search accounts...' : 'Search invitations...'}
+              className="w-full rounded-lg border border-gray-300 py-2 pl-10 pr-4 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          {viewTab === 'invitations' ? (
+            <select
+              value={invitationStatusFilter}
+              onChange={(e) => {
+                setInvitationStatusFilter(e.target.value as InvitationStatusFilter);
+                setInvitationPageOffset(0);
+              }}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="active">Active</option>
+              <option value="sent">Sent</option>
+              <option value="pending">Pending</option>
+              <option value="accepted">Accepted</option>
+              <option value="cancelled">Cancelled</option>
+              <option value="expired">Expired</option>
+            </select>
+          ) : null}
         </div>
       )}
+      summaryItems={[
+        { label: 'Active accounts', value: String(principalSummary.active_accounts) },
+        { label: 'Platform admins', value: String(principalSummary.platform_admins) },
+        { label: 'MFA enabled', value: String(principalSummary.mfa_enabled_accounts), icon: ShieldCheck, iconClassName: 'text-green-600' },
+        { label: 'Org memberships', value: String(principalSummary.organization_memberships), icon: Building2, iconClassName: 'text-blue-600' },
+        { label: 'Team memberships', value: String(principalSummary.team_memberships), icon: UsersRound, iconClassName: 'text-violet-600' },
+      ]}
     >
-      <div className="mb-6">
-        <InvitationPanel
-          orgList={orgList}
-          teamList={teamList}
-          initialOrganizationId={inviteOrganizationId}
-          initialTeamId={inviteTeamId}
-        />
-      </div>
-      {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-blue-600" />
-        </div>
-      ) : principals.length === 0 ? (
-        <div className="rounded-xl border border-gray-200 bg-white py-12 text-center">
-          <UserCog className="mx-auto mb-3 h-12 w-12 text-gray-300" />
-          <p className="text-gray-500">No accounts found</p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {principals.map((acct) => {
-            const isExpanded = expandedAccount === acct.account_id;
-            const acctOrgMs = acct.organization_memberships || [];
-            const acctTeamMs = acct.team_memberships || [];
-
-            return (
-              <div key={acct.account_id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-                <div
-                  className="flex items-center gap-4 px-5 py-4 cursor-pointer hover:bg-gray-50 transition-colors"
-                  onClick={() => setExpandedAccount(isExpanded ? null : acct.account_id)}
+      <ContentCard>
+        {viewTab === 'users' ? (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200 bg-gray-50">
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">Account</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">Platform Role</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">Access</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">Last Login</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">Status</th>
+                    <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-400">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {principalLoading ? (
+                    <tr>
+                      <td colSpan={6} className="px-4 py-12 text-center">
+                        <div className="inline-flex items-center gap-3 text-sm text-gray-500">
+                          <div className="h-5 w-5 animate-spin rounded-full border-b-2 border-blue-600" />
+                          Loading accounts…
+                        </div>
+                      </td>
+                    </tr>
+                  ) : principals.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="px-4 py-14 text-center">
+                        <UserCog className="mx-auto mb-3 h-10 w-10 text-gray-300" />
+                        <p className="text-sm font-medium text-gray-600">No accounts found</p>
+                        <p className="mt-1 text-xs text-gray-400">
+                          {principalSearchTerm ? 'Try a different search term.' : 'Create a platform account or send an invitation to get started.'}
+                        </p>
+                        {!principalSearchTerm ? (
+                          <button
+                            onClick={openCreateAccount}
+                            className="mt-4 inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+                          >
+                            <Plus className="h-4 w-4" />
+                            Add Person
+                          </button>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ) : (
+                    principals.map((acct, index) => {
+                      const acctOrgMs = acct.organization_memberships || [];
+                      const acctTeamMs = acct.team_memberships || [];
+                      return (
+                        <tr
+                          key={acct.account_id}
+                          onClick={() => { setError(''); setSelectedAccount(acct); }}
+                          className={`cursor-pointer border-b border-gray-100 transition-colors hover:bg-blue-50/40 ${
+                            index === principals.length - 1 ? 'border-b-0' : ''
+                          }`}
+                        >
+                          <td className="px-4 py-3.5">
+                            <div className="flex items-center gap-3">
+                              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-blue-100 to-blue-200 text-xs font-bold text-blue-700">
+                                {(acct.email || '?')[0]?.toUpperCase()}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="truncate font-semibold text-gray-900">{acct.email}</span>
+                                  {acct.mfa_enabled ? <ShieldCheck className="h-4 w-4 shrink-0 text-green-500" /> : null}
+                                </div>
+                                <div className="mt-1 flex items-center gap-2 text-[11px] text-gray-400">
+                                  <code className="font-mono">{acct.account_id}</code>
+                                  {acct.runtime_user_id ? (
+                                    <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 font-medium text-indigo-600">
+                                      Runtime linked
+                                    </span>
+                                  ) : null}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3.5">
+                            <RoleBadge role={acct.role} />
+                          </td>
+                          <td className="px-4 py-3.5">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <MembershipCountBadge count={acctOrgMs.length} label={acctOrgMs.length === 1 ? 'org' : 'orgs'} />
+                              <MembershipCountBadge count={acctTeamMs.length} label={acctTeamMs.length === 1 ? 'team' : 'teams'} />
+                            </div>
+                          </td>
+                          <td className="px-4 py-3.5">
+                            <span className="text-xs text-gray-600">{formatDate(acct.last_login_at)}</span>
+                          </td>
+                          <td className="px-4 py-3.5">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span
+                                className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                                  acct.is_active ? 'bg-emerald-50 text-emerald-700' : 'bg-red-100 text-red-700'
+                                }`}
+                              >
+                                {acct.is_active ? 'Active' : 'Disabled'}
+                              </span>
+                              {acct.force_password_change ? (
+                                <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+                                  Password reset required
+                                </span>
+                              ) : null}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3.5" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => { setError(''); setSelectedAccount(acct); }}
+                                className="rounded-lg bg-blue-50 px-2.5 py-1.5 text-xs font-medium text-blue-600 transition-colors hover:bg-blue-100"
+                              >
+                                View
+                              </button>
+                              <button
+                                onClick={() => openUserAssetAccess(acct)}
+                                disabled={!acct.runtime_user_id}
+                                title={acct.runtime_user_id ? 'Manage runtime asset access' : 'No linked runtime user'}
+                                className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                                  acct.runtime_user_id
+                                    ? 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
+                                    : 'cursor-not-allowed bg-gray-100 text-gray-300'
+                                }`}
+                              >
+                                Asset Access
+                              </button>
+                              <button
+                                onClick={() => openEditAccount(acct)}
+                                className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-100"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                onClick={() => deleteAccount(acct.account_id, acct.email)}
+                                className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-50"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex items-center justify-between border-t border-gray-200 bg-gray-50 px-4 py-3">
+              <span className="text-xs text-gray-500">
+                {principalLoading
+                  ? 'Loading…'
+                  : `Showing ${Math.min(principalPageOffset + 1, totalAccounts || 0)}–${Math.min(principalPageOffset + principals.length, totalAccounts || 0)} of ${totalAccounts}`}
+              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-400">
+                  Page {currentPage} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setPrincipalPageOffset(Math.max(0, principalPageOffset - pageSize))}
+                  disabled={!hasPrev || principalLoading}
+                  className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  <div className="flex-shrink-0">
-                    {isExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-gray-900 truncate">{acct.email}</span>
-                      <RoleBadge role={acct.role} />
-                      {!acct.is_active && (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
-                          Disabled
-                        </span>
-                      )}
-                      {acct.mfa_enabled && (
-                        <ShieldCheck className="w-4 h-4 text-green-500" />
-                      )}
-                    </div>
-                    <div className="flex items-center gap-4 mt-1">
-                      <span className="text-xs text-gray-400">
-                        Last login: {formatDate(acct.last_login_at)}
-                      </span>
-                      <span className="text-xs text-gray-400">
-                        {acctOrgMs.length} org{acctOrgMs.length !== 1 ? 's' : ''} · {acctTeamMs.length} team{acctTeamMs.length !== 1 ? 's' : ''}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); openUserAssetAccess(acct); }}
-                      disabled={!acct.runtime_user_id}
-                      title={acct.runtime_user_id ? 'Manage runtime asset access' : 'No linked runtime user'}
-                      className={`text-sm font-medium ${
-                        acct.runtime_user_id
-                          ? 'text-indigo-600 hover:text-indigo-800'
-                          : 'cursor-not-allowed text-gray-300'
-                      }`}
-                    >
-                      Asset Access
-                    </button>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); openEditAccount(acct); }}
-                      className="text-sm text-blue-600 hover:text-blue-800 font-medium"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); deleteAccount(acct.account_id, acct.email); }}
-                      className="text-sm text-red-600 hover:text-red-800 font-medium"
-                    >
-                      Delete
-                    </button>
-                  </div>
+                  Previous
+                </button>
+                <button
+                  onClick={() => setPrincipalPageOffset(principalPageOffset + pageSize)}
+                  disabled={!hasNext || principalLoading}
+                  className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </>
+        ) : (
+          <InvitationPanel
+            items={invitationItems}
+            loading={invitationLoading}
+            saving={invitationSaving}
+            error={invitationError}
+            pagination={invitationPagination}
+            onPageChange={setInvitationPageOffset}
+            onResend={handleInvitationResend}
+            onCancel={handleInvitationCancel}
+          />
+        )}
+      </ContentCard>
+
+      <Modal
+        open={!!selectedAccount}
+        onClose={() => setSelectedAccount(null)}
+        title={selectedAccount ? `Access Details · ${selectedAccount.email}` : 'Access Details'}
+      >
+        {selectedAccount ? (
+          <div className="space-y-5">
+            {error ? (
+              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+            ) : null}
+            <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <RoleBadge role={selectedAccount.role} />
+                <span
+                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                    selectedAccount.is_active ? 'bg-emerald-50 text-emerald-700' : 'bg-red-100 text-red-700'
+                  }`}
+                >
+                  {selectedAccount.is_active ? 'Active' : 'Disabled'}
+                </span>
+                {selectedAccount.mfa_enabled ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700">
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                    MFA enabled
+                  </span>
+                ) : null}
+                {selectedAccount.runtime_user_id ? (
+                  <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-600">
+                    Runtime user linked
+                  </span>
+                ) : null}
+              </div>
+              <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-gray-500 sm:grid-cols-2">
+                <span>ID: {selectedAccount.account_id}</span>
+                <span>Created: {formatDate(selectedAccount.created_at)}</span>
+                <span>Last login: {formatDate(selectedAccount.last_login_at)}</span>
+                {selectedAccount.runtime_user_id ? <span>Runtime user: {selectedAccount.runtime_user_id}</span> : null}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+              <div>
+                <div className="mb-3 flex items-center justify-between">
+                  <h4 className="flex items-center gap-1.5 text-sm font-medium text-gray-700">
+                    <Building2 className="h-4 w-4" />
+                    Organization Memberships
+                  </h4>
+                  <button
+                    onClick={() => openAddOrgMembership(selectedAccount.account_id)}
+                    className="text-xs font-medium text-blue-600 hover:text-blue-800"
+                  >
+                    + Add
+                  </button>
                 </div>
-
-                {isExpanded && (
-                  <div className="border-t border-gray-100 px-5 py-4 bg-gray-50/50">
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                      <div>
-                        <div className="flex items-center justify-between mb-3">
-                          <h4 className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
-                            <Building2 className="w-4 h-4" />
-                            Organization Memberships
-                          </h4>
+                {selectedAccount.organization_memberships.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-6 text-center text-xs text-gray-400">
+                    No organization memberships
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {selectedAccount.organization_memberships.map((membership) => (
+                      <div key={membership.membership_id} className="flex items-center justify-between rounded-xl border border-gray-200 bg-white px-3 py-2.5">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-gray-900">{getOrgName(membership.organization_id)}</p>
+                          <p className="mt-0.5 text-[11px] text-gray-400">{membership.organization_id}</p>
+                        </div>
+                        <div className="flex items-center gap-2 pl-3">
+                          <RoleBadge role={membership.role} />
                           <button
-                            onClick={() => openAddOrgMembership(acct.account_id)}
-                            className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+                            onClick={() => deleteOrgMembership(membership.membership_id)}
+                            className="rounded-lg p-1 hover:bg-red-50"
+                            title="Remove organization membership"
                           >
-                            + Add
+                            <Trash2 className="h-3.5 w-3.5 text-red-500" />
                           </button>
                         </div>
-                        {acctOrgMs.length === 0 ? (
-                          <p className="text-xs text-gray-400 italic">No organization memberships</p>
-                        ) : (
-                          <div className="space-y-2">
-                            {acctOrgMs.map((m) => (
-                              <div key={m.membership_id} className="flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-gray-200">
-                                <div>
-                                  <span className="text-sm text-gray-900">{getOrgName(m.organization_id)}</span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <RoleBadge role={m.role} />
-                                  <button
-                                    onClick={() => deleteOrgMembership(m.membership_id)}
-                                    className="p-1 hover:bg-red-50 rounded"
-                                    title="Remove organization membership"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5 text-red-500" />
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
                       </div>
-
-                      <div>
-                        <div className="flex items-center justify-between mb-3">
-                          <h4 className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
-                            <UsersRound className="w-4 h-4" />
-                            Team Memberships
-                          </h4>
-                          <button
-                            onClick={() => openAddTeamMembership(acct.account_id)}
-                            className="text-xs text-blue-600 hover:text-blue-800 font-medium"
-                          >
-                            + Add
-                          </button>
-                        </div>
-                        {acctTeamMs.length === 0 ? (
-                          <p className="text-xs text-gray-400 italic">No team memberships</p>
-                        ) : (
-                          <div className="space-y-2">
-                            {acctTeamMs.map((m) => (
-                              <div key={m.membership_id} className="flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-gray-200">
-                                <div>
-                                  <span className="text-sm text-gray-900">{getTeamName(m.team_id)}</span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <RoleBadge role={m.role} />
-                                  <button
-                                    onClick={() => deleteTeamMembership(m.membership_id)}
-                                    className="p-1 hover:bg-red-50 rounded"
-                                    title="Remove team membership"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5 text-red-500" />
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="mt-4 pt-3 border-t border-gray-200 flex items-center gap-4 text-xs text-gray-400">
-                      <span>ID: {acct.account_id}</span>
-                      <span>Created: {formatDate(acct.created_at)}</span>
-                    </div>
+                    ))}
                   </div>
                 )}
               </div>
-            );
-          })}
-        </div>
-      )}
-      <div className="mt-4 flex items-center justify-between text-xs text-gray-500">
-        <span>
-          Showing {principals.length} of {principalPagination.total}
-        </span>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setPageOffset(Math.max(0, pageOffset - pageSize))}
-            disabled={pageOffset === 0 || loading}
-            className="px-3 py-1.5 border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
-          >
-            Previous
-          </button>
-          <button
-            onClick={() => setPageOffset(pageOffset + pageSize)}
-            disabled={!principalPagination.has_more || loading}
-            className="px-3 py-1.5 border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
-          >
-            Next
-          </button>
-        </div>
-      </div>
 
-      <Modal open={showAccountModal} onClose={() => setShowAccountModal(false)} title={editAccount ? 'Edit Account' : 'Create Account'}>
+              <div>
+                <div className="mb-3 flex items-center justify-between">
+                  <h4 className="flex items-center gap-1.5 text-sm font-medium text-gray-700">
+                    <UsersRound className="h-4 w-4" />
+                    Team Memberships
+                  </h4>
+                  <button
+                    onClick={() => openAddTeamMembership(selectedAccount.account_id)}
+                    className="text-xs font-medium text-blue-600 hover:text-blue-800"
+                  >
+                    + Add
+                  </button>
+                </div>
+                {selectedAccount.team_memberships.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-6 text-center text-xs text-gray-400">
+                    No team memberships
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {selectedAccount.team_memberships.map((membership) => (
+                      <div key={membership.membership_id} className="flex items-center justify-between rounded-xl border border-gray-200 bg-white px-3 py-2.5">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-gray-900">{getTeamName(membership.team_id)}</p>
+                          <p className="mt-0.5 text-[11px] text-gray-400">{membership.team_id}</p>
+                        </div>
+                        <div className="flex items-center gap-2 pl-3">
+                          <RoleBadge role={membership.role} />
+                          <button
+                            onClick={() => deleteTeamMembership(membership.membership_id)}
+                            className="rounded-lg p-1 hover:bg-red-50"
+                            title="Remove team membership"
+                          >
+                            <Trash2 className="h-3.5 w-3.5 text-red-500" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </Modal>
+
+      <ProvisionPersonModal
+        open={showProvisionModal}
+        onClose={() => {
+          setShowProvisionModal(false);
+          clearInvitePrefill();
+        }}
+        onSuccess={async (result) => {
+          clearInvitePrefill();
+          const refreshTasks: Promise<unknown>[] = [loadPrincipals()];
+          if (result.mode === 'invite_email' || viewTab === 'invitations') {
+            refreshTasks.push(loadInvitations());
+          }
+          await Promise.all(refreshTasks);
+        }}
+        orgList={orgList}
+        teamList={teamList}
+        initialOrganizationId={inviteOrganizationId}
+        initialTeamId={inviteTeamId}
+      />
+
+      <Modal open={showAccountModal} onClose={() => setShowAccountModal(false)} title="Edit Account">
         <div className="space-y-4">
           {error && (
             <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>
@@ -565,13 +901,13 @@ export default function RBACAccounts() {
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              {editAccount ? 'New Password (leave blank to keep current)' : 'Password'}
+              New Password (leave blank to keep current)
             </label>
             <input
               type="password"
               value={formPassword}
               onChange={(e) => setFormPassword(e.target.value)}
-              placeholder={editAccount ? 'Leave blank to keep current' : 'At least 12 characters'}
+              placeholder="Leave blank to keep current"
               autoComplete="new-password"
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
@@ -598,7 +934,7 @@ export default function RBACAccounts() {
               disabled={saving}
               className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
             >
-              {saving ? 'Saving...' : editAccount ? 'Update Account' : 'Create Account'}
+              {saving ? 'Saving...' : 'Update Account'}
             </button>
           </div>
         </div>
