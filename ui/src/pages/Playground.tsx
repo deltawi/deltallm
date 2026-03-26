@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   ChevronRight, Sparkles, SlidersHorizontal,
   Activity, PlaySquare, StopCircle, CornerDownLeft, Copy, Check,
@@ -35,6 +35,32 @@ interface RequestStats {
   latencyMs: number;
   model: string;
   cost?: number;
+}
+
+function modeLabel(mode: PlaygroundMode): string {
+  if (mode === 'tts') return 'Text-to-Speech';
+  if (mode === 'stt') return 'Speech-to-Text';
+  return 'Chat';
+}
+
+function modeEmptyCopy(mode: PlaygroundMode): string {
+  if (mode === 'tts') return 'No text-to-speech models are configured yet.';
+  if (mode === 'stt') return 'No speech-to-text models are configured yet.';
+  return 'No chat models are configured yet.';
+}
+
+function ModeUnavailableState({ mode }: { mode: PlaygroundMode }) {
+  return (
+    <div className="flex flex-1 items-center justify-center bg-gray-50/50 p-6">
+      <div className="max-w-md rounded-2xl border border-dashed border-gray-300 bg-white px-8 py-10 text-center shadow-sm">
+        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50">
+          <Sparkles className="h-7 w-7 text-blue-600" />
+        </div>
+        <h2 className="mb-2 text-lg font-semibold text-gray-900">{modeLabel(mode)} unavailable</h2>
+        <p className="text-sm leading-6 text-gray-500">{modeEmptyCopy(mode)}</p>
+      </div>
+    </div>
+  );
 }
 
 function getTtsConfig(model: ModelOption): { voices: string[]; defaultVoice: string; defaultFormat: string } {
@@ -782,19 +808,36 @@ export default function Playground() {
     tts: ['audio_speech'],
     stt: ['audio_transcription'],
   };
-  const chatModels = allModels.filter(m => MODE_MAP.chat.includes(m.mode));
-  const ttsModels = allModels.filter(m => MODE_MAP.tts.includes(m.mode));
-  const sttModels = allModels.filter(m => MODE_MAP.stt.includes(m.mode));
-
-  const currentModels = mode === 'chat' ? (chatModels.length ? chatModels : allModels) :
-                        mode === 'tts' ? (ttsModels.length ? ttsModels : allModels) :
-                        (sttModels.length ? sttModels : allModels);
+  const chatModels = useMemo(
+    () => allModels.filter((model) => MODE_MAP.chat.includes(model.mode)),
+    [allModels],
+  );
+  const ttsModels = useMemo(
+    () => allModels.filter((model) => MODE_MAP.tts.includes(model.mode)),
+    [allModels],
+  );
+  const sttModels = useMemo(
+    () => allModels.filter((model) => MODE_MAP.stt.includes(model.mode)),
+    [allModels],
+  );
+  const currentModels = useMemo(() => {
+    if (mode === 'tts') return ttsModels;
+    if (mode === 'stt') return sttModels;
+    return chatModels;
+  }, [chatModels, mode, sttModels, ttsModels]);
+  const noModelsForMode = currentModels.length === 0;
 
   useEffect(() => {
-    if (currentModels.length > 0 && (!selectedModel || !currentModels.find(m => m.id === selectedModel.id))) {
+    if (currentModels.length === 0) {
+      if (selectedModel !== null) {
+        setSelectedModel(null);
+      }
+      return;
+    }
+    if (!selectedModel || !currentModels.some((model) => model.id === selectedModel.id)) {
       setSelectedModel(currentModels[0]);
     }
-  }, [mode, currentModels.length]);
+  }, [currentModels, selectedModel]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1035,7 +1078,7 @@ export default function Playground() {
                       value={selectedModel?.id || ''}
                       onChange={(e) => setSelectedModel(currentModels.find(m => m.id === e.target.value) || selectedModel)}
                     >
-                      {currentModels.length === 0 && <option value="">No models available</option>}
+                      {currentModels.length === 0 && <option value="">{modeEmptyCopy(mode)}</option>}
                       {currentModels.map(m => (
                         <option key={m.id} value={m.id}>{m.provider} / {m.name}</option>
                       ))}
@@ -1054,7 +1097,7 @@ export default function Playground() {
                   </div>
                 </div>
 
-                <ApiKeyInput value={apiKey} onChange={setApiKey} />
+                    <ApiKeyInput value={apiKey} onChange={setApiKey} />
 
                 {mode === 'chat' && (
                   <div className="ml-auto flex items-end h-full pt-5">
@@ -1070,6 +1113,12 @@ export default function Playground() {
                   </div>
                 )}
               </div>
+
+              {noModelsForMode && (
+                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                  {modeEmptyCopy(mode)}
+                </div>
+              )}
 
               {showConfig && mode === 'chat' && (
                 <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -1143,7 +1192,7 @@ export default function Playground() {
             </div>
           </div>
 
-          {mode === 'chat' && (
+          {mode === 'chat' && !noModelsForMode && (
             <>
               <div className="flex-1 overflow-y-auto bg-gray-50/50 p-4 sm:p-6 scroll-smooth">
                 <div className="max-w-4xl mx-auto space-y-6 pb-4">
@@ -1283,7 +1332,7 @@ export default function Playground() {
                       placeholder={apiKey ? "Message the model... (⌘ Enter to send)" : "Enter an API key to start chatting..."}
                       className="flex-1 max-h-48 min-h-[44px] bg-transparent border-0 resize-none py-2.5 px-3 text-sm focus:ring-0 focus:outline-none text-gray-900 placeholder:text-gray-400"
                       rows={Math.min(5, Math.max(1, input.split('\n').length))}
-                      disabled={!apiKey}
+                      disabled={!apiKey || !selectedModel}
                     />
                     <div className="flex flex-col justify-end pb-1 pr-1">
                       {isStreaming ? (
@@ -1297,7 +1346,7 @@ export default function Playground() {
                       ) : (
                         <button
                           onClick={handleSend}
-                          disabled={!input.trim() || !apiKey}
+                          disabled={!input.trim() || !apiKey || !selectedModel}
                           className="p-2 text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-200 disabled:text-gray-400 rounded-lg shadow-sm transition-colors flex items-center justify-center group"
                         >
                           <PlaySquare className="w-5 h-5 group-hover:-translate-y-0.5 group-hover:translate-x-0.5 transition-transform" />
@@ -1316,8 +1365,9 @@ export default function Playground() {
             </>
           )}
 
-          {mode === 'tts' && selectedModel && <TTSView apiKey={apiKey} selectedModel={selectedModel} />}
-          {mode === 'stt' && selectedModel && <STTView apiKey={apiKey} selectedModel={selectedModel} />}
+          {mode === 'chat' && noModelsForMode && <ModeUnavailableState mode={mode} />}
+          {mode === 'tts' && (selectedModel ? <TTSView apiKey={apiKey} selectedModel={selectedModel} /> : <ModeUnavailableState mode={mode} />)}
+          {mode === 'stt' && (selectedModel ? <STTView apiKey={apiKey} selectedModel={selectedModel} /> : <ModeUnavailableState mode={mode} />)}
         </div>
 
         {isSidebarOpen && (
