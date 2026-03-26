@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
-import { batches } from '../lib/api';
+import { batches, type BatchJobDetail, type BatchJobItem } from '../lib/api';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import { RecordDetailShell } from '../components/admin/shells';
@@ -40,12 +40,12 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function formatDateTime(d: string | null): string {
+function formatDateTime(d: string | null | undefined): string {
   if (!d) return '--';
   return new Date(d).toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
-function formatDuration(start: string | null, end: string | null): string {
+function formatDuration(start: string | null | undefined, end: string | null | undefined): string {
   if (!start) return '--';
   const s = new Date(start).getTime();
   const e = end ? new Date(end).getTime() : Date.now();
@@ -129,7 +129,7 @@ export default function BatchJobDetail() {
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
 
-  const { data: job, loading, refetch } = useApi(
+  const { data: job, loading, refetch } = useApi<BatchJobDetail | null>(
     () => batches.get(batchId!, { items_limit: 50, items_offset: itemsOffset }),
     [batchId, itemsOffset],
   );
@@ -142,7 +142,7 @@ export default function BatchJobDetail() {
     );
   }
 
-  const canCancel = ['validating', 'queued', 'in_progress', 'finalizing'].includes(job.status);
+  const canCancel = Boolean(job.capabilities?.cancel) && ['validating', 'queued', 'in_progress', 'finalizing'].includes(job.status);
 
   async function handleCancel() {
     if (!batchId || !confirm('Are you sure you want to cancel this batch job?')) return;
@@ -164,39 +164,39 @@ export default function BatchJobDetail() {
     {
       key: 'line_number',
       header: '#',
-      render: (row: any) => <span className="font-mono text-xs">{row.line_number}</span>,
+      render: (row: BatchJobItem) => <span className="font-mono text-xs">{row.line_number}</span>,
     },
     {
       key: 'custom_id',
       header: 'Custom ID',
-      render: (row: any) => <span className="font-mono text-xs max-w-[120px] truncate block">{row.custom_id}</span>,
+      render: (row: BatchJobItem) => <span className="font-mono text-xs max-w-[120px] truncate block">{row.custom_id}</span>,
     },
     {
       key: 'status',
       header: 'Status',
-      render: (row: any) => <StatusBadge status={row.status} />,
+      render: (row: BatchJobItem) => <StatusBadge status={row.status} />,
     },
     {
       key: 'attempts',
       header: 'Attempts',
-      render: (row: any) => <span className="text-sm">{row.attempts}</span>,
+      render: (row: BatchJobItem) => <span className="text-sm">{row.attempts}</span>,
     },
     {
       key: 'billed_cost',
       header: 'Cost',
-      render: (row: any) => <span className="text-sm">${(row.billed_cost || 0).toFixed(6)}</span>,
+      render: (row: BatchJobItem) => <span className="text-sm">${(row.billed_cost || 0).toFixed(6)}</span>,
     },
     {
       key: 'last_error',
       header: 'Error',
-      render: (row: any) => row.last_error
+      render: (row: BatchJobItem) => row.last_error
         ? <span className="text-xs text-red-600 max-w-[200px] truncate block">{row.last_error}</span>
         : <span className="text-xs text-gray-400">--</span>,
     },
     {
       key: 'expand',
       header: '',
-      render: (row: any) => (
+      render: (row: BatchJobItem) => (
         <button
           onClick={(e) => { e.stopPropagation(); setExpandedItem(expandedItem === row.item_id ? null : row.item_id); }}
           className="p-1 hover:bg-gray-100 rounded"

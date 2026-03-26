@@ -35,8 +35,20 @@ from src.services.asset_visibility_preview import (
     list_scope_route_group_bindings,
 )
 from src.services.scoped_asset_access import apply_scope_asset_access, build_scope_asset_access
+from src.services.ui_authorization import build_organization_capabilities
 
 router = APIRouter(tags=["Admin Organizations"])
+
+
+def _organization_response_payload(
+    organization: dict[str, Any],
+    *,
+    capabilities: dict[str, bool] | None = None,
+) -> dict[str, Any]:
+    payload = to_json_value(dict(organization))
+    if isinstance(payload, dict) and capabilities is not None:
+        payload["capabilities"] = capabilities
+    return payload
 
 
 def _optional_bool(value: Any, field_name: str) -> bool | None:
@@ -457,13 +469,25 @@ async def list_organizations(
     )
 
     return {
-        "data": [to_json_value(dict(row)) for row in rows],
+        "data": [
+            _organization_response_payload(
+                dict(row),
+                capabilities=build_organization_capabilities(scope, dict(row)),
+            )
+            for row in rows
+        ],
         "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
     }
 
 
 @router.get("/ui/api/organizations/{organization_id}", dependencies=[Depends(require_admin_permission(Permission.ORG_READ))])
-async def get_organization(request: Request, organization_id: str) -> dict[str, Any]:
+async def get_organization(
+    request: Request,
+    organization_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_READ)
     db = db_or_503(request)
     rows = await db.query_raw(
         """
@@ -476,7 +500,11 @@ async def get_organization(request: Request, organization_id: str) -> dict[str, 
     )
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
-    payload = to_json_value(dict(rows[0]))
+    organization = dict(rows[0])
+    payload = _organization_response_payload(
+        organization,
+        capabilities=build_organization_capabilities(scope, organization),
+    )
     if isinstance(payload, dict):
         payload["route_group_bindings"] = await _list_org_route_group_bindings(request, organization_id)
         payload["callable_target_bindings"] = await _list_org_callable_target_bindings(request, organization_id)
@@ -853,7 +881,11 @@ async def update_organization(
         )
         if not updated_rows:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
-        updated_payload = to_json_value(dict(updated_rows[0]))
+        updated_organization = dict(updated_rows[0])
+        updated_payload = _organization_response_payload(
+            updated_organization,
+            capabilities=build_organization_capabilities(scope, updated_organization),
+        )
         if isinstance(updated_payload, dict):
             updated_payload["route_group_bindings"] = (
                 await _sync_org_route_group_bindings(

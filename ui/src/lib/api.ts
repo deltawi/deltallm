@@ -311,6 +311,84 @@ export interface ApiKey {
   updated_at?: string | null;
 }
 
+export interface BatchCapabilities {
+  view: boolean;
+  cancel: boolean;
+}
+
+export interface BatchJobListItem {
+  batch_id: string;
+  endpoint: string;
+  status: string;
+  model: string;
+  total_items: number;
+  completed_items: number;
+  failed_items: number;
+  cancelled_items: number;
+  in_progress_items: number;
+  total_cost: number;
+  created_by_api_key?: string | null;
+  created_by_team_id?: string | null;
+  team_alias?: string | null;
+  created_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  capabilities: BatchCapabilities;
+}
+
+export interface BatchJobSummary {
+  total: number;
+  queued: number;
+  in_progress: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
+}
+
+export interface BatchJobItem {
+  item_id: string;
+  line_number: number;
+  custom_id?: string | null;
+  status: string;
+  attempts: number;
+  provider_cost?: number | null;
+  billed_cost?: number | null;
+  last_error?: string | null;
+  request_body?: Record<string, unknown> | null;
+  response_body?: Record<string, unknown> | null;
+  error_body?: Record<string, unknown> | null;
+  usage?: Record<string, unknown> | null;
+  created_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface BatchJobDetail {
+  batch_id: string;
+  endpoint: string;
+  status: string;
+  model: string;
+  execution_mode?: string | null;
+  metadata?: Record<string, unknown> | null;
+  total_items: number;
+  completed_items: number;
+  failed_items: number;
+  cancelled_items: number;
+  in_progress_items: number;
+  total_provider_cost: number;
+  total_billed_cost: number;
+  created_by_api_key?: string | null;
+  created_by_team_id?: string | null;
+  team_alias?: string | null;
+  created_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  cancel_requested_at?: string | null;
+  expires_at?: string | null;
+  capabilities: BatchCapabilities;
+  items: Paginated<BatchJobItem>;
+}
+
 export interface CallableTargetListItem {
   callable_key: string;
   target_type: 'model' | 'route_group';
@@ -859,11 +937,11 @@ export const users = {
 
 export const batches = {
   list: (params?: { search?: string; status?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<any>>(withQuery('/ui/api/batches', params as any)),
-  summary: () => apiFetch<any>('/ui/api/batches/summary'),
+    apiFetch<Paginated<BatchJobListItem>>(withQuery('/ui/api/batches', params as any)),
+  summary: () => apiFetch<BatchJobSummary>('/ui/api/batches/summary'),
   get: (batchId: string, params?: { items_limit?: number; items_offset?: number }) =>
-    apiFetch<any>(withQuery(`/ui/api/batches/${encodeURIComponent(batchId)}`, params as any)),
-  cancel: (batchId: string) => apiFetch<any>(`/ui/api/batches/${encodeURIComponent(batchId)}/cancel`, { method: 'POST' }),
+    apiFetch<BatchJobDetail>(withQuery(`/ui/api/batches/${encodeURIComponent(batchId)}`, params as any)),
+  cancel: (batchId: string) => apiFetch<{ batch_id: string; status: string }>(`/ui/api/batches/${encodeURIComponent(batchId)}/cancel`, { method: 'POST' }),
 };
 
 export const guardrails = {

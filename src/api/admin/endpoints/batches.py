@@ -6,6 +6,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
 from src.auth.roles import Permission
 from src.api.admin.endpoints.common import db_or_503, to_json_value, get_auth_scope
+from src.services.ui_authorization import build_batch_capabilities
 
 router = APIRouter(tags=["Admin Batches"])
 
@@ -63,7 +64,7 @@ async def list_batches(
                j.total_items, j.completed_items, j.failed_items, j.cancelled_items, j.in_progress_items,
                j.created_by_api_key, j.created_by_team_id,
                j.created_at, j.started_at, j.completed_at,
-               t.team_alias,
+               t.team_alias, t.organization_id,
                COALESCE((SELECT SUM(bi.billed_cost) FROM deltallm_batch_item bi WHERE bi.batch_id = j.batch_id), 0) AS total_cost
         FROM deltallm_batch_job j
         LEFT JOIN deltallm_teamtable t ON t.team_id = j.created_by_team_id
@@ -99,6 +100,7 @@ async def list_batches(
             "created_at": to_json_value(r.get("created_at")),
             "started_at": to_json_value(r.get("started_at")),
             "completed_at": to_json_value(r.get("completed_at")),
+            "capabilities": build_batch_capabilities(scope, r),
         })
 
     return {
@@ -172,7 +174,7 @@ async def get_batch(
 
     rows = await db.query_raw(
         """
-        SELECT j.*, t.team_alias
+        SELECT j.*, t.team_alias, t.organization_id
         FROM deltallm_batch_job j
         LEFT JOIN deltallm_teamtable t ON t.team_id = j.created_by_team_id
         WHERE j.batch_id = $1
@@ -257,6 +259,7 @@ async def get_batch(
         "completed_at": to_json_value(job.get("completed_at")),
         "cancel_requested_at": to_json_value(job.get("cancel_requested_at")),
         "expires_at": to_json_value(job.get("expires_at")),
+        "capabilities": build_batch_capabilities(scope, job),
         "items": {
             "data": [to_json_value(dict(r)) for r in item_rows],
             "pagination": {

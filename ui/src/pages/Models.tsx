@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { models } from '../lib/api';
+import { useAuth } from '../lib/auth';
+import { resolveUiAccess } from '../lib/authorization';
 import { modelDetailPath, modelEditPath } from '../lib/modelRoutes';
 import DataTable from '../components/DataTable';
 import ProviderBadge from '../components/ProviderBadge';
@@ -12,6 +14,8 @@ import { Box, Plus, Pencil, Search, Trash2 } from 'lucide-react';
 
 export default function Models() {
   const navigate = useNavigate();
+  const { session, authMode } = useAuth();
+  const canManageModels = resolveUiAccess(authMode, session).model_admin;
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [pageOffset, setPageOffset] = useState(0);
@@ -52,8 +56,12 @@ export default function Models() {
     {
       key: 'actions', header: '', render: (r: any) => (
         <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-          <button onClick={() => navigate(modelEditPath(r.deployment_id))} className="p-1.5 hover:bg-gray-100 rounded-lg"><Pencil className="w-4 h-4 text-gray-500" /></button>
-          <button onClick={() => handleDelete(r.deployment_id)} className="p-1.5 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4 text-red-500" /></button>
+          {canManageModels ? (
+            <>
+              <button onClick={() => navigate(modelEditPath(r.deployment_id))} className="p-1.5 hover:bg-gray-100 rounded-lg"><Pencil className="w-4 h-4 text-gray-500" /></button>
+              <button onClick={() => handleDelete(r.deployment_id)} className="p-1.5 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4 text-red-500" /></button>
+            </>
+          ) : null}
         </div>
       ),
     },
@@ -65,14 +73,14 @@ export default function Models() {
       titleIcon={Box}
       count={pagination?.total ?? null}
       description="Manage model deployments and providers"
-      action={(
+      action={canManageModels ? (
         <button
           onClick={() => navigate('/models/new')}
           className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
         >
           <Plus className="h-4 w-4" /> Add Model
         </button>
-      )}
+      ) : undefined}
       toolbar={(
         <div className="relative w-full sm:w-72">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />

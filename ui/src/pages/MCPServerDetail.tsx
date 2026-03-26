@@ -39,6 +39,7 @@ import {
   type MCPToolPolicy,
 } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { resolveUiAccess } from '../lib/authorization';
 import { useApi } from '../lib/hooks';
 import { useToast } from '../components/ToastProvider';
 import { HeroTabbedDetailShell } from '../components/admin/shells';
@@ -153,10 +154,8 @@ export default function MCPServerDetail() {
   const { session, authMode } = useAuth();
   const { pushToast } = useToast();
 
-  const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
-  const isPlatformAdmin = userRole === 'platform_admin';
-  const permissions = new Set(session?.effective_permissions || []);
-  const canReviewApprovals = isPlatformAdmin || permissions.has('key.update');
+  const uiAccess = resolveUiAccess(authMode, session);
+  const canReviewApprovals = uiAccess.mcp_approvals;
   const orgIds = (session?.organization_memberships || [])
     .map((membership) => String(membership.organization_id || ''))
     .filter(Boolean);

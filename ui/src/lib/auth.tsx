@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { auth as authApi, models, setMasterKey } from './api';
+import type { UIAccess } from './authorization';
 
 type AuthMode = 'session' | 'master_key';
 
@@ -9,6 +10,7 @@ export interface SessionInfo {
   email?: string | null;
   role?: string | null;
   effective_permissions?: string[];
+  ui_access?: Partial<UIAccess> | null;
   organization_memberships?: Array<Record<string, unknown>>;
   team_memberships?: Array<Record<string, unknown>>;
   mfa_enabled?: boolean;

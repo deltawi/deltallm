@@ -94,12 +94,34 @@ class ResetPasswordTokenResponse(BaseModel):
     expires_at: datetime | None = None
 
 
+class UIAccessResponse(BaseModel):
+    dashboard: bool = False
+    models: bool = False
+    model_admin: bool = False
+    route_groups: bool = False
+    prompts: bool = False
+    mcp_servers: bool = False
+    mcp_approvals: bool = False
+    keys: bool = False
+    organizations: bool = False
+    organization_create: bool = False
+    teams: bool = False
+    team_create: bool = False
+    people_access: bool = False
+    usage: bool = False
+    audit: bool = False
+    batches: bool = False
+    guardrails: bool = False
+    settings: bool = False
+
+
 class CurrentSessionResponse(BaseModel):
     authenticated: bool
     account_id: str | None = None
     email: str | None = None
     role: str | None = None
     effective_permissions: list[str] = Field(default_factory=list)
+    ui_access: UIAccessResponse = Field(default_factory=UIAccessResponse)
     organization_memberships: list[dict[str, Any]] = Field(default_factory=list)
     team_memberships: list[dict[str, Any]] = Field(default_factory=list)
     mfa_enabled: bool = False

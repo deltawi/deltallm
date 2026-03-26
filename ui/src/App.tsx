@@ -35,16 +35,11 @@ import MCPServers from './pages/MCPServers';
 import MCPServerDetail from './pages/MCPServerDetail';
 import MCPApprovalQueue from './pages/MCPApprovalQueue';
 import { ToastProvider } from './components/ToastProvider';
+import { resolveUiAccess } from './lib/authorization';
 
 function AppRoutes() {
   const { isAuthenticated, isLoading, session, authMode, mfaSkipped } = useAuth();
-  const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
-  const isPlatformAdmin = userRole === 'platform_admin';
-  const permissions = new Set(session?.effective_permissions || []);
-  const canCreateTeam = isPlatformAdmin || permissions.has('team.update');
-  const canReadMcp = isPlatformAdmin || permissions.has('key.read');
-  const canReviewMcp = isPlatformAdmin || permissions.has('key.update');
-  const canReadAudit = isPlatformAdmin || (session?.effective_permissions || []).includes('audit.read');
+  const uiAccess = resolveUiAccess(authMode, session);
 
   if (isLoading) {
     return (
@@ -82,32 +77,32 @@ function AppRoutes() {
     <Routes>
       <Route element={<Layout />}>
         <Route path="/" element={<Dashboard />} />
-        <Route path="/models" element={<Models />} />
-        <Route path="/models/new" element={<ModelCreate />} />
-        <Route path="/models/:deploymentId" element={<ModelDetail />} />
-        <Route path="/models/:deploymentId/edit" element={<ModelEdit />} />
-        <Route path="/route-groups" element={isPlatformAdmin ? <RouteGroups /> : <Navigate to="/" replace />} />
-        <Route path="/route-groups/:groupKey" element={isPlatformAdmin ? <RouteGroupDetail /> : <Navigate to="/" replace />} />
-        <Route path="/prompts" element={isPlatformAdmin ? <PromptRegistry /> : <Navigate to="/" replace />} />
-        <Route path="/prompts/:templateKey" element={isPlatformAdmin ? <PromptTemplateDetail /> : <Navigate to="/" replace />} />
-        <Route path="/mcp-servers" element={canReadMcp ? <MCPServers /> : <Navigate to="/" replace />} />
-        <Route path="/mcp-servers/:serverId" element={canReadMcp ? <MCPServerDetail /> : <Navigate to="/" replace />} />
-        <Route path="/mcp-approvals" element={canReviewMcp ? <MCPApprovalQueue /> : <Navigate to="/" replace />} />
-        <Route path="/keys" element={<ApiKeys />} />
-        <Route path="/organizations" element={<Organizations />} />
-        <Route path="/organizations/new" element={isPlatformAdmin ? <OrganizationCreate /> : <Navigate to="/organizations" replace />} />
-        <Route path="/organizations/:orgId" element={<OrganizationDetail />} />
-        <Route path="/teams" element={<Teams />} />
-        <Route path="/teams/new" element={canCreateTeam ? <TeamCreate /> : <Navigate to="/teams" replace />} />
-        <Route path="/teams/:teamId" element={<TeamDetail />} />
-        <Route path="/users" element={<UsersPage />} />
-        <Route path="/audit" element={canReadAudit ? <AuditLogs /> : <Navigate to="/" replace />} />
-        <Route path="/usage" element={<Usage />} />
-        <Route path="/batches" element={<BatchJobs />} />
-        <Route path="/batches/:batchId" element={<BatchJobDetail />} />
-        <Route path="/guardrails" element={isPlatformAdmin ? <Guardrails /> : <Navigate to="/" replace />} />
-        <Route path="/settings" element={isPlatformAdmin ? <SettingsPage /> : <Navigate to="/" replace />} />
-        <Route path="/access-control" element={<Navigate to="/users" replace />} />
+        <Route path="/models" element={uiAccess.models ? <Models /> : <Navigate to="/" replace />} />
+        <Route path="/models/new" element={uiAccess.model_admin ? <ModelCreate /> : <Navigate to="/models" replace />} />
+        <Route path="/models/:deploymentId" element={uiAccess.models ? <ModelDetail /> : <Navigate to="/" replace />} />
+        <Route path="/models/:deploymentId/edit" element={uiAccess.model_admin ? <ModelEdit /> : <Navigate to="/models" replace />} />
+        <Route path="/route-groups" element={uiAccess.route_groups ? <RouteGroups /> : <Navigate to="/" replace />} />
+        <Route path="/route-groups/:groupKey" element={uiAccess.route_groups ? <RouteGroupDetail /> : <Navigate to="/" replace />} />
+        <Route path="/prompts" element={uiAccess.prompts ? <PromptRegistry /> : <Navigate to="/" replace />} />
+        <Route path="/prompts/:templateKey" element={uiAccess.prompts ? <PromptTemplateDetail /> : <Navigate to="/" replace />} />
+        <Route path="/mcp-servers" element={uiAccess.mcp_servers ? <MCPServers /> : <Navigate to="/" replace />} />
+        <Route path="/mcp-servers/:serverId" element={uiAccess.mcp_servers ? <MCPServerDetail /> : <Navigate to="/" replace />} />
+        <Route path="/mcp-approvals" element={uiAccess.mcp_approvals ? <MCPApprovalQueue /> : <Navigate to="/" replace />} />
+        <Route path="/keys" element={uiAccess.keys ? <ApiKeys /> : <Navigate to="/" replace />} />
+        <Route path="/organizations" element={uiAccess.organizations ? <Organizations /> : <Navigate to="/" replace />} />
+        <Route path="/organizations/new" element={uiAccess.organization_create ? <OrganizationCreate /> : <Navigate to="/organizations" replace />} />
+        <Route path="/organizations/:orgId" element={uiAccess.organizations ? <OrganizationDetail /> : <Navigate to="/" replace />} />
+        <Route path="/teams" element={uiAccess.teams ? <Teams /> : <Navigate to="/" replace />} />
+        <Route path="/teams/new" element={uiAccess.team_create ? <TeamCreate /> : <Navigate to="/teams" replace />} />
+        <Route path="/teams/:teamId" element={uiAccess.teams ? <TeamDetail /> : <Navigate to="/" replace />} />
+        <Route path="/users" element={uiAccess.people_access ? <UsersPage /> : <Navigate to="/" replace />} />
+        <Route path="/audit" element={uiAccess.audit ? <AuditLogs /> : <Navigate to="/" replace />} />
+        <Route path="/usage" element={uiAccess.usage ? <Usage /> : <Navigate to="/" replace />} />
+        <Route path="/batches" element={uiAccess.batches ? <BatchJobs /> : <Navigate to="/" replace />} />
+        <Route path="/batches/:batchId" element={uiAccess.batches ? <BatchJobDetail /> : <Navigate to="/" replace />} />
+        <Route path="/guardrails" element={uiAccess.guardrails ? <Guardrails /> : <Navigate to="/" replace />} />
+        <Route path="/settings" element={uiAccess.settings ? <SettingsPage /> : <Navigate to="/" replace />} />
+        <Route path="/access-control" element={<Navigate to={uiAccess.people_access ? "/users" : "/"} replace />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
         <Route path="/forgot-password" element={<Navigate to="/" replace />} />
         <Route path="/reset-password" element={<Navigate to="/" replace />} />

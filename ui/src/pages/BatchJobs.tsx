@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
-import { batches } from '../lib/api';
+import { batches, type BatchJobListItem, type BatchJobSummary } from '../lib/api';
 import DataTable from '../components/DataTable';
 import { Layers, Search, Clock, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 import clsx from 'clsx';
@@ -57,7 +57,7 @@ function ProgressBar({ total, completed, failed, inProgress }: { total: number; 
   );
 }
 
-function formatDuration(start: string | null, end: string | null): string {
+function formatDuration(start: string | null | undefined, end: string | null | undefined): string {
   if (!start) return '--';
   const s = new Date(start).getTime();
   const e = end ? new Date(end).getTime() : Date.now();
@@ -70,7 +70,7 @@ function formatDuration(start: string | null, end: string | null): string {
   return `${hrs}h ${mins % 60}m`;
 }
 
-function formatDate(d: string | null): string {
+function formatDate(d: string | null | undefined): string {
   if (!d) return '--';
   return new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
@@ -97,13 +97,13 @@ export default function BatchJobs() {
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  const { data: summary } = useApi(() => batches.summary(), []);
+  const { data: summary } = useApi<BatchJobSummary | null>(() => batches.summary(), []);
   const { data: result, loading } = useApi(
     () => batches.list({ search, status: statusFilter || undefined, limit: pageSize, offset: pageOffset }),
     [search, statusFilter, pageOffset],
   );
 
-  const items = result?.data || [];
+  const items: BatchJobListItem[] = result?.data || [];
   const pagination = result?.pagination;
 
   const summaryCards = [
@@ -117,24 +117,24 @@ export default function BatchJobs() {
     {
       key: 'batch_id',
       header: 'Batch ID',
-      render: (row: any) => (
+      render: (row: BatchJobListItem) => (
         <span className="font-mono text-xs">{(row.batch_id || '').substring(0, 8)}...</span>
       ),
     },
     {
       key: 'model',
       header: 'Model',
-      render: (row: any) => <span className="text-sm">{row.model || '--'}</span>,
+      render: (row: BatchJobListItem) => <span className="text-sm">{row.model || '--'}</span>,
     },
     {
       key: 'status',
       header: 'Status',
-      render: (row: any) => <BatchStatusBadge status={row.status} />,
+      render: (row: BatchJobListItem) => <BatchStatusBadge status={row.status} />,
     },
     {
       key: 'progress',
       header: 'Progress',
-      render: (row: any) => (
+      render: (row: BatchJobListItem) => (
         <ProgressBar
           total={row.total_items}
           completed={row.completed_items}
@@ -146,22 +146,22 @@ export default function BatchJobs() {
     {
       key: 'total_cost',
       header: 'Cost',
-      render: (row: any) => <span className="text-sm">${(row.total_cost || 0).toFixed(4)}</span>,
+      render: (row: BatchJobListItem) => <span className="text-sm">${(row.total_cost || 0).toFixed(4)}</span>,
     },
     {
       key: 'team_alias',
       header: 'Team',
-      render: (row: any) => <span className="text-sm text-gray-500">{row.team_alias || '--'}</span>,
+      render: (row: BatchJobListItem) => <span className="text-sm text-gray-500">{row.team_alias || '--'}</span>,
     },
     {
       key: 'created_at',
       header: 'Created',
-      render: (row: any) => <span className="text-xs text-gray-500">{formatDate(row.created_at)}</span>,
+      render: (row: BatchJobListItem) => <span className="text-xs text-gray-500">{formatDate(row.created_at)}</span>,
     },
     {
       key: 'duration',
       header: 'Duration',
-      render: (row: any) => (
+      render: (row: BatchJobListItem) => (
         <div className="flex items-center gap-1 text-xs text-gray-500">
           <Clock className="w-3 h-3" />
           {formatDuration(row.started_at, row.completed_at)}

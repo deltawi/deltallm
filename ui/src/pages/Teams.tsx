@@ -2,14 +2,17 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { teams, organizations } from '../lib/api';
+import { useAuth } from '../lib/auth';
+import { resolveUiAccess } from '../lib/authorization';
 import { buildParentScopedAssetTargets, buildScopedSelectableTargets } from '../lib/assetAccess';
+import RateLimitSummary from '../components/admin/RateLimitSummary';
 import Modal from '../components/Modal';
 import UserSearchSelect from '../components/UserSearchSelect';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import { ContentCard, IndexShell } from '../components/admin/shells';
 import {
   Plus, Users, Trash2, UserPlus, Pencil, Search,
-  Building2, AlertOctagon, Gauge, X,
+  Building2, AlertOctagon, X,
 } from 'lucide-react';
 
 /* ─────────────── small visual helpers ─────────────── */
@@ -56,6 +59,8 @@ const STATUS_TABS: { key: StatusFilter; label: string }[] = [
 
 export default function Teams() {
   const navigate = useNavigate();
+  const { session, authMode } = useAuth();
+  const uiAccess = resolveUiAccess(authMode, session);
 
   /* search / pagination */
   const [search, setSearch] = useState('');
@@ -269,14 +274,14 @@ export default function Teams() {
       title="Teams"
       titleIcon={Users}
       count={pagination?.total ?? null}
-      action={(
+      action={uiAccess.team_create ? (
         <button
           onClick={() => navigate('/teams/new')}
           className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
         >
           <Plus className="h-4 w-4" /> Create Team
         </button>
-      )}
+      ) : undefined}
       toolbar={(
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative w-64">
@@ -384,7 +389,9 @@ export default function Teams() {
                       ? `No ${statusFilter.replace('_', ' ')} teams`
                       : search
                       ? 'No teams match your search'
-                      : 'No teams yet — create your first team to get started.'}
+                      : uiAccess.team_create
+                      ? 'No teams yet — create your first team to get started.'
+                      : 'No teams available.'}
                   </td>
                 </tr>
               ) : (
@@ -441,68 +448,45 @@ export default function Teams() {
 
                     {/* Rate limits */}
                     <td className="px-4 py-2.5">
-                      <div className="space-y-0.5">
-                        <div className="flex items-center gap-1 text-[10px] text-gray-500">
-                          <Gauge className="w-3 h-3 shrink-0" />
-                          {t.rpm_limit != null
-                            ? <><span className="font-medium text-gray-700">{Number(t.rpm_limit).toLocaleString()}</span><span className="text-gray-400">RPM</span></>
-                            : <span className="text-gray-400">—</span>}
-                        </div>
-                        {t.tpm_limit != null && (
-                          <div className="flex items-center gap-1 text-[10px] text-gray-400">
-                            <span className="w-3" />
-                            <span className="font-medium">{Number(t.tpm_limit).toLocaleString()}</span>
-                            <span>TPM</span>
-                          </div>
-                        )}
-                        {t.rph_limit != null && (
-                          <div className="flex items-center gap-1 text-[10px] text-gray-400">
-                            <span className="w-3" />
-                            <span className="font-medium">{Number(t.rph_limit).toLocaleString()}</span>
-                            <span>RPH</span>
-                          </div>
-                        )}
-                        {t.rpd_limit != null && (
-                          <div className="flex items-center gap-1 text-[10px] text-gray-400">
-                            <span className="w-3" />
-                            <span className="font-medium">{Number(t.rpd_limit).toLocaleString()}</span>
-                            <span>RPD</span>
-                          </div>
-                        )}
-                        {t.tpd_limit != null && (
-                          <div className="flex items-center gap-1 text-[10px] text-gray-400">
-                            <span className="w-3" />
-                            <span className="font-medium">{Number(t.tpd_limit).toLocaleString()}</span>
-                            <span>TPD</span>
-                          </div>
-                        )}
-                      </div>
+                      <RateLimitSummary
+                        rpm_limit={t.rpm_limit}
+                        tpm_limit={t.tpm_limit}
+                        rph_limit={t.rph_limit}
+                        rpd_limit={t.rpd_limit}
+                        tpd_limit={t.tpd_limit}
+                      />
                     </td>
 
                     {/* Actions */}
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => openEdit(t)}
-                          className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-gray-600 transition-colors"
-                          title="Edit"
-                        >
-                          <Pencil className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => { setSelectedTeam(t); setMemberSearch(''); setMemberForm({ user_id: '', user_email: '', user_role: 'team_viewer' }); }}
-                          className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-gray-600 transition-colors"
-                          title="Manage members"
-                        >
-                          <Users className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(t)}
-                          className="p-1.5 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-500 transition-colors"
-                          title="Delete"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {t.capabilities?.edit ? (
+                          <button
+                            onClick={() => openEdit(t)}
+                            className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-gray-600 transition-colors"
+                            title="Edit"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                        ) : null}
+                        {t.capabilities?.manage_members ? (
+                          <button
+                            onClick={() => { setSelectedTeam(t); setMemberSearch(''); setMemberForm({ user_id: '', user_email: '', user_role: 'team_viewer' }); }}
+                            className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-gray-600 transition-colors"
+                            title="Manage members"
+                          >
+                            <Users className="w-4 h-4" />
+                          </button>
+                        ) : null}
+                        {t.capabilities?.delete ? (
+                          <button
+                            onClick={() => handleDelete(t)}
+                            className="p-1.5 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-500 transition-colors"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
