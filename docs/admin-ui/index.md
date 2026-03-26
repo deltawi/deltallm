@@ -7,7 +7,7 @@ The DeltaLLM admin UI is the control plane for model deployments, route groups, 
 ## Access and authentication
 
 - **Development**: `http://localhost:5000`
-- **Single-port / Docker**: `http://localhost:4000`
+- **Single-port / Docker**: `http://localhost:4002`
 - **Email login** uses the platform account directory and session cookies
 - **Master key login** gives platform-admin access for local operations
 - **SSO** appears automatically when an identity provider is configured

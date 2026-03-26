@@ -20,7 +20,7 @@ require_bin curl
 require_bin jq
 require_bin docker
 
-BASE="${BASE:-http://127.0.0.1:4000}"
+BASE="${BASE:-http://127.0.0.1:4002}"
 MASTER_KEY="${MASTER_KEY:-${DELTALLM_MASTER_KEY:-}}"
 RUN_ID="${RUN_ID:-$(date +%s)}"
 

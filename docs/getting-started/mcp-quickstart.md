@@ -4,7 +4,7 @@ Use this guide when DeltaLLM is already running and you want your first successf
 
 This path assumes:
 
-- DeltaLLM is reachable on `http://localhost:4000` or `http://localhost:8000`
+- DeltaLLM is reachable on `http://localhost:4002` or `http://localhost:8000`
 - you already have a compatible MCP server that speaks JSON-RPC over `streamable_http`
 - you have either the DeltaLLM master key or admin UI access
 
@@ -22,7 +22,7 @@ In about five minutes you will:
 
 Use the DeltaLLM URL that matches your setup:
 
-- Docker quick start: `http://localhost:4000`
+- Docker quick start: `http://localhost:4002`
 - local backend: `http://localhost:8000`
 
 If your MCP server runs on your host machine:
@@ -33,7 +33,7 @@ If your MCP server runs on your host machine:
 Export the values once:
 
 ```bash
-export BASE="http://localhost:4000"
+export BASE="http://localhost:4002"
 export MASTER_KEY="YOUR_MASTER_KEY"
 ```
 

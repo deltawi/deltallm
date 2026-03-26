@@ -82,7 +82,10 @@ async def list_invitations(
     service = getattr(request.app.state, "invitation_service", None)
     if service is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invitation service unavailable")
-    invitations = await service.list_invitations(status=status_filter, search=search)
+    normalized_status = None if status_filter == "active" else status_filter
+    invitations = await service.list_invitations(status=normalized_status, search=search)
+    if status_filter == "active":
+        invitations = [item for item in invitations if item.get("status") in {"pending", "sent"}]
     visible = invitations if scope.is_platform_admin else [item for item in invitations if _can_manage_invitation(scope, item)]
     page = visible[offset : offset + limit]
     return {

@@ -1014,16 +1014,51 @@ export interface Invitation {
   metadata?: Record<string, unknown> | null;
 }
 
+export interface ProvisionPersonResponse {
+  mode: 'invite_email' | 'create_account';
+  account_id?: string;
+  invitation_id?: string;
+  email: string;
+  role?: string;
+  is_active?: boolean;
+  status?: string;
+  invite_scope_type?: 'organization' | 'team' | 'mixed';
+  organization_id?: string | null;
+  team_id?: string | null;
+  scope_type?: 'none' | 'organization' | 'team';
+}
+
+export interface PrincipalSummary {
+  total_accounts: number;
+  active_accounts: number;
+  platform_admins: number;
+  mfa_enabled_accounts: number;
+  organization_memberships: number;
+  team_memberships: number;
+}
+
 export const rbac = {
   principals: {
     list: (params?: { search?: string; limit?: number; offset?: number }) =>
       apiFetch<Paginated<Principal>>(withQuery('/ui/api/principals', params as any)),
+    summary: () => apiFetch<PrincipalSummary>('/ui/api/principals/summary'),
   },
   accounts: {
     upsert: (payload: any) => apiFetch<any>('/ui/api/rbac/accounts', { method: 'POST', json: payload }),
     delete: (accountId: string) =>
       apiFetch<any>(`/ui/api/rbac/accounts/${encodeURIComponent(accountId)}`, { method: 'DELETE' }),
   },
+  provisionPerson: (payload: {
+    email: string;
+    mode: 'invite_email' | 'create_account';
+    platform_role?: string;
+    password?: string;
+    is_active?: boolean;
+    organization_id?: string;
+    organization_role?: string;
+    team_id?: string;
+    team_role?: string;
+  }) => apiFetch<ProvisionPersonResponse>('/ui/api/rbac/provision', { method: 'POST', json: payload }),
   orgMemberships: {
     list: () => apiFetch<OrgMembership[]>('/ui/api/rbac/organization-memberships'),
     upsert: (payload: any) => apiFetch<any>('/ui/api/rbac/organization-memberships', { method: 'POST', json: payload }),
@@ -1039,7 +1074,7 @@ export const rbac = {
 };
 
 export const invitations = {
-  list: (params?: { status?: string; search?: string; limit?: number; offset?: number }) =>
+  list: (params?: { status?: Invitation['status'] | 'active'; search?: string; limit?: number; offset?: number }) =>
     apiFetch<Paginated<Invitation>>(withQuery('/ui/api/invitations', params as any)),
   create: (payload: {
     email: string;
