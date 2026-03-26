@@ -34,6 +34,7 @@ import PromptTemplateDetail from './pages/PromptTemplateDetail';
 import MCPServers from './pages/MCPServers';
 import MCPServerDetail from './pages/MCPServerDetail';
 import MCPApprovalQueue from './pages/MCPApprovalQueue';
+import Playground from './pages/Playground';
 import { ToastProvider } from './components/ToastProvider';
 import { defaultRouteForUiAccess, resolveUiAccess } from './lib/authorization';
 
@@ -102,6 +103,7 @@ function AppRoutes() {
         <Route path="/batches" element={uiAccess.batches ? <BatchJobs /> : <Navigate to="/" replace />} />
         <Route path="/batches/:batchId" element={uiAccess.batches ? <BatchJobDetail /> : <Navigate to="/" replace />} />
         <Route path="/guardrails" element={uiAccess.guardrails ? <Guardrails /> : <Navigate to="/" replace />} />
+        <Route path="/playground" element={uiAccess.playground ? <Playground /> : <Navigate to="/" replace />} />
         <Route path="/settings" element={uiAccess.settings ? <SettingsPage /> : <Navigate to="/" replace />} />
         <Route path="/access-control" element={<Navigate to={uiAccess.people_access ? "/users" : defaultRoute} replace />} />
         <Route path="/login" element={<Navigate to={defaultRoute} replace />} />

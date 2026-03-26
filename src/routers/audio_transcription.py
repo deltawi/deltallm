@@ -96,8 +96,17 @@ async def _execute_stt(
         timeout=params.get("timeout") or 600,
     )
     if response.status_code >= 400:
+        try:
+            upstream_body = response.json()
+            upstream_msg = upstream_body.get("error", {}).get("message", response.text)
+        except Exception:
+            upstream_msg = response.text
+        import logging
+        logging.getLogger(__name__).warning(
+            "upstream STT %s returned %d: %s", api_base, response.status_code, upstream_msg
+        )
         raise httpx.HTTPStatusError(
-            f"Upstream transcription failed with status {response.status_code}",
+            f"Upstream transcription failed with status {response.status_code}: {upstream_msg}",
             request=httpx.Request("POST", f"{api_base}/audio/transcriptions"),
             response=response,
         )

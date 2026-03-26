@@ -128,19 +128,19 @@ class BudgetEnforcementService:
 
     async def _get_entity(self, entity_type: str, entity_id: str) -> dict[str, Any] | None:
         table_map = {
-            "key": ("deltallm_verificationtoken", "token", "soft_budget"),
-            "user": ("deltallm_usertable", "user_id", "soft_budget"),
-            "team": ("deltallm_teamtable", "team_id", "soft_budget"),
-            "org": ("deltallm_organizationtable", "organization_id", "soft_budget"),
+            "key": ("deltallm_verificationtoken", "token"),
+            "user": ("deltallm_usertable", "user_id"),
+            "team": ("deltallm_teamtable", "team_id"),
+            "org": ("deltallm_organizationtable", "organization_id"),
         }
         table_info = table_map.get(entity_type)
         if table_info is None:
             return None
 
-        table, column, soft_budget_expr = table_info
+        table, column = table_info
         rows = await self.db.query_raw(
             f"""
-            SELECT {column} AS entity_id, max_budget, {soft_budget_expr}, spend, budget_duration, budget_reset_at
+            SELECT {column} AS entity_id, max_budget, spend, budget_duration, budget_reset_at
             FROM {table}
             WHERE {column} = $1
             LIMIT 1
