@@ -28,6 +28,7 @@ def build_ui_access(
     *,
     authenticated: bool,
     effective_permissions: Iterable[str],
+    organization_memberships: Iterable[dict[str, Any]] | None = None,
 ) -> dict[str, bool]:
     permissions = set(effective_permissions)
     is_platform_admin = Permission.PLATFORM_ADMIN in permissions
@@ -36,9 +37,17 @@ def build_ui_access(
         or Permission.KEY_UPDATE in permissions
         or Permission.KEY_CREATE_SELF in permissions
     )
+    can_view_dashboard = authenticated and (is_platform_admin or Permission.SPEND_READ in permissions)
+    can_create_team = is_platform_admin
+    if not can_create_team:
+        for membership in list(organization_memberships or []):
+            org_role = str(membership.get("role") or "")
+            if Permission.TEAM_UPDATE in ORG_ROLE_PERMISSIONS.get(org_role, set()):
+                can_create_team = True
+                break
 
     return {
-        "dashboard": authenticated,
+        "dashboard": can_view_dashboard,
         "models": authenticated,
         "model_admin": is_platform_admin,
         "route_groups": is_platform_admin,
@@ -49,7 +58,7 @@ def build_ui_access(
         "organizations": authenticated and (is_platform_admin or Permission.ORG_READ in permissions),
         "organization_create": is_platform_admin,
         "teams": authenticated and (is_platform_admin or Permission.TEAM_READ in permissions),
-        "team_create": authenticated and (is_platform_admin or Permission.TEAM_UPDATE in permissions),
+        "team_create": authenticated and can_create_team,
         "people_access": is_platform_admin,
         "usage": authenticated and (is_platform_admin or Permission.SPEND_READ in permissions),
         "audit": authenticated and (is_platform_admin or Permission.AUDIT_READ in permissions),

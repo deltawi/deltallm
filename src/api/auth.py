@@ -231,6 +231,8 @@ async def auth_me(request: Request) -> CurrentSessionResponse:
         return CurrentSessionResponse(authenticated=False)
 
     effective_permissions = effective_permissions_for_context(context)
+    organization_memberships = [dict(item) for item in (context.organization_memberships or [])]
+    team_memberships = [dict(item) for item in (context.team_memberships or [])]
     return CurrentSessionResponse(
         authenticated=True,
         account_id=context.account_id,
@@ -240,9 +242,10 @@ async def auth_me(request: Request) -> CurrentSessionResponse:
         ui_access=build_ui_access(
             authenticated=True,
             effective_permissions=effective_permissions,
+            organization_memberships=organization_memberships,
         ),
-        organization_memberships=[dict(item) for item in (context.organization_memberships or [])],
-        team_memberships=[dict(item) for item in (context.team_memberships or [])],
+        organization_memberships=organization_memberships,
+        team_memberships=team_memberships,
         mfa_enabled=context.mfa_enabled,
         mfa_verified=context.mfa_verified,
         mfa_prompt=not context.mfa_enabled,

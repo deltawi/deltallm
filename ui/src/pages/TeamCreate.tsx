@@ -7,6 +7,7 @@ import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import TeamSelfServicePolicySection from '../components/admin/TeamSelfServicePolicySection';
 import ToggleSwitch from '../components/ToggleSwitch';
 import { useAuth } from '../lib/auth';
+import { resolveUiAccess } from '../lib/authorization';
 import {
   Users, X, DollarSign, Gauge, TrendingUp, Info,
   ChevronRight, Check, AlertCircle, Building2,
@@ -117,11 +118,9 @@ export default function TeamCreate() {
   const preselectedOrgId = searchParams.get('organization_id') || '';
   const returnTo = searchParams.get('return_to') || '';
   const { session, authMode } = useAuth();
-  const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
-  const permissions = new Set(session?.effective_permissions || []);
-  const canCreateTeam = userRole === 'platform_admin' || permissions.has('team.update');
+  const uiAccess = resolveUiAccess(authMode, session);
 
-  if (!canCreateTeam) {
+  if (!uiAccess.team_create) {
     return <Navigate to="/teams" replace />;
   }
 
