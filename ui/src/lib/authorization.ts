@@ -16,6 +16,7 @@ export type UIAccess = {
   audit: boolean;
   batches: boolean;
   guardrails: boolean;
+  playground: boolean;
   settings: boolean;
 };
 
@@ -48,6 +49,7 @@ function emptyUiAccess(): UIAccess {
     audit: false,
     batches: false,
     guardrails: false,
+    playground: false,
     settings: false,
   };
 }
@@ -71,6 +73,7 @@ function fullUiAccess(): UIAccess {
     audit: true,
     batches: true,
     guardrails: true,
+    playground: true,
     settings: true,
   };
 }
@@ -105,6 +108,7 @@ function deriveUiAccessFromPermissions(session: SessionLike | null | undefined):
     audit: isPlatformAdmin || permissions.has('audit.read'),
     batches: isPlatformAdmin || permissions.has('key.read'),
     guardrails: isPlatformAdmin,
+    playground: true,
     settings: isPlatformAdmin,
   };
 }
