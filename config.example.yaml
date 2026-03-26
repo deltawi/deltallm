@@ -82,7 +82,7 @@ general_settings:
   # email_provider: smtp
   # email_from_address: no-reply@example.com
   # email_reply_to: support@example.com
-  # email_base_url: http://localhost:4000
+  # email_base_url: http://localhost:4002
   # email_worker_enabled: true
   # email_max_attempts: 5
   # email_retry_initial_seconds: 60
@@ -114,7 +114,7 @@ general_settings:
   # sso_authorize_url: https://idp.example.com/oauth2/authorize
   # sso_token_url: https://idp.example.com/oauth2/token
   # sso_userinfo_url: https://idp.example.com/oauth2/userinfo
-  # sso_redirect_uri: http://localhost:4000/auth/callback
+  # sso_redirect_uri: http://localhost:4002/auth/callback
   # sso_scope: openid email profile
   # sso_admin_email_list:
   #   - admin@example.com

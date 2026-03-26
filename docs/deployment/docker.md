@@ -13,7 +13,7 @@ services:
   deltallm:
     build: .
     ports:
-      - "4000:4000"
+      - "4002:4000"
     environment:
       - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/deltallm
       - REDIS_URL=redis://redis:6379/0
@@ -93,6 +93,8 @@ The generated master key always satisfies DeltaLLM's validator: it is longer tha
 ```bash
 docker compose up -d
 ```
+
+With this host mapping, the Docker deployment is reachable at `http://localhost:4002`.
 
 ## Upgrading
 

@@ -23,7 +23,7 @@ client = OpenAI(api_key="sk-...")
 
 # After: Through DeltaLLM
 client = OpenAI(
-    base_url="http://localhost:4000/v1",  # ← Just change this
+    base_url="http://localhost:4002/v1",  # ← Just change this
     api_key="sk-deltallm-key"
 )
 ```
@@ -107,7 +107,7 @@ docker compose --profile single up -d --build
 
 This starts:
 
-- DeltaLLM on `http://localhost:4000`
+- DeltaLLM on `http://localhost:4002`
 - PostgreSQL
 - Redis
 
@@ -116,13 +116,13 @@ This starts:
 Check liveliness:
 
 ```bash
-curl http://localhost:4000/health/liveliness
+curl http://localhost:4002/health/liveliness
 ```
 
 List available models:
 
 ```bash
-curl http://localhost:4000/v1/models \
+curl http://localhost:4002/v1/models \
   -H "Authorization: Bearer $DELTALLM_MASTER_KEY"
 ```
 
@@ -134,7 +134,7 @@ If this list is empty, you did not bootstrap a model and must either:
 ### 6. Send your first request
 
 ```bash
-curl http://localhost:4000/v1/chat/completions \
+curl http://localhost:4002/v1/chat/completions \
   -H "Authorization: Bearer $DELTALLM_MASTER_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -147,7 +147,7 @@ curl http://localhost:4000/v1/chat/completions \
 
 ### 7. Open the Admin UI
 
-Open `http://localhost:4000`.
+Open `http://localhost:4002`.
 
 If you set `PLATFORM_BOOTSTRAP_ADMIN_EMAIL` and `PLATFORM_BOOTSTRAP_ADMIN_PASSWORD`, you can log in with that initial admin account. You can also keep using the master key for gateway calls.
 

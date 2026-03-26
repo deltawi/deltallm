@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE="${BASE:-http://localhost:4000}"
+BASE="${BASE:-http://localhost:4002}"
 MASTER_KEY="${MASTER_KEY:-}"
 SERVER_ID="${SERVER_ID:-}"
 ORG_ID="${ORG_ID:-org-main}"

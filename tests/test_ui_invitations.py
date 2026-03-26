@@ -10,9 +10,10 @@ class _FakeInvitationService:
         self.create_calls: list[dict[str, object]] = []
         self.resend_calls: list[tuple[str, str | None]] = []
         self.cancel_calls: list[str] = []
+        self.list_calls: list[dict[str, object | None]] = []
 
     async def list_invitations(self, *, status=None, search=None):  # noqa: ANN001, ANN201
-        del status, search
+        self.list_calls.append({"status": status, "search": search})
         return [
             {
                 "invitation_id": "inv-1",
@@ -28,6 +29,22 @@ class _FakeInvitationService:
                 "invited_by_account_id": "acct-admin",
                 "inviter_email": "admin@example.com",
                 "message_email_id": "email-1",
+                "metadata": {"organization_invites": [{"organization_id": "org-1", "role": "org_member"}]},
+            },
+            {
+                "invitation_id": "inv-2",
+                "account_id": "acct-2",
+                "email": "accepted@example.com",
+                "status": "accepted",
+                "invite_scope_type": "organization",
+                "expires_at": "2026-01-02T00:00:00+00:00",
+                "accepted_at": "2026-01-01T12:00:00+00:00",
+                "cancelled_at": None,
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-01T12:00:00+00:00",
+                "invited_by_account_id": "acct-admin",
+                "inviter_email": "admin@example.com",
+                "message_email_id": "email-2",
                 "metadata": {"organization_invites": [{"organization_id": "org-1", "role": "org_member"}]},
             }
         ]
@@ -74,8 +91,27 @@ async def test_list_invitations_returns_paginated_payload(client, test_app) -> N
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["pagination"]["total"] == 1
+    assert payload["pagination"]["total"] == 2
     assert payload["data"][0]["invitation_id"] == "inv-1"
+
+
+@pytest.mark.asyncio
+async def test_list_invitations_active_status_filters_before_pagination(client, test_app) -> None:
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    service = _FakeInvitationService()
+    test_app.state.invitation_service = service
+
+    response = await client.get(
+        "/ui/api/invitations",
+        headers={"Authorization": "Bearer mk-test"},
+        params={"status": "active"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert service.list_calls == [{"status": None, "search": None}]
+    assert payload["pagination"]["total"] == 1
+    assert [item["status"] for item in payload["data"]] == ["sent"]
 
 
 @pytest.mark.asyncio

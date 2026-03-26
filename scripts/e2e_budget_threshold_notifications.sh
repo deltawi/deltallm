@@ -20,7 +20,7 @@ require_bin curl
 require_bin docker
 require_bin jq
 
-BASE="${BASE:-http://127.0.0.1:4000}"
+BASE="${BASE:-http://127.0.0.1:4002}"
 MASTER_KEY="${MASTER_KEY:-${DELTALLM_MASTER_KEY:-}}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 RUN_ID="${RUN_ID:-$(date +%s)}"
