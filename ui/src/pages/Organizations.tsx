@@ -2,13 +2,15 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
+import { resolveUiAccess } from '../lib/authorization';
 import { callableTargets, organizations } from '../lib/api';
 import { buildCatalogAssetTargets } from '../lib/assetAccess';
+import RateLimitSummary from '../components/admin/RateLimitSummary';
 import Modal from '../components/Modal';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import { ContentCard, IndexShell } from '../components/admin/shells';
 import {
-  Plus, Building2, Users, DollarSign, Gauge, TrendingUp,
+  Plus, Building2, Users, DollarSign,
   Shield, AlertCircle, Search, MoreHorizontal,
 } from 'lucide-react';
 
@@ -53,15 +55,6 @@ function StatusDot({ status }: { status: string }) {
   return <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${map[status] ?? 'bg-gray-300'}`} />;
 }
 
-function RateTag({ value, unit }: { value: number | null | undefined; unit: string }) {
-  if (value == null) return <span className="text-xs text-gray-400">—</span>;
-  return (
-    <span className="inline-flex items-center gap-0.5 text-xs font-medium text-gray-600 bg-gray-100 px-2 py-0.5 rounded-full">
-      {Number(value).toLocaleString()} <span className="text-gray-400">{unit}</span>
-    </span>
-  );
-}
-
 function getStatus(row: any): string {
   const spend = row.spend || 0;
   const budget = row.max_budget ?? null;
@@ -81,6 +74,7 @@ export default function Organizations() {
   const { session, authMode } = useAuth();
   const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
   const isPlatformAdmin = userRole === 'platform_admin';
+  const uiAccess = resolveUiAccess(authMode, session);
 
   /* ── list state ── */
   const [searchInput, setSearchInput] = useState('');
@@ -270,7 +264,7 @@ export default function Organizations() {
       title="Organizations"
       titleIcon={Building2}
       count={total}
-      action={isPlatformAdmin ? (
+      action={uiAccess.organization_create ? (
         <button
           onClick={() => navigate('/organizations/new')}
           className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
@@ -368,7 +362,7 @@ export default function Organizations() {
                       : search
                       ? 'No organizations match your search.'
                       : 'No organizations created yet.'}
-                    {statusTab === 'All' && !search && isPlatformAdmin && (
+                    {statusTab === 'All' && !search && uiAccess.organization_create && (
                       <button
                         onClick={() => navigate('/organizations/new')}
                         className="ml-1 text-blue-600 hover:underline"
@@ -413,28 +407,13 @@ export default function Organizations() {
 
                       {/* Rate limits */}
                       <td className="px-4 py-3.5">
-                        <div className="flex flex-col gap-1">
-                          <div className="flex items-center gap-1.5">
-                            <Gauge className="w-3 h-3 text-gray-400" />
-                            <RateTag value={row.rpm_limit} unit="RPM" />
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <TrendingUp className="w-3 h-3 text-gray-400" />
-                            <RateTag value={row.tpm_limit} unit="TPM" />
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <Gauge className="w-3 h-3 text-gray-400" />
-                            <RateTag value={row.rph_limit} unit="RPH" />
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <Gauge className="w-3 h-3 text-gray-400" />
-                            <RateTag value={row.rpd_limit} unit="RPD" />
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <TrendingUp className="w-3 h-3 text-gray-400" />
-                            <RateTag value={row.tpd_limit} unit="TPD" />
-                          </div>
-                        </div>
+                        <RateLimitSummary
+                          rpm_limit={row.rpm_limit}
+                          tpm_limit={row.tpm_limit}
+                          rph_limit={row.rph_limit}
+                          rpd_limit={row.rpd_limit}
+                          tpd_limit={row.tpd_limit}
+                        />
                       </td>
 
                       {/* Members + teams */}
@@ -461,12 +440,14 @@ export default function Organizations() {
                           >
                             View
                           </button>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); openEdit(row); }}
-                            className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-400 transition-colors"
-                          >
-                            <MoreHorizontal className="w-4 h-4" />
-                          </button>
+                          {row.capabilities?.edit ? (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); openEdit(row); }}
+                              className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-400 transition-colors"
+                            >
+                              <MoreHorizontal className="w-4 h-4" />
+                            </button>
+                          ) : null}
                         </div>
                       </td>
                     </tr>

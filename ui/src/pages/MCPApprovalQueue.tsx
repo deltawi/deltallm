@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Clock, Download, RefreshCw } from 'lucide-react';
 import MCPApprovalTable from '../components/mcp/MCPApprovalTable';
 import { mcpServers, type MCPApprovalRequest } from '../lib/api';
+import { useAuth } from '../lib/auth';
+import { resolveUiAccess } from '../lib/authorization';
 import { useApi } from '../lib/hooks';
 import { useToast } from '../components/ToastProvider';
 import { IndexShell } from '../components/admin/shells';
@@ -12,7 +14,9 @@ type StatusFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'expired';
 
 export default function MCPApprovalQueue() {
   const navigate = useNavigate();
+  const { session, authMode } = useAuth();
   const { pushToast } = useToast();
+  const uiAccess = resolveUiAccess(authMode, session);
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [offset, setOffset] = useState(0);
@@ -158,13 +162,15 @@ export default function MCPApprovalQueue() {
               <Clock className="h-3 w-3" />
               {pendingCount} Pending
             </span>
-            <button
-              type="button"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-xs font-semibold text-gray-600 transition hover:bg-gray-100"
-              onClick={() => navigate('/mcp-servers')}
-            >
-              View MCP Servers →
-            </button>
+            {uiAccess.mcp_servers ? (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-xs font-semibold text-gray-600 transition hover:bg-gray-100"
+                onClick={() => navigate('/mcp-servers')}
+              >
+                View MCP Servers →
+              </button>
+            ) : null}
           </div>
         </div>
       )}

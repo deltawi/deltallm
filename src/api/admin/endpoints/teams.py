@@ -21,14 +21,17 @@ from src.api.admin.endpoints.common import (
 from src.middleware.platform_auth import get_platform_auth_context
 from src.services.asset_visibility_preview import build_asset_visibility_preview
 from src.services.scoped_asset_access import apply_scope_asset_access, build_scope_asset_access
+from src.services.ui_authorization import build_team_capabilities
 
 router = APIRouter(tags=["Admin Teams"])
 
 
-def _team_response_payload(team: dict[str, Any]) -> dict[str, Any]:
+def _team_response_payload(team: dict[str, Any], *, capabilities: dict[str, bool] | None = None) -> dict[str, Any]:
     payload = to_json_value(dict(team))
     if isinstance(payload, dict):
         payload.pop("models", None)
+        if capabilities is not None:
+            payload["capabilities"] = capabilities
     return payload
 
 
@@ -159,12 +162,18 @@ async def list_teams(
     params: list[Any] = []
 
     if not scope.is_platform_admin:
+        scope_clauses: list[str] = []
         if scope.org_ids:
             ph = ", ".join(f"${len(params) + i + 1}" for i in range(len(scope.org_ids)))
             params.extend(scope.org_ids)
-            clauses.append(f"t.organization_id IN ({ph})")
-        else:
+            scope_clauses.append(f"t.organization_id IN ({ph})")
+        if scope.team_ids:
+            ph = ", ".join(f"${len(params) + i + 1}" for i in range(len(scope.team_ids)))
+            params.extend(scope.team_ids)
+            scope_clauses.append(f"t.team_id IN ({ph})")
+        if not scope_clauses:
             return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
+        clauses.append("(" + " OR ".join(scope_clauses) + ")")
 
     if search:
         params.append(f"%{search}%")
@@ -203,7 +212,13 @@ async def list_teams(
     )
 
     return {
-        "data": [_team_response_payload(dict(row)) for row in rows],
+        "data": [
+            _team_response_payload(
+                dict(row),
+                capabilities=build_team_capabilities(scope, dict(row)),
+            )
+            for row in rows
+        ],
         "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
     }
 
@@ -218,7 +233,7 @@ async def get_team(
     scope = get_auth_scope(request, authorization, x_master_key)
     db = db_or_503(request)
     team = await _require_team_access(request, scope, db, team_id)
-    return _team_response_payload(team)
+    return _team_response_payload(team, capabilities=build_team_capabilities(scope, team))
 
 
 @router.get("/ui/api/teams/{team_id}/asset-visibility")
@@ -391,6 +406,7 @@ async def create_team(
         "self_service_max_expiry_days": ss_max_expiry_days,
         "blocked": False,
     }
+    response["capabilities"] = build_team_capabilities(scope, response)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -495,7 +511,11 @@ async def update_team(
     )
     if not updated_rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
-    updated = _team_response_payload(dict(updated_rows[0]))
+    updated_team = dict(updated_rows[0])
+    updated = _team_response_payload(
+        updated_team,
+        capabilities=build_team_capabilities(scope, updated_team),
+    )
     key_service = getattr(request.app.state, "key_service", None)
     if key_service is not None:
         try:

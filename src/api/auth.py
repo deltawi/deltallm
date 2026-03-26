@@ -13,7 +13,7 @@ from src.db.email import EmailOutboxRepository
 from src.db.email_feedback import EmailFeedbackRepository
 from src.middleware.platform_auth import SESSION_COOKIE_NAME, get_platform_auth_context
 from src.models.errors import RateLimitError
-from src.auth.roles import ORG_ROLE_PERMISSIONS, PLATFORM_ROLE_PERMISSIONS, TEAM_ROLE_PERMISSIONS, TeamRole
+from src.auth.roles import TeamRole
 from src.db.email_tokens import EmailTokenRepository
 from src.models.platform_auth import (
     ChangePasswordRequest,
@@ -29,6 +29,7 @@ from src.models.platform_auth import (
     ResetPasswordRequest,
     ResetPasswordTokenResponse,
 )
+from src.services.ui_authorization import build_ui_access, effective_permissions_for_context
 from src.services.sso_state_store import SSOStateStoreError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -91,21 +92,6 @@ def _outbox_service_for_db(service: Any, db_client: Any) -> Any:
             feedback_repository=EmailFeedbackRepository(db_client),
         )
     return service
-
-
-def _effective_permissions(context: Any) -> list[str]:
-    permissions: set[str] = set()
-    role = str(getattr(context, "role", "") or "")
-    permissions.update(PLATFORM_ROLE_PERMISSIONS.get(role, set()))
-
-    for membership in list(getattr(context, "organization_memberships", []) or []):
-        org_role = str(membership.get("role") or "")
-        permissions.update(ORG_ROLE_PERMISSIONS.get(org_role, set()))
-
-    for membership in list(getattr(context, "team_memberships", []) or []):
-        team_role = str(membership.get("role") or "")
-        permissions.update(TEAM_ROLE_PERMISSIONS.get(team_role, set()))
-    return sorted(permissions)
 
 
 async def _enforce_auth_rate_limit(
@@ -244,12 +230,17 @@ async def auth_me(request: Request) -> CurrentSessionResponse:
     if context is None:
         return CurrentSessionResponse(authenticated=False)
 
+    effective_permissions = effective_permissions_for_context(context)
     return CurrentSessionResponse(
         authenticated=True,
         account_id=context.account_id,
         email=context.email,
         role=context.role,
-        effective_permissions=_effective_permissions(context),
+        effective_permissions=effective_permissions,
+        ui_access=build_ui_access(
+            authenticated=True,
+            effective_permissions=effective_permissions,
+        ),
         organization_memberships=[dict(item) for item in (context.organization_memberships or [])],
         team_memberships=[dict(item) for item in (context.team_memberships or [])],
         mfa_enabled=context.mfa_enabled,

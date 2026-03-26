@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
+import { resolveUiAccess } from '../lib/authorization';
 import { organizations, teams } from '../lib/api';
 import { buildParentScopedAssetTargets, buildScopedSelectableTargets } from '../lib/assetAccess';
 import Modal from '../components/Modal';
@@ -60,9 +61,7 @@ export default function TeamDetail() {
   const navigate = useNavigate();
   const location = useLocation();
   const { session, authMode } = useAuth();
-  const permissions = useMemo(() => new Set(session?.effective_permissions || []), [session?.effective_permissions]);
-  const isPlatformAdmin = authMode === 'master_key' || session?.role === 'platform_admin';
-  const canEditTeam = isPlatformAdmin || permissions.has('team.update');
+  const canAccessOrganizations = resolveUiAccess(authMode, session).organizations;
   const [tab, setTab] = useState<TabId>('overview');
 
   /* ── data ── */
@@ -299,6 +298,11 @@ export default function TeamDetail() {
 
   const grantedTargets = teamAssetTargets?.selectable_targets?.filter((t: any) => t.selected) ?? [];
   const blockedTargets = teamAssetTargets?.selectable_targets?.filter((t: any) => !t.selected) ?? [];
+  const teamCapabilities = team?.capabilities || {};
+  const canEditTeam = Boolean(teamCapabilities.edit);
+  const canManageMembers = Boolean(teamCapabilities.manage_members);
+  const canManageAssets = Boolean(teamCapabilities.manage_assets);
+  const canManageSelfServicePolicy = Boolean(teamCapabilities.manage_self_service_policy);
 
   const topSpenders = [...memberList]
     .filter((m) => (m.spend || 0) > 0)
@@ -331,7 +335,9 @@ export default function TeamDetail() {
       breadcrumbs={[
         { label: 'Teams', onClick: () => navigate('/teams'), icon: ArrowLeft },
         ...(team.organization_id
-          ? [{ label: orgName, onClick: () => navigate(`/organizations/${team.organization_id}`), icon: Building2 }]
+          ? canAccessOrganizations
+            ? [{ label: orgName, onClick: () => navigate(`/organizations/${team.organization_id}`), icon: Building2 }]
+            : [{ label: orgName, icon: Building2 }]
           : []),
         { label: teamName },
       ]}
@@ -369,14 +375,14 @@ export default function TeamDetail() {
           )}
         </div>
       )}
-      action={(
+      action={canEditTeam ? (
         <button
           onClick={openEditSettings}
           className="flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
         >
           <Pencil className="h-3.5 w-3.5" /> Edit
         </button>
-      )}
+      ) : undefined}
       metrics={(
         <>
           <DetailMetricCard
@@ -666,12 +672,16 @@ export default function TeamDetail() {
                     {team.organization_id && (
                       <div className="flex justify-between items-center">
                         <span className="text-gray-500">Organization</span>
-                        <button
-                          onClick={() => navigate(`/organizations/${team.organization_id}`)}
-                          className="text-xs font-medium text-indigo-600 hover:underline"
-                        >
-                          {orgName}
-                        </button>
+                        {canAccessOrganizations ? (
+                          <button
+                            onClick={() => navigate(`/organizations/${team.organization_id}`)}
+                            className="text-xs font-medium text-indigo-600 hover:underline"
+                          >
+                            {orgName}
+                          </button>
+                        ) : (
+                          <span className="text-xs font-medium text-gray-800">{orgName}</span>
+                        )}
                       </div>
                     )}
                     {team.created_at && (
@@ -767,13 +777,13 @@ export default function TeamDetail() {
               </div>
 
               {/* Self-Service Key Policy */}
-              {canEditTeam && <div className={`bg-white rounded-xl border p-4 transition-colors ${isEditingPolicy ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-gray-200'}`}>
+              {canManageSelfServicePolicy && <div className={`bg-white rounded-xl border p-4 transition-colors ${isEditingPolicy ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-gray-200'}`}>
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-1.5">
                     <Key className="w-3.5 h-3.5 text-indigo-600" />
                     <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Self-Service Keys</h4>
                   </div>
-                  {!isEditingPolicy && canEditTeam && (
+                  {!isEditingPolicy && canManageSelfServicePolicy && (
                     <button
                       onClick={openEditPolicy}
                       className="p-1 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-gray-600 transition-colors"
@@ -916,20 +926,22 @@ export default function TeamDetail() {
               <h3 className="text-sm font-semibold text-gray-900">
                 Members {memberList.length > 0 && `(${memberList.length})`}
               </h3>
-              <div className="flex items-center gap-2">
-                <Link
-                  to={`/users?invite_team_id=${encodeURIComponent(teamId || '')}`}
-                  className="flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-50"
-                >
-                  Invite by Email
-                </Link>
-                <button
-                  onClick={() => { setMemberSearch(''); setMemberForm({ user_id: '', user_email: '', user_role: 'team_viewer' }); setShowAddMember(true); }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-                >
-                  <UserPlus className="w-3.5 h-3.5" /> Add Member
-                </button>
-              </div>
+              {canManageMembers ? (
+                <div className="flex items-center gap-2">
+                  <Link
+                    to={`/users?invite_team_id=${encodeURIComponent(teamId || '')}`}
+                    className="flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-50"
+                  >
+                    Invite by Email
+                  </Link>
+                  <button
+                    onClick={() => { setMemberSearch(''); setMemberForm({ user_id: '', user_email: '', user_role: 'team_viewer' }); setShowAddMember(true); }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                  >
+                    <UserPlus className="w-3.5 h-3.5" /> Add Member
+                  </button>
+                </div>
+              ) : null}
             </div>
             <table className="w-full text-sm">
               <thead>
@@ -952,12 +964,17 @@ export default function TeamDetail() {
                 ) : memberList.length === 0 ? (
                   <tr>
                     <td colSpan={4} className="px-5 py-12 text-center text-sm text-gray-400">
-                      No members yet.{' '}
-                      <button onClick={() => setShowAddMember(true)} className="text-indigo-600 hover:underline">Add the first one</button>
-                      {' '}or{' '}
-                      <Link to={`/users?invite_team_id=${encodeURIComponent(teamId || '')}`} className="text-indigo-600 hover:underline">
-                        invite by email
-                      </Link>
+                      No members yet.
+                      {canManageMembers ? (
+                        <>
+                          {' '}
+                          <button onClick={() => setShowAddMember(true)} className="text-indigo-600 hover:underline">Add the first one</button>
+                          {' '}or{' '}
+                          <Link to={`/users?invite_team_id=${encodeURIComponent(teamId || '')}`} className="text-indigo-600 hover:underline">
+                            invite by email
+                          </Link>
+                        </>
+                      ) : null}
                     </td>
                   </tr>
                 ) : (
@@ -996,13 +1013,15 @@ export default function TeamDetail() {
                           )}
                         </td>
                         <td className="px-5 py-3.5 text-right">
-                          <button
-                            onClick={() => handleRemoveMember(m.user_id)}
-                            className="p-1.5 hover:bg-red-50 rounded-lg transition-colors"
-                            title="Remove member"
-                          >
-                            <Trash2 className="w-4 h-4 text-red-400" />
-                          </button>
+                          {canManageMembers ? (
+                            <button
+                              onClick={() => handleRemoveMember(m.user_id)}
+                              className="p-1.5 hover:bg-red-50 rounded-lg transition-colors"
+                              title="Remove member"
+                            >
+                              <Trash2 className="w-4 h-4 text-red-400" />
+                            </button>
+                          ) : null}
                         </td>
                       </tr>
                     );
@@ -1163,7 +1182,7 @@ export default function TeamDetail() {
                 </div>
               </div>
 
-              {!isEditingAssets && (
+              {!isEditingAssets && canManageAssets && (
                 <button
                   onClick={openEditAssets}
                   className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"

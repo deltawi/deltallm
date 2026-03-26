@@ -306,6 +306,11 @@ export default function OrganizationDetail() {
   /* ── derived ── */
   const teamList: any[] = orgTeams || [];
   const memberList: any[] = orgMembers || [];
+  const orgCapabilities = org?.capabilities || {};
+  const canEditOrganization = Boolean(orgCapabilities.edit);
+  const canAddTeam = Boolean(orgCapabilities.add_team);
+  const canManageMembers = Boolean(orgCapabilities.manage_members);
+  const canManageAssets = Boolean(orgCapabilities.manage_assets);
   const spend = org?.spend || 0;
   const budget = org?.max_budget ?? null;
   const spendPct = budget ? Math.min(100, Math.round((spend / budget) * 100)) : null;
@@ -375,14 +380,14 @@ export default function OrganizationDetail() {
           )}
         </div>
       )}
-      action={(
+      action={canEditOrganization ? (
         <button
           onClick={openEditSettings}
           className="flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
         >
           <Pencil className="h-3.5 w-3.5" /> Edit
         </button>
-      )}
+      ) : undefined}
       metrics={(
         <>
           <DetailMetricCard
@@ -451,7 +456,7 @@ export default function OrganizationDetail() {
                 </>
               ),
             },
-            ...(isPlatformAdmin ? [{ id: 'assets' as const, label: 'Asset Access' }] : []),
+            ...(canManageAssets ? [{ id: 'assets' as const, label: 'Asset Access' }] : []),
           ]}
         />
       )}
@@ -549,12 +554,14 @@ export default function OrganizationDetail() {
               <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
                 <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
                   <h3 className="text-sm font-semibold text-gray-900">Teams</h3>
-                  <button
-                    onClick={openCreateTeam}
-                    className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-blue-600 border border-blue-200 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
-                  >
-                    <Plus className="w-3 h-3" /> Add Team
-                  </button>
+                  {canAddTeam ? (
+                    <button
+                      onClick={openCreateTeam}
+                      className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-blue-600 border border-blue-200 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+                    >
+                      <Plus className="w-3 h-3" /> Add Team
+                    </button>
+                  ) : null}
                 </div>
                 {teamsLoading ? (
                   <div className="p-6 flex items-center justify-center">
@@ -624,7 +631,7 @@ export default function OrganizationDetail() {
               <div className={`bg-white rounded-xl border p-5 transition-colors ${isEditingSettings ? 'border-blue-300 ring-1 ring-blue-200' : 'border-gray-200'}`}>
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-sm font-semibold text-gray-900">Settings</h3>
-                  {!isEditingSettings && (
+                  {!isEditingSettings && canEditOrganization && (
                     <button
                       onClick={openEditSettings}
                       className="p-1 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-gray-600 transition-colors"
@@ -801,7 +808,7 @@ export default function OrganizationDetail() {
               </div>
 
               {/* Asset Access sidebar */}
-              {isPlatformAdmin && (
+              {canManageAssets && (
                 <div className="bg-white rounded-xl border border-gray-200 p-5">
                   <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
                     Asset Access <Info className="w-3.5 h-3.5 text-gray-400" />
@@ -869,12 +876,14 @@ export default function OrganizationDetail() {
               <h3 className="text-sm font-semibold text-gray-900">
                 All Teams {teamList.length > 0 && `(${teamList.length})`}
               </h3>
-              <button
-                onClick={openCreateTeam}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-              >
-                <Plus className="w-3.5 h-3.5" /> Add Team
-              </button>
+              {canAddTeam ? (
+                <button
+                  onClick={openCreateTeam}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Add Team
+                </button>
+              ) : null}
             </div>
             <table className="w-full text-sm">
               <thead>
@@ -901,7 +910,7 @@ export default function OrganizationDetail() {
                   <tr>
                     <td colSpan={5} className="px-5 py-12 text-center text-sm text-gray-400">
                       No teams yet.{' '}
-                      <button onClick={openCreateTeam} className="text-blue-600 hover:underline">Add the first one</button>
+                      {canAddTeam ? <button onClick={openCreateTeam} className="text-blue-600 hover:underline">Add the first one</button> : null}
                     </td>
                   </tr>
                 ) : (
@@ -951,20 +960,22 @@ export default function OrganizationDetail() {
               <h3 className="text-sm font-semibold text-gray-900">
                 Organization Members {memberList.length > 0 && `(${memberList.length})`}
               </h3>
-              <div className="flex items-center gap-2">
-                <Link
-                  to={`/users?invite_org_id=${encodeURIComponent(orgId || '')}`}
-                  className="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-50"
-                >
-                  Invite by Email
-                </Link>
-                <button
-                  onClick={openAddMember}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                >
-                  <UserPlus className="w-3.5 h-3.5" /> Add Member
-                </button>
-              </div>
+              {canManageMembers ? (
+                <div className="flex items-center gap-2">
+                  <Link
+                    to={`/users?invite_org_id=${encodeURIComponent(orgId || '')}`}
+                    className="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-50"
+                  >
+                    Invite by Email
+                  </Link>
+                  <button
+                    onClick={openAddMember}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                  >
+                    <UserPlus className="w-3.5 h-3.5" /> Add Member
+                  </button>
+                </div>
+              ) : null}
             </div>
             <table className="w-full text-sm">
               <thead>
@@ -989,12 +1000,17 @@ export default function OrganizationDetail() {
                 ) : memberList.length === 0 ? (
                   <tr>
                     <td colSpan={4} className="px-5 py-12 text-center text-sm text-gray-400">
-                      No members yet.{' '}
-                      <button onClick={openAddMember} className="text-blue-600 hover:underline">Add the first one</button>
-                      {' '}or{' '}
-                      <Link to={`/users?invite_org_id=${encodeURIComponent(orgId || '')}`} className="text-blue-600 hover:underline">
-                        invite by email
-                      </Link>
+                      No members yet.
+                      {canManageMembers ? (
+                        <>
+                          {' '}
+                          <button onClick={openAddMember} className="text-blue-600 hover:underline">Add the first one</button>
+                          {' '}or{' '}
+                          <Link to={`/users?invite_org_id=${encodeURIComponent(orgId || '')}`} className="text-blue-600 hover:underline">
+                            invite by email
+                          </Link>
+                        </>
+                      ) : null}
                     </td>
                   </tr>
                 ) : (
@@ -1025,13 +1041,15 @@ export default function OrganizationDetail() {
                           )}
                         </td>
                         <td className="px-5 py-3.5 text-right">
-                          <button
-                            onClick={() => handleRemoveMember(m.membership_id)}
-                            className="p-1.5 hover:bg-red-50 rounded-lg text-gray-300 hover:text-red-400 transition-colors"
-                            title="Remove member"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {canManageMembers ? (
+                            <button
+                              onClick={() => handleRemoveMember(m.membership_id)}
+                              className="p-1.5 hover:bg-red-50 rounded-lg text-gray-300 hover:text-red-400 transition-colors"
+                              title="Remove member"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          ) : null}
                         </td>
                       </tr>
                     );
@@ -1043,7 +1061,7 @@ export default function OrganizationDetail() {
         )}
 
         {/* ── ASSETS ── */}
-        {tab === 'assets' && isPlatformAdmin && (
+        {tab === 'assets' && canManageAssets && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
             <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 p-5">
               <div className="flex items-center justify-between mb-4">
@@ -1199,7 +1217,7 @@ export default function OrganizationDetail() {
                   Teams, API keys, and users within this org can only use assets from this allowed set. Child scopes can narrow further but never expand beyond this ceiling.
                 </p>
               </div>
-              {!isEditingAssets && (
+              {!isEditingAssets && canManageAssets && (
                 <button
                   onClick={openEditAssets}
                   className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium border border-gray-300 text-gray-700 bg-white rounded-lg hover:bg-gray-50 transition-colors"

@@ -23,6 +23,7 @@ import MCPServerForm, {
 } from '../components/mcp/MCPServerForm';
 import { mcpServers, type MCPServer } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { hasPermission, isPlatformAdminSession, resolveUiAccess } from '../lib/authorization';
 import { useApi } from '../lib/hooks';
 import { useToast } from '../components/ToastProvider';
 import { IndexShell } from '../components/admin/shells';
@@ -72,9 +73,8 @@ export default function MCPServers() {
   const { session, authMode } = useAuth();
   const { pushToast } = useToast();
 
-  const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
-  const isPlatformAdmin = userRole === 'platform_admin';
-  const permissions = new Set(session?.effective_permissions || []);
+  const uiAccess = resolveUiAccess(authMode, session);
+  const isPlatformAdmin = isPlatformAdminSession(authMode, session);
   const orgMemberships = (session?.organization_memberships || [])
     .map((membership) => ({
       organization_id: String(membership.organization_id || ''),
@@ -85,7 +85,7 @@ export default function MCPServers() {
     () => orgMemberships.map((membership) => ({ value: membership.organization_id, label: membership.organization_id })),
     [orgMemberships]
   );
-  const canManageMcp = isPlatformAdmin || permissions.has('org.update');
+  const canManageMcp = hasPermission(authMode, session, 'org.update');
   const isOrgScopedOnly = canManageMcp && !isPlatformAdmin;
 
   const [searchInput, setSearchInput] = useState('');
@@ -239,7 +239,7 @@ export default function MCPServers() {
           Register server
         </button>
       ) : null}
-      notice={!canManageMcp ? (
+      notice={uiAccess.mcp_servers && !canManageMcp ? (
         <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-900">
           Read-only. MCP registration requires organization or platform admin permissions.
         </div>
