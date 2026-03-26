@@ -180,7 +180,7 @@ function SidebarContent({
           }
 
           return (
-            <div key={entry.key} className="mb-4">
+            <div key={entry.key} className="mt-4 mb-4">
               {showExpanded && (
                 <h3 className="px-5 mb-2 text-xs font-semibold tracking-wider text-gray-400 uppercase truncate">
                   {entry.label}
@@ -303,7 +303,7 @@ export default function Layout() {
           onToggleCollapsed={toggleCollapsed}
         />
 
-        {showExpanded && (
+        {!collapsed && (
           <button
             type="button"
             aria-label="Resize sidebar"
