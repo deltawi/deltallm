@@ -17,12 +17,11 @@ import {
   Settings,
   LogOut,
   Zap,
-  Sparkles,
   Menu,
   X,
-  ChevronDown,
-  ChevronRight,
   CheckCircle2,
+  PanelLeftClose,
+  PanelLeftOpen,
   type LucideIcon,
 } from 'lucide-react';
 import clsx from 'clsx';
@@ -54,13 +53,14 @@ const navEntries: NavEntry[] = [
     type: 'group',
     key: 'ai-gateway',
     label: 'AI Gateway',
-    icon: Sparkles,
+    icon: LayoutDashboard,
     children: [
       { type: 'item', to: '/models', icon: Box, label: 'Models', pageKey: 'models' },
       { type: 'item', to: '/route-groups', icon: Workflow, label: 'Route Groups', pageKey: 'route_groups' },
       { type: 'item', to: '/prompts', icon: FileText, label: 'Prompt Registry', pageKey: 'prompts' },
       { type: 'item', to: '/mcp-servers', icon: Activity, label: 'MCP Servers', pageKey: 'mcp_servers' },
       { type: 'item', to: '/mcp-approvals', icon: CheckCircle2, label: 'Tool Approvals', pageKey: 'mcp_approvals' },
+      { type: 'item', to: '/playground', icon: Zap, label: 'Playground', pageKey: 'playground' },
     ],
   },
   {
@@ -91,47 +91,29 @@ function canViewItem(item: NavItem, uiAccess: UIAccess) {
 }
 
 function RoleBadge({ role }: { role: string }) {
-  const colors: Record<string, string> = {
-    platform_admin: 'bg-purple-500/20 text-purple-300',
-    org_user: 'bg-gray-500/20 text-gray-400',
-  };
   const label = role === 'platform_admin' ? 'Admin' : 'User';
   return (
-    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${colors[role] || 'bg-gray-500/20 text-gray-400'}`}>
+    <span className="inline-block px-1.5 py-0.5 text-[10px] font-medium text-violet-700 bg-violet-50 rounded-sm">
       {label}
     </span>
   );
 }
 
-function topLevelNavClass(isActive: boolean) {
+function navItemClass(isActive: boolean, isCollapsed: boolean) {
+  if (isCollapsed) {
+    return clsx(
+      'flex items-center justify-center w-10 py-2 mx-auto rounded-lg text-sm font-medium transition-colors',
+      isActive
+        ? 'bg-violet-50 text-violet-700'
+        : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+    );
+  }
   return clsx(
-    'flex w-full min-w-0 items-center gap-3 rounded-xl px-4 py-2.5 text-sm transition-colors',
+    'flex w-full min-w-0 items-center gap-3 px-4 py-2 text-sm font-medium transition-colors border-l-2',
     isActive
-      ? 'bg-gray-800 text-white ring-1 ring-inset ring-gray-700'
-      : 'text-gray-400 hover:bg-gray-800/60 hover:text-white'
+      ? 'bg-violet-50 text-violet-700 border-violet-600'
+      : 'text-gray-600 border-transparent hover:bg-gray-50 hover:text-gray-900'
   );
-}
-
-function childNavClass(isActive: boolean) {
-  return clsx(
-    'flex w-full min-w-0 items-center gap-3 rounded-lg px-4 py-2.5 text-sm transition-colors',
-    isActive
-      ? 'bg-gray-800 text-white ring-1 ring-inset ring-gray-700'
-      : 'text-gray-400 hover:bg-gray-800/60 hover:text-white'
-  );
-}
-
-function parentNavClass(isActive: boolean) {
-  return clsx(
-    'flex w-full min-w-0 items-center gap-3 rounded-xl px-4 py-2.5 text-sm transition-colors',
-    isActive
-      ? 'bg-gray-800 text-white ring-1 ring-inset ring-gray-700'
-      : 'text-gray-400 hover:bg-gray-800/60 hover:text-white'
-  );
-}
-
-function childNavPanelClass() {
-  return 'mt-1 ml-5 border-l border-gray-800 pl-2';
 }
 
 function SidebarContent({
@@ -139,109 +121,128 @@ function SidebarContent({
   displayEmail,
   displayRole,
   logout,
-  expandedGroups,
-  onToggleGroup,
   pathname,
   onNavClick,
+  showExpanded,
+  collapsed,
+  onToggleCollapsed,
 }: {
   visibleEntries: NavEntry[];
   displayEmail: string;
   displayRole: string;
   logout: () => void;
-  expandedGroups: Record<string, boolean>;
-  onToggleGroup: (groupKey: string) => void;
   pathname: string;
   onNavClick?: () => void;
+  showExpanded: boolean;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
 }) {
   return (
     <>
-      <div className="p-5 border-b border-gray-800">
-        <div className="flex items-center gap-2">
-          <Zap className="w-6 h-6 text-blue-400" />
-          <span className="text-lg font-bold">DeltaLLM</span>
+      <div className="flex items-center justify-between px-3 py-4 min-w-0 shrink-0">
+        <div className={clsx('flex items-center gap-2.5 min-w-0', !showExpanded && 'justify-center w-full')}>
+          <div className="w-8 h-8 rounded-[10px] bg-violet-100 border border-violet-200/60 flex items-center justify-center shrink-0 shadow-sm">
+            <Zap className="w-4 h-4 text-violet-600 fill-violet-600" />
+          </div>
+          {showExpanded && <span className="text-lg font-bold text-gray-900 truncate">DeltaLLM</span>}
         </div>
-        <p className="text-xs text-gray-400 mt-1">Admin Dashboard</p>
+        {showExpanded && (
+          <button
+            type="button"
+            onClick={onToggleCollapsed}
+            className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors shrink-0"
+            title={collapsed ? 'Pin sidebar open' : 'Collapse sidebar'}
+          >
+            {collapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+          </button>
+        )}
       </div>
-      <nav className="flex-1 overflow-x-hidden overflow-y-auto px-3 py-4">
+
+      <nav className="flex-1 overflow-x-hidden overflow-y-auto py-2">
         {visibleEntries.map((entry) => {
           if (entry.type === 'item') {
             const Icon = entry.icon;
+            const active = isRouteActive(pathname, entry.to);
             return (
-              <NavLink
-                key={entry.to}
-                to={entry.to}
-                end={entry.to === '/'}
-                onClick={onNavClick}
-                className={({ isActive }) => topLevelNavClass(isActive)}
-              >
-                <Icon className="w-4 h-4 shrink-0" />
-                <span className="min-w-0 truncate" title={entry.label}>
-                  {entry.label}
-                </span>
-              </NavLink>
+              <div key={entry.to} className="mb-0.5">
+                <NavLink
+                  to={entry.to}
+                  end={entry.to === '/'}
+                  onClick={onNavClick}
+                  title={!showExpanded ? entry.label : undefined}
+                  className={() => navItemClass(active, !showExpanded)}
+                >
+                  <Icon className={clsx('w-4 h-4 shrink-0', active ? 'text-violet-600' : 'text-gray-400')} />
+                  {showExpanded && <span className="min-w-0 truncate">{entry.label}</span>}
+                </NavLink>
+              </div>
             );
           }
 
-          const Icon = entry.icon;
-          const isExpanded = expandedGroups[entry.key] ?? false;
-          const isGroupActive = entry.children.some((child) => isRouteActive(pathname, child.to));
-          const groupPanelId = `${entry.key}-nav-group`;
           return (
-            <section key={entry.key} className="my-1">
-              <button
-                type="button"
-                onClick={() => onToggleGroup(entry.key)}
-                aria-expanded={isExpanded}
-                aria-controls={groupPanelId}
-                className={parentNavClass(isGroupActive || isExpanded)}
-              >
-                <Icon className="h-4 w-4 shrink-0" />
-                <span className="min-w-0 flex-1 truncate text-left" title={entry.label}>
+            <div key={entry.key} className="mb-4">
+              {showExpanded && (
+                <h3 className="px-5 mb-2 text-xs font-semibold tracking-wider text-gray-400 uppercase truncate">
                   {entry.label}
-                </span>
-                {isExpanded ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
-              </button>
-              {isExpanded && (
-                <div id={groupPanelId} className={childNavPanelClass()} role="group" aria-label={entry.label}>
-                  {entry.children.map((child) => {
-                    const ChildIcon = child.icon;
-                    return (
-                      <NavLink
-                        key={child.to}
-                        to={child.to}
-                        end={child.to === '/'}
-                        onClick={onNavClick}
-                        className={({ isActive }) => childNavClass(isActive)}
-                      >
-                        <ChildIcon className="h-4 w-4 shrink-0" />
-                        <span className="min-w-0 truncate" title={child.label}>
-                          {child.label}
-                        </span>
-                      </NavLink>
-                    );
-                  })}
-                </div>
+                </h3>
               )}
-            </section>
+              {!showExpanded && <div className="w-5 h-px bg-gray-200 mx-auto my-2" />}
+              <div className="space-y-0.5">
+                {entry.children.map((child) => {
+                  const ChildIcon = child.icon;
+                  const active = isRouteActive(pathname, child.to);
+                  return (
+                    <NavLink
+                      key={child.to}
+                      to={child.to}
+                      end={child.to === '/'}
+                      onClick={onNavClick}
+                      title={!showExpanded ? child.label : undefined}
+                      className={() => navItemClass(active, !showExpanded)}
+                    >
+                      <ChildIcon className={clsx('w-4 h-4 shrink-0', active ? 'text-violet-600' : 'text-gray-400')} />
+                      {showExpanded && <span className="min-w-0 truncate">{child.label}</span>}
+                    </NavLink>
+                  );
+                })}
+              </div>
+            </div>
           );
         })}
       </nav>
-      <div className="overflow-x-hidden p-4 border-t border-gray-800">
-        <div className="mb-3">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="min-w-0 flex-1 truncate text-sm text-gray-300" title={displayEmail}>
-              {displayEmail}
-            </span>
-            {displayRole && <div className="shrink-0"><RoleBadge role={displayRole} /></div>}
+
+      <div className="p-3 border-t border-gray-100 shrink-0">
+        {showExpanded ? (
+          <div className="flex items-center justify-between min-w-0">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="flex items-center justify-center w-8 h-8 rounded-full bg-violet-100 text-violet-700 font-medium shrink-0 text-sm">
+                {displayEmail.charAt(0).toUpperCase()}
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-gray-900 truncate" title={displayEmail}>
+                  {displayEmail}
+                </p>
+                {displayRole && <RoleBadge role={displayRole} />}
+              </div>
+            </div>
+            <button
+              onClick={logout}
+              className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors shrink-0"
+              aria-label="Sign out"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
-        </div>
-        <button
-          onClick={logout}
-          className="flex w-full items-center gap-2 text-sm text-gray-400 transition-colors hover:text-white"
-        >
-          <LogOut className="w-4 h-4 shrink-0" />
-          <span className="truncate">Sign Out</span>
-        </button>
+        ) : (
+          <div className="flex justify-center">
+            <div
+              className="w-8 h-8 rounded-full bg-violet-100 text-violet-700 font-medium flex items-center justify-center text-sm"
+              title={displayEmail}
+            >
+              {displayEmail.charAt(0).toUpperCase()}
+            </div>
+          </div>
+        )}
       </div>
     </>
   );
@@ -252,15 +253,15 @@ export default function Layout() {
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const {
-    width: desktopSidebarWidth,
-    isResizing: isSidebarResizing,
+    width: sidebarWidth,
+    collapsed,
+    showExpanded,
+    isResizing,
     startResizing,
     resetWidth,
+    toggleCollapsed,
+    setHovered,
   } = useDesktopSidebarWidth();
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
-    'ai-gateway': false,
-    access: false,
-  });
 
   const displayEmail = authMode === 'master_key' ? 'Master Key' : (session?.email || 'Unknown');
   const displayRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
@@ -280,64 +281,61 @@ export default function Layout() {
     [uiAccess]
   );
 
-  useEffect(() => {
-    const activeGroup = visibleEntries.find(
-      (entry): entry is NavGroup => entry.type === 'group' && entry.children.some((child) => isRouteActive(location.pathname, child.to))
-    );
-    if (!activeGroup) return;
-    setExpandedGroups((current) => (current[activeGroup.key] ? current : { ...current, [activeGroup.key]: true }));
-  }, [location.pathname, visibleEntries]);
-
-  const toggleGroup = (groupKey: string) => {
-    setExpandedGroups((current) => ({ ...current, [groupKey]: !current[groupKey] }));
-  };
-
   return (
     <div className="flex h-screen bg-gray-50">
       <aside
-        className="group relative hidden shrink-0 flex-col overflow-hidden bg-gray-900 text-white md:flex"
-        style={{ width: desktopSidebarWidth }}
+        onMouseEnter={() => collapsed && setHovered(true)}
+        onMouseLeave={() => { setHovered(false); }}
+        className={clsx(
+          'group relative hidden shrink-0 flex-col overflow-hidden bg-white border-r border-gray-200 md:flex transition-[width] z-10',
+          isResizing ? 'duration-0' : 'duration-200'
+        )}
+        style={{ width: sidebarWidth }}
       >
         <SidebarContent
           visibleEntries={visibleEntries}
           displayEmail={displayEmail}
           displayRole={displayRole}
           logout={logout}
-          expandedGroups={expandedGroups}
-          onToggleGroup={toggleGroup}
           pathname={location.pathname}
+          showExpanded={showExpanded}
+          collapsed={collapsed}
+          onToggleCollapsed={toggleCollapsed}
         />
-        <button
-          type="button"
-          aria-label="Resize sidebar"
-          onPointerDown={startResizing}
-          onDoubleClick={resetWidth}
-          className="absolute inset-y-0 right-0 w-3 cursor-col-resize"
-        >
-          <span
-            className={clsx(
-              'absolute inset-y-0 right-0 w-px transition-colors',
-              isSidebarResizing ? 'bg-blue-400' : 'bg-transparent group-hover:bg-gray-700'
-            )}
-          />
-          <span
-            className={clsx(
-              'pointer-events-none absolute right-1 top-1/2 flex h-14 w-4 -translate-y-1/2 items-center justify-center rounded-full border border-gray-700 bg-gray-800/90 text-[10px] text-gray-400 opacity-0 shadow-sm transition-opacity',
-              isSidebarResizing ? 'opacity-100 border-blue-500/50 text-blue-300' : 'group-hover:opacity-100'
-            )}
+
+        {showExpanded && (
+          <button
+            type="button"
+            aria-label="Resize sidebar"
+            onPointerDown={startResizing}
+            onDoubleClick={resetWidth}
+            className="absolute inset-y-0 right-0 w-3 cursor-col-resize"
           >
-            ||
-          </span>
-        </button>
+            <span
+              className={clsx(
+                'absolute inset-y-0 right-0 w-px transition-colors',
+                isResizing ? 'bg-violet-500' : 'bg-transparent group-hover:bg-gray-300'
+              )}
+            />
+            <span
+              className={clsx(
+                'pointer-events-none absolute right-0.5 top-1/2 flex h-10 w-3 -translate-y-1/2 items-center justify-center rounded-full border bg-white text-[8px] text-gray-400 opacity-0 shadow-sm transition-opacity',
+                isResizing ? 'opacity-100 border-violet-400 text-violet-500' : 'border-gray-200 group-hover:opacity-100'
+              )}
+            >
+              ||
+            </span>
+          </button>
+        )}
       </aside>
 
       {mobileOpen && (
         <div className="fixed inset-0 z-40 md:hidden">
           <div className="fixed inset-0 bg-black/50" onClick={() => setMobileOpen(false)} />
-          <aside className="fixed inset-y-0 left-0 w-64 bg-gray-900 text-white flex flex-col z-50">
+          <aside className="fixed inset-y-0 left-0 w-64 bg-white flex flex-col z-50 shadow-xl">
             <button
               onClick={() => setMobileOpen(false)}
-              className="absolute top-4 right-4 p-1 text-gray-400 hover:text-white"
+              className="absolute top-4 right-4 p-1 text-gray-400 hover:text-gray-900"
             >
               <X className="w-5 h-5" />
             </button>
@@ -346,10 +344,11 @@ export default function Layout() {
               displayEmail={displayEmail}
               displayRole={displayRole}
               logout={logout}
-              expandedGroups={expandedGroups}
-              onToggleGroup={toggleGroup}
               pathname={location.pathname}
               onNavClick={() => setMobileOpen(false)}
+              showExpanded={true}
+              collapsed={false}
+              onToggleCollapsed={() => {}}
             />
           </aside>
         </div>
@@ -361,7 +360,9 @@ export default function Layout() {
             <Menu className="w-5 h-5 text-gray-700" />
           </button>
           <div className="flex items-center gap-2">
-            <Zap className="w-5 h-5 text-blue-600" />
+            <div className="w-7 h-7 rounded-[8px] bg-violet-100 border border-violet-200/60 flex items-center justify-center shadow-sm">
+              <Zap className="w-3.5 h-3.5 text-violet-600 fill-violet-600" />
+            </div>
             <span className="font-semibold text-gray-900">DeltaLLM</span>
           </div>
         </header>
