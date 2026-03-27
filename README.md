@@ -157,6 +157,24 @@ Open `http://localhost:4002`.
 
 If you set `PLATFORM_BOOTSTRAP_ADMIN_EMAIL` and `PLATFORM_BOOTSTRAP_ADMIN_PASSWORD`, you can log in with that initial admin account. You can also keep using the master key for gateway calls.
 
+## Kubernetes Without Cloning
+
+Released Helm charts are published as OCI artifacts to GHCR, so you can install DeltaLLM without cloning this repository.
+
+```bash
+helm install deltallm oci://ghcr.io/deltawi/charts/deltallm --version 0.1.12
+```
+
+If you want the Presidio-enabled image variant from the same chart release:
+
+```bash
+helm install deltallm oci://ghcr.io/deltawi/charts/deltallm \
+  --version 0.1.12 \
+  --set image.tag=v0.1.12-presidio
+```
+
+For full Kubernetes examples and values, see [docs/deployment/kubernetes.md](/Users/mehditantaoui/Documents/Challenges/deltallm/docs/deployment/kubernetes.md).
+
 ## Local Development
 
 Use this path if you want to work on the backend or UI locally instead of running the full Compose stack.

@@ -1,6 +1,6 @@
 # Kubernetes Deployment
 
-Deploy DeltaLLM on Kubernetes with the Helm chart in [`helm/`](/Users/mehditantaoui/Documents/Challenges/deltallm/helm).
+Deploy DeltaLLM on Kubernetes with the released OCI Helm chart, or use the local chart in [`helm/`](/Users/mehditantaoui/Documents/Challenges/deltallm/helm) when developing the deployment itself.
 
 The rewritten chart supports three concrete deployment shapes:
 
@@ -13,6 +13,24 @@ The rewritten chart supports three concrete deployment shapes:
 - Kubernetes 1.24+
 - Helm 3.10+
 - `kubectl` access to the target cluster
+
+## Install a released chart
+
+Published releases are available from GHCR as OCI Helm charts.
+
+```bash
+helm install deltallm oci://ghcr.io/deltawi/charts/deltallm --version 0.1.12
+```
+
+To use the Presidio-enabled image variant from the same release:
+
+```bash
+helm install deltallm oci://ghcr.io/deltawi/charts/deltallm \
+  --version 0.1.12 \
+  --set image.tag=v0.1.12-presidio
+```
+
+If you are iterating on the chart locally instead of consuming a release, clone the repo and use `./helm` in the examples below.
 
 ## Fetch chart dependencies
 
