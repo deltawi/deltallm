@@ -5,11 +5,19 @@ from time import perf_counter
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import ValidationError
 
 from src.auth.roles import Permission
 from src.audit.actions import AuditAction
 from src.api.admin.endpoints.common import db_or_503, serialize_guardrail, emit_admin_mutation_audit
 from src.config import GuardrailConfig
+from src.guardrails.catalog import (
+    list_guardrail_presets,
+    get_guardrail_catalog_capabilities,
+    SUPPORTED_GUARDRAIL_ACTIONS,
+    SUPPORTED_GUARDRAIL_MODES,
+    validate_guardrail_runtime_requirements,
+)
 from src.middleware.admin import require_admin_permission
 
 router = APIRouter(tags=["Admin Guardrails"])
@@ -23,6 +31,16 @@ async def get_guardrails(request: Request) -> dict[str, Any]:
 
     items = [serialize_guardrail(guardrail) for guardrail in app_config.deltallm_settings.guardrails]
     return {"guardrails": items}
+
+
+@router.get("/ui/api/guardrails/catalog", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+async def get_guardrail_catalog() -> dict[str, Any]:
+    return {
+        "presets": list_guardrail_presets(),
+        "supported_modes": list(SUPPORTED_GUARDRAIL_MODES),
+        "supported_actions": list(SUPPORTED_GUARDRAIL_ACTIONS),
+        "capabilities": get_guardrail_catalog_capabilities(),
+    }
 
 
 @router.put("/ui/api/guardrails", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
@@ -45,7 +63,17 @@ async def update_guardrails(request: Request, payload: dict[str, Any]) -> dict[s
         deltallm_params = raw.get("deltallm_params")
         if not name or not isinstance(deltallm_params, dict):
             continue
-        updated.append(GuardrailConfig(guardrail_name=name, deltallm_params=deltallm_params))
+        try:
+            validate_guardrail_runtime_requirements(deltallm_params)
+            updated.append(GuardrailConfig(guardrail_name=name, deltallm_params=deltallm_params))
+        except ValidationError as exc:
+            first_error = exc.errors()[0] if exc.errors() else None
+            detail = str(first_error.get("msg")) if isinstance(first_error, dict) else "Invalid guardrail configuration"
+            if detail.startswith("Value error, "):
+                detail = detail.removeprefix("Value error, ")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     app_config.deltallm_settings.guardrails = updated
     registry = getattr(request.app.state, "guardrail_registry", None)

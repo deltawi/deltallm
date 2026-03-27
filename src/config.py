@@ -132,8 +132,11 @@ class GuardrailConfig(BaseModel):
         if "guardrail" not in value:
             raise ValueError("deltallm_params must include 'guardrail' class path")
         mode = value.get("mode")
-        if mode is not None and mode not in ("pre_call", "post_call", "during_call"):
-            raise ValueError("mode must be pre_call, post_call, or during_call")
+        if mode is not None and mode not in ("pre_call", "post_call"):
+            raise ValueError("mode must be pre_call or post_call")
+        action = value.get("default_action")
+        if action is not None and action not in ("block", "log"):
+            raise ValueError("default_action must be block or log")
         return value
 
 

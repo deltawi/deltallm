@@ -11,6 +11,7 @@ RUN npm run build
 FROM python:3.11-slim AS builder
 
 WORKDIR /app
+ARG INSTALL_PRESIDIO=false
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc libpq-dev curl libatomic1 \
@@ -18,6 +19,10 @@ RUN apt-get update \
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --user -r requirements.txt
+
+RUN if [ "$INSTALL_PRESIDIO" = "true" ]; then \
+      pip install --no-cache-dir --user presidio-analyzer presidio-anonymizer; \
+    fi
 
 # `pip install --user` drops console scripts (like `prisma`) into /root/.local/bin,
 # which is not on PATH by default during the build stage.
