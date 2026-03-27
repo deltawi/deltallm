@@ -19,16 +19,18 @@ The rewritten chart supports three concrete deployment shapes:
 Published releases are available from GHCR as OCI Helm charts.
 
 ```bash
-helm install deltallm oci://ghcr.io/deltawi/charts/deltallm --version 0.1.12
+helm install deltallm oci://ghcr.io/deltawi/charts/deltallm --version <chart-version>
 ```
 
 To use the Presidio-enabled image variant from the same release:
 
 ```bash
 helm install deltallm oci://ghcr.io/deltawi/charts/deltallm \
-  --version 0.1.12 \
-  --set image.tag=v0.1.12-presidio
+  --version <chart-version> \
+  --set image.tag=v<chart-version>-presidio
 ```
+
+Use the latest GitHub Release version for `<chart-version>`. The exact pinned install commands for each release live in the release notes.
 
 If you are iterating on the chart locally instead of consuming a release, clone the repo and use `./helm` in the examples below.
 

@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://github.com/deltawi/deltallm/actions"><img src="https://img.shields.io/github/actions/workflow/status/deltawi/deltallm/ci.yml?label=tests" alt="Tests"></a>
   <a href="https://deltallm.readthedocs.io"><img src="https://img.shields.io/badge/docs-readthedocs-blue" alt="Documentation"></a>
-  <img src="https://img.shields.io/badge/version-0.1.4-blue" alt="Version">
+  <a href="https://github.com/deltawi/deltallm/releases"><img src="https://img.shields.io/github/v/release/deltawi/deltallm?sort=semver" alt="Latest Release"></a>
   <img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python">
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
   <img src="https://img.shields.io/github/last-commit/deltawi/deltallm" alt="Last Commit">
@@ -162,16 +162,18 @@ If you set `PLATFORM_BOOTSTRAP_ADMIN_EMAIL` and `PLATFORM_BOOTSTRAP_ADMIN_PASSWO
 Released Helm charts are published as OCI artifacts to GHCR, so you can install DeltaLLM without cloning this repository.
 
 ```bash
-helm install deltallm oci://ghcr.io/deltawi/charts/deltallm --version 0.1.12
+helm install deltallm oci://ghcr.io/deltawi/charts/deltallm --version <chart-version>
 ```
 
 If you want the Presidio-enabled image variant from the same chart release:
 
 ```bash
 helm install deltallm oci://ghcr.io/deltawi/charts/deltallm \
-  --version 0.1.12 \
-  --set image.tag=v0.1.12-presidio
+  --version <chart-version> \
+  --set image.tag=v<chart-version>-presidio
 ```
+
+Use the latest GitHub Release version for `<chart-version>`. The exact copy-paste install commands for each release live in the release notes.
 
 For full Kubernetes examples and values, see [docs/deployment/kubernetes.md](/Users/mehditantaoui/Documents/Challenges/deltallm/docs/deployment/kubernetes.md).
 
