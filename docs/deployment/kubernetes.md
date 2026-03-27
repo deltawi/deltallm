@@ -28,8 +28,24 @@ helm repo add deltallm https://deltawi.github.io/deltallm
 helm repo update
 ```
 
+Generate the required secrets first:
+
 ```bash
-helm install deltallm deltallm/deltallm --version <chart-version>
+export DELTALLM_MASTER_KEY="$(python3 -c 'import secrets; print(\"sk-\" + secrets.token_hex(20) + \"A1\")')"
+export DELTALLM_SALT_KEY="$(openssl rand -hex 32)"
+```
+
+Quick-start install:
+
+```bash
+helm install deltallm deltallm/deltallm \
+  --version <chart-version> \
+  --set secret.values.masterKey="$DELTALLM_MASTER_KEY" \
+  --set secret.values.saltKey="$DELTALLM_SALT_KEY" \
+  --set-string env[0].name=PLATFORM_BOOTSTRAP_ADMIN_EMAIL \
+  --set-string env[0].value=admin@example.com \
+  --set-string env[1].name=PLATFORM_BOOTSTRAP_ADMIN_PASSWORD \
+  --set-string env[1].value='ChangeMe123!'
 ```
 
 To use the Presidio-enabled image variant from the same release:
@@ -37,10 +53,23 @@ To use the Presidio-enabled image variant from the same release:
 ```bash
 helm install deltallm deltallm/deltallm \
   --version <chart-version> \
+  --set secret.values.masterKey="$DELTALLM_MASTER_KEY" \
+  --set secret.values.saltKey="$DELTALLM_SALT_KEY" \
+  --set-string env[0].name=PLATFORM_BOOTSTRAP_ADMIN_EMAIL \
+  --set-string env[0].value=admin@example.com \
+  --set-string env[1].name=PLATFORM_BOOTSTRAP_ADMIN_PASSWORD \
+  --set-string env[1].value='ChangeMe123!' \
   --set image.tag=v<chart-version>-presidio
 ```
 
 Use the latest GitHub Release version for `<chart-version>`. The exact pinned install commands for each release live in the release notes.
+
+After install:
+
+- use `admin@example.com` and the bootstrap password to sign in to the Admin UI
+- use `DELTALLM_MASTER_KEY` for gateway and API requests
+
+For production, prefer a values file or secret-backed `envFrom` instead of passing credentials with `--set`.
 
 This is the recommended path if you just want to deploy DeltaLLM.
 
