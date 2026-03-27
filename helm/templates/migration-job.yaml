@@ -1,89 +1,53 @@
+{{- if .Values.migrationJob.enabled }}
 {{- $dbSecretName := .Values.runtime.database.existingSecret.name -}}
 {{- $dbAsyncSecretKey := default .Values.runtime.database.existingSecret.urlKey .Values.runtime.database.existingSecret.asyncUrlKey -}}
 {{- $redisSecretName := .Values.runtime.redis.existingSecret.name -}}
 {{- $s3SecretName := include "deltallm.s3SecretName" . -}}
-{{- $hasGeneratedAppSecret := not .Values.secret.existingSecret -}}
-{{- $hasGeneratedS3Secret := and .Values.s3.enabled (not .Values.s3.existingSecret.name) (or .Values.s3.accessKeyId .Values.s3.secretAccessKey) -}}
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: batch/v1
+kind: Job
 metadata:
-  name: {{ include "deltallm.fullname" . }}
+  name: {{ include "deltallm.fullname" . }}-migrate
   labels:
     {{- include "deltallm.labels" . | nindent 4 }}
-spec:
-  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
-  minReadySeconds: {{ .Values.minReadySeconds }}
-  {{- if not .Values.autoscaling.enabled }}
-  replicas: {{ .Values.replicaCount }}
-  {{- end }}
-  strategy:
-    type: {{ .Values.strategy.type }}
-    {{- if eq .Values.strategy.type "RollingUpdate" }}
-    rollingUpdate:
-      maxUnavailable: {{ .Values.strategy.rollingUpdate.maxUnavailable }}
-      maxSurge: {{ .Values.strategy.rollingUpdate.maxSurge }}
+  {{- if or .Values.migrationJob.annotations .Values.migrationJob.hook.enabled }}
+  annotations:
+    {{- with .Values.migrationJob.annotations }}
+    {{- toYaml . | nindent 4 }}
     {{- end }}
-  selector:
-    matchLabels:
-      {{- include "deltallm.selectorLabels" . | nindent 6 }}
+    {{- if .Values.migrationJob.hook.enabled }}
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: {{ .Values.migrationJob.hook.deletePolicy }}
+    {{- end }}
+  {{- end }}
+spec:
+  backoffLimit: {{ .Values.migrationJob.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrationJob.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: {{ .Values.migrationJob.ttlSecondsAfterFinished }}
   template:
     metadata:
       labels:
         {{- include "deltallm.selectorLabels" . | nindent 8 }}
-        {{- with .Values.podLabels }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
-      annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
-        {{- if $hasGeneratedAppSecret }}
-        checksum/app-secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
-        {{- end }}
-        {{- if $hasGeneratedS3Secret }}
-        checksum/s3-secret: {{ include (print $.Template.BasePath "/s3-secret.yaml") . | sha256sum }}
-        {{- end }}
-        {{- if .Values.prometheus.podAnnotations.enabled }}
-        prometheus.io/scrape: "true"
-        prometheus.io/port: {{ .Values.service.port | quote }}
-        prometheus.io/path: "/metrics"
-        {{- end }}
-        {{- with .Values.podAnnotations }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
     spec:
+      restartPolicy: OnFailure
       serviceAccountName: {{ include "deltallm.serviceAccountName" . }}
       automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
       {{- with .Values.image.pullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if .Values.priorityClassName }}
-      priorityClassName: {{ .Values.priorityClassName }}
-      {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
-        - name: {{ .Chart.Name }}
+        - name: migrate
           image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          {{- with .Values.command }}
           command:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with .Values.args }}
+            {{- toYaml .Values.migrationJob.command | nindent 12 }}
           args:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          ports:
-            - name: http
-              containerPort: {{ .Values.service.port }}
-              protocol: TCP
+            {{- toYaml .Values.migrationJob.args | nindent 12 }}
           env:
-            - name: HOST
-              value: "0.0.0.0"
-            - name: PORT
-              value: {{ .Values.service.port | quote }}
             - name: DELTALLM_CONFIG_PATH
               value: /app/config/config.yaml
             - name: DELTALLM_MASTER_KEY
@@ -180,33 +144,8 @@ spec:
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if .Values.probes.startup.enabled }}
-          startupProbe:
-            httpGet:
-              path: {{ .Values.probes.startup.path }}
-              port: http
-            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
-            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
-            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
-          {{- end }}
-          livenessProbe:
-            httpGet:
-              path: {{ .Values.probes.liveness.path }}
-              port: http
-            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
-            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
-            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
-            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
-          readinessProbe:
-            httpGet:
-              path: {{ .Values.probes.readiness.path }}
-              port: http
-            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
-            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
-            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
-            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
+            {{- toYaml .Values.migrationJob.resources | nindent 12 }}
       volumes:
         - name: config
           configMap:
@@ -214,43 +153,4 @@ spec:
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- with .Values.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.topologySpreadConstraints }}
-      topologySpreadConstraints:
-        {{- range . }}
-        - maxSkew: {{ .maxSkew }}
-          topologyKey: {{ .topologyKey }}
-          whenUnsatisfiable: {{ .whenUnsatisfiable }}
-          {{- with .minDomains }}
-          minDomains: {{ . }}
-          {{- end }}
-          {{- with .nodeAffinityPolicy }}
-          nodeAffinityPolicy: {{ . }}
-          {{- end }}
-          {{- with .nodeTaintsPolicy }}
-          nodeTaintsPolicy: {{ . }}
-          {{- end }}
-          {{- with .matchLabelKeys }}
-          matchLabelKeys:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          labelSelector:
-            {{- if .labelSelector }}
-{{ toYaml .labelSelector | indent 12 }}
-            {{- else }}
-              matchLabels:
-                {{- include "deltallm.selectorLabels" $ | nindent 16 }}
-            {{- end }}
-        {{- end }}
-      {{- end }}
-      {{- with .Values.tolerations }}
-      tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+{{- end }}

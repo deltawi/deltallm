@@ -1,0 +1,68 @@
+name: Release Images
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-images-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            tag_suffix: ""
+            install_presidio: "false"
+          - name: presidio
+            tag_suffix: "-presidio"
+            install_presidio: "true"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: deltallm/deltallm
+          tags: |
+            type=raw,value=${{ github.event.release.tag_name }}${{ matrix.tag_suffix }}
+            type=raw,value=latest${{ matrix.tag_suffix }},enable=${{ github.event.release.prerelease == false }}
+          labels: |
+            org.opencontainers.image.title=DeltaLLM
+            org.opencontainers.image.description=OpenAI-compatible LLM gateway
+
+      - name: Build and push ${{ matrix.name }} image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            INSTALL_PRESIDIO=${{ matrix.install_presidio }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
