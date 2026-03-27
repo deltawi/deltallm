@@ -82,99 +82,89 @@ const typeLabel: Record<GuardrailType, string> = {
   custom: 'Custom',
 };
 
-function GuardrailCard({ guardrail, onToggle }: { guardrail: Guardrail; onToggle: () => void }) {
-  const config = typeConfig[guardrail.type];
-  const Icon = config.icon;
-
+function GuardrailsTable({ guardrails, onToggle }: { guardrails: Guardrail[]; onToggle: (name: string) => void }) {
   return (
-    <div className={`group relative rounded-xl border bg-white transition-all hover:shadow-md ${guardrail.enabled ? 'border-gray-200' : 'border-gray-100 opacity-70'}`}>
-      <div className="p-5">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-start gap-3.5">
-            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${config.bg}`}>
-              <Icon className={`h-5 w-5 ${config.color}`} />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-semibold text-gray-900">{guardrail.label}</h3>
-                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${config.badge}`}>
-                  {typeLabel[guardrail.type]}
-                </span>
-              </div>
-              <p className="mt-1 text-xs text-gray-500 leading-relaxed">{guardrail.description}</p>
-            </div>
-          </div>
-
-          <button
-            onClick={onToggle}
-            className="shrink-0 mt-0.5"
-            title={guardrail.enabled ? 'Disable guardrail' : 'Enable guardrail'}
-          >
-            {guardrail.enabled ? (
-              <ToggleRight className="h-7 w-7 text-violet-600" />
-            ) : (
-              <ToggleLeft className="h-7 w-7 text-gray-300" />
-            )}
-          </button>
-        </div>
-
-        <div className="mt-4 flex items-center gap-5">
-          <div className="flex items-center gap-1.5">
-            <ArrowDownUp className="h-3.5 w-3.5 text-gray-400" />
-            <span className="text-xs text-gray-600">
-              {guardrail.mode === 'pre_call' ? 'Pre-call' : 'Post-call'}
-            </span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            {guardrail.action === 'block' ? (
-              <Ban className="h-3.5 w-3.5 text-red-500" />
-            ) : (
-              <Eye className="h-3.5 w-3.5 text-blue-500" />
-            )}
-            <span className="text-xs text-gray-600">
-              {guardrail.action === 'block' ? 'Block' : 'Log only'}
-            </span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <ScanSearch className="h-3.5 w-3.5 text-gray-400" />
-            <span className="text-xs text-gray-600">
-              Threshold: {guardrail.threshold}
-            </span>
-          </div>
-          {guardrail.entities && (
-            <div className="flex items-center gap-1.5">
-              <Layers className="h-3.5 w-3.5 text-gray-400" />
-              <span className="text-xs text-gray-600">
-                {guardrail.entities.length} entities
-              </span>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between border-t border-gray-100 px-5 py-2.5">
-        <div className="flex items-center gap-1">
-          {guardrail.entities?.slice(0, 3).map((entity) => (
-            <span key={entity} className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500">
-              {entity}
-            </span>
-          ))}
-          {guardrail.entities && guardrail.entities.length > 3 && (
-            <span className="text-[10px] text-gray-400">+{guardrail.entities.length - 3} more</span>
-          )}
-        </div>
-        <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-          <button className="rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
-            <Settings2 className="h-3.5 w-3.5" />
-          </button>
-          <button className="rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
-            <Pencil className="h-3.5 w-3.5" />
-          </button>
-          <button className="rounded-md p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-500">
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      </div>
+    <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+      <table className="w-full">
+        <thead>
+          <tr className="border-b border-gray-100 bg-gray-50/60">
+            <th className="px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Name</th>
+            <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Type</th>
+            <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Mode</th>
+            <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Action</th>
+            <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-500">Threshold</th>
+            <th className="px-4 py-3 text-center text-xs font-medium uppercase tracking-wide text-gray-500">Default</th>
+            <th className="w-24 px-4 py-3"></th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-100">
+          {guardrails.map((g) => {
+            const config = typeConfig[g.type];
+            const Icon = config.icon;
+            return (
+              <tr key={g.name} className={`group transition-colors hover:bg-gray-50/50 ${!g.enabled ? 'opacity-60' : ''}`}>
+                <td className="px-5 py-3.5">
+                  <div className="flex items-center gap-3">
+                    <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${config.bg}`}>
+                      <Icon className={`h-4 w-4 ${config.color}`} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-gray-900">{g.label}</p>
+                      <p className="truncate text-xs text-gray-400">{g.name}</p>
+                    </div>
+                  </div>
+                </td>
+                <td className="px-4 py-3.5">
+                  <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${config.badge}`}>
+                    {typeLabel[g.type]}
+                  </span>
+                </td>
+                <td className="px-4 py-3.5">
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-700">
+                    {g.mode === 'pre_call' ? 'Pre-call' : 'Post-call'}
+                  </span>
+                </td>
+                <td className="px-4 py-3.5">
+                  {g.action === 'block' ? (
+                    <span className="inline-flex items-center gap-1 text-xs font-medium text-red-600">
+                      <Ban className="h-3.5 w-3.5" /> Block
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-xs font-medium text-blue-600">
+                      <Eye className="h-3.5 w-3.5" /> Log
+                    </span>
+                  )}
+                </td>
+                <td className="px-4 py-3.5">
+                  <span className="text-sm tabular-nums text-gray-700">{g.threshold.toFixed(1)}</span>
+                </td>
+                <td className="px-4 py-3.5 text-center">
+                  <button
+                    onClick={() => onToggle(g.name)}
+                    title={g.enabled ? 'Disable guardrail' : 'Enable guardrail'}
+                  >
+                    {g.enabled ? (
+                      <ToggleRight className="mx-auto h-6 w-6 text-violet-600" />
+                    ) : (
+                      <ToggleLeft className="mx-auto h-6 w-6 text-gray-300" />
+                    )}
+                  </button>
+                </td>
+                <td className="px-4 py-3.5">
+                  <div className="flex items-center justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                    <button className="rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                    <button className="rounded-md p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-500">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -476,19 +466,7 @@ export function GuardrailsRedesign() {
           </div>
         </div>
 
-        <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-xs font-medium uppercase tracking-wide text-gray-500">Global Guardrails</h2>
-          <div className="flex items-center gap-2 text-xs text-gray-400">
-            <Info className="h-3.5 w-3.5" />
-            <span>Hover cards for actions</span>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          {guardrailList.map((g) => (
-            <GuardrailCard key={g.name} guardrail={g} onToggle={() => toggleGuardrail(g.name)} />
-          ))}
-        </div>
+        <GuardrailsTable guardrails={guardrailList} onToggle={toggleGuardrail} />
 
         <ScopedAssignmentsPanel />
       </div>
