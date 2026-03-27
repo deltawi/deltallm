@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://github.com/deltawi/deltallm/actions"><img src="https://img.shields.io/github/actions/workflow/status/deltawi/deltallm/ci.yml?label=tests" alt="Tests"></a>
   <a href="https://deltallm.readthedocs.io"><img src="https://img.shields.io/badge/docs-readthedocs-blue" alt="Documentation"></a>
-  <img src="https://img.shields.io/badge/version-0.1.4-blue" alt="Version">
+  <a href="https://github.com/deltawi/deltallm/releases"><img src="https://img.shields.io/github/v/release/deltawi/deltallm?sort=semver" alt="Latest Release"></a>
   <img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python">
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
   <img src="https://img.shields.io/github/last-commit/deltawi/deltallm" alt="Last Commit">
@@ -51,7 +51,13 @@ Manage all your model deployments, API keys, teams, and usage from a clean web i
 
 **Docs:** https://deltallm.readthedocs.io/en/latest
 
-## Quick Start
+## Choose Your Install Path
+
+- **Option 1: Docker Compose**: fastest way to run DeltaLLM locally for evaluation.
+- **Option 2: Kubernetes From a Released Chart**: install with Helm from GHCR without cloning the repository.
+- **Option 3: Local Development From the Repo**: best path for contributors and for local backend or UI work.
+
+## Option 1: Docker Compose
 
 Use Docker Compose if you want the fastest working setup.
 
@@ -157,7 +163,27 @@ Open `http://localhost:4002`.
 
 If you set `PLATFORM_BOOTSTRAP_ADMIN_EMAIL` and `PLATFORM_BOOTSTRAP_ADMIN_PASSWORD`, you can log in with that initial admin account. You can also keep using the master key for gateway calls.
 
-## Local Development
+## Option 2: Kubernetes From a Released Chart
+
+Released Helm charts are published as OCI artifacts to GHCR, so you can install DeltaLLM without cloning this repository.
+
+```bash
+helm install deltallm oci://ghcr.io/deltawi/charts/deltallm --version <chart-version>
+```
+
+If you want the Presidio-enabled image variant from the same chart release:
+
+```bash
+helm install deltallm oci://ghcr.io/deltawi/charts/deltallm \
+  --version <chart-version> \
+  --set image.tag=v<chart-version>-presidio
+```
+
+Use the latest GitHub Release version for `<chart-version>`. The exact copy-paste install commands for each release live in the release notes.
+
+For full Kubernetes examples and values, see [docs/deployment/kubernetes.md](docs/deployment/kubernetes.md).
+
+## Option 3: Local Development From the Repo
 
 Use this path if you want to work on the backend or UI locally instead of running the full Compose stack.
 
