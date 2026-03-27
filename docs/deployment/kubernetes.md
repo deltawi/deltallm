@@ -36,13 +36,27 @@ By default, the app pod uses an init container to wait until the configured Post
 
 This path uses bundled PostgreSQL and Redis and generated control-plane secrets.
 
+!!! warning "Generate the master key and salt key before you install"
+    DeltaLLM will not start with placeholder values such as `change-me`.
+    Generate both values first, then pass them into Helm.
+
+    Copy and run:
+
+    ```bash
+    export DELTALLM_MASTER_KEY="$(python3 -c 'import secrets; print(\"sk-\" + secrets.token_hex(20) + \"A1\")')"
+    export DELTALLM_SALT_KEY="$(openssl rand -hex 32)"
+    ```
+
+    `DELTALLM_MASTER_KEY` must be at least 32 characters long and include both letters and numbers.
+    `DELTALLM_SALT_KEY` must be a real secret value and must not be `change-me`.
+
 ```bash
 helm upgrade --install deltallm ./helm \
   --namespace deltallm \
   --create-namespace \
   -f helm/values-eval.yaml \
-  --set secret.values.masterKey="StrongMasterKey2026SecureValue99" \
-  --set secret.values.saltKey="unique-salt-2026"
+  --set secret.values.masterKey="$DELTALLM_MASTER_KEY" \
+  --set secret.values.saltKey="$DELTALLM_SALT_KEY"
 ```
 
 Access the service with port-forwarding:
@@ -58,13 +72,20 @@ Open the admin UI at `http://localhost:4000`.
 
 For production, keep secrets out of Helm values.
 
+Generate the secrets first if you have not already:
+
+```bash
+export DELTALLM_MASTER_KEY="$(python3 -c 'import secrets; print(\"sk-\" + secrets.token_hex(20) + \"A1\")')"
+export DELTALLM_SALT_KEY="$(openssl rand -hex 32)"
+```
+
 Create one secret for `master-key` and `salt-key`:
 
 ```bash
 kubectl create secret generic deltallm-app-secrets \
   --namespace deltallm \
-  --from-literal=master-key='StrongMasterKey2026SecureValue99' \
-  --from-literal=salt-key='unique-salt-2026'
+  --from-literal=master-key="$DELTALLM_MASTER_KEY" \
+  --from-literal=salt-key="$DELTALLM_SALT_KEY"
 ```
 
 Create one secret for runtime environment variables:
@@ -73,7 +94,6 @@ Create one secret for runtime environment variables:
 kubectl create secret generic deltallm-runtime-secrets \
   --namespace deltallm \
   --from-literal=DATABASE_URL='postgresql://user:pass@postgres:5432/deltallm' \
-  --from-literal=DELTALLM_DATABASE_URL='postgresql+asyncpg://user:pass@postgres:5432/deltallm' \
   --from-literal=REDIS_URL='redis://redis:6379/0' \
   --from-literal=OPENAI_API_KEY='sk-...'
 ```
@@ -89,7 +109,6 @@ runtime:
     existingSecret:
       name: deltallm-runtime-secrets
       urlKey: DATABASE_URL
-      asyncUrlKey: DELTALLM_DATABASE_URL
   redis:
     existingSecret:
       name: deltallm-runtime-secrets
@@ -157,7 +176,6 @@ runtime:
     existingSecret:
       name: deltallm-runtime-secrets
       urlKey: DATABASE_URL
-      asyncUrlKey: DELTALLM_DATABASE_URL
   redis:
     existingSecret:
       name: deltallm-runtime-secrets
@@ -262,7 +280,6 @@ runtime:
     existingSecret:
       name: deltallm-runtime-secrets
       urlKey: DATABASE_URL
-      asyncUrlKey: DELTALLM_DATABASE_URL
   redis:
     existingSecret:
       name: deltallm-runtime-secrets

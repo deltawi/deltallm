@@ -117,11 +117,9 @@ secret:
 runtime:
   database:
     url: ""
-    asyncUrl: ""
     existingSecret:
       name: ""
       urlKey: DATABASE_URL
-      asyncUrlKey: ""
   redis:
     url: ""
     existingSecret:

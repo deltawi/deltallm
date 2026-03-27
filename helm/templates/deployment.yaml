@@ -1,5 +1,4 @@
 {{- $dbSecretName := .Values.runtime.database.existingSecret.name -}}
-{{- $dbAsyncSecretKey := default .Values.runtime.database.existingSecret.urlKey .Values.runtime.database.existingSecret.asyncUrlKey -}}
 {{- $redisSecretName := .Values.runtime.redis.existingSecret.name -}}
 {{- $s3SecretName := include "deltallm.s3SecretName" . -}}
 {{- $hasGeneratedAppSecret := not .Values.secret.existingSecret -}}
@@ -179,19 +178,6 @@ spec:
               value: {{ .Values.runtime.database.url | quote }}
               {{- else }}
               value: {{ include "deltallm.bundledDatabaseUrl" . | quote }}
-              {{- end }}
-            - name: DELTALLM_DATABASE_URL
-              {{- if $dbSecretName }}
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $dbSecretName }}
-                  key: {{ $dbAsyncSecretKey }}
-              {{- else if .Values.runtime.database.asyncUrl }}
-              value: {{ .Values.runtime.database.asyncUrl | quote }}
-              {{- else if .Values.runtime.database.url }}
-              value: {{ .Values.runtime.database.url | replace "postgresql://" "postgresql+asyncpg://" | quote }}
-              {{- else }}
-              value: {{ include "deltallm.bundledAsyncDatabaseUrl" . | quote }}
               {{- end }}
             {{- end }}
             {{- if or $redisSecretName .Values.runtime.redis.url .Values.redis.enabled }}

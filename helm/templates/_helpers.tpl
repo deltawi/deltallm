@@ -70,10 +70,6 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "postgresql://%s:%s@%s:5432/%s" ($username | urlquery) ($password | urlquery) (include "deltallm.postgresqlHost" .) $database -}}
 {{- end -}}
 
-{{- define "deltallm.bundledAsyncDatabaseUrl" -}}
-{{ include "deltallm.bundledDatabaseUrl" . | replace "postgresql://" "postgresql+asyncpg://" }}
-{{- end -}}
-
 {{- define "deltallm.bundledRedisUrl" -}}
 {{- if .Values.redis.auth.enabled -}}
 {{- $password := required "redis.auth.password is required when redis.enabled=true and redis.auth.enabled=true unless runtime.redis.existingSecret.name or runtime.redis.url is set" .Values.redis.auth.password -}}
