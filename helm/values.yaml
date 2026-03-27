@@ -100,6 +100,11 @@ envFrom: []
 extraVolumes: []
 extraVolumeMounts: []
 
+dependencyWait:
+  enabled: true
+  timeoutSeconds: 180
+  periodSeconds: 2
+
 secret:
   existingSecret: ""
   keys:

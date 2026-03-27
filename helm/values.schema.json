@@ -75,6 +75,15 @@
     },
     "env": { "type": "array" },
     "envFrom": { "type": "array" },
+    "dependencyWait": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 },
+        "periodSeconds": { "type": "integer", "minimum": 1 }
+      }
+    },
     "secret": {
       "type": "object",
       "additionalProperties": true,

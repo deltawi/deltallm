@@ -30,6 +30,8 @@ The chart now ships with three value layers:
 - [`helm/values-eval.yaml`](/Users/mehditantaoui/Documents/Challenges/deltallm/helm/values-eval.yaml): quick-start with bundled PostgreSQL and Redis
 - [`helm/values-production.yaml`](/Users/mehditantaoui/Documents/Challenges/deltallm/helm/values-production.yaml): HA-oriented production defaults
 
+By default, the app pod uses an init container to wait until the configured PostgreSQL and Redis endpoints accept TCP connections before DeltaLLM starts. This avoids the initial crash loop that can happen while bundled stateful dependencies are still coming up.
+
 ## Quick start
 
 This path uses bundled PostgreSQL and Redis and generated control-plane secrets.
@@ -126,6 +128,15 @@ redis:
 ```
 
 If bundled Redis auth is enabled, the chart will generate the correct authenticated URL for DeltaLLM.
+
+If you need to tune or disable the startup wait behavior:
+
+```yaml
+dependencyWait:
+  enabled: true
+  timeoutSeconds: 180
+  periodSeconds: 2
+```
 
 ### 2. External PostgreSQL and Redis
 
