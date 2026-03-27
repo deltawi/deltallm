@@ -1,6 +1,6 @@
 # Kubernetes Deployment
 
-Deploy DeltaLLM on Kubernetes with the released OCI Helm chart, or use the local chart in [`helm/`](/Users/mehditantaoui/Documents/Challenges/deltallm/helm) when developing the deployment itself.
+Deploy DeltaLLM on Kubernetes with the released OCI Helm chart, or use the local chart in `helm/` when developing the deployment itself.
 
 The rewritten chart supports three concrete deployment shapes:
 
@@ -46,9 +46,9 @@ helm dependency build ./helm
 
 The chart now ships with three value layers:
 
-- [`helm/values.yaml`](/Users/mehditantaoui/Documents/Challenges/deltallm/helm/values.yaml): safe baseline
-- [`helm/values-eval.yaml`](/Users/mehditantaoui/Documents/Challenges/deltallm/helm/values-eval.yaml): quick-start with bundled PostgreSQL and Redis
-- [`helm/values-production.yaml`](/Users/mehditantaoui/Documents/Challenges/deltallm/helm/values-production.yaml): HA-oriented production defaults
+- `helm/values.yaml`: safe baseline
+- `helm/values-eval.yaml`: quick-start with bundled PostgreSQL and Redis
+- `helm/values-production.yaml`: HA-oriented production defaults
 
 By default, the app pod uses an init container to wait until the configured PostgreSQL and Redis endpoints accept TCP connections before DeltaLLM starts. This avoids the initial crash loop that can happen while bundled stateful dependencies are still coming up.
 

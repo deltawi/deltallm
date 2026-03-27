@@ -175,7 +175,7 @@ helm install deltallm oci://ghcr.io/deltawi/charts/deltallm \
 
 Use the latest GitHub Release version for `<chart-version>`. The exact copy-paste install commands for each release live in the release notes.
 
-For full Kubernetes examples and values, see [docs/deployment/kubernetes.md](/Users/mehditantaoui/Documents/Challenges/deltallm/docs/deployment/kubernetes.md).
+For full Kubernetes examples and values, see [docs/deployment/kubernetes.md](docs/deployment/kubernetes.md).
 
 ## Local Development
 
