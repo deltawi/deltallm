@@ -1,12 +1,12 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { guardrails, organizations, teams, keys, type GuardrailRecord } from '../lib/api';
 import { useApi } from '../lib/hooks';
 import ScopedGuardrailEditor from '../components/ScopedGuardrailEditor';
 import GuardrailFormModal from '../components/guardrails/GuardrailFormModal';
 import {
-  Plus, Pencil, Trash2, ChevronDown, ChevronRight,
+  Plus, Pencil, Trash2,
   Building2, Users, Key, Eye, Ban,
-  Shield, ShieldCheck, ShieldAlert, ShieldOff,
+  Shield, ShieldCheck, ShieldAlert,
   Fingerprint, MessageSquareWarning, Code2,
   ToggleLeft, ToggleRight,
   ArrowDownUp, CheckCircle2, Search,
@@ -131,7 +131,6 @@ export default function Guardrails() {
   const isSearching = scopeSearch.trim().length > 0;
   const visibleEntities = isSearching || showAll ? filteredEntities : filteredEntities.slice(0, VISIBLE_LIMIT);
   const hiddenCount = filteredEntities.length - visibleEntities.length;
-  const ScopeIcon = scopeIcons[activeScope];
   const colors = scopeColors[activeScope];
 
   const loadError = error instanceof Error ? error.message : catalogError instanceof Error ? catalogError.message : null;
