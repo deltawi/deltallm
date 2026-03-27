@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { guardrails, organizations, teams, keys, type GuardrailRecord } from '../lib/api';
 import { useApi } from '../lib/hooks';
 import ScopedGuardrailEditor from '../components/ScopedGuardrailEditor';
@@ -9,7 +9,7 @@ import {
   Shield, ShieldCheck, ShieldAlert, ShieldOff,
   Fingerprint, MessageSquareWarning, Code2,
   ToggleLeft, ToggleRight,
-  ArrowDownUp, CheckCircle2,
+  ArrowDownUp, CheckCircle2, Search,
 } from 'lucide-react';
 import { IndexShell } from '../components/admin/shells';
 import type { GuardrailConfigInput } from '../lib/guardrails';
@@ -82,6 +82,8 @@ export default function Guardrails() {
   const [editItem, setEditItem] = useState<GuardrailRecord | null>(null);
   const [activeScope, setActiveScope] = useState<ScopeKind>('organization');
   const [scopeTarget, setScopeTarget] = useState<ScopeTarget>(null);
+  const [scopeSearch, setScopeSearch] = useState('');
+  const [showAll, setShowAll] = useState(false);
 
   const items = data || [];
   const presidioCapability = catalog?.capabilities.presidio;
@@ -119,7 +121,16 @@ export default function Guardrails() {
     return keyList.map((k: any) => ({ id: k.token, label: k.key_name || k.key_alias || k.token?.slice(0, 12) }));
   };
 
-  const currentEntities = scopeEntities(activeScope);
+  const VISIBLE_LIMIT = 8;
+  const allEntities = scopeEntities(activeScope);
+  const filteredEntities = useMemo(() => {
+    if (!scopeSearch.trim()) return allEntities;
+    const q = scopeSearch.toLowerCase();
+    return allEntities.filter((e: any) => e.label.toLowerCase().includes(q));
+  }, [allEntities, scopeSearch]);
+  const isSearching = scopeSearch.trim().length > 0;
+  const visibleEntities = isSearching || showAll ? filteredEntities : filteredEntities.slice(0, VISIBLE_LIMIT);
+  const hiddenCount = filteredEntities.length - visibleEntities.length;
   const ScopeIcon = scopeIcons[activeScope];
   const colors = scopeColors[activeScope];
 
@@ -349,6 +360,8 @@ export default function Guardrails() {
                   onClick={() => {
                     setActiveScope(scope);
                     setScopeTarget(null);
+                    setScopeSearch('');
+                    setShowAll(false);
                   }}
                   className={`flex items-center gap-2 px-5 py-3 text-sm font-medium transition-colors border-b-2 ${
                     isActive
@@ -369,14 +382,26 @@ export default function Guardrails() {
           </div>
 
           <div className="flex divide-x divide-gray-200" style={{ minHeight: 320 }}>
-            <div className="w-64 shrink-0 bg-gray-50/50 p-3">
-              {currentEntities.length === 0 ? (
+            <div className="w-64 shrink-0 bg-gray-50/50 p-3 flex flex-col">
+              <div className="relative mb-2">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  value={scopeSearch}
+                  onChange={(e) => { setScopeSearch(e.target.value); setShowAll(false); }}
+                  placeholder={`Search ${activeScope === 'organization' ? 'organizations' : activeScope === 'team' ? 'teams' : 'API keys'}…`}
+                  className="w-full rounded-lg border border-gray-200 bg-white py-1.5 pl-8 pr-3 text-xs text-gray-700 placeholder:text-gray-400 focus:border-violet-300 focus:outline-none focus:ring-1 focus:ring-violet-200"
+                />
+              </div>
+              {filteredEntities.length === 0 ? (
                 <p className="px-3 py-4 text-xs text-gray-400">
-                  No {activeScope === 'organization' ? 'organizations' : activeScope === 'team' ? 'teams' : 'API keys'} found
+                  {isSearching
+                    ? 'No matches found'
+                    : `No ${activeScope === 'organization' ? 'organizations' : activeScope === 'team' ? 'teams' : 'API keys'} found`}
                 </p>
               ) : (
-                <div className="space-y-0.5">
-                  {currentEntities.map((entity: any) => (
+                <div className="space-y-0.5 overflow-y-auto flex-1 min-h-0">
+                  {visibleEntities.map((entity: any) => (
                     <button
                       key={entity.id}
                       onClick={() =>
@@ -395,6 +420,22 @@ export default function Guardrails() {
                       <span className="truncate">{entity.label}</span>
                     </button>
                   ))}
+                  {hiddenCount > 0 && (
+                    <button
+                      onClick={() => setShowAll(true)}
+                      className="mt-1 w-full rounded-lg px-3 py-1.5 text-xs font-medium text-violet-600 hover:bg-violet-50 transition-colors"
+                    >
+                      Show {hiddenCount} more
+                    </button>
+                  )}
+                  {showAll && filteredEntities.length > VISIBLE_LIMIT && !isSearching && (
+                    <button
+                      onClick={() => setShowAll(false)}
+                      className="mt-1 w-full rounded-lg px-3 py-1.5 text-xs font-medium text-gray-500 hover:bg-gray-100 transition-colors"
+                    >
+                      Show less
+                    </button>
+                  )}
                 </div>
               )}
             </div>
