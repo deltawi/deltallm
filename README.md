@@ -51,7 +51,13 @@ Manage all your model deployments, API keys, teams, and usage from a clean web i
 
 **Docs:** https://deltallm.readthedocs.io/en/latest
 
-## Quick Start
+## Choose Your Install Path
+
+- **Option 1: Docker Compose**: fastest way to run DeltaLLM locally for evaluation.
+- **Option 2: Kubernetes From a Released Chart**: install with Helm from GHCR without cloning the repository.
+- **Option 3: Local Development From the Repo**: best path for contributors and for local backend or UI work.
+
+## Option 1: Docker Compose
 
 Use Docker Compose if you want the fastest working setup.
 
@@ -157,7 +163,7 @@ Open `http://localhost:4002`.
 
 If you set `PLATFORM_BOOTSTRAP_ADMIN_EMAIL` and `PLATFORM_BOOTSTRAP_ADMIN_PASSWORD`, you can log in with that initial admin account. You can also keep using the master key for gateway calls.
 
-## Kubernetes Without Cloning
+## Option 2: Kubernetes From a Released Chart
 
 Released Helm charts are published as OCI artifacts to GHCR, so you can install DeltaLLM without cloning this repository.
 
@@ -177,7 +183,7 @@ Use the latest GitHub Release version for `<chart-version>`. The exact copy-past
 
 For full Kubernetes examples and values, see [docs/deployment/kubernetes.md](docs/deployment/kubernetes.md).
 
-## Local Development
+## Option 3: Local Development From the Repo
 
 Use this path if you want to work on the backend or UI locally instead of running the full Compose stack.
 
