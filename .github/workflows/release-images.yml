@@ -5,8 +5,7 @@ on:
     types: [published]
 
 permissions:
-  contents: read
-  packages: write
+  contents: write
 
 concurrency:
   group: release-artifacts-${{ github.event.release.tag_name }}
@@ -68,15 +67,17 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
-  helm-chart:
+  helm-repo:
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name }}
-      CHART_OCI_REPOSITORY: ghcr.io/${{ github.repository_owner }}/charts
+      CHART_REPO_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
@@ -142,9 +143,61 @@ jobs:
       - name: Package chart
         run: helm package /tmp/deltallm-chart --destination /tmp/deltallm-packages
 
-      - name: Log in to GHCR
+      - name: Publish chart repository to gh-pages
         shell: bash
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+        env:
+          GH_PAGES_DIR: /tmp/deltallm-gh-pages
+        run: |
+          set -euo pipefail
 
-      - name: Push chart to GHCR
-        run: helm push /tmp/deltallm-packages/deltallm-${{ env.CHART_VERSION }}.tgz oci://${{ env.CHART_OCI_REPOSITORY }}
+          rm -rf "${GH_PAGES_DIR}"
+
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            git fetch origin gh-pages
+            git worktree add "${GH_PAGES_DIR}" origin/gh-pages
+            cd "${GH_PAGES_DIR}"
+            git switch -c gh-pages --track origin/gh-pages || git switch gh-pages
+          else
+            git worktree add -b gh-pages "${GH_PAGES_DIR}" HEAD
+            cd "${GH_PAGES_DIR}"
+            git rm -rf . >/dev/null 2>&1 || true
+            find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+          fi
+
+          cp "/tmp/deltallm-packages/deltallm-${CHART_VERSION}.tgz" .
+
+          if [[ -f index.yaml ]]; then
+            helm repo index . --url "${CHART_REPO_URL}" --merge index.yaml
+          else
+            helm repo index . --url "${CHART_REPO_URL}"
+          fi
+
+          cat > index.html <<EOF
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>DeltaLLM Helm Repository</title>
+          </head>
+          <body>
+            <h1>DeltaLLM Helm Repository</h1>
+            <p>Add this repository with:</p>
+            <pre><code>helm repo add deltallm ${CHART_REPO_URL}
+          helm repo update</code></pre>
+            <p>See the main project docs for deployment examples.</p>
+          </body>
+          </html>
+          EOF
+
+          touch .nojekyll
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .nojekyll index.html index.yaml "deltallm-${CHART_VERSION}.tgz"
+          if git diff --cached --quiet; then
+            echo "No chart repo changes to publish"
+            exit 0
+          fi
+          git commit -m "Publish Helm chart ${CHART_VERSION}"
+          git push origin gh-pages

@@ -21,16 +21,21 @@ The rewritten chart supports three concrete deployment shapes:
 
 ## Option 1: Install From a Released Chart
 
-Published releases are available from GHCR as OCI Helm charts.
+Published releases are available from the public Helm repository at `https://deltawi.github.io/deltallm`.
 
 ```bash
-helm install deltallm oci://ghcr.io/deltawi/charts/deltallm --version <chart-version>
+helm repo add deltallm https://deltawi.github.io/deltallm
+helm repo update
+```
+
+```bash
+helm install deltallm deltallm/deltallm --version <chart-version>
 ```
 
 To use the Presidio-enabled image variant from the same release:
 
 ```bash
-helm install deltallm oci://ghcr.io/deltawi/charts/deltallm \
+helm install deltallm deltallm/deltallm \
   --version <chart-version> \
   --set image.tag=v<chart-version>-presidio
 ```
