@@ -1,6 +1,11 @@
 # Kubernetes Deployment
 
-Deploy DeltaLLM on Kubernetes with the released OCI Helm chart, or use the local chart in `helm/` when developing the deployment itself.
+Use this guide to deploy DeltaLLM on Kubernetes with Helm.
+
+There are two install paths:
+
+- **Install from a released chart** if you want the simplest production or evaluation setup without cloning the repository.
+- **Install from the repo** if you are developing the chart itself or testing local chart changes before release.
 
 The rewritten chart supports three concrete deployment shapes:
 
@@ -14,7 +19,7 @@ The rewritten chart supports three concrete deployment shapes:
 - Helm 3.10+
 - `kubectl` access to the target cluster
 
-## Install a released chart
+## Option 1: Install From a Released Chart
 
 Published releases are available from GHCR as OCI Helm charts.
 
@@ -32,9 +37,24 @@ helm install deltallm oci://ghcr.io/deltawi/charts/deltallm \
 
 Use the latest GitHub Release version for `<chart-version>`. The exact pinned install commands for each release live in the release notes.
 
-If you are iterating on the chart locally instead of consuming a release, clone the repo and use `./helm` in the examples below.
+This is the recommended path if you just want to deploy DeltaLLM.
 
-## Fetch chart dependencies
+## Option 2: Install From the Repo
+
+Use this path when you want to:
+
+- inspect the chart locally
+- test changes before opening a PR
+- install directly from `./helm`
+
+Clone the repository first:
+
+```bash
+git clone https://github.com/deltawi/deltallm.git
+cd deltallm
+```
+
+### Fetch chart dependencies
 
 The chart uses Bitnami PostgreSQL and Redis as optional subcharts.
 
@@ -42,7 +62,7 @@ The chart uses Bitnami PostgreSQL and Redis as optional subcharts.
 helm dependency build ./helm
 ```
 
-## Chart profiles
+### Chart profiles
 
 The chart now ships with three value layers:
 
@@ -52,7 +72,7 @@ The chart now ships with three value layers:
 
 By default, the app pod uses an init container to wait until the configured PostgreSQL and Redis endpoints accept TCP connections before DeltaLLM starts. This avoids the initial crash loop that can happen while bundled stateful dependencies are still coming up.
 
-## Quick start
+### Quick start from the repo
 
 This path uses bundled PostgreSQL and Redis and generated control-plane secrets.
 
