@@ -54,7 +54,7 @@ Manage all your model deployments, API keys, teams, and usage from a clean web i
 ## Choose Your Install Path
 
 - **Option 1: Docker Compose**: fastest way to run DeltaLLM locally for evaluation.
-- **Option 2: Kubernetes From a Released Chart**: install with Helm from GHCR without cloning the repository.
+- **Option 2: Kubernetes From a Released Chart**: install with Helm from the public chart repository without cloning the repository.
 - **Option 3: Local Development From the Repo**: best path for contributors and for local backend or UI work.
 
 ## Option 1: Docker Compose
@@ -165,16 +165,21 @@ If you set `PLATFORM_BOOTSTRAP_ADMIN_EMAIL` and `PLATFORM_BOOTSTRAP_ADMIN_PASSWO
 
 ## Option 2: Kubernetes From a Released Chart
 
-Released Helm charts are published as OCI artifacts to GHCR, so you can install DeltaLLM without cloning this repository.
+Released Helm charts are published to the public Helm repository at `https://deltawi.github.io/deltallm`.
 
 ```bash
-helm install deltallm oci://ghcr.io/deltawi/charts/deltallm --version <chart-version>
+helm repo add deltallm https://deltawi.github.io/deltallm
+helm repo update
+```
+
+```bash
+helm install deltallm deltallm/deltallm --version <chart-version>
 ```
 
 If you want the Presidio-enabled image variant from the same chart release:
 
 ```bash
-helm install deltallm oci://ghcr.io/deltawi/charts/deltallm \
+helm install deltallm deltallm/deltallm \
   --version <chart-version> \
   --set image.tag=v<chart-version>-presidio
 ```
