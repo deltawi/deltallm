@@ -11,6 +11,12 @@ from fastapi import HTTPException, Request, status
 
 from src.api.audit import emit_control_audit_event
 from src.audit.actions import AuditAction
+from src.guardrails.catalog import (
+    get_guardrail_preset_by_class_path,
+    guardrail_threshold_from_params,
+    guardrail_type_from_class_path,
+    serialize_guardrail_editor_config,
+)
 from src.providers.resolution import resolve_provider
 
 logger = logging.getLogger(__name__)
@@ -344,33 +350,23 @@ def model_entries(app: Any) -> list[dict[str, Any]]:
             )
     return entries
 
-
-def guardrail_type_from_class_path(class_path: str) -> str:
-    lowered = class_path.lower()
-    if "presidio" in lowered:
-        return "PII Detection (Presidio)"
-    if "lakera" in lowered:
-        return "Prompt Injection (Lakera)"
-    return "Custom Guardrail"
-
-
 def serialize_guardrail(raw: Any) -> dict[str, Any]:
     item = raw.model_dump(mode="python") if hasattr(raw, "model_dump") else dict(raw)
     deltallm_params = dict(item.get("deltallm_params", {}))
     class_path = str(deltallm_params.get("guardrail") or "")
-    threshold = deltallm_params.get("threshold")
-    if threshold is None:
-        threshold = deltallm_params.get("score_threshold")
-    if threshold is None:
-        threshold = deltallm_params.get("confidence_threshold")
+    preset = get_guardrail_preset_by_class_path(class_path)
 
     return {
         "guardrail_name": item.get("guardrail_name"),
         "type": guardrail_type_from_class_path(class_path),
+        "preset_id": preset["preset_id"] if preset is not None else None,
+        "is_custom": preset is None,
+        "class_path": class_path or None,
         "mode": deltallm_params.get("mode", "pre_call"),
         "enabled": bool(deltallm_params.get("enabled", True)),
         "default_action": deltallm_params.get("default_action", "block"),
-        "threshold": float(threshold) if threshold is not None else 0.5,
+        "threshold": guardrail_threshold_from_params(deltallm_params),
+        "editor": serialize_guardrail_editor_config(deltallm_params),
         "deltallm_params": to_json_value(deltallm_params),
     }
 

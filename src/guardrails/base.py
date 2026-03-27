@@ -9,7 +9,6 @@ from typing import Any
 class GuardrailMode(str, Enum):
     PRE_CALL = "pre_call"
     POST_CALL = "post_call"
-    DURING_CALL = "during_call"
 
 
 class GuardrailAction(str, Enum):

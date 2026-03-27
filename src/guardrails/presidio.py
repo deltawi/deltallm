@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+from functools import lru_cache
 from typing import Any
 
 from src.guardrails.base import CustomGuardrail, GuardrailAction, GuardrailMode
@@ -56,8 +57,12 @@ class PresidioGuardrail(CustomGuardrail):
         self.entities = entities or self.SUPPORTED_ENTITIES
         self.language = language
         self.threshold = threshold
-        self.analyzer = AnalyzerEngine() if AnalyzerEngine is not None else None
-        self.anonymizer = AnonymizerEngine() if AnonymizerEngine is not None else None
+        if presidio_full_engine_installed():
+            self.analyzer = AnalyzerEngine()
+            self.anonymizer = AnonymizerEngine()
+        else:
+            self.analyzer = None
+            self.anonymizer = None
 
     async def async_pre_call_hook(
         self,
@@ -206,3 +211,32 @@ class PresidioGuardrail(CustomGuardrail):
             if pattern is not None:
                 masked = pattern.sub(f"<{entity}>", masked)
         return masked
+
+
+PRESIDIO_FALLBACK_SUPPORTED_ENTITIES = tuple(PresidioGuardrail._PATTERN_MAP)
+
+
+@lru_cache(maxsize=1)
+def _presidio_engine_ready() -> bool:
+    if AnalyzerEngine is None or AnonymizerEngine is None or OperatorConfig is None:
+        return False
+    try:
+        AnalyzerEngine()
+        AnonymizerEngine()
+    except Exception as exc:  # pragma: no cover - depends on optional local runtime assets
+        logger.warning(
+            "presidio full engine unavailable; using regex fallback",
+            extra={"error_type": type(exc).__name__},
+        )
+        return False
+    return True
+
+
+def presidio_engine_mode() -> str:
+    if _presidio_engine_ready():
+        return "full"
+    return "regex_fallback"
+
+
+def presidio_full_engine_installed() -> bool:
+    return presidio_engine_mode() == "full"

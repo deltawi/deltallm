@@ -944,13 +944,86 @@ export const batches = {
   cancel: (batchId: string) => apiFetch<{ batch_id: string; status: string }>(`/ui/api/batches/${encodeURIComponent(batchId)}/cancel`, { method: 'POST' }),
 };
 
+export type GuardrailMode = 'pre_call' | 'post_call';
+export type GuardrailAction = 'block' | 'log';
+
+export interface GuardrailPresetFieldOption {
+  value: string;
+  label: string;
+  disabled?: boolean;
+  description?: string;
+}
+
+export interface GuardrailPresetField {
+  key: string;
+  label: string;
+  input: 'boolean' | 'number' | 'text' | 'multiselect' | 'secret';
+  default_value: string | number | boolean | string[];
+  help_text?: string;
+  placeholder?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  advanced?: boolean;
+  options?: GuardrailPresetFieldOption[];
+}
+
+export interface GuardrailPreset {
+  preset_id: string;
+  label: string;
+  description: string;
+  type_label: string;
+  class_path: string;
+  supported_modes: GuardrailMode[];
+  supported_actions: GuardrailAction[];
+  fields: GuardrailPresetField[];
+}
+
+export interface GuardrailEditorConfig {
+  preset_id: string | null;
+  is_custom: boolean;
+  class_path: string;
+  mode: GuardrailMode;
+  default_action: GuardrailAction;
+  default_on: boolean;
+  field_values: Record<string, unknown>;
+  additional_params: Record<string, unknown>;
+}
+
+export interface GuardrailRecord {
+  guardrail_name: string;
+  type: string;
+  preset_id: string | null;
+  is_custom: boolean;
+  class_path?: string | null;
+  mode: GuardrailMode;
+  enabled: boolean;
+  default_action: GuardrailAction;
+  threshold: number;
+  editor: GuardrailEditorConfig;
+  deltallm_params: Record<string, unknown>;
+}
+
+export interface GuardrailCatalog {
+  presets: GuardrailPreset[];
+  supported_modes: GuardrailMode[];
+  supported_actions: GuardrailAction[];
+  capabilities: {
+    presidio: {
+      engine_mode: 'full' | 'regex_fallback';
+      fallback_supported_entities: string[];
+    };
+  };
+}
+
 export const guardrails = {
   list: async () => {
-    const res = await apiFetch<{ guardrails: any[] }>('/ui/api/guardrails');
+    const res = await apiFetch<{ guardrails: GuardrailRecord[] }>('/ui/api/guardrails');
     return res.guardrails || [];
   },
-  update: async (payload: any) => {
-    const res = await apiFetch<{ guardrails: any[] }>('/ui/api/guardrails', { method: 'PUT', json: payload });
+  catalog: () => apiFetch<GuardrailCatalog>('/ui/api/guardrails/catalog'),
+  update: async (payload: { guardrails: Array<{ guardrail_name: string; deltallm_params: Record<string, unknown> }> }) => {
+    const res = await apiFetch<{ guardrails: GuardrailRecord[] }>('/ui/api/guardrails', { method: 'PUT', json: payload });
     return res.guardrails || [];
   },
   getScoped: (scope: 'organization' | 'team' | 'key', entityId: string) =>

@@ -45,6 +45,12 @@ The fastest way to get everything running:
 docker compose --profile single up -d --build
 ```
 
+If you want the full Presidio engine for guardrails instead of the default regex fallback:
+
+```bash
+INSTALL_PRESIDIO=true docker compose --profile single up -d --build
+```
+
 Run the command from the repository root so Compose can read the project `.env` file automatically.
 
 On startup, the DeltaLLM container applies the Prisma schema with:
@@ -61,6 +67,8 @@ This starts:
 - Redis 7 cache
 
 DeltaLLM is available at `http://localhost:4002`.
+
+Without `INSTALL_PRESIDIO=true`, Presidio guardrails still work, but DeltaLLM uses the built-in regex fallback for a smaller default image.
 
 Once a model is available, see [Quick Start](quickstart.md) for `curl`, Python, and JavaScript usage examples.
 
@@ -168,6 +176,12 @@ docker run -p 4002:4000 \
   -e DELTALLM_SALT_KEY="your-salt-key" \
   -v ./config.yaml:/app/config/config.yaml:ro \
   deltallm
+```
+
+To build an image with the full Presidio engine:
+
+```bash
+docker build --build-arg INSTALL_PRESIDIO=true -t deltallm .
 ```
 
 The image runs `prisma db push --schema=./prisma/schema.prisma --accept-data-loss` before starting `uvicorn`, so the target database must be reachable when the container starts.

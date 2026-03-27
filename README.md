@@ -105,6 +105,12 @@ The sample config uses `OPENAI_API_KEY`. If you want a different provider, edit 
 docker compose --profile single up -d --build
 ```
 
+If you want the full Presidio engine for guardrails instead of the default regex fallback:
+
+```bash
+INSTALL_PRESIDIO=true docker compose --profile single up -d --build
+```
+
 This starts:
 
 - DeltaLLM on `http://localhost:4002`
@@ -168,6 +174,12 @@ Use this path if you want to work on the backend or UI locally instead of runnin
 
 ```bash
 uv sync --dev
+```
+
+If you want the full Presidio engine locally for guardrails:
+
+```bash
+uv sync --dev --extra guardrails-presidio
 ```
 
 In another shell for the UI:

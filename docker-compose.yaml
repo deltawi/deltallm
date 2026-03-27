@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        INSTALL_PRESIDIO: ${INSTALL_PRESIDIO:-false}
     profiles: ["single"]
     ports:
       - "4002:4000"
@@ -39,6 +41,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        INSTALL_PRESIDIO: ${INSTALL_PRESIDIO:-false}
     profiles: ["ha"]
     environment:
       DELTALLM_CONFIG_PATH: /app/config/config.yaml
@@ -68,6 +72,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        INSTALL_PRESIDIO: ${INSTALL_PRESIDIO:-false}
     profiles: ["ha"]
     environment:
       DELTALLM_CONFIG_PATH: /app/config/config.yaml
