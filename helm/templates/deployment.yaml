@@ -1,9 +1,9 @@
 {{- $dbSecretName := .Values.runtime.database.existingSecret.name -}}
-{{- $dbAsyncSecretKey := default .Values.runtime.database.existingSecret.urlKey .Values.runtime.database.existingSecret.asyncUrlKey -}}
 {{- $redisSecretName := .Values.runtime.redis.existingSecret.name -}}
 {{- $s3SecretName := include "deltallm.s3SecretName" . -}}
 {{- $hasGeneratedAppSecret := not .Values.secret.existingSecret -}}
 {{- $hasGeneratedS3Secret := and .Values.s3.enabled (not .Values.s3.existingSecret.name) (or .Values.s3.accessKeyId .Values.s3.secretAccessKey) -}}
+{{- $hasRuntimeDependencies := or $dbSecretName .Values.runtime.database.url .Values.postgresql.enabled $redisSecretName .Values.runtime.redis.url .Values.redis.enabled -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -61,6 +61,77 @@ spec:
       {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if and .Values.dependencyWait.enabled $hasRuntimeDependencies }}
+      initContainers:
+        - name: wait-for-runtime-dependencies
+          image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          command:
+            - python
+            - -c
+            - |
+              import os
+              import socket
+              import sys
+              import time
+              from urllib.parse import urlparse
+
+              deadline = time.time() + {{ .Values.dependencyWait.timeoutSeconds }}
+              interval = {{ .Values.dependencyWait.periodSeconds }}
+              targets = []
+
+              database_url = os.getenv("DATABASE_URL", "").strip()
+              if database_url:
+                  parsed = urlparse(database_url)
+                  targets.append(("database", parsed.hostname, parsed.port or 5432))
+
+              redis_url = os.getenv("REDIS_URL", "").strip()
+              if redis_url:
+                  parsed = urlparse(redis_url)
+                  targets.append(("redis", parsed.hostname, parsed.port or 6379))
+
+              for name, host, port in targets:
+                  while True:
+                      try:
+                          with socket.create_connection((host, port), timeout=5):
+                              print(f"{name} is reachable at {host}:{port}", flush=True)
+                              break
+                      except OSError as exc:
+                          if time.time() >= deadline:
+                              print(f"Timed out waiting for {name} at {host}:{port}: {exc}", file=sys.stderr, flush=True)
+                              raise SystemExit(1)
+                          print(f"Waiting for {name} at {host}:{port}: {exc}", flush=True)
+                          time.sleep(interval)
+          env:
+            {{- if or $dbSecretName .Values.runtime.database.url .Values.postgresql.enabled }}
+            - name: DATABASE_URL
+              {{- if $dbSecretName }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $dbSecretName }}
+                  key: {{ .Values.runtime.database.existingSecret.urlKey }}
+              {{- else if .Values.runtime.database.url }}
+              value: {{ .Values.runtime.database.url | quote }}
+              {{- else }}
+              value: {{ include "deltallm.bundledDatabaseUrl" . | quote }}
+              {{- end }}
+            {{- end }}
+            {{- if or $redisSecretName .Values.runtime.redis.url .Values.redis.enabled }}
+            - name: REDIS_URL
+              {{- if $redisSecretName }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $redisSecretName }}
+                  key: {{ .Values.runtime.redis.existingSecret.urlKey }}
+              {{- else if .Values.runtime.redis.url }}
+              value: {{ .Values.runtime.redis.url | quote }}
+              {{- else }}
+              value: {{ include "deltallm.bundledRedisUrl" . | quote }}
+              {{- end }}
+            {{- end }}
+      {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
@@ -107,19 +178,6 @@ spec:
               value: {{ .Values.runtime.database.url | quote }}
               {{- else }}
               value: {{ include "deltallm.bundledDatabaseUrl" . | quote }}
-              {{- end }}
-            - name: DELTALLM_DATABASE_URL
-              {{- if $dbSecretName }}
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $dbSecretName }}
-                  key: {{ $dbAsyncSecretKey }}
-              {{- else if .Values.runtime.database.asyncUrl }}
-              value: {{ .Values.runtime.database.asyncUrl | quote }}
-              {{- else if .Values.runtime.database.url }}
-              value: {{ .Values.runtime.database.url | replace "postgresql://" "postgresql+asyncpg://" | quote }}
-              {{- else }}
-              value: {{ include "deltallm.bundledAsyncDatabaseUrl" . | quote }}
               {{- end }}
             {{- end }}
             {{- if or $redisSecretName .Values.runtime.redis.url .Values.redis.enabled }}

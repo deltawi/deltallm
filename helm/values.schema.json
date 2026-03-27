@@ -75,6 +75,15 @@
     },
     "env": { "type": "array" },
     "envFrom": { "type": "array" },
+    "dependencyWait": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 },
+        "periodSeconds": { "type": "integer", "minimum": 1 }
+      }
+    },
     "secret": {
       "type": "object",
       "additionalProperties": true,
@@ -107,14 +116,12 @@
           "additionalProperties": true,
           "properties": {
             "url": { "type": "string" },
-            "asyncUrl": { "type": "string" },
             "existingSecret": {
               "type": "object",
               "additionalProperties": true,
               "properties": {
                 "name": { "type": "string" },
-                "urlKey": { "type": "string" },
-                "asyncUrlKey": { "type": "string" }
+                "urlKey": { "type": "string" }
               }
             }
           }

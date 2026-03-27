@@ -46,21 +46,22 @@ data:
         {{- $callbacks = append $callbacks "prometheus" }}
         {{- end }}
 {{ toYaml $callbacks | indent 8 }}
+      {{- $callbackSettings := deepCopy .Values.config.deltallm_settings.callback_settings }}
+      {{- if not $callbackSettings }}
+      {{- $callbackSettings = dict }}
+      {{- end }}
+      {{- if .Values.s3.enabled }}
+      {{- $s3Callback := dict "bucket" .Values.s3.bucket "region" .Values.s3.region "prefix" .Values.s3.prefix }}
+      {{- if .Values.s3.compression }}
+      {{- $_ := set $s3Callback "compression" .Values.s3.compression }}
+      {{- end }}
+      {{- $_ := set $callbackSettings "s3" $s3Callback }}
+      {{- end }}
       callback_settings:
-        {{- if .Values.s3.enabled }}
-        s3:
-          bucket: {{ .Values.s3.bucket | quote }}
-          region: {{ .Values.s3.region | quote }}
-          prefix: {{ .Values.s3.prefix | quote }}
-          {{- if .Values.s3.compression }}
-          compression: {{ .Values.s3.compression | quote }}
-          {{- end }}
-        {{- end }}
-        {{- range $key, $val := .Values.config.deltallm_settings.callback_settings }}
-        {{- if ne $key "s3" }}
-        {{ $key }}:
-{{ toYaml $val | indent 10 }}
-        {{- end }}
+        {{- if $callbackSettings }}
+{{ toYaml $callbackSettings | indent 8 }}
+        {{- else }}
+        {}
         {{- end }}
 
     general_settings:

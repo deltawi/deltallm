@@ -100,6 +100,11 @@ envFrom: []
 extraVolumes: []
 extraVolumeMounts: []
 
+dependencyWait:
+  enabled: true
+  timeoutSeconds: 180
+  periodSeconds: 2
+
 secret:
   existingSecret: ""
   keys:
@@ -112,11 +117,9 @@ secret:
 runtime:
   database:
     url: ""
-    asyncUrl: ""
     existingSecret:
       name: ""
       urlKey: DATABASE_URL
-      asyncUrlKey: ""
   redis:
     url: ""
     existingSecret:
