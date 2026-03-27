@@ -14,14 +14,15 @@ import * as M11 from "../components/mockups/ai-gateway/RgTabSettings";
 import * as M12 from "../components/mockups/ai-gateway/RgTabTest";
 import * as M13 from "../components/mockups/ai-gateway/RouteGroupDetailV2";
 import * as M14 from "../components/mockups/ai-gateway/RouteGroupsList";
-import * as M15 from "../components/mockups/org-team/OrgCreateForm";
-import * as M16 from "../components/mockups/org-team/OrganizationDetail";
-import * as M17 from "../components/mockups/org-team/OrganizationsList";
-import * as M18 from "../components/mockups/org-team/TeamCreateForm";
-import * as M19 from "../components/mockups/org-team/TeamDetail";
-import * as M20 from "../components/mockups/org-team/TeamsList";
-import * as M21 from "../components/mockups/sidebar-redesign/CleanLight";
-import * as M22 from "../components/mockups/sidebar-redesign/IconRail";
+import * as M15 from "../components/mockups/guardrails/GuardrailsRedesign";
+import * as M16 from "../components/mockups/org-team/OrgCreateForm";
+import * as M17 from "../components/mockups/org-team/OrganizationDetail";
+import * as M18 from "../components/mockups/org-team/OrganizationsList";
+import * as M19 from "../components/mockups/org-team/TeamCreateForm";
+import * as M20 from "../components/mockups/org-team/TeamDetail";
+import * as M21 from "../components/mockups/org-team/TeamsList";
+import * as M22 from "../components/mockups/sidebar-redesign/CleanLight";
+import * as M23 from "../components/mockups/sidebar-redesign/IconRail";
 
 export const mockupComponents = [
   { folder: "ai-gateway", name: "ModelDetailV2", previewPath: "/preview/ai-gateway/ModelDetailV2", module: M0 },
@@ -39,12 +40,13 @@ export const mockupComponents = [
   { folder: "ai-gateway", name: "RgTabTest", previewPath: "/preview/ai-gateway/RgTabTest", module: M12 },
   { folder: "ai-gateway", name: "RouteGroupDetailV2", previewPath: "/preview/ai-gateway/RouteGroupDetailV2", module: M13 },
   { folder: "ai-gateway", name: "RouteGroupsList", previewPath: "/preview/ai-gateway/RouteGroupsList", module: M14 },
-  { folder: "org-team", name: "OrgCreateForm", previewPath: "/preview/org-team/OrgCreateForm", module: M15 },
-  { folder: "org-team", name: "OrganizationDetail", previewPath: "/preview/org-team/OrganizationDetail", module: M16 },
-  { folder: "org-team", name: "OrganizationsList", previewPath: "/preview/org-team/OrganizationsList", module: M17 },
-  { folder: "org-team", name: "TeamCreateForm", previewPath: "/preview/org-team/TeamCreateForm", module: M18 },
-  { folder: "org-team", name: "TeamDetail", previewPath: "/preview/org-team/TeamDetail", module: M19 },
-  { folder: "org-team", name: "TeamsList", previewPath: "/preview/org-team/TeamsList", module: M20 },
-  { folder: "sidebar-redesign", name: "CleanLight", previewPath: "/preview/sidebar-redesign/CleanLight", module: M21 },
-  { folder: "sidebar-redesign", name: "IconRail", previewPath: "/preview/sidebar-redesign/IconRail", module: M22 },
+  { folder: "guardrails", name: "GuardrailsRedesign", previewPath: "/preview/guardrails/GuardrailsRedesign", module: M15 },
+  { folder: "org-team", name: "OrgCreateForm", previewPath: "/preview/org-team/OrgCreateForm", module: M16 },
+  { folder: "org-team", name: "OrganizationDetail", previewPath: "/preview/org-team/OrganizationDetail", module: M17 },
+  { folder: "org-team", name: "OrganizationsList", previewPath: "/preview/org-team/OrganizationsList", module: M18 },
+  { folder: "org-team", name: "TeamCreateForm", previewPath: "/preview/org-team/TeamCreateForm", module: M19 },
+  { folder: "org-team", name: "TeamDetail", previewPath: "/preview/org-team/TeamDetail", module: M20 },
+  { folder: "org-team", name: "TeamsList", previewPath: "/preview/org-team/TeamsList", module: M21 },
+  { folder: "sidebar-redesign", name: "CleanLight", previewPath: "/preview/sidebar-redesign/CleanLight", module: M22 },
+  { folder: "sidebar-redesign", name: "IconRail", previewPath: "/preview/sidebar-redesign/IconRail", module: M23 },
 ] as const;
