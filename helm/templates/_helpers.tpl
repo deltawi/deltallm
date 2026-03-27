@@ -22,6 +22,7 @@
 {{- define "deltallm.labels" -}}
 helm.sh/chart: {{ include "deltallm.chart" . }}
 {{ include "deltallm.selectorLabels" . }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
@@ -35,5 +36,49 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- default (include "deltallm.fullname" .) .Values.serviceAccount.name -}}
 {{- else -}}
 {{- default "default" .Values.serviceAccount.name -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "deltallm.appSecretName" -}}
+{{- if .Values.secret.existingSecret -}}
+{{- .Values.secret.existingSecret -}}
+{{- else -}}
+{{- printf "%s-app" (include "deltallm.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "deltallm.s3SecretName" -}}
+{{- if .Values.s3.existingSecret.name -}}
+{{- .Values.s3.existingSecret.name -}}
+{{- else -}}
+{{- printf "%s-s3" (include "deltallm.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "deltallm.postgresqlHost" -}}
+{{- printf "%s-postgresql" (include "deltallm.fullname" .) -}}
+{{- end -}}
+
+{{- define "deltallm.redisHost" -}}
+{{- printf "%s-redis-master" (include "deltallm.fullname" .) -}}
+{{- end -}}
+
+{{- define "deltallm.bundledDatabaseUrl" -}}
+{{- $username := required "postgresql.auth.username is required when postgresql.enabled=true and runtime.database.url is not set" .Values.postgresql.auth.username -}}
+{{- $password := required "postgresql.auth.password is required when postgresql.enabled=true and runtime.database.url is not set" .Values.postgresql.auth.password -}}
+{{- $database := required "postgresql.auth.database is required when postgresql.enabled=true and runtime.database.url is not set" .Values.postgresql.auth.database -}}
+{{- printf "postgresql://%s:%s@%s:5432/%s" ($username | urlquery) ($password | urlquery) (include "deltallm.postgresqlHost" .) $database -}}
+{{- end -}}
+
+{{- define "deltallm.bundledAsyncDatabaseUrl" -}}
+{{ include "deltallm.bundledDatabaseUrl" . | replace "postgresql://" "postgresql+asyncpg://" }}
+{{- end -}}
+
+{{- define "deltallm.bundledRedisUrl" -}}
+{{- if .Values.redis.auth.enabled -}}
+{{- $password := required "redis.auth.password is required when redis.enabled=true and redis.auth.enabled=true unless runtime.redis.existingSecret.name or runtime.redis.url is set" .Values.redis.auth.password -}}
+{{- printf "redis://:%s@%s:6379/0" ($password | urlquery) (include "deltallm.redisHost" .) -}}
+{{- else -}}
+{{- printf "redis://%s:6379/0" (include "deltallm.redisHost" .) -}}
 {{- end -}}
 {{- end -}}

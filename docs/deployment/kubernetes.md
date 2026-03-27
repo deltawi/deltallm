@@ -1,11 +1,12 @@
 # Kubernetes Deployment
 
-Deploy DeltaLLM on Kubernetes with the Helm chart in [`helm/`](/Users/mehditantaoui/Documents/Challenges/deltallm/helm). The chart supports the common deployment shapes:
+Deploy DeltaLLM on Kubernetes with the Helm chart in [`helm/`](/Users/mehditantaoui/Documents/Challenges/deltallm/helm).
 
-- In-cluster PostgreSQL and Redis for evaluation or small installs
-- External PostgreSQL and Redis for production
-- Existing Kubernetes Secrets for the master key, salt key, provider API keys, SSO, and JWT settings
-- Optional Ingress, HPA, ServiceMonitor, and S3 request logging
+The rewritten chart supports three concrete deployment shapes:
+
+- evaluation with bundled PostgreSQL and Redis
+- standard production with external PostgreSQL and Redis
+- high-availability production with multiple replicas, HPA, PDB, topology spread, ingress, and monitoring
 
 ## Prerequisites
 
@@ -21,19 +22,28 @@ The chart uses Bitnami PostgreSQL and Redis as optional subcharts.
 helm dependency build ./helm
 ```
 
+## Chart profiles
+
+The chart now ships with three value layers:
+
+- [`helm/values.yaml`](/Users/mehditantaoui/Documents/Challenges/deltallm/helm/values.yaml): safe baseline
+- [`helm/values-eval.yaml`](/Users/mehditantaoui/Documents/Challenges/deltallm/helm/values-eval.yaml): quick-start with bundled PostgreSQL and Redis
+- [`helm/values-production.yaml`](/Users/mehditantaoui/Documents/Challenges/deltallm/helm/values-production.yaml): HA-oriented production defaults
+
 ## Quick start
 
-This path uses the bundled PostgreSQL and Redis subcharts.
+This path uses bundled PostgreSQL and Redis and generated control-plane secrets.
 
 ```bash
-helm install deltallm ./helm \
+helm upgrade --install deltallm ./helm \
   --namespace deltallm \
   --create-namespace \
-  --set config.masterKey="StrongMasterKey2026SecureValue99" \
-  --set config.saltKey="unique-salt-2026"
+  -f helm/values-eval.yaml \
+  --set secret.values.masterKey="StrongMasterKey2026SecureValue99" \
+  --set secret.values.saltKey="unique-salt-2026"
 ```
 
-Ingress is disabled by default. Access the service with port-forwarding:
+Access the service with port-forwarding:
 
 ```bash
 kubectl port-forward -n deltallm svc/deltallm 4000:4000
@@ -42,11 +52,11 @@ curl http://localhost:4000/health/liveliness
 
 Open the admin UI at `http://localhost:4000`.
 
-## Recommended secret layout
+## Secret layout
 
-For real deployments, do not keep secrets inline in Helm values.
+For production, keep secrets out of Helm values.
 
-Create one secret for the DeltaLLM control-plane secrets:
+Create one secret for `master-key` and `salt-key`:
 
 ```bash
 kubectl create secret generic deltallm-app-secrets \
@@ -55,38 +65,52 @@ kubectl create secret generic deltallm-app-secrets \
   --from-literal=salt-key='unique-salt-2026'
 ```
 
-Create a separate runtime secret for environment-backed settings such as `DATABASE_URL`, `REDIS_URL`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, SSO secrets, or JWT settings:
+Create one secret for runtime environment variables:
 
 ```bash
 kubectl create secret generic deltallm-runtime-secrets \
   --namespace deltallm \
   --from-literal=DATABASE_URL='postgresql://user:pass@postgres:5432/deltallm' \
+  --from-literal=DELTALLM_DATABASE_URL='postgresql+asyncpg://user:pass@postgres:5432/deltallm' \
   --from-literal=REDIS_URL='redis://redis:6379/0' \
   --from-literal=OPENAI_API_KEY='sk-...'
 ```
 
-Then reference those secrets from Helm:
+Then reference them from the chart:
 
 ```yaml
 secret:
   existingSecret: deltallm-app-secrets
+
+runtime:
+  database:
+    existingSecret:
+      name: deltallm-runtime-secrets
+      urlKey: DATABASE_URL
+      asyncUrlKey: DELTALLM_DATABASE_URL
+  redis:
+    existingSecret:
+      name: deltallm-runtime-secrets
+      urlKey: REDIS_URL
 
 envFrom:
   - secretRef:
       name: deltallm-runtime-secrets
 ```
 
-This is the preferred pattern when your `config.model_list` or `general_settings` use `os.environ/...` tokens.
+The chart will not emit empty database or Redis env vars, so `envFrom` works cleanly for provider keys and platform integrations.
 
 ## Configuration patterns
 
 ### 1. Bundled PostgreSQL and Redis
 
-This is the default.
+Use the eval profile or enable both subcharts explicitly:
 
 ```yaml
 postgresql:
   enabled: true
+  image:
+    tag: latest
   auth:
     username: deltallm
     password: change-this
@@ -94,37 +118,18 @@ postgresql:
 
 redis:
   enabled: true
-  auth:
-    enabled: false
-```
-
-If you enable Redis auth with the bundled subchart, you must also set `redis.auth.password` so the DeltaLLM deployment can build the correct connection URL:
-
-```yaml
-redis:
-  enabled: true
+  image:
+    tag: latest
   auth:
     enabled: true
     password: strong-redis-password
 ```
 
+If bundled Redis auth is enabled, the chart will generate the correct authenticated URL for DeltaLLM.
+
 ### 2. External PostgreSQL and Redis
 
-Disable the bundled subcharts and inject connection strings through values or `envFrom`.
-
-```yaml
-postgresql:
-  enabled: false
-
-redis:
-  enabled: false
-
-config:
-  databaseUrl: "postgresql://user:pass@postgres:5432/deltallm"
-  redisUrl: "redis://redis:6379/0"
-```
-
-Using `envFrom` is usually better:
+Disable the bundled subcharts and reference external connection strings:
 
 ```yaml
 postgresql:
@@ -136,16 +141,25 @@ redis:
 secret:
   existingSecret: deltallm-app-secrets
 
+runtime:
+  database:
+    existingSecret:
+      name: deltallm-runtime-secrets
+      urlKey: DATABASE_URL
+      asyncUrlKey: DELTALLM_DATABASE_URL
+  redis:
+    existingSecret:
+      name: deltallm-runtime-secrets
+      urlKey: REDIS_URL
+
 envFrom:
   - secretRef:
       name: deltallm-runtime-secrets
 ```
 
-The chart no longer emits empty `DATABASE_URL` or `REDIS_URL` values, so secret-based injection works cleanly.
+### 3. Provider credentials and platform settings
 
-### 3. Provider credentials and auth settings
-
-Use `envFrom` or `env` for provider keys and identity settings:
+Use `env` and `envFrom` directly:
 
 ```yaml
 envFrom:
@@ -157,15 +171,7 @@ env:
     value: admin@example.com
 ```
 
-This covers:
-
-- `OPENAI_API_KEY`
-- `ANTHROPIC_API_KEY`
-- `AZURE_OPENAI_API_KEY`
-- `PLATFORM_BOOTSTRAP_ADMIN_EMAIL`
-- `PLATFORM_BOOTSTRAP_ADMIN_PASSWORD`
-- SSO client credentials
-- JWT / JWKS settings
+This covers provider API keys, bootstrap admin credentials, SSO client credentials, JWT settings, and any other runtime env.
 
 ### 4. Model bootstrap from config
 
@@ -186,13 +192,16 @@ config:
     model_deployment_source: hybrid
 ```
 
-With `hybrid`, Helm can bootstrap initial models and the Admin UI/API can manage them afterward.
+## Service and ingress
 
-## Ingress and service exposure
-
-Ingress is opt-in.
+Ingress is disabled by default.
 
 ```yaml
+service:
+  type: LoadBalancer
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+
 ingress:
   enabled: true
   className: nginx
@@ -200,63 +209,19 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
   hosts:
-    - host: api.example.com
+    - host: llm-gateway.example.com
       paths:
         - path: /
           pathType: Prefix
   tls:
-    - secretName: deltallm-tls
+    - secretName: llm-gateway-tls
       hosts:
-        - api.example.com
+        - llm-gateway.example.com
 ```
 
-For a `LoadBalancer` service instead:
+## High availability
 
-```yaml
-service:
-  type: LoadBalancer
-  annotations:
-    service.beta.kubernetes.io/aws-load-balancer-type: nlb
-```
-
-## S3 request logging
-
-Enable S3 logging with IRSA/workload identity or with an existing secret.
-
-```yaml
-s3:
-  enabled: true
-  bucket: company-deltallm-logs
-  region: us-east-1
-  compression: gzip
-```
-
-### IRSA / workload identity
-
-```yaml
-serviceAccount:
-  create: true
-  annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/deltallm-s3-role
-```
-
-`serviceAccount.automountServiceAccountToken` defaults to `true` so workload identity works out of the box. If you do not rely on workload identity, you can disable it.
-
-### Existing AWS credentials secret
-
-```yaml
-s3:
-  enabled: true
-  bucket: company-deltallm-logs
-  region: us-east-1
-  existingSecret: deltallm-aws-creds
-  accessKeyIdKey: aws-access-key-id
-  secretAccessKeyKey: aws-secret-access-key
-```
-
-## Production baseline
-
-Use [`helm/values-production.yaml`](/Users/mehditantaoui/Documents/Challenges/deltallm/helm/values-production.yaml) as the starting point:
+Use the production profile as the base:
 
 ```bash
 helm upgrade --install deltallm ./helm \
@@ -266,21 +231,35 @@ helm upgrade --install deltallm ./helm \
   -f values-custom.yaml
 ```
 
-A reasonable production overlay looks like this:
+`values-production.yaml` gives you:
+
+- `replicaCount: 3`
+- HPA enabled
+- PDB enabled
+- topology spread constraints
+- soft anti-affinity
+- bundled PostgreSQL and Redis disabled
+
+A typical HA overlay looks like this:
 
 ```yaml
 secret:
   existingSecret: deltallm-app-secrets
 
+runtime:
+  database:
+    existingSecret:
+      name: deltallm-runtime-secrets
+      urlKey: DATABASE_URL
+      asyncUrlKey: DELTALLM_DATABASE_URL
+  redis:
+    existingSecret:
+      name: deltallm-runtime-secrets
+      urlKey: REDIS_URL
+
 envFrom:
   - secretRef:
       name: deltallm-runtime-secrets
-
-postgresql:
-  enabled: false
-
-redis:
-  enabled: false
 
 ingress:
   enabled: true
@@ -295,57 +274,105 @@ ingress:
       hosts:
         - llm-gateway.example.com
 
-hpa:
-  enabled: true
-  minReplicas: 3
-  maxReplicas: 20
-
 prometheus:
-  enabled: true
   serviceMonitor:
     enabled: true
-    interval: 15s
 ```
 
-## Operational behavior
+## Optional migration job
 
-The chart now includes a few defaults that matter operationally:
+The current container image still bootstraps Prisma on startup by default.
 
-- The container runs the shared database bootstrap script before starting the API, preferring `prisma migrate deploy` and falling back to `prisma db push` for legacy or unbaselined databases
-- `startupProbe` protects the pod while Prisma schema setup and app startup complete
-- Config and generated secret checksums are added to the pod template so Helm-triggered config changes roll pods automatically
-- Ingress is disabled by default to avoid shipping a fake hostname into clusters that do not want it
-- `env` and `envFrom` are passed directly into the container for provider keys and platform integrations
+The chart also exposes an optional `migrationJob` for teams that want a separate Kubernetes job for explicit migration control:
+
+```yaml
+migrationJob:
+  enabled: true
+  hook:
+    enabled: true
+```
+
+Use that only if your rollout process is intentionally built around a separate migration step. If you want the application pods to stop using the image default bootstrap path, set `command` and `args` explicitly for the app container.
+
+## S3 request logging
+
+Use workload identity or an existing secret.
+
+### Workload identity
+
+```yaml
+serviceAccount:
+  create: true
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/deltallm-s3-role
+  automountServiceAccountToken: true
+
+s3:
+  enabled: true
+  bucket: company-deltallm-logs
+  region: us-east-1
+  compression: gzip
+```
+
+### Existing AWS credentials secret
+
+```yaml
+s3:
+  enabled: true
+  bucket: company-deltallm-logs
+  region: us-east-1
+  existingSecret:
+    name: deltallm-aws-creds
+    accessKeyIdKey: aws-access-key-id
+    secretAccessKeyKey: aws-secret-access-key
+```
+
+## Optional hardening features
+
+The chart includes:
+
+- `podDisruptionBudget`
+- `topologySpreadConstraints`
+- `affinity`
+- `networkPolicy`
+- `serviceAccount.automountServiceAccountToken`
+- `startupProbe`, `readinessProbe`, and `livenessProbe`
+- config and generated-secret checksum rollouts
+
+If you enable `networkPolicy`, define ingress and egress rules that match your cluster and ingress-controller topology.
 
 ## Validation
 
-Render and lint before deploying:
+Lint the chart before deploying:
 
 ```bash
-helm lint ./helm \
-  --set config.masterKey=StrongMasterKey2026SecureValue99 \
-  --set config.saltKey=unique-salt-2026
+helm lint ./helm -f helm/values-eval.yaml \
+  --set secret.values.masterKey=StrongMasterKey2026SecureValue99 \
+  --set secret.values.saltKey=unique-salt-2026
 
-helm template deltallm ./helm \
-  --set config.masterKey=StrongMasterKey2026SecureValue99 \
-  --set config.saltKey=unique-salt-2026 > /tmp/deltallm-rendered.yaml
+helm lint ./helm -f helm/values-production.yaml \
+  --set secret.existingSecret=deltallm-app-secrets \
+  --set runtime.database.existingSecret.name=deltallm-runtime-secrets \
+  --set runtime.redis.existingSecret.name=deltallm-runtime-secrets \
+  --set ingress.enabled=true \
+  --set 'ingress.hosts[0].host=llm-gateway.example.com' \
+  --set 'ingress.hosts[0].paths[0].path=/' \
+  --set 'ingress.hosts[0].paths[0].pathType=Prefix'
 ```
 
-After deploy:
+If subchart dependencies are not present locally yet, run:
 
 ```bash
-kubectl get pods -n deltallm
-kubectl logs -n deltallm deploy/deltallm --tail=100
-kubectl get ingress,svc -n deltallm
+helm dependency build ./helm
 ```
 
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Pod exits during startup | Missing `master-key` or `salt-key` | Set `config.masterKey` / `config.saltKey`, or use `secret.existingSecret` |
-| Pod cannot connect to PostgreSQL | Wrong `DATABASE_URL` or bundled PostgreSQL disabled unexpectedly | Check `config.databaseUrl` or `envFrom` secret contents |
-| Pod cannot connect to Redis | Wrong `REDIS_URL` or Redis auth enabled without password | Set `config.redisUrl`, or set `redis.auth.password` when using bundled Redis auth |
-| Provider calls fail immediately | Provider API key missing from env | Add `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or similar via `envFrom` / `env` |
-| S3 logging does not work | Missing IAM permissions or AWS creds | Use IRSA/workload identity or set `s3.existingSecret` |
-| Config update did not apply | Existing external secret changed without a rollout | Restart the deployment after changing externally managed secrets |
+| Pod exits during startup | Missing `master-key` or `salt-key` | Set `secret.values.*` or `secret.existingSecret` |
+| App cannot connect to PostgreSQL | Wrong external DB secret or bundled PostgreSQL disabled | Check `runtime.database.*` and subchart settings |
+| App cannot connect to Redis | Wrong Redis URL or missing Redis auth password | Check `runtime.redis.*` or bundled `redis.auth.password` |
+| Provider calls fail immediately | Missing provider env vars | Add them via `envFrom` / `env` |
+| Config change did not roll pods | External secret changed outside Helm | Restart the deployment or rotate through your secret operator |
+| Migration job fails | DB not reachable or migration command not appropriate | Inspect `kubectl logs job/<release>-migrate` and adjust `migrationJob.args` |

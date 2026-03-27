@@ -111,6 +111,18 @@ If you want the full Presidio engine for guardrails instead of the default regex
 INSTALL_PRESIDIO=true docker compose --profile single up -d --build
 ```
 
+Published GitHub Releases also push two Docker Hub image variants:
+
+- `deltallm/deltallm:latest`
+- `deltallm/deltallm:latest-presidio`
+
+Each release also gets versioned tags:
+
+- `deltallm/deltallm:vX.Y.Z`
+- `deltallm/deltallm:vX.Y.Z-presidio`
+
+The Helm chart defaults to `deltallm/deltallm:latest`. Set `image.tag=latest-presidio` if you want the Presidio-enabled image with Helm.
+
 This starts:
 
 - DeltaLLM on `http://localhost:4002`

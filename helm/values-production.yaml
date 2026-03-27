@@ -1,16 +1,5 @@
 replicaCount: 3
 
-image:
-  pullPolicy: IfNotPresent
-  tag: "stable"
-
-ingress:
-  hosts:
-    - host: api.deltallm.example.com
-      paths:
-        - path: /
-          pathType: Prefix
-
 resources:
   requests:
     cpu: 500m
@@ -19,42 +8,40 @@ resources:
     cpu: 2000m
     memory: 2Gi
 
-hpa:
+autoscaling:
   enabled: true
   minReplicas: 3
-  maxReplicas: 20
+  maxReplicas: 12
   targetCPUUtilizationPercentage: 65
   targetMemoryUtilizationPercentage: 75
 
-config:
-  # masterKey: "your-production-master-key-min-32-chars"
-  # saltKey: "your-unique-production-salt-key"
-  # databaseUrl: "postgresql://user:pass@your-rds-host:5432/deltallm"
-  # asyncDatabaseUrl: "postgresql+asyncpg://user:pass@your-rds-host:5432/deltallm"
-  # redisUrl: "redis://your-elasticache-host:6379/0"
-  general_settings:
-    background_health_checks: true
-    health_check_interval: 120
-    model_deployment_source: hybrid
-
-# s3:
-#   enabled: true
-#   bucket: "your-deltallm-logs-bucket"
-#   region: "us-east-1"
-#   prefix: "deltallm-logs/"
-#   compression: "gzip"
-#   accessKeyId: ""
-#   secretAccessKey: ""
-
-prometheus:
+podDisruptionBudget:
   enabled: true
-  serviceMonitor:
-    enabled: true
-    interval: 15s
-    scrapeTimeout: 10s
+  minAvailable: 2
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: deltallm
 
 postgresql:
   enabled: false
 
 redis:
   enabled: false
+
+prometheus:
+  serviceMonitor:
+    enabled: true
+    interval: 15s
+    scrapeTimeout: 10s

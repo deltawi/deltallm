@@ -1,18 +1,21 @@
+nameOverride: ""
+fullnameOverride: ""
+
 replicaCount: 2
+revisionHistoryLimit: 10
+minReadySeconds: 5
 
 image:
   repository: deltallm/deltallm
   pullPolicy: IfNotPresent
-  tag: "latest"
-
-imagePullSecrets: []
-nameOverride: ""
-fullnameOverride: ""
+  tag: latest
+  pullSecrets: []
 
 serviceAccount:
   create: true
-  annotations: {}
   name: ""
+  annotations: {}
+  automountServiceAccountToken: false
 
 podAnnotations: {}
 podLabels: {}
@@ -20,21 +23,23 @@ podLabels: {}
 podSecurityContext: {}
 securityContext: {}
 
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
 service:
   type: ClusterIP
   port: 4000
+  annotations: {}
+  labels: {}
 
 ingress:
-  enabled: true
-  className: nginx
-  annotations:
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
-  hosts:
-    - host: deltallm.example.com
-      paths:
-        - path: /
-          pathType: Prefix
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
   tls: []
 
 resources:
@@ -45,14 +50,13 @@ resources:
     cpu: 1000m
     memory: 1Gi
 
-hpa:
-  enabled: true
-  minReplicas: 2
-  maxReplicas: 10
-  targetCPUUtilizationPercentage: 70
-  targetMemoryUtilizationPercentage: 80
-
 probes:
+  startup:
+    enabled: true
+    path: /health/readiness
+    failureThreshold: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
   liveness:
     path: /health/liveliness
     initialDelaySeconds: 30
@@ -66,12 +70,60 @@ probes:
     timeoutSeconds: 3
     failureThreshold: 3
 
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: false
+  ingress: []
+  egress: []
+  allowDns: true
+
+priorityClassName: ""
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
+command: []
+args: []
+env: []
+envFrom: []
+extraVolumes: []
+extraVolumeMounts: []
+
+secret:
+  existingSecret: ""
+  keys:
+    masterKey: master-key
+    saltKey: salt-key
+  values:
+    masterKey: ""
+    saltKey: ""
+
+runtime:
+  database:
+    url: ""
+    asyncUrl: ""
+    existingSecret:
+      name: ""
+      urlKey: DATABASE_URL
+      asyncUrlKey: ""
+  redis:
+    url: ""
+    existingSecret:
+      name: ""
+      urlKey: REDIS_URL
+
 config:
-  masterKey: ""
-  saltKey: ""
-  databaseUrl: ""
-  asyncDatabaseUrl: ""
-  redisUrl: ""
   model_list: []
   router_settings:
     routing_strategy: simple-shuffle
@@ -94,7 +146,6 @@ config:
     turn_off_message_logging: false
   general_settings:
     deltallm_key_header_name: Authorization
-    salt_key: ""
     cache_enabled: false
     cache_backend: memory
     cache_ttl: 3600
@@ -108,13 +159,18 @@ s3:
   enabled: false
   bucket: ""
   region: us-east-1
-  prefix: "deltallm-logs/"
+  prefix: deltallm-logs/
   compression: ""
   accessKeyId: ""
   secretAccessKey: ""
+  existingSecret:
+    name: ""
+    accessKeyIdKey: aws-access-key-id
+    secretAccessKeyKey: aws-secret-access-key
 
 prometheus:
-  enabled: true
+  podAnnotations:
+    enabled: true
   serviceMonitor:
     enabled: false
     namespace: ""
@@ -122,11 +178,30 @@ prometheus:
     scrapeTimeout: 10s
     labels: {}
 
+migrationJob:
+  enabled: false
+  annotations: {}
+  hook:
+    enabled: false
+    deletePolicy: before-hook-creation,hook-succeeded
+  backoffLimit: 4
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 300
+  resources: {}
+  command:
+    - sh
+    - -c
+  args:
+    - |
+      prisma migrate deploy --schema=./prisma/schema.prisma || prisma db push --schema=./prisma/schema.prisma --accept-data-loss
+
 postgresql:
-  enabled: true
+  enabled: false
+  image:
+    tag: latest
   auth:
     username: deltallm
-    password: deltallm
+    password: ""
     database: deltallm
   primary:
     persistence:
@@ -134,14 +209,13 @@ postgresql:
       size: 10Gi
 
 redis:
-  enabled: true
+  enabled: false
+  image:
+    tag: latest
   auth:
     enabled: false
+    password: ""
   master:
     persistence:
       enabled: true
       size: 5Gi
-
-nodeSelector: {}
-tolerations: []
-affinity: {}

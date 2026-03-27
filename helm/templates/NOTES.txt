@@ -1,0 +1,20 @@
+{{- if .Values.ingress.enabled }}
+DeltaLLM is exposed through ingress.
+
+Hosts:
+{{- range .Values.ingress.hosts }}
+  - {{ .host }}
+{{- end }}
+{{- else }}
+DeltaLLM is deployed without ingress.
+
+Port-forward the service:
+  kubectl port-forward svc/{{ include "deltallm.fullname" . }} 4000:{{ .Values.service.port }} -n {{ .Release.Namespace }}
+{{- end }}
+
+Health endpoints:
+  /health/liveliness
+  /health/readiness
+
+If you enabled a migration job:
+  kubectl logs job/{{ include "deltallm.fullname" . }}-migrate -n {{ .Release.Namespace }}
