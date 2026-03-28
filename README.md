@@ -165,15 +165,34 @@ If you set `PLATFORM_BOOTSTRAP_ADMIN_EMAIL` and `PLATFORM_BOOTSTRAP_ADMIN_PASSWO
 
 ## Option 2: Kubernetes From a Released Chart
 
-Released Helm charts are published to the public Helm repository at `https://deltawi.github.io/deltallm`.
+Released Helm charts and matching values overlays are published to the public Helm repository at `https://deltawi.github.io/deltallm`.
 
 ```bash
 helm repo add deltallm https://deltawi.github.io/deltallm
 helm repo update
 ```
 
+Generate the required secrets first:
+
 ```bash
-helm install deltallm deltallm/deltallm --version <chart-version>
+export DELTALLM_MASTER_KEY="$(python3 -c 'import secrets; print(\"sk-\" + secrets.token_hex(20) + \"A1\")')"
+export DELTALLM_SALT_KEY="$(openssl rand -hex 32)"
+```
+
+Quick-start install with bundled PostgreSQL and Redis:
+
+```bash
+helm install deltallm deltallm/deltallm \
+  --version <chart-version> \
+  --namespace deltallm \
+  --create-namespace \
+  -f https://deltawi.github.io/deltallm/values-eval-<chart-version>.yaml \
+  --set secret.values.masterKey="$DELTALLM_MASTER_KEY" \
+  --set secret.values.saltKey="$DELTALLM_SALT_KEY" \
+  --set-string env[0].name=PLATFORM_BOOTSTRAP_ADMIN_EMAIL \
+  --set-string env[0].value=admin@example.com \
+  --set-string env[1].name=PLATFORM_BOOTSTRAP_ADMIN_PASSWORD \
+  --set-string env[1].value='ChangeMe123!'
 ```
 
 If you want the Presidio-enabled image variant from the same chart release:
@@ -181,8 +200,19 @@ If you want the Presidio-enabled image variant from the same chart release:
 ```bash
 helm install deltallm deltallm/deltallm \
   --version <chart-version> \
+  --namespace deltallm \
+  --create-namespace \
+  -f https://deltawi.github.io/deltallm/values-eval-<chart-version>.yaml \
+  --set secret.values.masterKey="$DELTALLM_MASTER_KEY" \
+  --set secret.values.saltKey="$DELTALLM_SALT_KEY" \
+  --set-string env[0].name=PLATFORM_BOOTSTRAP_ADMIN_EMAIL \
+  --set-string env[0].value=admin@example.com \
+  --set-string env[1].name=PLATFORM_BOOTSTRAP_ADMIN_PASSWORD \
+  --set-string env[1].value='ChangeMe123!' \
   --set image.tag=v<chart-version>-presidio
 ```
+
+`values-eval-<chart-version>.yaml` is the self-contained quick-start profile. Use `values-production-<chart-version>.yaml` with external PostgreSQL and Redis for production.
 
 Use the latest GitHub Release version for `<chart-version>`. The exact copy-paste install commands for each release live in the release notes.
 
