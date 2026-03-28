@@ -174,6 +174,8 @@ jobs:
         shell: bash
         env:
           GH_PAGES_DIR: /tmp/deltallm-gh-pages
+          SOURCE_CHART_DIR: /tmp/deltallm-chart
+          SOURCE_VALUES_DIR: ${{ github.workspace }}/helm
         run: |
           set -euo pipefail
 
@@ -192,12 +194,12 @@ jobs:
           fi
 
           cp "/tmp/deltallm-packages/deltallm-${CHART_VERSION}.tgz" .
-          cp helm/values.yaml .
-          cp helm/values-eval.yaml .
-          cp helm/values-production.yaml .
-          cp helm/values.yaml "values-${CHART_VERSION}.yaml"
-          cp helm/values-eval.yaml "values-eval-${CHART_VERSION}.yaml"
-          cp helm/values-production.yaml "values-production-${CHART_VERSION}.yaml"
+          cp "${SOURCE_VALUES_DIR}/values.yaml" .
+          cp "${SOURCE_VALUES_DIR}/values-eval.yaml" .
+          cp "${SOURCE_VALUES_DIR}/values-production.yaml" .
+          cp "${SOURCE_CHART_DIR}/values.yaml" "values-${CHART_VERSION}.yaml"
+          cp "${SOURCE_VALUES_DIR}/values-eval.yaml" "values-eval-${CHART_VERSION}.yaml"
+          cp "${SOURCE_VALUES_DIR}/values-production.yaml" "values-production-${CHART_VERSION}.yaml"
 
           if [[ -f index.yaml ]]; then
             helm repo index . --url "${CHART_REPO_URL}" --merge index.yaml
