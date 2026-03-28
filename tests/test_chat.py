@@ -58,6 +58,21 @@ class _RecordingAuditService:
         self.records.append((event, list(payloads or []), critical))
 
 
+class _SpendRecorder:
+    def __init__(self) -> None:
+        self.events: list[dict] = []
+
+    async def log_spend(self, **kwargs):
+        self.events.append({"status": "success", **kwargs})
+
+    async def log_request_failure(self, **kwargs):
+        error_type = kwargs.get("error_type")
+        if error_type is None:
+            exc = kwargs.get("exc")
+            error_type = getattr(exc, "error_type", None) or (exc.__class__.__name__ if exc is not None else None)
+        self.events.append({"status": "error", "cost": 0.0, "error_type": error_type, **kwargs})
+
+
 class _ExplodingMCPGateway:
     async def list_visible_tools(self, auth):  # noqa: ANN001, ANN201
         del auth
@@ -610,9 +625,10 @@ async def test_chat_completion_runs_failure_callback(client, test_app):
 
 
 class _StreamContext:
-    def __init__(self, status_code: int, lines: list[str]) -> None:
+    def __init__(self, status_code: int, lines: list[str], *, line_error: Exception | None = None) -> None:
         self.status_code = status_code
         self._lines = lines
+        self._line_error = line_error
 
     async def __aenter__(self):
         return self
@@ -623,6 +639,8 @@ class _StreamContext:
     async def aiter_lines(self):
         for line in self._lines:
             yield line
+        if self._line_error is not None:
+            raise self._line_error
 
 
 @pytest.mark.asyncio
@@ -667,6 +685,67 @@ async def test_stream_retries_before_first_token_with_failover(client, test_app)
     assert response.status_code == 200
     assert "data: [DONE]" in response.text
     assert calls["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_stream_failure_after_failover_uses_last_attempted_deployment(client, test_app):
+    test_app.state.spend_tracking_service = _SpendRecorder()
+
+    registry = test_app.state.router.deployment_registry["gpt-4o-mini"]
+    registry[0].deltallm_params["api_base"] = "https://primary.example/v1"
+    registry[0].deltallm_params["api_key"] = "provider-key"
+    fallback = type(registry[0])(
+        deployment_id="gpt-4o-mini-fallback",
+        model_name="gpt-4o-mini",
+        deltallm_params={
+            "model": "openai/gpt-4o-mini",
+            "api_key": "provider-key-fallback",
+            "api_base": "https://fallback.example/v1",
+        },
+        model_info={},
+    )
+    registry.append(fallback)
+
+    async def choose_primary(model_group, request_context):  # noqa: ANN001, ANN201
+        del request_context
+        return test_app.state.router.deployment_registry[model_group][0]
+
+    test_app.state.router.select_deployment = choose_primary
+
+    def stream(method: str, url: str, headers: dict[str, str], json: dict, timeout: int):  # noqa: ANN001
+        del method, url, json, timeout
+        auth = headers.get("Authorization", "")
+        if auth.endswith("provider-key"):
+            return _StreamContext(status_code=503, lines=[])
+        return _StreamContext(
+            status_code=200,
+            lines=[
+                'data: {"id":"chatcmpl-fb","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}',
+            ],
+            line_error=httpx.ReadError("fallback stream broke"),
+        )
+
+    test_app.state.http_client.stream = stream
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": "req-stream-fallback-failure"}
+    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": True}
+
+    with pytest.raises(httpx.ReadError, match="fallback stream broke"):
+        await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    await asyncio.sleep(0.05)
+    assert len(test_app.state.spend_tracking_service.events) == 1
+    last = test_app.state.spend_tracking_service.events[-1]
+    metadata = last.get("metadata") or {}
+    assert last["status"] == "error"
+    assert last["call_type"] == "completion"
+    assert last["error_type"] == "ReadError"
+    assert metadata.get("api_base") == "https://fallback.example/v1"
+    assert metadata.get("deployment_model") == "openai/gpt-4o-mini"
+
+    primary_health = await test_app.state.router_state_backend.get_health(registry[0].deployment_id)
+    fallback_health = await test_app.state.router_state_backend.get_health("gpt-4o-mini-fallback")
+    assert primary_health.get("last_error") == "Provider error: 503"
+    assert fallback_health.get("last_error") == "fallback stream broke"
 
 
 @pytest.mark.asyncio

@@ -26,11 +26,14 @@ from src.models.requests import EmbeddingRequest
 from src.providers.resolution import resolve_provider, resolve_upstream_model
 from src.router.router import Deployment
 from src.router.usage import record_router_usage
+from src.telemetry.request_failures import enqueue_request_log_write, seed_request_failure_context
 from src.routers.routing_decision import (
+    capture_attempted_deployment,
     capture_initial_route_decision,
     route_failover_kwargs,
     route_decision_headers,
     route_decision_metadata,
+    resolve_failure_target,
     update_served_route_decision,
 )
 from src.routers.utils import enforce_budget_if_configured, fire_and_forget
@@ -150,6 +153,13 @@ async def _execute_embedding(
 async def embeddings(request: Request, payload: EmbeddingRequest):
     request_start = perf_counter()
     callback_start = datetime.now(tz=UTC)
+    seed_request_failure_context(
+        request,
+        call_type="embedding",
+        model=payload.model,
+        request_start=request_start,
+        audit_action=AuditAction.EMBEDDING_REQUEST.value,
+    )
     auth = request.state.user_api_key
     ensure_model_allowed(
         auth,
@@ -186,6 +196,10 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
     capture_initial_route_decision(request, request_context)
     api_provider = resolve_provider(primary.deltallm_params)
     request_id = request.headers.get("x-request-id")
+    primary_api_base = str(primary.deltallm_params.get("api_base", request.app.state.settings.openai_base_url)).rstrip("/")
+
+    def track_attempt(deployment):  # noqa: ANN001
+        capture_attempted_deployment(request, deployment)
 
     try:
         data, served_deployment = await request.app.state.failover_manager.execute_with_failover(
@@ -193,6 +207,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             model_group=model_group,
             execute=lambda dep: _execute_embedding(request, payload, dep),
             return_deployment=True,
+            on_attempt=track_attempt,
             **failover_kwargs,
         )
         update_served_route_decision(
@@ -334,19 +349,24 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         )
         return JSONResponse(status_code=200, content=data, headers=route_decision_headers(request))
     except httpx.HTTPError as exc:
-        await request.app.state.passive_health_tracker.record_request_outcome(primary.deployment_id, success=False, error=str(exc))
+        failure_target = resolve_failure_target(request, fallback_deployment=primary)
+        failure_deployment_id = str(failure_target.deployment_id or primary.deployment_id)
+        failure_provider = str(failure_target.provider or api_provider)
+        failure_api_base = failure_target.api_base or primary_api_base
+        failure_deployment_model = failure_target.deployment_model or primary.deltallm_params.get("model")
+        await request.app.state.passive_health_tracker.record_request_outcome(failure_deployment_id, success=False, error=str(exc))
         status_code = getattr(getattr(exc, "response", None), "status_code", 502)
         increment_request(
-            model=payload.model, api_provider=api_provider,
+            model=payload.model, api_provider=failure_provider,
             api_key=auth.api_key, user=auth.user_id, team=auth.team_id, status_code=status_code,
         )
-        increment_request_failure(model=payload.model, api_provider=api_provider, error_type=exc.__class__.__name__)
-        observe_request_latency(model=payload.model, api_provider=api_provider, status_code=status_code, latency_seconds=perf_counter() - request_start)
+        increment_request_failure(model=payload.model, api_provider=failure_provider, error_type=exc.__class__.__name__)
+        observe_request_latency(model=payload.model, api_provider=failure_provider, status_code=status_code, latency_seconds=perf_counter() - request_start)
         callback_payload = build_standard_logging_payload(
             call_type="embedding", request_id=request_id, model=payload.model,
-            deployment_model=None, request_payload=request_data, response_obj=None,
+            deployment_model=failure_deployment_model, request_payload=request_data, response_obj=None,
             user_api_key_dict=auth.model_dump(mode="json"), start_time=callback_start, end_time=datetime.now(tz=UTC),
-            api_base=None,
+            api_base=failure_api_base,
             error_info={"error_type": exc.__class__.__name__, "message": str(exc)},
             turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
         )
@@ -358,11 +378,31 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         error_route_meta = route_decision_metadata(request)
         error_metadata: dict[str, Any] = {
             "route": request.url.path,
-            "provider": api_provider,
-            "deployment_model": primary.deltallm_params.get("model"),
+            "api_base": failure_api_base,
+            "provider": failure_provider,
+            "deployment_model": failure_deployment_model,
         }
         if error_route_meta is not None:
             error_metadata["routing_decision"] = error_route_meta
+        enqueue_request_log_write(
+            request,
+            request.app.state.spend_tracking_service.log_request_failure(
+                request_id=request_id or "",
+                api_key=auth.api_key,
+                user_id=auth.user_id,
+                team_id=auth.team_id,
+                organization_id=getattr(auth, "organization_id", None),
+                end_user_id=None,
+                model=payload.model,
+                call_type="embedding",
+                metadata=error_metadata,
+                cache_hit=bool(getattr(request.state, "cache_hit", False)),
+                start_time=callback_start,
+                end_time=datetime.now(tz=UTC),
+                http_status_code=status_code,
+                exc=exc,
+            )
+        )
         _emit_embedding_audit_event(
             request=request,
             auth=auth,
@@ -376,12 +416,18 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         )
         raise InvalidRequestError(message=f"Embedding request failed: {exc}") from exc
     except Exception as exc:
-        await request.app.state.passive_health_tracker.record_request_outcome(primary.deployment_id, success=False, error=str(exc))
+        failure_target = resolve_failure_target(request, fallback_deployment=primary)
+        failure_deployment_id = str(failure_target.deployment_id or primary.deployment_id)
+        failure_provider = str(failure_target.provider or api_provider)
+        failure_api_base = failure_target.api_base or primary_api_base
+        failure_deployment_model = failure_target.deployment_model or primary.deltallm_params.get("model")
+        await request.app.state.passive_health_tracker.record_request_outcome(failure_deployment_id, success=False, error=str(exc))
+        status_code = int(getattr(exc, "status_code", 500) or 500)
         callback_payload = build_standard_logging_payload(
             call_type="embedding", request_id=request_id, model=payload.model,
-            deployment_model=None, request_payload=request_data, response_obj=None,
+            deployment_model=failure_deployment_model, request_payload=request_data, response_obj=None,
             user_api_key_dict=auth.model_dump(mode="json"), start_time=callback_start, end_time=datetime.now(tz=UTC),
-            api_base=None,
+            api_base=failure_api_base,
             error_info={"error_type": exc.__class__.__name__, "message": str(exc)},
             turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
         )
@@ -393,11 +439,31 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         error_route_meta = route_decision_metadata(request)
         error_metadata: dict[str, Any] = {
             "route": request.url.path,
-            "provider": api_provider,
-            "deployment_model": primary.deltallm_params.get("model"),
+            "api_base": failure_api_base,
+            "provider": failure_provider,
+            "deployment_model": failure_deployment_model,
         }
         if error_route_meta is not None:
             error_metadata["routing_decision"] = error_route_meta
+        enqueue_request_log_write(
+            request,
+            request.app.state.spend_tracking_service.log_request_failure(
+                request_id=request_id or "",
+                api_key=auth.api_key,
+                user_id=auth.user_id,
+                team_id=auth.team_id,
+                organization_id=getattr(auth, "organization_id", None),
+                end_user_id=None,
+                model=payload.model,
+                call_type="embedding",
+                metadata=error_metadata,
+                cache_hit=bool(getattr(request.state, "cache_hit", False)),
+                start_time=callback_start,
+                end_time=datetime.now(tz=UTC),
+                http_status_code=status_code,
+                exc=exc,
+            )
+        )
         _emit_embedding_audit_event(
             request=request,
             auth=auth,

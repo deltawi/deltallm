@@ -1,14 +1,5 @@
 # DeltaLLM
 
-<p align="center">
-  <a href="https://github.com/deltawi/deltallm/actions"><img src="https://img.shields.io/github/actions/workflow/status/deltawi/deltallm/ci.yml?label=tests" alt="Tests"></a>
-  <a href="https://deltallm.readthedocs.io"><img src="https://img.shields.io/badge/docs-readthedocs-blue" alt="Documentation"></a>
-  <a href="https://github.com/deltawi/deltallm/releases"><img src="https://img.shields.io/github/v/release/deltawi/deltallm?sort=semver" alt="Latest Release"></a>
-  <img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python">
-  <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
-  <img src="https://img.shields.io/github/last-commit/deltawi/deltallm" alt="Last Commit">
-  <a href="https://github.com/deltawi/deltallm/stargazers"><img src="https://img.shields.io/github/stars/deltawi/deltallm?style=social" alt="Stars"></a>
-</p>
 
 
 ## What is DeltaLLM?
@@ -34,7 +25,7 @@ That's it. Your existing code works unchanged — now with routing, spend tracki
 
 Manage all your model deployments, API keys, teams, and usage from a clean web interface:
 
-![DeltaLLM Admin UI - Models List](docs/admin-ui/images/models-list.png)
+DeltaLLM Admin UI - Models List
 
 ## Key Features
 
@@ -49,7 +40,7 @@ Manage all your model deployments, API keys, teams, and usage from a clean web i
 - **Response Caching** — Memory, Redis, or S3 backends for lower latency and cost
 - **Observability** — Prometheus metrics, request logging, and spend analytics
 
-**Docs:** https://deltallm.readthedocs.io/en/latest
+**Docs:** [https://deltallm.readthedocs.io/en/latest](https://deltallm.readthedocs.io/en/latest)
 
 ## Choose Your Install Path
 

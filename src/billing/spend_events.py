@@ -20,6 +20,9 @@ def build_spend_event(
     cache_hit: bool,
     start_time: datetime,
     end_time: datetime,
+    status: str = "success",
+    http_status_code: int | None = None,
+    error_type: str | None = None,
 ) -> dict[str, Any]:
     usage_data = usage or {}
     meta = metadata if isinstance(metadata, dict) else {}
@@ -88,6 +91,9 @@ def build_spend_event(
         "pricing_fields_used": billing.get("pricing_fields_used") if isinstance(billing.get("pricing_fields_used"), list) else None,
         "usage_snapshot": usage_snapshot or None,
         "metadata": meta,
+        "status": str(status or "success"),
+        "http_status_code": _int_or_none(http_status_code),
+        "error_type": _str_or_none(error_type),
     }
 
 
@@ -100,6 +106,15 @@ def _int_value(*values: Any) -> int:
         except Exception:
             continue
     return 0
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except Exception:
+        return None
 
 
 def _float_value(*values: Any) -> float:

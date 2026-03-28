@@ -121,6 +121,9 @@ async def test_spend_logs_use_normalized_event_columns(client, test_app, monkeyp
     assert "FROM deltallm_spendlog_events" in logs_query[0]
     assert "input_tokens AS prompt_tokens" in logs_query[0]
     assert 'user_id AS "user"' in logs_query[0]
+    assert "status" in logs_query[0]
+    assert "http_status_code" in logs_query[0]
+    assert "error_type" in logs_query[0]
     assert "FROM deltallm_spendlog_events" in count_query[0]
 
 

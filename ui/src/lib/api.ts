@@ -115,6 +115,9 @@ export interface SpendLog {
   cache_hit: boolean;
   cache_key?: string | null;
   request_tags?: string[];
+  status?: string | null;
+  http_status_code?: number | null;
+  error_type?: string | null;
 }
 
 export type SpendGroupBy = 'model' | 'organization' | 'team' | 'api_key';

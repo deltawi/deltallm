@@ -43,6 +43,9 @@ class NoopSpendTrackingService:
     async def log_spend(self, **kwargs):
         return None
 
+    async def log_request_failure(self, **kwargs):
+        return None
+
 
 class FakeRedis:
     def __init__(self) -> None:

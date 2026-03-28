@@ -47,6 +47,9 @@ model DeltaLLM_SpendLogEvents {
   pricing_fields_used    Json?
   usage_snapshot         Json?
   metadata               Json?
+  status                 String   @default("success")
+  http_status_code       Int?
+  error_type             String?
 
   @@index([organization_id, start_time], map: "deltallm_spendlog_events_org_time_idx")
   @@index([team_id, start_time], map: "deltallm_spendlog_events_team_time_idx")
