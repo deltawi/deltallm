@@ -23,6 +23,14 @@ The rewritten chart supports three concrete deployment shapes:
 
 Published releases are available from the public Helm repository at `https://deltawi.github.io/deltallm`.
 
+Each release publishes three matching values files:
+
+- `values-eval-<chart-version>.yaml`: self-contained quick-start with bundled PostgreSQL and Redis
+- `values-production-<chart-version>.yaml`: HA-oriented production baseline for external PostgreSQL and Redis
+- `values-<chart-version>.yaml`: raw base chart values
+
+The bare chart does not provision PostgreSQL or Redis by default. For a first install, use the eval values file.
+
 ```bash
 helm repo add deltallm https://deltawi.github.io/deltallm
 helm repo update
@@ -35,11 +43,14 @@ export DELTALLM_MASTER_KEY="$(python3 -c 'import secrets; print(\"sk-\" + secret
 export DELTALLM_SALT_KEY="$(openssl rand -hex 32)"
 ```
 
-Quick-start install:
+Quick-start evaluation install:
 
 ```bash
 helm install deltallm deltallm/deltallm \
   --version <chart-version> \
+  --namespace deltallm \
+  --create-namespace \
+  -f https://deltawi.github.io/deltallm/values-eval-<chart-version>.yaml \
   --set secret.values.masterKey="$DELTALLM_MASTER_KEY" \
   --set secret.values.saltKey="$DELTALLM_SALT_KEY" \
   --set-string env[0].name=PLATFORM_BOOTSTRAP_ADMIN_EMAIL \
@@ -53,6 +64,9 @@ To use the Presidio-enabled image variant from the same release:
 ```bash
 helm install deltallm deltallm/deltallm \
   --version <chart-version> \
+  --namespace deltallm \
+  --create-namespace \
+  -f https://deltawi.github.io/deltallm/values-eval-<chart-version>.yaml \
   --set secret.values.masterKey="$DELTALLM_MASTER_KEY" \
   --set secret.values.saltKey="$DELTALLM_SALT_KEY" \
   --set-string env[0].name=PLATFORM_BOOTSTRAP_ADMIN_EMAIL \
@@ -66,12 +80,34 @@ Use the latest GitHub Release version for `<chart-version>`. The exact pinned in
 
 After install:
 
+- `kubectl get pods -n deltallm` should show DeltaLLM plus bundled PostgreSQL and Redis pods
 - use `admin@example.com` and the bootstrap password to sign in to the Admin UI
 - use `DELTALLM_MASTER_KEY` for gateway and API requests
 
-For production, prefer a values file or secret-backed `envFrom` instead of passing credentials with `--set`.
+For production, do not use the eval overlay. Start from the released production overlay instead:
 
-This is the recommended path if you just want to deploy DeltaLLM.
+```bash
+curl -fsSLo values-production.yaml \
+  https://deltawi.github.io/deltallm/values-production-<chart-version>.yaml
+```
+
+Edit `values-production.yaml` to point at your external PostgreSQL and Redis secrets, then install:
+
+- set `secret.existingSecret` to the secret that contains `master-key` and `salt-key`
+- set `runtime.database.existingSecret.name` and `runtime.database.existingSecret.urlKey`
+- set `runtime.redis.existingSecret.name` and `runtime.redis.existingSecret.urlKey`
+- add any provider keys or platform credentials under `envFrom` or `env`
+
+```bash
+helm install deltallm deltallm/deltallm \
+  --version <chart-version> \
+  --namespace deltallm \
+  --create-namespace \
+  -f values-production.yaml \
+  --set secret.existingSecret=deltallm-app-secrets
+```
+
+Use the eval overlay for the simplest first working install. Use the production overlay once you have external stateful services and secret-backed runtime configuration.
 
 ## Option 2: Install From the Repo
 

@@ -132,12 +132,39 @@ jobs:
 
       - name: Validate packaged chart
         run: |
+          VALID_MASTER_KEY=sk-release-validation-1234567890abcdeA1
+          VALID_SALT_KEY=release-validation-salt-0123456789abcdef0123456789abcdef
+          VALID_DATABASE_URL=postgresql://deltallm:deltallm@postgres:5432/deltallm
+          VALID_REDIS_URL=redis://redis:6379/0
+
           helm lint /tmp/deltallm-chart \
-            --set secret.values.masterKey=sk-release-validation-1234567890abcdeA1 \
-            --set secret.values.saltKey=release-validation-salt-0123456789abcdef0123456789abcdef
+            --set secret.values.masterKey="${VALID_MASTER_KEY}" \
+            --set secret.values.saltKey="${VALID_SALT_KEY}"
           helm template deltallm /tmp/deltallm-chart \
-            --set secret.values.masterKey=sk-release-validation-1234567890abcdeA1 \
-            --set secret.values.saltKey=release-validation-salt-0123456789abcdef0123456789abcdef \
+            --set secret.values.masterKey="${VALID_MASTER_KEY}" \
+            --set secret.values.saltKey="${VALID_SALT_KEY}" \
+            > /dev/null
+          helm lint /tmp/deltallm-chart \
+            -f helm/values-eval.yaml \
+            --set secret.values.masterKey="${VALID_MASTER_KEY}" \
+            --set secret.values.saltKey="${VALID_SALT_KEY}"
+          helm template deltallm /tmp/deltallm-chart \
+            -f helm/values-eval.yaml \
+            --set secret.values.masterKey="${VALID_MASTER_KEY}" \
+            --set secret.values.saltKey="${VALID_SALT_KEY}" \
+            > /dev/null
+          helm lint /tmp/deltallm-chart \
+            -f helm/values-production.yaml \
+            --set secret.values.masterKey="${VALID_MASTER_KEY}" \
+            --set secret.values.saltKey="${VALID_SALT_KEY}" \
+            --set runtime.database.url="${VALID_DATABASE_URL}" \
+            --set runtime.redis.url="${VALID_REDIS_URL}"
+          helm template deltallm /tmp/deltallm-chart \
+            -f helm/values-production.yaml \
+            --set secret.values.masterKey="${VALID_MASTER_KEY}" \
+            --set secret.values.saltKey="${VALID_SALT_KEY}" \
+            --set runtime.database.url="${VALID_DATABASE_URL}" \
+            --set runtime.redis.url="${VALID_REDIS_URL}" \
             > /dev/null
 
       - name: Package chart
@@ -165,6 +192,12 @@ jobs:
           fi
 
           cp "/tmp/deltallm-packages/deltallm-${CHART_VERSION}.tgz" .
+          cp helm/values.yaml .
+          cp helm/values-eval.yaml .
+          cp helm/values-production.yaml .
+          cp helm/values.yaml "values-${CHART_VERSION}.yaml"
+          cp helm/values-eval.yaml "values-eval-${CHART_VERSION}.yaml"
+          cp helm/values-production.yaml "values-production-${CHART_VERSION}.yaml"
 
           if [[ -f index.yaml ]]; then
             helm repo index . --url "${CHART_REPO_URL}" --merge index.yaml
@@ -185,6 +218,16 @@ jobs:
             <p>Add this repository with:</p>
             <pre><code>helm repo add deltallm ${CHART_REPO_URL}
           helm repo update</code></pre>
+            <p>Quick-start evaluation install with bundled PostgreSQL and Redis:</p>
+            <pre><code>helm install deltallm deltallm/deltallm \\
+          --version ${CHART_VERSION} \\
+          -f ${CHART_REPO_URL}/values-eval-${CHART_VERSION}.yaml</code></pre>
+            <p>Release-matched values overlays:</p>
+            <ul>
+              <li><a href="values-eval-${CHART_VERSION}.yaml">values-eval-${CHART_VERSION}.yaml</a></li>
+              <li><a href="values-production-${CHART_VERSION}.yaml">values-production-${CHART_VERSION}.yaml</a></li>
+              <li><a href="values-${CHART_VERSION}.yaml">values-${CHART_VERSION}.yaml</a></li>
+            </ul>
             <p>See the main project docs for deployment examples.</p>
           </body>
           </html>
@@ -194,7 +237,17 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .nojekyll index.html index.yaml "deltallm-${CHART_VERSION}.tgz"
+          git add \
+            .nojekyll \
+            index.html \
+            index.yaml \
+            "deltallm-${CHART_VERSION}.tgz" \
+            values.yaml \
+            values-eval.yaml \
+            values-production.yaml \
+            "values-${CHART_VERSION}.yaml" \
+            "values-eval-${CHART_VERSION}.yaml" \
+            "values-production-${CHART_VERSION}.yaml"
           if git diff --cached --quiet; then
             echo "No chart repo changes to publish"
             exit 0
