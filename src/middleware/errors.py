@@ -3,10 +3,13 @@ from __future__ import annotations
 import logging
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from src.guardrails.exceptions import GuardrailViolationError
 from src.models.errors import ApprovalRequiredError, ProxyError, RateLimitError
+from src.telemetry.request_failures import maybe_log_proxy_error, maybe_log_request_validation_failure
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +32,17 @@ def _serialize_error(exc: ProxyError) -> dict[str, object]:
 
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ProxyError)
-    async def proxy_error_handler(_: Request, exc: ProxyError) -> JSONResponse:
+    async def proxy_error_handler(request: Request, exc: ProxyError) -> JSONResponse:
+        maybe_log_proxy_error(request, exc)
         headers = {}
         if isinstance(exc, RateLimitError) and getattr(exc, "retry_after", None):
             headers["Retry-After"] = str(exc.retry_after)
         return JSONResponse(status_code=exc.status_code, content=_serialize_error(exc), headers=headers)
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+        await maybe_log_request_validation_failure(request, exc)
+        return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
 
     @app.exception_handler(Exception)
     async def unhandled_error_handler(_: Request, exc: Exception) -> JSONResponse:

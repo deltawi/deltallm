@@ -116,7 +116,11 @@ class SpendQueryDB:
                     "end_time": "2026-02-13T00:00:01+00:00",
                     "user": "u1",
                     "team_id": "t1",
+                    "metadata": {"error": {"message": "upstream unavailable"}},
                     "cache_hit": False,
+                    "status": "error",
+                    "http_status_code": 503,
+                    "error_type": "HTTPStatusError",
                     "request_tags": ["tag-a"],
                 }
             ]
@@ -257,6 +261,37 @@ async def test_spend_tracking_persists_cached_token_counts():
 
 
 @pytest.mark.asyncio
+async def test_request_failure_logging_writes_error_event_without_ledger_updates():
+    db = RecordingDB()
+    service = SpendTrackingService(db_client=db)
+
+    await service.log_request_failure(
+        request_id="req_failure",
+        api_key="key_hash",
+        user_id="user_1",
+        team_id="team_1",
+        organization_id="org_1",
+        end_user_id=None,
+        model="gpt-4o-mini",
+        call_type="completion",
+        metadata={"api_base": "https://api.openai.com/v1"},
+        http_status_code=503,
+        exc=RuntimeError("upstream unavailable"),
+    )
+
+    event_call = next(args for query, args in db.calls if "insert into deltallm_spendlog_events" in query.lower())
+    assert event_call[12] == 0.0
+    assert event_call[16] == 0
+    assert event_call[38] == "error"
+    assert event_call[39] == 503
+    assert event_call[40] == "RuntimeError"
+    assert not any("update deltallm_verificationtoken" in q.lower() for q, _ in db.calls)
+    assert not any("update deltallm_usertable" in q.lower() for q, _ in db.calls)
+    assert not any("update deltallm_teamtable" in q.lower() for q, _ in db.calls)
+    assert not any("update deltallm_organizationtable" in q.lower() for q, _ in db.calls)
+
+
+@pytest.mark.asyncio
 async def test_budget_enforcement_raises_when_hard_budget_exceeded():
     service = BudgetEnforcementService(db_client=BudgetDB())
 
@@ -342,6 +377,9 @@ async def test_spend_logs_endpoint_returns_paginated_data(client, test_app):
     payload = response.json()
     assert payload["pagination"]["total"] == 1
     assert payload["logs"][0]["request_id"] == "req_1"
+    assert payload["logs"][0]["status"] == "error"
+    assert payload["logs"][0]["http_status_code"] == 503
+    assert payload["logs"][0]["error_type"] == "HTTPStatusError"
 
 
 @pytest.mark.asyncio

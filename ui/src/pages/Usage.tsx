@@ -49,6 +49,28 @@ function prettyJson(value: Record<string, unknown> | null | undefined): string {
   return JSON.stringify(value, null, 2);
 }
 
+function logStatus(value: SpendLog): 'success' | 'error' {
+  return value.status === 'error' ? 'error' : 'success';
+}
+
+function errorMessage(value: SpendLog): string {
+  const metadataError = value.metadata?.['error'];
+  const errorValue = metadataError && typeof metadataError === 'object' ? metadataError as Record<string, unknown> : null;
+  const message = typeof errorValue?.['message'] === 'string' ? errorValue['message'] : null;
+  if (message && message.trim()) {
+    return message;
+  }
+  return '—';
+}
+
+function StatusBadge({ status }: { status: 'success' | 'error' }) {
+  const classes =
+    status === 'error'
+      ? 'bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200'
+      : 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200';
+  return <span className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${classes}`}>{status}</span>;
+}
+
 function DetailItem({ label, value, mono = false }: { label: string; value: ReactNode; mono?: boolean }) {
   return (
     <div>
@@ -156,6 +178,7 @@ export default function Usage() {
     { key: 'start_time', header: 'Time', render: (r: SpendLog) => <span className="text-xs text-gray-500 whitespace-nowrap">{fmtDateTime(r.start_time)}</span> },
     { key: 'model', header: 'Model', render: (r: SpendLog) => <span className="font-medium text-xs">{r.model}</span> },
     { key: 'call_type', header: 'Type', render: (r: SpendLog) => <span className="text-xs capitalize">{r.call_type}</span> },
+    { key: 'status', header: 'Status', render: (r: SpendLog) => <StatusBadge status={logStatus(r)} /> },
     { key: 'spend', header: 'Cost', render: (r: SpendLog) => fmt(r.spend) },
     { key: 'prompt_tokens', header: 'Prompt', render: (r: SpendLog) => fmtNum(r.prompt_tokens) },
     { key: 'completion_tokens', header: 'Completion', render: (r: SpendLog) => fmtNum(r.completion_tokens) },
@@ -262,13 +285,16 @@ export default function Usage() {
         </Card>
       )}
 
-      <Modal open={selectedLog !== null} onClose={() => setSelectedLog(null)} title="Spend Log Details" wide>
+      <Modal open={selectedLog !== null} onClose={() => setSelectedLog(null)} title="Request Log Details" wide>
         {selectedLog && (
           <div className="space-y-6">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <DetailItem label="Time" value={fmtDateTime(selectedLog.start_time)} />
               <DetailItem label="Model" value={selectedLog.model} />
               <DetailItem label="Type" value={selectedLog.call_type} />
+              <DetailItem label="Status" value={<StatusBadge status={logStatus(selectedLog)} />} />
+              <DetailItem label="HTTP Status" value={selectedLog.http_status_code ?? '—'} />
+              <DetailItem label="Error Type" value={selectedLog.error_type || '—'} />
               <DetailItem label="Cost" value={fmt(selectedLog.spend)} />
               <DetailItem label="Total Tokens" value={fmtNum(selectedLog.total_tokens)} />
               <DetailItem label="Cache" value={selectedLog.cache_hit ? 'Hit' : 'Miss'} />
@@ -282,6 +308,7 @@ export default function Usage() {
               <DetailItem label="API Base" value={selectedLog.api_base || '—'} mono />
               <DetailItem label="Request ID" value={selectedLog.request_id} mono />
               <DetailItem label="API Key" value={selectedLog.api_key} mono />
+              <DetailItem label="Error Message" value={errorMessage(selectedLog)} />
               <DetailItem label="Cache Key" value={selectedLog.cache_key || '—'} mono />
               <DetailItem label="Tags" value={selectedLog.request_tags && selectedLog.request_tags.length > 0 ? selectedLog.request_tags.join(', ') : '—'} />
               <DetailItem label="End Time" value={fmtDateTime(selectedLog.end_time)} />

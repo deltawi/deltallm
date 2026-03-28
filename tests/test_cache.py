@@ -18,7 +18,10 @@ class _SpendRecorder:
         self.events: list[dict] = []
 
     async def log_spend(self, **kwargs):
-        self.events.append(kwargs)
+        self.events.append({"status": "success", **kwargs})
+
+    async def log_request_failure(self, **kwargs):
+        self.events.append({"status": "error", "cost": 0.0, **kwargs})
 
 
 def _enable_cache(test_app):

@@ -219,6 +219,15 @@ class FailoverManager:
             delay = delay * (0.5 + random.random() * 0.5)
         return delay
 
+    @staticmethod
+    def _notify_attempt(on_attempt: Callable[[Deployment], None] | None, deployment: Deployment) -> None:
+        if on_attempt is None:
+            return
+        try:
+            on_attempt(deployment)
+        except Exception:
+            logger.warning("failover attempt callback failed", exc_info=True)
+
     async def execute_with_failover(
         self,
         primary_deployment: Deployment,
@@ -227,6 +236,7 @@ class FailoverManager:
         request_tokens: int = 0,
         *,
         return_deployment: bool = False,
+        on_attempt: Callable[[Deployment], None] | None = None,
         timeout_seconds: float | None = None,
         retry_max_attempts: int | None = None,
         retryable_error_classes: list[str] | set[str] | None = None,
@@ -248,6 +258,7 @@ class FailoverManager:
             for attempt in range(effective_retries + 1):
                 started = time.monotonic()
                 try:
+                    self._notify_attempt(on_attempt, deployment)
                     await self.state.increment_active(deployment.deployment_id)
                     result = await asyncio.wait_for(
                         execute(deployment),
@@ -314,6 +325,7 @@ class FailoverManager:
                             execute,
                             deployment.deployment_id,
                             classification,
+                            on_attempt=on_attempt,
                             timeout_seconds=effective_timeout,
                         )
                         if extra_result is not None:
@@ -350,6 +362,7 @@ class FailoverManager:
                             execute,
                             deployment.deployment_id,
                             classification,
+                            on_attempt=on_attempt,
                             timeout_seconds=effective_timeout,
                         )
                         if extra_result is not None:
@@ -386,6 +399,7 @@ class FailoverManager:
                             execute,
                             deployment.deployment_id,
                             classification,
+                            on_attempt=on_attempt,
                             timeout_seconds=effective_timeout,
                         )
                         if extra_result is not None:
@@ -442,6 +456,7 @@ class FailoverManager:
         from_deployment_id: str,
         classification: str,
         *,
+        on_attempt: Callable[[Deployment], None] | None = None,
         timeout_seconds: float,
     ) -> tuple[Any, Deployment] | None:
         for deployment in chain:
@@ -452,6 +467,7 @@ class FailoverManager:
                 continue
 
             try:
+                self._notify_attempt(on_attempt, deployment)
                 await self.state.increment_active(deployment.deployment_id)
                 started = time.monotonic()
                 result = await asyncio.wait_for(

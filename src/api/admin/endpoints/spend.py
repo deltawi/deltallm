@@ -329,7 +329,7 @@ async def request_logs(
                {source.cached_prompt_tokens_column} AS prompt_tokens_cached,
                {source.cached_completion_tokens_column} AS completion_tokens_cached,
                start_time, end_time, {source.user_column} AS "user", team_id, {source.end_user_column} AS end_user,
-               metadata, cache_hit, cache_key, request_tags
+               metadata, cache_hit, cache_key, request_tags, status, http_status_code, error_type
         FROM {source.table}
         {where_sql}
         ORDER BY start_time DESC

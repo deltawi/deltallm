@@ -22,7 +22,22 @@ class _SpendRecorder:
         self.events: list[dict] = []
 
     async def log_spend(self, **kwargs):
-        self.events.append(kwargs)
+        self.events.append({"status": "success", **kwargs})
+
+    async def log_request_failure(self, **kwargs):
+        error_type = kwargs.get("error_type")
+        if error_type is None:
+            exc = kwargs.get("exc")
+            error_type = getattr(exc, "error_type", None) or (exc.__class__.__name__ if exc is not None else None)
+        self.events.append({"status": "error", "cost": 0.0, "error_type": error_type, **kwargs})
+
+
+class _RecordingAuditService:
+    def __init__(self) -> None:
+        self.events: list[tuple[object, list[object], bool]] = []
+
+    def record_event(self, event, *, payloads=None, critical=False):  # noqa: ANN001, ANN201
+        self.events.append((event, list(payloads or []), critical))
 
 
 @pytest.mark.asyncio
@@ -139,6 +154,194 @@ async def test_explicit_provider_keeps_spend_logging_intact(client, test_app, pa
     assert last.get("model") == body["model"]
     assert (last.get("metadata") or {}).get("api_base") == "https://openrouter.ai/api/v1"
     assert "cost" in last
+
+
+@pytest.mark.asyncio
+async def test_chat_failure_writes_error_request_log(client, test_app):
+    test_app.state.spend_tracking_service = _SpendRecorder()
+
+    async def failing_post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del headers, json, timeout
+        return httpx.Response(503, json={"error": "upstream unavailable"}, request=httpx.Request("POST", url))
+
+    test_app.state.http_client.post = failing_post
+
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": "req-chat-error"},
+        json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False},
+    )
+    assert response.status_code == 503
+
+    await asyncio.sleep(0.05)
+    assert len(test_app.state.spend_tracking_service.events) == 1
+    last = test_app.state.spend_tracking_service.events[-1]
+    assert last["status"] == "error"
+    assert last["call_type"] == "completion"
+    assert last["cost"] == 0.0
+    assert last["http_status_code"] == 503
+    assert (last.get("metadata") or {}).get("route") == "/v1/chat/completions"
+
+
+@pytest.mark.asyncio
+async def test_embedding_failure_writes_error_request_log(client, test_app):
+    test_app.state.spend_tracking_service = _SpendRecorder()
+
+    async def failing_post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del headers, json, timeout
+        return httpx.Response(503, json={"error": "upstream unavailable"}, request=httpx.Request("POST", url))
+
+    test_app.state.http_client.post = failing_post
+
+    response = await client.post(
+        "/v1/embeddings",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": "req-embedding-error"},
+        json={"model": "text-embedding-3-small", "input": "hello"},
+    )
+    assert response.status_code == 503
+
+    await asyncio.sleep(0.05)
+    assert len(test_app.state.spend_tracking_service.events) == 1
+    last = test_app.state.spend_tracking_service.events[-1]
+    assert last["status"] == "error"
+    assert last["call_type"] == "embedding"
+    assert last["cost"] == 0.0
+    assert last["http_status_code"] == 503
+    assert (last.get("metadata") or {}).get("route") == "/v1/embeddings"
+
+
+@pytest.mark.asyncio
+async def test_embedding_failover_failure_uses_last_attempted_deployment_metadata(client, test_app):
+    test_app.state.spend_tracking_service = _SpendRecorder()
+    audit = _RecordingAuditService()
+    test_app.state.audit_service = audit
+
+    registry = test_app.state.router.deployment_registry["text-embedding-3-small"]
+    registry[0].deltallm_params["api_base"] = "https://primary.example/v1"
+    registry[0].deltallm_params["api_key"] = "primary-key"
+    fallback = type(registry[0])(
+        deployment_id="text-embedding-3-small-fallback",
+        model_name="text-embedding-3-small",
+        deltallm_params={
+            "model": "openai/text-embedding-3-small",
+            "api_key": "fallback-key",
+            "api_base": "https://fallback.example/v1",
+        },
+        model_info={},
+    )
+    registry.append(fallback)
+
+    async def choose_primary(model_group, request_context):  # noqa: ANN001, ANN201
+        del request_context
+        return test_app.state.router.deployment_registry[model_group][0]
+
+    test_app.state.router.select_deployment = choose_primary
+
+    async def failing_post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del json, timeout
+        request = httpx.Request("POST", url)
+        if headers.get("Authorization") == "Bearer primary-key":
+            return httpx.Response(503, json={"error": "primary unavailable"}, request=request)
+        return httpx.Response(502, json={"error": "fallback unavailable"}, request=request)
+
+    test_app.state.http_client.post = failing_post
+
+    response = await client.post(
+        "/v1/embeddings",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": "req-embedding-failover-failure"},
+        json={"model": "text-embedding-3-small", "input": "hello"},
+    )
+    assert response.status_code == 503
+
+    await asyncio.sleep(0.05)
+    assert len(test_app.state.spend_tracking_service.events) == 1
+    last = test_app.state.spend_tracking_service.events[-1]
+    metadata = last.get("metadata") or {}
+    assert last["status"] == "error"
+    assert metadata.get("api_base") == "https://fallback.example/v1"
+    assert metadata.get("provider") == "openai"
+    assert metadata.get("deployment_model") == "openai/text-embedding-3-small"
+
+    assert len(audit.events) == 1
+    event, payloads, critical = audit.events[0]
+    assert event.status == "error"
+    assert event.metadata["api_base"] == "https://fallback.example/v1"
+    assert event.metadata["deployment_model"] == "openai/text-embedding-3-small"
+    assert critical is True
+    assert payloads
+
+    primary_health = await test_app.state.router_state_backend.get_health(registry[0].deployment_id)
+    fallback_health = await test_app.state.router_state_backend.get_health(fallback.deployment_id)
+    assert primary_health.get("last_error") == "Upstream embedding call failed with status 503"
+    assert fallback_health.get("last_error") == "Upstream embedding call failed with status 502"
+
+
+@pytest.mark.asyncio
+async def test_denied_model_preflight_writes_request_log_and_audit_event(client, test_app):
+    test_app.state.spend_tracking_service = _SpendRecorder()
+    audit = _RecordingAuditService()
+    test_app.state.audit_service = audit
+
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}", "x-request-id": "req-chat-denied"},
+        json={"model": "gpts-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False},
+    )
+    assert response.status_code == 403
+    payload = response.json()["error"]
+    assert payload["type"] == "permission_denied"
+
+    await asyncio.sleep(0.05)
+    assert len(test_app.state.spend_tracking_service.events) == 1
+    last = test_app.state.spend_tracking_service.events[-1]
+    assert last["status"] == "error"
+    assert last["call_type"] == "completion"
+    assert last["model"] == "gpts-4o-mini"
+    assert last["http_status_code"] == 403
+    assert last["error_type"] == "permission_denied"
+    assert (last.get("metadata") or {}).get("failure_stage") == "preflight"
+
+    assert len(audit.events) == 1
+    event, payloads, critical = audit.events[0]
+    assert event.action == "CHAT_COMPLETION_REQUEST"
+    assert event.status == "error"
+    assert event.resource_id == "gpts-4o-mini"
+    assert event.error_type == "PermissionDeniedError"
+    assert critical is True
+    assert payloads == []
+
+
+@pytest.mark.asyncio
+async def test_invalid_json_writes_request_log_without_audit_event(client, test_app):
+    test_app.state.spend_tracking_service = _SpendRecorder()
+    audit = _RecordingAuditService()
+    test_app.state.audit_service = audit
+
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {test_app.state._test_key}",
+            "Content-Type": "application/json",
+            "x-request-id": "req-chat-json-invalid",
+        },
+        content='{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}',
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail[0]["type"] == "json_invalid"
+
+    await asyncio.sleep(0.05)
+    assert len(test_app.state.spend_tracking_service.events) == 1
+    last = test_app.state.spend_tracking_service.events[-1]
+    assert last["status"] == "error"
+    assert last["call_type"] == "completion"
+    assert last["model"] == "(unknown)"
+    assert last["http_status_code"] == 422
+    assert last["error_type"] == "request_validation_error"
+    assert (last.get("metadata") or {}).get("failure_stage") == "request_validation"
+    assert ((last.get("metadata") or {}).get("error") or {}).get("code") == "json_invalid"
+
+    assert audit.events == []
 
 
 @pytest.mark.asyncio

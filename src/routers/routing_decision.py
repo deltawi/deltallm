@@ -1,9 +1,22 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import Request
+
+from src.providers.resolution import resolve_provider
+
+_FAILURE_TARGET_ATTR = "_failure_target"
+
+
+@dataclass(frozen=True, slots=True)
+class FailureTarget:
+    deployment_id: str | None = None
+    provider: str | None = None
+    api_base: str | None = None
+    deployment_model: str | None = None
 
 
 def _refresh_request_resolution(request: Request) -> dict[str, Any] | None:
@@ -16,6 +29,54 @@ def _refresh_request_resolution(request: Request) -> dict[str, Any] | None:
         resolution["prompt"] = deepcopy(prompt)
     request.state.request_resolution = deepcopy(resolution) if resolution else None
     return deepcopy(resolution) if resolution else None
+
+
+def _build_failure_target(request: Request, deployment: Any) -> FailureTarget:
+    if deployment is None:
+        return FailureTarget()
+
+    deployment_id = getattr(deployment, "deployment_id", None)
+    params = getattr(deployment, "deltallm_params", None)
+    if not isinstance(params, dict):
+        return FailureTarget(deployment_id=deployment_id)
+
+    provider: str | None = None
+    try:
+        provider = resolve_provider(params)
+    except Exception:
+        raw_provider = str(params.get("provider") or "").strip()
+        provider = raw_provider or None
+
+    default_api_base = getattr(getattr(request.app.state, "settings", None), "openai_base_url", None)
+    raw_api_base = params.get("api_base", default_api_base)
+    api_base = str(raw_api_base).rstrip("/") if raw_api_base else None
+    deployment_model = params.get("model")
+
+    return FailureTarget(
+        deployment_id=deployment_id,
+        provider=provider,
+        api_base=api_base,
+        deployment_model=str(deployment_model) if deployment_model is not None else None,
+    )
+
+
+def capture_attempted_deployment(request: Request, deployment: Any) -> FailureTarget:
+    target = _build_failure_target(request, deployment)
+    setattr(request.state, _FAILURE_TARGET_ATTR, target)
+    return target
+
+
+def resolve_failure_target(
+    request: Request,
+    *,
+    fallback_deployment: Any | None = None,
+) -> FailureTarget:
+    target = getattr(request.state, _FAILURE_TARGET_ATTR, None)
+    if isinstance(target, FailureTarget):
+        return target
+    if fallback_deployment is not None:
+        return _build_failure_target(request, fallback_deployment)
+    return FailureTarget()
 
 
 def capture_initial_route_decision(request: Request, request_context: dict[str, Any]) -> dict[str, Any] | None:

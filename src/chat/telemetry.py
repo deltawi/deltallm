@@ -19,11 +19,43 @@ from src.metrics import (
     observe_request_latency,
 )
 from src.providers.resolution import resolve_provider
-from src.routers.routing_decision import attach_route_decision
+from src.telemetry.request_failures import enqueue_request_log_write
+from src.routers.routing_decision import attach_route_decision, resolve_failure_target
+from src.routers.utils import fire_and_forget
 
 
 def _append_route_decision_metadata(request: Request, metadata: dict[str, Any]) -> dict[str, Any]:
     return attach_route_decision(metadata, request)
+
+
+def _exception_status_code(exc: Exception) -> int | None:
+    response = getattr(exc, "response", None)
+    raw_status = getattr(exc, "status_code", None)
+    if raw_status is None and response is not None:
+        raw_status = getattr(response, "status_code", None)
+    try:
+        return int(raw_status) if raw_status is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_failure_fields(
+    request: Request,
+    *,
+    fallback_deployment: Any,
+    default_provider: str | None = None,
+    default_api_base: str | None = None,
+    default_deployment_model: str | None = None,
+) -> dict[str, str | None]:
+    target = resolve_failure_target(request, fallback_deployment=fallback_deployment)
+    fallback_params = getattr(fallback_deployment, "deltallm_params", {})
+    fallback_model = fallback_params.get("model") if isinstance(fallback_params, dict) else None
+    return {
+        "deployment_id": target.deployment_id or getattr(fallback_deployment, "deployment_id", None),
+        "provider": target.provider or default_provider,
+        "api_base": target.api_base or default_api_base,
+        "deployment_model": target.deployment_model or default_deployment_model or fallback_model,
+    }
 
 
 async def emit_stream_success(
@@ -41,9 +73,11 @@ async def emit_stream_success(
     cache_hit: bool,
     cache_key: str | None,
     audit_action: str,
+    served_deployment: Any,
     api_base: str,
     params: dict[str, Any],
 ) -> None:
+    await request.app.state.passive_health_tracker.record_request_outcome(served_deployment.deployment_id, success=True)
     callback_payload = build_standard_logging_payload(
         call_type="completion",
         request_id=request_id,
@@ -109,36 +143,83 @@ async def emit_stream_failure(
     cache_hit: bool,
     cache_key: str | None,
     audit_action: str,
+    primary_deployment: Any,
     api_base: str,
     params: dict[str, Any],
+    exc: Exception,
 ) -> None:
+    failure_fields = _resolve_failure_fields(
+        request,
+        fallback_deployment=primary_deployment,
+        default_provider=resolve_provider(params),
+        default_api_base=api_base,
+        default_deployment_model=params.get("model"),
+    )
+    enqueue_request_log_write(
+        request,
+        request.app.state.spend_tracking_service.log_request_failure(
+            request_id=request_id or "",
+            api_key=auth.api_key,
+            user_id=auth.user_id,
+            team_id=auth.team_id,
+            organization_id=getattr(auth, "organization_id", None),
+            end_user_id=None,
+            model=payload.model,
+            call_type="completion",
+            metadata=_append_route_decision_metadata(
+                request,
+                {
+                    "route": request.url.path,
+                    "stream": True,
+                    "cache_hit": cache_hit,
+                    "cache_key": cache_key,
+                    "api_base": failure_fields["api_base"],
+                    "provider": failure_fields["provider"],
+                    "deployment_model": failure_fields["deployment_model"],
+                },
+            ),
+            cache_hit=cache_hit,
+            start_time=callback_start,
+            end_time=datetime.now(tz=UTC),
+            http_status_code=_exception_status_code(exc),
+            exc=exc,
+        )
+    )
+    if failure_fields["deployment_id"]:
+        await request.app.state.passive_health_tracker.record_request_outcome(
+            str(failure_fields["deployment_id"]),
+            success=False,
+            error=str(exc),
+        )
     callback_payload = build_standard_logging_payload(
         call_type="completion",
         request_id=request_id,
         model=payload.model,
-        deployment_model=params.get("model"),
+        deployment_model=failure_fields["deployment_model"],
         request_payload=request_data,
         response_obj=None,
         user_api_key_dict=auth.model_dump(mode="json"),
         start_time=callback_start,
         end_time=datetime.now(tz=UTC),
-        api_base=api_base,
+        api_base=failure_fields["api_base"],
         cache_hit=cache_hit,
         cache_key=cache_key,
-        error_info={"error_type": "stream_error"},
+        error_info={
+            "error_type": getattr(exc, "error_type", None) or exc.__class__.__name__,
+            "message": str(exc),
+        },
         turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
     )
-    stream_exc = Exception("stream interrupted")
-    callback_manager.dispatch_failure_callbacks(callback_payload, stream_exc)
+    callback_manager.dispatch_failure_callbacks(callback_payload, exc)
     await callback_manager.execute_post_call_failure_hooks(
         request_data=request_data,
-        original_exception=stream_exc,
+        original_exception=exc,
         user_api_key_dict=auth.model_dump(mode="json"),
     )
     await guardrail_middleware.run_post_call_failure(
         request_data=request_data,
         user_api_key_dict=auth.model_dump(mode="python"),
-        original_exception=stream_exc,
+        original_exception=exc,
         call_type="completion",
     )
     emit_text_audit_event(
@@ -150,7 +231,7 @@ async def emit_stream_failure(
         request_start=request_start,
         request_data=request_data,
         response_data=None,
-        error=stream_exc,
+        error=exc,
         metadata=_append_route_decision_metadata(
             request,
             {
@@ -158,9 +239,9 @@ async def emit_stream_failure(
                 "stream": True,
                 "cache_hit": cache_hit,
                 "cache_key": cache_key,
-                "api_base": api_base,
-                "provider": resolve_provider(params),
-                "deployment_model": params.get("model"),
+                "api_base": failure_fields["api_base"],
+                "provider": failure_fields["provider"],
+                "deployment_model": failure_fields["deployment_model"],
             },
         ),
     )
@@ -225,8 +306,6 @@ async def emit_nonstream_success(
         team=auth.team_id,
         spend=request_cost,
     )
-    from src.routers.utils import fire_and_forget
-
     fire_and_forget(
         request.app.state.spend_tracking_service.log_spend(
             request_id=request_id or "",
@@ -329,6 +408,43 @@ async def emit_nonstream_failure(
     exc: Exception,
     status_code: int,
 ) -> None:
+    failure_fields = _resolve_failure_fields(
+        request,
+        fallback_deployment=primary_deployment,
+        default_provider=api_provider,
+        default_api_base=api_base,
+        default_deployment_model=primary_deployment.deltallm_params.get("model"),
+    )
+    enqueue_request_log_write(
+        request,
+        request.app.state.spend_tracking_service.log_request_failure(
+            request_id=request_id or "",
+            api_key=auth.api_key,
+            user_id=auth.user_id,
+            team_id=auth.team_id,
+            organization_id=getattr(auth, "organization_id", None),
+            end_user_id=None,
+            model=payload.model,
+            call_type="completion",
+            metadata=_append_route_decision_metadata(
+                request,
+                {
+                    "route": request.url.path,
+                    "stream": False,
+                    "cache_hit": cache_hit,
+                    "cache_key": cache_key,
+                    "api_base": failure_fields["api_base"],
+                    "provider": failure_fields["provider"],
+                    "deployment_model": failure_fields["deployment_model"],
+                },
+            ),
+            cache_hit=cache_hit,
+            start_time=callback_start,
+            end_time=datetime.now(tz=UTC),
+            http_status_code=status_code,
+            exc=exc,
+        )
+    )
     await guardrail_middleware.run_post_call_failure(
         request_data=request_data,
         user_api_key_dict=auth.model_dump(mode="python"),
@@ -336,13 +452,13 @@ async def emit_nonstream_failure(
         call_type="completion",
     )
     await request.app.state.passive_health_tracker.record_request_outcome(
-        primary_deployment.deployment_id,
+        str(failure_fields["deployment_id"] or primary_deployment.deployment_id),
         success=False,
         error=str(exc),
     )
     increment_request(
         model=payload.model,
-        api_provider=api_provider,
+        api_provider=str(failure_fields["provider"] or api_provider),
         api_key=auth.api_key,
         user=auth.user_id,
         team=auth.team_id,
@@ -350,12 +466,12 @@ async def emit_nonstream_failure(
     )
     increment_request_failure(
         model=payload.model,
-        api_provider=api_provider,
+        api_provider=str(failure_fields["provider"] or api_provider),
         error_type=exc.__class__.__name__,
     )
     observe_request_latency(
         model=payload.model,
-        api_provider=api_provider,
+        api_provider=str(failure_fields["provider"] or api_provider),
         status_code=status_code,
         latency_seconds=perf_counter() - request_start,
     )
@@ -363,13 +479,13 @@ async def emit_nonstream_failure(
         call_type="completion",
         request_id=request_id,
         model=payload.model,
-        deployment_model=primary_deployment.deltallm_params.get("model"),
+        deployment_model=failure_fields["deployment_model"],
         request_payload=request_data,
         response_obj=None,
         user_api_key_dict=auth.model_dump(mode="json"),
         start_time=callback_start,
         end_time=datetime.now(tz=UTC),
-        api_base=api_base,
+        api_base=failure_fields["api_base"],
         cache_hit=cache_hit,
         cache_key=cache_key,
         error_info={"error_type": exc.__class__.__name__, "message": str(exc)},
@@ -398,9 +514,9 @@ async def emit_nonstream_failure(
                 "stream": False,
                 "cache_hit": cache_hit,
                 "cache_key": cache_key,
-                "api_base": api_base,
-                "provider": api_provider,
-                "deployment_model": primary_deployment.deltallm_params.get("model"),
+                "api_base": failure_fields["api_base"],
+                "provider": failure_fields["provider"],
+                "deployment_model": failure_fields["deployment_model"],
             },
         ),
     )

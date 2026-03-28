@@ -36,6 +36,90 @@ class SpendTrackingService:
         start_time: datetime | None = None,
         end_time: datetime | None = None,
     ) -> None:
+        await self._log_request_event(
+            request_id=request_id,
+            api_key=api_key,
+            user_id=user_id,
+            team_id=team_id,
+            organization_id=organization_id,
+            end_user_id=end_user_id,
+            model=model,
+            call_type=call_type,
+            usage=usage,
+            cost=cost,
+            metadata=metadata,
+            cache_hit=cache_hit,
+            start_time=start_time,
+            end_time=end_time,
+            update_ledger=True,
+        )
+
+    async def log_request_failure(
+        self,
+        *,
+        request_id: str,
+        api_key: str,
+        user_id: str | None,
+        team_id: str | None,
+        organization_id: str | None,
+        end_user_id: str | None,
+        model: str,
+        call_type: str,
+        metadata: dict[str, Any] | None = None,
+        cache_hit: bool = False,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        http_status_code: int | None = None,
+        exc: Exception | None = None,
+        error_type: str | None = None,
+    ) -> None:
+        await self._log_request_event(
+            request_id=request_id,
+            api_key=api_key,
+            user_id=user_id,
+            team_id=team_id,
+            organization_id=organization_id,
+            end_user_id=end_user_id,
+            model=model,
+            call_type=call_type,
+            usage=None,
+            cost=0.0,
+            metadata=_failure_metadata(
+                metadata=metadata,
+                exc=exc,
+                http_status_code=http_status_code,
+            ),
+            cache_hit=cache_hit,
+            start_time=start_time,
+            end_time=end_time,
+            status="error",
+            http_status_code=http_status_code,
+            error_type=error_type or getattr(exc, "error_type", None) or (exc.__class__.__name__ if exc is not None else None),
+            update_ledger=False,
+        )
+
+    async def _log_request_event(
+        self,
+        *,
+        request_id: str,
+        api_key: str,
+        user_id: str | None,
+        team_id: str | None,
+        organization_id: str | None,
+        end_user_id: str | None,
+        model: str,
+        call_type: str,
+        usage: dict[str, int] | None,
+        cost: float,
+        metadata: dict[str, Any] | None,
+        cache_hit: bool,
+        start_time: datetime | None,
+        end_time: datetime | None,
+        status: str = "success",
+        http_status_code: int | None = None,
+        error_type: str | None = None,
+        update_ledger: bool,
+    ) -> None:
         if self.db is None:
             return
 
@@ -60,8 +144,25 @@ class SpendTrackingService:
             cache_hit=cache_hit,
             start_time=log_start,
             end_time=log_end,
+            status=status,
+            http_status_code=http_status_code,
+            error_type=error_type,
         )
 
+        await self._write_event(event_entry)
+        if not update_ledger:
+            return
+
+        await self.ledger.increment_spend(
+            api_key=api_key,
+            user_id=user_id,
+            team_id=team_id,
+            organization_id=organization_id,
+            model=model,
+            cost=float(cost),
+        )
+
+    async def _write_event(self, event_entry: dict[str, Any]) -> None:
         try:
             import uuid as _uuid
 
@@ -110,9 +211,12 @@ class SpendTrackingService:
                     unpriced_reason,
                     pricing_fields_used,
                     usage_snapshot,
-                    metadata
+                    metadata,
+                    status,
+                    http_status_code,
+                    error_type
                 ) VALUES (
-                    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29::timestamp,$30::timestamp,$31,$32,$33,$34,$35,$36::jsonb,$37::jsonb,$38::jsonb
+                    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29::timestamp,$30::timestamp,$31,$32,$33,$34,$35,$36::jsonb,$37::jsonb,$38::jsonb,$39,$40,$41
                 )
                 """,
                 row_id,
@@ -153,15 +257,29 @@ class SpendTrackingService:
                 json.dumps(event_entry["pricing_fields_used"], default=str),
                 json.dumps(event_entry["usage_snapshot"], default=str),
                 json.dumps(event_entry["metadata"], default=str),
+                event_entry["status"],
+                event_entry["http_status_code"],
+                event_entry["error_type"],
             )
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.warning("failed to write normalized spend event: %s", exc)
 
-        await self.ledger.increment_spend(
-            api_key=api_key,
-            user_id=user_id,
-            team_id=team_id,
-            organization_id=organization_id,
-            model=model,
-            cost=float(cost),
-        )
+
+def _failure_metadata(
+    *,
+    metadata: dict[str, Any] | None,
+    exc: Exception | None,
+    http_status_code: int | None,
+) -> dict[str, Any]:
+    base = dict(metadata or {})
+    error_payload = dict(base.get("error") or {}) if isinstance(base.get("error"), dict) else {}
+    if exc is not None:
+        error_payload.setdefault("type", getattr(exc, "error_type", None) or exc.__class__.__name__)
+        error_payload.setdefault("message", str(exc))
+        if getattr(exc, "code", None):
+            error_payload.setdefault("code", getattr(exc, "code"))
+    if http_status_code is not None:
+        error_payload.setdefault("http_status_code", int(http_status_code))
+    if error_payload:
+        base["error"] = error_payload
+    return base

@@ -28,7 +28,9 @@ from src.models.requests import ChatCompletionRequest
 from src.providers.registry import resolve_chat_upstream
 from src.providers.resolution import resolve_provider
 from src.router.usage import record_router_usage
+from src.telemetry.request_failures import seed_request_failure_context
 from src.routers.routing_decision import (
+    capture_attempted_deployment,
     capture_initial_route_decision,
     route_failover_kwargs,
     route_decision_headers,
@@ -80,6 +82,14 @@ async def handle_chat_like_request(
 ):
     request_start = perf_counter()
     callback_start = datetime.now(tz=UTC)
+    audit_action = audit_action_for_path(request.url.path)
+    seed_request_failure_context(
+        request,
+        call_type="completion",
+        model=payload.model,
+        request_start=request_start,
+        audit_action=audit_action,
+    )
     auth, payload, request_data, callback_manager, guardrail_middleware = await run_text_preflight(
         request=request,
         payload=payload,
@@ -99,11 +109,13 @@ async def handle_chat_like_request(
     api_provider = resolve_provider(primary.deltallm_params)
     request_id = request.headers.get("x-request-id")
     api_base = primary.deltallm_params.get("api_base", request.app.state.settings.openai_base_url).rstrip("/")
+
+    def track_attempt(deployment):  # noqa: ANN001
+        capture_attempted_deployment(request, deployment)
+
     cache_context = getattr(request.state, "cache_context", None)
     cache_hit = bool(getattr(cache_context, "hit", False)) if cache_context is not None else False
     cache_key = getattr(cache_context, "cache_key", None) if cache_context is not None else None
-    audit_action = audit_action_for_path(request.url.path)
-
     try:
         if payload.stream:
             if has_mcp_tools:
@@ -118,116 +130,125 @@ async def handle_chat_like_request(
                 stream_id = None
                 stream_write_context: StreamWriteContext | None = None
                 stream_usage = _StreamUsageTracker()
-                opened_stream = await request.app.state.failover_manager.execute_with_failover(
-                    primary_deployment=primary,
-                    model_group=model_group,
-                    execute=lambda dep: open_stream_with_first_chunk(request, payload, dep),
-                    return_deployment=True,
-                    **failover_kwargs,
-                )
-                opened_stream, served_deployment = opened_stream
-                update_served_route_decision(
-                    request,
-                    primary_deployment_id=primary.deployment_id,
-                    served_deployment_id=served_deployment.deployment_id,
-                )
-                params = opened_stream.params
-                api_base_local = opened_stream.api_base
-                if (
-                    enable_stream_cache
-                    and request.url.path == "/v1/chat/completions"
-                    and
-                    cache_context is not None
-                    and stream_handler is not None
-                    and cache_context.options.control.value != "no-store"
-                ):
-                    cache_ttl = int(
-                        cache_context.options.ttl
-                        or getattr(
-                            getattr(getattr(request.app.state, "app_config", None), "general_settings", None),
-                            "cache_ttl",
-                            3600,
-                        )
-                    )
-                    stream_id = cache_context.cache_key
-                    stream_write_context = StreamWriteContext(
-                        cache_key=cache_context.cache_key,
-                        ttl=cache_ttl,
-                        model=payload.model,
-                        pricing=dict(served_deployment.model_info or {}),
-                        deployment_id=served_deployment.deployment_id,
-                    )
-                    stream_handler.start_stream(stream_id)
-
+                opened_stream = None
+                served_deployment = None
+                failure_exc: Exception | None = None
                 try:
-                    try:
-                        initial = opened_stream.first_line
-                        if initial:
-                            stream_usage.add_line(initial)
-                            if stream_id is not None and stream_handler is not None:
-                                stream_handler.add_chunk_from_line(stream_id, initial)
-                            out_line = stream_line_transform(initial) if stream_line_transform is not None else initial
-                            if out_line is not None:
-                                yield f"{out_line}\n\n"
-                        async for line in opened_stream.translated_stream:
-                            if not line:
-                                continue
-
-                            stream_usage.add_line(line)
-                            if stream_id is not None and stream_handler is not None:
-                                stream_handler.add_chunk_from_line(stream_id, line)
-                                if line.strip() == "data: [DONE]" and stream_write_context is not None:
-                                    await stream_handler.finalize_and_store(stream_id, stream_write_context)
-
-                            out_line = stream_line_transform(line) if stream_line_transform is not None else line
-                            if out_line is None:
-                                continue
-                            yield f"{out_line}\n\n"
-                        await record_router_usage(
-                            request.app.state.router_state_backend,
-                            served_deployment.deployment_id,
-                            mode="chat",
-                            usage=stream_usage.usage,
+                    opened_stream, served_deployment = await request.app.state.failover_manager.execute_with_failover(
+                        primary_deployment=primary,
+                        model_group=model_group,
+                        execute=lambda dep: open_stream_with_first_chunk(request, payload, dep),
+                        return_deployment=True,
+                        on_attempt=track_attempt,
+                        **failover_kwargs,
+                    )
+                    update_served_route_decision(
+                        request,
+                        primary_deployment_id=primary.deployment_id,
+                        served_deployment_id=served_deployment.deployment_id,
+                    )
+                    params = opened_stream.params
+                    api_base_local = opened_stream.api_base
+                    if (
+                        enable_stream_cache
+                        and request.url.path == "/v1/chat/completions"
+                        and
+                        cache_context is not None
+                        and stream_handler is not None
+                        and cache_context.options.control.value != "no-store"
+                    ):
+                        cache_ttl = int(
+                            cache_context.options.ttl
+                            or getattr(
+                                getattr(getattr(request.app.state, "app_config", None), "general_settings", None),
+                                "cache_ttl",
+                                3600,
+                            )
                         )
-                        await emit_stream_success(
-                            request=request,
-                            auth=auth,
-                            payload=payload,
-                            request_data=request_data,
-                            callback_manager=callback_manager,
-                            guardrail_middleware=guardrail_middleware,
-                            callback_start=callback_start,
-                            request_start=request_start,
-                            request_id=request_id,
-                            stream_response_object=stream_response_object,
-                            cache_hit=cache_hit,
-                            cache_key=cache_key,
-                            audit_action=audit_action,
-                            api_base=api_base_local,
-                            params=params,
+                        stream_id = cache_context.cache_key
+                        stream_write_context = StreamWriteContext(
+                            cache_key=cache_context.cache_key,
+                            ttl=cache_ttl,
+                            model=payload.model,
+                            pricing=dict(served_deployment.model_info or {}),
+                            deployment_id=served_deployment.deployment_id,
                         )
-                    except Exception:
+                        stream_handler.start_stream(stream_id)
+
+                    initial = opened_stream.first_line
+                    if initial:
+                        stream_usage.add_line(initial)
                         if stream_id is not None and stream_handler is not None:
-                            stream_handler.discard_stream(stream_id)
-                        await emit_stream_failure(
-                            request=request,
-                            auth=auth,
-                            payload=payload,
-                            request_data=request_data,
-                            callback_manager=callback_manager,
-                            guardrail_middleware=guardrail_middleware,
-                            callback_start=callback_start,
-                            request_start=request_start,
-                            request_id=request_id,
-                            cache_hit=cache_hit,
-                            cache_key=cache_key,
-                            audit_action=audit_action,
-                            api_base=api_base_local,
-                            params=params,
-                        )
-                        raise
+                            stream_handler.add_chunk_from_line(stream_id, initial)
+                        out_line = stream_line_transform(initial) if stream_line_transform is not None else initial
+                        if out_line is not None:
+                            yield f"{out_line}\n\n"
+                    async for line in opened_stream.translated_stream:
+                        if not line:
+                            continue
+
+                        stream_usage.add_line(line)
+                        if stream_id is not None and stream_handler is not None:
+                            stream_handler.add_chunk_from_line(stream_id, line)
+                            if line.strip() == "data: [DONE]" and stream_write_context is not None:
+                                await stream_handler.finalize_and_store(stream_id, stream_write_context)
+
+                        out_line = stream_line_transform(line) if stream_line_transform is not None else line
+                        if out_line is None:
+                            continue
+                        yield f"{out_line}\n\n"
+                    await record_router_usage(
+                        request.app.state.router_state_backend,
+                        served_deployment.deployment_id,
+                        mode="chat",
+                        usage=stream_usage.usage,
+                    )
+                    await emit_stream_success(
+                        request=request,
+                        auth=auth,
+                        payload=payload,
+                        request_data=request_data,
+                        callback_manager=callback_manager,
+                        guardrail_middleware=guardrail_middleware,
+                        callback_start=callback_start,
+                        request_start=request_start,
+                        request_id=request_id,
+                        stream_response_object=stream_response_object,
+                        cache_hit=cache_hit,
+                        cache_key=cache_key,
+                        audit_action=audit_action,
+                        served_deployment=served_deployment,
+                        api_base=api_base_local,
+                        params=params,
+                    )
+                except Exception as exc:
+                    failure_exc = exc
+                    if stream_id is not None and stream_handler is not None:
+                        stream_handler.discard_stream(stream_id)
+                    failure_params = opened_stream.params if opened_stream is not None else primary.deltallm_params
+                    failure_api_base = opened_stream.api_base if opened_stream is not None else api_base
+                    await emit_stream_failure(
+                        request=request,
+                        auth=auth,
+                        payload=payload,
+                        request_data=request_data,
+                        callback_manager=callback_manager,
+                        guardrail_middleware=guardrail_middleware,
+                        callback_start=callback_start,
+                        request_start=request_start,
+                        request_id=request_id,
+                        cache_hit=cache_hit,
+                        cache_key=cache_key,
+                        audit_action=audit_action,
+                        primary_deployment=primary,
+                        api_base=failure_api_base,
+                        params=failure_params,
+                        exc=exc,
+                    )
+                    raise
                 finally:
-                    await opened_stream.close()
+                    if opened_stream is not None:
+                        await opened_stream.close(failure_exc)
 
             return StreamingResponse(
                 stream_sse(),
@@ -260,6 +281,7 @@ async def handle_chat_like_request(
             model_group=model_group,
             execute=_execute_for_deployment,
             return_deployment=True,
+            on_attempt=track_attempt,
             **failover_kwargs,
         )
         update_served_route_decision(
@@ -314,6 +336,7 @@ async def handle_chat_like_request(
         adapter = request.app.state.openai_adapter
         raise adapter.map_error(exc) from exc
     except Exception as exc:
+        status_code = int(getattr(exc, "status_code", 500) or 500)
         await emit_nonstream_failure(
             request=request,
             auth=auth,
@@ -331,6 +354,6 @@ async def handle_chat_like_request(
             api_provider=api_provider,
             api_base=api_base,
             exc=exc,
-            status_code=500,
+            status_code=status_code,
         )
         raise

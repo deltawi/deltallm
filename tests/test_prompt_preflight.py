@@ -31,7 +31,10 @@ class _SpendRecorder:
         self.events: list[dict[str, object]] = []
 
     async def log_spend(self, **kwargs):  # noqa: ANN003, ANN201
-        self.events.append(kwargs)
+        self.events.append({"status": "success", **kwargs})
+
+    async def log_request_failure(self, **kwargs):  # noqa: ANN003, ANN201
+        self.events.append({"status": "error", "cost": 0.0, **kwargs})
 
 
 class _PromptRepoForDefaults:

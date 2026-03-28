@@ -169,7 +169,10 @@ async def get_spend_logs(
             {source.user_column} AS "user",
             team_id,
             cache_hit,
-            request_tags
+            request_tags,
+            status,
+            http_status_code,
+            error_type
         FROM {source.table}
         {where_sql}
         ORDER BY start_time DESC
