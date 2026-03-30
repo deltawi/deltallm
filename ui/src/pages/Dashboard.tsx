@@ -143,9 +143,7 @@ export default function Dashboard() {
             <div>
               <p className="text-sm font-medium text-gray-500">Total Requests</p>
               <p className="mt-1 text-2xl font-bold text-gray-900 tabular-nums">{fmtNum(totalRequests)}</p>
-              {failedRequests > 0 && (
-                <p className="mt-1 text-xs text-red-500 font-medium">{fmtNum(failedRequests)} failed</p>
-              )}
+              <p className={`mt-1 text-xs font-medium ${failedRequests > 0 ? 'text-red-500' : 'text-gray-400'}`}>{fmtNum(failedRequests)} failed</p>
             </div>
           </div>
 
