@@ -120,7 +120,9 @@ async def spend_summary(
             COALESCE(SUM(total_tokens), 0) AS total_tokens,
             COALESCE(SUM({source.prompt_tokens_column}), 0) AS prompt_tokens,
             COALESCE(SUM({source.completion_tokens_column}), 0) AS completion_tokens,
-            COUNT(*) AS total_requests
+            COUNT(*) AS total_requests,
+            COUNT(*) FILTER (WHERE COALESCE(status, 'success') = 'success') AS successful_requests,
+            COUNT(*) FILTER (WHERE status = 'error') AS failed_requests
         FROM {source.table}
         {where_sql}
         """,
@@ -174,7 +176,9 @@ async def spend_report(
                 DATE(start_time) AS group_key,
                 COALESCE(SUM(spend), 0) AS total_spend,
                 COUNT(*) AS request_count,
-                COALESCE(SUM(total_tokens), 0) AS total_tokens
+                COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                COUNT(*) FILTER (WHERE COALESCE(status, 'success') = 'success') AS successful_requests,
+                COUNT(*) FILTER (WHERE status = 'error') AS failed_requests
             FROM {source.table}
             {where_sql}
             GROUP BY DATE(start_time)

@@ -65,9 +65,10 @@ export default function Dashboard() {
   const { data: keysResult } = useApi(() => keysApi.list(), []);
   const { data: healthData } = useApi(() => health.check(), []);
 
-  const daily = (dailyReport?.breakdown || dailyReport?.data || []).map((r: SpendReportRow) => ({
+  const daily = (dailyReport?.breakdown || dailyReport?.data || []).map((r: any) => ({
     date: r.group_key,
-    requests: r.request_count ?? 0,
+    success: r.successful_requests ?? r.request_count ?? 0,
+    failed: r.failed_requests ?? 0,
   }));
 
   const providerSpend = (providerReport?.breakdown || providerReport?.data || []).map((r: SpendReportRow) => {
@@ -112,6 +113,7 @@ export default function Dashboard() {
   const activeProviders = providerList.filter(p => p.status !== 'down').length;
 
   const totalRequests = summary?.total_requests ?? 0;
+  const failedRequests = summary?.failed_requests ?? 0;
 
   return (
     <div className="p-4 sm:p-6">
@@ -141,6 +143,9 @@ export default function Dashboard() {
             <div>
               <p className="text-sm font-medium text-gray-500">Total Requests</p>
               <p className="mt-1 text-2xl font-bold text-gray-900 tabular-nums">{fmtNum(totalRequests)}</p>
+              {failedRequests > 0 && (
+                <p className="mt-1 text-xs text-red-500 font-medium">{fmtNum(failedRequests)} failed</p>
+              )}
             </div>
           </div>
 
@@ -199,7 +204,8 @@ export default function Dashboard() {
                       itemStyle={{ fontSize: '13px' }}
                       labelStyle={{ fontSize: '13px', fontWeight: 600, color: '#374151', marginBottom: '4px' }}
                     />
-                    <Area type="monotone" dataKey="requests" stroke="#8b5cf6" strokeWidth={2} fillOpacity={1} fill="url(#colorRequests)" name="Requests" />
+                    <Area type="monotone" dataKey="success" stackId="1" stroke="#8b5cf6" strokeWidth={2} fillOpacity={1} fill="url(#colorRequests)" name="Successful" />
+                    <Area type="monotone" dataKey="failed" stackId="1" stroke="#f43f5e" strokeWidth={2} fill="#fecdd3" name="Failed" />
                   </AreaChart>
                 </ResponsiveContainer>
               ) : (
