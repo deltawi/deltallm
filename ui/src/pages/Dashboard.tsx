@@ -215,32 +215,34 @@ export default function Dashboard() {
 
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
             <h2 className="text-base font-semibold text-gray-900 mb-4">Cost by Provider</h2>
-            <div className="h-64 flex items-center">
+            <div className="min-h-[256px]">
               {providerSpend.length > 0 ? (
-                <>
-                  <ResponsiveContainer width="50%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={providerSpend}
-                        dataKey="spend"
-                        nameKey="provider"
-                        cx="50%"
-                        cy="50%"
-                        outerRadius={80}
-                        innerRadius={50}
-                        paddingAngle={2}
-                      >
-                        {providerSpend.map((_: any, index: number) => (
-                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        formatter={(value: any) => [fmtDollarPrecise(value), 'Spend']}
-                        contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb', boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)', fontSize: '13px' }}
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
-                  <div className="pl-4 pr-2 overflow-y-auto max-h-full w-full">
+                <div className="flex flex-col sm:flex-row items-center gap-4">
+                  <div className="w-full sm:w-1/2 h-48 sm:h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={providerSpend}
+                          dataKey="spend"
+                          nameKey="provider"
+                          cx="50%"
+                          cy="50%"
+                          outerRadius="70%"
+                          innerRadius="45%"
+                          paddingAngle={2}
+                        >
+                          {providerSpend.map((_: any, index: number) => (
+                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip
+                          formatter={(value: any) => [fmtDollarPrecise(value), 'Spend']}
+                          contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb', boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)', fontSize: '13px' }}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="w-full sm:w-1/2 sm:pl-2 overflow-y-auto max-h-48 sm:max-h-64">
                     <div className="space-y-3">
                       {providerSpend.map((p: any, idx: number) => (
                         <div key={p.provider} className="flex items-center justify-between">
@@ -253,9 +255,9 @@ export default function Dashboard() {
                       ))}
                     </div>
                   </div>
-                </>
+                </div>
               ) : (
-                <div className="flex items-center justify-center w-full h-full text-gray-400 text-sm">
+                <div className="flex items-center justify-center w-full h-64 text-gray-400 text-sm">
                   <div className="text-center">
                     <Box className="w-8 h-8 mx-auto mb-2 opacity-50" />
                     <p>No provider data yet</p>
