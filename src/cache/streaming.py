@@ -19,6 +19,8 @@ class StreamWriteContext:
     model: str
     pricing: dict[str, Any] | None = None
     deployment_id: str | None = None
+    provider: str | None = None
+    deployment_model: str | None = None
 
 
 @dataclass(slots=True)
@@ -208,6 +210,8 @@ class StreamingCacheHandler:
             token_count=token_count,
             pricing=ctx.pricing,
             deployment_id=ctx.deployment_id,
+            provider=ctx.provider,
+            deployment_model=ctx.deployment_model,
         )
         try:
             await self.backend.set(ctx.cache_key, entry, ctx.ttl)

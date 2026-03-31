@@ -13,8 +13,9 @@ from src.batch.models import BatchJobStatus
 from src.batch.repository import BatchRepository
 from src.batch.storage import BatchArtifactStorage
 from src.billing.cost import ModelPricing, completion_cost
-from src.metrics import increment_request, increment_spend, increment_usage, infer_provider
+from src.metrics import increment_request, increment_spend, increment_usage
 from src.models.requests import EmbeddingRequest
+from src.providers.resolution import resolve_provider
 from src.routers.routing_decision import route_failover_kwargs
 from src.routers.embeddings import _execute_embedding
 
@@ -114,7 +115,7 @@ class BatchExecutorWorker:
                 return_deployment=True,
                 **failover_kwargs,
             )
-            api_provider = infer_provider(served_deployment.deltallm_params.get("model"))
+            api_provider = resolve_provider(served_deployment.deltallm_params)
             usage = data.get("usage") or {}
             deployment_pricing = None
             if served_deployment.input_cost_per_token or served_deployment.output_cost_per_token:
@@ -159,6 +160,7 @@ class BatchExecutorWorker:
                 billed_cost=billed_cost,
                 provider_cost=provider_cost,
                 api_base=served_deployment.deltallm_params.get("api_base"),
+                deployment_model=str(served_deployment.deltallm_params.get("model") or "") or None,
                 batch_id=batch_id,
             )
             return
@@ -186,6 +188,7 @@ class BatchExecutorWorker:
         billed_cost: float,
         provider_cost: float,
         api_base: str | None,
+        deployment_model: str | None,
         batch_id: str,
     ) -> None:
         try:
@@ -232,6 +235,8 @@ class BatchExecutorWorker:
                     cost=billed_cost,
                     metadata={
                         "api_base": api_base,
+                        "provider": api_provider,
+                        "deployment_model": deployment_model,
                         "batch_id": batch_id,
                         "batch_item_id": item.item_id,
                         "execution_mode": job.execution_mode,

@@ -236,6 +236,49 @@ async def test_grouped_spend_report_for_model_does_not_group_by_null_constant(cl
 
 
 @pytest.mark.asyncio
+async def test_grouped_spend_report_for_provider_uses_canonical_provider_grouping(client, test_app, monkeypatch):
+    fake_db = FakeSpendDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.model_registry["gpt-oss-20b"] = [
+        {
+            "deltallm_params": {
+                "provider": "groq",
+                "model": "openai/gpt-oss-20b",
+                "api_key": "provider-key",
+                "api_base": "https://api.groq.com/openai/v1",
+            }
+        }
+    ]
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.spend.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
+            is_platform_admin=True,
+            org_ids=[],
+            team_ids=[],
+        ),
+    )
+
+    response = await client.get(
+        "/ui/api/spend/report?group_by=provider&limit=5&offset=0",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+    assert response.status_code == 200
+
+    query, _ = fake_db.calls[0]
+    assert "LOWER(TRIM(s.provider))" in query
+    assert "metadata->>'provider'" in query
+    assert "s.deployment_model" in query
+    assert "openai.azure.com" in query
+    assert "api.groq.com" in query
+    assert "openai/gpt-oss-20b" in query
+    assert "THEN 'groq'" in query
+    assert "<> 'cache'" in query
+    assert "COALESCE(s.api_base, 'unknown')" not in query
+
+
+@pytest.mark.asyncio
 async def test_spend_endpoints_cast_date_filters_to_timestamp(client, test_app, monkeypatch):
     fake_db = FakeSpendDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()

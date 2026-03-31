@@ -14,6 +14,8 @@ class CacheEntry:
     token_count: int = 0
     pricing: dict[str, Any] | None = None
     deployment_id: str | None = None
+    provider: str | None = None
+    deployment_model: str | None = None
 
 
 class CacheBackend(ABC):

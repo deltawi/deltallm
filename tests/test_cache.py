@@ -100,6 +100,20 @@ def _refresh_runtime_registry(test_app) -> None:
     test_app.state.router_health_handler.registry.update(rebuilt)
 
 
+def _configure_groq_openai_compatible_chat_model(test_app) -> None:
+    test_app.state.model_registry["gpt-4o-mini"] = [
+        {
+            "deltallm_params": {
+                "provider": "groq",
+                "model": "openai/gpt-oss-20b",
+                "api_key": "provider-key",
+                "api_base": "https://api.groq.com/openai/v1",
+            }
+        }
+    ]
+    _refresh_runtime_registry(test_app)
+
+
 @pytest.mark.asyncio
 async def test_chat_cache_hit(client, test_app):
     _enable_cache(test_app)
@@ -204,6 +218,68 @@ async def test_streaming_cache_miss_populates_cache_entry(client, test_app):
     assert len(backend._cache) == 1
     stored = next(iter(backend._cache.values()))
     assert stored.response.get("object") == "chat.completion"
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_uses_persisted_provider_metadata_when_runtime_deployment_missing(client, test_app):
+    _enable_cache(test_app)
+    _configure_groq_openai_compatible_chat_model(test_app)
+    recorder = _SpendRecorder()
+    test_app.state.spend_tracking_service = recorder
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "cache provider"}],
+        "stream": False,
+    }
+
+    warm = await client.post("/v1/chat/completions", headers=headers, json=body)
+    assert warm.status_code == 200
+
+    cached_entry = next(iter(test_app.state.cache_backend._cache.values()))
+    assert cached_entry.provider == "groq"
+    assert cached_entry.deployment_model == "openai/gpt-oss-20b"
+    cached_entry.deployment_id = None
+
+    hit = await client.post("/v1/chat/completions", headers=headers, json=body)
+    assert hit.status_code == 200
+    assert hit.headers["x-deltallm-cache-hit"] == "true"
+
+    await asyncio.sleep(0.05)
+    assert recorder.events[-1]["cache_hit"] is True
+    assert recorder.events[-1]["metadata"]["provider"] == "groq"
+    assert recorder.events[-1]["metadata"]["deployment_model"] == "openai/gpt-oss-20b"
+
+
+@pytest.mark.asyncio
+async def test_streaming_cache_hit_uses_persisted_provider_metadata_when_runtime_deployment_missing(client, test_app):
+    _enable_stream_cache(test_app)
+    _configure_groq_openai_compatible_chat_model(test_app)
+    recorder = _SpendRecorder()
+    test_app.state.spend_tracking_service = recorder
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "stream provider"}],
+        "stream": True,
+    }
+
+    warm = await client.post("/v1/chat/completions", headers=headers, json=body)
+    assert warm.status_code == 200
+
+    cached_entry = next(iter(test_app.state.cache_backend._cache.values()))
+    assert cached_entry.provider == "groq"
+    assert cached_entry.deployment_model == "openai/gpt-oss-20b"
+    cached_entry.deployment_id = None
+
+    hit = await client.post("/v1/chat/completions", headers=headers, json=body)
+    assert hit.status_code == 200
+    assert hit.headers["x-deltallm-cache-hit"] == "true"
+
+    await asyncio.sleep(0.05)
+    assert recorder.events[-1]["cache_hit"] is True
+    assert recorder.events[-1]["metadata"]["provider"] == "groq"
+    assert recorder.events[-1]["metadata"]["deployment_model"] == "openai/gpt-oss-20b"
 
 
 @pytest.mark.asyncio

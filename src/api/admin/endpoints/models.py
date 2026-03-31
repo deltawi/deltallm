@@ -37,6 +37,38 @@ def _to_int_or_none(value: Any) -> int | None:
         return None
 
 
+def _normalized_provider_key(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized or "unknown"
+
+
+def _provider_health_status(*, models: int, healthy_models: int) -> str:
+    if models <= 0:
+        return "healthy"
+    if healthy_models <= 0:
+        return "down"
+    if healthy_models < models:
+        return "degraded"
+    return "healthy"
+
+
+async def _deployment_health_flags(app: Any, deployment_ids: list[str]) -> dict[str, bool]:
+    if not deployment_ids:
+        return {}
+
+    health_backend = getattr(app.state, "router_state_backend", None)
+    if health_backend is None:
+        return {deployment_id: True for deployment_id in deployment_ids}
+
+    health_by_deployment = await health_backend.get_health_batch(deployment_ids)
+    cooldown_by_deployment = await health_backend.get_cooldown_batch(deployment_ids)
+    return {
+        deployment_id: str(health_by_deployment.get(deployment_id, {}).get("healthy", "true")) != "false"
+        and not cooldown_by_deployment.get(deployment_id, False)
+        for deployment_id in deployment_ids
+    }
+
+
 async def _serialize_deployment_health(app: Any, deployment_id: str) -> dict[str, Any]:
     health_backend = getattr(app.state, "router_state_backend", None)
     if health_backend is None:
@@ -181,6 +213,63 @@ async def list_models(
     return {
         "data": page,
         "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+    }
+
+
+@router.get("/ui/api/models/provider-health-summary", dependencies=[Depends(require_authenticated)])
+async def provider_health_summary(request: Request) -> dict[str, Any]:
+    entries = model_entries(request.app)
+    deployment_ids = [str(entry["deployment_id"]) for entry in entries]
+    healthy_by_deployment = await _deployment_health_flags(request.app, deployment_ids)
+
+    provider_aggregates: dict[str, dict[str, int | str]] = {}
+    for entry in entries:
+        deployment_id = str(entry["deployment_id"])
+        provider = _normalized_provider_key(entry.get("provider"))
+        aggregate = provider_aggregates.setdefault(
+            provider,
+            {
+                "provider": provider,
+                "models": 0,
+                "healthy_models": 0,
+            },
+        )
+        aggregate["models"] = int(aggregate["models"]) + 1
+        if healthy_by_deployment.get(deployment_id, True):
+            aggregate["healthy_models"] = int(aggregate["healthy_models"]) + 1
+
+    providers: list[dict[str, Any]] = []
+    active_providers = 0
+    down_providers = 0
+    for aggregate in provider_aggregates.values():
+        models = int(aggregate["models"])
+        healthy_models = int(aggregate["healthy_models"])
+        unhealthy_models = models - healthy_models
+        status_name = _provider_health_status(models=models, healthy_models=healthy_models)
+        if status_name == "down":
+            down_providers += 1
+        else:
+            active_providers += 1
+        providers.append(
+            {
+                "provider": aggregate["provider"],
+                "models": models,
+                "healthy_models": healthy_models,
+                "unhealthy_models": unhealthy_models,
+                "status": status_name,
+            }
+        )
+
+    providers.sort(key=lambda item: (-int(item["models"]), str(item["provider"])))
+
+    return {
+        "total_models": len(entries),
+        "providers": providers,
+        "summary": {
+            "total_providers": len(providers),
+            "active_providers": active_providers,
+            "down_providers": down_providers,
+        },
     }
 
 

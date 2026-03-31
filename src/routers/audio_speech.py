@@ -209,7 +209,12 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
         billing = compute_billing_result(mode="audio_speech", usage=usage, model_info=model_info)
         request_cost = billing.cost
         spend_metadata = attach_route_decision(
-            {"api_base": api_base, "billing": billing_metadata(billing)},
+            {
+                "api_base": api_base,
+                "provider": api_provider,
+                "deployment_model": deployment_model,
+                "billing": billing_metadata(billing),
+            },
             request,
         )
         increment_request(

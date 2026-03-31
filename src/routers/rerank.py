@@ -176,7 +176,14 @@ async def rerank(request: Request, payload: RerankRequest):
                 call_type="rerank",
                 usage=usage,
                 cost=request_cost,
-                metadata=attach_route_decision({"api_base": api_base}, request),
+                metadata=attach_route_decision(
+                    {
+                        "api_base": api_base,
+                        "provider": api_provider,
+                        "deployment_model": deployment_model,
+                    },
+                    request,
+                ),
                 cache_hit=False,
                 start_time=callback_start,
                 end_time=datetime.now(tz=UTC),

@@ -51,6 +51,8 @@ class DeploymentStateBackend(Protocol):
 
     async def is_cooled_down(self, deployment_id: str) -> bool: ...
 
+    async def get_cooldown_batch(self, deployment_ids: list[str]) -> dict[str, bool]: ...
+
     async def record_success(self, deployment_id: str) -> None: ...
 
     async def record_failure(self, deployment_id: str, error: str) -> int: ...
@@ -432,6 +434,36 @@ class RedisStateBackend:
                 return False
             self._touch_local_state(deployment_id, now=time.time())
             return True
+
+    async def get_cooldown_batch(self, deployment_ids: list[str]) -> dict[str, bool]:
+        if not deployment_ids:
+            return {}
+
+        keys = [f"cooldown:{deployment_id}" for deployment_id in deployment_ids]
+        try:
+            values = await self._redis_call("mget", keys)
+            return {
+                deployment_id: value not in (None, "", b"")
+                for deployment_id, value in zip(deployment_ids, values, strict=False)
+            }
+        except Exception as exc:
+            self._handle_backend_failure(exc)
+            self._prune_local_state()
+            now = time.time()
+            statuses: dict[str, bool] = {}
+            for deployment_id in deployment_ids:
+                until = self._cooldown_until.get(deployment_id)
+                if not until:
+                    statuses[deployment_id] = False
+                    continue
+                if until <= now:
+                    self._cooldown_until.pop(deployment_id, None)
+                    self._drop_local_state_if_unused(deployment_id)
+                    statuses[deployment_id] = False
+                    continue
+                self._touch_local_state(deployment_id, now=now)
+                statuses[deployment_id] = True
+            return statuses
 
     async def record_success(self, deployment_id: str) -> None:
         failures_key = f"failures:{deployment_id}"

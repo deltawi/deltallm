@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from src.providers.resolution import provider_from_model
+
 
 def build_spend_event(
     *,
@@ -63,7 +65,12 @@ def build_spend_event(
         "end_user_id": end_user_id,
         "model": model,
         "deployment_model": _str_or_none(meta.get("deployment_model")),
-        "provider": _str_or_none(meta.get("provider")) or _provider_from_api_base(meta.get("api_base")),
+        "provider": _resolve_provider(
+            explicit_provider=meta.get("provider"),
+            api_base=meta.get("api_base"),
+            deployment_model=meta.get("deployment_model"),
+            model=model,
+        ),
         "api_base": _str_or_none(meta.get("api_base")),
         "spend": float(cost),
         "provider_cost": _float_or_none(meta.get("provider_cost")),
@@ -95,6 +102,28 @@ def build_spend_event(
         "http_status_code": _int_or_none(http_status_code),
         "error_type": _str_or_none(error_type),
     }
+
+
+def _resolve_provider(
+    *,
+    explicit_provider: Any,
+    api_base: Any,
+    deployment_model: Any,
+    model: str,
+) -> str | None:
+    provider = _normalized_provider(explicit_provider)
+    if provider:
+        return provider
+
+    provider = _provider_from_api_base(api_base)
+    if provider:
+        return provider
+
+    provider = _provider_from_model(deployment_model)
+    if provider:
+        return provider
+
+    return _provider_from_model(model)
 
 
 def _int_value(*values: Any) -> int:
@@ -143,6 +172,18 @@ def _str_or_none(value: Any) -> str | None:
     return str(value)
 
 
+def _normalized_provider(value: Any) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    return normalized or None
+
+
+def _provider_from_model(value: Any) -> str | None:
+    provider = provider_from_model(str(value or ""))
+    return None if provider == "unknown" else provider
+
+
 def _latency_ms(start_time: datetime, end_time: datetime) -> int | None:
     try:
         return max(int((end_time - start_time).total_seconds() * 1000), 0)
@@ -154,18 +195,28 @@ def _provider_from_api_base(value: Any) -> str | None:
     if value is None:
         return None
     lowered = str(value).lower()
-    if "openai" in lowered:
-        return "openai"
-    if "anthropic" in lowered:
-        return "anthropic"
-    if "azure" in lowered:
-        return "azure"
-    if "groq" in lowered:
+    if "openai.azure.com" in lowered:
+        return "azure_openai"
+    if "api.groq.com" in lowered or "groq" in lowered:
         return "groq"
+    if "openrouter.ai" in lowered or "openrouter" in lowered:
+        return "openrouter"
     if "fireworks" in lowered:
         return "fireworks"
     if "together" in lowered:
         return "together"
     if "deepinfra" in lowered:
         return "deepinfra"
+    if "perplexity" in lowered:
+        return "perplexity"
+    if "anthropic" in lowered:
+        return "anthropic"
+    if "googleapis.com" in lowered or "generativelanguage.googleapis.com" in lowered:
+        return "gemini"
+    if "bedrock" in lowered:
+        return "bedrock"
+    if "openai.com" in lowered or "openai" in lowered:
+        return "openai"
+    if "azure" in lowered:
+        return "azure_openai"
     return None

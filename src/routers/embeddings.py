@@ -217,6 +217,8 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         )
         request.state.cache_store_pricing = dict(served_deployment.model_info or {})
         request.state.cache_store_deployment_id = served_deployment.deployment_id
+        request.state.cache_store_provider = resolve_provider(served_deployment.deltallm_params)
+        request.state.cache_store_deployment_model = str(served_deployment.deltallm_params.get("model") or "") or None
         route_meta = route_decision_metadata(request)
         await request.app.state.passive_health_tracker.record_request_outcome(served_deployment.deployment_id, success=True)
         api_provider = resolve_provider(served_deployment.deltallm_params)
@@ -268,7 +270,11 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             team=auth.team_id,
             spend=request_cost,
         )
-        spend_metadata: dict[str, Any] = {"api_base": api_base}
+        spend_metadata: dict[str, Any] = {
+            "api_base": api_base,
+            "provider": api_provider,
+            "deployment_model": deployment_model,
+        }
         if route_meta is not None:
             spend_metadata["routing_decision"] = route_meta
         fire_and_forget(

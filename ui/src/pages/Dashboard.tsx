@@ -1,6 +1,6 @@
-import { useMemo } from 'react';
 import { useApi } from '../lib/hooks';
-import { spend, models as modelsApi, keys as keysApi, health } from '../lib/api';
+import { spend, models as modelsApi, keys as keysApi, health, type ProviderHealthStatus } from '../lib/api';
+import { providerDisplayName } from '../lib/providers';
 import {
   DollarSign,
   Zap,
@@ -28,10 +28,11 @@ import {
 const COLORS = ['#8b5cf6', '#3b82f6', '#06b6d4', '#10b981', '#f59e0b'];
 
 type SpendReportRow = { group_key: string; total_spend: number; request_count?: number; total_tokens?: number; display_name?: string | null };
+type ProviderSpendDatum = { provider: string; label: string; spend: number };
 
 function fmtDollar(n: number | null | undefined): string {
-  if (n == null) return '$0.00';
-  return `$${Number(n).toFixed(2)}`;
+  if (n == null) return '$0.0000';
+  return `$${Number(n).toFixed(4)}`;
 }
 
 function fmtDollarPrecise(n: number | null | undefined): string {
@@ -45,13 +46,14 @@ function fmtNum(n: number | null | undefined): string {
 }
 
 interface ProviderAgg {
-  name: string;
-  status: 'healthy' | 'degraded' | 'down';
+  provider: string;
+  status: ProviderHealthStatus;
   models: number;
-  healthyModels: number;
+  healthy_models: number;
+  unhealthy_models: number;
 }
 
-const statusConfig = {
+const statusConfig: Record<ProviderHealthStatus, { dot: string; text: string; bg: string; label: string }> = {
   healthy: { dot: 'bg-emerald-500', text: 'text-emerald-700', bg: 'bg-emerald-50', label: 'Healthy' },
   degraded: { dot: 'bg-amber-500', text: 'text-amber-700', bg: 'bg-amber-50', label: 'Degraded' },
   down: { dot: 'bg-rose-500', text: 'text-rose-700', bg: 'bg-rose-50', label: 'Down' },
@@ -61,7 +63,7 @@ export default function Dashboard() {
   const { data: summary } = useApi(() => spend.summary(), []);
   const { data: dailyReport } = useApi(() => spend.report('day'), []);
   const { data: providerReport } = useApi(() => spend.report('provider'), []);
-  const { data: modelsResult } = useApi(() => modelsApi.list({ limit: 500 }), []);
+  const { data: providerHealthSummary } = useApi(() => modelsApi.providerHealthSummary(), []);
   const { data: keysResult } = useApi(() => keysApi.list(), []);
   const { data: healthData } = useApi(() => health.check(), []);
 
@@ -71,46 +73,23 @@ export default function Dashboard() {
     failed: r.failed_requests ?? 0,
   }));
 
-  const providerSpend = (providerReport?.breakdown || providerReport?.data || []).map((r: SpendReportRow) => {
-    const raw = r.display_name || r.group_key || 'Unknown';
-    const parts = raw.replace(/^https?:\/\//, '').split('/');
-    const host = parts[0];
-    let label = host;
-    if (host.includes('openai.com')) label = 'OpenAI';
-    else if (host.includes('anthropic.com') || host.includes('anthropic')) label = 'Anthropic';
-    else if (host.includes('googleapis.com') || host.includes('google')) label = 'Google';
-    else if (host.includes('groq.com') || host.includes('groq')) label = 'Groq';
-    else if (host.includes('mistral.ai') || host.includes('mistral')) label = 'Mistral';
-    else if (host.includes('cohere') || host.includes('cohere')) label = 'Cohere';
-    return { provider: label, spend: r.total_spend };
+  const providerSpend: ProviderSpendDatum[] = ((providerReport?.breakdown || providerReport?.data || []) as SpendReportRow[]).map((r) => {
+    const provider = (r.group_key || 'unknown').trim().toLowerCase() || 'unknown';
+    return {
+      provider,
+      label: providerDisplayName(provider),
+      spend: r.total_spend,
+    };
   });
 
-  const allModels = modelsResult?.data || [];
-  const totalModels = modelsResult?.pagination?.total ?? allModels.length;
-
-  const providerHealthMap = useMemo(() => {
-    const map: Record<string, ProviderAgg> = {};
-    for (const m of allModels) {
-      const p = m.provider || 'unknown';
-      if (!map[p]) {
-        map[p] = { name: p, status: 'healthy', models: 0, healthyModels: 0 };
-      }
-      map[p].models++;
-      if (m.healthy) map[p].healthyModels++;
-    }
-    for (const agg of Object.values(map)) {
-      if (agg.healthyModels === 0 && agg.models > 0) agg.status = 'down';
-      else if (agg.healthyModels < agg.models) agg.status = 'degraded';
-      else agg.status = 'healthy';
-    }
-    return map;
-  }, [allModels]);
-
-  const providerList = Object.values(providerHealthMap).sort((a, b) => b.models - a.models);
+  const providerList = (providerHealthSummary?.providers || []) as ProviderAgg[];
+  const totalModels = providerHealthSummary?.total_models ?? 0;
+  const totalProviders = providerHealthSummary?.summary.total_providers ?? providerList.length;
 
   const healthStatus = healthData?.readiness?.status || healthData?.liveliness || 'unknown';
   const isHealthy = healthStatus === 'ok' || healthStatus === 'healthy';
-  const activeProviders = providerList.filter(p => p.status !== 'down').length;
+  const activeProviders =
+    providerHealthSummary?.summary.active_providers ?? providerList.filter((p) => p.status !== 'down').length;
 
   const totalRequests = summary?.total_requests ?? 0;
   const failedRequests = summary?.failed_requests ?? 0;
@@ -173,8 +152,8 @@ export default function Dashboard() {
             </div>
             <div>
               <p className="text-sm font-medium text-gray-500">Providers</p>
-              <p className="mt-1 text-2xl font-bold text-gray-900 tabular-nums">{providerList.length}</p>
-              <p className={`mt-1 text-xs font-medium ${activeProviders === providerList.length ? 'text-emerald-600' : 'text-amber-600'}`}>
+              <p className="mt-1 text-2xl font-bold text-gray-900 tabular-nums">{totalProviders}</p>
+              <p className={`mt-1 text-xs font-medium ${activeProviders === totalProviders ? 'text-emerald-600' : 'text-amber-600'}`}>
                 {activeProviders} active
               </p>
             </div>
@@ -228,14 +207,14 @@ export default function Dashboard() {
                         <Pie
                           data={providerSpend}
                           dataKey="spend"
-                          nameKey="provider"
+                          nameKey="label"
                           cx="50%"
                           cy="50%"
                           outerRadius="70%"
                           innerRadius="45%"
                           paddingAngle={2}
                         >
-                          {providerSpend.map((_: any, index: number) => (
+                          {providerSpend.map((_, index) => (
                             <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                           ))}
                         </Pie>
@@ -248,11 +227,11 @@ export default function Dashboard() {
                   </div>
                   <div className="w-full sm:w-1/2 sm:pl-2 overflow-y-auto max-h-48 sm:max-h-64">
                     <div className="space-y-3">
-                      {providerSpend.map((p: any, idx: number) => (
+                      {providerSpend.map((p, idx) => (
                         <div key={p.provider} className="flex items-center justify-between">
                           <div className="flex items-center gap-2 overflow-hidden">
                             <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: COLORS[idx % COLORS.length] }} />
-                            <span className="text-sm text-gray-600 truncate">{p.provider}</span>
+                            <span className="text-sm text-gray-600 truncate">{p.label}</span>
                           </div>
                           <span className="text-sm font-medium text-gray-900 tabular-nums shrink-0 ml-2">{fmtDollarPrecise(p.spend)}</span>
                         </div>
@@ -313,23 +292,23 @@ export default function Dashboard() {
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
             <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
               <h2 className="text-base font-semibold text-gray-900">Provider Health</h2>
-              <span className="text-xs text-gray-400">{providerList.length} provider{providerList.length !== 1 ? 's' : ''} configured</span>
+              <span className="text-xs text-gray-400">{totalProviders} provider{totalProviders !== 1 ? 's' : ''} configured</span>
             </div>
             <div className="divide-y divide-gray-100">
               {providerList.map((p) => {
                 const cfg = statusConfig[p.status];
                 return (
-                  <div key={p.name} className="flex items-center justify-between px-5 py-3.5">
+                  <div key={p.provider} className="flex items-center justify-between px-5 py-3.5">
                     <div className="flex items-center gap-3 min-w-0">
                       <div className={`h-2.5 w-2.5 rounded-full shrink-0 ${cfg.dot}`} />
                       <div className="min-w-0">
-                        <p className="text-sm font-medium text-gray-900 truncate capitalize">{p.name}</p>
+                        <p className="text-sm font-medium text-gray-900 truncate">{providerDisplayName(p.provider)}</p>
                         <p className="text-xs text-gray-400">{p.models} model{p.models > 1 ? 's' : ''}</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-5 shrink-0">
                       <div className="text-right">
-                        <p className="text-sm tabular-nums text-gray-700">{p.healthyModels}/{p.models}</p>
+                        <p className="text-sm tabular-nums text-gray-700">{p.healthy_models}/{p.models}</p>
                         <p className="text-[11px] text-gray-400">healthy</p>
                       </div>
                       <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${cfg.bg} ${cfg.text}`}>
