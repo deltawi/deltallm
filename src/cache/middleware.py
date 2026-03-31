@@ -15,7 +15,8 @@ from src.billing.cost import completion_cost
 from src.billing.pricing import normalize_gateway_cache_hit_usage, pricing_from_model_info
 from src.middleware.auth import authenticate_request
 from src.middleware.rate_limit import _check_and_acquire_rate_limits, _release_rate_limits
-from src.metrics import increment_request, increment_spend, increment_usage, infer_provider
+from src.metrics import increment_request, increment_spend, increment_usage
+from src.providers.resolution import provider_from_model, resolve_provider
 from src.routers.utils import enforce_budget_if_configured, fire_and_forget
 
 from .backends.base import CacheBackend, CacheEntry
@@ -254,7 +255,16 @@ class CacheMiddleware(BaseHTTPMiddleware):
         payload = entry.response if isinstance(entry.response, dict) else {}
         usage = payload.get("usage") if isinstance(payload, dict) else None
         usage = normalize_gateway_cache_hit_usage(usage if isinstance(usage, dict) else {})
-        api_provider = infer_provider(model)
+        deployment_model = _normalized_text(entry.deployment_model)
+        api_provider = _normalized_provider(entry.provider)
+        deployment = None
+        if api_provider is None or deployment_model is None:
+            deployment = _find_runtime_deployment(request, entry.deployment_id)
+        if deployment is not None:
+            deployment_model = deployment_model or _normalized_text(deployment.deltallm_params.get("model"))
+            api_provider = api_provider or _normalized_provider(resolve_provider(deployment.deltallm_params))
+        if api_provider is None:
+            api_provider = _provider_from_model_value(deployment_model) or _provider_from_model_value(model) or "unknown"
         custom_pricing = pricing_from_model_info(entry.pricing)
         if custom_pricing is None:
             custom_pricing = await self._resolve_cache_hit_pricing(request, model, entry)
@@ -301,7 +311,12 @@ class CacheMiddleware(BaseHTTPMiddleware):
                 call_type=call_type,
                 usage=usage,
                 cost=request_cost,
-                metadata={"api_base": "cache", "cache_key": cache_key},
+                metadata={
+                    "api_base": "cache",
+                    "cache_key": cache_key,
+                    "provider": api_provider,
+                    "deployment_model": deployment_model,
+                },
                 cache_hit=True,
             )
         )
@@ -354,6 +369,8 @@ class CacheMiddleware(BaseHTTPMiddleware):
             token_count=int((response_data.get("usage") or {}).get("total_tokens") or 0),
             pricing=_pricing_for_cache_entry(request),
             deployment_id=_deployment_id_for_cache_entry(request),
+            provider=_provider_for_cache_entry(request),
+            deployment_model=_deployment_model_for_cache_entry(request),
         )
 
         try:
@@ -405,6 +422,14 @@ def _deployment_id_for_cache_entry(request: Request) -> str | None:
     return str(deployment_id) if deployment_id else None
 
 
+def _provider_for_cache_entry(request: Request) -> str | None:
+    return _normalized_provider(getattr(request.state, "cache_store_provider", None))
+
+
+def _deployment_model_for_cache_entry(request: Request) -> str | None:
+    return _normalized_text(getattr(request.state, "cache_store_deployment_model", None))
+
+
 def _find_runtime_deployment(request: Request, deployment_id: str | None):
     if not deployment_id:
         return None
@@ -426,3 +451,22 @@ async def _select_runtime_deployment_for_pricing(request: Request, model: str):
     request_context = {"metadata": metadata or {}, "user_id": auth.user_id or auth.api_key}
     model_group = router.resolve_model_group(model)
     return await router.select_deployment(model_group, request_context)
+
+
+def _normalized_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _normalized_provider(value: Any) -> str | None:
+    normalized = _normalized_text(value)
+    if normalized is None:
+        return None
+    return normalized.lower()
+
+
+def _provider_from_model_value(value: Any) -> str | None:
+    provider = provider_from_model(_normalized_text(value))
+    return None if provider == "unknown" else provider

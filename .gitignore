@@ -6,6 +6,7 @@ __pycache__/
 *.so
 .deltallm/
 docs/internal/
+.codex/
 
 # Distribution / packaging
 .Python
@@ -208,3 +209,4 @@ attached_assets/
 scripts/run_backend_local.sh
 scripts/e2e_embeddings.sh
 scripts/ci-local.sh
+.omx/

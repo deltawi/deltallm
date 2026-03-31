@@ -37,6 +37,8 @@ class InMemoryBackend(CacheBackend):
                     token_count=entry.token_count,
                     pricing=entry.pricing,
                     deployment_id=entry.deployment_id,
+                    provider=entry.provider,
+                    deployment_model=entry.deployment_model,
                 )
 
             if key in self._cache:

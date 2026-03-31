@@ -255,6 +255,17 @@ async def test_usage_based_strategy_uses_router_state_usage():
 
 
 @pytest.mark.asyncio
+async def test_cooldown_batch_uses_local_fallback_state():
+    state = RedisStateBackend(redis=None)
+
+    await state.set_cooldown("dep-a", 30, "manual")
+
+    cooldowns = await state.get_cooldown_batch(["dep-a", "dep-b"])
+
+    assert cooldowns == {"dep-a": True, "dep-b": False}
+
+
+@pytest.mark.asyncio
 async def test_usage_based_strategy_uses_image_limits_when_configured():
     state = RedisStateBackend(redis=None)
     registry = build_deployment_registry(

@@ -318,7 +318,14 @@ async def emit_nonstream_success(
             call_type="completion",
             usage=usage,
             cost=request_cost,
-            metadata=_append_route_decision_metadata(request, {"api_base": api_base}),
+            metadata=_append_route_decision_metadata(
+                request,
+                {
+                    "api_base": api_base,
+                    "provider": api_provider,
+                    "deployment_model": served_deployment.deltallm_params.get("model"),
+                },
+            ),
             cache_hit=cache_hit,
             start_time=callback_start,
             end_time=datetime.now(tz=UTC),

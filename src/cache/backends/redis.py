@@ -42,6 +42,8 @@ class RedisBackend(CacheBackend):
             token_count=int(payload.get("token_count", 0)),
             pricing=payload.get("pricing"),
             deployment_id=payload.get("deployment_id"),
+            provider=payload.get("provider"),
+            deployment_model=payload.get("deployment_model"),
         )
 
     async def set(self, key: str, entry: CacheEntry, ttl: int | None = None) -> None:

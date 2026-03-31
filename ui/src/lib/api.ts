@@ -122,6 +122,17 @@ export interface SpendLog {
 
 export type SpendGroupBy = 'model' | 'organization' | 'team' | 'api_key';
 
+export interface SpendSummary {
+  total_spend: number;
+  total_tokens: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_requests: number;
+  unique_models?: number;
+  successful_requests?: number;
+  failed_requests?: number;
+}
+
 export interface SpendGroupRow {
   group_key: string;
   display_name?: string | null;
@@ -134,6 +145,26 @@ export interface SpendGroupReport {
   group_by: SpendGroupBy | 'provider' | 'user';
   data: SpendGroupRow[];
   pagination: Pagination;
+}
+
+export type ProviderHealthStatus = 'healthy' | 'degraded' | 'down';
+
+export interface ProviderHealthSummaryRow {
+  provider: string;
+  models: number;
+  healthy_models: number;
+  unhealthy_models: number;
+  status: ProviderHealthStatus;
+}
+
+export interface ProviderHealthSummary {
+  total_models: number;
+  providers: ProviderHealthSummaryRow[];
+  summary: {
+    total_providers: number;
+    active_providers: number;
+    down_providers: number;
+  };
 }
 
 export interface ServiceAccount {
@@ -565,7 +596,7 @@ export const spend = {
     if (start_date) qs.set('start_date', start_date);
     if (end_date) qs.set('end_date', end_date);
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
-    return apiFetch<any>(`/ui/api/spend/summary${suffix}`);
+    return apiFetch<SpendSummary>(`/ui/api/spend/summary${suffix}`);
   },
   report: (group_by: 'model' | 'provider' | 'day' | 'user' | 'team', start_date?: string, end_date?: string) => {
     const qs = new URLSearchParams({ group_by });
@@ -605,6 +636,7 @@ export const audit = {
 export const models = {
   list: (params?: { search?: string; provider?: string; mode?: string; limit?: number; offset?: number }) =>
     apiFetch<Paginated<any>>(withQuery('/ui/api/models', params as any)),
+  providerHealthSummary: () => apiFetch<ProviderHealthSummary>('/ui/api/models/provider-health-summary'),
   providerPresets: () => apiFetch<{ data: ProviderPreset[] }>('/ui/api/provider-presets'),
   get: (deploymentId: string) => apiFetch<ModelDeploymentDetail>(`/ui/api/models/${encodeURIComponent(deploymentId)}`),
   checkHealth: (deploymentId: string) =>

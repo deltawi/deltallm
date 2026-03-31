@@ -158,6 +158,7 @@ async def test_batch_worker_logs_batch_pricing_and_spend(monkeypatch):
     logged = spend.events[0]
     assert logged["call_type"] == "embedding_batch"
     assert logged["cost"] == 0.0025
+    assert logged["metadata"]["deployment_model"] == "vllm/sentence-transformers/all-MiniLM-L6-v2"
     assert logged["metadata"]["pricing_tier"] == "batch"
     assert logged["metadata"]["provider_cost"] == 0.005
 

@@ -10,6 +10,7 @@ from src.api.admin.endpoints.common import db_or_503, get_auth_scope, log_admin_
 from src.auth.roles import Permission
 from src.billing.spend_read import SpendReadSource, apply_org_scope, get_spend_read_source
 from src.middleware.admin import require_admin_permission
+from src.providers.resolution import provider_from_model, resolve_provider
 
 router = APIRouter(tags=["Spend"])
 
@@ -26,7 +27,141 @@ def _date_end(value: date | None) -> datetime | None:
     return datetime.combine(value, time.max, tzinfo=UTC)
 
 
-def _grouped_spend_config(group_by: str, source: SpendReadSource) -> dict[str, Any]:
+def _provider_from_api_base_expr(api_base_expr: str) -> str:
+    lowered_api_base = f"LOWER(COALESCE({api_base_expr}, ''))"
+    return f"""
+        CASE
+            WHEN {lowered_api_base} LIKE '%openai.azure.com%' THEN 'azure_openai'
+            WHEN {lowered_api_base} LIKE '%api.groq.com%' OR {lowered_api_base} LIKE '%groq%' THEN 'groq'
+            WHEN {lowered_api_base} LIKE '%openrouter.ai%' OR {lowered_api_base} LIKE '%openrouter%' THEN 'openrouter'
+            WHEN {lowered_api_base} LIKE '%fireworks%' THEN 'fireworks'
+            WHEN {lowered_api_base} LIKE '%together%' THEN 'together'
+            WHEN {lowered_api_base} LIKE '%deepinfra%' THEN 'deepinfra'
+            WHEN {lowered_api_base} LIKE '%perplexity%' THEN 'perplexity'
+            WHEN {lowered_api_base} LIKE '%anthropic%' THEN 'anthropic'
+            WHEN {lowered_api_base} LIKE '%googleapis.com%' OR {lowered_api_base} LIKE '%generativelanguage.googleapis.com%' THEN 'gemini'
+            WHEN {lowered_api_base} LIKE '%bedrock%' THEN 'bedrock'
+            WHEN {lowered_api_base} LIKE '%api.openai.com%' OR {lowered_api_base} LIKE '%openai.com%' THEN 'openai'
+            WHEN {lowered_api_base} LIKE '%azure%' THEN 'azure_openai'
+            ELSE NULL
+        END
+    """.strip()
+
+
+def _provider_from_model_expr(model_expr: str) -> str:
+    lowered_model = f"LOWER(COALESCE({model_expr}, ''))"
+    return f"""
+        CASE
+            WHEN {lowered_model} LIKE 'azure_openai/%' OR {lowered_model} LIKE 'azure/%' THEN 'azure_openai'
+            WHEN {lowered_model} LIKE 'anthropic/%' THEN 'anthropic'
+            WHEN {lowered_model} LIKE 'openrouter/%' THEN 'openrouter'
+            WHEN {lowered_model} LIKE 'groq/%' THEN 'groq'
+            WHEN {lowered_model} LIKE 'together/%' THEN 'together'
+            WHEN {lowered_model} LIKE 'fireworks/%' THEN 'fireworks'
+            WHEN {lowered_model} LIKE 'deepinfra/%' THEN 'deepinfra'
+            WHEN {lowered_model} LIKE 'perplexity/%' THEN 'perplexity'
+            WHEN {lowered_model} LIKE 'gemini/%' THEN 'gemini'
+            WHEN {lowered_model} LIKE 'bedrock/%' THEN 'bedrock'
+            WHEN {lowered_model} LIKE 'vllm/%' THEN 'vllm'
+            WHEN {lowered_model} LIKE 'lmstudio/%' THEN 'lmstudio'
+            WHEN {lowered_model} LIKE 'ollama/%' THEN 'ollama'
+            WHEN {lowered_model} LIKE 'openai/%' THEN 'openai'
+            ELSE NULL
+        END
+    """.strip()
+
+
+def _sql_string_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _legacy_cache_provider_override_expr(
+    *,
+    table_alias: str = "s",
+    model_provider_overrides: dict[str, str] | None = None,
+) -> str:
+    if not model_provider_overrides:
+        return "NULL"
+
+    lowered_api_base = f"LOWER(COALESCE({table_alias}.api_base, ''))"
+    cases = []
+    for model, provider in sorted(model_provider_overrides.items()):
+        model_literal = _sql_string_literal(model)
+        provider_literal = _sql_string_literal(provider)
+        cases.append(
+            f"""WHEN (
+                LOWER(COALESCE({table_alias}.deployment_model, '')) = {model_literal}
+                OR LOWER(COALESCE({table_alias}.model, '')) = {model_literal}
+            ) THEN {provider_literal}"""
+        )
+    case_sql = "\n            ".join(cases)
+    return f"""
+        CASE
+            WHEN {lowered_api_base} <> 'cache' THEN NULL
+            {case_sql}
+            ELSE NULL
+        END
+    """.strip()
+
+
+def _canonical_provider_expr(
+    *,
+    table_alias: str = "s",
+    model_provider_overrides: dict[str, str] | None = None,
+) -> str:
+    provider_column = f"{table_alias}.provider"
+    metadata_provider_column = f"{table_alias}.metadata->>'provider'"
+    api_base_column = f"{table_alias}.api_base"
+    api_base_provider_expr = _provider_from_api_base_expr(api_base_column)
+    legacy_cache_provider_expr = _legacy_cache_provider_override_expr(
+        table_alias=table_alias,
+        model_provider_overrides=model_provider_overrides,
+    )
+    deployment_model_provider_expr = _provider_from_model_expr(f"{table_alias}.deployment_model")
+    model_provider_expr = _provider_from_model_expr(f"{table_alias}.model")
+    return f"""
+        COALESCE(
+            {api_base_provider_expr},
+            NULLIF(LOWER(TRIM(COALESCE({metadata_provider_column}, ''))), ''),
+            NULLIF(LOWER(TRIM({provider_column})), ''),
+            {legacy_cache_provider_expr},
+            {deployment_model_provider_expr},
+            {model_provider_expr},
+            'unknown'
+        )
+    """.strip()
+
+
+def _legacy_cache_model_provider_overrides(request: Request) -> dict[str, str]:
+    registry = getattr(request.app.state, "model_registry", {}) or {}
+    provider_candidates: dict[str, set[str]] = {}
+    for deployments in registry.values():
+        if not isinstance(deployments, list):
+            continue
+        for deployment in deployments:
+            params = deployment.get("deltallm_params") if isinstance(deployment, dict) else None
+            if not isinstance(params, dict):
+                continue
+            deployment_model = str(params.get("model") or "").strip()
+            provider = resolve_provider(params)
+            if not deployment_model or provider == "unknown":
+                continue
+            if provider_from_model(deployment_model) == provider:
+                continue
+            provider_candidates.setdefault(deployment_model.lower(), set()).add(provider)
+    return {
+        deployment_model: next(iter(providers))
+        for deployment_model, providers in provider_candidates.items()
+        if len(providers) == 1
+    }
+
+
+def _grouped_spend_config(
+    group_by: str,
+    source: SpendReadSource,
+    *,
+    model_provider_overrides: dict[str, str] | None = None,
+) -> dict[str, Any]:
     if group_by == "model":
         return {
             "group_expr": "s.model",
@@ -71,11 +206,15 @@ def _grouped_spend_config(group_by: str, source: SpendReadSource) -> dict[str, A
             "search_clause": "(s.api_key ILIKE ${i} OR COALESCE(vt.key_name, '') ILIKE ${i})",
         }
     if group_by == "provider":
+        provider_expr = _canonical_provider_expr(
+            table_alias="s",
+            model_provider_overrides=model_provider_overrides,
+        )
         return {
-            "group_expr": "COALESCE(s.api_base, 'unknown')",
+            "group_expr": provider_expr,
             "display_expr": "NULL",
-            "group_by_exprs": ["COALESCE(s.api_base, 'unknown')"],
-            "search_clause": "COALESCE(s.api_base, 'unknown') ILIKE ${i}",
+            "group_by_exprs": [provider_expr],
+            "search_clause": f"({provider_expr} ILIKE ${{i}} OR COALESCE(s.api_base, '') ILIKE ${{i}})",
         }
     return {
         "group_expr": f"COALESCE({source.column('user_column', table_alias='s')}, 'anonymous')",
@@ -120,7 +259,9 @@ async def spend_summary(
             COALESCE(SUM(total_tokens), 0) AS total_tokens,
             COALESCE(SUM({source.prompt_tokens_column}), 0) AS prompt_tokens,
             COALESCE(SUM({source.completion_tokens_column}), 0) AS completion_tokens,
-            COUNT(*) AS total_requests
+            COUNT(*) AS total_requests,
+            COUNT(*) FILTER (WHERE COALESCE(status, 'success') = 'success') AS successful_requests,
+            COUNT(*) FILTER (WHERE status = 'error') AS failed_requests
         FROM {source.table}
         {where_sql}
         """,
@@ -174,7 +315,9 @@ async def spend_report(
                 DATE(start_time) AS group_key,
                 COALESCE(SUM(spend), 0) AS total_spend,
                 COUNT(*) AS request_count,
-                COALESCE(SUM(total_tokens), 0) AS total_tokens
+                COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                COUNT(*) FILTER (WHERE COALESCE(status, 'success') = 'success') AS successful_requests,
+                COUNT(*) FILTER (WHERE status = 'error') AS failed_requests
             FROM {source.table}
             {where_sql}
             GROUP BY DATE(start_time)
@@ -194,7 +337,11 @@ async def spend_report(
             "breakdown": [to_json_value(dict(row)) for row in rows],
         }
 
-    config = _grouped_spend_config(group_by, source)
+    config = _grouped_spend_config(
+        group_by,
+        source,
+        model_provider_overrides=_legacy_cache_model_provider_overrides(request) if group_by == "provider" else None,
+    )
     clauses: list[str] = []
     params: list[Any] = []
     joins = list(config.get("joins", []))

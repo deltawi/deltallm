@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
 
 from src.billing.budget import BudgetEnforcementService, BudgetExceeded
 from src.billing.spend import SpendTrackingService
+from src.billing.spend_events import build_spend_event
 
 
 class RecordingDB:
@@ -258,6 +260,61 @@ async def test_spend_tracking_persists_cached_token_counts():
     insert_call = next(args for query, args in db.calls if "insert into deltallm_spendlog_events" in query.lower())
     assert insert_call[19] == 6
     assert insert_call[20] == 0
+
+
+def test_build_spend_event_infers_groq_from_openai_compatible_api_base() -> None:
+    event = build_spend_event(
+        request_id="req_groq",
+        api_key="key_hash",
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        end_user_id=None,
+        model="openai/gpt-oss-20b",
+        call_type="completion",
+        usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        cost=0.01,
+        metadata={"api_base": "https://api.groq.com/openai/v1"},
+        cache_hit=False,
+        start_time=datetime.now(tz=UTC),
+        end_time=datetime.now(tz=UTC),
+    )
+
+    assert event["provider"] == "groq"
+
+
+@pytest.mark.asyncio
+async def test_spend_tracking_preserves_explicit_provider_for_cache_rows():
+    db = RecordingDB()
+    service = SpendTrackingService(db_client=db)
+
+    await service.log_spend(
+        request_id="req_cached_groq",
+        api_key="key_hash",
+        user_id="user_1",
+        team_id="team_1",
+        organization_id="org_1",
+        end_user_id=None,
+        model="openai/gpt-oss-20b",
+        call_type="completion",
+        usage={
+            "total_tokens": 10,
+            "prompt_tokens": 6,
+            "completion_tokens": 4,
+            "prompt_tokens_cached": 6,
+            "completion_tokens_cached": 0,
+        },
+        cost=0.01,
+        metadata={
+            "api_base": "cache",
+            "provider": "groq",
+            "deployment_model": "openai/gpt-oss-20b",
+        },
+        cache_hit=True,
+    )
+
+    insert_call = next(args for query, args in db.calls if "insert into deltallm_spendlog_events" in query.lower())
+    assert insert_call[10] == "groq"
 
 
 @pytest.mark.asyncio
