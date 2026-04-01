@@ -159,8 +159,12 @@ class CallableTargetGrantService:
         scope_context = resolve_runtime_scope_context(auth)
         if scope_context.organization_id is not None:
             organization_scope = ("organization", scope_context.organization_id)
-            if snapshot.binding_counts_by_scope.get(organization_scope, 0) == 0:
-                return set()
+            org_mode = snapshot.scope_modes_by_scope.get(organization_scope)
+            # If org policy is "inherit" (all models allowed), return None so
+            # models added after the policy was set are accessible automatically.
+            # See: https://github.com/deltawi/deltallm/issues/59
+            if org_mode != "restrict":
+                return None
             return set(snapshot.enabled_by_scope.get(organization_scope, ()))
 
         direct_scopes = self._applicable_scopes(auth)
