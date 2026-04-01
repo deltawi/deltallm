@@ -1,10 +1,18 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import Card from './Card';
-import { MessageSquare, FileText, Image, Mic, Volume2, ArrowUpDown, Plus, X, ChevronDown } from 'lucide-react';
+import { ChevronDown, Plus, X } from 'lucide-react';
 import ProviderBadge from './ProviderBadge';
 import { useApi } from '../lib/hooks';
-import { models } from '../lib/api';
-import { normalizeProvider, providerDisplayName } from '../lib/providers';
+import { models, type ProviderModelDiscoveryPayload, type ProviderModelOption } from '../lib/api';
+import { providerDisplayName } from '../lib/providers';
+import {
+  EMPTY_FORM,
+  MODE_OPTIONS,
+  buildModelPayload,
+  type ModelFormValues,
+  type ModelMode,
+  type ModelPayload,
+} from './modelFormShared';
 
 let collapsibleIdCounter = 0;
 
@@ -28,239 +36,99 @@ function CollapsibleCard({ title, defaultOpen = false, children }: { title: stri
   );
 }
 
-type ModelMode = 'chat' | 'embedding' | 'image_generation' | 'audio_speech' | 'audio_transcription' | 'rerank';
+function upstreamModelPlaceholder(mode: ModelMode): string {
+  if (mode === 'image_generation') return 'gpt-image-1.5';
+  if (mode === 'audio_speech') return 'gpt-4o-mini-tts';
+  if (mode === 'audio_transcription') return 'gpt-4o-transcribe';
+  if (mode === 'embedding') return 'text-embedding-3-large';
+  if (mode === 'rerank') return 'rerank-english-v3.0';
+  return 'gpt-5.4';
+}
 
-export const MODE_OPTIONS: { value: ModelMode; label: string; icon: React.ReactNode; description: string }[] = [
-  { value: 'chat', label: 'Chat', icon: <MessageSquare className="w-4 h-4" />, description: 'Text completions & conversations' },
-  { value: 'embedding', label: 'Embedding', icon: <FileText className="w-4 h-4" />, description: 'Text & document embeddings' },
-  { value: 'image_generation', label: 'Image Generation', icon: <Image className="w-4 h-4" />, description: 'Text-to-image generation' },
-  { value: 'audio_speech', label: 'Text-to-Speech', icon: <Volume2 className="w-4 h-4" />, description: 'Generate spoken audio from text' },
-  { value: 'audio_transcription', label: 'Speech-to-Text', icon: <Mic className="w-4 h-4" />, description: 'Transcribe audio to text' },
-  { value: 'rerank', label: 'Rerank', icon: <ArrowUpDown className="w-4 h-4" />, description: 'Document re-ranking' },
-];
+type MetadataAutofillField =
+  | 'input_cost_per_token'
+  | 'output_cost_per_token'
+  | 'input_cost_per_token_cache_hit'
+  | 'output_cost_per_token_cache_hit'
+  | 'max_context_window'
+  | 'max_input_tokens'
+  | 'max_output_tokens'
+  | 'output_vector_size'
+  | 'input_cost_per_image'
+  | 'input_cost_per_character'
+  | 'output_cost_per_character'
+  | 'input_cost_per_second'
+  | 'output_cost_per_second'
+  | 'input_cost_per_audio_token'
+  | 'output_cost_per_audio_token'
+  | 'batch_price_multiplier'
+  | 'batch_input_cost_per_token'
+  | 'batch_output_cost_per_token';
 
-export const MODE_BADGE_COLORS: Record<string, string> = {
-  chat: 'bg-blue-100 text-blue-700',
-  embedding: 'bg-purple-100 text-purple-700',
-  image_generation: 'bg-pink-100 text-pink-700',
-  audio_speech: 'bg-green-100 text-green-700',
-  audio_transcription: 'bg-yellow-100 text-yellow-700',
-  rerank: 'bg-orange-100 text-orange-700',
+const MODEL_METADATA_FIELDS: Record<string, MetadataAutofillField> = {
+  input_cost_per_token: 'input_cost_per_token',
+  output_cost_per_token: 'output_cost_per_token',
+  input_cost_per_token_cache_hit: 'input_cost_per_token_cache_hit',
+  output_cost_per_token_cache_hit: 'output_cost_per_token_cache_hit',
+  max_tokens: 'max_context_window',
+  max_input_tokens: 'max_input_tokens',
+  max_output_tokens: 'max_output_tokens',
+  output_vector_size: 'output_vector_size',
+  input_cost_per_image: 'input_cost_per_image',
+  input_cost_per_character: 'input_cost_per_character',
+  output_cost_per_character: 'output_cost_per_character',
+  input_cost_per_second: 'input_cost_per_second',
+  output_cost_per_second: 'output_cost_per_second',
+  input_cost_per_audio_token: 'input_cost_per_audio_token',
+  output_cost_per_audio_token: 'output_cost_per_audio_token',
+  batch_price_multiplier: 'batch_price_multiplier',
+  batch_input_cost_per_token: 'batch_input_cost_per_token',
+  batch_output_cost_per_token: 'batch_output_cost_per_token',
 };
 
-export interface ModelFormValues {
-  mode: ModelMode;
-  model_name: string;
-  provider: string;
-  model: string;
-  api_key: string;
-  api_base: string;
-  api_version: string;
-  rpm: string;
-  tpm: string;
-  timeout: string;
-  stream_timeout: string;
-  max_tokens: string;
-  weight: string;
-  priority: string;
-  tags: string;
-  input_cost_per_token: string;
-  output_cost_per_token: string;
-  input_cost_per_token_cache_hit: string;
-  output_cost_per_token_cache_hit: string;
-  max_context_window: string;
-  max_input_tokens: string;
-  max_output_tokens: string;
-  output_vector_size: string;
-  input_cost_per_image: string;
-  input_cost_per_character: string;
-  output_cost_per_character: string;
-  input_cost_per_second: string;
-  output_cost_per_second: string;
-  input_cost_per_audio_token: string;
-  output_cost_per_audio_token: string;
-  batch_price_multiplier: string;
-  batch_input_cost_per_token: string;
-  batch_output_cost_per_token: string;
+function applyKnownMetadataToForm(
+  current: ModelFormValues,
+  metadata: ProviderModelOption['known_metadata'],
+): ModelFormValues {
+  if (!metadata) return current;
+
+  let changed = false;
+  const next = { ...current };
+  for (const metadataKey of Object.keys(MODEL_METADATA_FIELDS) as Array<keyof typeof MODEL_METADATA_FIELDS>) {
+    const formField = MODEL_METADATA_FIELDS[metadataKey];
+    const rawValue = metadata[metadataKey];
+    if (rawValue == null) continue;
+    if (next[formField]) continue;
+    next[formField] = String(rawValue);
+    changed = true;
+  }
+  return changed ? next : current;
 }
 
-export const EMPTY_FORM: ModelFormValues = {
-  mode: 'chat',
-  model_name: '',
-  provider: '',
-  model: '',
-  api_key: '',
-  api_base: '',
-  api_version: '',
-  rpm: '',
-  tpm: '',
-  timeout: '',
-  stream_timeout: '',
-  max_tokens: '',
-  weight: '',
-  priority: '',
-  tags: '',
-  input_cost_per_token: '',
-  output_cost_per_token: '',
-  input_cost_per_token_cache_hit: '',
-  output_cost_per_token_cache_hit: '',
-  max_context_window: '',
-  max_input_tokens: '',
-  max_output_tokens: '',
-  output_vector_size: '',
-  input_cost_per_image: '',
-  input_cost_per_character: '',
-  output_cost_per_character: '',
-  input_cost_per_second: '',
-  output_cost_per_second: '',
-  input_cost_per_audio_token: '',
-  output_cost_per_audio_token: '',
-  batch_price_multiplier: '',
-  batch_input_cost_per_token: '',
-  batch_output_cost_per_token: '',
-};
-
-function numOrUndef(val: string): number | undefined {
-  return val ? Number(val) : undefined;
+function findProviderModelOption(options: ProviderModelOption[], modelId: string): ProviderModelOption | null {
+  const normalizedId = modelId.trim().toLowerCase();
+  if (!normalizedId) return null;
+  return options.find((option) => option.id.trim().toLowerCase() === normalizedId) || null;
 }
 
-export function strOrEmpty(val: any): string {
-  return val != null ? String(val) : '';
+function emptyDiscoveryResult(): { data: ProviderModelOption[]; warnings: string[] } {
+  return { data: [], warnings: [] };
 }
 
-export function buildModelPayload(form: ModelFormValues, defaultParams: { key: string; value: string }[]) {
-  const deltallm_params: Record<string, any> = {
-    provider: form.provider.trim() || undefined,
-    model: form.model.trim(),
-    api_key: form.api_key || undefined,
-    api_base: form.api_base.trim() || undefined,
-    api_version: form.api_version.trim() || undefined,
-    rpm: numOrUndef(form.rpm),
-    tpm: numOrUndef(form.tpm),
-    timeout: numOrUndef(form.timeout),
-    weight: numOrUndef(form.weight),
-  };
-
-  if (form.mode === 'chat') {
-    deltallm_params.stream_timeout = numOrUndef(form.stream_timeout);
-    deltallm_params.max_tokens = numOrUndef(form.max_tokens);
-  }
-
-  const model_info: Record<string, any> = {
-    mode: form.mode,
-    priority: numOrUndef(form.priority),
-    tags: form.tags ? form.tags.split(',').map(t => t.trim()).filter(Boolean) : undefined,
-    weight: numOrUndef(form.weight),
-  };
-
-  if (form.mode === 'chat') {
-    model_info.input_cost_per_token = numOrUndef(form.input_cost_per_token);
-    model_info.output_cost_per_token = numOrUndef(form.output_cost_per_token);
-    model_info.input_cost_per_token_cache_hit = numOrUndef(form.input_cost_per_token_cache_hit);
-    model_info.output_cost_per_token_cache_hit = numOrUndef(form.output_cost_per_token_cache_hit);
-    model_info.max_tokens = numOrUndef(form.max_context_window);
-    model_info.max_input_tokens = numOrUndef(form.max_input_tokens);
-    model_info.max_output_tokens = numOrUndef(form.max_output_tokens);
-  } else if (form.mode === 'embedding') {
-    model_info.input_cost_per_token = numOrUndef(form.input_cost_per_token);
-    model_info.input_cost_per_token_cache_hit = numOrUndef(form.input_cost_per_token_cache_hit);
-    model_info.output_vector_size = numOrUndef(form.output_vector_size);
-    model_info.max_tokens = numOrUndef(form.max_context_window);
-  } else if (form.mode === 'image_generation') {
-    model_info.input_cost_per_image = numOrUndef(form.input_cost_per_image);
-  } else if (form.mode === 'audio_speech') {
-    model_info.input_cost_per_character = numOrUndef(form.input_cost_per_character);
-    model_info.output_cost_per_character = numOrUndef(form.output_cost_per_character);
-    model_info.input_cost_per_second = numOrUndef(form.input_cost_per_second);
-    model_info.output_cost_per_second = numOrUndef(form.output_cost_per_second);
-    model_info.input_cost_per_audio_token = numOrUndef(form.input_cost_per_audio_token);
-    model_info.output_cost_per_audio_token = numOrUndef(form.output_cost_per_audio_token);
-  } else if (form.mode === 'audio_transcription') {
-    model_info.input_cost_per_second = numOrUndef(form.input_cost_per_second);
-    model_info.output_cost_per_second = numOrUndef(form.output_cost_per_second);
-  } else if (form.mode === 'rerank') {
-    model_info.input_cost_per_token = numOrUndef(form.input_cost_per_token);
-  }
-
-  if (form.mode === 'chat' || form.mode === 'embedding') {
-    model_info.batch_price_multiplier = numOrUndef(form.batch_price_multiplier);
-    model_info.batch_input_cost_per_token = numOrUndef(form.batch_input_cost_per_token);
-    model_info.batch_output_cost_per_token = numOrUndef(form.batch_output_cost_per_token);
-  }
-
-  const dp: Record<string, any> = {};
-  for (const p of defaultParams) {
-    if (p.key.trim()) {
-      const v = p.value.trim();
-      if (v === 'true') dp[p.key.trim()] = true;
-      else if (v === 'false') dp[p.key.trim()] = false;
-      else if (v !== '' && !isNaN(Number(v)) && v !== '') dp[p.key.trim()] = Number(v);
-      else dp[p.key.trim()] = v;
-    }
-  }
-  model_info.default_params = Object.keys(dp).length > 0 ? dp : {};
-
-  return { model_name: form.model_name.trim(), deltallm_params, model_info };
-}
-
-export function formFromModel(model: any): { form: ModelFormValues; defaultParams: { key: string; value: string }[] } {
-  const lp = model.deltallm_params || {};
-  const mi = model.model_info || {};
-  const explicitProvider = strOrEmpty(lp.provider).trim();
-  const inferredProvider = normalizeProvider(undefined, lp.model);
-  const provider = explicitProvider || (inferredProvider !== 'unknown' ? inferredProvider : '');
-  const normalizedModel = explicitProvider
-    ? strOrEmpty(lp.model)
-    : provider && strOrEmpty(lp.model).startsWith(`${provider}/`)
-      ? strOrEmpty(lp.model).slice(provider.length + 1)
-      : strOrEmpty(lp.model);
-  const form: ModelFormValues = {
-    mode: (mi.mode || model.mode || 'chat') as ModelMode,
-    model_name: model.model_name || '',
-    provider,
-    model: normalizedModel,
-    api_key: lp.api_key || '',
-    api_base: lp.api_base || '',
-    api_version: lp.api_version || '',
-    rpm: strOrEmpty(lp.rpm),
-    tpm: strOrEmpty(lp.tpm),
-    timeout: strOrEmpty(lp.timeout),
-    stream_timeout: strOrEmpty(lp.stream_timeout),
-    max_tokens: strOrEmpty(lp.max_tokens),
-    weight: strOrEmpty(mi.weight || lp.weight),
-    priority: strOrEmpty(mi.priority),
-    tags: Array.isArray(mi.tags) ? mi.tags.join(', ') : '',
-    input_cost_per_token: strOrEmpty(mi.input_cost_per_token),
-    output_cost_per_token: strOrEmpty(mi.output_cost_per_token),
-    input_cost_per_token_cache_hit: strOrEmpty(mi.input_cost_per_token_cache_hit),
-    output_cost_per_token_cache_hit: strOrEmpty(mi.output_cost_per_token_cache_hit),
-    max_context_window: strOrEmpty(mi.max_tokens),
-    max_input_tokens: strOrEmpty(mi.max_input_tokens),
-    max_output_tokens: strOrEmpty(mi.max_output_tokens),
-    output_vector_size: strOrEmpty(mi.output_vector_size),
-    input_cost_per_image: strOrEmpty(mi.input_cost_per_image),
-    input_cost_per_character: strOrEmpty(mi.input_cost_per_character),
-    output_cost_per_character: strOrEmpty(mi.output_cost_per_character),
-    input_cost_per_second: strOrEmpty(mi.input_cost_per_second),
-    output_cost_per_second: strOrEmpty(mi.output_cost_per_second),
-    input_cost_per_audio_token: strOrEmpty(mi.input_cost_per_audio_token),
-    output_cost_per_audio_token: strOrEmpty(mi.output_cost_per_audio_token),
-    batch_price_multiplier: strOrEmpty(mi.batch_price_multiplier),
-    batch_input_cost_per_token: strOrEmpty(mi.batch_input_cost_per_token),
-    batch_output_cost_per_token: strOrEmpty(mi.batch_output_cost_per_token),
-  };
-  const existingDefaults = mi.default_params;
-  let defaultParams: { key: string; value: string }[] = [];
-  if (existingDefaults && typeof existingDefaults === 'object') {
-    defaultParams = Object.entries(existingDefaults).map(([key, value]) => ({ key, value: String(value) }));
-  }
-  return { form, defaultParams };
+function buildLiveDiscoveryRequestKey(payload: ProviderModelDiscoveryPayload): string {
+  return [
+    payload.provider || '',
+    payload.mode || '',
+    payload.api_key || '',
+    payload.api_base || '',
+    payload.api_version || '',
+  ].join('::');
 }
 
 interface ModelFormProps {
   initialValues?: ModelFormValues;
   initialDefaultParams?: { key: string; value: string }[];
-  onSubmit: (payload: ReturnType<typeof buildModelPayload>) => Promise<void>;
+  onSubmit: (payload: ModelPayload) => Promise<void>;
   onCancel: () => void;
   submitLabel?: string;
   saving?: boolean;
@@ -296,11 +164,58 @@ export default function ModelForm({
   const [defaultParams, setDefaultParams] = useState<{ key: string; value: string }[]>(initialDefaultParams || []);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<RequiredField, string>>>({});
-  const { data: providerPresetResponse } = useApi(() => models.providerPresets(), []);
-
+  const [liveDiscoveryState, setLiveDiscoveryState] = useState<{
+    requestKey: string | null;
+    data: ProviderModelOption[];
+    warnings: string[];
+    loading: boolean;
+  }>({
+    requestKey: null,
+    data: [],
+    warnings: [],
+    loading: false,
+  });
   const mode = form.mode;
+  const { data: providerPresetResponse } = useApi(() => models.providerPresets(), []);
+  const { data: catalogDiscoveryResponse, loading: catalogDiscoveryLoading } = useApi(
+    async () => {
+      if (!form.provider) {
+        return emptyDiscoveryResult();
+      }
+      try {
+        return await models.discoverProviderModels({
+          provider: form.provider,
+          mode,
+        });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Failed to load provider model suggestions.';
+        return { data: [], warnings: [message] };
+      }
+    },
+    [form.provider, mode],
+  );
+  const modelSuggestionListId = useId();
+
   const providerPresets = providerPresetResponse?.data || [];
+  const liveDiscoveryPayload: ProviderModelDiscoveryPayload = {
+    provider: form.provider,
+    mode,
+    api_key: form.api_key.trim() || null,
+    api_base: form.api_base.trim() || null,
+    api_version: form.api_version.trim() || null,
+  };
+  const liveDiscoveryRequestKey = buildLiveDiscoveryRequestKey(liveDiscoveryPayload);
+  const hasActiveLiveDiscovery = liveDiscoveryState.requestKey === liveDiscoveryRequestKey;
+  const modelOptions = hasActiveLiveDiscovery && liveDiscoveryState.data.length > 0
+    ? liveDiscoveryState.data
+    : catalogDiscoveryResponse?.data || [];
+  const discoveryWarnings = [
+    ...(catalogDiscoveryResponse?.warnings || []),
+    ...(hasActiveLiveDiscovery ? liveDiscoveryState.warnings : []),
+  ];
+  const discoveryLoading = catalogDiscoveryLoading || (hasActiveLiveDiscovery && liveDiscoveryState.loading);
   const selectedProviderPreset = providerPresets.find((preset) => preset.provider === form.provider);
+  const selectedModelOption = findProviderModelOption(modelOptions, form.model);
 
   const clearValidation = (field?: RequiredField) => {
     if (validationError) setValidationError(null);
@@ -313,15 +228,89 @@ export default function ModelForm({
     }
   };
 
+  const invalidateLiveDiscovery = () => {
+    setLiveDiscoveryState((current) => {
+      if (current.requestKey == null && !current.loading && current.data.length === 0 && current.warnings.length === 0) {
+        return current;
+      }
+      return {
+        requestKey: null,
+        data: [],
+        warnings: [],
+        loading: false,
+      };
+    });
+  };
+
   const applyProvider = (provider: string) => {
     const preset = providerPresets.find((item) => item.provider === provider);
+    invalidateLiveDiscovery();
     setForm((current) => ({
       ...current,
       provider,
+      model: current.provider === provider ? current.model : '',
       api_base: preset?.api_base || '',
     }));
     clearValidation('provider');
+    clearValidation('model');
     clearValidation('api_base');
+  };
+
+  const applyMode = (nextMode: ModelMode) => {
+    invalidateLiveDiscovery();
+    setForm((current) => ({ ...current, mode: nextMode }));
+  };
+
+  const updateProviderCredentialField = (
+    field: 'api_key' | 'api_base' | 'api_version',
+    value: string,
+    clearField?: RequiredField,
+  ) => {
+    invalidateLiveDiscovery();
+    setForm((current) => ({ ...current, [field]: value }));
+    if (clearField) {
+      clearValidation(clearField);
+    }
+  };
+
+  const updateModelValue = (value: string) => {
+    clearValidation('model');
+    const matchedOption = findProviderModelOption(modelOptions, value);
+    setForm((current) => {
+      const next = { ...current, model: value };
+      return applyKnownMetadataToForm(next, matchedOption?.known_metadata || null);
+    });
+  };
+
+  const refreshProviderModels = async () => {
+    if (!form.provider || !form.api_key.trim()) {
+      return;
+    }
+
+    setLiveDiscoveryState({
+      requestKey: liveDiscoveryRequestKey,
+      data: [],
+      warnings: [],
+      loading: true,
+    });
+
+    try {
+      const response = await models.discoverProviderModels(liveDiscoveryPayload);
+      setLiveDiscoveryState({
+        requestKey: liveDiscoveryRequestKey,
+        data: response.data || [],
+        warnings: response.warnings || [],
+        loading: false,
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to refresh provider models.';
+      setLiveDiscoveryState({
+        requestKey: liveDiscoveryRequestKey,
+        data: [],
+        warnings: [message],
+        loading: false,
+      });
+    }
   };
 
   const handleSubmit = async () => {
@@ -372,14 +361,14 @@ export default function ModelForm({
             <button
               key={opt.value}
               type="button"
-              onClick={() => setForm({ ...form, mode: opt.value })}
+              onClick={() => applyMode(opt.value)}
               className={`flex items-center gap-2 p-2.5 rounded-lg border text-left text-sm transition-colors ${
                 mode === opt.value
                   ? 'border-blue-500 bg-blue-50 text-blue-700'
                   : 'border-gray-200 hover:border-gray-300 text-gray-600'
               }`}
             >
-              {opt.icon}
+              <opt.icon className="w-4 h-4" />
               <div>
                 <div className="font-medium text-xs">{opt.label}</div>
                 <div className="text-[10px] text-gray-400 leading-tight">{opt.description}</div>
@@ -395,7 +384,7 @@ export default function ModelForm({
           {validationError ? <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{validationError}</div> : null}
           <div>
             <FieldLabel label="Model Name" required />
-            <input value={form.model_name} onChange={(e) => { setForm({ ...form, model_name: e.target.value }); clearValidation('model_name'); }} placeholder={mode === 'image_generation' ? 'dall-e-3' : mode === 'audio_speech' ? 'tts-1' : mode === 'audio_transcription' ? 'whisper-1' : mode === 'embedding' ? 'text-embedding-3-large' : mode === 'rerank' ? 'rerank-english-v3' : 'gpt-4o'} className={inputClasses(Boolean(fieldErrors.model_name))} />
+            <input value={form.model_name} onChange={(e) => { setForm({ ...form, model_name: e.target.value }); clearValidation('model_name'); }} placeholder={mode === 'image_generation' ? 'gpt-image-1.5' : mode === 'audio_speech' ? 'gpt-4o-mini-tts' : mode === 'audio_transcription' ? 'gpt-4o-transcribe' : mode === 'embedding' ? 'text-embedding-3-large' : mode === 'rerank' ? 'rerank-english-v3' : 'gpt-5.4'} className={inputClasses(Boolean(fieldErrors.model_name))} />
             {fieldErrors.model_name ? <p className="mt-1 text-xs text-red-600">{fieldErrors.model_name}</p> : null}
             <p className="text-xs text-gray-400 mt-1">Public name users will reference in API calls</p>
           </div>
@@ -415,33 +404,76 @@ export default function ModelForm({
                 ))}
               </select>
               <input
+                list={modelSuggestionListId}
                 value={form.model}
-                onChange={(e) => { setForm({ ...form, model: e.target.value }); clearValidation('model'); }}
-                placeholder={mode === 'image_generation' ? 'dall-e-3' : mode === 'audio_speech' ? 'tts-1' : mode === 'audio_transcription' ? 'whisper-1' : mode === 'embedding' ? 'text-embedding-3-large' : mode === 'rerank' ? 'rerank-english-v3.0' : 'gpt-4o'}
+                onChange={(e) => updateModelValue(e.target.value)}
+                placeholder={upstreamModelPlaceholder(mode)}
                 className="min-w-0 flex-1 px-3 py-2 text-sm text-gray-900 focus:outline-none"
               />
             </div>
+            <datalist id={modelSuggestionListId}>
+              {modelOptions.map((option) => (
+                <option
+                  key={`${option.provider}:${option.id}`}
+                  value={option.id}
+                  label={option.label}
+                />
+              ))}
+            </datalist>
             {fieldErrors.provider ? <p className="mt-1 text-xs text-red-600">{fieldErrors.provider}</p> : null}
             {!fieldErrors.provider && fieldErrors.model ? <p className="mt-1 text-xs text-red-600">{fieldErrors.model}</p> : null}
             <div className="mt-2 flex items-center gap-2">
               <span className="text-xs text-gray-500">Selected provider:</span>
               {form.provider ? <ProviderBadge provider={form.provider} model={form.model} /> : <span className="text-xs text-gray-400">Choose a provider first</span>}
             </div>
+            {discoveryLoading ? <p className="mt-1 text-xs text-gray-500">Loading provider model suggestions...</p> : null}
+            {form.provider && !discoveryLoading && modelOptions.length > 0 ? (
+              <p className="mt-1 text-xs text-gray-500">
+                {modelOptions.length} suggested model{modelOptions.length === 1 ? '' : 's'} available. Custom values are still allowed.
+              </p>
+            ) : null}
+            {form.provider && !form.api_key.trim() ? (
+              <p className="mt-1 text-xs text-gray-400">
+                Showing built-in suggestions first. Add the provider API key, then refresh to fetch live provider models when supported.
+              </p>
+            ) : null}
+            {form.provider && form.api_key.trim() ? (
+              <div className="mt-2">
+                <button
+                  type="button"
+                  onClick={() => { void refreshProviderModels(); }}
+                  disabled={discoveryLoading}
+                  className="inline-flex items-center rounded-md border border-gray-300 px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {hasActiveLiveDiscovery && liveDiscoveryState.loading ? 'Refreshing...' : 'Refresh provider models'}
+                </button>
+              </div>
+            ) : null}
+            {selectedModelOption?.known_metadata ? (
+              <p className="mt-1 text-xs text-emerald-700">
+                Known pricing and limit metadata is available for this model. Empty fields below will be filled automatically.
+              </p>
+            ) : null}
             {selectedProviderPreset && (
               <p className="text-xs text-gray-500 mt-1">
                 Supported model types: {selectedProviderPreset.supported_modes.join(', ')}
               </p>
             )}
+            {discoveryWarnings.length > 0 ? (
+              <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                {discoveryWarnings.join(' ')}
+              </div>
+            ) : null}
             <p className="text-xs text-gray-400 mt-1">Enter the upstream model name only. Example for Groq: <code>openai/gpt-oss-120b</code>.</p>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <FieldLabel label="API Key" />
-              <input type="password" value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })} placeholder="sk-..." className={inputClass} />
+              <input type="password" value={form.api_key} onChange={(e) => updateProviderCredentialField('api_key', e.target.value)} placeholder="sk-..." className={inputClass} />
             </div>
             <div>
               <FieldLabel label="API Base URL" required />
-              <input value={form.api_base} onChange={(e) => { setForm({ ...form, api_base: e.target.value }); clearValidation('api_base'); }} placeholder={selectedProviderPreset?.api_base || 'https://your-provider.example/v1'} className={inputClasses(Boolean(fieldErrors.api_base))} />
+              <input value={form.api_base} onChange={(e) => updateProviderCredentialField('api_base', e.target.value, 'api_base')} placeholder={selectedProviderPreset?.api_base || 'https://your-provider.example/v1'} className={inputClasses(Boolean(fieldErrors.api_base))} />
               {fieldErrors.api_base ? <p className="mt-1 text-xs text-red-600">{fieldErrors.api_base}</p> : null}
               <p className="mt-1 text-xs text-gray-400">
                 {selectedProviderPreset?.api_base
@@ -455,7 +487,7 @@ export default function ModelForm({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <FieldLabel label="API Version" />
-              <input value={form.api_version} onChange={(e) => setForm({ ...form, api_version: e.target.value })} placeholder="e.g. 2024-02-01 (Azure)" className={inputClass} />
+              <input value={form.api_version} onChange={(e) => updateProviderCredentialField('api_version', e.target.value)} placeholder="e.g. 2024-02-01 (Azure)" className={inputClass} />
             </div>
             <div>
               <FieldLabel label="Timeout (s)" />

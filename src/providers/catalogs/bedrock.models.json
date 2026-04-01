@@ -1,0 +1,18 @@
+{
+  "provider": "bedrock",
+  "last_verified_at": "2026-04-01",
+  "source_type": "official_docs",
+  "sources": [
+    {
+      "label": "Bedrock Claude model ID example",
+      "url": "https://platform.claude.com/docs/en/about-claude/models/overview"
+    }
+  ],
+  "models": [
+    {
+      "id": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+      "status": "active",
+      "supported_modes": ["chat"]
+    }
+  ]
+}

@@ -1,0 +1,165 @@
+{
+  "provider": "groq",
+  "last_verified_at": "2026-04-01",
+  "source_type": "official_docs",
+  "sources": [
+    {
+      "label": "Groq models",
+      "url": "https://console.groq.com/docs/models"
+    }
+  ],
+  "models": [
+    {
+      "id": "llama-3.1-8b-instant",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.00000005,
+        "output_cost_per_token": 0.00000008,
+        "max_tokens": 131072,
+        "max_output_tokens": 131072
+      }
+    },
+    {
+      "id": "llama-3.3-70b-versatile",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.00000059,
+        "output_cost_per_token": 0.00000079,
+        "max_tokens": 131072,
+        "max_output_tokens": 32768
+      }
+    },
+    {
+      "id": "openai/gpt-oss-120b",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.00000015,
+        "output_cost_per_token": 0.0000006,
+        "max_tokens": 131072,
+        "max_output_tokens": 65536
+      }
+    },
+    {
+      "id": "openai/gpt-oss-20b",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.000000075,
+        "output_cost_per_token": 0.0000003,
+        "max_tokens": 131072,
+        "max_output_tokens": 65536
+      }
+    },
+    {
+      "id": "groq/compound",
+      "status": "active",
+      "supported_modes": ["chat"]
+    },
+    {
+      "id": "groq/compound-mini",
+      "status": "active",
+      "supported_modes": ["chat"]
+    },
+    {
+      "id": "meta-llama/llama-4-scout-17b-16e-instruct",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.00000011,
+        "output_cost_per_token": 0.00000034,
+        "max_tokens": 131072,
+        "max_output_tokens": 8192
+      }
+    },
+    {
+      "id": "openai/gpt-oss-safeguard-20b",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.000000075,
+        "output_cost_per_token": 0.0000003,
+        "max_tokens": 131072,
+        "max_output_tokens": 65536
+      }
+    },
+    {
+      "id": "qwen/qwen3-32b",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.00000029,
+        "output_cost_per_token": 0.00000059,
+        "max_tokens": 131072,
+        "max_output_tokens": 40960
+      }
+    },
+    {
+      "id": "moonshotai/kimi-k2-instruct-0905",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000003,
+        "max_tokens": 262144,
+        "max_output_tokens": 16384
+      }
+    },
+    {
+      "id": "meta-llama/llama-prompt-guard-2-22m",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.00000003,
+        "output_cost_per_token": 0.00000003,
+        "max_tokens": 512,
+        "max_output_tokens": 512
+      }
+    },
+    {
+      "id": "meta-llama/llama-prompt-guard-2-86m",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.00000004,
+        "output_cost_per_token": 0.00000004,
+        "max_tokens": 512,
+        "max_output_tokens": 512
+      }
+    },
+    {
+      "id": "canopylabs/orpheus-arabic-saudi",
+      "status": "active",
+      "supported_modes": ["audio_speech"],
+      "metadata": {
+        "input_cost_per_character": 0.00004
+      }
+    },
+    {
+      "id": "canopylabs/orpheus-v1-english",
+      "status": "active",
+      "supported_modes": ["audio_speech"],
+      "metadata": {
+        "input_cost_per_character": 0.000022
+      }
+    },
+    {
+      "id": "whisper-large-v3",
+      "status": "active",
+      "supported_modes": ["audio_transcription"],
+      "metadata": {
+        "input_cost_per_second": 0.0000308333333333
+      }
+    },
+    {
+      "id": "whisper-large-v3-turbo",
+      "status": "active",
+      "supported_modes": ["audio_transcription"],
+      "metadata": {
+        "input_cost_per_second": 0.0000111111111111
+      }
+    }
+  ]
+}

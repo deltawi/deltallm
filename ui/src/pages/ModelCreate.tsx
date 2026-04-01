@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { models } from '../lib/api';
 import { modelDetailPath } from '../lib/modelRoutes';
-import ModelForm, { EMPTY_FORM, buildModelPayload } from '../components/ModelForm';
+import ModelForm from '../components/ModelForm';
+import { EMPTY_FORM, type ModelPayload } from '../components/modelFormShared';
 import { ArrowLeft } from 'lucide-react';
 
 export default function ModelCreate() {
@@ -10,7 +11,7 @@ export default function ModelCreate() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const handleSubmit = async (payload: ReturnType<typeof buildModelPayload>) => {
+  const handleSubmit = async (payload: ModelPayload) => {
     setError(null);
     setSaving(true);
     try {

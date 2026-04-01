@@ -1,0 +1,18 @@
+{
+  "provider": "fireworks",
+  "last_verified_at": "2026-04-01",
+  "source_type": "official_docs",
+  "sources": [
+    {
+      "label": "Fireworks model example",
+      "url": "https://fireworks.ai/"
+    }
+  ],
+  "models": [
+    {
+      "id": "accounts/fireworks/models/llama-v3p1-405b-instruct",
+      "status": "active",
+      "supported_modes": ["chat"]
+    }
+  ]
+}

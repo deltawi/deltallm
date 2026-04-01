@@ -46,3 +46,6 @@ package-dir = {"" = "."}
 
 [tool.setuptools.packages.find]
 include = ["src*"]
+
+[tool.setuptools.package-data]
+"src.providers.catalogs" = ["*.json"]
