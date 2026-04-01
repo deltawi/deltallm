@@ -9,7 +9,7 @@ import DataTable from '../components/DataTable';
 import ProviderBadge from '../components/ProviderBadge';
 import StatusBadge from '../components/StatusBadge';
 import { ContentCard, IndexShell } from '../components/admin/shells';
-import { MODE_OPTIONS, MODE_BADGE_COLORS } from '../components/ModelForm';
+import { MODE_OPTIONS, MODE_BADGE_COLORS } from '../components/modelFormShared';
 import { Box, Plus, Pencil, Search, Trash2 } from 'lucide-react';
 
 export default function Models() {

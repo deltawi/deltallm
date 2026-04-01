@@ -22,7 +22,7 @@ import { useAuth } from '../lib/auth';
 import { ApiError, models, type DeploymentHealth } from '../lib/api';
 import { modelEditPath } from '../lib/modelRoutes';
 import ModelUsageExamplesCard from '../components/ModelUsageExamplesCard';
-import { MODE_OPTIONS } from '../components/ModelForm';
+import { MODE_OPTIONS } from '../components/modelFormShared';
 import { HeroTabbedDetailShell, IconTabs, InlineStat, PanelCard } from '../components/admin/shells';
 
 // ─── Constants ────────────────────────────────────────────────────────────────

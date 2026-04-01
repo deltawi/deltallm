@@ -66,6 +66,7 @@ These endpoints back browser login, invitation acceptance, password recovery, MF
 | `PUT` | `/ui/api/models/{deployment_id}` | Update a deployment |
 | `DELETE` | `/ui/api/models/{deployment_id}` | Delete a deployment |
 | `GET` | `/ui/api/provider-presets` | List provider presets for the UI |
+| `POST` | `/ui/api/provider-models/discover` | Discover provider model suggestions for the UI |
 
 ### Route Groups
 

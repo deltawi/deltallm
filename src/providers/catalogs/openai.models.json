@@ -1,0 +1,231 @@
+{
+  "provider": "openai",
+  "last_verified_at": "2026-04-01",
+  "source_type": "official_docs",
+  "sources": [
+    {
+      "label": "OpenAI compare models",
+      "url": "https://developers.openai.com/api/docs/models/compare"
+    },
+    {
+      "label": "OpenAI GPT Image 1.5 model page",
+      "url": "https://developers.openai.com/api/docs/models/gpt-image-1.5"
+    }
+  ],
+  "models": [
+    {
+      "id": "gpt-5.4",
+      "label": "GPT-5.4",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.0000025,
+        "output_cost_per_token": 0.000015,
+        "input_cost_per_token_cache_hit": 0.00000025,
+        "max_tokens": 1050000,
+        "max_output_tokens": 128000
+      }
+    },
+    {
+      "id": "gpt-5.4-mini",
+      "label": "GPT-5.4 mini",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.00000075,
+        "output_cost_per_token": 0.0000045,
+        "input_cost_per_token_cache_hit": 0.00000008,
+        "max_tokens": 400000,
+        "max_output_tokens": 128000
+      }
+    },
+    {
+      "id": "gpt-5.4-nano",
+      "label": "GPT-5.4 nano",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.00000125,
+        "input_cost_per_token_cache_hit": 0.00000002,
+        "max_tokens": 400000,
+        "max_output_tokens": 128000
+      }
+    },
+    {
+      "id": "gpt-5",
+      "label": "GPT-5",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.00000125,
+        "output_cost_per_token": 0.00001,
+        "input_cost_per_token_cache_hit": 0.000000125,
+        "max_tokens": 400000,
+        "max_output_tokens": 128000
+      }
+    },
+    {
+      "id": "gpt-5-mini",
+      "label": "GPT-5 mini",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.00000025,
+        "output_cost_per_token": 0.000002,
+        "input_cost_per_token_cache_hit": 0.000000025,
+        "max_tokens": 400000,
+        "max_output_tokens": 128000
+      }
+    },
+    {
+      "id": "gpt-5-nano",
+      "label": "GPT-5 nano",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.00000005,
+        "output_cost_per_token": 0.0000004,
+        "input_cost_per_token_cache_hit": 0.000000005,
+        "max_tokens": 400000,
+        "max_output_tokens": 128000
+      }
+    },
+    {
+      "id": "gpt-4.1",
+      "label": "GPT-4.1",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000008,
+        "input_cost_per_token_cache_hit": 0.0000005,
+        "max_tokens": 1047576,
+        "max_output_tokens": 32768
+      }
+    },
+    {
+      "id": "gpt-4.1-mini",
+      "label": "GPT-4.1 mini",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.0000004,
+        "output_cost_per_token": 0.0000016,
+        "input_cost_per_token_cache_hit": 0.0000001,
+        "max_tokens": 1047576,
+        "max_output_tokens": 32768
+      }
+    },
+    {
+      "id": "gpt-4o",
+      "label": "GPT-4o",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.0000025,
+        "output_cost_per_token": 0.00001,
+        "input_cost_per_token_cache_hit": 0.00000125,
+        "max_tokens": 128000,
+        "max_output_tokens": 16384
+      }
+    },
+    {
+      "id": "gpt-4o-mini",
+      "label": "GPT-4o mini",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.00000015,
+        "output_cost_per_token": 0.0000006,
+        "input_cost_per_token_cache_hit": 0.000000075,
+        "max_tokens": 128000,
+        "max_output_tokens": 16384
+      }
+    },
+    {
+      "id": "gpt-4",
+      "label": "GPT-4",
+      "status": "legacy",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.00003,
+        "output_cost_per_token": 0.00006,
+        "max_tokens": 8192,
+        "max_output_tokens": 8192
+      }
+    },
+    {
+      "id": "text-embedding-3-small",
+      "label": "text-embedding-3-small",
+      "status": "active",
+      "supported_modes": ["embedding"],
+      "metadata": {
+        "input_cost_per_token": 0.00000002
+      }
+    },
+    {
+      "id": "text-embedding-3-large",
+      "label": "text-embedding-3-large",
+      "status": "active",
+      "supported_modes": ["embedding"],
+      "metadata": {
+        "input_cost_per_token": 0.00000013
+      }
+    },
+    {
+      "id": "gpt-image-1.5",
+      "label": "GPT Image 1.5",
+      "status": "active",
+      "supported_modes": ["image_generation"]
+    },
+    {
+      "id": "gpt-image-1-mini",
+      "label": "GPT Image 1 mini",
+      "status": "active",
+      "supported_modes": ["image_generation"]
+    },
+    {
+      "id": "gpt-image-1",
+      "label": "GPT Image 1",
+      "status": "active",
+      "supported_modes": ["image_generation"]
+    },
+    {
+      "id": "dall-e-3",
+      "label": "DALL-E 3",
+      "status": "legacy",
+      "supported_modes": ["image_generation"]
+    },
+    {
+      "id": "tts-1",
+      "label": "tts-1",
+      "status": "active",
+      "supported_modes": ["audio_speech"]
+    },
+    {
+      "id": "tts-1-hd",
+      "label": "tts-1-hd",
+      "status": "active",
+      "supported_modes": ["audio_speech"]
+    },
+    {
+      "id": "gpt-4o-transcribe",
+      "label": "GPT-4o transcribe",
+      "status": "active",
+      "supported_modes": ["audio_transcription"]
+    },
+    {
+      "id": "gpt-4o-mini-transcribe",
+      "label": "GPT-4o mini transcribe",
+      "status": "active",
+      "supported_modes": ["audio_transcription"]
+    },
+    {
+      "id": "whisper-1",
+      "label": "whisper-1",
+      "status": "legacy",
+      "supported_modes": ["audio_transcription"]
+    }
+  ]
+}

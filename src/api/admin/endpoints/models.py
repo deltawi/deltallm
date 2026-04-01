@@ -5,18 +5,29 @@ import secrets
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel
 
 from src.api.admin.endpoints.common import model_entries
 from src.api.audit import emit_control_audit_event
 from src.audit.actions import AuditAction
+from src.config import ModelMode
 from src.config_runtime.models import ModelHotReloadManager
 from src.middleware.admin import require_authenticated, require_master_key
 from src.providers.healthcheck import probe_provider_health
+from src.providers.model_discovery import discover_provider_models
 from src.providers.resolution import provider_presets, validate_provider_mode_compatibility
 from src.router import build_deployment_registry
 from src.services.model_deployments import DuplicateModelNameError, ensure_model_name_available
 
 router = APIRouter(tags=["Models"])
+
+
+class ProviderModelDiscoveryRequest(BaseModel):
+    provider: str
+    mode: ModelMode | None = None
+    api_key: str | None = None
+    api_base: str | None = None
+    api_version: str | None = None
 
 
 def _find_runtime_deployment(app: Any, deployment_id: str) -> Any | None:
@@ -276,6 +287,19 @@ async def provider_health_summary(request: Request) -> dict[str, Any]:
 @router.get("/ui/api/provider-presets", dependencies=[Depends(require_authenticated)])
 async def list_provider_presets() -> dict[str, Any]:
     return {"data": provider_presets()}
+
+
+@router.post("/ui/api/provider-models/discover", dependencies=[Depends(require_authenticated)])
+async def discover_models_for_provider(request: Request, payload: ProviderModelDiscoveryRequest) -> dict[str, Any]:
+    return await discover_provider_models(
+        request.app.state.http_client,
+        provider=payload.provider,
+        mode=payload.mode,
+        api_key=payload.api_key,
+        api_base=payload.api_base,
+        api_version=payload.api_version,
+        default_openai_base_url=getattr(request.app.state.settings, "openai_base_url", "https://api.openai.com/v1"),
+    )
 
 
 @router.get("/ui/api/models/{deployment_id:path}", dependencies=[Depends(require_authenticated)])

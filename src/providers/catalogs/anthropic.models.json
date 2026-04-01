@@ -1,0 +1,50 @@
+{
+  "provider": "anthropic",
+  "last_verified_at": "2026-04-01",
+  "source_type": "official_docs",
+  "sources": [
+    {
+      "label": "Anthropic models overview",
+      "url": "https://platform.claude.com/docs/en/about-claude/models/overview"
+    }
+  ],
+  "models": [
+    {
+      "id": "claude-opus-4-6",
+      "label": "Claude Opus 4.6",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.000005,
+        "output_cost_per_token": 0.000025,
+        "max_tokens": 200000,
+        "max_output_tokens": 128000
+      }
+    },
+    {
+      "id": "claude-sonnet-4-6",
+      "label": "Claude Sonnet 4.6",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "metadata": {
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000015,
+        "max_tokens": 200000,
+        "max_output_tokens": 64000
+      }
+    },
+    {
+      "id": "claude-haiku-4-5",
+      "label": "Claude Haiku 4.5",
+      "status": "active",
+      "supported_modes": ["chat"],
+      "aliases": ["claude-haiku-4-5-20251001"],
+      "metadata": {
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000005,
+        "max_tokens": 200000,
+        "max_output_tokens": 64000
+      }
+    }
+  ]
+}

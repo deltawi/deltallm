@@ -487,6 +487,28 @@ export interface ProviderPreset {
   supported_modes: string[];
 }
 
+export interface ProviderModelOption {
+  id: string;
+  label: string;
+  provider: string;
+  source: 'catalog' | 'provider_api' | 'catalog+provider_api';
+  supported_modes: string[];
+  known_metadata: Record<string, number | null> | null;
+}
+
+export interface ProviderModelDiscoveryPayload {
+  provider: string;
+  mode?: string | null;
+  api_key?: string | null;
+  api_base?: string | null;
+  api_version?: string | null;
+}
+
+export interface ProviderModelDiscoveryResponse {
+  data: ProviderModelOption[];
+  warnings: string[];
+}
+
 export interface DeploymentHealth {
   healthy: boolean;
   in_cooldown: boolean;
@@ -638,6 +660,8 @@ export const models = {
     apiFetch<Paginated<any>>(withQuery('/ui/api/models', params as any)),
   providerHealthSummary: () => apiFetch<ProviderHealthSummary>('/ui/api/models/provider-health-summary'),
   providerPresets: () => apiFetch<{ data: ProviderPreset[] }>('/ui/api/provider-presets'),
+  discoverProviderModels: (payload: ProviderModelDiscoveryPayload) =>
+    apiFetch<ProviderModelDiscoveryResponse>('/ui/api/provider-models/discover', { method: 'POST', json: payload }),
   get: (deploymentId: string) => apiFetch<ModelDeploymentDetail>(`/ui/api/models/${encodeURIComponent(deploymentId)}`),
   checkHealth: (deploymentId: string) =>
     apiFetch<{ deployment_id: string; healthy: boolean; health: DeploymentHealth; message: string; status_code?: number | null; checked_at: number }>(

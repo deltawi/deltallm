@@ -1,0 +1,121 @@
+{
+  "provider": "gemini",
+  "last_verified_at": "2026-04-01",
+  "source_type": "official_docs",
+  "sources": [
+    {
+      "label": "Gemini models",
+      "url": "https://ai.google.dev/gemini-api/docs/models"
+    },
+    {
+      "label": "Gemini embeddings",
+      "url": "https://ai.google.dev/gemini-api/docs/embeddings"
+    }
+  ],
+  "models": [
+    {
+      "id": "gemini-3.1-pro-preview",
+      "status": "preview",
+      "supported_modes": ["chat"]
+    },
+    {
+      "id": "gemini-3-flash-preview",
+      "status": "preview",
+      "supported_modes": ["chat"]
+    },
+    {
+      "id": "gemini-3.1-flash-lite-preview",
+      "status": "preview",
+      "supported_modes": ["chat"]
+    },
+    {
+      "id": "gemini-2.5-pro",
+      "status": "active",
+      "supported_modes": ["chat"]
+    },
+    {
+      "id": "gemini-2.5-flash",
+      "status": "active",
+      "supported_modes": ["chat"]
+    },
+    {
+      "id": "gemini-2.5-flash-preview-09-2025",
+      "status": "preview",
+      "supported_modes": ["chat"]
+    },
+    {
+      "id": "gemini-2.5-flash-lite",
+      "status": "active",
+      "supported_modes": ["chat"]
+    },
+    {
+      "id": "gemini-2.5-flash-lite-preview-09-2025",
+      "status": "preview",
+      "supported_modes": ["chat"]
+    },
+    {
+      "id": "gemini-2.0-flash",
+      "status": "active",
+      "supported_modes": ["chat"]
+    },
+    {
+      "id": "gemini-2.0-flash-001",
+      "status": "active",
+      "supported_modes": ["chat"]
+    },
+    {
+      "id": "gemini-2.0-flash-exp",
+      "status": "preview",
+      "supported_modes": ["chat"]
+    },
+    {
+      "id": "gemini-2.0-flash-lite",
+      "status": "active",
+      "supported_modes": ["chat"]
+    },
+    {
+      "id": "gemini-2.0-flash-lite-001",
+      "status": "active",
+      "supported_modes": ["chat"]
+    },
+    {
+      "id": "gemini-3.1-flash-image-preview",
+      "status": "preview",
+      "supported_modes": ["image_generation"]
+    },
+    {
+      "id": "gemini-3-pro-image-preview",
+      "status": "preview",
+      "supported_modes": ["image_generation"]
+    },
+    {
+      "id": "gemini-2.5-flash-image",
+      "status": "active",
+      "supported_modes": ["image_generation"]
+    },
+    {
+      "id": "gemini-2.0-flash-preview-image-generation",
+      "status": "preview",
+      "supported_modes": ["image_generation"]
+    },
+    {
+      "id": "gemini-2.5-flash-preview-tts",
+      "status": "preview",
+      "supported_modes": ["audio_speech"]
+    },
+    {
+      "id": "gemini-2.5-pro-preview-tts",
+      "status": "preview",
+      "supported_modes": ["audio_speech"]
+    },
+    {
+      "id": "gemini-embedding-001",
+      "status": "active",
+      "supported_modes": ["embedding"],
+      "metadata": {
+        "max_tokens": 2048,
+        "output_vector_size": 3072
+      }
+    }
+  ]
+}

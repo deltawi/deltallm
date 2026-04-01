@@ -3,7 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { models } from '../lib/api';
 import { modelDetailPath } from '../lib/modelRoutes';
-import ModelForm, { formFromModel, buildModelPayload } from '../components/ModelForm';
+import ModelForm from '../components/ModelForm';
+import { formFromModel, type ModelPayload } from '../components/modelFormShared';
 import { ArrowLeft } from 'lucide-react';
 
 export default function ModelEdit() {
@@ -34,7 +35,7 @@ export default function ModelEdit() {
 
   const { form: initialValues, defaultParams: initialDefaultParams } = formFromModel(model);
 
-  const handleSubmit = async (payload: ReturnType<typeof buildModelPayload>) => {
+  const handleSubmit = async (payload: ModelPayload) => {
     setError(null);
     setSaving(true);
     try {
