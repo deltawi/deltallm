@@ -14,7 +14,7 @@ from src.services.asset_binding_mirror import (
     mirror_route_group_binding_to_callable_target,
     reload_callable_target_grants,
 )
-from src.api.admin.endpoints.common import emit_admin_mutation_audit, model_entries, to_json_value
+from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, model_entries, to_json_value
 from src.db.prompt_registry import PromptRegistryRepository
 from src.db.route_groups import RouteGroupRepository
 from src.middleware.admin import require_admin_permission
@@ -27,6 +27,7 @@ from src.services.asset_ownership import (
     public_metadata_without_owner_scope,
 )
 from src.services.asset_scopes import normalize_scope_type
+from src.services.organization_callable_target_sync import maybe_disable_organization_auto_follow_for_scope_mutation
 from src.services.prompt_registry import apply_route_preferences_to_metadata, parse_prompt_reference
 from src.services.route_groups import RouteGroupRuntimeCache
 
@@ -564,6 +565,12 @@ async def upsert_route_group_binding(request: Request, payload: dict[str, Any]) 
         enabled=enabled,
         metadata=metadata,
     )
+    if normalized_scope_type == "organization":
+        await maybe_disable_organization_auto_follow_for_scope_mutation(
+            db_or_503(request),
+            scope_type=normalized_scope_type,
+            scope_id=scope_id,
+        )
     await reload_callable_target_grants(request)
     response = _binding_response_payload(binding)
     await emit_admin_mutation_audit(
@@ -596,6 +603,12 @@ async def delete_route_group_binding(request: Request, binding_id: str) -> dict[
         scope_type=binding.scope_type,
         scope_id=binding.scope_id,
     )
+    if binding.scope_type == "organization":
+        await maybe_disable_organization_auto_follow_for_scope_mutation(
+            db_or_503(request),
+            scope_type=binding.scope_type,
+            scope_id=binding.scope_id,
+        )
     await reload_callable_target_grants(request)
     response = {"deleted": True, "route_group_binding_id": binding_id}
     await emit_admin_mutation_audit(

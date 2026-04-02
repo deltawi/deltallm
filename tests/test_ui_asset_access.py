@@ -6,13 +6,14 @@ import pytest
 
 from src.db.callable_target_policies import CallableTargetScopePolicyRecord
 from src.db.callable_targets import CallableTargetBindingRecord
+from src.db.route_groups import RouteGroupBindingRecord, RouteGroupRecord
 from src.services.callable_targets import CallableTarget
 
 
 class _FakeScopeDB:
     def __init__(self) -> None:
         self.organizations = {
-            "org-1": {"organization_id": "org-1"},
+            "org-1": {"organization_id": "org-1", "metadata": None},
         }
         self.teams = {
             "team-1": {
@@ -41,6 +42,8 @@ class _FakeScopeDB:
         if "FROM deltallm_organizationtable" in query and "WHERE organization_id = $1" in query:
             row = self.organizations.get(str(params[0]))
             return [row] if row else []
+        if "FROM deltallm_organizationtable" in query:
+            return list(self.organizations.values())
         if "FROM deltallm_teamtable" in query and "WHERE team_id = $1" in query:
             row = self.teams.get(str(params[0]))
             return [row] if row else []
@@ -48,6 +51,27 @@ class _FakeScopeDB:
             row = self.keys.get(str(params[0]))
             return [row] if row else []
         return []
+
+    async def execute_raw(self, query: str, *params):  # noqa: ANN201
+        if "UPDATE deltallm_organizationtable" in query and "metadata = $2::jsonb" in query:
+            row = self.organizations.get(str(params[0]))
+            if row is None:
+                return 0
+            row["metadata"] = params[1]
+            return 1
+        return 0
+
+    def tx(self):  # noqa: ANN201
+        db = self
+
+        class _TxContext:
+            async def __aenter__(self_inner):  # noqa: ANN202
+                return db
+
+            async def __aexit__(self_inner, exc_type, exc, tb):  # noqa: ANN202
+                return False
+
+        return _TxContext()
 
 
 class _FakeCallableTargetBindingRepository:
@@ -139,6 +163,76 @@ class _FakeGrantService:
         self.reloads += 1
 
 
+class _SharedRouteGroupState:
+    def __init__(self) -> None:
+        self.groups = {
+            "support-chat": RouteGroupRecord(
+                route_group_id="rg-1",
+                group_key="support-chat",
+                name="Support Chat",
+                mode="chat",
+                routing_strategy="weighted",
+                enabled=True,
+                metadata=None,
+                owner_scope_type="global",
+                owner_scope_id=None,
+            )
+        }
+        self.bindings: list[RouteGroupBindingRecord] = []
+
+
+class _CountingRouteGroupRepository:
+    def __init__(self, shared: _SharedRouteGroupState) -> None:
+        self.shared = shared
+        self.upsert_calls = 0
+        self.delete_calls = 0
+
+    async def get_group(self, group_key: str):  # noqa: ANN201
+        return self.shared.groups.get(group_key)
+
+    async def list_groups(self, *, limit=100, offset=0):  # noqa: ANN001, ANN201
+        items = list(self.shared.groups.values())[offset : offset + limit]
+        return items, len(self.shared.groups)
+
+    async def list_bindings(self, *, group_key=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+        items = list(self.shared.bindings)
+        if group_key:
+            items = [item for item in items if item.group_key == group_key]
+        if scope_type:
+            items = [item for item in items if item.scope_type == scope_type]
+        if scope_id:
+            items = [item for item in items if item.scope_id == scope_id]
+        page = items[offset : offset + limit]
+        return page, len(items)
+
+    async def upsert_binding(self, group_key: str, *, scope_type, scope_id, enabled, metadata):  # noqa: ANN001, ANN201
+        self.upsert_calls += 1
+        for index, item in enumerate(self.shared.bindings):
+            if item.group_key == group_key and item.scope_type == scope_type and item.scope_id == scope_id:
+                self.shared.bindings[index] = replace(item, enabled=enabled, metadata=metadata)
+                return self.shared.bindings[index]
+        group = self.shared.groups[group_key]
+        record = RouteGroupBindingRecord(
+            route_group_binding_id=f"rgb-{len(self.shared.bindings) + 1}",
+            route_group_id=group.route_group_id,
+            group_key=group_key,
+            scope_type=scope_type,
+            scope_id=scope_id,
+            enabled=enabled,
+            metadata=metadata,
+        )
+        self.shared.bindings.append(record)
+        return record
+
+    async def delete_binding(self, binding_id: str) -> bool:
+        self.delete_calls += 1
+        kept = [item for item in self.shared.bindings if item.route_group_binding_id != binding_id]
+        if len(kept) == len(self.shared.bindings):
+            return False
+        self.shared.bindings = kept
+        return True
+
+
 @pytest.mark.asyncio
 async def test_get_organization_asset_access_returns_selected_targets(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
@@ -167,9 +261,85 @@ async def test_get_organization_asset_access_returns_selected_targets(client, te
     assert response.status_code == 200
     payload = response.json()
     assert payload["mode"] == "grant"
+    assert payload["auto_follow_catalog"] is False
     assert payload["selected_callable_keys"] == ["gpt-4o-mini"]
     assert payload["summary"]["selectable_total"] == 2
     assert payload["summary"]["effective_total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_update_organization_asset_access_select_all_enables_auto_follow(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    scope_db = _FakeScopeDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": scope_db})()
+    binding_repository = _FakeCallableTargetBindingRepository()
+    grant_service = _FakeGrantService()
+    test_app.state.callable_target_binding_repository = binding_repository
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.callable_target_grant_service = grant_service
+    test_app.state.callable_target_catalog = {
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model"),
+        "support-chat": CallableTarget(key="support-chat", target_type="route_group"),
+    }
+
+    response = await client.put(
+        "/ui/api/organizations/org-1/asset-access",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"mode": "grant", "selected_callable_keys": [], "select_all_selectable": True},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["auto_follow_catalog"] is True
+    assert payload["selected_callable_keys"] == ["gpt-4o-mini", "support-chat"]
+    assert scope_db.organizations["org-1"]["metadata"] == {
+        "_callable_target_access": {"auto_follow_catalog": True}
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_organization_asset_access_uses_transaction_route_group_repository(client, test_app, monkeypatch) -> None:
+    from src.api.admin.endpoints import organizations as organizations_endpoints
+
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    scope_db = _FakeScopeDB()
+    shared_route_groups = _SharedRouteGroupState()
+    request_route_repo = _CountingRouteGroupRepository(shared_route_groups)
+    tx_route_repo = _CountingRouteGroupRepository(shared_route_groups)
+    binding_repository = _FakeCallableTargetBindingRepository()
+    grant_service = _FakeGrantService()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": scope_db})()
+    test_app.state.callable_target_binding_repository = binding_repository
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.callable_target_grant_service = grant_service
+    test_app.state.route_group_repository = request_route_repo
+    test_app.state.callable_target_catalog = {
+        "support-chat": CallableTarget(key="support-chat", target_type="route_group"),
+    }
+
+    def _route_group_repository_for_request(request, *, db_client=None):  # noqa: ANN001, ANN202
+        del request
+        return tx_route_repo if db_client is not None else request_route_repo
+
+    monkeypatch.setattr(
+        organizations_endpoints,
+        "_route_group_repository_for_request",
+        _route_group_repository_for_request,
+    )
+
+    response = await client.put(
+        "/ui/api/organizations/org-1/asset-access",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"mode": "grant", "selected_callable_keys": ["support-chat"]},
+    )
+
+    assert response.status_code == 200
+    assert tx_route_repo.upsert_calls == 1
+    assert request_route_repo.upsert_calls == 0
+    assert {
+        (binding.group_key, binding.scope_type, binding.scope_id)
+        for binding in shared_route_groups.bindings
+    } == {("support-chat", "organization", "org-1")}
 
 
 @pytest.mark.asyncio

@@ -531,9 +531,9 @@ export default function OrganizationCreate() {
                         />
                         <span>
                           <span className="block font-medium text-gray-900 text-xs">
-                            <Shield className="w-3 h-3 text-blue-600 inline mr-1" />Allow all
+                            <Shield className="w-3 h-3 text-blue-600 inline mr-1" />Allow all, including future additions
                           </span>
-                          <span className="block text-xs text-gray-500 mt-0.5">Grant every current model and route group.</span>
+                          <span className="block text-xs text-gray-500 mt-0.5">Grant every current asset now and automatically include newly added models and route groups.</span>
                         </span>
                       </div>
                     </label>
@@ -557,7 +557,7 @@ export default function OrganizationCreate() {
 
                   {selectAll ? (
                     <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-3 text-xs text-blue-800">
-                      Saving will grant every currently available model and route group to this organization.
+                      Saving will grant every currently available model and route group to this organization and automatically include future additions.
                     </div>
                   ) : (
                     <AssetAccessEditor
@@ -575,7 +575,7 @@ export default function OrganizationCreate() {
                       onTargetTypeFilterChange={(next) => { setAssetTargetType(next); setAssetPageOffset(0); }}
                       pagination={assetPagePagination}
                       onPageChange={setAssetPageOffset}
-                      primaryActionLabel="Allow all current assets"
+                      primaryActionLabel="Allow all assets"
                       onPrimaryAction={() => { setSelectAll(true); setSelectedKeys([]); }}
                       secondaryActionLabel={selectedKeys.length > 0 ? 'Clear selection' : undefined}
                       onSecondaryAction={selectedKeys.length > 0 ? () => setSelectedKeys([]) : undefined}

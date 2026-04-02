@@ -97,7 +97,7 @@ class _FakeMigrationDB:
 
 class _FakeScopeValidationDB:
     def __init__(self) -> None:
-        self.organizations = [{"organization_id": "org-1"}]
+        self.organizations = [{"organization_id": "org-1", "metadata": {"_callable_target_access": {"auto_follow_catalog": True}}}]
         self.teams = [{"team_id": "team-1", "organization_id": "org-1"}]
         self.keys = [{"token": "key-1", "team_id": "team-1", "organization_id": "org-1"}]
         self.users = [{"user_id": "user-1", "team_id": "team-1", "organization_id": "org-1"}]
@@ -115,7 +115,19 @@ class _FakeScopeValidationDB:
         if "FROM deltallm_usertable u" in query and "WHERE u.user_id = $1" in query:
             user_id = str(params[0])
             return [row for row in self.users if row["user_id"] == user_id]
+        if "FROM deltallm_organizationtable" in query:
+            return list(self.organizations)
         return []
+
+    async def execute_raw(self, query: str, *params):  # noqa: ANN201
+        if "UPDATE deltallm_organizationtable" in query and "metadata = $2::jsonb" in query:
+            organization_id = str(params[0])
+            for row in self.organizations:
+                if row["organization_id"] == organization_id:
+                    row["metadata"] = params[1]
+                    return 1
+            return 0
+        return 0
 
 
 class _FakeReadyMigrationDB(_FakeMigrationDB):
@@ -346,7 +358,8 @@ async def test_callable_target_binding_admin_lifecycle(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
     repo = _FakeCallableTargetBindingRepository()
     policy_repo = _FakeCallableTargetScopePolicyRepository()
-    test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeValidationDB()})()
+    scope_db = _FakeScopeValidationDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": scope_db})()
     test_app.state.callable_target_binding_repository = repo
     test_app.state.callable_target_scope_policy_repository = policy_repo
     test_app.state.callable_target_catalog = {
@@ -370,6 +383,7 @@ async def test_callable_target_binding_admin_lifecycle(client, test_app):
     payload = upsert.json()
     assert payload["callable_key"] == "support-fast"
     assert payload["scope_type"] == "organization"
+    assert scope_db.organizations[0]["metadata"] is None
 
     detail = await client.get("/ui/api/callable-targets/support-fast", headers=headers)
     assert detail.status_code == 200
@@ -384,12 +398,14 @@ async def test_callable_target_binding_admin_lifecycle(client, test_app):
     assert listing.status_code == 200
     assert listing.json()["pagination"]["total"] == 1
 
+    scope_db.organizations[0]["metadata"] = {"_callable_target_access": {"auto_follow_catalog": True}}
     delete = await client.delete(
         f"/ui/api/callable-target-bindings/{payload['callable_target_binding_id']}",
         headers=headers,
     )
     assert delete.status_code == 200
     assert delete.json()["deleted"] is True
+    assert scope_db.organizations[0]["metadata"] is None
 
 
 @pytest.mark.asyncio

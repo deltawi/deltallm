@@ -31,13 +31,17 @@ def callable_catalog(request: Request) -> dict[str, CallableTarget]:
 
 
 async def reload_callable_target_grants(request: Request) -> None:
-    invalidation = getattr(request.app.state, "governance_invalidation_service", None)
+    await reload_callable_target_grants_for_app(request.app)
+
+
+async def reload_callable_target_grants_for_app(app: Any) -> None:
+    invalidation = getattr(app.state, "governance_invalidation_service", None)
     if invalidation is not None and callable(getattr(invalidation, "invalidate_local", None)):
         await invalidation.invalidate_local("callable_target")
         if callable(getattr(invalidation, "notify", None)):
             await invalidation.notify("callable_target")
         return
-    service = getattr(request.app.state, "callable_target_grant_service", None)
+    service = getattr(app.state, "callable_target_grant_service", None)
     if service is None or not callable(getattr(service, "reload", None)):
         return
     await service.reload()

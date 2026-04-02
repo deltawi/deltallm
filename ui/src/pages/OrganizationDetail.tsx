@@ -151,9 +151,7 @@ export default function OrganizationDetail() {
     if (!isEditingAssets || !orgAssetAccess) return;
     setForm((c) => ({
       ...c,
-      select_all_current_assets:
-        orgAssetAccess.summary.selectable_total > 0 &&
-        orgAssetAccess.summary.selected_total === orgAssetAccess.summary.selectable_total,
+      select_all_current_assets: !!orgAssetAccess.auto_follow_catalog,
       selected_callable_keys: orgAssetAccess.selected_callable_keys || [],
     }));
   }, [isEditingAssets, orgAssetAccess]);
@@ -1092,8 +1090,8 @@ export default function OrganizationDetail() {
                           className="mt-0.5"
                         />
                         <span>
-                          <span className="block font-medium text-gray-900">Allow all current assets</span>
-                          <span className="block text-xs text-gray-500">Grant every current model and route group without loading the full catalog.</span>
+                          <span className="block font-medium text-gray-900">Allow all assets, including future additions</span>
+                          <span className="block text-xs text-gray-500">Grant every current asset now and automatically include newly added models and route groups.</span>
                         </span>
                       </div>
                     </label>
@@ -1117,8 +1115,8 @@ export default function OrganizationDetail() {
                   {form.select_all_current_assets ? (
                     <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-3 text-xs text-blue-800">
                       {orgAssetAccess
-                        ? `This organization currently has ${orgAssetAccess.summary.selected_total} of ${orgAssetAccess.summary.selectable_total} assets granted. Saving will align it to all current assets.`
-                        : 'Saving will grant every currently available model and route group to this organization.'}
+                        ? `This organization currently has ${orgAssetAccess.summary.selected_total} of ${orgAssetAccess.summary.selectable_total} assets granted. Saving will align it to all current assets and automatically include future additions.`
+                        : 'Saving will grant every currently available model and route group to this organization and automatically include future additions.'}
                     </div>
                   ) : (
                     <AssetAccessEditor
@@ -1136,7 +1134,7 @@ export default function OrganizationDetail() {
                       onTargetTypeFilterChange={(next) => { setAssetTargetType(next); setAssetPageOffset(0); }}
                       pagination={orgAssetPagination}
                       onPageChange={setAssetPageOffset}
-                      primaryActionLabel="Allow all current assets"
+                      primaryActionLabel="Allow all assets"
                       onPrimaryAction={() => setForm((c) => ({ ...c, select_all_current_assets: true, selected_callable_keys: [] }))}
                       secondaryActionLabel={form.selected_callable_keys.length > 0 ? 'Clear selection' : undefined}
                       onSecondaryAction={form.selected_callable_keys.length > 0 ? () => setForm((c) => ({ ...c, selected_callable_keys: [] })) : undefined}
