@@ -23,8 +23,9 @@ import * as M20 from "../components/mockups/org-team/OrganizationsList";
 import * as M21 from "../components/mockups/org-team/TeamCreateForm";
 import * as M22 from "../components/mockups/org-team/TeamDetail";
 import * as M23 from "../components/mockups/org-team/TeamsList";
-import * as M24 from "../components/mockups/sidebar-redesign/CleanLight";
-import * as M25 from "../components/mockups/sidebar-redesign/IconRail";
+import * as M24 from "../components/mockups/settings/SettingsRedesign";
+import * as M25 from "../components/mockups/sidebar-redesign/CleanLight";
+import * as M26 from "../components/mockups/sidebar-redesign/IconRail";
 
 export const mockupComponents = [
   { folder: "ai-gateway", name: "ModelDetailV2", previewPath: "/preview/ai-gateway/ModelDetailV2", module: M0 },
@@ -51,6 +52,7 @@ export const mockupComponents = [
   { folder: "org-team", name: "TeamCreateForm", previewPath: "/preview/org-team/TeamCreateForm", module: M21 },
   { folder: "org-team", name: "TeamDetail", previewPath: "/preview/org-team/TeamDetail", module: M22 },
   { folder: "org-team", name: "TeamsList", previewPath: "/preview/org-team/TeamsList", module: M23 },
-  { folder: "sidebar-redesign", name: "CleanLight", previewPath: "/preview/sidebar-redesign/CleanLight", module: M24 },
-  { folder: "sidebar-redesign", name: "IconRail", previewPath: "/preview/sidebar-redesign/IconRail", module: M25 },
+  { folder: "settings", name: "SettingsRedesign", previewPath: "/preview/settings/SettingsRedesign", module: M24 },
+  { folder: "sidebar-redesign", name: "CleanLight", previewPath: "/preview/sidebar-redesign/CleanLight", module: M25 },
+  { folder: "sidebar-redesign", name: "IconRail", previewPath: "/preview/sidebar-redesign/IconRail", module: M26 },
 ] as const;
