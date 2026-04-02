@@ -60,6 +60,17 @@ interface SpendLogsResponse {
   pagination: Pagination;
 }
 
+interface UsageRefreshSnapshot {
+  startDate: string;
+  endDate: string;
+  spendBy: SpendGroupBy;
+  spendSearch: string;
+  spendOffset: number;
+  logsOffset: number;
+}
+
+type RefreshStrategy = 'replace' | 'skip_if_busy';
+
 function fmt(n: number | null | undefined): string {
   if (n == null) return '$0.00';
   return `$${Number(n).toFixed(4)}`;
@@ -72,6 +83,10 @@ function fmtNum(n: number | null | undefined): string {
 
 function fmtDateTime(value: string | null | undefined): string {
   return value ? new Date(value).toLocaleString() : '—';
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
 }
 
 function prettyJson(value: Record<string, unknown> | null | undefined): string {
@@ -154,10 +169,12 @@ export default function Usage() {
   const [pageVisible, setPageVisible] = useState(() => (typeof document === 'undefined' ? true : document.visibilityState === 'visible'));
   const spendPageSize = 5;
   const logsPageSize = 25;
-  const refreshInFlightRef = useRef(false);
-  const pendingRefreshRef = useRef(false);
-  const pendingRefreshBackgroundRef = useRef(false);
-  const requestSequenceRef = useRef(0);
+  const activeControllerRef = useRef<AbortController | null>(null);
+  const latestRequestIdRef = useRef(0);
+  const mountedRef = useRef(true);
+  const previousPageVisibleRef = useRef(pageVisible);
+  const hasUsageData =
+    summary !== null || dailyReport !== null || spendGroupsData !== null || logsData !== null;
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -168,26 +185,35 @@ export default function Usage() {
   }, [spendSearchInput]);
 
   useEffect(() => {
-    setSpendOffset(0);
-  }, [spendBy, startDate, endDate]);
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      activeControllerRef.current?.abort();
+      activeControllerRef.current = null;
+    };
+  }, []);
 
-  useEffect(() => {
-    setLogsOffset(0);
-  }, [startDate, endDate]);
+  const buildRefreshSnapshot = useEffectEvent((): UsageRefreshSnapshot => ({
+    startDate,
+    endDate,
+    spendBy,
+    spendSearch,
+    spendOffset,
+    logsOffset,
+  }));
 
-  const refreshUsageData = useEffectEvent(async (background: boolean) => {
-    if (refreshInFlightRef.current) {
-      pendingRefreshRef.current = true;
-      pendingRefreshBackgroundRef.current = pendingRefreshBackgroundRef.current || background;
+  const runRefresh = useEffectEvent(async (snapshot: UsageRefreshSnapshot, strategy: RefreshStrategy) => {
+    if (strategy === 'skip_if_busy' && activeControllerRef.current) {
       return;
     }
 
-    refreshInFlightRef.current = true;
-    const requestId = ++requestSequenceRef.current;
-    const hasData =
-      summary !== null || dailyReport !== null || spendGroupsData !== null || logsData !== null;
+    activeControllerRef.current?.abort();
+    const controller = new AbortController();
+    activeControllerRef.current = controller;
+    const requestId = latestRequestIdRef.current + 1;
+    latestRequestIdRef.current = requestId;
 
-    if (hasData) {
+    if (hasUsageData) {
       setBackgroundRefreshing(true);
     } else {
       setInitialLoading(true);
@@ -197,25 +223,25 @@ export default function Usage() {
     try {
       const logsParams: Record<string, string> = {
         limit: String(logsPageSize),
-        offset: String(logsOffset),
+        offset: String(snapshot.logsOffset),
       };
-      if (startDate) logsParams.start_date = startDate;
-      if (endDate) logsParams.end_date = endDate;
+      if (snapshot.startDate) logsParams.start_date = snapshot.startDate;
+      if (snapshot.endDate) logsParams.end_date = snapshot.endDate;
 
       const [nextSummary, nextDailyReport, nextSpendGroupsData, nextLogsData] = await Promise.all([
-        spend.summary(startDate, endDate),
-        spend.report('day', startDate, endDate) as Promise<SpendDayReport>,
-        spend.groupedReport(spendBy, {
-          start_date: startDate || undefined,
-          end_date: endDate || undefined,
-          search: spendSearch || undefined,
+        spend.summary(snapshot.startDate, snapshot.endDate, { signal: controller.signal }),
+        spend.report('day', snapshot.startDate, snapshot.endDate, { signal: controller.signal }) as Promise<SpendDayReport>,
+        spend.groupedReport(snapshot.spendBy, {
+          start_date: snapshot.startDate || undefined,
+          end_date: snapshot.endDate || undefined,
+          search: snapshot.spendSearch || undefined,
           limit: spendPageSize,
-          offset: spendOffset,
-        }),
-        spend.logs(logsParams),
+          offset: snapshot.spendOffset,
+        }, { signal: controller.signal }),
+        spend.logs(logsParams, { signal: controller.signal }),
       ]);
 
-      if (requestId !== requestSequenceRef.current) {
+      if (!mountedRef.current || controller.signal.aborted || requestId !== latestRequestIdRef.current) {
         return;
       }
 
@@ -225,25 +251,43 @@ export default function Usage() {
       setLogsData(nextLogsData);
       setLastRefreshedAt(Date.now());
     } catch (error) {
-      if (requestId === requestSequenceRef.current) {
+      if (controller.signal.aborted || isAbortError(error)) {
+        return;
+      }
+      if (mountedRef.current && requestId === latestRequestIdRef.current) {
         setRefreshError(error instanceof Error ? error.message : 'Refresh failed');
       }
     } finally {
-      if (requestId === requestSequenceRef.current) {
+      if (activeControllerRef.current === controller) {
+        activeControllerRef.current = null;
+      }
+      if (
+        mountedRef.current &&
+        requestId === latestRequestIdRef.current &&
+        activeControllerRef.current === null
+      ) {
         setInitialLoading(false);
         setBackgroundRefreshing(false);
       }
-
-      refreshInFlightRef.current = false;
-
-      if (pendingRefreshRef.current) {
-        const pendingBackground = pendingRefreshBackgroundRef.current;
-        pendingRefreshRef.current = false;
-        pendingRefreshBackgroundRef.current = false;
-        void refreshUsageData(pendingBackground);
-      }
     }
   });
+
+  const handleStartDateChange = (value: string) => {
+    setStartDate(value);
+    setSpendOffset(0);
+    setLogsOffset(0);
+  };
+
+  const handleEndDateChange = (value: string) => {
+    setEndDate(value);
+    setSpendOffset(0);
+    setLogsOffset(0);
+  };
+
+  const handleSpendByChange = (value: SpendGroupBy) => {
+    setSpendBy(value);
+    setSpendOffset(0);
+  };
 
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -256,22 +300,38 @@ export default function Usage() {
   }, []);
 
   useEffect(() => {
-    void refreshUsageData(false);
+    if (!pageVisible) {
+      return;
+    }
+    void runRefresh(buildRefreshSnapshot(), 'replace');
   }, [startDate, endDate, spendBy, spendSearch, spendOffset, logsOffset]);
+
+  useEffect(() => {
+    const wasVisible = previousPageVisibleRef.current;
+    previousPageVisibleRef.current = pageVisible;
+    if (!pageVisible) {
+      activeControllerRef.current?.abort();
+      return;
+    }
+    if (wasVisible || (autoRefreshMs === 0 && hasUsageData)) {
+      return;
+    }
+    void runRefresh(buildRefreshSnapshot(), 'replace');
+  }, [pageVisible, autoRefreshMs, hasUsageData]);
 
   useEffect(() => {
     if (!pageVisible || autoRefreshMs === 0) {
       return;
     }
-    void refreshUsageData(true);
-  }, [pageVisible, autoRefreshMs]);
+    void runRefresh(buildRefreshSnapshot(), 'replace');
+  }, [autoRefreshMs]);
 
   useEffect(() => {
     if (!pageVisible || autoRefreshMs === 0) {
       return;
     }
     const timer = window.setInterval(() => {
-      void refreshUsageData(true);
+      void runRefresh(buildRefreshSnapshot(), 'skip_if_busy');
     }, autoRefreshMs);
     return () => {
       window.clearInterval(timer);
@@ -352,7 +412,7 @@ export default function Usage() {
             <input
               type="date"
               value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
+              onChange={(e) => handleStartDateChange(e.target.value)}
               className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               aria-label="Start date"
             />
@@ -360,7 +420,7 @@ export default function Usage() {
             <input
               type="date"
               value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
+              onChange={(e) => handleEndDateChange(e.target.value)}
               className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               aria-label="End date"
             />
@@ -424,7 +484,7 @@ export default function Usage() {
                 {SPEND_GROUP_OPTIONS.map((option) => (
                   <button
                     key={option.value}
-                    onClick={() => setSpendBy(option.value)}
+                    onClick={() => handleSpendByChange(option.value)}
                     className={`rounded-md px-3 py-2 text-sm transition-colors ${
                       spendBy === option.value ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
                     }`}
