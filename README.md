@@ -25,7 +25,7 @@ That's it. Your existing code works unchanged — now with routing, spend tracki
 
 Manage all your model deployments, API keys, teams, and usage from a clean web interface:
 
-[](./docs/admin-ui/images/models-list.png)
+![](./docs/admin-ui/images/models-list.png)
 
 ## Key Features
 
