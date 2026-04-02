@@ -11,6 +11,7 @@ from src.services.asset_binding_mirror import (
     callable_target_binding_repository,
     delete_route_group_binding_mirror,
     list_all_callable_target_bindings,
+    list_all_route_group_bindings,
     mirror_callable_target_binding_to_route_group,
     reload_callable_target_grants,
 )
@@ -205,6 +206,47 @@ async def apply_scope_asset_access(
     user_id: str | None = None,
     select_all_selectable: bool = False,
 ) -> dict[str, Any]:
+    await sync_scope_asset_access_state(
+        request,
+        scope_type=scope_type,
+        scope_id=scope_id,
+        organization_id=organization_id,
+        mode=mode,
+        selected_callable_keys=selected_callable_keys,
+        team_id=team_id,
+        api_key_id=api_key_id,
+        user_id=user_id,
+        select_all_selectable=select_all_selectable,
+    )
+
+    return await build_scope_asset_access(
+        request,
+        scope_type=_normalize_scope_type(scope_type),
+        scope_id=scope_id,
+        organization_id=organization_id,
+        team_id=team_id,
+        api_key_id=api_key_id,
+        user_id=user_id,
+    )
+
+
+async def sync_scope_asset_access_state(
+    request: Request,
+    *,
+    scope_type: str,
+    scope_id: str,
+    organization_id: str,
+    mode: str | None,
+    selected_callable_keys: list[str],
+    team_id: str | None = None,
+    api_key_id: str | None = None,
+    user_id: str | None = None,
+    select_all_selectable: bool = False,
+    binding_repository: CallableTargetBindingRepository | None = None,
+    policy_repository: CallableTargetScopePolicyRepository | None = None,
+    route_group_repository: Any | None = None,
+    reload_after_write: bool = True,
+) -> None:
     normalized_scope_type = _normalize_scope_type(scope_type)
     normalized_mode = _normalize_mode(normalized_scope_type, mode)
     normalized_selected = _normalize_selected_callable_keys(selected_callable_keys)
@@ -245,7 +287,7 @@ async def apply_scope_asset_access(
             detail="selected_callable_keys must be empty when mode is inherit",
         )
 
-    repository = _binding_repository_or_503(request)
+    repository = binding_repository or _binding_repository_or_503(request)
     await _sync_scope_bindings(
         request,
         repository=repository,
@@ -253,24 +295,17 @@ async def apply_scope_asset_access(
         scope_id=scope_id,
         selected_callable_keys=normalized_selected if normalized_mode != "inherit" else [],
         catalog=catalog,
+        route_group_repository=route_group_repository,
     )
     await _sync_scope_policy(
         request,
         scope_type=normalized_scope_type,
         scope_id=scope_id,
         mode=normalized_mode,
+        policy_repository=policy_repository,
     )
-    await reload_callable_target_grants(request)
-
-    return await build_scope_asset_access(
-        request,
-        scope_type=normalized_scope_type,
-        scope_id=scope_id,
-        organization_id=organization_id,
-        team_id=team_id,
-        api_key_id=api_key_id,
-        user_id=user_id,
-    )
+    if reload_after_write:
+        await reload_callable_target_grants(request)
 
 
 async def _resolved_mode(request: Request, *, scope_type: str, scope_id: str) -> str:
@@ -419,6 +454,7 @@ async def _sync_scope_bindings(
     scope_id: str,
     selected_callable_keys: list[str],
     catalog: dict[str, CallableTarget],
+    route_group_repository: Any | None = None,
 ) -> None:
     selected_set = set(selected_callable_keys)
     existing = await list_all_callable_target_bindings(
@@ -440,14 +476,24 @@ async def _sync_scope_bindings(
         )
         target = catalog.get(callable_key)
         if target is not None and target.target_type == "route_group":
-            await mirror_callable_target_binding_to_route_group(
-                request,
-                callable_key=callable_key,
-                scope_type=scope_type,
-                scope_id=scope_id,
-                enabled=True,
-                metadata=metadata,
-            )
+            if route_group_repository is not None:
+                if await route_group_repository.get_group(callable_key) is not None:
+                    await route_group_repository.upsert_binding(
+                        callable_key,
+                        scope_type=scope_type,
+                        scope_id=scope_id,
+                        enabled=True,
+                        metadata=metadata,
+                    )
+            else:
+                await mirror_callable_target_binding_to_route_group(
+                    request,
+                    callable_key=callable_key,
+                    scope_type=scope_type,
+                    scope_id=scope_id,
+                    enabled=True,
+                    metadata=metadata,
+                )
 
     for callable_key, binding in existing_by_key.items():
         if callable_key in selected_set:
@@ -455,12 +501,22 @@ async def _sync_scope_bindings(
         await repository.delete_binding(binding.callable_target_binding_id)
         target = catalog.get(callable_key)
         if target is not None and target.target_type == "route_group":
-            await delete_route_group_binding_mirror(
-                request,
-                group_key=callable_key,
-                scope_type=scope_type,
-                scope_id=scope_id,
-            )
+            if route_group_repository is not None:
+                bindings = await list_all_route_group_bindings(
+                    route_group_repository,
+                    group_key=callable_key,
+                    scope_type=scope_type,
+                    scope_id=scope_id,
+                )
+                for route_group_binding in bindings:
+                    await route_group_repository.delete_binding(route_group_binding.route_group_binding_id)
+            else:
+                await delete_route_group_binding_mirror(
+                    request,
+                    group_key=callable_key,
+                    scope_type=scope_type,
+                    scope_id=scope_id,
+                )
 
 
 async def _sync_scope_policy(
@@ -469,10 +525,11 @@ async def _sync_scope_policy(
     scope_type: str,
     scope_id: str,
     mode: str,
+    policy_repository: CallableTargetScopePolicyRepository | None = None,
 ) -> None:
     if scope_type not in _SCOPES_WITH_POLICY:
         return
-    repository = _policy_repository_or_503(request)
+    repository = policy_repository or _policy_repository_or_503(request)
     if mode == "restrict":
         await repository.upsert_policy(
             scope_type=scope_type,

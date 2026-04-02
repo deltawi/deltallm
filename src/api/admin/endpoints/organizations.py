@@ -34,7 +34,13 @@ from src.services.asset_visibility_preview import (
     build_asset_visibility_preview,
     list_scope_route_group_bindings,
 )
-from src.services.scoped_asset_access import apply_scope_asset_access, build_scope_asset_access
+from src.services.organization_callable_target_sync import (
+    get_organization_auto_follow_catalog,
+    organization_auto_follow_catalog,
+    set_organization_auto_follow_catalog,
+    with_organization_auto_follow_catalog,
+)
+from src.services.scoped_asset_access import build_scope_asset_access, sync_scope_asset_access_state
 from src.services.ui_authorization import build_organization_capabilities
 
 router = APIRouter(tags=["Admin Organizations"])
@@ -559,13 +565,15 @@ async def get_organization_asset_access(
     )
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
-    return await build_scope_asset_access(
+    response = await build_scope_asset_access(
         request,
         scope_type="organization",
         scope_id=organization_id,
         organization_id=organization_id,
         include_targets=include_targets,
     )
+    response["auto_follow_catalog"] = await get_organization_auto_follow_catalog(db, organization_id)
+    return response
 
 
 @router.put("/ui/api/organizations/{organization_id}/asset-access", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
@@ -587,15 +595,47 @@ async def update_organization_asset_access(
     )
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
-    response = await apply_scope_asset_access(
+    auto_follow_catalog = bool(payload.get("select_all_selectable", False))
+    async def _apply_asset_access(db_client: Any, *, callable_repository, route_repository) -> None:  # noqa: ANN001, ANN202
+        await sync_scope_asset_access_state(
+            request,
+            scope_type="organization",
+            scope_id=organization_id,
+            organization_id=organization_id,
+            mode=payload.get("mode"),
+            selected_callable_keys=payload.get("selected_callable_keys", []),
+            select_all_selectable=auto_follow_catalog,
+            binding_repository=callable_repository,
+            route_group_repository=route_repository,
+            reload_after_write=False,
+        )
+        await set_organization_auto_follow_catalog(
+            db_client,
+            organization_id,
+            enabled=auto_follow_catalog,
+        )
+
+    if hasattr(db, "tx"):
+        async with db.tx() as tx:
+            await _apply_asset_access(
+                tx,
+                callable_repository=_callable_target_binding_repository_for_request(request, db_client=tx),
+                route_repository=_route_group_repository_for_request(request, db_client=tx),
+            )
+    else:
+        await _apply_asset_access(
+            db,
+            callable_repository=_callable_target_binding_repository_for_request(request),
+            route_repository=_route_group_repository_for_request(request),
+        )
+    await reload_callable_target_grants(request)
+    response = await build_scope_asset_access(
         request,
         scope_type="organization",
         scope_id=organization_id,
         organization_id=organization_id,
-        mode=payload.get("mode"),
-        selected_callable_keys=payload.get("selected_callable_keys", []),
-        select_all_selectable=bool(payload.get("select_all_selectable", False)),
     )
+    response["auto_follow_catalog"] = auto_follow_catalog
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -629,7 +669,10 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
         payload.get("audit_content_storage_enabled"),
         "audit_content_storage_enabled",
     )
-    metadata = _audit_retention_metadata(payload)
+    metadata = with_organization_auto_follow_catalog(
+        _audit_retention_metadata(payload),
+        enabled=False,
+    )
     route_group_bindings = _normalize_route_group_binding_payloads(payload.get("route_group_bindings"))
     callable_target_bindings = _normalize_callable_target_binding_payloads(payload.get("callable_target_bindings"))
     _validate_route_group_callable_target_overlap(route_group_bindings, callable_target_bindings)
@@ -809,7 +852,8 @@ async def update_organization(
         payload.get("audit_content_storage_enabled", existing.get("audit_content_storage_enabled")),
         "audit_content_storage_enabled",
     )
-    metadata = _audit_retention_metadata(payload, existing.get("metadata") if isinstance(existing.get("metadata"), dict) else None)
+    existing_metadata = existing.get("metadata") if isinstance(existing.get("metadata"), dict) else None
+    metadata = _audit_retention_metadata(payload, existing_metadata)
     route_group_bindings = (
         _normalize_route_group_binding_payloads(payload.get("route_group_bindings"))
         if "route_group_bindings" in payload
@@ -836,6 +880,14 @@ async def update_organization(
             binding_payloads=callable_target_bindings,
             catalog=catalog,
         )
+    metadata = with_organization_auto_follow_catalog(
+        metadata if metadata is not None else existing_metadata,
+        enabled=(
+            organization_auto_follow_catalog(existing_metadata)
+            and route_group_bindings is None
+            and callable_target_bindings is None
+        ),
+    )
 
     async def _apply_update(db_client: Any, *, route_repository, callable_repository):  # noqa: ANN001, ANN202
         await db_client.execute_raw(
@@ -852,7 +904,7 @@ async def update_organization(
                 model_rpm_limit = $9::jsonb,
                 model_tpm_limit = $10::jsonb,
                 audit_content_storage_enabled = $11,
-                metadata = COALESCE($12::jsonb, metadata),
+                metadata = $12::jsonb,
                 updated_at = NOW()
             WHERE organization_id = $13
             """,

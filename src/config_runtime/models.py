@@ -10,8 +10,10 @@ from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
 from src.db.route_groups import RouteGroupRepository
 from src.providers.resolution import validate_provider_mode_compatibility
 from src.router import RouterConfig, RoutingStrategy, build_deployment_registry, build_route_group_policies
+from src.services.asset_binding_mirror import reload_callable_target_grants_for_app
 from src.services.callable_targets import build_callable_target_catalog
 from src.services.model_deployments import ensure_model_name_available, load_model_registry
+from src.services.organization_callable_target_sync import sync_auto_follow_organization_bindings
 from src.services.route_groups import RouteGroupRuntimeCache, load_route_groups
 
 
@@ -197,6 +199,14 @@ class ModelHotReloadManager:
     async def _reload_runtime(self) -> None:
         app_config = self.dynamic_config.get_app_config()
         await self._apply_runtime_config(app_config)
+        changed = await sync_auto_follow_organization_bindings(
+            db=getattr(getattr(self.app.state, "prisma_manager", None), "client", None),
+            callable_target_binding_repository=getattr(self.app.state, "callable_target_binding_repository", None),
+            route_group_repository=getattr(self.app.state, "route_group_repository", None),
+            callable_target_catalog=getattr(self.app.state, "callable_target_catalog", None),
+        )
+        if changed > 0:
+            await reload_callable_target_grants_for_app(self.app)
         await self.dynamic_config.publish_model_updated()
 
     async def reload_runtime(self) -> None:

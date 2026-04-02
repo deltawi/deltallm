@@ -17,7 +17,10 @@ from src.providers.healthcheck import probe_provider_health
 from src.providers.model_discovery import discover_provider_models
 from src.providers.resolution import provider_presets, validate_provider_mode_compatibility
 from src.router import build_deployment_registry
+from src.services.asset_binding_mirror import reload_callable_target_grants_for_app
+from src.services.callable_targets import build_callable_target_catalog
 from src.services.model_deployments import DuplicateModelNameError, ensure_model_name_available
+from src.services.organization_callable_target_sync import sync_auto_follow_organization_bindings
 
 router = APIRouter(tags=["Models"])
 
@@ -108,6 +111,10 @@ async def _serialize_deployment_health(app: Any, deployment_id: str) -> dict[str
 def _rebuild_runtime_registry(app: Any) -> None:
     model_registry = getattr(app.state, "model_registry", {})
     route_groups = list(getattr(app.state, "route_groups", []))
+    app.state.callable_target_catalog = build_callable_target_catalog(
+        model_registry,
+        route_groups,
+    )
     rebuilt = build_deployment_registry(model_registry, route_groups=route_groups)
 
     runtime_registry = getattr(getattr(app.state, "router", None), "deployment_registry", None)
@@ -128,6 +135,17 @@ async def _invalidate_route_group_runtime_cache(app: Any) -> None:
     invalidate = getattr(cache, "invalidate", None)
     if callable(invalidate):
         await invalidate()
+
+
+async def _sync_auto_follow_org_bindings(app: Any) -> None:
+    changed = await sync_auto_follow_organization_bindings(
+        db=getattr(getattr(app.state, "prisma_manager", None), "client", None),
+        callable_target_binding_repository=getattr(app.state, "callable_target_binding_repository", None),
+        route_group_repository=getattr(app.state, "route_group_repository", None),
+        callable_target_catalog=getattr(app.state, "callable_target_catalog", None),
+    )
+    if changed > 0:
+        await reload_callable_target_grants_for_app(app)
 
 
 def _validate_model_config_or_400(model_config: dict[str, Any]) -> None:
@@ -367,6 +385,7 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
         )
         await _invalidate_route_group_runtime_cache(request.app)
         _rebuild_runtime_registry(request.app)
+        await _sync_auto_follow_org_bindings(request.app)
 
     response = {
         "deployment_id": deployment_id,
@@ -452,6 +471,7 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
         )
         await _invalidate_route_group_runtime_cache(request.app)
         _rebuild_runtime_registry(request.app)
+        await _sync_auto_follow_org_bindings(request.app)
 
     response = {
         "deployment_id": deployment_id,
@@ -513,6 +533,7 @@ async def delete_model(request: Request, deployment_id: str) -> dict[str, bool]:
                 registry.pop(model_name, None)
             await _invalidate_route_group_runtime_cache(request.app)
             _rebuild_runtime_registry(request.app)
+            await _sync_auto_follow_org_bindings(request.app)
             response = {"deleted": True}
             await emit_control_audit_event(
                 request=request,

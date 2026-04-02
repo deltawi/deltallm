@@ -470,6 +470,7 @@ export interface ScopedAssetAccess {
   api_key_id?: string | null;
   user_id?: string | null;
   mode: 'grant' | 'inherit' | 'restrict';
+  auto_follow_catalog?: boolean;
   selected_callable_keys: string[];
   selectable_targets: AssetAccessTarget[];
   effective_targets: AssetAccessTarget[];

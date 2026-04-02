@@ -27,6 +27,7 @@ from src.services.callable_target_migration import (
     apply_callable_target_migration_backfill,
     build_callable_target_migration_report,
 )
+from src.services.organization_callable_target_sync import maybe_disable_organization_auto_follow_for_scope_mutation
 from src.services.callable_targets import CallableTarget
 
 router = APIRouter(tags=["Admin Callable Targets"])
@@ -239,6 +240,11 @@ async def upsert_callable_target_binding(request: Request, payload: dict[str, An
             enabled=binding.enabled,
             metadata=binding.metadata,
         )
+    await maybe_disable_organization_auto_follow_for_scope_mutation(
+        db_or_503(request),
+        scope_type=binding.scope_type,
+        scope_id=binding.scope_id,
+    )
     await reload_callable_target_grants(request)
     response = _binding_payload(binding)
     await emit_admin_mutation_audit(
@@ -359,6 +365,11 @@ async def delete_callable_target_binding(request: Request, binding_id: str) -> d
             scope_type=binding.scope_type,
             scope_id=binding.scope_id,
         )
+    await maybe_disable_organization_auto_follow_for_scope_mutation(
+        db_or_503(request),
+        scope_type=binding.scope_type,
+        scope_id=binding.scope_id,
+    )
     await reload_callable_target_grants(request)
     response = {"deleted": True, "callable_target_binding_id": binding_id}
     await emit_admin_mutation_audit(

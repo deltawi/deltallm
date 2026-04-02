@@ -272,6 +272,33 @@ class _FakeRouteGroupRepository:
         return rolled
 
 
+class _FakeOrganizationMetadataDB:
+    def __init__(self) -> None:
+        self.organizations = {
+            "org-1": {
+                "organization_id": "org-1",
+                "metadata": {"_callable_target_access": {"auto_follow_catalog": True}},
+            }
+        }
+
+    async def query_raw(self, query: str, *params):  # noqa: ANN201
+        if "FROM deltallm_organizationtable" in query and "WHERE organization_id = $1" in query:
+            row = self.organizations.get(str(params[0]))
+            return [row] if row else []
+        if "FROM deltallm_organizationtable" in query:
+            return list(self.organizations.values())
+        return []
+
+    async def execute_raw(self, query: str, *params):  # noqa: ANN201
+        if "UPDATE deltallm_organizationtable" in query and "metadata = $2::jsonb" in query:
+            row = self.organizations.get(str(params[0]))
+            if row is None:
+                return 0
+            row["metadata"] = params[1]
+            return 1
+        return 0
+
+
 class _FakeCallableTargetBindingRepository:
     def __init__(self) -> None:
         self.bindings: list[CallableTargetBindingRecord] = []
@@ -728,11 +755,13 @@ async def test_route_group_binding_admin_lifecycle(client, test_app):
     repo = _FakeRouteGroupRepository()
     callable_repo = _FakeCallableTargetBindingRepository()
     grant_reload = _FakeGrantReload()
+    scope_db = _FakeOrganizationMetadataDB()
     test_app.state.route_group_repository = repo
     test_app.state.callable_target_binding_repository = callable_repo
     test_app.state.callable_target_grant_service = grant_reload
     test_app.state.model_hot_reload_manager = _FakeHotReload()
     test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": scope_db})()
     headers = {"Authorization": "Bearer mk-test"}
 
     await client.post(
@@ -760,6 +789,7 @@ async def test_route_group_binding_admin_lifecycle(client, test_app):
     assert {(binding.callable_key, binding.scope_type, binding.scope_id) for binding in callable_repo.bindings} == {
         ("bound-route", "organization", "org-1")
     }
+    assert scope_db.organizations["org-1"]["metadata"] is None
     assert grant_reload.reload_count == 1
 
     list_response = await client.get(
@@ -775,6 +805,7 @@ async def test_route_group_binding_admin_lifecycle(client, test_app):
     assert detail_response.status_code == 200
     assert detail_response.json()["bindings"][0]["scope_id"] == "org-1"
 
+    scope_db.organizations["org-1"]["metadata"] = {"_callable_target_access": {"auto_follow_catalog": True}}
     delete_response = await client.delete(
         f"/ui/api/route-group-bindings/{payload['route_group_binding_id']}",
         headers=headers,
@@ -782,6 +813,7 @@ async def test_route_group_binding_admin_lifecycle(client, test_app):
     assert delete_response.status_code == 200
     assert delete_response.json()["deleted"] is True
     assert callable_repo.bindings == []
+    assert scope_db.organizations["org-1"]["metadata"] is None
     assert grant_reload.reload_count == 2
 
 
