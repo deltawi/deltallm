@@ -1,12 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useApi } from '../lib/hooks';
-import { spend, type SpendGroupBy, type SpendGroupRow, type SpendLog } from '../lib/api';
+import {
+  spend,
+  type Pagination,
+  type SpendGroupBy,
+  type SpendGroupReport,
+  type SpendGroupRow,
+  type SpendLog,
+  type SpendSummary,
+} from '../lib/api';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import StatCard from '../components/StatCard';
 import Modal from '../components/Modal';
-import { DollarSign, Zap, Hash, Calendar } from 'lucide-react';
+import { DollarSign, LoaderCircle, Zap, Hash, Calendar } from 'lucide-react';
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 
 const SPEND_GROUP_OPTIONS: Array<{ value: SpendGroupBy; label: string }> = [
@@ -29,6 +36,29 @@ const SPEND_SEARCH_PLACEHOLDERS: Record<SpendGroupBy, string> = {
   team: 'Filter teams...',
   api_key: 'Filter API keys...',
 };
+
+const AUTO_REFRESH_OPTIONS = [
+  { value: 0, label: 'Off' },
+  { value: 5000, label: '5 seconds' },
+  { value: 10000, label: '10 seconds' },
+  { value: 30000, label: '30 seconds' },
+] as const;
+
+type AutoRefreshMs = (typeof AUTO_REFRESH_OPTIONS)[number]['value'];
+
+interface SpendDayReportRow {
+  group_key: string;
+  total_spend: number;
+}
+
+interface SpendDayReport {
+  breakdown: SpendDayReportRow[];
+}
+
+interface SpendLogsResponse {
+  logs: SpendLog[];
+  pagination: Pagination;
+}
 
 function fmt(n: number | null | undefined): string {
   if (n == null) return '$0.00';
@@ -112,8 +142,22 @@ export default function Usage() {
   const [spendSearch, setSpendSearch] = useState('');
   const [spendOffset, setSpendOffset] = useState(0);
   const [logsOffset, setLogsOffset] = useState(0);
+  const [summary, setSummary] = useState<SpendSummary | null>(null);
+  const [dailyReport, setDailyReport] = useState<SpendDayReport | null>(null);
+  const [spendGroupsData, setSpendGroupsData] = useState<SpendGroupReport | null>(null);
+  const [logsData, setLogsData] = useState<SpendLogsResponse | null>(null);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [backgroundRefreshing, setBackgroundRefreshing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<number | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [autoRefreshMs, setAutoRefreshMs] = useState<AutoRefreshMs>(0);
+  const [pageVisible, setPageVisible] = useState(() => (typeof document === 'undefined' ? true : document.visibilityState === 'visible'));
   const spendPageSize = 5;
   const logsPageSize = 25;
+  const refreshInFlightRef = useRef(false);
+  const pendingRefreshRef = useRef(false);
+  const pendingRefreshBackgroundRef = useRef(false);
+  const requestSequenceRef = useRef(0);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -131,37 +175,133 @@ export default function Usage() {
     setLogsOffset(0);
   }, [startDate, endDate]);
 
-  const { data: summary } = useApi(() => spend.summary(startDate, endDate), [startDate, endDate]);
-  const { data: dailyReport } = useApi(() => spend.report('day', startDate, endDate), [startDate, endDate]);
-  const { data: spendGroupsData, loading: spendGroupsLoading } = useApi(
-    () =>
-      spend.groupedReport(spendBy, {
-        start_date: startDate || undefined,
-        end_date: endDate || undefined,
-        search: spendSearch || undefined,
-        limit: spendPageSize,
-        offset: spendOffset,
-      }),
-    [spendBy, startDate, endDate, spendSearch, spendOffset]
-  );
-  const { data: logsData, loading: logsLoading } = useApi(
-    () => {
-      const params: Record<string, string> = {
+  const refreshUsageData = useEffectEvent(async (background: boolean) => {
+    if (refreshInFlightRef.current) {
+      pendingRefreshRef.current = true;
+      pendingRefreshBackgroundRef.current = pendingRefreshBackgroundRef.current || background;
+      return;
+    }
+
+    refreshInFlightRef.current = true;
+    const requestId = ++requestSequenceRef.current;
+    const hasData =
+      summary !== null || dailyReport !== null || spendGroupsData !== null || logsData !== null;
+
+    if (hasData) {
+      setBackgroundRefreshing(true);
+    } else {
+      setInitialLoading(true);
+    }
+    setRefreshError(null);
+
+    try {
+      const logsParams: Record<string, string> = {
         limit: String(logsPageSize),
         offset: String(logsOffset),
       };
-      if (startDate) params.start_date = startDate;
-      if (endDate) params.end_date = endDate;
-      return spend.logs(params);
-    },
-    [startDate, endDate, logsOffset]
-  );
+      if (startDate) logsParams.start_date = startDate;
+      if (endDate) logsParams.end_date = endDate;
 
-  const daily = (dailyReport?.breakdown || []).map((r: any) => ({ date: r.group_key, total_spend: r.total_spend }));
+      const [nextSummary, nextDailyReport, nextSpendGroupsData, nextLogsData] = await Promise.all([
+        spend.summary(startDate, endDate),
+        spend.report('day', startDate, endDate) as Promise<SpendDayReport>,
+        spend.groupedReport(spendBy, {
+          start_date: startDate || undefined,
+          end_date: endDate || undefined,
+          search: spendSearch || undefined,
+          limit: spendPageSize,
+          offset: spendOffset,
+        }),
+        spend.logs(logsParams),
+      ]);
+
+      if (requestId !== requestSequenceRef.current) {
+        return;
+      }
+
+      setSummary(nextSummary);
+      setDailyReport(nextDailyReport);
+      setSpendGroupsData(nextSpendGroupsData);
+      setLogsData(nextLogsData);
+      setLastRefreshedAt(Date.now());
+    } catch (error) {
+      if (requestId === requestSequenceRef.current) {
+        setRefreshError(error instanceof Error ? error.message : 'Refresh failed');
+      }
+    } finally {
+      if (requestId === requestSequenceRef.current) {
+        setInitialLoading(false);
+        setBackgroundRefreshing(false);
+      }
+
+      refreshInFlightRef.current = false;
+
+      if (pendingRefreshRef.current) {
+        const pendingBackground = pendingRefreshBackgroundRef.current;
+        pendingRefreshRef.current = false;
+        pendingRefreshBackgroundRef.current = false;
+        void refreshUsageData(pendingBackground);
+      }
+    }
+  });
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      setPageVisible(document.visibilityState === 'visible');
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    void refreshUsageData(false);
+  }, [startDate, endDate, spendBy, spendSearch, spendOffset, logsOffset]);
+
+  useEffect(() => {
+    if (!pageVisible || autoRefreshMs === 0) {
+      return;
+    }
+    void refreshUsageData(true);
+  }, [pageVisible, autoRefreshMs]);
+
+  useEffect(() => {
+    if (!pageVisible || autoRefreshMs === 0) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void refreshUsageData(true);
+    }, autoRefreshMs);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [pageVisible, autoRefreshMs]);
+
+  const spendGroupsLoading = initialLoading && spendGroupsData === null;
+  const logsLoading = initialLoading && logsData === null;
+  const refreshControlDisabled = initialLoading || backgroundRefreshing;
+  const daily = (dailyReport?.breakdown || []).map((row) => ({ date: row.group_key, total_spend: row.total_spend }));
   const spendGroups = spendGroupsData?.data || [];
   const spendGroupsPagination = spendGroupsData?.pagination;
   const logs = logsData?.logs || [];
   const logsPagination = logsData?.pagination;
+  const refreshStatusLabel = backgroundRefreshing
+    ? 'Refreshing now'
+    : refreshError
+      ? 'Refresh failed'
+      : autoRefreshMs > 0
+        ? pageVisible
+          ? `Every ${autoRefreshMs / 1000}s`
+          : 'Paused in background'
+        : 'Manual refresh';
+  const refreshStatusTone = backgroundRefreshing
+    ? 'bg-blue-50 text-blue-700 ring-blue-200'
+    : refreshError
+      ? 'bg-rose-50 text-rose-700 ring-rose-200'
+      : autoRefreshMs > 0
+        ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+        : 'bg-gray-100 text-gray-600 ring-gray-200';
 
   const spendGroupColumns = [
     {
@@ -189,16 +329,9 @@ export default function Usage() {
 
   return (
     <div className="p-4 sm:p-6">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Usage & Spend</h1>
-          <p className="text-sm text-gray-500 mt-1">Monitor costs, tokens, and request analytics</p>
-        </div>
-        <div className="flex items-center gap-2 w-full sm:w-auto">
-          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="flex-1 sm:flex-none px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-          <span className="text-gray-400 shrink-0">to</span>
-          <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="flex-1 sm:flex-none px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-        </div>
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-gray-900">Usage & Spend</h1>
+        <p className="mt-1 text-sm text-gray-500">Monitor costs, tokens, and request analytics</p>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -208,9 +341,58 @@ export default function Usage() {
         <StatCard title="Unique Models" value={fmtNum(summary?.unique_models)} icon={<Calendar className="w-5 h-5" />} />
       </div>
 
-      <div className="flex gap-2 mb-6">
-        <button onClick={() => setTab('overview')} className={`px-4 py-2 text-sm rounded-lg transition-colors ${tab === 'overview' ? 'bg-blue-600 text-white' : 'bg-white border text-gray-700 hover:bg-gray-50'}`}>Overview</button>
-        <button onClick={() => setTab('logs')} className={`px-4 py-2 text-sm rounded-lg transition-colors ${tab === 'logs' ? 'bg-blue-600 text-white' : 'bg-white border text-gray-700 hover:bg-gray-50'}`}>Request Logs</button>
+      <div className="mb-6 flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+        <div className="flex gap-2">
+          <button onClick={() => setTab('overview')} className={`px-4 py-2 text-sm rounded-lg transition-colors ${tab === 'overview' ? 'bg-blue-600 text-white' : 'bg-white border text-gray-700 hover:bg-gray-50'}`}>Overview</button>
+          <button onClick={() => setTab('logs')} className={`px-4 py-2 text-sm rounded-lg transition-colors ${tab === 'logs' ? 'bg-blue-600 text-white' : 'bg-white border text-gray-700 hover:bg-gray-50'}`}>Request Logs</button>
+        </div>
+
+        <div className="flex flex-col gap-2 xl:items-end">
+          <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              aria-label="Start date"
+            />
+            <span className="text-sm text-gray-400">to</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              aria-label="End date"
+            />
+            <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${refreshStatusTone}`}>
+              {backgroundRefreshing ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
+              <span>{refreshStatusLabel}</span>
+            </span>
+            <select
+              value={String(autoRefreshMs)}
+              onChange={(e) => setAutoRefreshMs(Number(e.target.value) as AutoRefreshMs)}
+              disabled={refreshControlDisabled}
+              className="rounded-full border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+              aria-label="Auto refresh interval"
+            >
+              {AUTO_REFRESH_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500 xl:justify-end">
+            {refreshError ? (
+              <span className="text-rose-600">{refreshError}</span>
+            ) : lastRefreshedAt !== null ? (
+              <span>Last updated {new Date(lastRefreshedAt).toLocaleTimeString()}</span>
+            ) : (
+              <span>Waiting for first refresh</span>
+            )}
+          </div>
+        </div>
       </div>
 
       {tab === 'overview' ? (
