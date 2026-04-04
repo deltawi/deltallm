@@ -67,6 +67,8 @@ async def init_routing_runtime(
         cfg,
         settings,
         source_mode=cfg.general_settings.model_deployment_source,
+        named_credential_repository=getattr(app.state, "named_credential_repository", None),
+        secret_resolver=getattr(dynamic_config_manager, "secret_resolver", None),
     )
     logger.info("loaded model registry from %s source", model_registry_source)
 
@@ -158,6 +160,7 @@ async def init_routing_runtime(
         app=app,
         dynamic_config=dynamic_config_manager,
         model_repository=app.state.model_deployment_repository,
+        named_credential_repository=getattr(app.state, "named_credential_repository", None),
         route_group_repository=app.state.route_group_repository,
         route_group_cache=app.state.route_group_runtime_cache,
     )

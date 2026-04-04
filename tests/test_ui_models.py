@@ -5,8 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.db.named_credentials import NamedCredentialRecord
 from src.db.callable_targets import CallableTargetBindingRecord
 from src.db.route_groups import RouteGroupBindingRecord, RouteGroupRecord
+from src.router import build_deployment_registry
 from src.services.callable_target_grants import CallableTargetGrantService
 from src.services.callable_targets import CallableTarget
 from src.services.organization_callable_target_sync import sync_auto_follow_organization_bindings
@@ -156,6 +158,14 @@ class _MutableRouteGroupRepository:
         return True
 
 
+class _FakeNamedCredentialRepository:
+    def __init__(self, records: list[NamedCredentialRecord]) -> None:
+        self.records = {record.credential_id: record for record in records}
+
+    async def get_by_id(self, credential_id: str) -> NamedCredentialRecord | None:
+        return self.records.get(credential_id)
+
+
 @pytest.mark.asyncio
 async def test_list_models_returns_runtime_models(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
@@ -179,6 +189,182 @@ async def test_get_model_returns_health_block(client, test_app):
     payload = response.json()
     assert payload["deployment_id"] == "gpt-4o-mini-0"
     assert payload["health"]["healthy"] is True
+    assert payload["credential_source"] == "inline"
+    assert payload["inline_credentials_present"] is True
+    assert payload["connection_summary"]["api_base"] is None
+    assert payload["deltallm_params"]["api_key"] == "***REDACTED***"
+
+
+@pytest.mark.asyncio
+async def test_get_model_redacts_named_credential_backed_params(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.model_registry = {
+        "gpt-4o-mini": [
+            {
+                "deployment_id": "dep-named-1",
+                "named_credential_id": "cred-1",
+                "named_credential_name": "OpenAI prod",
+                "deltallm_params": {
+                    "provider": "openai",
+                    "model": "openai/gpt-4o-mini",
+                    "api_base": "https://api.openai.com/v1",
+                    "api_key": "provider-key",
+                },
+                "model_info": {"mode": "chat"},
+            }
+        ]
+    }
+    rebuilt = build_deployment_registry(test_app.state.model_registry)
+    test_app.state.router.deployment_registry.clear()
+    test_app.state.router.deployment_registry.update(rebuilt)
+
+    response = await client.get("/ui/api/models/dep-named-1", headers={"Authorization": "Bearer mk-test"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["credential_source"] == "named"
+    assert payload["inline_credentials_present"] is False
+    assert payload["named_credential_id"] == "cred-1"
+    assert payload["named_credential_name"] == "OpenAI prod"
+    assert payload["deltallm_params"]["api_key"] == "***REDACTED***"
+    assert payload["deltallm_params"]["api_base"] == "https://api.openai.com/v1"
+    assert payload["connection_summary"]["api_base"] == "https://api.openai.com/v1"
+
+
+@pytest.mark.asyncio
+async def test_update_model_preserves_inline_api_key_when_omitted(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.put(
+        "/ui/api/models/gpt-4o-mini-0",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "model_name": "gpt-4o-mini",
+            "deltallm_params": {
+                "provider": "openai",
+                "model": "openai/gpt-4o-mini",
+                "api_base": "https://api.openai.com/v1",
+            },
+            "model_info": {"mode": "chat"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["deltallm_params"]["api_key"] == "***REDACTED***"
+    assert test_app.state.model_registry["gpt-4o-mini"][0]["deltallm_params"]["api_key"] == "provider-key"
+
+
+@pytest.mark.asyncio
+async def test_update_model_clears_old_connection_fields_when_provider_changes(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.put(
+        "/ui/api/models/gpt-4o-mini-0",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "model_name": "gpt-4o-mini",
+            "deltallm_params": {
+                "provider": "anthropic",
+                "model": "anthropic/claude-sonnet-4-20250514",
+                "api_base": "https://api.anthropic.com/v1",
+            },
+            "model_info": {"mode": "chat"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["deltallm_params"]["provider"] == "anthropic"
+    assert payload["deltallm_params"]["api_base"] == "***REDACTED***"
+    assert "api_key" not in payload["deltallm_params"]
+
+
+@pytest.mark.asyncio
+async def test_create_model_accepts_azure_named_credential_alias_match(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.named_credential_repository = _FakeNamedCredentialRepository(
+        [
+            NamedCredentialRecord(
+                credential_id="cred-azure",
+                name="Azure Shared",
+                provider="azure_openai",
+                connection_config={
+                    "api_key": "provider-key",
+                    "api_base": "https://example.azure.com/openai/v1",
+                    "api_version": "2024-02-01",
+                },
+            )
+        ]
+    )
+
+    response = await client.post(
+        "/ui/api/models",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "model_name": "azure-gpt-4o-mini",
+            "named_credential_id": "cred-azure",
+            "deltallm_params": {
+                "provider": "azure",
+                "model": "azure/gpt-4o-mini",
+            },
+            "model_info": {"mode": "chat"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["named_credential_id"] == "cred-azure"
+
+
+@pytest.mark.asyncio
+async def test_create_model_response_redacts_inline_api_key(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.post(
+        "/ui/api/models",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "model_name": "inline-created-model",
+            "deltallm_params": {
+                "provider": "openai",
+                "model": "openai/gpt-4o-mini",
+                "api_base": "https://api.openai.com/v1",
+                "api_key": "provider-key",
+            },
+            "model_info": {"mode": "chat"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["credential_source"] == "inline"
+    assert payload["deltallm_params"]["api_key"] == "***REDACTED***"
+
+
+@pytest.mark.asyncio
+async def test_update_model_response_redacts_inline_api_key(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.put(
+        "/ui/api/models/gpt-4o-mini-0",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "model_name": "gpt-4o-mini",
+            "deltallm_params": {
+                "provider": "openai",
+                "model": "openai/gpt-4o-mini",
+                "api_base": "https://api.openai.com/v1",
+                "api_key": "provider-key-updated",
+            },
+            "model_info": {"mode": "chat"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["credential_source"] == "inline"
+    assert payload["deltallm_params"]["api_key"] == "***REDACTED***"
 
 
 @pytest.mark.asyncio

@@ -26,6 +26,7 @@ import TeamDetail from './pages/TeamDetail';
 import ModelDetail from './pages/ModelDetail';
 import ModelEdit from './pages/ModelEdit';
 import ModelCreate from './pages/ModelCreate';
+import NamedCredentials from './pages/NamedCredentials';
 import AuditLogs from './pages/AuditLogs';
 import RouteGroups from './pages/RouteGroups';
 import RouteGroupDetail from './pages/RouteGroupDetail';
@@ -83,6 +84,7 @@ function AppRoutes() {
         <Route path="/models/new" element={uiAccess.model_admin ? <ModelCreate /> : <Navigate to="/models" replace />} />
         <Route path="/models/:deploymentId" element={uiAccess.models ? <ModelDetail /> : <Navigate to="/" replace />} />
         <Route path="/models/:deploymentId/edit" element={uiAccess.model_admin ? <ModelEdit /> : <Navigate to="/models" replace />} />
+        <Route path="/named-credentials" element={uiAccess.named_credentials ? <NamedCredentials /> : <Navigate to="/" replace />} />
         <Route path="/route-groups" element={uiAccess.route_groups ? <RouteGroups /> : <Navigate to="/" replace />} />
         <Route path="/route-groups/:groupKey" element={uiAccess.route_groups ? <RouteGroupDetail /> : <Navigate to="/" replace />} />
         <Route path="/prompts" element={uiAccess.prompts ? <PromptRegistry /> : <Navigate to="/" replace />} />

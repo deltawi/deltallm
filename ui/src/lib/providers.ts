@@ -30,6 +30,11 @@ export function normalizeProvider(provider: string | null | undefined, model: st
   return providerFromModelString(model);
 }
 
+export function canonicalNamedCredentialProvider(provider: string | null | undefined): string {
+  const normalized = (provider || '').trim().toLowerCase();
+  return normalized === 'azure' ? 'azure_openai' : normalized;
+}
+
 export function providerDisplayName(provider: string | null | undefined): string {
   const key = (provider || '').trim().toLowerCase() || 'unknown';
   return PROVIDER_LABELS[key] || key;

@@ -488,6 +488,29 @@ export interface ProviderPreset {
   supported_modes: string[];
 }
 
+export interface NamedCredential {
+  credential_id: string;
+  name: string;
+  provider: string;
+  connection_config: Record<string, unknown> | null;
+  credentials_present: boolean;
+  metadata?: Record<string, unknown> | null;
+  created_by_account_id?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  usage_count?: number;
+  linked_deployments?: Array<{ deployment_id: string; model_name: string }>;
+}
+
+export interface InlineCredentialGroup {
+  fingerprint: string;
+  provider: string;
+  connection_config: Record<string, unknown> | null;
+  credentials_present: boolean;
+  deployment_count: number;
+  deployments: Array<{ deployment_id: string; model_name: string }>;
+}
+
 export interface ProviderModelOption {
   id: string;
   label: string;
@@ -500,6 +523,7 @@ export interface ProviderModelOption {
 export interface ProviderModelDiscoveryPayload {
   provider: string;
   mode?: string | null;
+  named_credential_id?: string | null;
   api_key?: string | null;
   api_base?: string | null;
   api_version?: string | null;
@@ -524,6 +548,15 @@ export interface ModelDeploymentDetail {
   model_name: string;
   provider: string;
   mode?: string;
+  credential_source?: 'inline' | 'named';
+  named_credential_id?: string | null;
+  named_credential_name?: string | null;
+  inline_credentials_present?: boolean;
+  connection_summary?: {
+    api_base?: string | null;
+    api_version?: string | null;
+    region?: string | null;
+  };
   healthy?: boolean;
   health?: DeploymentHealth;
   deltallm_params: Record<string, any>;
@@ -679,6 +712,39 @@ export const models = {
   update: (deploymentId: string, payload: any) =>
     apiFetch<any>(`/ui/api/models/${encodeURIComponent(deploymentId)}`, { method: 'PUT', json: payload }),
   delete: (deploymentId: string) => apiFetch<any>(`/ui/api/models/${encodeURIComponent(deploymentId)}`, { method: 'DELETE' }),
+};
+
+export const namedCredentials = {
+  list: (params?: { provider?: string }) =>
+    apiFetch<{ data: NamedCredential[] }>(withQuery('/ui/api/named-credentials', params as any)),
+  get: (credentialId: string) =>
+    apiFetch<NamedCredential>(`/ui/api/named-credentials/${encodeURIComponent(credentialId)}`),
+  create: (payload: {
+    name: string;
+    provider: string;
+    connection_config: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  }) => apiFetch<NamedCredential>('/ui/api/named-credentials', { method: 'POST', json: payload }),
+  update: (credentialId: string, payload: {
+    name?: string;
+    provider?: string;
+    connection_config?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  }) => apiFetch<NamedCredential>(`/ui/api/named-credentials/${encodeURIComponent(credentialId)}`, { method: 'PUT', json: payload }),
+  delete: (credentialId: string) =>
+    apiFetch<{ deleted: boolean; credential_id: string }>(`/ui/api/named-credentials/${encodeURIComponent(credentialId)}`, { method: 'DELETE' }),
+  inlineReport: () =>
+    apiFetch<{ data: InlineCredentialGroup[] }>('/ui/api/named-credentials/inline-report'),
+  convertInlineGroup: (payload: {
+    fingerprint: string;
+    name: string;
+    provider: string;
+    deployment_ids: string[];
+    metadata?: Record<string, unknown>;
+  }) => apiFetch<{
+    credential: NamedCredential;
+    converted_deployments: Array<{ deployment_id: string; model_name: string }>;
+  }>('/ui/api/named-credentials/convert-inline-group', { method: 'POST', json: payload }),
 };
 
 export interface RouteGroup {

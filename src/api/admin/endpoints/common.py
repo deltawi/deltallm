@@ -18,8 +18,22 @@ from src.guardrails.catalog import (
     serialize_guardrail_editor_config,
 )
 from src.providers.resolution import resolve_provider
+from src.services.named_credentials import redact_connection_config
 
 logger = logging.getLogger(__name__)
+
+_INLINE_SECRET_FIELDS = {
+    "api_key",
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+}
+
+_CONNECTION_SUMMARY_FIELDS = (
+    "api_base",
+    "api_version",
+    "region",
+)
 
 @dataclass
 class AuthScope:
@@ -338,17 +352,43 @@ def model_entries(app: Any) -> list[dict[str, Any]]:
             deployment_id = str(deployment.get("deployment_id") or f"{model_name}-{index}")
             params = dict(deployment.get("deltallm_params", {}))
             model_info = dict(deployment.get("model_info", {}))
+            named_credential_id = (
+                str(deployment.get("named_credential_id")).strip()
+                if deployment.get("named_credential_id") is not None
+                else None
+            )
+            credential_source = "named" if named_credential_id else "inline"
             entries.append(
                 {
                     "deployment_id": deployment_id,
                     "model_name": model_name,
                     "provider": resolve_provider(params),
                     "mode": model_info.get("mode", "chat"),
-                    "deltallm_params": params,
+                    "credential_source": credential_source,
+                    "inline_credentials_present": _inline_credentials_present(params) if credential_source == "inline" else False,
+                    "connection_summary": _connection_summary(params),
+                    "named_credential_id": named_credential_id or None,
+                    "named_credential_name": (
+                        str(deployment.get("named_credential_name")).strip()
+                        if deployment.get("named_credential_name") is not None
+                        else None
+                    ),
+                    "deltallm_params": redact_connection_config(params),
                     "model_info": model_info,
                 }
             )
     return entries
+
+
+def _inline_credentials_present(params: dict[str, Any]) -> bool:
+    return any(str(params.get(field) or "").strip() for field in _INLINE_SECRET_FIELDS)
+
+
+def _connection_summary(params: dict[str, Any]) -> dict[str, Any]:
+    return {
+        field: params.get(field) or None
+        for field in _CONNECTION_SUMMARY_FIELDS
+    }
 
 def serialize_guardrail(raw: Any) -> dict[str, Any]:
     item = raw.model_dump(mode="python") if hasattr(raw, "model_dump") else dict(raw)

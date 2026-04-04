@@ -3,8 +3,8 @@ import Card from './Card';
 import { ChevronDown, Plus, X } from 'lucide-react';
 import ProviderBadge from './ProviderBadge';
 import { useApi } from '../lib/hooks';
-import { models, type ProviderModelDiscoveryPayload, type ProviderModelOption } from '../lib/api';
-import { providerDisplayName } from '../lib/providers';
+import { models, namedCredentials, type NamedCredential, type ProviderModelDiscoveryPayload, type ProviderModelOption } from '../lib/api';
+import { canonicalNamedCredentialProvider, providerDisplayName } from '../lib/providers';
 import {
   EMPTY_FORM,
   MODE_OPTIONS,
@@ -119,6 +119,7 @@ function buildLiveDiscoveryRequestKey(payload: ProviderModelDiscoveryPayload): s
   return [
     payload.provider || '',
     payload.mode || '',
+    payload.named_credential_id || '',
     payload.api_key || '',
     payload.api_base || '',
     payload.api_version || '',
@@ -136,7 +137,7 @@ interface ModelFormProps {
 }
 
 const inputClass = "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500";
-type RequiredField = 'model_name' | 'provider' | 'model' | 'api_base';
+type RequiredField = 'model_name' | 'provider' | 'model' | 'api_base' | 'named_credential_id';
 
 function inputClasses(hasError = false): string {
   return `${inputClass} ${hasError ? 'border-red-300 bg-red-50/40 focus:ring-red-500' : ''}`;
@@ -176,7 +177,12 @@ export default function ModelForm({
     loading: false,
   });
   const mode = form.mode;
+  const credentialProvider = canonicalNamedCredentialProvider(form.provider);
   const { data: providerPresetResponse } = useApi(() => models.providerPresets(), []);
+  const { data: namedCredentialResponse } = useApi(
+    () => (credentialProvider ? namedCredentials.list({ provider: credentialProvider }) : Promise.resolve({ data: [] as NamedCredential[] })),
+    [credentialProvider],
+  );
   const { data: catalogDiscoveryResponse, loading: catalogDiscoveryLoading } = useApi(
     async () => {
       if (!form.provider) {
@@ -197,12 +203,14 @@ export default function ModelForm({
   const modelSuggestionListId = useId();
 
   const providerPresets = providerPresetResponse?.data || [];
+  const availableNamedCredentials = namedCredentialResponse?.data || [];
   const liveDiscoveryPayload: ProviderModelDiscoveryPayload = {
     provider: form.provider,
     mode,
-    api_key: form.api_key.trim() || null,
-    api_base: form.api_base.trim() || null,
-    api_version: form.api_version.trim() || null,
+    named_credential_id: form.credential_source === 'named' ? form.named_credential_id.trim() || null : null,
+    api_key: form.credential_source === 'inline' ? form.api_key.trim() || null : null,
+    api_base: form.credential_source === 'inline' ? form.api_base.trim() || null : null,
+    api_version: form.credential_source === 'inline' ? form.api_version.trim() || null : null,
   };
   const liveDiscoveryRequestKey = buildLiveDiscoveryRequestKey(liveDiscoveryPayload);
   const hasActiveLiveDiscovery = liveDiscoveryState.requestKey === liveDiscoveryRequestKey;
@@ -214,7 +222,8 @@ export default function ModelForm({
     ...(hasActiveLiveDiscovery ? liveDiscoveryState.warnings : []),
   ];
   const discoveryLoading = catalogDiscoveryLoading || (hasActiveLiveDiscovery && liveDiscoveryState.loading);
-  const selectedProviderPreset = providerPresets.find((preset) => preset.provider === form.provider);
+  const selectedProviderPreset = providerPresets.find((preset) => preset.provider === credentialProvider || preset.provider === form.provider);
+  const selectedNamedCredential = availableNamedCredentials.find((credential) => credential.credential_id === form.named_credential_id) || null;
   const selectedModelOption = findProviderModelOption(modelOptions, form.model);
 
   const clearValidation = (field?: RequiredField) => {
@@ -249,11 +258,15 @@ export default function ModelForm({
       ...current,
       provider,
       model: current.provider === provider ? current.model : '',
+      named_credential_id: current.provider === provider ? current.named_credential_id : '',
+      named_credential_name: current.provider === provider ? current.named_credential_name : '',
       api_base: preset?.api_base || '',
+      clear_inline_api_key: false,
     }));
     clearValidation('provider');
     clearValidation('model');
     clearValidation('api_base');
+    clearValidation('named_credential_id');
   };
 
   const applyMode = (nextMode: ModelMode) => {
@@ -267,10 +280,38 @@ export default function ModelForm({
     clearField?: RequiredField,
   ) => {
     invalidateLiveDiscovery();
-    setForm((current) => ({ ...current, [field]: value }));
+    setForm((current) => ({
+      ...current,
+      [field]: value,
+      clear_inline_api_key: field === 'api_key' ? false : current.clear_inline_api_key,
+    }));
     if (clearField) {
       clearValidation(clearField);
     }
+  };
+
+  const setCredentialSource = (credentialSource: 'inline' | 'named') => {
+    invalidateLiveDiscovery();
+    setForm((current) => ({
+      ...current,
+      credential_source: credentialSource,
+      named_credential_id: credentialSource === 'named' ? current.named_credential_id : '',
+      named_credential_name: credentialSource === 'named' ? current.named_credential_name : '',
+      clear_inline_api_key: credentialSource === 'inline' ? current.clear_inline_api_key : false,
+    }));
+    clearValidation('api_base');
+    clearValidation('named_credential_id');
+  };
+
+  const applyNamedCredential = (credentialId: string) => {
+    const selected = availableNamedCredentials.find((credential) => credential.credential_id === credentialId) || null;
+    invalidateLiveDiscovery();
+    setForm((current) => ({
+      ...current,
+      named_credential_id: credentialId,
+      named_credential_name: selected?.name || '',
+    }));
+    clearValidation('named_credential_id');
   };
 
   const updateModelValue = (value: string) => {
@@ -283,7 +324,13 @@ export default function ModelForm({
   };
 
   const refreshProviderModels = async () => {
-    if (!form.provider || !form.api_key.trim()) {
+    if (!form.provider) {
+      return;
+    }
+    if (form.credential_source === 'named' && !form.named_credential_id.trim()) {
+      return;
+    }
+    if (form.credential_source === 'inline' && !form.api_key.trim()) {
       return;
     }
 
@@ -320,6 +367,8 @@ export default function ModelForm({
     const provider = form.provider.trim();
     const upstreamModel = form.model.trim();
     const apiBase = form.api_base.trim();
+    const namedCredentialId = form.named_credential_id.trim();
+    const useNamedCredential = form.credential_source === 'named';
 
     if (!modelName) {
       nextFieldErrors.model_name = 'Model Name is required.';
@@ -330,7 +379,10 @@ export default function ModelForm({
     if (!upstreamModel) {
       nextFieldErrors.model = 'Provider Model is required.';
     }
-    if (!apiBase) {
+    if (useNamedCredential && !namedCredentialId) {
+      nextFieldErrors.named_credential_id = 'Named credential is required.';
+    }
+    if (!useNamedCredential && !apiBase) {
       nextFieldErrors.api_base = 'API Base URL is required.';
     }
     if (Object.keys(nextFieldErrors).length > 0) {
@@ -349,7 +401,17 @@ export default function ModelForm({
       );
       return;
     }
-    const payload = buildModelPayload({ ...form, model_name: modelName, provider, model: upstreamModel, api_base: apiBase }, defaultParams);
+    const payload = buildModelPayload(
+      {
+        ...form,
+        model_name: modelName,
+        provider,
+        model: upstreamModel,
+        api_base: apiBase,
+        named_credential_id: namedCredentialId,
+      },
+      defaultParams,
+    );
     await onSubmit(payload);
   };
 
@@ -432,12 +494,17 @@ export default function ModelForm({
                 {modelOptions.length} suggested model{modelOptions.length === 1 ? '' : 's'} available. Custom values are still allowed.
               </p>
             ) : null}
-            {form.provider && !form.api_key.trim() ? (
+            {form.provider && form.credential_source === 'inline' && !form.api_key.trim() ? (
               <p className="mt-1 text-xs text-gray-400">
                 Showing built-in suggestions first. Add the provider API key, then refresh to fetch live provider models when supported.
               </p>
             ) : null}
-            {form.provider && form.api_key.trim() ? (
+            {form.provider && form.credential_source === 'named' && !form.named_credential_id.trim() ? (
+              <p className="mt-1 text-xs text-gray-400">
+                Select a named credential to fetch live provider models without entering inline secrets.
+              </p>
+            ) : null}
+            {form.provider && ((form.credential_source === 'named' && form.named_credential_id.trim()) || (form.credential_source === 'inline' && form.api_key.trim())) ? (
               <div className="mt-2">
                 <button
                   type="button"
@@ -466,34 +533,122 @@ export default function ModelForm({
             ) : null}
             <p className="text-xs text-gray-400 mt-1">Enter the upstream model name only. Example for Groq: <code>openai/gpt-oss-120b</code>.</p>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="space-y-4 rounded-lg border border-gray-200 bg-gray-50/60 p-4">
             <div>
-              <FieldLabel label="API Key" />
-              <input type="password" value={form.api_key} onChange={(e) => updateProviderCredentialField('api_key', e.target.value)} placeholder="sk-..." className={inputClass} />
+              <FieldLabel label="Credential Source" required />
+              <div className="grid gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => setCredentialSource('named')}
+                  className={`rounded-lg border px-3 py-3 text-left text-sm transition-colors ${form.credential_source === 'named' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'}`}
+                >
+                  <div className="font-medium">Named Credential</div>
+                  <div className="mt-0.5 text-xs text-gray-500">Recommended for shared provider access and credential rotation.</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCredentialSource('inline')}
+                  className={`rounded-lg border px-3 py-3 text-left text-sm transition-colors ${form.credential_source === 'inline' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'}`}
+                >
+                  <div className="font-medium">Inline Credentials</div>
+                  <div className="mt-0.5 text-xs text-gray-500">Use deployment-specific provider credentials directly on this model.</div>
+                </button>
+              </div>
             </div>
-            <div>
-              <FieldLabel label="API Base URL" required />
-              <input value={form.api_base} onChange={(e) => updateProviderCredentialField('api_base', e.target.value, 'api_base')} placeholder={selectedProviderPreset?.api_base || 'https://your-provider.example/v1'} className={inputClasses(Boolean(fieldErrors.api_base))} />
-              {fieldErrors.api_base ? <p className="mt-1 text-xs text-red-600">{fieldErrors.api_base}</p> : null}
-              <p className="mt-1 text-xs text-gray-400">
-                {selectedProviderPreset?.api_base
-                  ? 'Filled from the selected provider. Override it if your deployment uses a custom endpoint.'
-                  : form.provider
-                    ? 'This provider has no built-in default. You must enter the API base URL.'
-                    : 'Choose a provider to auto-fill its default API base URL when one is available.'}
-              </p>
-            </div>
+
+            {form.credential_source === 'named' ? (
+              <div className="space-y-3">
+                <div>
+                  <FieldLabel label="Named Credential" required />
+                  <select
+                    value={form.named_credential_id}
+                    onChange={(e) => applyNamedCredential(e.target.value)}
+                    className={inputClasses(Boolean(fieldErrors.named_credential_id))}
+                  >
+                    <option value="">Select named credential</option>
+                    {availableNamedCredentials.map((credential) => (
+                      <option key={credential.credential_id} value={credential.credential_id}>
+                        {credential.name}
+                      </option>
+                    ))}
+                  </select>
+                  {fieldErrors.named_credential_id ? <p className="mt-1 text-xs text-red-600">{fieldErrors.named_credential_id}</p> : null}
+                  {form.provider && availableNamedCredentials.length === 0 ? (
+                    <p className="mt-1 text-xs text-gray-400">No named credentials available for {providerDisplayName(form.provider)} yet.</p>
+                  ) : null}
+                </div>
+
+                {selectedNamedCredential ? (
+                  <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-3 text-sm">
+                    <div className="font-medium text-blue-900">{selectedNamedCredential.name}</div>
+                    <div className="mt-1 text-xs text-blue-700">
+                      {selectedNamedCredential.connection_config?.api_base
+                        ? `API base: ${String(selectedNamedCredential.connection_config.api_base)}`
+                        : selectedNamedCredential.connection_config?.region
+                          ? `Region: ${String(selectedNamedCredential.connection_config.region)}`
+                          : 'Connection details are managed by this credential.'}
+                    </div>
+                    <div className="mt-1 text-xs text-blue-700">
+                      Linked deployments: {selectedNamedCredential.usage_count || 0}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <FieldLabel label="API Key" />
+                    <input type="password" value={form.api_key} onChange={(e) => updateProviderCredentialField('api_key', e.target.value)} placeholder="sk-..." className={inputClass} />
+                    <div className="mt-1 flex items-center gap-3 text-xs">
+                      {form.inline_credentials_present && !form.clear_inline_api_key ? (
+                        <span className="text-gray-500">Stored inline key present. Leave blank to keep it.</span>
+                      ) : null}
+                      {form.clear_inline_api_key ? <span className="text-red-600">Stored inline key will be cleared on save.</span> : null}
+                      {form.inline_credentials_present ? (
+                        <button
+                          type="button"
+                          onClick={() => setForm((current) => ({ ...current, api_key: '', clear_inline_api_key: true }))}
+                          className="font-medium text-red-600 hover:text-red-700"
+                        >
+                          Clear stored key
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div>
+                    <FieldLabel label="API Base URL" required />
+                    <input value={form.api_base} onChange={(e) => updateProviderCredentialField('api_base', e.target.value, 'api_base')} placeholder={selectedProviderPreset?.api_base || 'https://your-provider.example/v1'} className={inputClasses(Boolean(fieldErrors.api_base))} />
+                    {fieldErrors.api_base ? <p className="mt-1 text-xs text-red-600">{fieldErrors.api_base}</p> : null}
+                    <p className="mt-1 text-xs text-gray-400">
+                      {selectedProviderPreset?.api_base
+                        ? 'Filled from the selected provider. Override it if your deployment uses a custom endpoint.'
+                        : form.provider
+                          ? 'This provider has no built-in default. You must enter the API base URL.'
+                          : 'Choose a provider to auto-fill its default API base URL when one is available.'}
+                    </p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <FieldLabel label="API Version" />
+                    <input value={form.api_version} onChange={(e) => updateProviderCredentialField('api_version', e.target.value)} placeholder="e.g. 2024-02-01 (Azure)" className={inputClass} />
+                  </div>
+                  <div>
+                    <FieldLabel label="Timeout (s)" />
+                    <input type="number" value={form.timeout} onChange={(e) => setForm({ ...form, timeout: e.target.value })} placeholder="300" className={inputClass} />
+                  </div>
+                </div>
+              </>
+            )}
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <FieldLabel label="API Version" />
-              <input value={form.api_version} onChange={(e) => updateProviderCredentialField('api_version', e.target.value)} placeholder="e.g. 2024-02-01 (Azure)" className={inputClass} />
-            </div>
+
+          {form.credential_source === 'named' ? (
             <div>
               <FieldLabel label="Timeout (s)" />
               <input type="number" value={form.timeout} onChange={(e) => setForm({ ...form, timeout: e.target.value })} placeholder="300" className={inputClass} />
             </div>
-          </div>
+          ) : null}
         </div>
       </Card>
 

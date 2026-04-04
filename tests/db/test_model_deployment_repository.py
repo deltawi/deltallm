@@ -12,10 +12,10 @@ class FakePrisma:
         self.rows: dict[str, dict[str, object]] = {}
 
     async def query_raw(self, query: str, *args):
-        if "SELECT deployment_id, model_name, deltallm_params, model_info" in query and "WHERE deployment_id = $1" not in query:
+        if "SELECT deployment_id, model_name, named_credential_id, deltallm_params, model_info" in query and "WHERE deployment_id = $1" not in query:
             values = sorted(self.rows.values(), key=lambda item: (str(item["model_name"]), str(item["deployment_id"])))
             return [dict(item) for item in values]
-        if "WHERE deployment_id = $1" in query and "SELECT deployment_id, model_name, deltallm_params, model_info" in query:
+        if "WHERE deployment_id = $1" in query and "SELECT deployment_id, model_name, named_credential_id, deltallm_params, model_info" in query:
             deployment_id = str(args[0])
             row = self.rows.get(deployment_id)
             return [dict(row)] if row else []
@@ -26,8 +26,9 @@ class FakePrisma:
             self.rows[deployment_id] = {
                 "deployment_id": deployment_id,
                 "model_name": str(args[1]),
-                "deltallm_params": json.loads(str(args[2])),
-                "model_info": json.loads(str(args[3])) if args[3] is not None else None,
+                "named_credential_id": str(args[2]) if args[2] is not None else None,
+                "deltallm_params": json.loads(str(args[3])),
+                "model_info": json.loads(str(args[4])) if args[4] is not None else None,
             }
             return [dict(self.rows[deployment_id])]
         if "DELETE FROM deltallm_modeldeployment" in query:
@@ -47,8 +48,9 @@ class FakePrisma:
             self.rows[deployment_id] = {
                 "deployment_id": deployment_id,
                 "model_name": str(args[1]),
-                "deltallm_params": json.loads(str(args[2])),
-                "model_info": json.loads(str(args[3])) if args[3] is not None else None,
+                "named_credential_id": str(args[2]) if args[2] is not None else None,
+                "deltallm_params": json.loads(str(args[3])),
+                "model_info": json.loads(str(args[4])) if args[4] is not None else None,
             }
 
 
@@ -60,6 +62,7 @@ async def test_model_deployment_repository_crud_roundtrip():
         deployment_id="dep-1",
         model_name="openai/gpt-4o-mini",
         deltallm_params={"model": "openai/gpt-4o-mini"},
+        named_credential_id="cred-1",
         model_info={"priority": 1},
     )
     await repo.create(record)
@@ -67,15 +70,18 @@ async def test_model_deployment_repository_crud_roundtrip():
     loaded = await repo.get_by_deployment_id("dep-1")
     assert loaded is not None
     assert loaded.model_name == "openai/gpt-4o-mini"
+    assert loaded.named_credential_id == "cred-1"
 
     updated = await repo.update(
         "dep-1",
         model_name="openai/gpt-4.1-mini",
+        named_credential_id=None,
         deltallm_params={"model": "openai/gpt-4.1-mini"},
         model_info={"priority": 2},
     )
     assert updated is not None
     assert updated.model_name == "openai/gpt-4.1-mini"
+    assert updated.named_credential_id is None
     assert updated.model_info == {"priority": 2}
 
     rows = await repo.list_all()

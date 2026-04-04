@@ -89,6 +89,7 @@ class ModelDeployment(BaseModel):
     model_config = {"populate_by_name": True}
 
     model_name: str
+    named_credential_id: str | None = None
     deltallm_params: DeltaLLMParams = Field(validation_alias=AliasChoices("deltallm_params", "litellm_params"))
     model_info: ModelInfo | None = None
     deployment_id: str | None = None

@@ -51,6 +51,11 @@ export default function Models() {
       return <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${MODE_BADGE_COLORS[mode] || 'bg-gray-100 text-gray-700'}`}>{modeLabel(mode)}</span>;
     }},
     { key: 'provider', header: 'Provider', render: (r: any) => <ProviderBadge provider={r.provider} model={r.deltallm_params?.model} /> },
+    { key: 'credential_source', header: 'Credentials', render: (r: any) => (
+      <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${r.credential_source === 'named' ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-700'}`}>
+        {r.credential_source === 'named' ? 'Named' : 'Inline'}
+      </span>
+    )},
     { key: 'deployment_id', header: 'Deployment ID', render: (r: any) => <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{r.deployment_id}</code> },
     { key: 'healthy', header: 'Health', render: (r: any) => <StatusBadge status={r.healthy ? 'healthy' : 'unhealthy'} /> },
     {

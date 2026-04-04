@@ -7,27 +7,44 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
-from src.api.admin.endpoints.common import model_entries
+from src.api.admin.endpoints.common import model_entries, to_json_value
 from src.api.audit import emit_control_audit_event
 from src.audit.actions import AuditAction
 from src.config import ModelMode
 from src.config_runtime.models import ModelHotReloadManager
+from src.db.named_credentials import NamedCredentialRecord, NamedCredentialRepository
 from src.middleware.admin import require_authenticated, require_master_key
 from src.providers.healthcheck import probe_provider_health
 from src.providers.model_discovery import discover_provider_models
-from src.providers.resolution import provider_presets, validate_provider_mode_compatibility
+from src.providers.resolution import provider_presets, resolve_provider, validate_provider_mode_compatibility
 from src.router import build_deployment_registry
 from src.services.asset_binding_mirror import reload_callable_target_grants_for_app
 from src.services.callable_targets import build_callable_target_catalog
-from src.services.model_deployments import DuplicateModelNameError, ensure_model_name_available
+from src.services.model_deployments import DuplicateModelNameError, ensure_model_name_available, resolve_runtime_deltallm_params
+from src.services.named_credentials import (
+    canonicalize_named_credential_provider,
+    merge_named_credential_params,
+    resolve_named_credential_record,
+)
 from src.services.organization_callable_target_sync import sync_auto_follow_organization_bindings
 
 router = APIRouter(tags=["Models"])
+_MISSING = object()
+_CREDENTIAL_CONNECTION_FIELDS = {
+    "api_key",
+    "api_base",
+    "api_version",
+    "region",
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+}
 
 
 class ProviderModelDiscoveryRequest(BaseModel):
     provider: str
     mode: ModelMode | None = None
+    named_credential_id: str | None = None
     api_key: str | None = None
     api_base: str | None = None
     api_version: str | None = None
@@ -64,6 +81,37 @@ def _provider_health_status(*, models: int, healthy_models: int) -> str:
     if healthy_models < models:
         return "degraded"
     return "healthy"
+
+
+def _named_credential_repository(app: Any) -> NamedCredentialRepository | None:
+    repository = getattr(app.state, "named_credential_repository", None)
+    if isinstance(repository, NamedCredentialRepository):
+        return repository
+    return repository
+
+
+async def _load_named_credential_or_400(
+    app: Any,
+    credential_id: str | None,
+    *,
+    provider: str | None = None,
+) -> NamedCredentialRecord | None:
+    normalized_id = str(credential_id or "").strip()
+    if not normalized_id:
+        return None
+    repository = _named_credential_repository(app)
+    if repository is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Named credential repository unavailable")
+    named_credential = await repository.get_by_id(normalized_id)
+    if named_credential is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="named_credential_id is invalid")
+    if (
+        provider is not None
+        and canonicalize_named_credential_provider(named_credential.provider)
+        != canonicalize_named_credential_provider(provider)
+    ):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Named credential provider does not match deployment provider")
+    return named_credential
 
 
 async def _deployment_health_flags(app: Any, deployment_ids: list[str]) -> dict[str, bool]:
@@ -106,6 +154,48 @@ async def _serialize_deployment_health(app: Any, deployment_id: str) -> dict[str
         "last_error_at": _to_int_or_none(health.get("last_error_at")),
         "last_success_at": _to_int_or_none(health.get("last_success_at")),
     }
+
+
+def _serialize_model_write_response(
+    *,
+    deployment_id: str,
+    model_name: str,
+    provider: str,
+    named_credential_id: str | None,
+    named_credential_name: str | None,
+    deltallm_params: dict[str, Any],
+    model_info: dict[str, Any],
+) -> dict[str, Any]:
+    credential_source = "named" if named_credential_id else "inline"
+    return to_json_value(
+        {
+            "deployment_id": deployment_id,
+            "model_name": model_name,
+            "provider": provider,
+            "mode": model_info.get("mode", "chat"),
+            "credential_source": credential_source,
+            "inline_credentials_present": credential_source == "inline" and any(
+                str(deltallm_params.get(field) or "").strip()
+                for field in _CREDENTIAL_CONNECTION_FIELDS
+            ),
+            "connection_summary": {
+                "api_base": deltallm_params.get("api_base") or None,
+                "api_version": deltallm_params.get("api_version") or None,
+                "region": deltallm_params.get("region") or None,
+            },
+            "named_credential_id": named_credential_id,
+            "named_credential_name": named_credential_name,
+            "deltallm_params": {
+                **deltallm_params,
+                **{
+                    field: "***REDACTED***"
+                    for field in _CREDENTIAL_CONNECTION_FIELDS
+                    if field in deltallm_params and deltallm_params.get(field) not in (None, "")
+                },
+            },
+            "model_info": model_info,
+        }
+    )
 
 
 def _rebuild_runtime_registry(app: Any) -> None:
@@ -161,18 +251,29 @@ def _normalized_model_payload_or_400(
     payload: dict[str, Any],
     *,
     existing_model_name: str | None = None,
+    existing_named_credential_id: str | None = None,
     existing_params: dict[str, Any] | None = None,
     existing_model_info: dict[str, Any] | None = None,
-) -> tuple[str, dict[str, Any], dict[str, Any]]:
+) -> tuple[str, str | None, dict[str, Any], dict[str, Any]]:
     model_name = str(payload.get("model_name") or existing_model_name or "").strip()
     if not model_name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="model_name is required")
+
+    raw_named_credential_id = payload.get("named_credential_id", _MISSING)
+    if raw_named_credential_id is _MISSING:
+        named_credential_id = existing_named_credential_id
+    else:
+        named_credential_id = str(raw_named_credential_id or "").strip() or None
 
     raw_params = payload.get("deltallm_params")
     if raw_params is None:
         params = dict(existing_params or {})
     elif isinstance(raw_params, dict):
-        params = dict(raw_params)
+        params = _merged_model_params(
+            existing_params=existing_params,
+            incoming_params=raw_params,
+            named_credential_id=named_credential_id,
+        )
     else:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params must be an object")
 
@@ -184,12 +285,11 @@ def _normalized_model_payload_or_400(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="provider is required")
     if not model:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params.model is required")
-    if not api_base:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params.api_base is required")
 
     params["provider"] = provider
     params["model"] = model
-    params["api_base"] = api_base
+    if api_base:
+        params["api_base"] = api_base
 
     api_version = params.get("api_version")
     if api_version is not None:
@@ -204,7 +304,35 @@ def _normalized_model_payload_or_400(
     else:
         model_info = dict(existing_model_info or {})
 
-    return model_name, params, model_info
+    return model_name, named_credential_id, params, model_info
+
+
+def _merged_model_params(
+    *,
+    existing_params: dict[str, Any] | None,
+    incoming_params: dict[str, Any],
+    named_credential_id: str | None,
+) -> dict[str, Any]:
+    merged = dict(existing_params or {})
+    existing_provider = str(merged.get("provider") or "").strip().lower() or resolve_provider(merged)
+    incoming_provider = str(incoming_params.get("provider") or existing_provider or "").strip().lower()
+    provider_changed = bool(existing_provider and incoming_provider and existing_provider != incoming_provider)
+
+    if named_credential_id is not None or provider_changed:
+        for field in _CREDENTIAL_CONNECTION_FIELDS:
+            merged.pop(field, None)
+
+    for key, value in incoming_params.items():
+        if value is None:
+            merged.pop(str(key), None)
+        else:
+            merged[str(key)] = value
+
+    if named_credential_id is not None:
+        for field in _CREDENTIAL_CONNECTION_FIELDS:
+            merged.pop(field, None)
+
+    return merged
 
 
 @router.get("/ui/api/models", dependencies=[Depends(require_authenticated)])
@@ -309,13 +437,31 @@ async def list_provider_presets() -> dict[str, Any]:
 
 @router.post("/ui/api/provider-models/discover", dependencies=[Depends(require_authenticated)])
 async def discover_models_for_provider(request: Request, payload: ProviderModelDiscoveryRequest) -> dict[str, Any]:
+    raw_named_credential = await _load_named_credential_or_400(
+        request.app,
+        payload.named_credential_id,
+        provider=str(payload.provider or "").strip().lower() or None,
+    )
+    dynamic_config = getattr(request.app.state, "dynamic_config_manager", None)
+    named_credential = resolve_named_credential_record(
+        raw_named_credential,
+        secret_resolver=getattr(dynamic_config, "secret_resolver", None),
+    )
+    merged_params = merge_named_credential_params(
+        {
+            "api_key": payload.api_key,
+            "api_base": payload.api_base,
+            "api_version": payload.api_version,
+        },
+        named_credential,
+    )
     return await discover_provider_models(
         request.app.state.http_client,
         provider=payload.provider,
         mode=payload.mode,
-        api_key=payload.api_key,
-        api_base=payload.api_base,
-        api_version=payload.api_version,
+        api_key=merged_params.get("api_key"),
+        api_base=merged_params.get("api_base"),
+        api_version=merged_params.get("api_version"),
         default_openai_base_url=getattr(request.app.state.settings, "openai_base_url", "https://api.openai.com/v1"),
     )
 
@@ -362,7 +508,15 @@ async def check_model_health(request: Request, deployment_id: str) -> dict[str, 
 @router.post("/ui/api/models", dependencies=[Depends(require_master_key)])
 async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     request_start = perf_counter()
-    model_name, deltallm_params, model_info = _normalized_model_payload_or_400(payload)
+    model_name, named_credential_id, deltallm_params, model_info = _normalized_model_payload_or_400(payload)
+    named_credential = await _load_named_credential_or_400(
+        request.app,
+        named_credential_id,
+        provider=str(deltallm_params.get("provider") or "").strip().lower() or None,
+    )
+    effective_params = merge_named_credential_params(deltallm_params, named_credential)
+    if not str(effective_params.get("api_base") or "").strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params.api_base is required")
     deployment_id = str(payload.get("deployment_id") or f"{model_name}-{secrets.token_hex(4)}")
     try:
         ensure_model_name_available(getattr(request.app.state, "model_registry", {}) or {}, model_name=model_name)
@@ -373,6 +527,7 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
         "model_name": model_name,
         "deltallm_params": deltallm_params,
         "model_info": model_info,
+        "named_credential_id": named_credential_id,
     }
     _validate_model_config_or_400(model_config)
 
@@ -381,18 +536,31 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
         deployment_id = await hot_reload.add_model(model_config, updated_by="admin_api")
     else:
         request.app.state.model_registry.setdefault(model_name, []).append(
-            {"deployment_id": deployment_id, "deltallm_params": deltallm_params, "model_info": model_info}
+            {
+                "deployment_id": deployment_id,
+                "named_credential_id": named_credential_id,
+                "named_credential_name": named_credential.name if named_credential is not None else None,
+                "deltallm_params": resolve_runtime_deltallm_params(
+                    deltallm_params,
+                    request.app.state.settings,
+                    named_credential=named_credential,
+                ),
+                "model_info": model_info,
+            }
         )
         await _invalidate_route_group_runtime_cache(request.app)
         _rebuild_runtime_registry(request.app)
         await _sync_auto_follow_org_bindings(request.app)
 
-    response = {
-        "deployment_id": deployment_id,
-        "model_name": model_name,
-        "deltallm_params": deltallm_params,
-        "model_info": model_info,
-    }
+    response = _serialize_model_write_response(
+        deployment_id=deployment_id,
+        model_name=model_name,
+        provider=str(deltallm_params.get("provider") or ""),
+        named_credential_id=named_credential_id,
+        named_credential_name=named_credential.name if named_credential is not None else None,
+        deltallm_params=deltallm_params,
+        model_info=model_info,
+    )
     await emit_control_audit_event(
         request=request,
         request_start=request_start,
@@ -412,28 +580,54 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
     request_start = perf_counter()
     hot_reload: ModelHotReloadManager | None = getattr(request.app.state, "model_hot_reload_manager", None)
     registry: dict[str, list[dict[str, Any]]] = request.app.state.model_registry
+    model_repository = getattr(request.app.state, "model_deployment_repository", None)
+    get_by_deployment_id = getattr(model_repository, "get_by_deployment_id", None)
 
-    found_model_name: str | None = None
-    found_deployment: dict[str, Any] | None = None
-    for model_name, deployments in list(registry.items()):
-        for idx, deployment in enumerate(deployments):
-            candidate_id = str(deployment.get("deployment_id") or f"{model_name}-{idx}")
-            if candidate_id == deployment_id:
-                found_model_name = model_name
-                found_deployment = deployment
+    stored_deployment = None
+    if callable(get_by_deployment_id):
+        stored_deployment = await get_by_deployment_id(deployment_id)
+
+    if stored_deployment is not None:
+        found_model_name = stored_deployment.model_name
+        found_deployment = {
+            "deployment_id": stored_deployment.deployment_id,
+            "named_credential_id": stored_deployment.named_credential_id,
+            "deltallm_params": dict(stored_deployment.deltallm_params),
+            "model_info": dict(stored_deployment.model_info or {}),
+        }
+    else:
+        found_model_name = None
+        found_deployment = None
+
+    if found_deployment is None or found_model_name is None:
+        for model_name, deployments in list(registry.items()):
+            for idx, deployment in enumerate(deployments):
+                candidate_id = str(deployment.get("deployment_id") or f"{model_name}-{idx}")
+                if candidate_id == deployment_id:
+                    found_model_name = model_name
+                    found_deployment = deployment
+                    break
+            if found_deployment:
                 break
-        if found_deployment:
-            break
 
     if found_deployment is None or found_model_name is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment not found")
 
-    new_model_name, deltallm_params, model_info = _normalized_model_payload_or_400(
+    new_model_name, named_credential_id, deltallm_params, model_info = _normalized_model_payload_or_400(
         payload,
         existing_model_name=found_model_name,
+        existing_named_credential_id=found_deployment.get("named_credential_id"),
         existing_params=found_deployment.get("deltallm_params", {}),
         existing_model_info=found_deployment.get("model_info", {}),
     )
+    named_credential = await _load_named_credential_or_400(
+        request.app,
+        named_credential_id,
+        provider=str(deltallm_params.get("provider") or "").strip().lower() or None,
+    )
+    effective_params = merge_named_credential_params(deltallm_params, named_credential)
+    if not str(effective_params.get("api_base") or "").strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="deltallm_params.api_base is required")
     try:
         ensure_model_name_available(
             getattr(request.app.state, "model_registry", {}) or {},
@@ -447,6 +641,7 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
         "model_name": new_model_name,
         "deltallm_params": deltallm_params,
         "model_info": model_info,
+        "named_credential_id": named_credential_id,
     }
     _validate_model_config_or_400(model_config)
 
@@ -467,18 +662,31 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
                     registry.pop(found_model_name, None)
                 break
         registry.setdefault(new_model_name, []).append(
-            {"deployment_id": deployment_id, "deltallm_params": deltallm_params, "model_info": model_info}
+            {
+                "deployment_id": deployment_id,
+                "named_credential_id": named_credential_id,
+                "named_credential_name": named_credential.name if named_credential is not None else None,
+                "deltallm_params": resolve_runtime_deltallm_params(
+                    deltallm_params,
+                    request.app.state.settings,
+                    named_credential=named_credential,
+                ),
+                "model_info": model_info,
+            }
         )
         await _invalidate_route_group_runtime_cache(request.app)
         _rebuild_runtime_registry(request.app)
         await _sync_auto_follow_org_bindings(request.app)
 
-    response = {
-        "deployment_id": deployment_id,
-        "model_name": new_model_name,
-        "deltallm_params": deltallm_params,
-        "model_info": model_info,
-    }
+    response = _serialize_model_write_response(
+        deployment_id=deployment_id,
+        model_name=new_model_name,
+        provider=str(deltallm_params.get("provider") or ""),
+        named_credential_id=named_credential_id,
+        named_credential_name=named_credential.name if named_credential is not None else None,
+        deltallm_params=deltallm_params,
+        model_info=model_info,
+    )
     await emit_control_audit_event(
         request=request,
         request_start=request_start,

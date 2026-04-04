@@ -13,6 +13,7 @@ from src.api.admin.endpoints import (
     keys_router,
     mcp_router,
     models_router,
+    named_credentials_router,
     organizations_router,
     prompt_registry_router,
     rbac_router,
@@ -35,6 +36,7 @@ admin_router.include_router(keys_router)
 admin_router.include_router(mcp_router)
 admin_router.include_router(callable_targets_router)
 admin_router.include_router(models_router)
+admin_router.include_router(named_credentials_router)
 admin_router.include_router(service_accounts_router)
 admin_router.include_router(teams_router)
 admin_router.include_router(users_router)
