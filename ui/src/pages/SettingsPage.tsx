@@ -132,7 +132,11 @@ function FallbackEditor({ label, description, entries, onChange }: {
               <input value={entry.from} onChange={(e) => { const u = [...entries]; u[i] = { ...u[i], from: e.target.value }; onChange(u); }} placeholder="Source model group" className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent transition-all" />
               <ChevronRight className="w-4 h-4 text-gray-300 shrink-0" />
               <input value={entry.to} onChange={(e) => { const u = [...entries]; u[i] = { ...u[i], to: e.target.value }; onChange(u); }} placeholder="Fallback model group" className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent transition-all" />
-              <button onClick={() => onChange(entries.filter((_, idx) => idx !== i))} className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button
+                onClick={() => onChange(entries.filter((_, idx) => idx !== i))}
+                aria-label="Remove fallback rule"
+                className="rounded-md p-1 text-gray-400 transition-colors hover:text-red-500 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:ring-offset-1 focus-visible:text-red-500"
+              >
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -251,7 +255,7 @@ export default function SettingsPage() {
           </button>
         </div>
 
-        <div className="flex gap-6">
+        <div className="flex flex-col gap-6 md:flex-row">
           <nav className="w-56 shrink-0 hidden md:block">
             <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-1.5 sticky top-6">
               {TABS.map((tab) => {
