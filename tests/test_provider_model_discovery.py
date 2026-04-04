@@ -3,6 +3,17 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from src.config_runtime.secrets import SecretResolver
+from src.db.named_credentials import NamedCredentialRecord
+
+
+class _FakeNamedCredentialRepository:
+    def __init__(self, records: list[NamedCredentialRecord]) -> None:
+        self.records = {record.credential_id: record for record in records}
+
+    async def get_by_id(self, credential_id: str) -> NamedCredentialRecord | None:
+        return self.records.get(credential_id)
+
 
 @pytest.mark.asyncio
 async def test_provider_model_discovery_returns_catalog_without_credentials(client, test_app):
@@ -108,6 +119,83 @@ async def test_provider_model_discovery_merges_catalog_and_live_results(client, 
     assert models["gpt-4o"]["known_metadata"]["max_tokens"] == 128000
     assert models["gpt-5-custom"]["source"] == "provider_api"
     assert models["gpt-5-custom"]["known_metadata"] is None
+
+
+@pytest.mark.asyncio
+async def test_provider_model_discovery_supports_named_credentials(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.named_credential_repository = _FakeNamedCredentialRepository(
+        [
+            NamedCredentialRecord(
+                credential_id="cred-1",
+                name="OpenAI prod",
+                provider="openai",
+                connection_config={"api_key": "provider-key", "api_base": "https://api.openai.com/v1"},
+            )
+        ]
+    )
+
+    async def get(url: str, headers: dict[str, str] | None = None, timeout: float = 10.0):  # noqa: ANN201
+        assert url == "https://api.openai.com/v1/models"
+        assert headers == {"Authorization": "Bearer provider-key"}
+        del timeout
+        return httpx.Response(
+            200,
+            json={"data": [{"id": "gpt-4o", "name": "gpt-4o"}]},
+        )
+
+    test_app.state.http_client.get = get
+
+    response = await client.post(
+        "/ui/api/provider-models/discover",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"provider": "openai", "mode": "chat", "named_credential_id": "cred-1"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["warnings"] == []
+    models = {item["id"]: item for item in payload["data"]}
+    assert models["gpt-4o"]["source"] == "catalog+provider_api"
+
+
+@pytest.mark.asyncio
+async def test_provider_model_discovery_resolves_named_credential_env_refs(
+    client,
+    test_app,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    monkeypatch.setenv("OPENAI_PROVIDER_KEY", "provider-key")
+    test_app.state.dynamic_config_manager = type("DynamicConfig", (), {"secret_resolver": SecretResolver()})()
+    test_app.state.named_credential_repository = _FakeNamedCredentialRepository(
+        [
+            NamedCredentialRecord(
+                credential_id="cred-1",
+                name="OpenAI prod",
+                provider="openai",
+                connection_config={"api_key": "os.environ/OPENAI_PROVIDER_KEY", "api_base": "https://api.openai.com/v1"},
+            )
+        ]
+    )
+
+    async def get(url: str, headers: dict[str, str] | None = None, timeout: float = 10.0):  # noqa: ANN201
+        assert url == "https://api.openai.com/v1/models"
+        assert headers == {"Authorization": "Bearer provider-key"}
+        del timeout
+        return httpx.Response(200, json={"data": [{"id": "gpt-4o", "name": "gpt-4o"}]})
+
+    test_app.state.http_client.get = get
+
+    response = await client.post(
+        "/ui/api/provider-models/discover",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"provider": "openai", "mode": "chat", "named_credential_id": "cred-1"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["warnings"] == []
 
 
 @pytest.mark.asyncio

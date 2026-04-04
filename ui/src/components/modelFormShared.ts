@@ -48,6 +48,11 @@ export interface ModelFormValues {
   model_name: string;
   provider: string;
   model: string;
+  credential_source: 'inline' | 'named';
+  named_credential_id: string;
+  named_credential_name: string;
+  inline_credentials_present: boolean;
+  clear_inline_api_key: boolean;
   api_key: string;
   api_base: string;
   api_version: string;
@@ -81,6 +86,7 @@ export interface ModelFormValues {
 
 export interface ModelPayload {
   model_name: string;
+  named_credential_id?: string | null;
   deltallm_params: Record<string, unknown>;
   model_info: Record<string, unknown>;
 }
@@ -90,6 +96,11 @@ export const EMPTY_FORM: ModelFormValues = {
   model_name: '',
   provider: '',
   model: '',
+  credential_source: 'inline',
+  named_credential_id: '',
+  named_credential_name: '',
+  inline_credentials_present: false,
+  clear_inline_api_key: false,
   api_key: '',
   api_base: '',
   api_version: '',
@@ -139,12 +150,17 @@ export function buildModelPayload(
   form: ModelFormValues,
   defaultParams: { key: string; value: string }[],
 ): ModelPayload {
+  const useNamedCredential = form.credential_source === 'named';
   const deltallm_params: Record<string, unknown> = {
     provider: form.provider.trim() || undefined,
     model: form.model.trim(),
-    api_key: form.api_key || undefined,
-    api_base: form.api_base.trim() || undefined,
-    api_version: form.api_version.trim() || undefined,
+    api_key: useNamedCredential
+      ? undefined
+      : form.clear_inline_api_key
+        ? null
+        : form.api_key || undefined,
+    api_base: useNamedCredential ? undefined : form.api_base.trim() || undefined,
+    api_version: useNamedCredential ? undefined : form.api_version.trim() || undefined,
     rpm: numOrUndef(form.rpm),
     tpm: numOrUndef(form.tpm),
     timeout: numOrUndef(form.timeout),
@@ -211,7 +227,12 @@ export function buildModelPayload(
   }
   model_info.default_params = Object.keys(defaultParamsPayload).length > 0 ? defaultParamsPayload : {};
 
-  return { model_name: form.model_name.trim(), deltallm_params, model_info };
+  return {
+    model_name: form.model_name.trim(),
+    named_credential_id: useNamedCredential ? form.named_credential_id.trim() || null : null,
+    deltallm_params,
+    model_info,
+  };
 }
 
 export function formFromModel(
@@ -234,7 +255,12 @@ export function formFromModel(
     model_name: model.model_name || '',
     provider,
     model: normalizedModel,
-    api_key: strOrEmpty(lp.api_key),
+    credential_source: model.credential_source || (model.named_credential_id ? 'named' : 'inline'),
+    named_credential_id: strOrEmpty(model.named_credential_id),
+    named_credential_name: strOrEmpty(model.named_credential_name),
+    inline_credentials_present: Boolean(model.inline_credentials_present),
+    clear_inline_api_key: false,
+    api_key: '',
     api_base: strOrEmpty(lp.api_base),
     api_version: strOrEmpty(lp.api_version),
     rpm: strOrEmpty(lp.rpm),

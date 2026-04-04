@@ -6,6 +6,7 @@ import {
   Box,
   Activity,
   Key,
+  KeyRound,
   Users,
   UsersRound,
   Building2,
@@ -56,6 +57,7 @@ const navEntries: NavEntry[] = [
     icon: LayoutDashboard,
     children: [
       { type: 'item', to: '/models', icon: Box, label: 'Models', pageKey: 'models' },
+      { type: 'item', to: '/named-credentials', icon: KeyRound, label: 'Named Credentials', pageKey: 'named_credentials' },
       { type: 'item', to: '/route-groups', icon: Workflow, label: 'Route Groups', pageKey: 'route_groups' },
       { type: 'item', to: '/prompts', icon: FileText, label: 'Prompt Registry', pageKey: 'prompts' },
       { type: 'item', to: '/mcp-servers', icon: Activity, label: 'MCP Servers', pageKey: 'mcp_servers' },

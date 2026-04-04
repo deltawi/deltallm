@@ -502,17 +502,38 @@ model DeltaLLM_Config {
   @@map("deltallm_config")
 }
 
+model DeltaLLM_NamedCredential {
+  credential_id         String   @id @default(uuid())
+  name                  String   @unique
+  provider              String
+  connection_config     Json
+  metadata              Json?
+  created_by_account_id String?
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
+
+  deployments DeltaLLM_ModelDeployment[]
+
+  @@index([provider], map: "deltallm_namedcredential_provider_idx")
+  @@index([created_at], map: "deltallm_namedcredential_created_at_idx")
+  @@map("deltallm_namedcredential")
+}
+
 model DeltaLLM_ModelDeployment {
-  deployment_id   String   @id
-  model_name      String
-  deltallm_params Json
-  model_info      Json?
-  created_at      DateTime @default(now())
-  updated_at      DateTime @updatedAt
+  deployment_id        String   @id
+  model_name           String
+  named_credential_id  String?
+  deltallm_params      Json
+  model_info           Json?
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  named_credential DeltaLLM_NamedCredential? @relation(fields: [named_credential_id], references: [credential_id], onDelete: SetNull)
 
   route_group_members DeltaLLM_RouteGroupMember[]
 
   @@index([model_name])
+  @@index([named_credential_id], map: "deltallm_modeldeployment_named_credential_idx")
   @@map("deltallm_modeldeployment")
 }
 

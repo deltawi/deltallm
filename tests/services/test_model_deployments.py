@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from src.config import AppConfig
+from src.config_runtime.secrets import SecretResolver
+from src.db.named_credentials import NamedCredentialRecord
 from src.db.repositories import ModelDeploymentRecord
 from src.services.model_deployments import bootstrap_model_deployments_from_config, load_model_registry
 
@@ -23,6 +25,18 @@ class FakeModelRepository:
             return False
         self.records = list(records)
         return True
+
+
+class FakeNamedCredentialRepository:
+    def __init__(self, records: list[NamedCredentialRecord] | None = None) -> None:
+        self.records = {record.credential_id: record for record in (records or [])}
+
+    async def list_by_ids(self, credential_ids: list[str]) -> dict[str, NamedCredentialRecord]:
+        return {
+            credential_id: self.records[credential_id]
+            for credential_id in credential_ids
+            if credential_id in self.records
+        }
 
 
 @pytest.mark.asyncio
@@ -187,3 +201,97 @@ async def test_load_model_registry_rejects_duplicate_model_names_from_db() -> No
 
     with pytest.raises(DuplicateModelNameError, match="Duplicate model_name 'shared-model' is not allowed"):
         await load_model_registry(repo, cfg, settings)
+
+
+@pytest.mark.asyncio
+async def test_load_model_registry_resolves_named_credential_connection_params() -> None:
+    settings = SimpleNamespace(openai_api_key=None, openai_base_url="https://api.openai.com/v1")
+    cfg = AppConfig.model_validate({})
+    repo = FakeModelRepository(
+        records=[
+            ModelDeploymentRecord(
+                deployment_id="db-1",
+                model_name="shared-model",
+                named_credential_id="cred-1",
+                deltallm_params={
+                    "provider": "openai",
+                    "model": "openai/gpt-4.1-mini",
+                    "api_base": "https://inline.example/v1",
+                },
+                model_info={},
+            ),
+        ]
+    )
+    named_credentials = FakeNamedCredentialRepository(
+        records=[
+            NamedCredentialRecord(
+                credential_id="cred-1",
+                name="OpenAI prod",
+                provider="openai",
+                connection_config={
+                    "api_key": "named-secret",
+                    "api_base": "https://named.example/v1",
+                },
+            )
+        ]
+    )
+
+    model_registry, source = await load_model_registry(
+        repo,
+        cfg,
+        settings,
+        named_credential_repository=named_credentials,
+    )
+
+    assert source == "db"
+    entry = model_registry["shared-model"][0]
+    assert entry["named_credential_id"] == "cred-1"
+    assert entry["named_credential_name"] == "OpenAI prod"
+    assert entry["deltallm_params"]["api_key"] == "named-secret"
+    assert entry["deltallm_params"]["api_base"] == "https://named.example/v1"
+
+
+@pytest.mark.asyncio
+async def test_load_model_registry_resolves_named_credential_env_secret_refs(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_PROVIDER_KEY", "env-secret")
+    settings = SimpleNamespace(openai_api_key=None, openai_base_url="https://api.openai.com/v1")
+    cfg = AppConfig.model_validate({})
+    repo = FakeModelRepository(
+        records=[
+            ModelDeploymentRecord(
+                deployment_id="db-1",
+                model_name="shared-model",
+                named_credential_id="cred-1",
+                deltallm_params={
+                    "provider": "openai",
+                    "model": "openai/gpt-4.1-mini",
+                },
+                model_info={},
+            ),
+        ]
+    )
+    named_credentials = FakeNamedCredentialRepository(
+        records=[
+            NamedCredentialRecord(
+                credential_id="cred-1",
+                name="OpenAI prod",
+                provider="openai",
+                connection_config={
+                    "api_key": "os.environ/OPENAI_PROVIDER_KEY",
+                    "api_base": "https://named.example/v1",
+                },
+            )
+        ]
+    )
+
+    model_registry, source = await load_model_registry(
+        repo,
+        cfg,
+        settings,
+        named_credential_repository=named_credentials,
+        secret_resolver=SecretResolver(),
+    )
+
+    assert source == "db"
+    entry = model_registry["shared-model"][0]
+    assert entry["deltallm_params"]["api_key"] == "env-secret"

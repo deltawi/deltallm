@@ -18,6 +18,7 @@ from src.db.email_tokens import EmailTokenRepository
 from src.db.invitations import InvitationRepository
 from src.db.mcp import MCPRepository
 from src.db.mcp_scope_policies import MCPScopePolicyRepository
+from src.db.named_credentials import NamedCredentialRepository
 from src.db.prompt_registry import PromptRegistryRepository
 from src.db.repositories import ModelDeploymentRepository
 from src.db.route_groups import RouteGroupRepository
@@ -85,6 +86,7 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
     app.state.bedrock_adapter = BedrockAdapter(http_client)
 
     app.state.model_deployment_repository = ModelDeploymentRepository(prisma_manager.client)
+    app.state.named_credential_repository = NamedCredentialRepository(prisma_manager.client)
     app.state.callable_target_binding_repository = CallableTargetBindingRepository(prisma_manager.client)
     app.state.callable_target_scope_policy_repository = CallableTargetScopePolicyRepository(prisma_manager.client)
     app.state.route_group_repository = RouteGroupRepository(prisma_manager.client)

@@ -193,10 +193,12 @@ const EMPTY_DEPLOYMENT_HEALTH: DeploymentHealth = {
 
 function OverviewTab({ model }: { model: any }) {
   const lp = model.deltallm_params || {};
+  const connectionSummary = model.connection_summary || {};
   const health: DeploymentHealth = model.health || EMPTY_DEPLOYMENT_HEALTH;
-  const maskedKey = lp.api_key
-    ? `${lp.api_key.slice(0, 8)}${'•'.repeat(12)}${lp.api_key.slice(-4)}`
-    : null;
+  const credentialSource = model.credential_source === 'named' ? 'Named credential' : 'Inline credentials';
+  const credentialDetail = model.credential_source === 'named'
+    ? (model.named_credential_name || 'Managed by named credential')
+    : (model.inline_credentials_present ? 'Stored inline credential' : 'No inline credential configured');
 
   return (
     <div className="grid grid-cols-2 gap-3">
@@ -204,8 +206,11 @@ function OverviewTab({ model }: { model: any }) {
       <Field label="Deployment ID"        value={model.deployment_id} mono />
       <Field label="Provider"             value={<ProviderPill provider={model.provider} />} />
       <Field label="Provider Model"       value={lp.model || '—'} mono />
-      <Field label="API Base"             value={lp.api_base || '—'} mono full />
-      <Field label="API Key"              value={maskedKey || 'Managed outside this deployment'} mono full />
+      <Field label="Credential Source"    value={credentialSource} />
+      <Field label="Credential"           value={credentialDetail} full />
+      <Field label="API Base"             value={connectionSummary.api_base || lp.api_base || '—'} mono full />
+      {connectionSummary.api_version && <Field label="API Version" value={connectionSummary.api_version} mono />}
+      {connectionSummary.region && <Field label="Region" value={connectionSummary.region} mono />}
       <Field label="Timeout"              value={formatDurationSeconds(lp.timeout) || '—'} />
       <Field label="Consecutive Failures" value={String(health.consecutive_failures ?? 0)} />
       <Field label="Last Success"         value={timeSince(health.last_success_at) || '—'} />

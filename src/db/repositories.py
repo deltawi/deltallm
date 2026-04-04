@@ -198,6 +198,7 @@ class ModelDeploymentRecord:
     deployment_id: str
     model_name: str
     deltallm_params: dict[str, Any]
+    named_credential_id: str | None = None
     model_info: dict[str, Any] | None = None
 
 
@@ -211,7 +212,7 @@ class ModelDeploymentRepository:
 
         rows = await self.prisma.query_raw(
             """
-            SELECT deployment_id, model_name, deltallm_params, model_info
+            SELECT deployment_id, model_name, named_credential_id, deltallm_params, model_info
             FROM deltallm_modeldeployment
             ORDER BY model_name ASC, created_at ASC
             """
@@ -220,6 +221,7 @@ class ModelDeploymentRepository:
             ModelDeploymentRecord(
                 deployment_id=str(row.get("deployment_id") or ""),
                 model_name=str(row.get("model_name") or ""),
+                named_credential_id=str(row.get("named_credential_id")) if row.get("named_credential_id") is not None else None,
                 deltallm_params=_parse_json_object(row.get("deltallm_params")),
                 model_info=_parse_metadata(row.get("model_info")),
             )
@@ -232,7 +234,7 @@ class ModelDeploymentRepository:
 
         rows = await self.prisma.query_raw(
             """
-            SELECT deployment_id, model_name, deltallm_params, model_info
+            SELECT deployment_id, model_name, named_credential_id, deltallm_params, model_info
             FROM deltallm_modeldeployment
             WHERE deployment_id = $1
             LIMIT 1
@@ -245,9 +247,39 @@ class ModelDeploymentRepository:
         return ModelDeploymentRecord(
             deployment_id=str(row.get("deployment_id") or ""),
             model_name=str(row.get("model_name") or ""),
+            named_credential_id=str(row.get("named_credential_id")) if row.get("named_credential_id") is not None else None,
             deltallm_params=_parse_json_object(row.get("deltallm_params")),
             model_info=_parse_metadata(row.get("model_info")),
         )
+
+    async def list_by_deployment_ids(self, deployment_ids: list[str]) -> list[ModelDeploymentRecord]:
+        if self.prisma is None or not deployment_ids:
+            return []
+
+        normalized_ids = [str(item).strip() for item in deployment_ids if str(item).strip()]
+        if not normalized_ids:
+            return []
+
+        placeholders = ", ".join(f"${index}" for index in range(1, len(normalized_ids) + 1))
+        rows = await self.prisma.query_raw(
+            f"""
+            SELECT deployment_id, model_name, named_credential_id, deltallm_params, model_info
+            FROM deltallm_modeldeployment
+            WHERE deployment_id IN ({placeholders})
+            ORDER BY model_name ASC, created_at ASC
+            """,
+            *normalized_ids,
+        )
+        return [
+            ModelDeploymentRecord(
+                deployment_id=str(row.get("deployment_id") or ""),
+                model_name=str(row.get("model_name") or ""),
+                named_credential_id=str(row.get("named_credential_id")) if row.get("named_credential_id") is not None else None,
+                deltallm_params=_parse_json_object(row.get("deltallm_params")),
+                model_info=_parse_metadata(row.get("model_info")),
+            )
+            for row in rows
+        ]
 
     async def create(self, record: ModelDeploymentRecord) -> ModelDeploymentRecord:
         if self.prisma is None:
@@ -255,11 +287,20 @@ class ModelDeploymentRepository:
 
         await self.prisma.execute_raw(
             """
-            INSERT INTO deltallm_modeldeployment (deployment_id, model_name, deltallm_params, model_info, created_at, updated_at)
-            VALUES ($1, $2, $3::jsonb, $4::jsonb, NOW(), NOW())
+            INSERT INTO deltallm_modeldeployment (
+                deployment_id,
+                model_name,
+                named_credential_id,
+                deltallm_params,
+                model_info,
+                created_at,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, NOW(), NOW())
             """,
             record.deployment_id,
             record.model_name,
+            record.named_credential_id,
             json.dumps(record.deltallm_params),
             json.dumps(record.model_info) if record.model_info is not None else None,
         )
@@ -270,6 +311,7 @@ class ModelDeploymentRepository:
         deployment_id: str,
         *,
         model_name: str,
+        named_credential_id: str | None,
         deltallm_params: dict[str, Any],
         model_info: dict[str, Any] | None,
     ) -> ModelDeploymentRecord | None:
@@ -280,14 +322,16 @@ class ModelDeploymentRepository:
             """
             UPDATE deltallm_modeldeployment
             SET model_name = $2,
-                deltallm_params = $3::jsonb,
-                model_info = $4::jsonb,
+                named_credential_id = $3,
+                deltallm_params = $4::jsonb,
+                model_info = $5::jsonb,
                 updated_at = NOW()
             WHERE deployment_id = $1
-            RETURNING deployment_id, model_name, deltallm_params, model_info
+            RETURNING deployment_id, model_name, named_credential_id, deltallm_params, model_info
             """,
             deployment_id,
             model_name,
+            named_credential_id,
             json.dumps(deltallm_params),
             json.dumps(model_info) if model_info is not None else None,
         )
@@ -297,6 +341,7 @@ class ModelDeploymentRepository:
         return ModelDeploymentRecord(
             deployment_id=str(row.get("deployment_id") or ""),
             model_name=str(row.get("model_name") or ""),
+            named_credential_id=str(row.get("named_credential_id")) if row.get("named_credential_id") is not None else None,
             deltallm_params=_parse_json_object(row.get("deltallm_params")),
             model_info=_parse_metadata(row.get("model_info")),
         )
@@ -326,12 +371,21 @@ class ModelDeploymentRepository:
         for record in records:
             await self.prisma.execute_raw(
                 """
-                INSERT INTO deltallm_modeldeployment (deployment_id, model_name, deltallm_params, model_info, created_at, updated_at)
-                VALUES ($1, $2, $3::jsonb, $4::jsonb, NOW(), NOW())
+                INSERT INTO deltallm_modeldeployment (
+                    deployment_id,
+                    model_name,
+                    named_credential_id,
+                    deltallm_params,
+                    model_info,
+                    created_at,
+                    updated_at
+                )
+                VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, NOW(), NOW())
                 ON CONFLICT (deployment_id) DO NOTHING
                 """,
                 record.deployment_id,
                 record.model_name,
+                record.named_credential_id,
                 json.dumps(record.deltallm_params),
                 json.dumps(record.model_info) if record.model_info is not None else None,
             )

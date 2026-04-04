@@ -6,6 +6,7 @@ from uuid import uuid4
 from src.cache import configure_cache_runtime
 from src.config import AppConfig, RouterSettings, resolve_salt_key
 from src.config_runtime.dynamic import DynamicConfigManager
+from src.db.named_credentials import NamedCredentialRepository
 from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
 from src.db.route_groups import RouteGroupRepository
 from src.providers.resolution import validate_provider_mode_compatibility
@@ -33,12 +34,14 @@ class ModelHotReloadManager:
         app: Any,
         dynamic_config: DynamicConfigManager,
         model_repository: ModelDeploymentRepository | None = None,
+        named_credential_repository: NamedCredentialRepository | None = None,
         route_group_repository: RouteGroupRepository | None = None,
         route_group_cache: RouteGroupRuntimeCache | None = None,
     ) -> None:
         self.app = app
         self.dynamic_config = dynamic_config
         self.model_repository = model_repository
+        self.named_credential_repository = named_credential_repository
         self.route_group_repository = route_group_repository
         self.route_group_cache = route_group_cache
         self.dynamic_config.subscribe(self._on_config_change)
@@ -63,6 +66,7 @@ class ModelHotReloadManager:
                 ModelDeploymentRecord(
                     deployment_id=deployment_id,
                     model_name=str(deployment["model_name"]),
+                    named_credential_id=str(deployment.get("named_credential_id")).strip() or None if deployment.get("named_credential_id") is not None else None,
                     deltallm_params=dict(deployment["deltallm_params"]),
                     model_info=dict(deployment.get("model_info", {})),
                 )
@@ -98,6 +102,7 @@ class ModelHotReloadManager:
         updated_record = await self.model_repository.update(
             deployment_id,
             model_name=str(deployment["model_name"]),
+            named_credential_id=str(deployment.get("named_credential_id")).strip() or None if deployment.get("named_credential_id") is not None else None,
             deltallm_params=dict(deployment["deltallm_params"]),
             model_info=dict(deployment.get("model_info", {})),
         )
@@ -141,6 +146,8 @@ class ModelHotReloadManager:
             app_config,
             settings,
             source_mode=app_config.general_settings.model_deployment_source,
+            named_credential_repository=self.named_credential_repository,
+            secret_resolver=getattr(self.dynamic_config, "secret_resolver", None),
         )
         app.state.model_registry = model_registry
 
