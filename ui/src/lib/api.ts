@@ -614,22 +614,28 @@ export const health = {
 };
 
 export const spend = {
-  summary: (start_date?: string, end_date?: string) => {
+  summary: (start_date?: string, end_date?: string, opts?: RequestInit) => {
     const qs = new URLSearchParams();
     if (start_date) qs.set('start_date', start_date);
     if (end_date) qs.set('end_date', end_date);
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
-    return apiFetch<SpendSummary>(`/ui/api/spend/summary${suffix}`);
+    return apiFetch<SpendSummary>(`/ui/api/spend/summary${suffix}`, opts);
   },
-  report: (group_by: 'model' | 'provider' | 'day' | 'user' | 'team', start_date?: string, end_date?: string) => {
+  report: (
+    group_by: 'model' | 'provider' | 'day' | 'user' | 'team',
+    start_date?: string,
+    end_date?: string,
+    opts?: RequestInit,
+  ) => {
     const qs = new URLSearchParams({ group_by });
     if (start_date) qs.set('start_date', start_date);
     if (end_date) qs.set('end_date', end_date);
-    return apiFetch<any>(`/ui/api/spend/report?${qs.toString()}`);
+    return apiFetch<any>(`/ui/api/spend/report?${qs.toString()}`, opts);
   },
   groupedReport: (
     group_by: SpendGroupBy,
-    params?: { start_date?: string; end_date?: string; search?: string; limit?: number; offset?: number }
+    params?: { start_date?: string; end_date?: string; search?: string; limit?: number; offset?: number },
+    opts?: RequestInit,
   ) => {
     const qs = new URLSearchParams({ group_by });
     if (params?.start_date) qs.set('start_date', params.start_date);
@@ -637,12 +643,12 @@ export const spend = {
     if (params?.search) qs.set('search', params.search);
     if (params?.limit != null) qs.set('limit', String(params.limit));
     if (params?.offset != null) qs.set('offset', String(params.offset));
-    return apiFetch<SpendGroupReport>(`/ui/api/spend/report?${qs.toString()}`);
+    return apiFetch<SpendGroupReport>(`/ui/api/spend/report?${qs.toString()}`, opts);
   },
-  logs: (params?: Record<string, string>) => {
+  logs: (params?: Record<string, string>, opts?: RequestInit) => {
     const qs = new URLSearchParams(params || {});
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
-    return apiFetch<{ logs: SpendLog[]; pagination: Pagination }>(`/ui/api/logs${suffix}`);
+    return apiFetch<{ logs: SpendLog[]; pagination: Pagination }>(`/ui/api/logs${suffix}`, opts);
   },
 };
 
