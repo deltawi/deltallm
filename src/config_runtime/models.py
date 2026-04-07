@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from typing import Any
 from uuid import uuid4
 
@@ -101,10 +102,7 @@ class ModelHotReloadManager:
 
         updated_record = await self.model_repository.update(
             deployment_id,
-            model_name=str(deployment["model_name"]),
-            named_credential_id=str(deployment.get("named_credential_id")).strip() or None if deployment.get("named_credential_id") is not None else None,
-            deltallm_params=dict(deployment["deltallm_params"]),
-            model_info=dict(deployment.get("model_info", {})),
+            **self._repository_update_kwargs(self.model_repository, deployment),
         )
         if updated_record is None:
             return False
@@ -141,13 +139,9 @@ class ModelHotReloadManager:
 
         app.state.app_config = app_config
         salt_key = resolve_salt_key(app_config, settings)
-        model_registry, _ = await load_model_registry(
-            self.model_repository,
-            app_config,
-            settings,
-            source_mode=app_config.general_settings.model_deployment_source,
-            named_credential_repository=self.named_credential_repository,
-            secret_resolver=getattr(self.dynamic_config, "secret_resolver", None),
+        model_registry, _ = await self._load_model_registry_compat(
+            app_config=app_config,
+            settings=settings,
         )
         app.state.model_registry = model_registry
 
@@ -223,6 +217,45 @@ class ModelHotReloadManager:
         if self.route_group_cache is None:
             return
         await self.route_group_cache.invalidate()
+
+    async def _load_model_registry_compat(
+        self,
+        *,
+        app_config: AppConfig,
+        settings: Any,
+    ) -> tuple[dict[str, list[dict[str, Any]]], str]:
+        kwargs = {
+            "source_mode": app_config.general_settings.model_deployment_source,
+            "named_credential_repository": self.named_credential_repository,
+            "secret_resolver": getattr(self.dynamic_config, "secret_resolver", None),
+        }
+        signature = inspect.signature(load_model_registry)
+        supported_kwargs = {
+            key: value
+            for key, value in kwargs.items()
+            if key in signature.parameters
+        }
+        return await load_model_registry(
+            self.model_repository,
+            app_config,
+            settings,
+            **supported_kwargs,
+        )
+
+    @staticmethod
+    def _repository_update_kwargs(repository: Any, deployment: dict[str, Any]) -> dict[str, Any]:
+        kwargs = {
+            "model_name": str(deployment["model_name"]),
+            "named_credential_id": str(deployment.get("named_credential_id")).strip() or None if deployment.get("named_credential_id") is not None else None,
+            "deltallm_params": dict(deployment["deltallm_params"]),
+            "model_info": dict(deployment.get("model_info", {})),
+        }
+        signature = inspect.signature(repository.update)
+        return {
+            key: value
+            for key, value in kwargs.items()
+            if key in signature.parameters
+        }
 
     @staticmethod
     def _build_router_config(router_settings: RouterSettings, route_groups: list[dict[str, Any]] | None = None) -> RouterConfig:
