@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import logging
 from asyncio import Task, create_task
 from dataclasses import dataclass
@@ -48,6 +49,30 @@ def _normalize_fallbacks(items: list[dict[str, list[str]]]) -> dict[str, list[st
     return merged
 
 
+async def _load_model_registry_compat(
+    loader: Any,
+    repository: Any,
+    cfg: Any,
+    settings: Any,
+    *,
+    source_mode: str,
+    named_credential_repository: Any | None,
+    secret_resolver: Any | None,
+) -> tuple[dict[str, list[dict[str, Any]]], str]:
+    kwargs = {
+        "source_mode": source_mode,
+        "named_credential_repository": named_credential_repository,
+        "secret_resolver": secret_resolver,
+    }
+    signature = inspect.signature(loader)
+    supported_kwargs = {
+        key: value
+        for key, value in kwargs.items()
+        if key in signature.parameters
+    }
+    return await loader(repository, cfg, settings, **supported_kwargs)
+
+
 async def init_routing_runtime(
     app: Any,
     *,
@@ -62,7 +87,8 @@ async def init_routing_runtime(
         if did_bootstrap:
             logger.info("bootstrapped model deployments from config into database")
 
-    app.state.model_registry, model_registry_source = await load_model_registry(
+    app.state.model_registry, model_registry_source = await _load_model_registry_compat(
+        load_model_registry,
         app.state.model_deployment_repository,
         cfg,
         settings,
