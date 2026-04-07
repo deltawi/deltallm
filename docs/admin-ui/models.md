@@ -6,7 +6,7 @@ Each deployment defines:
 
 - the public model name clients will call
 - the upstream provider model ID
-- credentials and connection details
+- credentials and connection details, either inline or through a shared named credential
 - the workload type, such as chat or embeddings
 - optional pricing and default request parameters
 
@@ -35,7 +35,7 @@ For a simple first deployment:
 
 1. Set `model_name` to the public name you want clients to use
 2. Set `deltallm_params.model` to the provider-prefixed upstream model ID
-3. Add the provider API key
+3. Add the provider API key inline, or select a shared named credential
 4. Keep the default mode as `chat` unless this is an embeddings, image, audio, or rerank model
 
 If you do not set a `deployment_id`, DeltaLLM creates one automatically.
@@ -62,12 +62,14 @@ Create a route group when:
 ## Operational Notes
 
 - DeltaLLM validates provider and mode compatibility when you create or update a deployment
+- Shared provider credentials are best managed through [Named Credentials](named-credentials.md)
 - Creating, updating, and deleting deployments requires admin access
 - Readable deployment IDs make later route-group work easier
 - Visibility to organizations, teams, keys, and users is governed through callable-target bindings and scope policies
 
 ## Related Pages
 
+- [Named Credentials](named-credentials.md)
 - [Route Groups](route-groups.md)
 - [Model Deployments config reference](../configuration/models.md)
 - [Quick Start](../getting-started/quickstart.md)
