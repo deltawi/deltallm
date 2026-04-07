@@ -275,3 +275,40 @@ class BatchItemRepository:
             batch_id,
         )
         return [item_from_row(row) for row in rows]
+
+    async def list_items_page(
+        self,
+        *,
+        batch_id: str,
+        limit: int = 500,
+        after_line_number: int | None = None,
+    ) -> list[BatchItemRecord]:
+        if self.prisma is None:
+            return []
+        if after_line_number is None:
+            rows = await self.prisma.query_raw(
+                """
+                SELECT *
+                FROM deltallm_batch_item
+                WHERE batch_id = $1
+                ORDER BY line_number ASC
+                LIMIT $2
+                """,
+                batch_id,
+                max(1, min(limit, 5_000)),
+            )
+        else:
+            rows = await self.prisma.query_raw(
+                """
+                SELECT *
+                FROM deltallm_batch_item
+                WHERE batch_id = $1
+                  AND line_number > $2
+                ORDER BY line_number ASC
+                LIMIT $3
+                """,
+                batch_id,
+                after_line_number,
+                max(1, min(limit, 5_000)),
+            )
+        return [item_from_row(row) for row in rows]

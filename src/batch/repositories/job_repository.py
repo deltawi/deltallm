@@ -13,6 +13,17 @@ class BatchJobRepository:
     def __init__(self, prisma_client: Any | None = None) -> None:
         self.prisma = prisma_client
 
+    async def acquire_scope_advisory_lock(self, *, scope_type: str, scope_id: str) -> None:
+        if self.prisma is None:
+            return
+        await self.prisma.query_raw(
+            """
+            SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))
+            """,
+            scope_type,
+            scope_id,
+        )
+
     async def create_job(
         self,
         *,
@@ -110,6 +121,39 @@ class BatchJobRepository:
             *params,
         )
         return [job_from_row(row) for row in rows]
+
+    async def count_active_jobs_for_scope(
+        self,
+        *,
+        created_by_api_key: str | None = None,
+        created_by_team_id: str | None = None,
+    ) -> int:
+        if self.prisma is None:
+            return 0
+        terminal = "'completed', 'failed', 'cancelled', 'expired'"
+        if created_by_team_id:
+            rows = await self.prisma.query_raw(
+                f"""
+                SELECT COUNT(*) AS total
+                FROM deltallm_batch_job
+                WHERE created_by_team_id = $1
+                  AND status NOT IN ({terminal})
+                """,
+                created_by_team_id,
+            )
+        elif created_by_api_key:
+            rows = await self.prisma.query_raw(
+                f"""
+                SELECT COUNT(*) AS total
+                FROM deltallm_batch_job
+                WHERE created_by_api_key = $1
+                  AND status NOT IN ({terminal})
+                """,
+                created_by_api_key,
+            )
+        else:
+            return 0
+        return int((rows[0] if rows else {}).get("total") or 0)
 
     async def set_job_queued(self, batch_id: str, total_items: int) -> BatchJobRecord | None:
         if self.prisma is None:

@@ -36,6 +36,7 @@ def _build_s3_batch_storage(cfg: Any) -> S3BatchArtifactStorage:
             endpoint_url=getattr(general, "embeddings_batch_s3_endpoint_url", None),
             access_key_id=getattr(general, "embeddings_batch_s3_access_key_id", None),
             secret_access_key=getattr(general, "embeddings_batch_s3_secret_access_key", None),
+            spool_max_bytes=int(getattr(general, "embeddings_batch_s3_spool_max_bytes", 8_388_608) or 8_388_608),
         )
     except ImportError as exc:
         raise RuntimeError(
@@ -89,6 +90,12 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         storage=batch_storage,
         storage_registry=batch_storage_registry,
         metadata_retention_days=cfg.general_settings.batch_metadata_retention_days,
+        storage_chunk_size=cfg.general_settings.embeddings_batch_storage_chunk_size,
+        create_buffer_size=cfg.general_settings.embeddings_batch_create_buffer_size,
+        max_file_bytes=cfg.general_settings.embeddings_batch_max_file_bytes,
+        max_items_per_batch=cfg.general_settings.embeddings_batch_max_items_per_batch,
+        max_line_bytes=cfg.general_settings.embeddings_batch_max_line_bytes,
+        max_pending_batches_per_scope=cfg.general_settings.embeddings_batch_max_pending_batches_per_scope,
         callable_target_grant_service=getattr(app.state, "callable_target_grant_service", None),
         callable_target_scope_policy_mode=normalize_callable_target_policy_mode(
             getattr(cfg.general_settings, "callable_target_scope_policy_mode", "enforce")
@@ -107,6 +114,9 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
                 job_lease_seconds=cfg.general_settings.embeddings_batch_job_lease_seconds,
                 item_lease_seconds=cfg.general_settings.embeddings_batch_item_lease_seconds,
                 finalization_retry_delay_seconds=cfg.general_settings.embeddings_batch_finalization_retry_delay_seconds,
+                worker_concurrency=cfg.general_settings.embeddings_batch_worker_concurrency,
+                item_buffer_multiplier=cfg.general_settings.embeddings_batch_item_buffer_multiplier,
+                finalization_page_size=cfg.general_settings.embeddings_batch_finalization_page_size,
                 item_claim_limit=cfg.general_settings.embeddings_batch_item_claim_limit,
                 max_attempts=cfg.general_settings.embeddings_batch_max_attempts,
                 completed_artifact_retention_days=cfg.general_settings.batch_completed_artifact_retention_days,

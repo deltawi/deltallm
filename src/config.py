@@ -256,11 +256,21 @@ class GeneralSettings(BaseModel):
     embeddings_batch_s3_endpoint_url: str | None = None
     embeddings_batch_s3_access_key_id: str | None = None
     embeddings_batch_s3_secret_access_key: str | None = None
+    embeddings_batch_s3_spool_max_bytes: int = Field(default=8_388_608, gt=0)
     embeddings_batch_poll_interval_seconds: float = 1.0
     embeddings_batch_heartbeat_interval_seconds: float = Field(default=15.0, gt=0)
     embeddings_batch_job_lease_seconds: int = Field(default=120, ge=5)
     embeddings_batch_item_lease_seconds: int = Field(default=360, ge=30)
     embeddings_batch_finalization_retry_delay_seconds: int = Field(default=60, ge=1)
+    embeddings_batch_worker_concurrency: int = Field(default=4, ge=1, le=100)
+    embeddings_batch_item_buffer_multiplier: int = Field(default=2, ge=1, le=10)
+    embeddings_batch_storage_chunk_size: int = Field(default=65_536, ge=1_024)
+    embeddings_batch_finalization_page_size: int = Field(default=500, ge=10, le=10_000)
+    embeddings_batch_create_buffer_size: int = Field(default=200, ge=1, le=10_000)
+    embeddings_batch_max_file_bytes: int = Field(default=52_428_800, ge=1_024)
+    embeddings_batch_max_items_per_batch: int = Field(default=10_000, ge=1)
+    embeddings_batch_max_line_bytes: int = Field(default=1_048_576, ge=1_024)
+    embeddings_batch_max_pending_batches_per_scope: int = Field(default=20, ge=0)
     embeddings_batch_item_claim_limit: int = 20
     embeddings_batch_max_attempts: int = 3
     batch_completed_artifact_retention_days: int = 7

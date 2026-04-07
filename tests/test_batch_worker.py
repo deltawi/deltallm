@@ -42,6 +42,9 @@ class _FakeStorage:
     async def write_lines(self, **kwargs):  # pragma: no cover
         raise AssertionError(f"unexpected artifact write in this test: {kwargs}")
 
+    async def write_lines_stream(self, **kwargs):  # pragma: no cover
+        raise AssertionError(f"unexpected streaming artifact write in this test: {kwargs}")
+
     async def delete(self, storage_key: str) -> None:  # pragma: no cover
         del storage_key
         raise AssertionError("unexpected artifact delete in this test")
@@ -284,6 +287,151 @@ async def test_batch_worker_keeps_completed_state_when_side_effects_fail(monkeyp
 
     await worker._process_item(job, item)
     assert len(repo.completed_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_processes_items_with_bounded_concurrency(monkeypatch):
+    active_calls = 0
+    max_active_calls = 0
+
+    async def _slow_execute_embedding(request, payload, deployment):
+        nonlocal active_calls, max_active_calls
+        del request, payload, deployment
+        active_calls += 1
+        max_active_calls = max(max_active_calls, active_calls)
+        try:
+            await asyncio.sleep(0.05)
+            return {"object": "list", "data": [{"index": 0, "embedding": [0.1]}], "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5}}
+        finally:
+            active_calls -= 1
+
+    monkeypatch.setattr("src.batch.worker._execute_embedding", _slow_execute_embedding)
+
+    deployment = SimpleNamespace(
+        deltallm_params={"model": "vllm/sentence-transformers/all-MiniLM-L6-v2", "api_base": "http://localhost:9090/v1"},
+        input_cost_per_token=0.001,
+        output_cost_per_token=0.0,
+        model_info={"batch_input_cost_per_token": 0.0005, "batch_output_cost_per_token": 0.0},
+    )
+
+    class _Router:
+        def resolve_model_group(self, model: str) -> str:
+            return model
+
+        async def select_deployment(self, model_group: str, request_context: dict) -> str:
+            del model_group, request_context
+            return "dep-1"
+
+        def require_deployment(self, model_group: str, deployment: str):
+            del model_group, deployment
+            return deployment_obj
+
+    class _Failover:
+        async def execute_with_failover(self, *, primary_deployment, model_group, execute, return_deployment=False, **kwargs):  # noqa: ANN001
+            del model_group, kwargs
+            data = await execute(primary_deployment)
+            if return_deployment:
+                return data, primary_deployment
+            return data
+
+    class _ConcurrencyRepo(_FakeRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.claim_count = 0
+            self.released = False
+            self.now = datetime.now(tz=UTC)
+
+        async def claim_next_job(self, *, worker_id: str, lease_seconds: int = 30):
+            del worker_id, lease_seconds
+            self.claim_count += 1
+            if self.claim_count > 1:
+                return None
+            return BatchJobRecord(
+                batch_id="b1",
+                endpoint="/v1/embeddings",
+                status=BatchJobStatus.IN_PROGRESS,
+                execution_mode="managed_internal",
+                input_file_id="f1",
+                output_file_id=None,
+                error_file_id=None,
+                model="m-1",
+                metadata={},
+                provider_batch_id=None,
+                provider_status=None,
+                provider_error=None,
+                provider_last_sync_at=None,
+                total_items=4,
+                in_progress_items=4,
+                completed_items=0,
+                failed_items=0,
+                cancelled_items=0,
+                locked_by="w1",
+                lease_expires_at=self.now,
+                cancel_requested_at=None,
+                status_last_updated_at=self.now,
+                created_by_api_key="tok-1",
+                created_by_user_id="u1",
+                created_by_team_id="t1",
+                created_at=self.now,
+                started_at=self.now,
+                completed_at=None,
+                expires_at=None,
+            )
+
+        async def claim_items(self, **kwargs):
+            del kwargs
+            return [
+                BatchItemRecord(
+                    item_id=f"i{index}",
+                    batch_id="b1",
+                    line_number=index,
+                    custom_id=f"c{index}",
+                    status="in_progress",
+                    request_body={"model": "m-1", "input": f"hello-{index}"},
+                    response_body=None,
+                    error_body=None,
+                    usage=None,
+                    provider_cost=0.0,
+                    billed_cost=0.0,
+                    attempts=0,
+                    last_error=None,
+                    locked_by="w1",
+                    lease_expires_at=self.now,
+                    created_at=self.now,
+                    started_at=self.now,
+                    completed_at=None,
+                )
+                for index in range(1, 5)
+            ]
+
+        async def refresh_job_progress(self, batch_id: str):
+            assert batch_id == "b1"
+            return None
+
+        async def release_job_lease(self, *, batch_id: str, worker_id: str) -> None:
+            assert batch_id == "b1"
+            assert worker_id == "w1"
+            self.released = True
+
+    deployment_obj = deployment
+    repo = _ConcurrencyRepo()
+    spend = _SpendRecorder()
+    app = SimpleNamespace(state=SimpleNamespace(router=_Router(), failover_manager=_Failover(), spend_tracking_service=spend))
+    worker = BatchExecutorWorker(
+        app=app,
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1", worker_concurrency=2, item_buffer_multiplier=2),
+    )
+    worker._running = True
+
+    did_work = await worker.process_once()
+    worker._running = False
+
+    assert did_work is True
+    assert len(repo.completed_calls) == 4
+    assert max_active_calls == 2
+    assert repo.released is True
 
 
 @pytest.mark.asyncio
@@ -688,7 +836,7 @@ async def test_batch_worker_retries_finalizing_job_after_storage_failure():
             self.write_calls = 0
             self.deleted: list[str] = []
 
-        async def write_lines(self, *, purpose: str, filename: str, lines):  # noqa: ANN001
+        async def write_lines_stream(self, *, purpose: str, filename: str, lines):  # noqa: ANN001
             del filename, lines
             self.write_calls += 1
             if self.write_calls == 2:

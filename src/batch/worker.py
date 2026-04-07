@@ -6,7 +6,7 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, AsyncIterator
 
 import httpx
 
@@ -31,6 +31,9 @@ class BatchWorkerConfig:
     job_lease_seconds: int = 120
     item_lease_seconds: int = 360
     finalization_retry_delay_seconds: int = 60
+    worker_concurrency: int = 4
+    item_buffer_multiplier: int = 2
+    finalization_page_size: int = 500
     item_claim_limit: int = 20
     max_attempts: int = 3
     completed_artifact_retention_days: int = 7
@@ -72,6 +75,12 @@ class BatchExecutorWorker:
     def stop(self) -> None:
         self._running = False
 
+    def _claim_limit(self) -> int:
+        return max(
+            self.config.item_claim_limit,
+            self.config.worker_concurrency * self.config.item_buffer_multiplier,
+        )
+
     async def process_once(self) -> bool:
         job = await self.repository.claim_next_job(
             worker_id=self.config.worker_id,
@@ -98,11 +107,10 @@ class BatchExecutorWorker:
             items = await self.repository.claim_items(
                 batch_id=job.batch_id,
                 worker_id=self.config.worker_id,
-                limit=self.config.item_claim_limit,
+                limit=self._claim_limit(),
                 lease_seconds=self.config.item_lease_seconds,
             )
-            for item in items:
-                await self._process_item(job, item)
+            await self._process_items(job, items)
 
             refreshed = await self.repository.refresh_job_progress(job.batch_id)
             if refreshed and refreshed.status == BatchJobStatus.FINALIZING:
@@ -211,6 +219,19 @@ class BatchExecutorWorker:
             await self.repository.refresh_job_progress(batch_id)
         finally:
             await self._stop_heartbeat(item_heartbeat)
+
+    async def _process_items(self, job, items) -> None:
+        if not items:
+            return
+        semaphore = asyncio.Semaphore(self.config.worker_concurrency)
+
+        async def _runner(item) -> None:  # noqa: ANN001
+            async with semaphore:
+                await self._process_item(job, item)
+
+        async with asyncio.TaskGroup() as task_group:
+            for item in items:
+                task_group.create_task(_runner(item))
 
     async def _record_success_side_effects(
         self,
@@ -345,27 +366,47 @@ class BatchExecutorWorker:
             with contextlib.suppress(Exception):
                 await self.repository.delete_file(file_id)
 
-    async def _finalize_artifacts(self, job) -> None:
-        items = await self.repository.list_items(job.batch_id)
-        output_lines: list[str] = []
-        error_lines: list[str] = []
-        for item in items:
-            if item.status == "completed":
-                output_lines.append(json.dumps({"custom_id": item.custom_id, "response": item.response_body or {}}))
-            elif item.status in {"failed", "cancelled"}:
-                error_lines.append(json.dumps({"custom_id": item.custom_id, "error": item.error_body or {}}))
+    async def _iter_batch_items(self, batch_id: str) -> AsyncIterator[Any]:
+        if hasattr(self.repository, "list_items_page"):
+            after_line_number: int | None = None
+            while True:
+                page = await self.repository.list_items_page(
+                    batch_id=batch_id,
+                    limit=self.config.finalization_page_size,
+                    after_line_number=after_line_number,
+                )
+                if not page:
+                    break
+                for item in page:
+                    yield item
+                after_line_number = page[-1].line_number
+            return
 
+        for item in await self.repository.list_items(batch_id):
+            yield item
+
+    async def _iter_output_lines(self, batch_id: str) -> AsyncIterator[str]:
+        async for item in self._iter_batch_items(batch_id):
+            if item.status == "completed":
+                yield json.dumps({"custom_id": item.custom_id, "response": item.response_body or {}})
+
+    async def _iter_error_lines(self, batch_id: str) -> AsyncIterator[str]:
+        async for item in self._iter_batch_items(batch_id):
+            if item.status in {"failed", "cancelled"}:
+                yield json.dumps({"custom_id": item.custom_id, "error": item.error_body or {}})
+
+    async def _finalize_artifacts(self, job) -> None:
         storage_backend = getattr(self.storage, "backend_name", "local")
         created_artifacts: list[tuple[str, str]] = []
         output_file_id: str | None = None
         error_file_id: str | None = None
         final_status = self._resolve_final_status(job)
         try:
-            if output_lines:
-                key, size, checksum = await self.storage.write_lines(
+            if job.completed_items > 0:
+                key, size, checksum = await self.storage.write_lines_stream(
                     purpose="batch_output",
                     filename=f"{job.batch_id}-output.jsonl",
-                    lines=output_lines,
+                    lines=self._iter_output_lines(job.batch_id),
                 )
                 file_record = await self.repository.create_file(
                     purpose="batch_output",
@@ -384,11 +425,11 @@ class BatchExecutorWorker:
                 created_artifacts.append((file_record.file_id, key))
                 output_file_id = file_record.file_id
 
-            if error_lines:
-                key, size, checksum = await self.storage.write_lines(
+            if job.failed_items > 0 or job.cancelled_items > 0:
+                key, size, checksum = await self.storage.write_lines_stream(
                     purpose="batch_error",
                     filename=f"{job.batch_id}-error.jsonl",
-                    lines=error_lines,
+                    lines=self._iter_error_lines(job.batch_id),
                 )
                 retention_days = (
                     self.config.failed_artifact_retention_days
