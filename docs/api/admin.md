@@ -68,6 +68,30 @@ These endpoints back browser login, invitation acceptance, password recovery, MF
 | `GET` | `/ui/api/provider-presets` | List provider presets for the UI |
 | `POST` | `/ui/api/provider-models/discover` | Discover provider model suggestions for the UI |
 
+### Named Credentials
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/ui/api/named-credentials` | List named credentials with usage counts |
+| `GET` | `/ui/api/named-credentials/{credential_id}` | Get one named credential and linked deployments |
+| `POST` | `/ui/api/named-credentials` | Create a named credential |
+| `PUT` | `/ui/api/named-credentials/{credential_id}` | Update a named credential |
+| `DELETE` | `/ui/api/named-credentials/{credential_id}` | Delete a named credential when not linked |
+| `GET` | `/ui/api/named-credentials/inline-report` | Report repeated inline credential groups |
+| `POST` | `/ui/api/named-credentials/convert-inline-group` | Convert repeated inline credentials into a shared named credential |
+
+Named credentials are the reusable provider connection objects that model deployments can reference through `named_credential_id`.
+
+Use them when you want to:
+
+- rotate one provider key and have multiple deployments pick it up
+- reduce duplicated inline secrets in model payloads
+- centralize shared connection settings such as `api_key`, `api_base`, `api_version`, or Bedrock fields
+
+Read responses always redact secret-bearing fields. Updating an in-use named credential triggers a runtime reload so linked deployments pick up the new connection settings.
+
+For full UI and `curl` examples, see [Admin UI: Named Credentials](../admin-ui/named-credentials.md).
+
 ### Route Groups
 
 | Method | Endpoint | Purpose |

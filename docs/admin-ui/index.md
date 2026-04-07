@@ -18,7 +18,7 @@ The current UI is organized by operator intent:
 
 - **Dashboard**: health and spend overview
 - **API Keys**: credential issuance and limits
-- **AI Gateway**: [Models](models.md), [Route Groups](route-groups.md), [Prompt Registry](prompt-registry.md), and [MCP Servers](mcp.md)
+- **AI Gateway**: [Models](models.md), [Named Credentials](named-credentials.md), [Route Groups](route-groups.md), [Prompt Registry](prompt-registry.md), and [MCP Servers](mcp.md)
 - **Access**: [Organizations](organizations.md), [Teams](teams.md), and [People & Access](people-and-access.md)
 - **Operations**: [Usage & Spend](usage.md), [Audit Logs](audit-logs.md), [Batch Jobs](batch-jobs.md), [Guardrails](guardrails.md), and [Settings](settings.md)
 
@@ -37,6 +37,7 @@ Parent menu sections start collapsed by default and expand only when the operato
 | --- | --- |
 | [Dashboard](dashboard.md) | Spend, request, and model activity overview |
 | [Models](models.md) | Provider-backed deployments and health |
+| [Named Credentials](named-credentials.md) | Shared provider connection settings and credential rotation |
 | [Route Groups](route-groups.md) | Group-level routing, membership, prompt binding, and usage |
 | [Prompt Registry](prompt-registry.md) | Prompt shells, versions, labels, tests, and history |
 | [MCP Servers](mcp.md) | External MCP server registry, bindings, tool policies, approvals, and health |
