@@ -47,6 +47,8 @@ class _RepoStub:
 
 
 class _StorageStub:
+    backend_name = "local"
+
     def __init__(self) -> None:
         self.deleted: list[str] = []
 
@@ -70,3 +72,38 @@ async def test_batch_cleanup_worker_deletes_expired_jobs_and_files():
     assert repo.deleted_files == ["f-1"]
     assert storage.deleted == ["batch_output/f-1"]
 
+
+@pytest.mark.asyncio
+async def test_batch_cleanup_worker_routes_delete_by_file_backend():
+    repo = _RepoStub()
+    repo.files[0] = BatchFileRecord(
+        file_id="f-2",
+        purpose="batch_output",
+        filename="out.jsonl",
+        bytes=10,
+        status="processed",
+        storage_backend="local",
+        storage_key="batch_output/f-2",
+        checksum=None,
+        created_by_api_key=None,
+        created_by_user_id=None,
+        created_by_team_id=None,
+        created_at=repo.files[0].created_at,
+        expires_at=repo.files[0].expires_at,
+    )
+    active_storage = _StorageStub()
+    active_storage.backend_name = "s3"
+    local_storage = _StorageStub()
+    worker = BatchRetentionCleanupWorker(
+        repository=repo,  # type: ignore[arg-type]
+        storage=active_storage,  # type: ignore[arg-type]
+        storage_registry={"local": local_storage, "s3": active_storage},  # type: ignore[arg-type]
+        config=BatchCleanupConfig(interval_seconds=0.01, scan_limit=10),
+    )
+
+    deleted_jobs, deleted_files = await worker.process_once()
+
+    assert deleted_jobs == 2
+    assert deleted_files == 1
+    assert local_storage.deleted == ["batch_output/f-2"]
+    assert active_storage.deleted == []

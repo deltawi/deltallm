@@ -51,8 +51,10 @@ class BatchItemRepository:
                 SELECT item_id
                 FROM deltallm_batch_item
                 WHERE batch_id = $1
-                  AND status = 'pending'
-                  AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
+                  AND (
+                        (status = 'pending' AND (lease_expires_at IS NULL OR lease_expires_at < NOW()))
+                     OR (status = 'in_progress' AND lease_expires_at < NOW())
+                  )
                 ORDER BY line_number ASC
                 FOR UPDATE SKIP LOCKED
                 LIMIT $2
@@ -78,46 +80,95 @@ class BatchItemRepository:
         self,
         *,
         item_id: str,
+        worker_id: str | None,
         response_body: dict[str, Any],
         usage: dict[str, Any] | None,
         provider_cost: float,
         billed_cost: float,
-    ) -> None:
+    ) -> bool:
         if self.prisma is None:
-            return
-        await self.prisma.execute_raw(
+            return False
+        if worker_id is None:
+            rows = await self.prisma.query_raw(
+                """
+                UPDATE deltallm_batch_item
+                SET status = 'completed',
+                    response_body = $2::jsonb,
+                    usage = $3::jsonb,
+                    provider_cost = $4,
+                    billed_cost = $5,
+                    lease_expires_at = NULL,
+                    locked_by = NULL,
+                    completed_at = NOW()
+                WHERE item_id = $1
+                  AND status = 'in_progress'
+                RETURNING item_id
+                """,
+                item_id,
+                json.dumps(response_body),
+                json.dumps(usage or {}),
+                provider_cost,
+                billed_cost,
+            )
+            return bool(rows)
+        rows = await self.prisma.query_raw(
             """
             UPDATE deltallm_batch_item
             SET status = 'completed',
-                response_body = $2::jsonb,
-                usage = $3::jsonb,
-                provider_cost = $4,
-                billed_cost = $5,
+                response_body = $3::jsonb,
+                usage = $4::jsonb,
+                provider_cost = $5,
+                billed_cost = $6,
                 lease_expires_at = NULL,
                 locked_by = NULL,
                 completed_at = NOW()
             WHERE item_id = $1
+              AND locked_by = $2
+              AND status = 'in_progress'
+            RETURNING item_id
             """,
             item_id,
+            worker_id,
             json.dumps(response_body),
             json.dumps(usage or {}),
             provider_cost,
             billed_cost,
         )
+        return bool(rows)
 
     async def mark_item_failed(
         self,
         *,
         item_id: str,
+        worker_id: str | None,
         error_body: dict[str, Any],
         last_error: str,
         retryable: bool,
         retry_delay_seconds: int = 0,
-    ) -> None:
+    ) -> bool:
         if self.prisma is None:
-            return
+            return False
         if retryable:
-            await self.prisma.execute_raw(
+            if worker_id is None:
+                rows = await self.prisma.query_raw(
+                    """
+                    UPDATE deltallm_batch_item
+                    SET status = 'pending',
+                        error_body = $2::jsonb,
+                        last_error = $3,
+                        lease_expires_at = NOW() + ($4 || ' seconds')::interval,
+                        locked_by = NULL
+                    WHERE item_id = $1
+                      AND status = 'in_progress'
+                    RETURNING item_id
+                    """,
+                    item_id,
+                    json.dumps(error_body),
+                    last_error,
+                    max(0, retry_delay_seconds),
+                )
+                return bool(rows)
+            rows = await self.prisma.query_raw(
                 """
                 UPDATE deltallm_batch_item
                 SET status = 'pending',
@@ -126,28 +177,74 @@ class BatchItemRepository:
                     lease_expires_at = NOW() + ($4 || ' seconds')::interval,
                     locked_by = NULL
                 WHERE item_id = $1
+                  AND locked_by = $5
+                  AND status = 'in_progress'
+                RETURNING item_id
                 """,
                 item_id,
                 json.dumps(error_body),
                 last_error,
                 max(0, retry_delay_seconds),
+                worker_id,
             )
-            return
-        await self.prisma.execute_raw(
+            return bool(rows)
+        if worker_id is None:
+            rows = await self.prisma.query_raw(
+                """
+                UPDATE deltallm_batch_item
+                SET status = 'failed',
+                    error_body = $2::jsonb,
+                    last_error = $3,
+                    lease_expires_at = NULL,
+                    locked_by = NULL,
+                    completed_at = NOW()
+                WHERE item_id = $1
+                  AND status = 'in_progress'
+                RETURNING item_id
+                """,
+                item_id,
+                json.dumps(error_body),
+                last_error,
+            )
+            return bool(rows)
+        rows = await self.prisma.query_raw(
             """
             UPDATE deltallm_batch_item
             SET status = 'failed',
-                error_body = $2::jsonb,
-                last_error = $3,
+                error_body = $3::jsonb,
+                last_error = $4,
                 lease_expires_at = NULL,
                 locked_by = NULL,
                 completed_at = NOW()
             WHERE item_id = $1
+              AND locked_by = $2
+              AND status = 'in_progress'
+            RETURNING item_id
             """,
             item_id,
+            worker_id,
             json.dumps(error_body),
             last_error,
         )
+        return bool(rows)
+
+    async def renew_item_lease(self, *, item_id: str, worker_id: str, lease_seconds: int) -> bool:
+        if self.prisma is None:
+            return False
+        rows = await self.prisma.query_raw(
+            """
+            UPDATE deltallm_batch_item
+            SET lease_expires_at = NOW() + ($3 || ' seconds')::interval
+            WHERE item_id = $1
+              AND locked_by = $2
+              AND status = 'in_progress'
+            RETURNING item_id
+            """,
+            item_id,
+            worker_id,
+            lease_seconds,
+        )
+        return bool(rows)
 
     async def mark_pending_items_cancelled(self, batch_id: str) -> None:
         if self.prisma is None:

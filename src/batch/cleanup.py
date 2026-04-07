@@ -23,12 +23,28 @@ class BatchRetentionCleanupWorker:
         *,
         repository: BatchRepository,
         storage: BatchArtifactStorage,
+        storage_registry: dict[str, BatchArtifactStorage] | None = None,
         config: BatchCleanupConfig,
     ) -> None:
         self.repository = repository
         self.storage = storage
+        active_backend = str(getattr(storage, "backend_name", "local") or "local").strip().lower()
+        self.storage_registry = {
+            str(key).strip().lower(): value
+            for key, value in (storage_registry or {}).items()
+        }
+        self.storage_registry.setdefault(active_backend, storage)
         self.config = config
         self._running = False
+
+    def _storage_for_backend(self, backend: str | None) -> BatchArtifactStorage:
+        normalized = str(backend or getattr(self.storage, "backend_name", "local") or "local").strip().lower()
+        storage = self.storage_registry.get(normalized)
+        if storage is None:
+            raise RuntimeError(
+                f"Storage backend '{normalized}' is unavailable; keep legacy batch storage configured until referenced files expire"
+            )
+        return storage
 
     async def run(self) -> None:
         self._running = True
@@ -58,7 +74,7 @@ class BatchRetentionCleanupWorker:
         )
         for file_record in expired_files:
             try:
-                await self.storage.delete(file_record.storage_key)
+                await self._storage_for_backend(file_record.storage_backend).delete(file_record.storage_key)
             except Exception as exc:
                 logger.warning("batch artifact delete failed file_id=%s error=%s", file_record.file_id, exc)
                 continue
@@ -68,4 +84,3 @@ class BatchRetentionCleanupWorker:
         if deleted_jobs or deleted_files:
             logger.info("batch GC deleted jobs=%s files=%s", deleted_jobs, deleted_files)
         return deleted_jobs, deleted_files
-
