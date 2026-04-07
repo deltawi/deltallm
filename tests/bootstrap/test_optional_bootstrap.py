@@ -44,12 +44,22 @@ def _batch_config(
             embeddings_batch_s3_endpoint_url=None,
             embeddings_batch_s3_access_key_id=None,
             embeddings_batch_s3_secret_access_key=None,
+            embeddings_batch_s3_spool_max_bytes=8_388_608,
             batch_metadata_retention_days=14,
             embeddings_batch_poll_interval_seconds=5,
             embeddings_batch_heartbeat_interval_seconds=15,
             embeddings_batch_job_lease_seconds=120,
             embeddings_batch_item_lease_seconds=360,
             embeddings_batch_finalization_retry_delay_seconds=60,
+            embeddings_batch_worker_concurrency=4,
+            embeddings_batch_item_buffer_multiplier=2,
+            embeddings_batch_storage_chunk_size=65_536,
+            embeddings_batch_finalization_page_size=500,
+            embeddings_batch_create_buffer_size=200,
+            embeddings_batch_max_file_bytes=52_428_800,
+            embeddings_batch_max_items_per_batch=10_000,
+            embeddings_batch_max_line_bytes=1_048_576,
+            embeddings_batch_max_pending_batches_per_scope=20,
             embeddings_batch_item_claim_limit=10,
             embeddings_batch_max_attempts=3,
             batch_completed_artifact_retention_days=7,
@@ -152,6 +162,12 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
             storage,  # noqa: ANN001
             metadata_retention_days,  # noqa: ANN001
             storage_registry=None,  # noqa: ANN001
+            storage_chunk_size=65_536,  # noqa: ANN001
+            create_buffer_size=200,  # noqa: ANN001
+            max_file_bytes=52_428_800,  # noqa: ANN001
+            max_items_per_batch=10_000,  # noqa: ANN001
+            max_line_bytes=1_048_576,  # noqa: ANN001
+            max_pending_batches_per_scope=20,  # noqa: ANN001
             callable_target_grant_service=None,  # noqa: ANN001
             callable_target_scope_policy_mode="enforce",  # noqa: ANN001
         ) -> None:
@@ -159,6 +175,12 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
             self.storage = storage
             self.storage_registry = storage_registry
             self.metadata_retention_days = metadata_retention_days
+            self.storage_chunk_size = storage_chunk_size
+            self.create_buffer_size = create_buffer_size
+            self.max_file_bytes = max_file_bytes
+            self.max_items_per_batch = max_items_per_batch
+            self.max_line_bytes = max_line_bytes
+            self.max_pending_batches_per_scope = max_pending_batches_per_scope
             self.callable_target_grant_service = callable_target_grant_service
             self.callable_target_scope_policy_mode = callable_target_scope_policy_mode
             created["service"] = self
@@ -212,11 +234,16 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
     assert isinstance(app.state.batch_service, FakeBatchService)
     assert created["service"].repository is repository
     assert created["service"].storage_registry == {"local": {"path": "/tmp/batch-artifacts"}}
+    assert created["service"].storage_chunk_size == 65_536
+    assert created["service"].create_buffer_size == 200
     assert runtime.worker is created["worker"]
     assert runtime.worker_task is not None
     assert runtime.gc_worker is created["gc_worker"]
     assert runtime.gc_task is not None
     assert created["gc_worker"].storage_registry == {"local": {"path": "/tmp/batch-artifacts"}}
+    assert created["worker"].config.worker_concurrency == 4
+    assert created["worker"].config.item_buffer_multiplier == 2
+    assert created["worker"].config.finalization_page_size == 500
     assert runtime.statuses == (
         BootstrapStatus("embeddings_batch", "ready"),
         BootstrapStatus("embeddings_batch_worker", "ready"),
@@ -234,8 +261,24 @@ async def test_init_batch_runtime_selects_s3_storage(monkeypatch: pytest.MonkeyP
     created: dict[str, object] = {}
 
     class FakeBatchService:
-        def __init__(self, repository, storage, storage_registry=None, metadata_retention_days=30, callable_target_grant_service=None, callable_target_scope_policy_mode="enforce") -> None:  # noqa: ANN001
-            del metadata_retention_days, callable_target_grant_service, callable_target_scope_policy_mode
+        def __init__(
+            self,
+            repository,
+            storage,
+            metadata_retention_days=30,
+            storage_registry=None,
+            storage_chunk_size=65_536,
+            create_buffer_size=200,
+            max_file_bytes=52_428_800,
+            max_items_per_batch=10_000,
+            max_line_bytes=1_048_576,
+            max_pending_batches_per_scope=20,
+            callable_target_grant_service=None,
+            callable_target_scope_policy_mode="enforce",
+        ) -> None:  # noqa: ANN001
+            del metadata_retention_days, storage_chunk_size, create_buffer_size, max_file_bytes
+            del max_items_per_batch, max_line_bytes, max_pending_batches_per_scope
+            del callable_target_grant_service, callable_target_scope_policy_mode
             self.repository = repository
             self.storage = storage
             self.storage_registry = storage_registry

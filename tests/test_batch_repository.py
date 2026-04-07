@@ -90,3 +90,46 @@ async def test_reschedule_finalization_pushes_lease_forward():
     assert rescheduled is False
     assert "lease_expires_at = NOW() + ($3 || ' seconds')::interval" in prisma.sql
     assert "status = 'finalizing'" in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_count_active_jobs_for_scope_prefers_team_scope():
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    count = await repository.count_active_jobs_for_scope(
+        created_by_api_key="key-1",
+        created_by_team_id="team-1",
+    )
+
+    assert count == 0
+    assert "created_by_team_id = $1" in prisma.sql
+    assert "status NOT IN ('completed', 'failed', 'cancelled', 'expired')" in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_list_items_page_uses_line_number_cursor():
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    items = await repository.list_items_page(
+        batch_id="batch-1",
+        limit=200,
+        after_line_number=10,
+    )
+
+    assert items == []
+    assert "line_number > $2" in prisma.sql
+    assert "ORDER BY line_number ASC" in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_acquire_scope_advisory_lock_uses_postgres_advisory_lock():
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    await repository.acquire_scope_advisory_lock(scope_type="team", scope_id="team-1")
+
+    assert "pg_advisory_xact_lock" in prisma.sql
+    assert "hashtext($1)" in prisma.sql
+    assert "hashtext($2)" in prisma.sql

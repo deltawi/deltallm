@@ -22,6 +22,9 @@ class BatchRepository:
         self.items = BatchItemRepository(prisma_client)
         self.maintenance = BatchMaintenanceRepository(prisma_client)
 
+    def with_prisma(self, prisma_client: Any | None) -> BatchRepository:
+        return BatchRepository(prisma_client)
+
     async def create_file(
         self,
         *,
@@ -80,6 +83,9 @@ class BatchRepository:
     async def get_job(self, batch_id: str) -> BatchJobRecord | None:
         return await self.jobs.get_job(batch_id)
 
+    async def acquire_scope_advisory_lock(self, *, scope_type: str, scope_id: str) -> None:
+        await self.jobs.acquire_scope_advisory_lock(scope_type=scope_type, scope_id=scope_id)
+
     async def list_jobs(
         self,
         *,
@@ -91,6 +97,17 @@ class BatchRepository:
         return await self.jobs.list_jobs(
             limit=limit,
             after=after,
+            created_by_api_key=created_by_api_key,
+            created_by_team_id=created_by_team_id,
+        )
+
+    async def count_active_jobs_for_scope(
+        self,
+        *,
+        created_by_api_key: str | None = None,
+        created_by_team_id: str | None = None,
+    ) -> int:
+        return await self.jobs.count_active_jobs_for_scope(
             created_by_api_key=created_by_api_key,
             created_by_team_id=created_by_team_id,
         )
@@ -190,6 +207,19 @@ class BatchRepository:
 
     async def list_items(self, batch_id: str) -> list[BatchItemRecord]:
         return await self.items.list_items(batch_id)
+
+    async def list_items_page(
+        self,
+        *,
+        batch_id: str,
+        limit: int = 500,
+        after_line_number: int | None = None,
+    ) -> list[BatchItemRecord]:
+        return await self.items.list_items_page(
+            batch_id=batch_id,
+            limit=limit,
+            after_line_number=after_line_number,
+        )
 
     async def attach_artifacts_and_finalize(
         self,
