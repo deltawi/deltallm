@@ -9,7 +9,7 @@ from typing import Any
 from src.bootstrap.status import BootstrapStatus
 from src.batch import BatchCleanupConfig, BatchRetentionCleanupWorker, BatchRepository
 from src.batch.service import BatchService
-from src.batch.storage import LocalBatchArtifactStorage
+from src.batch.storage import LocalBatchArtifactStorage, S3BatchArtifactStorage
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
 from src.services.model_visibility import normalize_callable_target_policy_mode
 
@@ -23,20 +23,71 @@ class BatchRuntime:
     statuses: tuple[BootstrapStatus, ...] = ()
 
 
+def _build_s3_batch_storage(cfg: Any) -> S3BatchArtifactStorage:
+    general = cfg.general_settings
+    bucket = str(getattr(general, "embeddings_batch_s3_bucket", "") or "").strip()
+    if not bucket:
+        raise RuntimeError("embeddings_batch_s3_bucket must be configured when embeddings_batch_storage_backend='s3'")
+    try:
+        return S3BatchArtifactStorage(
+            bucket=bucket,
+            region=str(getattr(general, "embeddings_batch_s3_region", "us-east-1") or "us-east-1"),
+            prefix=str(getattr(general, "embeddings_batch_s3_prefix", "deltallm/batch-artifacts") or ""),
+            endpoint_url=getattr(general, "embeddings_batch_s3_endpoint_url", None),
+            access_key_id=getattr(general, "embeddings_batch_s3_access_key_id", None),
+            secret_access_key=getattr(general, "embeddings_batch_s3_secret_access_key", None),
+        )
+    except ImportError as exc:
+        raise RuntimeError(
+            "S3 batch storage requires the 'batch-s3' optional dependency; install with `pip install .[batch-s3]`"
+        ) from exc
+
+
+def _build_batch_storage_registry(cfg: Any) -> dict[str, Any]:
+    general = cfg.general_settings
+    registry: dict[str, Any] = {
+        "local": LocalBatchArtifactStorage(general.embeddings_batch_storage_dir),
+    }
+    bucket = str(getattr(general, "embeddings_batch_s3_bucket", "") or "").strip()
+    if bucket:
+        try:
+            registry["s3"] = _build_s3_batch_storage(cfg)
+        except RuntimeError:
+            backend = str(getattr(general, "embeddings_batch_storage_backend", "local") or "local").strip().lower()
+            if backend == "s3":
+                raise
+    return registry
+
+
+def _build_batch_storage(cfg: Any, storage_registry: dict[str, Any]):
+    general = cfg.general_settings
+    backend = str(getattr(general, "embeddings_batch_storage_backend", "local") or "local").strip().lower()
+    storage = storage_registry.get(backend)
+    if storage is None:
+        if backend == "s3":
+            return _build_s3_batch_storage(cfg)
+        raise RuntimeError(f"Unsupported embeddings batch storage backend: {backend}")
+    return storage
+
+
 async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) -> BatchRuntime:
     runtime = BatchRuntime()
 
     if not cfg.general_settings.embeddings_batch_enabled:
         app.state.batch_storage = None
+        app.state.batch_storage_registry = None
         app.state.batch_service = None
         runtime.statuses = (BootstrapStatus("embeddings_batch", "disabled"),)
         return runtime
 
-    batch_storage = LocalBatchArtifactStorage(cfg.general_settings.embeddings_batch_storage_dir)
+    batch_storage_registry = _build_batch_storage_registry(cfg)
+    batch_storage = _build_batch_storage(cfg, batch_storage_registry)
     app.state.batch_storage = batch_storage
+    app.state.batch_storage_registry = batch_storage_registry
     app.state.batch_service = BatchService(
         repository=repository,
         storage=batch_storage,
+        storage_registry=batch_storage_registry,
         metadata_retention_days=cfg.general_settings.batch_metadata_retention_days,
         callable_target_grant_service=getattr(app.state, "callable_target_grant_service", None),
         callable_target_scope_policy_mode=normalize_callable_target_policy_mode(
@@ -52,6 +103,10 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
             config=BatchWorkerConfig(
                 worker_id=f"worker-{id(app)}",
                 poll_interval_seconds=cfg.general_settings.embeddings_batch_poll_interval_seconds,
+                heartbeat_interval_seconds=cfg.general_settings.embeddings_batch_heartbeat_interval_seconds,
+                job_lease_seconds=cfg.general_settings.embeddings_batch_job_lease_seconds,
+                item_lease_seconds=cfg.general_settings.embeddings_batch_item_lease_seconds,
+                finalization_retry_delay_seconds=cfg.general_settings.embeddings_batch_finalization_retry_delay_seconds,
                 item_claim_limit=cfg.general_settings.embeddings_batch_item_claim_limit,
                 max_attempts=cfg.general_settings.embeddings_batch_max_attempts,
                 completed_artifact_retention_days=cfg.general_settings.batch_completed_artifact_retention_days,
@@ -64,6 +119,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         runtime.gc_worker = BatchRetentionCleanupWorker(
             repository=repository,
             storage=batch_storage,
+            storage_registry=batch_storage_registry,
             config=BatchCleanupConfig(
                 interval_seconds=cfg.general_settings.embeddings_batch_gc_interval_seconds,
                 scan_limit=cfg.general_settings.embeddings_batch_gc_scan_limit,

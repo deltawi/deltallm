@@ -126,13 +126,15 @@ class BatchRepository:
         self,
         *,
         item_id: str,
+        worker_id: str | None,
         response_body: dict[str, Any],
         usage: dict[str, Any] | None,
         provider_cost: float,
         billed_cost: float,
-    ) -> None:
-        await self.items.mark_item_completed(
+    ) -> bool:
+        return await self.items.mark_item_completed(
             item_id=item_id,
+            worker_id=worker_id,
             response_body=response_body,
             usage=usage,
             provider_cost=provider_cost,
@@ -143,13 +145,15 @@ class BatchRepository:
         self,
         *,
         item_id: str,
+        worker_id: str | None,
         error_body: dict[str, Any],
         last_error: str,
         retryable: bool,
         retry_delay_seconds: int = 0,
-    ) -> None:
-        await self.items.mark_item_failed(
+    ) -> bool:
+        return await self.items.mark_item_failed(
             item_id=item_id,
+            worker_id=worker_id,
             error_body=error_body,
             last_error=last_error,
             retryable=retryable,
@@ -159,8 +163,27 @@ class BatchRepository:
     async def refresh_job_progress(self, batch_id: str) -> BatchJobRecord | None:
         return await self.jobs.refresh_job_progress(batch_id)
 
+    async def renew_job_lease(self, *, batch_id: str, worker_id: str, lease_seconds: int) -> bool:
+        return await self.jobs.renew_job_lease(batch_id=batch_id, worker_id=worker_id, lease_seconds=lease_seconds)
+
+    async def reschedule_finalization(
+        self,
+        *,
+        batch_id: str,
+        worker_id: str,
+        retry_delay_seconds: int,
+    ) -> bool:
+        return await self.jobs.reschedule_finalization(
+            batch_id=batch_id,
+            worker_id=worker_id,
+            retry_delay_seconds=retry_delay_seconds,
+        )
+
     async def release_job_lease(self, *, batch_id: str, worker_id: str) -> None:
         await self.jobs.release_job_lease(batch_id=batch_id, worker_id=worker_id)
+
+    async def renew_item_lease(self, *, item_id: str, worker_id: str, lease_seconds: int) -> bool:
+        return await self.items.renew_item_lease(item_id=item_id, worker_id=worker_id, lease_seconds=lease_seconds)
 
     async def mark_pending_items_cancelled(self, batch_id: str) -> None:
         await self.items.mark_pending_items_cancelled(batch_id)
@@ -175,12 +198,14 @@ class BatchRepository:
         output_file_id: str | None,
         error_file_id: str | None,
         final_status: str,
+        worker_id: str | None = None,
     ) -> BatchJobRecord | None:
         return await self.jobs.attach_artifacts_and_finalize(
             batch_id=batch_id,
             output_file_id=output_file_id,
             error_file_id=error_file_id,
             final_status=final_status,
+            worker_id=worker_id,
         )
 
     async def list_expired_terminal_job_ids(self, *, now: datetime, limit: int = 100) -> list[str]:

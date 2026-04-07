@@ -140,6 +140,7 @@ class BatchJobRepository:
             SET cancel_requested_at = NOW(),
                 status = CASE
                     WHEN status IN ('completed', 'failed', 'cancelled', 'expired') THEN status
+                    WHEN status = 'finalizing' THEN status
                     ELSE 'in_progress'
                 END,
                 status_last_updated_at = NOW()
@@ -160,9 +161,9 @@ class BatchJobRepository:
             WITH candidate AS (
                 SELECT batch_id
                 FROM deltallm_batch_job
-                WHERE status IN ('queued', 'in_progress')
+                WHERE status IN ('queued', 'in_progress', 'finalizing')
                   AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
-                ORDER BY created_at ASC
+                ORDER BY CASE WHEN status = 'finalizing' THEN 1 ELSE 0 END, created_at ASC
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
             )
@@ -185,6 +186,50 @@ class BatchJobRepository:
         if not rows:
             return None
         return job_from_row(rows[0])
+
+    async def renew_job_lease(self, *, batch_id: str, worker_id: str, lease_seconds: int) -> bool:
+        if self.prisma is None:
+            return False
+        rows = await self.prisma.query_raw(
+            """
+            UPDATE deltallm_batch_job
+            SET lease_expires_at = NOW() + ($3 || ' seconds')::interval
+            WHERE batch_id = $1
+              AND locked_by = $2
+              AND status IN ('in_progress', 'finalizing')
+            RETURNING batch_id
+            """,
+            batch_id,
+            worker_id,
+            lease_seconds,
+        )
+        return bool(rows)
+
+    async def reschedule_finalization(
+        self,
+        *,
+        batch_id: str,
+        worker_id: str,
+        retry_delay_seconds: int,
+    ) -> bool:
+        if self.prisma is None:
+            return False
+        rows = await self.prisma.query_raw(
+            """
+            UPDATE deltallm_batch_job
+            SET lease_expires_at = NOW() + ($3 || ' seconds')::interval,
+                locked_by = NULL,
+                status_last_updated_at = NOW()
+            WHERE batch_id = $1
+              AND locked_by = $2
+              AND status = 'finalizing'
+            RETURNING batch_id
+            """,
+            batch_id,
+            worker_id,
+            max(1, retry_delay_seconds),
+        )
+        return bool(rows)
 
     async def refresh_job_progress(self, batch_id: str) -> BatchJobRecord | None:
         if self.prisma is None:
@@ -210,19 +255,11 @@ class BatchJobRepository:
                 cancelled_items = s.cancelled_items,
                 status = CASE
                     WHEN j.status IN ('completed', 'failed', 'cancelled', 'expired') THEN j.status
-                    WHEN j.cancel_requested_at IS NOT NULL AND s.pending_items = 0 AND s.in_progress_items = 0 THEN 'cancelled'
-                    WHEN s.pending_items = 0 AND s.in_progress_items = 0 THEN 'completed'
-                    WHEN s.in_progress_items > 0 OR s.completed_items > 0 OR s.failed_items > 0 THEN 'in_progress'
+                    WHEN s.pending_items = 0 AND s.in_progress_items = 0 THEN 'finalizing'
+                    WHEN s.in_progress_items > 0 OR s.completed_items > 0 OR s.failed_items > 0 OR s.cancelled_items > 0 THEN 'in_progress'
                     ELSE j.status
                 END,
-                completed_at = CASE
-                    WHEN j.completed_at IS NOT NULL THEN j.completed_at
-                    WHEN (
-                        j.cancel_requested_at IS NOT NULL AND s.pending_items = 0 AND s.in_progress_items = 0
-                    ) OR (s.pending_items = 0 AND s.in_progress_items = 0)
-                    THEN NOW()
-                    ELSE NULL
-                END,
+                completed_at = CASE WHEN j.status IN ('completed', 'failed', 'cancelled', 'expired') THEN COALESCE(j.completed_at, NOW()) ELSE NULL END,
                 status_last_updated_at = NOW()
             FROM stats s
             WHERE j.batch_id = $1
@@ -256,27 +293,51 @@ class BatchJobRepository:
         output_file_id: str | None,
         error_file_id: str | None,
         final_status: str,
+        worker_id: str | None = None,
     ) -> BatchJobRecord | None:
         if self.prisma is None:
             return None
-        rows = await self.prisma.query_raw(
-            """
-            UPDATE deltallm_batch_job
-            SET output_file_id = $2,
-                error_file_id = $3,
-                status = $4,
-                completed_at = COALESCE(completed_at, NOW()),
-                lease_expires_at = NULL,
-                locked_by = NULL,
-                status_last_updated_at = NOW()
-            WHERE batch_id = $1
-            RETURNING *
-            """,
-            batch_id,
-            output_file_id,
-            error_file_id,
-            final_status,
-        )
+        if worker_id is None:
+            rows = await self.prisma.query_raw(
+                """
+                UPDATE deltallm_batch_job
+                SET output_file_id = $2,
+                    error_file_id = $3,
+                    status = $4,
+                    completed_at = COALESCE(completed_at, NOW()),
+                    lease_expires_at = NULL,
+                    locked_by = NULL,
+                    status_last_updated_at = NOW()
+                WHERE batch_id = $1
+                RETURNING *
+                """,
+                batch_id,
+                output_file_id,
+                error_file_id,
+                final_status,
+            )
+        else:
+            rows = await self.prisma.query_raw(
+                """
+                UPDATE deltallm_batch_job
+                SET output_file_id = $3,
+                    error_file_id = $4,
+                    status = $5,
+                    completed_at = COALESCE(completed_at, NOW()),
+                    lease_expires_at = NULL,
+                    locked_by = NULL,
+                    status_last_updated_at = NOW()
+                WHERE batch_id = $1
+                  AND locked_by = $2
+                  AND status = 'finalizing'
+                RETURNING *
+                """,
+                batch_id,
+                worker_id,
+                output_file_id,
+                error_file_id,
+                final_status,
+            )
         if not rows:
             return None
         return job_from_row(rows[0])

@@ -22,15 +22,32 @@ class BatchService:
         *,
         repository: BatchRepository,
         storage: BatchArtifactStorage,
+        storage_registry: dict[str, BatchArtifactStorage] | None = None,
         metadata_retention_days: int = 30,
         callable_target_grant_service: CallableTargetGrantService | None = None,
         callable_target_scope_policy_mode: CallableTargetPolicyMode | str = "enforce",
     ) -> None:
         self.repository = repository
         self.storage = storage
+        active_backend = str(getattr(storage, "backend_name", "local") or "local").strip().lower()
+        self.storage_registry = {
+            str(key).strip().lower(): value
+            for key, value in (storage_registry or {}).items()
+        }
+        self.storage_registry.setdefault(active_backend, storage)
         self.metadata_retention_days = metadata_retention_days
         self.callable_target_grant_service = callable_target_grant_service
         self.callable_target_scope_policy_mode = callable_target_scope_policy_mode
+
+    def _storage_for_backend(self, backend: str | None) -> BatchArtifactStorage:
+        normalized = str(backend or getattr(self.storage, "backend_name", "local") or "local").strip().lower()
+        storage = self.storage_registry.get(normalized)
+        if storage is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Storage backend '{normalized}' is unavailable; keep legacy batch storage configured until referenced files expire",
+            )
+        return storage
 
     async def create_file(self, *, auth: UserAPIKeyAuth, upload: UploadFile, purpose: str) -> dict[str, Any]:
         body = await upload.read()
@@ -46,7 +63,7 @@ class BatchService:
             purpose=purpose,
             filename=filename,
             bytes_size=bytes_size,
-            storage_backend="local",
+            storage_backend=getattr(self.storage, "backend_name", "local"),
             storage_key=storage_key,
             checksum=checksum,
             created_by_api_key=auth.api_key,
@@ -68,7 +85,7 @@ class BatchService:
             auth=auth,
         ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="File access denied")
-        return await self.storage.read_bytes(file_record.storage_key)
+        return await self._storage_for_backend(file_record.storage_backend).read_bytes(file_record.storage_key)
 
     async def create_embeddings_batch(
         self,
@@ -92,7 +109,7 @@ class BatchService:
         ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Input file access denied")
 
-        raw = await self.storage.read_bytes(file_record.storage_key)
+        raw = await self._storage_for_backend(file_record.storage_backend).read_bytes(file_record.storage_key)
         items, inferred_model = self._parse_input_jsonl(raw, endpoint=endpoint, auth=auth)
         if not items:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid batch items found in file")

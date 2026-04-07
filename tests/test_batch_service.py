@@ -18,8 +18,13 @@ class _DummyRepo:
 
 
 class _DummyStorage:
+    backend_name = "local"
+
+    def __init__(self) -> None:
+        self.reads: list[str] = []
+
     async def read_bytes(self, storage_key: str) -> bytes:
-        del storage_key
+        self.reads.append(storage_key)
         return b"{}"
 
 
@@ -57,10 +62,13 @@ def _service(
     *,
     callable_target_grant_service: CallableTargetGrantService | None = None,
     callable_target_scope_policy_mode: str = "enforce",
+    storage: _DummyStorage | None = None,
+    storage_registry: dict[str, _DummyStorage] | None = None,
 ) -> BatchService:
     return BatchService(
         repository=_DummyRepo(),
-        storage=_DummyStorage(),
+        storage=storage or _DummyStorage(),
+        storage_registry=storage_registry,
         callable_target_grant_service=callable_target_grant_service,
         callable_target_scope_policy_mode=callable_target_scope_policy_mode,
     )  # type: ignore[arg-type]
@@ -263,6 +271,172 @@ async def test_get_file_content_denies_different_key_without_team_match() -> Non
     with pytest.raises(HTTPException) as exc:
         await service.get_file_content(file_id="f1", auth=UserAPIKeyAuth(api_key="key-b"))
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_file_content_uses_file_storage_backend_from_registry() -> None:
+    now = datetime.now(tz=UTC)
+
+    class _Repo:
+        async def get_file(self, file_id: str):
+            del file_id
+            return BatchFileRecord(
+                file_id="f1",
+                purpose="batch",
+                filename="x.jsonl",
+                bytes=1,
+                status="processed",
+                storage_backend="local",
+                storage_key="legacy/local-file",
+                checksum=None,
+                created_by_api_key="key-a",
+                created_by_user_id=None,
+                created_by_team_id=None,
+                created_at=now,
+                expires_at=None,
+            )
+
+    local_storage = _DummyStorage()
+    active_storage = _DummyStorage()
+    active_storage.backend_name = "s3"
+    service = BatchService(
+        repository=_Repo(),  # type: ignore[arg-type]
+        storage=active_storage,  # type: ignore[arg-type]
+        storage_registry={"local": local_storage, "s3": active_storage},  # type: ignore[arg-type]
+    )
+
+    content = await service.get_file_content(file_id="f1", auth=UserAPIKeyAuth(api_key="key-a"))
+
+    assert content == b"{}"
+    assert local_storage.reads == ["legacy/local-file"]
+    assert active_storage.reads == []
+
+
+@pytest.mark.asyncio
+async def test_create_embeddings_batch_reads_input_from_file_storage_backend() -> None:
+    now = datetime.now(tz=UTC)
+
+    class _Repo:
+        async def get_file(self, file_id: str):
+            assert file_id == "f1"
+            return BatchFileRecord(
+                file_id="f1",
+                purpose="batch",
+                filename="x.jsonl",
+                bytes=1,
+                status="processed",
+                storage_backend="local",
+                storage_key="legacy/input-file",
+                checksum=None,
+                created_by_api_key="key-a",
+                created_by_user_id=None,
+                created_by_team_id=None,
+                created_at=now,
+                expires_at=None,
+            )
+
+        async def create_job(self, **kwargs):
+            del kwargs
+            return BatchJobRecord(
+                batch_id="b1",
+                endpoint="/v1/embeddings",
+                status=BatchJobStatus.VALIDATING,
+                execution_mode="managed_internal",
+                input_file_id="f1",
+                output_file_id=None,
+                error_file_id=None,
+                model="m1",
+                metadata={},
+                provider_batch_id=None,
+                provider_status=None,
+                provider_error=None,
+                provider_last_sync_at=None,
+                total_items=0,
+                in_progress_items=0,
+                completed_items=0,
+                failed_items=0,
+                cancelled_items=0,
+                locked_by=None,
+                lease_expires_at=None,
+                cancel_requested_at=None,
+                status_last_updated_at=now,
+                created_by_api_key="key-a",
+                created_by_user_id=None,
+                created_by_team_id=None,
+                created_at=now,
+                started_at=None,
+                completed_at=None,
+                expires_at=None,
+            )
+
+        async def create_items(self, batch_id: str, items):  # noqa: ANN001
+            assert batch_id == "b1"
+            assert len(items) == 1
+            return 1
+
+        async def set_job_queued(self, batch_id: str, total_items: int):
+            assert batch_id == "b1"
+            assert total_items == 1
+            return BatchJobRecord(
+                batch_id="b1",
+                endpoint="/v1/embeddings",
+                status=BatchJobStatus.QUEUED,
+                execution_mode="managed_internal",
+                input_file_id="f1",
+                output_file_id=None,
+                error_file_id=None,
+                model="m1",
+                metadata={},
+                provider_batch_id=None,
+                provider_status=None,
+                provider_error=None,
+                provider_last_sync_at=None,
+                total_items=1,
+                in_progress_items=0,
+                completed_items=0,
+                failed_items=0,
+                cancelled_items=0,
+                locked_by=None,
+                lease_expires_at=None,
+                cancel_requested_at=None,
+                status_last_updated_at=now,
+                created_by_api_key="key-a",
+                created_by_user_id=None,
+                created_by_team_id=None,
+                created_at=now,
+                started_at=None,
+                completed_at=None,
+                expires_at=None,
+            )
+
+    local_storage = _DummyStorage()
+    active_storage = _DummyStorage()
+    active_storage.backend_name = "s3"
+    service = BatchService(
+        repository=_Repo(),  # type: ignore[arg-type]
+        storage=active_storage,  # type: ignore[arg-type]
+        storage_registry={"local": local_storage, "s3": active_storage},  # type: ignore[arg-type]
+    )
+
+    def _fake_parse(payload: bytes, *, endpoint: str, auth):  # noqa: ANN001
+        assert payload == b"{}"
+        assert endpoint == "/v1/embeddings"
+        assert auth.api_key == "key-a"
+        return [type("Item", (), {"line_number": 1, "custom_id": "c1", "request_body": {"model": "m1"}})()], "m1"
+
+    service._parse_input_jsonl = _fake_parse  # type: ignore[method-assign]
+
+    result = await service.create_embeddings_batch(
+        auth=UserAPIKeyAuth(api_key="key-a"),
+        input_file_id="f1",
+        endpoint="/v1/embeddings",
+        metadata=None,
+        completion_window=None,
+    )
+
+    assert result["status"] == "queued"
+    assert local_storage.reads == ["legacy/input-file"]
+    assert active_storage.reads == []
 
 
 @pytest.mark.asyncio

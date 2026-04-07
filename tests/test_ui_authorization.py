@@ -117,6 +117,8 @@ class FakeAuthorizationDB:
             return [row] if row else []
         if "COUNT(*) AS total FROM deltallm_batch_job j" in query:
             return [{"total": 1}]
+        if "COUNT(*) FILTER (WHERE status IN ('in_progress', 'finalizing')) AS in_progress" in query:
+            return [{"total": 1, "queued": 0, "in_progress": 1, "completed": 0, "failed": 0, "cancelled": 0}]
         if "FROM deltallm_batch_job j" in query and "LEFT JOIN deltallm_teamtable t" in query:
             if "WHERE j.batch_id = $1" in query:
                 row = self.batches.get(str(params[0]))
@@ -295,3 +297,26 @@ async def test_list_batches_keeps_developer_read_access_and_hides_cancel(client,
     assert payload["pagination"]["total"] == 1
     assert payload["data"][0]["batch_id"] == "batch-1"
     assert payload["data"][0]["capabilities"] == {"view": True, "cancel": False}
+
+
+@pytest.mark.asyncio
+async def test_batch_summary_counts_finalizing_as_in_progress(client, test_app, monkeypatch):
+    fake_db = FakeAuthorizationDB()
+    fake_db.batches["batch-1"]["status"] = "finalizing"
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
+            is_platform_admin=False,
+            org_ids=[],
+            team_ids=["team-1"],
+            team_permissions_by_id={"team-1": {Permission.TEAM_READ, Permission.KEY_READ}},
+        ),
+    )
+
+    response = await client.get("/ui/api/batches/summary", headers={"Authorization": "Bearer mk-test"})
+
+    assert response.status_code == 200
+    assert response.json()["in_progress"] == 1

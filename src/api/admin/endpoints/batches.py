@@ -140,7 +140,7 @@ async def batch_summary(
         SELECT
             COUNT(*) AS total,
             COUNT(*) FILTER (WHERE status = 'queued') AS queued,
-            COUNT(*) FILTER (WHERE status = 'in_progress') AS in_progress,
+            COUNT(*) FILTER (WHERE status IN ('in_progress', 'finalizing')) AS in_progress,
             COUNT(*) FILTER (WHERE status = 'completed') AS completed,
             COUNT(*) FILTER (WHERE status = 'failed') AS failed,
             COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled

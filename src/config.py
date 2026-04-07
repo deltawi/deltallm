@@ -248,8 +248,19 @@ class GeneralSettings(BaseModel):
     model_deployment_bootstrap_from_config: bool = True
     embeddings_batch_enabled: bool = False
     embeddings_batch_worker_enabled: bool = True
+    embeddings_batch_storage_backend: Literal["local", "s3"] = "local"
     embeddings_batch_storage_dir: str = ".deltallm/batch-artifacts"
+    embeddings_batch_s3_bucket: str | None = None
+    embeddings_batch_s3_region: str = "us-east-1"
+    embeddings_batch_s3_prefix: str = "deltallm/batch-artifacts"
+    embeddings_batch_s3_endpoint_url: str | None = None
+    embeddings_batch_s3_access_key_id: str | None = None
+    embeddings_batch_s3_secret_access_key: str | None = None
     embeddings_batch_poll_interval_seconds: float = 1.0
+    embeddings_batch_heartbeat_interval_seconds: float = Field(default=15.0, gt=0)
+    embeddings_batch_job_lease_seconds: int = Field(default=120, ge=5)
+    embeddings_batch_item_lease_seconds: int = Field(default=360, ge=30)
+    embeddings_batch_finalization_retry_delay_seconds: int = Field(default=60, ge=1)
     embeddings_batch_item_claim_limit: int = 20
     embeddings_batch_max_attempts: int = 3
     batch_completed_artifact_retention_days: int = 7
