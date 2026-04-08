@@ -1,38 +1,64 @@
 from __future__ import annotations
 
 import json
+import logging
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
 from src.batch.models import BatchItemCreate, BatchItemRecord, BatchItemStatus
 from src.batch.repositories.mappers import item_from_row
+from src.metrics import increment_batch_item_reclaim
+
+logger = logging.getLogger(__name__)
 
 
 class BatchItemRepository:
+    _MAX_BULK_INSERT_ROWS = 200
+
     def __init__(self, prisma_client: Any | None = None) -> None:
         self.prisma = prisma_client
 
     async def create_items(self, batch_id: str, items: list[BatchItemCreate]) -> int:
         if self.prisma is None or not items:
             return 0
+        if len(items) > self._MAX_BULK_INSERT_ROWS:
+            inserted = 0
+            for start in range(0, len(items), self._MAX_BULK_INSERT_ROWS):
+                inserted += await self.create_items(batch_id, items[start : start + self._MAX_BULK_INSERT_ROWS])
+            return inserted
+
+        values_sql: list[str] = []
+        params: list[Any] = []
+        param_index = 1
         inserted = 0
         for item in items:
             item_id = str(uuid4())
-            rows = await self.prisma.query_raw(
-                """
-                INSERT INTO deltallm_batch_item (item_id, batch_id, line_number, custom_id, status, request_body)
-                VALUES ($1, $2, $3, $4, $5, $6::jsonb)
-                ON CONFLICT (batch_id, line_number) DO NOTHING
-                RETURNING item_id
-                """,
-                item_id,
-                batch_id,
-                item.line_number,
-                item.custom_id,
-                BatchItemStatus.PENDING,
-                json.dumps(item.request_body),
+            values_sql.append(
+                f"(${param_index}, ${param_index + 1}, ${param_index + 2}, ${param_index + 3}, "
+                f"${param_index + 4}, ${param_index + 5}::jsonb)"
             )
-            inserted += len(rows)
+            params.extend(
+                [
+                    item_id,
+                    batch_id,
+                    item.line_number,
+                    item.custom_id,
+                    BatchItemStatus.PENDING,
+                    json.dumps(item.request_body),
+                ]
+            )
+            param_index += 6
+        rows = await self.prisma.query_raw(
+            f"""
+            INSERT INTO deltallm_batch_item (item_id, batch_id, line_number, custom_id, status, request_body)
+            VALUES {", ".join(values_sql)}
+            ON CONFLICT (batch_id, line_number) DO NOTHING
+            RETURNING item_id
+            """,
+            *params,
+        )
+        inserted += len(rows)
         return inserted
 
     async def claim_items(
@@ -48,7 +74,7 @@ class BatchItemRepository:
         rows = await self.prisma.query_raw(
             """
             WITH candidate AS (
-                SELECT item_id
+                SELECT item_id, status AS previous_status
                 FROM deltallm_batch_item
                 WHERE batch_id = $1
                   AND (
@@ -67,13 +93,23 @@ class BatchItemRepository:
                 started_at = COALESCE(i.started_at, NOW())
             FROM candidate
             WHERE i.item_id = candidate.item_id
-            RETURNING i.*
+            RETURNING i.*, candidate.previous_status
             """,
             batch_id,
             max(1, min(limit, 200)),
             worker_id,
             lease_seconds,
         )
+        reclaimed_count = sum(1 for row in rows if row.get("previous_status") == "in_progress")
+        for _ in range(reclaimed_count):
+            increment_batch_item_reclaim()
+        if reclaimed_count > 0:
+            logger.info(
+                "batch items reclaimed batch_id=%s worker_id=%s count=%s",
+                batch_id,
+                worker_id,
+                reclaimed_count,
+            )
         return [item_from_row(row) for row in rows]
 
     async def mark_item_completed(
@@ -312,3 +348,82 @@ class BatchItemRepository:
                 max(1, min(limit, 5_000)),
             )
         return [item_from_row(row) for row in rows]
+
+    async def summarize_runtime_statuses(self, *, now: datetime) -> dict[str, float]:
+        if self.prisma is None:
+            return {
+                "pending_items": 0,
+                "in_progress_items": 0,
+                "oldest_pending_item_age_seconds": 0.0,
+                "oldest_in_progress_item_age_seconds": 0.0,
+            }
+        rows = await self.prisma.query_raw(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE status = 'pending') AS pending_items,
+                COUNT(*) FILTER (WHERE status = 'in_progress') AS in_progress_items,
+                COALESCE(
+                    EXTRACT(EPOCH FROM ($1::timestamp - MIN(CASE WHEN status = 'pending' THEN created_at END))),
+                    0
+                ) AS oldest_pending_item_age_seconds,
+                COALESCE(
+                    EXTRACT(
+                        EPOCH FROM (
+                            $1::timestamp - MIN(CASE WHEN status = 'in_progress' THEN COALESCE(started_at, created_at) END)
+                        )
+                    ),
+                    0
+                ) AS oldest_in_progress_item_age_seconds
+            FROM deltallm_batch_item
+            """,
+            now,
+        )
+        row = dict(rows[0]) if rows else {}
+        return {
+            "pending_items": int(row.get("pending_items") or 0),
+            "in_progress_items": int(row.get("in_progress_items") or 0),
+            "oldest_pending_item_age_seconds": float(row.get("oldest_pending_item_age_seconds") or 0.0),
+            "oldest_in_progress_item_age_seconds": float(row.get("oldest_in_progress_item_age_seconds") or 0.0),
+        }
+
+    async def requeue_expired_in_progress_items(self, batch_id: str) -> int:
+        if self.prisma is None:
+            return 0
+        rows = await self.prisma.query_raw(
+            """
+            UPDATE deltallm_batch_item
+            SET status = 'pending',
+                locked_by = NULL,
+                lease_expires_at = NULL
+            WHERE batch_id = $1
+              AND status = 'in_progress'
+              AND lease_expires_at IS NOT NULL
+              AND lease_expires_at < NOW()
+            RETURNING item_id
+            """,
+            batch_id,
+        )
+        return len(rows)
+
+    async def fail_nonterminal_items(self, *, batch_id: str, reason: str) -> int:
+        if self.prisma is None:
+            return 0
+        error_payload = json.dumps({"message": reason, "type": "OperatorFailed"})
+        rows = await self.prisma.query_raw(
+            """
+            UPDATE deltallm_batch_item
+            SET status = 'failed',
+                error_body = $2::jsonb,
+                last_error = $3,
+                locked_by = NULL,
+                lease_expires_at = NULL,
+                completed_at = NOW()
+            WHERE batch_id = $1
+              AND status IN ('pending', 'in_progress')
+            RETURNING item_id
+            """,
+            batch_id,
+            error_payload,
+            reason,
+        )
+        return len(rows)

@@ -1,14 +1,127 @@
 from __future__ import annotations
 
-from typing import Any
+import contextlib
+from datetime import UTC, datetime
+import logging
+from typing import Any, Iterator
+from time import perf_counter
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
+from pydantic import BaseModel
 
 from src.auth.roles import Permission
-from src.api.admin.endpoints.common import db_or_503, to_json_value, get_auth_scope
+from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, to_json_value, get_auth_scope
+from src.audit.actions import AuditAction
+from src.batch.repository import BatchRepository
+from src.batch.models import decode_operator_failed_reason, encode_operator_failed_reason
+from src.metrics import (
+    increment_batch_repair_action,
+    publish_batch_runtime_summary,
+)
 from src.services.ui_authorization import build_batch_capabilities
 
 router = APIRouter(tags=["Admin Batches"])
+logger = logging.getLogger(__name__)
+
+
+class MarkBatchFailedRequest(BaseModel):
+    reason: str | None = None
+
+
+async def _refresh_batch_runtime_metrics(repository: BatchRepository) -> None:
+    try:
+        summary = await repository.summarize_runtime_statuses(now=datetime.now(tz=UTC))
+        publish_batch_runtime_summary(summary)
+    except Exception:
+        logger.debug("batch admin runtime metrics refresh failed", exc_info=True)
+        return
+
+
+@contextlib.contextmanager
+def _repair_action_metric(action: str) -> Iterator[None]:
+    """Records a repair action outcome as success unless an unexpected error escapes.
+
+    HTTPExceptions are treated as client-visible validation and do not flip the
+    counter to error — only unexpected exceptions do.
+    """
+    try:
+        yield
+    except HTTPException:
+        raise
+    except Exception:
+        increment_batch_repair_action(action=action, status="error")
+        raise
+    increment_batch_repair_action(action=action, status="success")
+
+
+def _batch_repository_or_503(request: Request) -> BatchRepository:
+    repository = getattr(request.app.state, "batch_repository", None)
+    if repository is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Batch repository unavailable")
+    return repository
+
+
+async def _load_batch_scope_row(db: Any, batch_id: str) -> dict[str, Any]:
+    rows = await db.query_raw(
+        """
+        SELECT batch_id, status, created_by_team_id, created_by_organization_id
+        FROM deltallm_batch_job
+        WHERE batch_id = $1
+        LIMIT 1
+        """,
+        batch_id,
+    )
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
+    return dict(rows[0])
+
+
+async def _enforce_batch_update_scope(*, db: Any, scope, job: dict[str, Any]) -> None:  # noqa: ANN001
+    if scope.is_platform_admin:
+        return
+    team_id = job.get("created_by_team_id")
+    organization_id = job.get("created_by_organization_id")
+    if team_id and scope.team_ids and team_id in scope.team_ids:
+        return
+    if organization_id and scope.org_ids and organization_id in scope.org_ids:
+        return
+    if team_id and scope.org_ids:
+        org_rows = await db.query_raw(
+            "SELECT organization_id FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
+            team_id,
+        )
+        org_id = str((org_rows[0] if org_rows else {}).get("organization_id") or "")
+        if org_id in scope.org_ids:
+            return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+
+def _append_batch_scope_clause(*, clauses: list[str], params: list[Any], scope, job_alias: str = "") -> bool:  # noqa: ANN001
+    if scope.is_platform_admin:
+        return True
+
+    team_column = f"{job_alias}created_by_team_id"
+    org_column = f"{job_alias}created_by_organization_id"
+    scope_clauses: list[str] = []
+
+    if scope.team_ids:
+        team_placeholders = ", ".join(f"${len(params) + index + 1}" for index in range(len(scope.team_ids)))
+        params.extend(scope.team_ids)
+        scope_clauses.append(f"{team_column} IN ({team_placeholders})")
+
+    if scope.org_ids:
+        org_placeholders = ", ".join(f"${len(params) + index + 1}" for index in range(len(scope.org_ids)))
+        params.extend(scope.org_ids)
+        scope_clauses.append(
+            f"({org_column} IN ({org_placeholders}) "
+            f"OR {team_column} IN (SELECT team_id FROM deltallm_teamtable WHERE organization_id IN ({org_placeholders})))"
+        )
+
+    if not scope_clauses:
+        return False
+
+    clauses.append("(" + " OR ".join(scope_clauses) + ")")
+    return True
 
 
 @router.get("/ui/api/batches")
@@ -27,17 +140,8 @@ async def list_batches(
     clauses: list[str] = []
     params: list[Any] = []
 
-    if not scope.is_platform_admin:
-        if scope.team_ids:
-            ph = ", ".join(f"${len(params) + i + 1}" for i in range(len(scope.team_ids)))
-            params.extend(scope.team_ids)
-            clauses.append(f"j.created_by_team_id IN ({ph})")
-        elif scope.org_ids:
-            ph = ", ".join(f"${len(params) + i + 1}" for i in range(len(scope.org_ids)))
-            params.extend(scope.org_ids)
-            clauses.append(f"j.created_by_team_id IN (SELECT team_id FROM deltallm_teamtable WHERE organization_id IN ({ph}))")
-        else:
-            return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
+    if not _append_batch_scope_clause(clauses=clauses, params=params, scope=scope, job_alias="j."):
+        return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
 
     if search:
         params.append(f"%{search}%")
@@ -62,9 +166,9 @@ async def list_batches(
         f"""
         SELECT j.batch_id, j.endpoint, j.status, j.model, j.execution_mode,
                j.total_items, j.completed_items, j.failed_items, j.cancelled_items, j.in_progress_items,
-               j.created_by_api_key, j.created_by_team_id,
+               j.created_by_api_key, j.created_by_team_id, j.created_by_organization_id,
                j.created_at, j.started_at, j.completed_at,
-               t.team_alias, t.organization_id,
+               t.team_alias, COALESCE(j.created_by_organization_id, t.organization_id) AS organization_id,
                COALESCE((SELECT SUM(bi.billed_cost) FROM deltallm_batch_item bi WHERE bi.batch_id = j.batch_id), 0) AS total_cost
         FROM deltallm_batch_job j
         LEFT JOIN deltallm_teamtable t ON t.team_id = j.created_by_team_id
@@ -96,6 +200,7 @@ async def list_batches(
             "total_cost": float(r.get("total_cost") or 0),
             "created_by_api_key": masked_key,
             "created_by_team_id": r.get("created_by_team_id"),
+            "created_by_organization_id": r.get("created_by_organization_id"),
             "team_alias": r.get("team_alias"),
             "created_at": to_json_value(r.get("created_at")),
             "started_at": to_json_value(r.get("started_at")),
@@ -121,17 +226,8 @@ async def batch_summary(
     clauses: list[str] = []
     params: list[Any] = []
 
-    if not scope.is_platform_admin:
-        if scope.team_ids:
-            ph = ", ".join(f"${len(params) + i + 1}" for i in range(len(scope.team_ids)))
-            params.extend(scope.team_ids)
-            clauses.append(f"created_by_team_id IN ({ph})")
-        elif scope.org_ids:
-            ph = ", ".join(f"${len(params) + i + 1}" for i in range(len(scope.org_ids)))
-            params.extend(scope.org_ids)
-            clauses.append(f"created_by_team_id IN (SELECT team_id FROM deltallm_teamtable WHERE organization_id IN ({ph}))")
-        else:
-            return {"total": 0, "queued": 0, "in_progress": 0, "completed": 0, "failed": 0, "cancelled": 0}
+    if not _append_batch_scope_clause(clauses=clauses, params=params, scope=scope):
+        return {"total": 0, "queued": 0, "in_progress": 0, "completed": 0, "failed": 0, "cancelled": 0}
 
     where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 
@@ -175,6 +271,7 @@ async def get_batch(
     rows = await db.query_raw(
         """
         SELECT j.*, t.team_alias, t.organization_id
+        , COALESCE(j.created_by_organization_id, t.organization_id) AS organization_id
         FROM deltallm_batch_job j
         LEFT JOIN deltallm_teamtable t ON t.team_id = j.created_by_team_id
         WHERE j.batch_id = $1
@@ -186,21 +283,7 @@ async def get_batch(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
 
     job = dict(rows[0])
-
-    if not scope.is_platform_admin:
-        team_id = job.get("created_by_team_id")
-        if team_id and scope.team_ids and team_id in scope.team_ids:
-            pass
-        elif team_id and scope.org_ids:
-            org_rows = await db.query_raw(
-                "SELECT organization_id FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
-                team_id,
-            )
-            org_id = str((org_rows[0] if org_rows else {}).get("organization_id") or "")
-            if org_id not in scope.org_ids:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-        else:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    await _enforce_batch_update_scope(db=db, scope=scope, job=job)
 
     cost_rows = await db.query_raw(
         """
@@ -244,6 +327,7 @@ async def get_batch(
         "model": job.get("model"),
         "execution_mode": job.get("execution_mode"),
         "metadata": to_json_value(job.get("metadata")),
+        "provider_error": decode_operator_failed_reason(job.get("provider_error")),
         "total_items": int(job.get("total_items") or 0),
         "completed_items": int(job.get("completed_items") or 0),
         "failed_items": int(job.get("failed_items") or 0),
@@ -253,6 +337,7 @@ async def get_batch(
         "total_billed_cost": float(cost_row.get("total_billed_cost") or 0),
         "created_by_api_key": masked_key,
         "created_by_team_id": job.get("created_by_team_id"),
+        "created_by_organization_id": job.get("created_by_organization_id") or job.get("organization_id"),
         "team_alias": job.get("team_alias"),
         "created_at": to_json_value(job.get("created_at")),
         "started_at": to_json_value(job.get("started_at")),
@@ -281,30 +366,8 @@ async def cancel_batch(
 ) -> dict[str, Any]:
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
     db = db_or_503(request)
-
-    rows = await db.query_raw(
-        "SELECT batch_id, status, created_by_team_id FROM deltallm_batch_job WHERE batch_id = $1 LIMIT 1",
-        batch_id,
-    )
-    if not rows:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
-
-    job = dict(rows[0])
-
-    if not scope.is_platform_admin:
-        team_id = job.get("created_by_team_id")
-        if team_id and scope.team_ids and team_id in scope.team_ids:
-            pass
-        elif team_id and scope.org_ids:
-            org_rows = await db.query_raw(
-                "SELECT organization_id FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
-                team_id,
-            )
-            org_id = str((org_rows[0] if org_rows else {}).get("organization_id") or "")
-            if org_id not in scope.org_ids:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-        else:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    job = await _load_batch_scope_row(db, batch_id)
+    await _enforce_batch_update_scope(db=db, scope=scope, job=job)
 
     terminal = {"completed", "failed", "cancelled", "expired"}
     if job.get("status") in terminal:
@@ -321,3 +384,122 @@ async def cancel_batch(
         batch_id,
     )
     return {"batch_id": batch_id, "status": dict(updated[0]).get("status") if updated else job.get("status"), "cancel_requested": True}
+
+
+@router.post("/ui/api/batches/{batch_id}/retry-finalization")
+async def retry_batch_finalization(
+    request: Request,
+    batch_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    request_start = perf_counter()
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
+    db = db_or_503(request)
+    repository = _batch_repository_or_503(request)
+    job = await _load_batch_scope_row(db, batch_id)
+    await _enforce_batch_update_scope(db=db, scope=scope, job=job)
+    if job.get("status") != "finalizing":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Batch is not in 'finalizing' status")
+    with _repair_action_metric("retry_finalization"):
+        updated = await repository.retry_finalization_now(batch_id)
+        if updated is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
+    await _refresh_batch_runtime_metrics(repository)
+    response = {"batch_id": batch_id, "status": updated.status, "retried": True}
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_BATCH_RETRY_FINALIZATION,
+        scope=scope,
+        resource_type="batch",
+        resource_id=batch_id,
+        request_payload={"batch_id": batch_id},
+        response_payload=response,
+    )
+    logger.info("batch repair retry-finalization batch_id=%s actor=%s", batch_id, scope.account_id)
+    return response
+
+
+@router.post("/ui/api/batches/{batch_id}/requeue-stale")
+async def requeue_stale_batch_items(
+    request: Request,
+    batch_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    request_start = perf_counter()
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
+    db = db_or_503(request)
+    repository = _batch_repository_or_503(request)
+    job = await _load_batch_scope_row(db, batch_id)
+    await _enforce_batch_update_scope(db=db, scope=scope, job=job)
+    with _repair_action_metric("requeue_stale"):
+        requeued = await repository.requeue_expired_in_progress_items(batch_id)
+        refreshed = await repository.refresh_job_progress(batch_id)
+    await _refresh_batch_runtime_metrics(repository)
+    response = {
+        "batch_id": batch_id,
+        "status": refreshed.status if refreshed is not None else job.get("status"),
+        "requeued_items": requeued,
+    }
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_BATCH_REQUEUE_STALE,
+        scope=scope,
+        resource_type="batch",
+        resource_id=batch_id,
+        request_payload={"batch_id": batch_id},
+        response_payload=response,
+    )
+    logger.info("batch repair requeue-stale batch_id=%s items=%s actor=%s", batch_id, requeued, scope.account_id)
+    return response
+
+
+@router.post("/ui/api/batches/{batch_id}/mark-failed")
+async def mark_batch_failed(
+    request: Request,
+    batch_id: str,
+    payload: MarkBatchFailedRequest,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    request_start = perf_counter()
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_UPDATE)
+    db = db_or_503(request)
+    repository = _batch_repository_or_503(request)
+    job = await _load_batch_scope_row(db, batch_id)
+    await _enforce_batch_update_scope(db=db, scope=scope, job=job)
+    terminal = {"completed", "failed", "cancelled", "expired"}
+    if job.get("status") in terminal:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cannot fail batch in '{job.get('status')}' status")
+    reason = str(payload.reason or "").strip() or "Marked failed by operator"
+    provider_error = encode_operator_failed_reason(reason)
+    with _repair_action_metric("mark_failed"):
+        failed_items = await repository.fail_nonterminal_items(batch_id=batch_id, reason=reason)
+        await repository.set_provider_error(batch_id=batch_id, provider_error=provider_error)
+        refreshed = await repository.refresh_job_progress(batch_id)
+        if refreshed is not None and refreshed.status == "finalizing":
+            refreshed = await repository.retry_finalization_now(batch_id) or refreshed
+    await _refresh_batch_runtime_metrics(repository)
+    current_status = refreshed.status if refreshed is not None else "failed"
+    response = {
+        "batch_id": batch_id,
+        "current_status": current_status,
+        "intended_status": "failed",
+        "failed_items": failed_items,
+        "reason": reason,
+    }
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_BATCH_MARK_FAILED,
+        scope=scope,
+        resource_type="batch",
+        resource_id=batch_id,
+        request_payload={"batch_id": batch_id, "reason": reason},
+        response_payload=response,
+    )
+    logger.warning("batch repair mark-failed batch_id=%s items=%s actor=%s reason=%s", batch_id, failed_items, scope.account_id, reason)
+    return response

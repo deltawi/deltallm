@@ -878,6 +878,7 @@ model DeltaLLM_BatchFile {
   created_by_api_key  String?
   created_by_user_id  String?
   created_by_team_id  String?
+  created_by_organization_id String?
   created_at          DateTime @default(now())
   expires_at          DateTime?
 
@@ -917,6 +918,7 @@ model DeltaLLM_BatchJob {
   created_by_api_key       String?
   created_by_user_id       String?
   created_by_team_id       String?
+  created_by_organization_id String?
   created_at               DateTime @default(now())
   started_at               DateTime?
   completed_at             DateTime?
@@ -931,6 +933,7 @@ model DeltaLLM_BatchJob {
   @@index([lease_expires_at])
   @@index([created_by_api_key, created_at])
   @@index([created_by_team_id, created_at])
+  @@index([created_by_organization_id, created_at])
   @@index([expires_at])
   @@map("deltallm_batch_job")
 }

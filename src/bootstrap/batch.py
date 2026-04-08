@@ -2,16 +2,25 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from asyncio import Task, create_task
 from dataclasses import dataclass
 from typing import Any
 
-from src.bootstrap.status import BootstrapStatus
 from src.batch import BatchCleanupConfig, BatchRetentionCleanupWorker, BatchRepository
 from src.batch.service import BatchService
 from src.batch.storage import LocalBatchArtifactStorage, S3BatchArtifactStorage
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
+from src.bootstrap.status import BootstrapStatus
 from src.services.model_visibility import normalize_callable_target_policy_mode
+
+logger = logging.getLogger(__name__)
+
+# Upper bound on how long shutdown_batch_runtime waits for an in-flight
+# process_once iteration to drain before falling back to hard-cancelling the
+# worker task. Kept conservative so k8s pod termination grace periods are
+# respected; the worker loop's own idle poll is sub-second.
+_WORKER_SHUTDOWN_DRAIN_TIMEOUT_SECONDS = 30.0
 
 
 @dataclass
@@ -46,15 +55,23 @@ def _build_s3_batch_storage(cfg: Any) -> S3BatchArtifactStorage:
 
 def _build_batch_storage_registry(cfg: Any) -> dict[str, Any]:
     general = cfg.general_settings
-    registry: dict[str, Any] = {
-        "local": LocalBatchArtifactStorage(general.embeddings_batch_storage_dir),
-    }
+    backend = str(getattr(general, "embeddings_batch_storage_backend", "local") or "local").strip().lower()
+    registry: dict[str, Any] = {}
+    try:
+        registry["local"] = LocalBatchArtifactStorage(general.embeddings_batch_storage_dir)
+    except Exception:
+        if backend == "local":
+            raise
+        logger.warning(
+            "batch local storage backend unavailable for legacy artifact routing path=%s",
+            general.embeddings_batch_storage_dir,
+            exc_info=True,
+        )
     bucket = str(getattr(general, "embeddings_batch_s3_bucket", "") or "").strip()
     if bucket:
         try:
             registry["s3"] = _build_s3_batch_storage(cfg)
         except RuntimeError:
-            backend = str(getattr(general, "embeddings_batch_storage_backend", "local") or "local").strip().lower()
             if backend == "s3":
                 raise
     return registry
@@ -145,17 +162,51 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
     return runtime
 
 
+async def _drain_worker_task(
+    task: Task[None],
+    *,
+    label: str,
+    timeout: float,
+) -> None:
+    """Wait for a worker's run() loop to exit naturally after stop() flipped
+    its _running flag. Falls back to cancellation if draining exceeds the
+    timeout so pod termination stays bounded.
+    """
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        return
+    except asyncio.TimeoutError:
+        logger.warning(
+            "%s drain timed out after %.1fs; cancelling in-flight iteration",
+            label,
+            timeout,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("%s drain raised", label)
+        return
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+
 async def shutdown_batch_runtime(runtime: BatchRuntime) -> None:
     if runtime.worker is not None:
         runtime.worker.stop()
     if runtime.worker_task is not None:
-        runtime.worker_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await runtime.worker_task
+        await _drain_worker_task(
+            runtime.worker_task,
+            label="batch worker",
+            timeout=_WORKER_SHUTDOWN_DRAIN_TIMEOUT_SECONDS,
+        )
 
     if runtime.gc_worker is not None:
         runtime.gc_worker.stop()
     if runtime.gc_task is not None:
-        runtime.gc_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await runtime.gc_task
+        # GC has no mid-iteration lease risk; short drain then cancel.
+        await _drain_worker_task(
+            runtime.gc_task,
+            label="batch gc worker",
+            timeout=5.0,
+        )

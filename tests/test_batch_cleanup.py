@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import logging
 
 import pytest
 
@@ -107,3 +108,48 @@ async def test_batch_cleanup_worker_routes_delete_by_file_backend():
     assert deleted_files == 1
     assert local_storage.deleted == ["batch_output/f-2"]
     assert active_storage.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_batch_cleanup_worker_refresh_runtime_metrics_logs_debug_on_failure(caplog: pytest.LogCaptureFixture):
+    class _Repo(_RepoStub):
+        async def summarize_runtime_statuses(self, *, now: datetime):
+            del now
+            raise RuntimeError("metrics unavailable")
+
+    worker = BatchRetentionCleanupWorker(
+        repository=_Repo(),  # type: ignore[arg-type]
+        storage=_StorageStub(),  # type: ignore[arg-type]
+        config=BatchCleanupConfig(interval_seconds=0.01, scan_limit=10),
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        await worker._refresh_batch_runtime_metrics(now=datetime.now(tz=UTC))
+
+    assert "batch cleanup runtime metrics refresh failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_batch_cleanup_worker_refresh_runtime_metrics_logs_debug_on_publish_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    class _Repo(_RepoStub):
+        async def summarize_runtime_statuses(self, *, now: datetime):
+            del now
+            return {"queued": 0, "in_progress": 0, "finalizing": 0}
+
+    worker = BatchRetentionCleanupWorker(
+        repository=_Repo(),  # type: ignore[arg-type]
+        storage=_StorageStub(),  # type: ignore[arg-type]
+        config=BatchCleanupConfig(interval_seconds=0.01, scan_limit=10),
+    )
+    monkeypatch.setattr(
+        "src.batch.cleanup.publish_batch_runtime_summary",
+        lambda summary: (_ for _ in ()).throw(RuntimeError("publish unavailable")),  # noqa: ARG005
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        await worker._refresh_batch_runtime_metrics(now=datetime.now(tz=UTC))
+
+    assert "batch cleanup runtime metrics refresh failed" in caplog.text

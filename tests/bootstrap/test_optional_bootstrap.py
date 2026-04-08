@@ -7,7 +7,7 @@ import pytest
 
 from src.bootstrap import BootstrapStatus
 from src.bootstrap.audit import init_audit_runtime, shutdown_audit_runtime
-from src.bootstrap.batch import init_batch_runtime, shutdown_batch_runtime
+from src.bootstrap.batch import _drain_worker_task, init_batch_runtime, shutdown_batch_runtime
 
 
 def _audit_config(*, enabled: bool, retention_enabled: bool) -> SimpleNamespace:
@@ -195,7 +195,8 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
             created["worker"] = self
 
         async def run(self) -> None:
-            await asyncio.sleep(3600)
+            while not self.stopped:
+                await asyncio.sleep(0.01)
 
         def stop(self) -> None:
             self.stopped = True
@@ -210,7 +211,8 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
             created["gc_worker"] = self
 
         async def run(self) -> None:
-            await asyncio.sleep(3600)
+            while not self.stopped:
+                await asyncio.sleep(0.01)
 
         def stop(self) -> None:
             self.stopped = True
@@ -311,6 +313,39 @@ async def test_init_batch_runtime_selects_s3_storage(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
+async def test_init_batch_runtime_allows_s3_when_local_storage_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeBatchService:
+        def __init__(self, repository, storage, storage_registry=None, **kwargs) -> None:  # noqa: ANN001
+            del repository, kwargs
+            self.storage = storage
+            self.storage_registry = storage_registry
+
+    def _fail_local(path: str):  # noqa: ANN001
+        raise RuntimeError("local storage unavailable")
+
+    monkeypatch.setattr("src.bootstrap.batch.LocalBatchArtifactStorage", _fail_local)
+    monkeypatch.setattr(
+        "src.bootstrap.batch.S3BatchArtifactStorage",
+        lambda **kwargs: {"backend": "s3", **kwargs},
+    )
+    monkeypatch.setattr("src.bootstrap.batch.BatchService", FakeBatchService)
+
+    app = SimpleNamespace(state=SimpleNamespace())
+
+    runtime = await init_batch_runtime(
+        app,
+        _batch_config(enabled=True, worker_enabled=False, gc_enabled=False, storage_backend="s3", s3_bucket="batch-bucket"),
+        repository=object(),
+    )
+
+    assert app.state.batch_storage == {"backend": "s3", "bucket": "batch-bucket", "region": "us-east-1", "prefix": "deltallm/batch-artifacts", "endpoint_url": None, "access_key_id": None, "secret_access_key": None, "spool_max_bytes": 8_388_608}
+    assert "local" not in app.state.batch_storage_registry
+    assert app.state.batch_storage_registry["s3"]["backend"] == "s3"
+    assert runtime.worker is None
+    assert runtime.gc_worker is None
+
+
+@pytest.mark.asyncio
 async def test_init_batch_runtime_rejects_s3_without_bucket() -> None:
     app = SimpleNamespace(state=SimpleNamespace())
 
@@ -320,3 +355,32 @@ async def test_init_batch_runtime_rejects_s3_without_bucket() -> None:
             _batch_config(enabled=True, worker_enabled=False, gc_enabled=False, storage_backend="s3", s3_bucket=None),
             repository=object(),
         )
+
+
+@pytest.mark.asyncio
+async def test_drain_worker_task_waits_for_natural_exit() -> None:
+    finished = asyncio.Event()
+
+    async def _worker() -> None:
+        await asyncio.sleep(0.01)
+        finished.set()
+
+    task = asyncio.create_task(_worker())
+    await _drain_worker_task(task, label="test worker", timeout=1.0)
+    assert finished.is_set()
+    assert task.done() and not task.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_drain_worker_task_cancels_on_timeout() -> None:
+    started = asyncio.Event()
+
+    async def _worker() -> None:
+        started.set()
+        await asyncio.sleep(10.0)
+
+    task = asyncio.create_task(_worker())
+    await started.wait()
+    await _drain_worker_task(task, label="test worker", timeout=0.05)
+    assert task.done()
+    assert task.cancelled()

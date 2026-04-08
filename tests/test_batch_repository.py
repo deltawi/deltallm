@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from src.batch.repository import BatchRepository
@@ -36,6 +38,23 @@ async def test_list_jobs_uses_or_scope_for_api_key_and_team():
 
 
 @pytest.mark.asyncio
+async def test_list_jobs_can_filter_by_organization_scope() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    jobs = await repository.list_jobs(
+        limit=20,
+        created_by_api_key="key-1",
+        created_by_organization_id="org-1",
+    )
+
+    assert jobs == []
+    assert "created_by_api_key" in prisma.sql
+    assert "created_by_organization_id" in prisma.sql
+    assert " OR " in prisma.sql
+
+
+@pytest.mark.asyncio
 async def test_claim_items_reclaims_expired_in_progress_rows():
     prisma = _PrismaSpy()
     repository = BatchRepository(prisma_client=prisma)
@@ -51,6 +70,49 @@ async def test_claim_items_reclaims_expired_in_progress_rows():
     assert "status = 'pending'" in prisma.sql
     assert "status = 'in_progress'" in prisma.sql
     assert "lease_expires_at < NOW()" in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_claim_items_logs_reclaimed_expired_rows(caplog: pytest.LogCaptureFixture):
+    class _ReclaimPrisma:
+        async def query_raw(self, sql: str, *params):
+            del sql, params
+            return [
+                {
+                    "item_id": "item-1",
+                    "batch_id": "batch-1",
+                    "line_number": 1,
+                    "custom_id": "custom-1",
+                    "status": "in_progress",
+                    "request_body": {"model": "m1"},
+                    "response_body": None,
+                    "error_body": None,
+                    "usage": None,
+                    "provider_cost": 0.0,
+                    "billed_cost": 0.0,
+                    "attempts": 2,
+                    "last_error": None,
+                    "locked_by": "worker-1",
+                    "lease_expires_at": None,
+                    "created_at": None,
+                    "started_at": None,
+                    "completed_at": None,
+                    "previous_status": "in_progress",
+                }
+            ]
+
+    repository = BatchRepository(prisma_client=_ReclaimPrisma())
+
+    with caplog.at_level(logging.INFO):
+        items = await repository.claim_items(
+            batch_id="batch-1",
+            worker_id="worker-1",
+            limit=10,
+            lease_seconds=120,
+        )
+
+    assert len(items) == 1
+    assert "batch items reclaimed batch_id=batch-1 worker_id=worker-1 count=1" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -133,3 +195,21 @@ async def test_acquire_scope_advisory_lock_uses_postgres_advisory_lock():
     assert "pg_advisory_xact_lock" in prisma.sql
     assert "hashtext($1)" in prisma.sql
     assert "hashtext($2)" in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_create_items_uses_bulk_insert_statement():
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    inserted = await repository.create_items(
+        "batch-1",
+        [
+            type("Item", (), {"line_number": 1, "custom_id": "c1", "request_body": {"model": "m1"}})(),
+            type("Item", (), {"line_number": 2, "custom_id": "c2", "request_body": {"model": "m2"}})(),
+        ],
+    )
+
+    assert inserted == 0
+    assert "VALUES ($1, $2, $3, $4, $5, $6::jsonb), ($7, $8, $9, $10, $11, $12::jsonb)" in prisma.sql
+    assert "ON CONFLICT (batch_id, line_number) DO NOTHING" in prisma.sql
