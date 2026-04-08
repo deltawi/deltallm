@@ -56,6 +56,7 @@ def file_from_row(row: dict[str, Any]) -> BatchFileRecord:
         created_by_team_id=row.get("created_by_team_id"),
         created_at=parse_datetime(row.get("created_at")) or datetime.now(tz=UTC),
         expires_at=parse_datetime(row.get("expires_at")),
+        created_by_organization_id=row.get("created_by_organization_id"),
     )
 
 
@@ -90,6 +91,7 @@ def job_from_row(row: dict[str, Any]) -> BatchJobRecord:
         started_at=parse_datetime(row.get("started_at")),
         completed_at=parse_datetime(row.get("completed_at")),
         expires_at=parse_datetime(row.get("expires_at")),
+        created_by_organization_id=row.get("created_by_organization_id"),
     )
 
 

@@ -6,17 +6,30 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from time import perf_counter
 from typing import Any, AsyncIterator
 
 import httpx
 
 from src.batch.models import BatchJobStatus
+from src.batch.models import is_operator_failed_reason
 from src.batch.repository import BatchRepository
 from src.batch.storage import BatchArtifactStorage
 from src.billing.cost import ModelPricing, completion_cost
-from src.metrics import increment_request, increment_spend, increment_usage
+from src.metrics import (
+    increment_batch_artifact_failure,
+    increment_batch_finalization_retry,
+    observe_batch_finalize_latency,
+    observe_batch_item_execution_latency,
+    publish_batch_runtime_summary,
+    set_batch_worker_saturation,
+    increment_request,
+    increment_spend,
+    increment_usage,
+)
 from src.models.requests import EmbeddingRequest
 from src.providers.resolution import resolve_provider
+from src.router.usage import record_router_usage
 from src.routers.routing_decision import route_failover_kwargs
 from src.routers.embeddings import _execute_embedding
 
@@ -81,13 +94,23 @@ class BatchExecutorWorker:
             self.config.worker_concurrency * self.config.item_buffer_multiplier,
         )
 
+    async def _refresh_batch_runtime_metrics(self) -> None:
+        try:
+            summary = await self.repository.summarize_runtime_statuses(now=datetime.now(tz=UTC))
+            publish_batch_runtime_summary(summary)
+        except Exception:
+            logger.debug("batch worker runtime metrics refresh failed", exc_info=True)
+            return
+
     async def process_once(self) -> bool:
         job = await self.repository.claim_next_job(
             worker_id=self.config.worker_id,
             lease_seconds=self.config.job_lease_seconds,
         )
         if job is None:
+            set_batch_worker_saturation(worker_id=self.config.worker_id, active=0, capacity=self.config.worker_concurrency)
             return False
+        logger.info("batch claimed id=%s status=%s", job.batch_id, job.status)
         job_heartbeat = self._start_heartbeat(
             renew=lambda: self.repository.renew_job_lease(
                 batch_id=job.batch_id,
@@ -110,37 +133,56 @@ class BatchExecutorWorker:
                 limit=self._claim_limit(),
                 lease_seconds=self.config.item_lease_seconds,
             )
+            logger.info("batch items claimed id=%s count=%s", job.batch_id, len(items))
             await self._process_items(job, items)
 
             refreshed = await self.repository.refresh_job_progress(job.batch_id)
             if refreshed and refreshed.status == BatchJobStatus.FINALIZING:
                 await self._finalize_with_retry(refreshed)
+            await self._refresh_batch_runtime_metrics()
             return True
         finally:
+            set_batch_worker_saturation(worker_id=self.config.worker_id, active=0, capacity=self.config.worker_concurrency)
             await self._stop_heartbeat(job_heartbeat)
             await self.repository.release_job_lease(batch_id=job.batch_id, worker_id=self.config.worker_id)
 
     async def _process_item(self, job, item) -> None:
         batch_id = job.batch_id
-        payload = EmbeddingRequest.model_validate(item.request_body)
+        started = perf_counter()
+        request_body = item.request_body if isinstance(item.request_body, dict) else {}
+        model_name = str(request_body.get("model") or job.model or "")
+        payload: EmbeddingRequest | None = None
+        primary = None
+        item_heartbeat: asyncio.Task[None] | None = None
         request_shim = _RequestShim(app=self.app)
         app_router = self.app.state.router
         request_context = {"metadata": {}, "user_id": "batch-worker"}
-        model_group = app_router.resolve_model_group(payload.model)
-        primary = app_router.require_deployment(
-            model_group=model_group,
-            deployment=await app_router.select_deployment(model_group, request_context),
-        )
-        failover_kwargs = route_failover_kwargs(request_context)
-        item_heartbeat = self._start_heartbeat(
-            renew=lambda: self.repository.renew_item_lease(
-                item_id=item.item_id,
-                worker_id=self.config.worker_id,
-                lease_seconds=self.config.item_lease_seconds,
-            ),
-            label=f"item:{item.item_id}",
-        )
+        budget_service = getattr(self.app.state, "budget_service", None)
         try:
+            payload = EmbeddingRequest.model_validate(item.request_body)
+            model_name = payload.model
+            if budget_service is not None:
+                await budget_service.check_budgets(
+                    api_key=job.created_by_api_key,
+                    user_id=job.created_by_user_id,
+                    team_id=job.created_by_team_id,
+                    organization_id=job.created_by_organization_id,
+                    model=payload.model,
+                )
+            model_group = app_router.resolve_model_group(payload.model)
+            primary = app_router.require_deployment(
+                model_group=model_group,
+                deployment=await app_router.select_deployment(model_group, request_context),
+            )
+            failover_kwargs = route_failover_kwargs(request_context)
+            item_heartbeat = self._start_heartbeat(
+                renew=lambda: self.repository.renew_item_lease(
+                    item_id=item.item_id,
+                    worker_id=self.config.worker_id,
+                    lease_seconds=self.config.item_lease_seconds,
+                ),
+                label=f"item:{item.item_id}",
+            )
             data, served_deployment = await self.app.state.failover_manager.execute_with_failover(
                 primary_deployment=primary,
                 model_group=model_group,
@@ -177,6 +219,11 @@ class BatchExecutorWorker:
             data.pop("_api_base", None)
             data.pop("_deployment_model", None)
             data["_provider"] = api_provider
+            served_deployment_id = str(
+                getattr(served_deployment, "deployment_id", None)
+                or getattr(primary, "deployment_id", None)
+                or ""
+            )
             updated = await self.repository.mark_item_completed(
                 item_id=item.item_id,
                 worker_id=self.config.worker_id,
@@ -188,6 +235,12 @@ class BatchExecutorWorker:
             if not updated:
                 logger.warning("batch item completion skipped after lease loss batch_id=%s item_id=%s", batch_id, item.item_id)
                 return
+            await self._record_success_runtime_hooks(
+                batch_id=batch_id,
+                item_id=item.item_id,
+                deployment_id=served_deployment_id,
+                usage=usage,
+            )
             await self._record_success_side_effects(
                 job=job,
                 item=item,
@@ -200,6 +253,7 @@ class BatchExecutorWorker:
                 deployment_model=str(served_deployment.deltallm_params.get("model") or "") or None,
                 batch_id=batch_id,
             )
+            observe_batch_item_execution_latency(status="success", latency_seconds=perf_counter() - started)
             return
         except Exception as exc:
             retryable = self._is_retryable(exc) and item.attempts < self.config.max_attempts
@@ -217,21 +271,126 @@ class BatchExecutorWorker:
                 logger.warning("batch item failure update skipped after lease loss batch_id=%s item_id=%s", batch_id, item.item_id)
                 return
             await self.repository.refresh_job_progress(batch_id)
+            await self._record_failure_runtime_hooks(
+                job=job,
+                item=item,
+                batch_id=batch_id,
+                model_name=model_name,
+                exc=exc,
+                deployment_id=primary.deployment_id if primary is not None else None,
+            )
+            observe_batch_item_execution_latency(status="error", latency_seconds=perf_counter() - started)
         finally:
-            await self._stop_heartbeat(item_heartbeat)
+            if item_heartbeat is not None:
+                await self._stop_heartbeat(item_heartbeat)
 
     async def _process_items(self, job, items) -> None:
         if not items:
+            set_batch_worker_saturation(worker_id=self.config.worker_id, active=0, capacity=self.config.worker_concurrency)
             return
         semaphore = asyncio.Semaphore(self.config.worker_concurrency)
+        active = 0
 
         async def _runner(item) -> None:  # noqa: ANN001
+            nonlocal active
             async with semaphore:
-                await self._process_item(job, item)
+                active += 1
+                set_batch_worker_saturation(worker_id=self.config.worker_id, active=active, capacity=self.config.worker_concurrency)
+                try:
+                    await self._process_item(job, item)
+                finally:
+                    active -= 1
+                    set_batch_worker_saturation(worker_id=self.config.worker_id, active=active, capacity=self.config.worker_concurrency)
 
         async with asyncio.TaskGroup() as task_group:
             for item in items:
                 task_group.create_task(_runner(item))
+
+    async def _record_success_runtime_hooks(
+        self,
+        *,
+        batch_id: str,
+        item_id: str,
+        deployment_id: str,
+        usage: dict[str, Any],
+    ) -> None:
+        passive_health_tracker = getattr(self.app.state, "passive_health_tracker", None)
+        if passive_health_tracker is not None and deployment_id:
+            try:
+                await passive_health_tracker.record_request_outcome(deployment_id, success=True)
+            except Exception as exc:
+                logger.warning(
+                    "batch passive health success hook failed batch_id=%s item_id=%s deployment_id=%s error=%s",
+                    batch_id,
+                    item_id,
+                    deployment_id,
+                    exc,
+                )
+        router_state_backend = getattr(self.app.state, "router_state_backend", None)
+        if router_state_backend is not None and deployment_id:
+            try:
+                await record_router_usage(
+                    router_state_backend,
+                    deployment_id,
+                    mode="embedding",
+                    usage=usage,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "batch router usage hook failed batch_id=%s item_id=%s deployment_id=%s error=%s",
+                    batch_id,
+                    item_id,
+                    deployment_id,
+                    exc,
+                )
+
+    async def _record_failure_runtime_hooks(
+        self,
+        *,
+        job,
+        item,
+        batch_id: str,
+        model_name: str,
+        exc: Exception,
+        deployment_id: str | None,
+    ) -> None:
+        passive_health_tracker = getattr(self.app.state, "passive_health_tracker", None)
+        if passive_health_tracker is not None and deployment_id is not None:
+            try:
+                await passive_health_tracker.record_request_outcome(deployment_id, success=False, error=str(exc))
+            except Exception as hook_exc:
+                logger.warning(
+                    "batch passive health failure hook failed batch_id=%s item_id=%s deployment_id=%s error=%s",
+                    batch_id,
+                    item.item_id,
+                    deployment_id,
+                    hook_exc,
+                )
+        spend_tracking_service = getattr(self.app.state, "spend_tracking_service", None)
+        if job.created_by_api_key and spend_tracking_service is not None:
+            try:
+                await spend_tracking_service.log_request_failure(
+                    request_id=f"batch:{batch_id}:{item.item_id}",
+                    api_key=job.created_by_api_key,
+                    user_id=job.created_by_user_id,
+                    team_id=job.created_by_team_id,
+                    organization_id=job.created_by_organization_id,
+                    end_user_id=None,
+                    model=model_name,
+                    call_type="embedding_batch",
+                    metadata={"batch_id": batch_id, "batch_item_id": item.item_id},
+                    cache_hit=False,
+                    start_time=None,
+                    end_time=datetime.now(tz=UTC),
+                    exc=exc,
+                )
+            except Exception as hook_exc:
+                logger.warning(
+                    "batch failure logging hook failed batch_id=%s item_id=%s error=%s",
+                    batch_id,
+                    item.item_id,
+                    hook_exc,
+                )
 
     async def _record_success_side_effects(
         self,
@@ -279,7 +438,7 @@ class BatchExecutorWorker:
                     api_key=job.created_by_api_key,
                     user_id=job.created_by_user_id,
                     team_id=job.created_by_team_id,
-                    organization_id=None,
+                    organization_id=job.created_by_organization_id,
                     end_user_id=None,
                     model=payload.model,
                     call_type="embedding_batch",
@@ -323,7 +482,12 @@ class BatchExecutorWorker:
         return asyncio.create_task(self._run_heartbeat(renew=renew, label=label))
 
     async def _run_heartbeat(self, *, renew, label: str) -> None:
-        while self._running:
+        # Loop until cancelled by _stop_heartbeat in the owning finally block.
+        # Intentionally NOT gated on self._running: graceful shutdown flips that
+        # flag while in-flight work is still holding the lease, and dropping
+        # the heartbeat there would let the lease expire mid-item and allow
+        # another worker to reclaim the same item.
+        while True:
             await asyncio.sleep(self.config.heartbeat_interval_seconds)
             try:
                 renewed = await renew()
@@ -342,13 +506,17 @@ class BatchExecutorWorker:
     def _resolve_final_status(self, job) -> str:
         if job.cancel_requested_at is not None:
             return BatchJobStatus.CANCELLED
+        if is_operator_failed_reason(job.provider_error):
+            return BatchJobStatus.FAILED
         if job.completed_items == 0 and job.failed_items > 0:
             return BatchJobStatus.FAILED
         return BatchJobStatus.COMPLETED
 
     async def _finalize_with_retry(self, job) -> None:
+        started = perf_counter()
         try:
             await self._finalize_artifacts(job)
+            observe_batch_finalize_latency(status="success", latency_seconds=perf_counter() - started)
         except Exception as exc:
             logger.warning("batch finalization failed batch_id=%s error=%s", job.batch_id, exc, exc_info=True)
             rescheduled = await self.repository.reschedule_finalization(
@@ -358,6 +526,16 @@ class BatchExecutorWorker:
             )
             if not rescheduled:
                 logger.warning("batch finalization retry skipped after lease loss batch_id=%s", job.batch_id)
+                increment_batch_finalization_retry(result="lease_lost")
+            else:
+                logger.info(
+                    "batch finalization retry scheduled batch_id=%s worker_id=%s delay_seconds=%s",
+                    job.batch_id,
+                    self.config.worker_id,
+                    self.config.finalization_retry_delay_seconds,
+                )
+                increment_batch_finalization_retry(result="scheduled")
+            observe_batch_finalize_latency(status="error", latency_seconds=perf_counter() - started)
 
     async def _cleanup_unattached_artifacts(self, artifacts: list[tuple[str, str]]) -> None:
         for file_id, storage_key in artifacts:
@@ -418,9 +596,11 @@ class BatchExecutorWorker:
                     created_by_api_key=job.created_by_api_key,
                     created_by_user_id=job.created_by_user_id,
                     created_by_team_id=job.created_by_team_id,
+                    created_by_organization_id=job.created_by_organization_id,
                     expires_at=datetime.now(tz=UTC) + timedelta(days=self.config.completed_artifact_retention_days),
                 )
                 if file_record is None:
+                    increment_batch_artifact_failure(operation="create_record", backend=storage_backend)
                     raise RuntimeError(f"Failed to create output artifact record for batch {job.batch_id}")
                 created_artifacts.append((file_record.file_id, key))
                 output_file_id = file_record.file_id
@@ -446,9 +626,11 @@ class BatchExecutorWorker:
                     created_by_api_key=job.created_by_api_key,
                     created_by_user_id=job.created_by_user_id,
                     created_by_team_id=job.created_by_team_id,
+                    created_by_organization_id=job.created_by_organization_id,
                     expires_at=datetime.now(tz=UTC) + timedelta(days=retention_days),
                 )
                 if file_record is None:
+                    increment_batch_artifact_failure(operation="create_record", backend=storage_backend)
                     raise RuntimeError(f"Failed to create error artifact record for batch {job.batch_id}")
                 created_artifacts.append((file_record.file_id, key))
                 error_file_id = file_record.file_id
@@ -463,6 +645,7 @@ class BatchExecutorWorker:
             if finalized is None:
                 raise RuntimeError(f"Failed to finalize batch {job.batch_id}")
         except Exception:
+            increment_batch_artifact_failure(operation="write_or_finalize", backend=storage_backend)
             await self._cleanup_unattached_artifacts(created_artifacts)
             raise
         logger.info(

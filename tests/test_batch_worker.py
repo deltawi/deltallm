@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+import logging
 from types import SimpleNamespace
 
 import pytest
 
-from src.batch.models import BatchItemRecord, BatchJobRecord, BatchJobStatus
+from fastapi import HTTPException
+
+from src.batch.models import BatchItemRecord, BatchJobRecord, BatchJobStatus, encode_operator_failed_reason
 from src.batch.service import BatchService
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
 from src.models.responses import UserAPIKeyAuth
@@ -21,6 +24,14 @@ class _SpendRecorder:
 
     async def log_request_failure(self, **kwargs):
         self.events.append({"status": "error", "cost": 0.0, **kwargs})
+
+
+class _PassiveHealthRecorder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, bool, str | None]] = []
+
+    async def record_request_outcome(self, deployment_id: str, success: bool, error: str | None = None) -> None:
+        self.calls.append((deployment_id, success, error))
 
 
 class _FakeRepository:
@@ -135,6 +146,7 @@ async def test_batch_worker_logs_batch_pricing_and_spend(monkeypatch):
         started_at=now,
         completed_at=None,
         expires_at=None,
+        created_by_organization_id="org-1",
     )
     item = BatchItemRecord(
         item_id="i1",
@@ -167,6 +179,7 @@ async def test_batch_worker_logs_batch_pricing_and_spend(monkeypatch):
     logged = spend.events[0]
     assert logged["call_type"] == "embedding_batch"
     assert logged["cost"] == 0.0025
+    assert logged["organization_id"] == "org-1"
     assert logged["metadata"]["deployment_model"] == "vllm/sentence-transformers/all-MiniLM-L6-v2"
     assert logged["metadata"]["pricing_tier"] == "batch"
     assert logged["metadata"]["provider_cost"] == 0.005
@@ -263,6 +276,7 @@ async def test_batch_worker_keeps_completed_state_when_side_effects_fail(monkeyp
         started_at=now,
         completed_at=None,
         expires_at=None,
+        created_by_organization_id="org-1",
     )
     item = BatchItemRecord(
         item_id="i1",
@@ -287,6 +301,1057 @@ async def test_batch_worker_keeps_completed_state_when_side_effects_fail(monkeyp
 
     await worker._process_item(job, item)
     assert len(repo.completed_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_keeps_completed_state_when_passive_health_success_hook_fails(monkeypatch):
+    async def _fake_execute_embedding(request, payload, deployment):
+        del request, payload, deployment
+        return {"object": "list", "data": [{"index": 0, "embedding": [0.1]}], "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5}}
+
+    monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
+
+    deployment = SimpleNamespace(
+        deployment_id="dep-1",
+        deltallm_params={"model": "vllm/sentence-transformers/all-MiniLM-L6-v2", "api_base": "http://localhost:9090/v1"},
+        input_cost_per_token=0.001,
+        output_cost_per_token=0.0,
+        model_info={"batch_input_cost_per_token": 0.0005, "batch_output_cost_per_token": 0.0},
+    )
+
+    class _FailingPassiveHealth:
+        async def record_request_outcome(self, deployment_id: str, success: bool, error: str | None = None) -> None:
+            del deployment_id, success, error
+            raise RuntimeError("health sink unavailable")
+
+    class _RouterStateBackend:
+        async def increment_usage_counters(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+            return None
+
+    class _Router:
+        def resolve_model_group(self, model: str) -> str:
+            return model
+
+        async def select_deployment(self, model_group: str, request_context: dict) -> str:
+            del model_group, request_context
+            return "dep-1"
+
+        def require_deployment(self, model_group: str, deployment: str):
+            del model_group, deployment
+            return deployment_obj
+
+    class _Failover:
+        async def execute_with_failover(self, *, primary_deployment, model_group, execute, return_deployment=False, **kwargs):  # noqa: ANN001
+            del model_group, kwargs
+            data = await execute(primary_deployment)
+            if return_deployment:
+                return data, primary_deployment
+            return data
+
+    deployment_obj = deployment
+    repo = _FakeRepository()
+    spend = _SpendRecorder()
+    router_usage_calls: list[str] = []
+
+    async def _record_router_usage(state_backend, deployment_id: str, *, mode: str, usage: dict):  # noqa: ANN001
+        del state_backend, mode, usage
+        router_usage_calls.append(deployment_id)
+
+    monkeypatch.setattr("src.batch.worker.record_router_usage", _record_router_usage)
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            router=_Router(),
+            failover_manager=_Failover(),
+            spend_tracking_service=spend,
+            passive_health_tracker=_FailingPassiveHealth(),
+            router_state_backend=_RouterStateBackend(),
+        )
+    )
+    worker = BatchExecutorWorker(
+        app=app,
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+
+    now = datetime.now(tz=UTC)
+    job = BatchJobRecord(
+        batch_id="b1",
+        endpoint="/v1/embeddings",
+        status=BatchJobStatus.IN_PROGRESS,
+        execution_mode="managed_internal",
+        input_file_id="f1",
+        output_file_id=None,
+        error_file_id=None,
+        model="m-1",
+        metadata={},
+        provider_batch_id=None,
+        provider_status=None,
+        provider_error=None,
+        provider_last_sync_at=None,
+        total_items=1,
+        in_progress_items=1,
+        completed_items=0,
+        failed_items=0,
+        cancelled_items=0,
+        locked_by=None,
+        lease_expires_at=None,
+        cancel_requested_at=None,
+        status_last_updated_at=now,
+        created_by_api_key="tok-1",
+        created_by_user_id="u1",
+        created_by_team_id="t1",
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+        expires_at=None,
+    )
+    item = BatchItemRecord(
+        item_id="i1",
+        batch_id="b1",
+        line_number=1,
+        custom_id="c1",
+        status="in_progress",
+        request_body={"model": "m-1", "input": "hello"},
+        response_body=None,
+        error_body=None,
+        usage=None,
+        provider_cost=0.0,
+        billed_cost=0.0,
+        attempts=0,
+        last_error=None,
+        locked_by="w1",
+        lease_expires_at=now,
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+    )
+
+    await worker._process_item(job, item)
+
+    assert len(repo.completed_calls) == 1
+    assert router_usage_calls == ["dep-1"]
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_keeps_completed_state_when_router_usage_hook_fails(monkeypatch):
+    async def _fake_execute_embedding(request, payload, deployment):
+        del request, payload, deployment
+        return {"object": "list", "data": [{"index": 0, "embedding": [0.1]}], "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5}}
+
+    monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
+    async def _failing_record_router_usage(*args, **kwargs):  # noqa: ANN002, ANN003
+        del args, kwargs
+        raise RuntimeError("router usage unavailable")
+
+    monkeypatch.setattr("src.batch.worker.record_router_usage", _failing_record_router_usage)
+
+    deployment = SimpleNamespace(
+        deployment_id="dep-1",
+        deltallm_params={"model": "vllm/sentence-transformers/all-MiniLM-L6-v2", "api_base": "http://localhost:9090/v1"},
+        input_cost_per_token=0.001,
+        output_cost_per_token=0.0,
+        model_info={"batch_input_cost_per_token": 0.0005, "batch_output_cost_per_token": 0.0},
+    )
+
+    class _RouterStateBackend:
+        async def increment_usage_counters(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+            return None
+
+    class _Router:
+        def resolve_model_group(self, model: str) -> str:
+            return model
+
+        async def select_deployment(self, model_group: str, request_context: dict) -> str:
+            del model_group, request_context
+            return "dep-1"
+
+        def require_deployment(self, model_group: str, deployment: str):
+            del model_group, deployment
+            return deployment_obj
+
+    class _Failover:
+        async def execute_with_failover(self, *, primary_deployment, model_group, execute, return_deployment=False, **kwargs):  # noqa: ANN001
+            del model_group, kwargs
+            data = await execute(primary_deployment)
+            if return_deployment:
+                return data, primary_deployment
+            return data
+
+    deployment_obj = deployment
+    repo = _FakeRepository()
+    spend = _SpendRecorder()
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            router=_Router(),
+            failover_manager=_Failover(),
+            spend_tracking_service=spend,
+            passive_health_tracker=_PassiveHealthRecorder(),
+            router_state_backend=_RouterStateBackend(),
+        )
+    )
+    worker = BatchExecutorWorker(
+        app=app,
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+
+    now = datetime.now(tz=UTC)
+    job = BatchJobRecord(
+        batch_id="b1",
+        endpoint="/v1/embeddings",
+        status=BatchJobStatus.IN_PROGRESS,
+        execution_mode="managed_internal",
+        input_file_id="f1",
+        output_file_id=None,
+        error_file_id=None,
+        model="m-1",
+        metadata={},
+        provider_batch_id=None,
+        provider_status=None,
+        provider_error=None,
+        provider_last_sync_at=None,
+        total_items=1,
+        in_progress_items=1,
+        completed_items=0,
+        failed_items=0,
+        cancelled_items=0,
+        locked_by=None,
+        lease_expires_at=None,
+        cancel_requested_at=None,
+        status_last_updated_at=now,
+        created_by_api_key="tok-1",
+        created_by_user_id="u1",
+        created_by_team_id="t1",
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+        expires_at=None,
+    )
+    item = BatchItemRecord(
+        item_id="i1",
+        batch_id="b1",
+        line_number=1,
+        custom_id="c1",
+        status="in_progress",
+        request_body={"model": "m-1", "input": "hello"},
+        response_body=None,
+        error_body=None,
+        usage=None,
+        provider_cost=0.0,
+        billed_cost=0.0,
+        attempts=0,
+        last_error=None,
+        locked_by="w1",
+        lease_expires_at=now,
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+    )
+
+    await worker._process_item(job, item)
+
+    assert len(repo.completed_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_enforces_budget_before_provider_execution(monkeypatch):
+    execute_called = False
+
+    async def _fake_execute_embedding(request, payload, deployment):
+        nonlocal execute_called
+        del request, payload, deployment
+        execute_called = True
+        return {"object": "list", "data": [{"index": 0, "embedding": [0.1]}], "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5}}
+
+    monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
+
+    class _BudgetService:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def check_budgets(self, **kwargs):
+            self.calls.append(kwargs)
+
+    class _RouterStateBackend:
+        async def increment_usage_counters(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+            return None
+
+    deployment = SimpleNamespace(
+        deployment_id="dep-1",
+        deltallm_params={"model": "vllm/sentence-transformers/all-MiniLM-L6-v2", "api_base": "http://localhost:9090/v1"},
+        input_cost_per_token=0.001,
+        output_cost_per_token=0.0,
+        model_info={"batch_input_cost_per_token": 0.0005, "batch_output_cost_per_token": 0.0},
+    )
+
+    class _Router:
+        def resolve_model_group(self, model: str) -> str:
+            return model
+
+        async def select_deployment(self, model_group: str, request_context: dict) -> str:
+            del model_group, request_context
+            return "dep-1"
+
+        def require_deployment(self, model_group: str, deployment: str):
+            del model_group, deployment
+            return deployment_obj
+
+    class _Failover:
+        async def execute_with_failover(self, *, primary_deployment, model_group, execute, return_deployment=False, **kwargs):  # noqa: ANN001
+            del model_group, kwargs
+            data = await execute(primary_deployment)
+            if return_deployment:
+                return data, primary_deployment
+            return data
+
+    deployment_obj = deployment
+    repo = _FakeRepository()
+    spend = _SpendRecorder()
+    budget = _BudgetService()
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            router=_Router(),
+            failover_manager=_Failover(),
+            spend_tracking_service=spend,
+            budget_service=budget,
+            passive_health_tracker=_PassiveHealthRecorder(),
+            router_state_backend=_RouterStateBackend(),
+        )
+    )
+    worker = BatchExecutorWorker(
+        app=app,
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+
+    now = datetime.now(tz=UTC)
+    job = BatchJobRecord(
+        batch_id="b1",
+        endpoint="/v1/embeddings",
+        status=BatchJobStatus.IN_PROGRESS,
+        execution_mode="managed_internal",
+        input_file_id="f1",
+        output_file_id=None,
+        error_file_id=None,
+        model="m-1",
+        metadata={},
+        provider_batch_id=None,
+        provider_status=None,
+        provider_error=None,
+        provider_last_sync_at=None,
+        total_items=1,
+        in_progress_items=1,
+        completed_items=0,
+        failed_items=0,
+        cancelled_items=0,
+        locked_by=None,
+        lease_expires_at=None,
+        cancel_requested_at=None,
+        status_last_updated_at=now,
+        created_by_api_key="tok-1",
+        created_by_user_id="u1",
+        created_by_team_id="t1",
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+        expires_at=None,
+        created_by_organization_id="org-1",
+    )
+    item = BatchItemRecord(
+        item_id="i1",
+        batch_id="b1",
+        line_number=1,
+        custom_id="c1",
+        status="in_progress",
+        request_body={"model": "m-1", "input": "hello"},
+        response_body=None,
+        error_body=None,
+        usage=None,
+        provider_cost=0.0,
+        billed_cost=0.0,
+        attempts=0,
+        last_error=None,
+        locked_by="w1",
+        lease_expires_at=now,
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+    )
+
+    await worker._process_item(job, item)
+
+    assert execute_called is True
+    assert budget.calls == [
+        {"api_key": "tok-1", "user_id": "u1", "team_id": "t1", "organization_id": "org-1", "model": "m-1"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_logs_request_failure_and_health_on_error():
+    class _BudgetService:
+        async def check_budgets(self, **kwargs):  # noqa: ANN003, ANN201
+            return None
+
+    class _RouterStateBackend:
+        async def increment_usage_counters(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+            return None
+
+    class _Router:
+        def resolve_model_group(self, model: str) -> str:
+            return model
+
+        async def select_deployment(self, model_group: str, request_context: dict) -> str:
+            del model_group, request_context
+            return "dep-1"
+
+        def require_deployment(self, model_group: str, deployment: str):
+            del model_group, deployment
+            return deployment_obj
+
+    class _Failover:
+        async def execute_with_failover(self, **kwargs):  # noqa: ANN003, ANN201
+            raise RuntimeError("provider down")
+
+    class _FailureRepo(_FakeRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failed_calls: list[dict] = []
+
+        async def mark_item_failed(self, **kwargs) -> bool:
+            self.failed_calls.append(kwargs)
+            return True
+
+        async def refresh_job_progress(self, batch_id: str):
+            assert batch_id == "b1"
+            return None
+
+    deployment_obj = SimpleNamespace(
+        deployment_id="dep-1",
+        deltallm_params={"model": "vllm/sentence-transformers/all-MiniLM-L6-v2", "api_base": "http://localhost:9090/v1"},
+        input_cost_per_token=0.001,
+        output_cost_per_token=0.0,
+        model_info={},
+    )
+    repo = _FailureRepo()
+    spend = _SpendRecorder()
+    passive_health = _PassiveHealthRecorder()
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            router=_Router(),
+            failover_manager=_Failover(),
+            spend_tracking_service=spend,
+            budget_service=_BudgetService(),
+            passive_health_tracker=passive_health,
+            router_state_backend=_RouterStateBackend(),
+        )
+    )
+    worker = BatchExecutorWorker(
+        app=app,
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+
+    now = datetime.now(tz=UTC)
+    job = BatchJobRecord(
+        batch_id="b1",
+        endpoint="/v1/embeddings",
+        status=BatchJobStatus.IN_PROGRESS,
+        execution_mode="managed_internal",
+        input_file_id="f1",
+        output_file_id=None,
+        error_file_id=None,
+        model="m-1",
+        metadata={},
+        provider_batch_id=None,
+        provider_status=None,
+        provider_error=None,
+        provider_last_sync_at=None,
+        total_items=1,
+        in_progress_items=1,
+        completed_items=0,
+        failed_items=0,
+        cancelled_items=0,
+        locked_by=None,
+        lease_expires_at=None,
+        cancel_requested_at=None,
+        status_last_updated_at=now,
+        created_by_api_key="tok-1",
+        created_by_user_id="u1",
+        created_by_team_id="t1",
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+        expires_at=None,
+        created_by_organization_id="org-1",
+    )
+    item = BatchItemRecord(
+        item_id="i1",
+        batch_id="b1",
+        line_number=1,
+        custom_id="c1",
+        status="in_progress",
+        request_body={"model": "m-1", "input": "hello"},
+        response_body=None,
+        error_body=None,
+        usage=None,
+        provider_cost=0.0,
+        billed_cost=0.0,
+        attempts=0,
+        last_error=None,
+        locked_by="w1",
+        lease_expires_at=now,
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+    )
+
+    await worker._process_item(job, item)
+
+    assert len(repo.failed_calls) == 1
+    assert passive_health.calls == [("dep-1", False, "provider down")]
+    assert len(spend.events) == 1
+    assert spend.events[0]["status"] == "error"
+    assert spend.events[0]["request_id"] == "batch:b1:i1"
+    assert spend.events[0]["organization_id"] == "org-1"
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_keeps_failed_state_when_passive_health_failure_hook_raises():
+    class _BudgetService:
+        async def check_budgets(self, **kwargs):  # noqa: ANN003, ANN201
+            return None
+
+    class _RouterStateBackend:
+        async def increment_usage_counters(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+            return None
+
+    class _Router:
+        def resolve_model_group(self, model: str) -> str:
+            return model
+
+        async def select_deployment(self, model_group: str, request_context: dict) -> str:
+            del model_group, request_context
+            return "dep-1"
+
+        def require_deployment(self, model_group: str, deployment: str):
+            del model_group, deployment
+            return deployment_obj
+
+    class _Failover:
+        async def execute_with_failover(self, **kwargs):  # noqa: ANN003, ANN201
+            raise RuntimeError("provider down")
+
+    class _FailureRepo(_FakeRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failed_calls: list[dict] = []
+
+        async def mark_item_failed(self, **kwargs) -> bool:
+            self.failed_calls.append(kwargs)
+            return True
+
+        async def refresh_job_progress(self, batch_id: str):
+            assert batch_id == "b1"
+            return None
+
+    class _FailingPassiveHealth:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, bool, str | None]] = []
+
+        async def record_request_outcome(self, deployment_id: str, success: bool, error: str | None = None) -> None:
+            self.calls.append((deployment_id, success, error))
+            raise RuntimeError("health sink unavailable")
+
+    deployment_obj = SimpleNamespace(
+        deployment_id="dep-1",
+        deltallm_params={"model": "vllm/sentence-transformers/all-MiniLM-L6-v2", "api_base": "http://localhost:9090/v1"},
+        input_cost_per_token=0.001,
+        output_cost_per_token=0.0,
+        model_info={},
+    )
+    repo = _FailureRepo()
+    spend = _SpendRecorder()
+    passive_health = _FailingPassiveHealth()
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            router=_Router(),
+            failover_manager=_Failover(),
+            spend_tracking_service=spend,
+            budget_service=_BudgetService(),
+            passive_health_tracker=passive_health,
+            router_state_backend=_RouterStateBackend(),
+        )
+    )
+    worker = BatchExecutorWorker(
+        app=app,
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+
+    now = datetime.now(tz=UTC)
+    job = BatchJobRecord(
+        batch_id="b1",
+        endpoint="/v1/embeddings",
+        status=BatchJobStatus.IN_PROGRESS,
+        execution_mode="managed_internal",
+        input_file_id="f1",
+        output_file_id=None,
+        error_file_id=None,
+        model="m-1",
+        metadata={},
+        provider_batch_id=None,
+        provider_status=None,
+        provider_error=None,
+        provider_last_sync_at=None,
+        total_items=1,
+        in_progress_items=1,
+        completed_items=0,
+        failed_items=0,
+        cancelled_items=0,
+        locked_by=None,
+        lease_expires_at=None,
+        cancel_requested_at=None,
+        status_last_updated_at=now,
+        created_by_api_key="tok-1",
+        created_by_user_id="u1",
+        created_by_team_id="t1",
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+        expires_at=None,
+        created_by_organization_id="org-1",
+    )
+    item = BatchItemRecord(
+        item_id="i1",
+        batch_id="b1",
+        line_number=1,
+        custom_id="c1",
+        status="in_progress",
+        request_body={"model": "m-1", "input": "hello"},
+        response_body=None,
+        error_body=None,
+        usage=None,
+        provider_cost=0.0,
+        billed_cost=0.0,
+        attempts=0,
+        last_error=None,
+        locked_by="w1",
+        lease_expires_at=now,
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+    )
+
+    await worker._process_item(job, item)
+
+    assert len(repo.failed_calls) == 1
+    assert passive_health.calls == [("dep-1", False, "provider down")]
+    assert len(spend.events) == 1
+    assert spend.events[0]["status"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_keeps_failed_state_when_failure_logging_hook_raises():
+    class _BudgetService:
+        async def check_budgets(self, **kwargs):  # noqa: ANN003, ANN201
+            return None
+
+    class _RouterStateBackend:
+        async def increment_usage_counters(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+            return None
+
+    class _Router:
+        def resolve_model_group(self, model: str) -> str:
+            return model
+
+        async def select_deployment(self, model_group: str, request_context: dict) -> str:
+            del model_group, request_context
+            return "dep-1"
+
+        def require_deployment(self, model_group: str, deployment: str):
+            del model_group, deployment
+            return deployment_obj
+
+    class _Failover:
+        async def execute_with_failover(self, **kwargs):  # noqa: ANN003, ANN201
+            raise RuntimeError("provider down")
+
+    class _FailureRepo(_FakeRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failed_calls: list[dict] = []
+
+        async def mark_item_failed(self, **kwargs) -> bool:
+            self.failed_calls.append(kwargs)
+            return True
+
+        async def refresh_job_progress(self, batch_id: str):
+            assert batch_id == "b1"
+            return None
+
+    class _FailingSpendRecorder(_SpendRecorder):
+        async def log_request_failure(self, **kwargs):
+            del kwargs
+            raise RuntimeError("failure log sink unavailable")
+
+    deployment_obj = SimpleNamespace(
+        deployment_id="dep-1",
+        deltallm_params={"model": "vllm/sentence-transformers/all-MiniLM-L6-v2", "api_base": "http://localhost:9090/v1"},
+        input_cost_per_token=0.001,
+        output_cost_per_token=0.0,
+        model_info={},
+    )
+    repo = _FailureRepo()
+    spend = _FailingSpendRecorder()
+    passive_health = _PassiveHealthRecorder()
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            router=_Router(),
+            failover_manager=_Failover(),
+            spend_tracking_service=spend,
+            budget_service=_BudgetService(),
+            passive_health_tracker=passive_health,
+            router_state_backend=_RouterStateBackend(),
+        )
+    )
+    worker = BatchExecutorWorker(
+        app=app,
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+
+    now = datetime.now(tz=UTC)
+    job = BatchJobRecord(
+        batch_id="b1",
+        endpoint="/v1/embeddings",
+        status=BatchJobStatus.IN_PROGRESS,
+        execution_mode="managed_internal",
+        input_file_id="f1",
+        output_file_id=None,
+        error_file_id=None,
+        model="m-1",
+        metadata={},
+        provider_batch_id=None,
+        provider_status=None,
+        provider_error=None,
+        provider_last_sync_at=None,
+        total_items=1,
+        in_progress_items=1,
+        completed_items=0,
+        failed_items=0,
+        cancelled_items=0,
+        locked_by=None,
+        lease_expires_at=None,
+        cancel_requested_at=None,
+        status_last_updated_at=now,
+        created_by_api_key="tok-1",
+        created_by_user_id="u1",
+        created_by_team_id="t1",
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+        expires_at=None,
+        created_by_organization_id="org-1",
+    )
+    item = BatchItemRecord(
+        item_id="i1",
+        batch_id="b1",
+        line_number=1,
+        custom_id="c1",
+        status="in_progress",
+        request_body={"model": "m-1", "input": "hello"},
+        response_body=None,
+        error_body=None,
+        usage=None,
+        provider_cost=0.0,
+        billed_cost=0.0,
+        attempts=0,
+        last_error=None,
+        locked_by="w1",
+        lease_expires_at=now,
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+    )
+
+    await worker._process_item(job, item)
+
+    assert len(repo.failed_calls) == 1
+    assert passive_health.calls == [("dep-1", False, "provider down")]
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_marks_item_failed_when_budget_check_raises():
+    class _BudgetService:
+        async def check_budgets(self, **kwargs):  # noqa: ANN003, ANN201
+            del kwargs
+            raise HTTPException(status_code=429, detail="Budget exceeded")
+
+    class _Router:
+        def resolve_model_group(self, model: str) -> str:
+            del model
+            raise AssertionError("routing should not be reached after budget failure")
+
+    class _FailureRepo(_FakeRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failed_calls: list[dict] = []
+
+        async def mark_item_failed(self, **kwargs) -> bool:
+            self.failed_calls.append(kwargs)
+            return True
+
+        async def refresh_job_progress(self, batch_id: str):
+            assert batch_id == "b1"
+            return None
+
+    repo = _FailureRepo()
+    spend = _SpendRecorder()
+    passive_health = _PassiveHealthRecorder()
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            router=_Router(),
+            failover_manager=SimpleNamespace(),
+            spend_tracking_service=spend,
+            budget_service=_BudgetService(),
+            passive_health_tracker=passive_health,
+            router_state_backend=None,
+        )
+    )
+    worker = BatchExecutorWorker(
+        app=app,
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+
+    now = datetime.now(tz=UTC)
+    job = BatchJobRecord(
+        batch_id="b1",
+        endpoint="/v1/embeddings",
+        status=BatchJobStatus.IN_PROGRESS,
+        execution_mode="managed_internal",
+        input_file_id="f1",
+        output_file_id=None,
+        error_file_id=None,
+        model="m-1",
+        metadata={},
+        provider_batch_id=None,
+        provider_status=None,
+        provider_error=None,
+        provider_last_sync_at=None,
+        total_items=1,
+        in_progress_items=1,
+        completed_items=0,
+        failed_items=0,
+        cancelled_items=0,
+        locked_by=None,
+        lease_expires_at=None,
+        cancel_requested_at=None,
+        status_last_updated_at=now,
+        created_by_api_key="tok-1",
+        created_by_user_id="u1",
+        created_by_team_id="t1",
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+        expires_at=None,
+    )
+    item = BatchItemRecord(
+        item_id="i1",
+        batch_id="b1",
+        line_number=1,
+        custom_id="c1",
+        status="in_progress",
+        request_body={"model": "m-1", "input": "hello"},
+        response_body=None,
+        error_body=None,
+        usage=None,
+        provider_cost=0.0,
+        billed_cost=0.0,
+        attempts=0,
+        last_error=None,
+        locked_by="w1",
+        lease_expires_at=now,
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+    )
+
+    await worker._process_item(job, item)
+
+    assert len(repo.failed_calls) == 1
+    assert repo.failed_calls[0]["retryable"] is False
+    assert "Budget exceeded" in repo.failed_calls[0]["last_error"]
+    assert passive_health.calls == []
+    assert len(spend.events) == 1
+    assert spend.events[0]["status"] == "error"
+    assert spend.events[0]["request_id"] == "batch:b1:i1"
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_marks_item_failed_when_route_selection_raises():
+    class _BudgetService:
+        async def check_budgets(self, **kwargs):  # noqa: ANN003, ANN201
+            del kwargs
+            return None
+
+    class _Router:
+        def resolve_model_group(self, model: str) -> str:
+            return model
+
+        async def select_deployment(self, model_group: str, request_context: dict) -> str:
+            del model_group, request_context
+            raise RuntimeError("routing unavailable")
+
+        def require_deployment(self, model_group: str, deployment: str):
+            del model_group, deployment
+            raise AssertionError("require_deployment should not be reached when selection fails")
+
+    class _FailureRepo(_FakeRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failed_calls: list[dict] = []
+
+        async def mark_item_failed(self, **kwargs) -> bool:
+            self.failed_calls.append(kwargs)
+            return True
+
+        async def refresh_job_progress(self, batch_id: str):
+            assert batch_id == "b1"
+            return None
+
+    repo = _FailureRepo()
+    spend = _SpendRecorder()
+    passive_health = _PassiveHealthRecorder()
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            router=_Router(),
+            failover_manager=SimpleNamespace(),
+            spend_tracking_service=spend,
+            budget_service=_BudgetService(),
+            passive_health_tracker=passive_health,
+            router_state_backend=None,
+        )
+    )
+    worker = BatchExecutorWorker(
+        app=app,
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+
+    now = datetime.now(tz=UTC)
+    job = BatchJobRecord(
+        batch_id="b1",
+        endpoint="/v1/embeddings",
+        status=BatchJobStatus.IN_PROGRESS,
+        execution_mode="managed_internal",
+        input_file_id="f1",
+        output_file_id=None,
+        error_file_id=None,
+        model="m-1",
+        metadata={},
+        provider_batch_id=None,
+        provider_status=None,
+        provider_error=None,
+        provider_last_sync_at=None,
+        total_items=1,
+        in_progress_items=1,
+        completed_items=0,
+        failed_items=0,
+        cancelled_items=0,
+        locked_by=None,
+        lease_expires_at=None,
+        cancel_requested_at=None,
+        status_last_updated_at=now,
+        created_by_api_key="tok-1",
+        created_by_user_id="u1",
+        created_by_team_id="t1",
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+        expires_at=None,
+    )
+    item = BatchItemRecord(
+        item_id="i1",
+        batch_id="b1",
+        line_number=1,
+        custom_id="c1",
+        status="in_progress",
+        request_body={"model": "m-1", "input": "hello"},
+        response_body=None,
+        error_body=None,
+        usage=None,
+        provider_cost=0.0,
+        billed_cost=0.0,
+        attempts=0,
+        last_error=None,
+        locked_by="w1",
+        lease_expires_at=now,
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+    )
+
+    await worker._process_item(job, item)
+
+    assert len(repo.failed_calls) == 1
+    assert repo.failed_calls[0]["retryable"] is False
+    assert repo.failed_calls[0]["last_error"] == "routing unavailable"
+    assert passive_health.calls == []
+    assert len(spend.events) == 1
+    assert spend.events[0]["status"] == "error"
+
+
+def test_batch_worker_resolve_final_status_prefers_operator_failed_marker():
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=_FakeRepository(),  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+    now = datetime.now(tz=UTC)
+    job = BatchJobRecord(
+        batch_id="b1",
+        endpoint="/v1/embeddings",
+        status=BatchJobStatus.FINALIZING,
+        execution_mode="managed_internal",
+        input_file_id="f1",
+        output_file_id=None,
+        error_file_id=None,
+        model="m-1",
+        metadata={},
+        provider_batch_id=None,
+        provider_status=None,
+        provider_error=encode_operator_failed_reason("manual stop"),
+        provider_last_sync_at=None,
+        total_items=2,
+        in_progress_items=0,
+        completed_items=1,
+        failed_items=1,
+        cancelled_items=0,
+        locked_by="w1",
+        lease_expires_at=now,
+        cancel_requested_at=None,
+        status_last_updated_at=now,
+        created_by_api_key="tok-1",
+        created_by_user_id="u1",
+        created_by_team_id="t1",
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+        expires_at=None,
+    )
+
+    assert worker._resolve_final_status(job) == BatchJobStatus.FAILED
 
 
 @pytest.mark.asyncio
@@ -712,7 +1777,7 @@ async def test_batch_worker_skips_spend_logging_when_item_completion_loses_owner
 
 
 @pytest.mark.asyncio
-async def test_batch_worker_retries_finalizing_job_after_storage_failure():
+async def test_batch_worker_retries_finalizing_job_after_storage_failure(caplog: pytest.LogCaptureFixture):
     now = datetime.now(tz=UTC)
 
     class _FinalizingRepo:
@@ -722,6 +1787,7 @@ async def test_batch_worker_retries_finalizing_job_after_storage_failure():
             self.deleted_files: list[str] = []
             self.finalized = False
             self.created_files = 0
+            self.created_file_calls: list[dict] = []
             self.rescheduled: list[int] = []
             self.job = BatchJobRecord(
                 batch_id="b-finalize",
@@ -753,6 +1819,7 @@ async def test_batch_worker_retries_finalizing_job_after_storage_failure():
                 started_at=now,
                 completed_at=None,
                 expires_at=None,
+                created_by_organization_id="org-1",
             )
 
         async def claim_next_job(self, *, worker_id: str, lease_seconds: int = 30):
@@ -809,6 +1876,7 @@ async def test_batch_worker_retries_finalizing_job_after_storage_failure():
 
         async def create_file(self, **kwargs):
             self.created_files += 1
+            self.created_file_calls.append(kwargs)
             return SimpleNamespace(file_id=f"file-{self.created_files}", storage_key=kwargs["storage_key"])
 
         async def reschedule_finalization(self, *, batch_id: str, worker_id: str, retry_delay_seconds: int) -> bool:
@@ -855,7 +1923,8 @@ async def test_batch_worker_retries_finalizing_job_after_storage_failure():
         config=BatchWorkerConfig(worker_id="w1"),
     )
 
-    did_work = await worker.process_once()
+    with caplog.at_level(logging.INFO):
+        did_work = await worker.process_once()
 
     assert did_work is True
     assert storage.deleted == ["batch_output/1.jsonl"]
@@ -863,12 +1932,15 @@ async def test_batch_worker_retries_finalizing_job_after_storage_failure():
     assert repo.released == 1
     assert repo.finalized is False
     assert repo.rescheduled == [60]
+    assert "batch finalization retry scheduled batch_id=b-finalize worker_id=w1 delay_seconds=60" in caplog.text
 
     did_work = await worker.process_once()
 
     assert did_work is True
     assert repo.finalized is True
     assert repo.released == 2
+    assert repo.created_file_calls
+    assert all(call["created_by_organization_id"] == "org-1" for call in repo.created_file_calls)
 
 
 @pytest.mark.asyncio
@@ -1214,3 +2286,99 @@ async def test_second_worker_reclaims_expired_in_progress_item_after_crash(monke
     assert did_work is True
     assert repo.item_status == "completed"
     assert repo.completed_by == "w2"
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_continues_renewing_after_stop_requested():
+    """stop() must not drop the heartbeat while an item is still in-flight —
+    otherwise the lease expires and another worker duplicates the work."""
+    renew_calls: list[float] = []
+
+    async def _renew() -> bool:
+        renew_calls.append(asyncio.get_event_loop().time())
+        return True
+
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=_FakeRepository(),  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1", heartbeat_interval_seconds=0.01),
+    )
+    worker._running = True
+
+    heartbeat = worker._start_heartbeat(renew=_renew, label="item:test")
+    await asyncio.sleep(0.03)
+    worker.stop()
+    await asyncio.sleep(0.05)
+    await worker._stop_heartbeat(heartbeat)
+
+    calls_before_stop = sum(1 for _ in renew_calls if _ > 0)
+    assert calls_before_stop >= 2, "heartbeat should have continued renewing across stop()"
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_exits_when_renewal_reports_lease_loss():
+    calls = {"count": 0}
+
+    async def _renew() -> bool:
+        calls["count"] += 1
+        return calls["count"] < 2
+
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=_FakeRepository(),  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1", heartbeat_interval_seconds=0.01),
+    )
+    worker._running = True
+
+    task = worker._start_heartbeat(renew=_renew, label="item:test")
+    await asyncio.wait_for(task, timeout=1.0)
+    assert calls["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_refresh_runtime_metrics_logs_debug_on_failure(caplog: pytest.LogCaptureFixture):
+    class _Repo:
+        async def summarize_runtime_statuses(self, *, now):  # noqa: ANN001
+            del now
+            raise RuntimeError("metrics unavailable")
+
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=_Repo(),  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        await worker._refresh_batch_runtime_metrics()
+
+    assert "batch worker runtime metrics refresh failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_refresh_runtime_metrics_logs_debug_on_publish_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    class _Repo:
+        async def summarize_runtime_statuses(self, *, now):  # noqa: ANN001
+            del now
+            return {"queued": 1, "in_progress": 0, "finalizing": 0}
+
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=_Repo(),  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+    monkeypatch.setattr(
+        "src.batch.worker.publish_batch_runtime_summary",
+        lambda summary: (_ for _ in ()).throw(RuntimeError("publish unavailable")),  # noqa: ARG005
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        await worker._refresh_batch_runtime_metrics()
+
+    assert "batch worker runtime metrics refresh failed" in caplog.text

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import tempfile
 from datetime import UTC, datetime, timedelta
+from time import perf_counter
 from typing import Any
 from typing import AsyncIterator
 
@@ -13,10 +15,17 @@ from src.batch.access import can_access_owned_resource
 from src.batch.models import BatchItemCreate, BatchJobRecord
 from src.batch.repository import BatchRepository
 from src.batch.storage import BatchArtifactLineTooLongError, BatchArtifactStorage
+from src.metrics import (
+    increment_batch_artifact_failure,
+    observe_batch_create_latency,
+    publish_batch_runtime_summary,
+)
 from src.models.requests import EmbeddingRequest
 from src.models.responses import UserAPIKeyAuth
 from src.services.model_visibility import CallableTargetPolicyMode, ensure_batch_model_allowed
 from src.services.callable_target_grants import CallableTargetGrantService
+
+logger = logging.getLogger(__name__)
 
 
 class BatchService:
@@ -54,6 +63,14 @@ class BatchService:
         self.callable_target_grant_service = callable_target_grant_service
         self.callable_target_scope_policy_mode = callable_target_scope_policy_mode
 
+    async def _refresh_batch_runtime_metrics(self) -> None:
+        try:
+            summary = await self.repository.summarize_runtime_statuses(now=datetime.now(tz=UTC))
+            publish_batch_runtime_summary(summary)
+        except Exception:
+            logger.debug("batch service runtime metrics refresh failed", exc_info=True)
+            return
+
     def _storage_for_backend(self, backend: str | None) -> BatchArtifactStorage:
         normalized = str(backend or getattr(self.storage, "backend_name", "local") or "local").strip().lower()
         storage = self.storage_registry.get(normalized)
@@ -71,6 +88,26 @@ class BatchService:
             return ("api_key", auth.api_key, auth.api_key, None)
         return None
 
+    async def _precheck_pending_batch_capacity(self, *, auth: UserAPIKeyAuth) -> None:
+        if self.max_pending_batches_per_scope <= 0:
+            return
+        scope = self._scope_limit_target(auth)
+        if scope is None:
+            return
+        _scope_type, _scope_id, created_by_api_key, created_by_team_id = scope
+        active_batches = await self.repository.count_active_jobs_for_scope(
+            created_by_api_key=created_by_api_key,
+            created_by_team_id=created_by_team_id,
+        )
+        if active_batches >= self.max_pending_batches_per_scope:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=(
+                    "Active batch count exceeds "
+                    f"embeddings_batch_max_pending_batches_per_scope ({self.max_pending_batches_per_scope})"
+                ),
+            )
+
     async def _create_job_with_scope_limit(
         self,
         *,
@@ -79,49 +116,22 @@ class BatchService:
         input_file_id: str,
         inferred_model: str | None,
         metadata: dict[str, Any] | None,
+        repository: BatchRepository | None = None,
+        within_transaction: bool = False,
     ) -> BatchJobRecord:
+        target_repository = repository or self.repository
         scope = self._scope_limit_target(auth)
-        db = getattr(self.repository, "prisma", None)
-        if (
-            self.max_pending_batches_per_scope > 0
-            and scope is not None
-            and db is not None
-            and hasattr(db, "tx")
-            and hasattr(self.repository, "with_prisma")
-        ):
-            scope_type, scope_id, created_by_api_key, created_by_team_id = scope
-            async with db.tx() as tx:
-                tx_repository = self.repository.with_prisma(tx)
-                await tx_repository.acquire_scope_advisory_lock(scope_type=scope_type, scope_id=scope_id)
-                active_batches = await tx_repository.count_active_jobs_for_scope(
-                    created_by_api_key=created_by_api_key,
-                    created_by_team_id=created_by_team_id,
-                )
-                if active_batches >= self.max_pending_batches_per_scope:
-                    raise HTTPException(
-                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                        detail=(
-                            "Active batch count exceeds "
-                            f"embeddings_batch_max_pending_batches_per_scope ({self.max_pending_batches_per_scope})"
-                        ),
-                    )
-                job = await tx_repository.create_job(
-                    endpoint=endpoint,
-                    input_file_id=input_file_id,
-                    model=inferred_model,
-                    metadata=metadata,
-                    created_by_api_key=auth.api_key,
-                    created_by_user_id=auth.user_id,
-                    created_by_team_id=auth.team_id,
-                    expires_at=datetime.now(tz=UTC) + timedelta(days=self.metadata_retention_days),
-                )
-                if job is None:
-                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable")
-                return job
-
+        db = getattr(target_repository, "prisma", None)
         if self.max_pending_batches_per_scope > 0 and scope is not None:
-            _scope_type, _scope_id, created_by_api_key, created_by_team_id = scope
-            active_batches = await self.repository.count_active_jobs_for_scope(
+            scope_type, scope_id, created_by_api_key, created_by_team_id = scope
+            if within_transaction:
+                await target_repository.acquire_scope_advisory_lock(scope_type=scope_type, scope_id=scope_id)
+            elif db is not None and not hasattr(db, "tx"):
+                logger.debug(
+                    "batch scope limit enforcement is best-effort without transaction support scope_type=%s",
+                    scope_type,
+                )
+            active_batches = await target_repository.count_active_jobs_for_scope(
                 created_by_api_key=created_by_api_key,
                 created_by_team_id=created_by_team_id,
             )
@@ -134,7 +144,7 @@ class BatchService:
                     ),
                 )
 
-        job = await self.repository.create_job(
+        job = await target_repository.create_job(
             endpoint=endpoint,
             input_file_id=input_file_id,
             model=inferred_model,
@@ -142,6 +152,7 @@ class BatchService:
             created_by_api_key=auth.api_key,
             created_by_user_id=auth.user_id,
             created_by_team_id=auth.team_id,
+            created_by_organization_id=auth.organization_id,
             expires_at=datetime.now(tz=UTC) + timedelta(days=self.metadata_retention_days),
         )
         if job is None:
@@ -182,6 +193,16 @@ class BatchService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Line {exc.line_number} exceeds embeddings_batch_max_line_bytes ({self.max_line_bytes})",
             ) from exc
+        except Exception as exc:
+            backend = str(getattr(storage, "backend_name", "unknown") or "unknown")
+            increment_batch_artifact_failure(operation="read", backend=backend)
+            logger.warning(
+                "batch artifact read failed backend=%s storage_key=%s error=%s",
+                backend,
+                storage_key,
+                exc,
+            )
+            raise
 
     def _parse_input_line(
         self,
@@ -290,7 +311,9 @@ class BatchService:
         *,
         batch_id: str,
         spool: Any,
+        repository: BatchRepository | None = None,
     ) -> int:
+        target_repository = repository or self.repository
         buffer: list[BatchItemCreate] = []
         inserted = 0
         while True:
@@ -309,10 +332,10 @@ class BatchService:
                 )
             )
             if len(buffer) >= self.create_buffer_size:
-                inserted += await self.repository.create_items(batch_id, buffer)
+                inserted += await target_repository.create_items(batch_id, buffer)
                 buffer.clear()
         if buffer:
-            inserted += await self.repository.create_items(batch_id, buffer)
+            inserted += await target_repository.create_items(batch_id, buffer)
         return inserted
 
     async def create_file(self, *, auth: UserAPIKeyAuth, upload: UploadFile, purpose: str) -> dict[str, Any]:
@@ -334,6 +357,7 @@ class BatchService:
             created_by_api_key=auth.api_key,
             created_by_user_id=auth.user_id,
             created_by_team_id=auth.team_id,
+            created_by_organization_id=auth.organization_id,
             expires_at=datetime.now(tz=UTC) + timedelta(days=self.metadata_retention_days),
         )
         if record is None:
@@ -347,10 +371,23 @@ class BatchService:
         if not can_access_owned_resource(
             owner_api_key=file_record.created_by_api_key,
             owner_team_id=file_record.created_by_team_id,
+            owner_organization_id=file_record.created_by_organization_id,
             auth=auth,
         ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="File access denied")
-        return await self._storage_for_backend(file_record.storage_backend).read_bytes(file_record.storage_key)
+        backend = str(file_record.storage_backend or "unknown")
+        try:
+            return await self._storage_for_backend(file_record.storage_backend).read_bytes(file_record.storage_key)
+        except Exception as exc:
+            increment_batch_artifact_failure(operation="read", backend=backend)
+            logger.warning(
+                "batch artifact read failed file_id=%s backend=%s storage_key=%s error=%s",
+                file_id,
+                backend,
+                file_record.storage_key,
+                exc,
+            )
+            raise
 
     async def create_embeddings_batch(
         self,
@@ -361,6 +398,7 @@ class BatchService:
         metadata: dict[str, Any] | None,
         completion_window: str | None,
     ) -> dict[str, Any]:
+        started = perf_counter()
         del completion_window
         if endpoint != "/v1/embeddings":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only /v1/embeddings is supported")
@@ -370,6 +408,7 @@ class BatchService:
         if not can_access_owned_resource(
             owner_api_key=file_record.created_by_api_key,
             owner_team_id=file_record.created_by_team_id,
+            owner_organization_id=file_record.created_by_organization_id,
             auth=auth,
         ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Input file access denied")
@@ -379,6 +418,7 @@ class BatchService:
                 detail=f"Input file exceeds embeddings_batch_max_file_bytes ({self.max_file_bytes})",
             )
 
+        await self._precheck_pending_batch_capacity(auth=auth)
         file_storage = self._storage_for_backend(file_record.storage_backend)
         spool, item_count, inferred_model = await self._validate_input_to_spool(
             storage=file_storage,
@@ -386,25 +426,55 @@ class BatchService:
             endpoint=endpoint,
             auth=auth,
         )
+        db = getattr(self.repository, "prisma", None)
         try:
             if item_count <= 0:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid batch items found in file")
 
-            job = await self._create_job_with_scope_limit(
-                auth=auth,
-                endpoint=endpoint,
-                input_file_id=input_file_id,
-                metadata=metadata,
-                inferred_model=inferred_model,
-            )
-            inserted = await self._insert_items_from_spool(
-                batch_id=job.batch_id,
-                spool=spool,
-            )
-            job = await self.repository.set_job_queued(job.batch_id, inserted)
-            if job is None:
-                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to queue batch")
+            job: BatchJobRecord | None = None
+            if db is not None and hasattr(db, "tx") and hasattr(self.repository, "with_prisma"):
+                async with db.tx() as tx:
+                    tx_repository = self.repository.with_prisma(tx)
+                    job = await self._create_job_with_scope_limit(
+                        auth=auth,
+                        endpoint=endpoint,
+                        input_file_id=input_file_id,
+                        metadata=metadata,
+                        inferred_model=inferred_model,
+                        repository=tx_repository,
+                        within_transaction=True,
+                    )
+                    inserted = await self._insert_items_from_spool(
+                        batch_id=job.batch_id,
+                        spool=spool,
+                        repository=tx_repository,
+                    )
+                    job = await tx_repository.set_job_queued(job.batch_id, inserted)
+                    if job is None:
+                        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to queue batch")
+            else:
+                job = await self._create_job_with_scope_limit(
+                    auth=auth,
+                    endpoint=endpoint,
+                    input_file_id=input_file_id,
+                    metadata=metadata,
+                    inferred_model=inferred_model,
+                )
+                inserted = await self._insert_items_from_spool(
+                    batch_id=job.batch_id,
+                    spool=spool,
+                )
+                job = await self.repository.set_job_queued(job.batch_id, inserted)
+                if job is None:
+                    raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to queue batch")
+
+            assert job is not None
+            await self._refresh_batch_runtime_metrics()
+            observe_batch_create_latency(status="success", latency_seconds=perf_counter() - started)
             return self.job_to_response(job)
+        except Exception:
+            observe_batch_create_latency(status="error", latency_seconds=perf_counter() - started)
+            raise
         finally:
             await asyncio.to_thread(spool.close)
 
@@ -415,6 +485,7 @@ class BatchService:
         if not can_access_owned_resource(
             owner_api_key=job.created_by_api_key,
             owner_team_id=job.created_by_team_id,
+            owner_organization_id=job.created_by_organization_id,
             auth=auth,
         ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Batch access denied")
@@ -425,6 +496,7 @@ class BatchService:
             limit=limit,
             created_by_api_key=auth.api_key,
             created_by_team_id=auth.team_id,
+            created_by_organization_id=auth.organization_id if auth.team_id is None else None,
         )
         return {"object": "list", "data": [self.job_to_response(job) for job in jobs]}
 
@@ -435,6 +507,7 @@ class BatchService:
         if not can_access_owned_resource(
             owner_api_key=job.created_by_api_key,
             owner_team_id=job.created_by_team_id,
+            owner_organization_id=job.created_by_organization_id,
             auth=auth,
         ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Batch access denied")

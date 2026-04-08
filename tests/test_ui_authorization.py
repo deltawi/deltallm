@@ -72,6 +72,7 @@ class FakeAuthorizationDB:
                 "in_progress_items": 3,
                 "created_by_api_key": "sk-batch-test-key-1234",
                 "created_by_team_id": "team-1",
+                "created_by_organization_id": None,
                 "organization_id": "org-1",
                 "team_alias": "Team One",
                 "created_at": now,
@@ -296,7 +297,107 @@ async def test_list_batches_keeps_developer_read_access_and_hides_cancel(client,
     payload = response.json()
     assert payload["pagination"]["total"] == 1
     assert payload["data"][0]["batch_id"] == "batch-1"
-    assert payload["data"][0]["capabilities"] == {"view": True, "cancel": False}
+    assert payload["data"][0]["capabilities"] == {
+        "view": True,
+        "cancel": False,
+        "retry_finalization": False,
+        "requeue_stale": False,
+        "mark_failed": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_batches_exposes_repair_capabilities_for_updating_scope(client, test_app, monkeypatch):
+    fake_db = FakeAuthorizationDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
+            is_platform_admin=False,
+            org_ids=[],
+            team_ids=["team-1"],
+            team_permissions_by_id={"team-1": {Permission.TEAM_READ, Permission.KEY_READ, Permission.KEY_UPDATE}},
+        ),
+    )
+
+    response = await client.get("/ui/api/batches", headers={"Authorization": "Bearer mk-test"})
+
+    assert response.status_code == 200
+    assert response.json()["data"][0]["capabilities"] == {
+        "view": True,
+        "cancel": True,
+        "retry_finalization": False,
+        "requeue_stale": True,
+        "mark_failed": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_batches_includes_org_owned_batches_when_scope_has_team_and_org_memberships(client, test_app, monkeypatch):
+    class MixedScopeBatchDB(FakeAuthorizationDB):
+        def __init__(self) -> None:
+            super().__init__()
+            now = datetime.now(tz=UTC)
+            self.batches["batch-org"] = {
+                "batch_id": "batch-org",
+                "endpoint": "/v1/embeddings",
+                "status": "completed",
+                "model": "gpt-4o-mini",
+                "execution_mode": "serial",
+                "metadata": {},
+                "total_items": 2,
+                "completed_items": 2,
+                "failed_items": 0,
+                "cancelled_items": 0,
+                "in_progress_items": 0,
+                "created_by_api_key": "sk-batch-org-1234",
+                "created_by_team_id": None,
+                "created_by_organization_id": "org-1",
+                "organization_id": "org-1",
+                "team_alias": None,
+                "created_at": now,
+                "started_at": now,
+                "completed_at": now,
+                "cancel_requested_at": None,
+                "expires_at": None,
+                "total_cost": 0.5,
+                "total_provider_cost": 0.4,
+                "total_billed_cost": 0.5,
+            }
+
+        async def query_raw(self, query: str, *params):
+            if "COUNT(*) AS total FROM deltallm_batch_job j" in query:
+                return [{"total": len(self.batches)}]
+            if "FROM deltallm_batch_job j" in query and "LEFT JOIN deltallm_teamtable t" in query:
+                if "WHERE j.batch_id = $1" in query:
+                    row = self.batches.get(str(params[0]))
+                    return [row] if row else []
+                return list(self.batches.values())
+            return await super().query_raw(query, *params)
+
+    fake_db = MixedScopeBatchDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
+            is_platform_admin=False,
+            org_ids=["org-1"],
+            team_ids=["team-1"],
+            org_permissions_by_id={"org-1": {Permission.KEY_READ}},
+            team_permissions_by_id={"team-1": {Permission.KEY_READ}},
+        ),
+    )
+
+    response = await client.get("/ui/api/batches", headers={"Authorization": "Bearer mk-test"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["pagination"]["total"] == 2
+    assert {item["batch_id"] for item in payload["data"]} == {"batch-1", "batch-org"}
 
 
 @pytest.mark.asyncio
@@ -320,3 +421,66 @@ async def test_batch_summary_counts_finalizing_as_in_progress(client, test_app, 
 
     assert response.status_code == 200
     assert response.json()["in_progress"] == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_summary_includes_org_owned_batches_when_scope_has_team_and_org_memberships(client, test_app, monkeypatch):
+    class MixedScopeBatchDB(FakeAuthorizationDB):
+        def __init__(self) -> None:
+            super().__init__()
+            self.batches["batch-org"] = {
+                **self.batches["batch-1"],
+                "batch_id": "batch-org",
+                "status": "completed",
+                "completed_items": 2,
+                "in_progress_items": 0,
+                "failed_items": 0,
+                "cancelled_items": 0,
+                "created_by_team_id": None,
+                "created_by_organization_id": "org-1",
+                "team_alias": None,
+            }
+
+        async def query_raw(self, query: str, *params):
+            if "COUNT(*) FILTER (WHERE status IN ('in_progress', 'finalizing')) AS in_progress" in query:
+                completed = sum(1 for row in self.batches.values() if row["status"] == "completed")
+                failed = sum(1 for row in self.batches.values() if row["status"] == "failed")
+                cancelled = sum(1 for row in self.batches.values() if row["status"] == "cancelled")
+                queued = sum(1 for row in self.batches.values() if row["status"] == "queued")
+                in_progress = sum(1 for row in self.batches.values() if row["status"] in {"in_progress", "finalizing"})
+                return [{
+                    "total": len(self.batches),
+                    "queued": queued,
+                    "in_progress": in_progress,
+                    "completed": completed,
+                    "failed": failed,
+                    "cancelled": cancelled,
+                }]
+            return await super().query_raw(query, *params)
+
+    fake_db = MixedScopeBatchDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
+            is_platform_admin=False,
+            org_ids=["org-1"],
+            team_ids=["team-1"],
+            org_permissions_by_id={"org-1": {Permission.KEY_READ}},
+            team_permissions_by_id={"team-1": {Permission.KEY_READ}},
+        ),
+    )
+
+    response = await client.get("/ui/api/batches/summary", headers={"Authorization": "Bearer mk-test"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "total": 2,
+        "queued": 0,
+        "in_progress": 1,
+        "completed": 1,
+        "failed": 0,
+        "cancelled": 0,
+    }

@@ -16,6 +16,16 @@ class BatchJobRepository:
     async def acquire_scope_advisory_lock(self, *, scope_type: str, scope_id: str) -> None:
         if self.prisma is None:
             return
+        executor = getattr(self.prisma, "execute_raw", None)
+        if callable(executor):
+            await executor(
+                """
+                SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))
+                """,
+                scope_type,
+                scope_id,
+            )
+            return
         await self.prisma.query_raw(
             """
             SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))
@@ -34,7 +44,8 @@ class BatchJobRepository:
         created_by_api_key: str | None,
         created_by_user_id: str | None,
         created_by_team_id: str | None,
-        expires_at: datetime | None,
+        created_by_organization_id: str | None = None,
+        expires_at: datetime | None = None,
         execution_mode: str = "managed_internal",
     ) -> BatchJobRecord | None:
         if self.prisma is None:
@@ -44,9 +55,9 @@ class BatchJobRepository:
             """
             INSERT INTO deltallm_batch_job (
                 batch_id, endpoint, status, execution_mode, input_file_id, model, metadata,
-                created_by_api_key, created_by_user_id, created_by_team_id, expires_at
+                created_by_api_key, created_by_user_id, created_by_team_id, created_by_organization_id, expires_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11::timestamp)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12::timestamp)
             RETURNING *
             """,
             batch_id,
@@ -59,6 +70,7 @@ class BatchJobRepository:
             created_by_api_key,
             created_by_user_id,
             created_by_team_id,
+            created_by_organization_id,
             expires_at,
         )
         if not rows:
@@ -88,6 +100,7 @@ class BatchJobRepository:
         after: datetime | None = None,
         created_by_api_key: str | None = None,
         created_by_team_id: str | None = None,
+        created_by_organization_id: str | None = None,
     ) -> list[BatchJobRecord]:
         if self.prisma is None:
             return []
@@ -96,18 +109,43 @@ class BatchJobRepository:
         if after is not None:
             params.append(after)
             clauses.append(f"created_at > ${len(params)}")
-        if created_by_api_key and created_by_team_id:
+        if created_by_api_key and created_by_team_id and created_by_organization_id:
+            params.append(created_by_api_key)
+            api_key_idx = len(params)
+            params.append(created_by_team_id)
+            team_idx = len(params)
+            params.append(created_by_organization_id)
+            org_idx = len(params)
+            clauses.append(
+                f"(created_by_api_key = ${api_key_idx} OR created_by_team_id = ${team_idx} OR created_by_organization_id = ${org_idx})"
+            )
+        elif created_by_api_key and created_by_team_id:
             params.append(created_by_api_key)
             api_key_idx = len(params)
             params.append(created_by_team_id)
             team_idx = len(params)
             clauses.append(f"(created_by_api_key = ${api_key_idx} OR created_by_team_id = ${team_idx})")
+        elif created_by_api_key and created_by_organization_id:
+            params.append(created_by_api_key)
+            api_key_idx = len(params)
+            params.append(created_by_organization_id)
+            org_idx = len(params)
+            clauses.append(f"(created_by_api_key = ${api_key_idx} OR created_by_organization_id = ${org_idx})")
+        elif created_by_team_id and created_by_organization_id:
+            params.append(created_by_team_id)
+            team_idx = len(params)
+            params.append(created_by_organization_id)
+            org_idx = len(params)
+            clauses.append(f"(created_by_team_id = ${team_idx} OR created_by_organization_id = ${org_idx})")
         elif created_by_api_key:
             params.append(created_by_api_key)
             clauses.append(f"created_by_api_key = ${len(params)}")
         elif created_by_team_id:
             params.append(created_by_team_id)
             clauses.append(f"created_by_team_id = ${len(params)}")
+        elif created_by_organization_id:
+            params.append(created_by_organization_id)
+            clauses.append(f"created_by_organization_id = ${len(params)}")
         params.append(max(1, min(limit, 200)))
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = await self.prisma.query_raw(
@@ -154,6 +192,25 @@ class BatchJobRepository:
         else:
             return 0
         return int((rows[0] if rows else {}).get("total") or 0)
+
+    async def summarize_runtime_statuses(self) -> dict[str, int]:
+        if self.prisma is None:
+            return {"queued": 0, "in_progress": 0, "finalizing": 0}
+        rows = await self.prisma.query_raw(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE status = 'queued') AS queued,
+                COUNT(*) FILTER (WHERE status = 'in_progress') AS in_progress,
+                COUNT(*) FILTER (WHERE status = 'finalizing') AS finalizing
+            FROM deltallm_batch_job
+            """
+        )
+        row = dict(rows[0]) if rows else {}
+        return {
+            "queued": int(row.get("queued") or 0),
+            "in_progress": int(row.get("in_progress") or 0),
+            "finalizing": int(row.get("finalizing") or 0),
+        }
 
     async def set_job_queued(self, batch_id: str, total_items: int) -> BatchJobRecord | None:
         if self.prisma is None:
@@ -382,6 +439,43 @@ class BatchJobRepository:
                 error_file_id,
                 final_status,
             )
+        if not rows:
+            return None
+        return job_from_row(rows[0])
+
+    async def retry_finalization_now(self, batch_id: str) -> BatchJobRecord | None:
+        if self.prisma is None:
+            return None
+        rows = await self.prisma.query_raw(
+            """
+            UPDATE deltallm_batch_job
+            SET lease_expires_at = NULL,
+                locked_by = NULL,
+                status_last_updated_at = NOW()
+            WHERE batch_id = $1
+              AND status = 'finalizing'
+            RETURNING *
+            """,
+            batch_id,
+        )
+        if not rows:
+            return None
+        return job_from_row(rows[0])
+
+    async def set_provider_error(self, *, batch_id: str, provider_error: str | None) -> BatchJobRecord | None:
+        if self.prisma is None:
+            return None
+        rows = await self.prisma.query_raw(
+            """
+            UPDATE deltallm_batch_job
+            SET provider_error = $2,
+                status_last_updated_at = NOW()
+            WHERE batch_id = $1
+            RETURNING *
+            """,
+            batch_id,
+            provider_error,
+        )
         if not rows:
             return None
         return job_from_row(rows[0])

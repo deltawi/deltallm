@@ -37,6 +37,7 @@ class BatchRepository:
         created_by_api_key: str | None = None,
         created_by_user_id: str | None = None,
         created_by_team_id: str | None = None,
+        created_by_organization_id: str | None = None,
         expires_at: datetime | None = None,
     ) -> BatchFileRecord | None:
         return await self.files.create_file(
@@ -49,6 +50,7 @@ class BatchRepository:
             created_by_api_key=created_by_api_key,
             created_by_user_id=created_by_user_id,
             created_by_team_id=created_by_team_id,
+            created_by_organization_id=created_by_organization_id,
             expires_at=expires_at,
         )
 
@@ -65,7 +67,8 @@ class BatchRepository:
         created_by_api_key: str | None,
         created_by_user_id: str | None,
         created_by_team_id: str | None,
-        expires_at: datetime | None,
+        created_by_organization_id: str | None = None,
+        expires_at: datetime | None = None,
         execution_mode: str = "managed_internal",
     ) -> BatchJobRecord | None:
         return await self.jobs.create_job(
@@ -76,6 +79,7 @@ class BatchRepository:
             created_by_api_key=created_by_api_key,
             created_by_user_id=created_by_user_id,
             created_by_team_id=created_by_team_id,
+            created_by_organization_id=created_by_organization_id,
             expires_at=expires_at,
             execution_mode=execution_mode,
         )
@@ -93,12 +97,14 @@ class BatchRepository:
         after: datetime | None = None,
         created_by_api_key: str | None = None,
         created_by_team_id: str | None = None,
+        created_by_organization_id: str | None = None,
     ) -> list[BatchJobRecord]:
         return await self.jobs.list_jobs(
             limit=limit,
             after=after,
             created_by_api_key=created_by_api_key,
             created_by_team_id=created_by_team_id,
+            created_by_organization_id=created_by_organization_id,
         )
 
     async def count_active_jobs_for_scope(
@@ -111,6 +117,14 @@ class BatchRepository:
             created_by_api_key=created_by_api_key,
             created_by_team_id=created_by_team_id,
         )
+
+    async def summarize_runtime_statuses(self, *, now: datetime) -> dict[str, float]:
+        job_summary = await self.jobs.summarize_runtime_statuses()
+        item_summary = await self.items.summarize_runtime_statuses(now=now)
+        return {
+            **job_summary,
+            **item_summary,
+        }
 
     async def set_job_queued(self, batch_id: str, total_items: int) -> BatchJobRecord | None:
         return await self.jobs.set_job_queued(batch_id, total_items)
@@ -221,6 +235,12 @@ class BatchRepository:
             after_line_number=after_line_number,
         )
 
+    async def requeue_expired_in_progress_items(self, batch_id: str) -> int:
+        return await self.items.requeue_expired_in_progress_items(batch_id)
+
+    async def fail_nonterminal_items(self, *, batch_id: str, reason: str) -> int:
+        return await self.items.fail_nonterminal_items(batch_id=batch_id, reason=reason)
+
     async def attach_artifacts_and_finalize(
         self,
         *,
@@ -237,6 +257,12 @@ class BatchRepository:
             final_status=final_status,
             worker_id=worker_id,
         )
+
+    async def retry_finalization_now(self, batch_id: str) -> BatchJobRecord | None:
+        return await self.jobs.retry_finalization_now(batch_id)
+
+    async def set_provider_error(self, *, batch_id: str, provider_error: str | None) -> BatchJobRecord | None:
+        return await self.jobs.set_provider_error(batch_id=batch_id, provider_error=provider_error)
 
     async def list_expired_terminal_job_ids(self, *, now: datetime, limit: int = 100) -> list[str]:
         return await self.maintenance.list_expired_terminal_job_ids(now=now, limit=limit)

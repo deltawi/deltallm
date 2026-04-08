@@ -24,6 +24,25 @@ class BatchItemStatus:
     CANCELLED = "cancelled"
 
 
+OPERATOR_FAILED_PREFIX = "__operator_failed__:"
+
+
+def encode_operator_failed_reason(reason: str) -> str:
+    normalized = str(reason or "").strip() or "Marked failed by operator"
+    return f"{OPERATOR_FAILED_PREFIX}{normalized}"
+
+
+def is_operator_failed_reason(value: str | None) -> bool:
+    return str(value or "").startswith(OPERATOR_FAILED_PREFIX)
+
+
+def decode_operator_failed_reason(value: str | None) -> str | None:
+    if not is_operator_failed_reason(value):
+        return value
+    decoded = str(value)[len(OPERATOR_FAILED_PREFIX) :].strip()
+    return decoded or None
+
+
 @dataclass
 class BatchFileRecord:
     file_id: str
@@ -39,6 +58,7 @@ class BatchFileRecord:
     created_by_team_id: str | None
     created_at: datetime
     expires_at: datetime | None
+    created_by_organization_id: str | None = None
 
 
 @dataclass
@@ -72,6 +92,7 @@ class BatchJobRecord:
     started_at: datetime | None
     completed_at: datetime | None
     expires_at: datetime | None
+    created_by_organization_id: str | None = None
 
 
 @dataclass
@@ -101,4 +122,3 @@ class BatchItemCreate:
     line_number: int
     custom_id: str
     request_body: dict[str, Any]
-

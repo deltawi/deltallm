@@ -24,6 +24,7 @@ class BatchFileRepository:
         created_by_api_key: str | None = None,
         created_by_user_id: str | None = None,
         created_by_team_id: str | None = None,
+        created_by_organization_id: str | None = None,
         expires_at: datetime | None = None,
     ) -> BatchFileRecord | None:
         if self.prisma is None:
@@ -33,9 +34,9 @@ class BatchFileRepository:
             """
             INSERT INTO deltallm_batch_file (
                 file_id, purpose, filename, bytes, status, storage_backend, storage_key, checksum,
-                created_by_api_key, created_by_user_id, created_by_team_id, expires_at
+                created_by_api_key, created_by_user_id, created_by_team_id, created_by_organization_id, expires_at
             )
-            VALUES ($1, $2, $3, $4, 'processed', $5, $6, $7, $8, $9, $10, $11::timestamp)
+            VALUES ($1, $2, $3, $4, 'processed', $5, $6, $7, $8, $9, $10, $11, $12::timestamp)
             RETURNING *
             """,
             file_id,
@@ -48,6 +49,7 @@ class BatchFileRepository:
             created_by_api_key,
             created_by_user_id,
             created_by_team_id,
+            created_by_organization_id,
             expires_at,
         )
         if not rows:

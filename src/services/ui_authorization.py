@@ -131,12 +131,16 @@ def build_team_capabilities(scope: Any, team: dict[str, Any]) -> dict[str, bool]
 def build_batch_capabilities(scope: Any, batch: dict[str, Any]) -> dict[str, bool]:
     team_id = str(batch.get("created_by_team_id") or "").strip()
     organization_id = str(batch.get("organization_id") or "").strip()
-    can_cancel = (
+    status = str(batch.get("status") or "").strip().lower()
+    can_update = (
         _scope_has_team_permission(scope, team_id, Permission.KEY_UPDATE)
         or _scope_has_org_permission(scope, organization_id, Permission.KEY_UPDATE)
     )
 
     return {
         "view": True,
-        "cancel": can_cancel,
+        "cancel": can_update,
+        "retry_finalization": can_update and status == "finalizing",
+        "requeue_stale": can_update and status == "in_progress",
+        "mark_failed": can_update and status not in {"completed", "failed", "cancelled", "expired"},
     }

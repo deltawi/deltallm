@@ -7,6 +7,10 @@ from datetime import UTC, datetime
 
 from src.batch.repository import BatchRepository
 from src.batch.storage import BatchArtifactStorage
+from src.metrics import (
+    increment_batch_artifact_failure,
+    publish_batch_runtime_summary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +50,14 @@ class BatchRetentionCleanupWorker:
             )
         return storage
 
+    async def _refresh_batch_runtime_metrics(self, *, now: datetime) -> None:
+        try:
+            summary = await self.repository.summarize_runtime_statuses(now=now)
+            publish_batch_runtime_summary(summary)
+        except Exception:
+            logger.debug("batch cleanup runtime metrics refresh failed", exc_info=True)
+            return
+
     async def run(self) -> None:
         self._running = True
         while self._running:
@@ -76,6 +88,10 @@ class BatchRetentionCleanupWorker:
             try:
                 await self._storage_for_backend(file_record.storage_backend).delete(file_record.storage_key)
             except Exception as exc:
+                increment_batch_artifact_failure(
+                    operation="delete",
+                    backend=str(file_record.storage_backend or getattr(self.storage, "backend_name", "unknown")),
+                )
                 logger.warning("batch artifact delete failed file_id=%s error=%s", file_record.file_id, exc)
                 continue
             await self.repository.delete_file(file_record.file_id)
@@ -83,4 +99,5 @@ class BatchRetentionCleanupWorker:
 
         if deleted_jobs or deleted_files:
             logger.info("batch GC deleted jobs=%s files=%s", deleted_jobs, deleted_files)
+        await self._refresh_batch_runtime_metrics(now=now)
         return deleted_jobs, deleted_files
