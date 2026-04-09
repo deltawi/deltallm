@@ -7,6 +7,11 @@ from typing import TYPE_CHECKING, Any
 from fastapi import HTTPException, status
 
 from src.db.named_credentials import NamedCredentialRecord
+from src.upstream_auth import (
+    supports_custom_openai_compatible_auth,
+    validate_auth_header_format,
+    validate_auth_header_name,
+)
 from src.providers.resolution import PROVIDER_PRESETS, is_openai_compatible_provider, resolve_provider
 
 if TYPE_CHECKING:
@@ -15,6 +20,8 @@ if TYPE_CHECKING:
 _NON_SECRET_CONNECTION_KEYS = {
     "api_base",
     "api_version",
+    "auth_header_format",
+    "auth_header_name",
     "region",
     "provider",
     "endpoint",
@@ -34,6 +41,10 @@ _API_KEY_PROVIDER_FIELDS = {
     "api_base",
     "api_version",
 }
+_CUSTOM_AUTH_PROVIDER_FIELDS = _API_KEY_PROVIDER_FIELDS | {
+    "auth_header_name",
+    "auth_header_format",
+}
 _PROVIDER_LABEL_ALIASES = {
     "azure": "azure_openai",
 }
@@ -41,6 +52,8 @@ INLINE_CONNECTION_FIELDS = (
     "api_key",
     "api_base",
     "api_version",
+    "auth_header_name",
+    "auth_header_format",
     "region",
     "aws_access_key_id",
     "aws_secret_access_key",
@@ -146,6 +159,21 @@ def _validate_connection_config(provider: str, connection_config: dict[str, Any]
                 detail="bedrock aws_session_token requires aws_access_key_id and aws_secret_access_key",
             )
 
+    if supports_custom_openai_compatible_auth(provider):
+        auth_header_name = connection_config.get("auth_header_name")
+        if auth_header_name is not None:
+            try:
+                validate_auth_header_name(str(auth_header_name))
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+        auth_header_format = connection_config.get("auth_header_format")
+        if auth_header_format is not None:
+            try:
+                validate_auth_header_format(str(auth_header_format))
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
 
 def _allowed_fields_for_provider(provider: str) -> set[str]:
     if provider == "bedrock":
@@ -156,6 +184,8 @@ def _allowed_fields_for_provider(provider: str) -> set[str]:
         return _API_KEY_PROVIDER_FIELDS
     if provider == "gemini":
         return _API_KEY_PROVIDER_FIELDS
+    if supports_custom_openai_compatible_auth(provider):
+        return _CUSTOM_AUTH_PROVIDER_FIELDS
     if is_openai_compatible_provider(provider):
         return _API_KEY_PROVIDER_FIELDS
     return set()

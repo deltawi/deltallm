@@ -5,7 +5,7 @@ import secrets
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator, model_validator
 
 from src.api.admin.endpoints.common import model_entries, to_json_value
 from src.api.audit import emit_control_audit_event
@@ -14,6 +14,11 @@ from src.config import ModelMode
 from src.config_runtime.models import ModelHotReloadManager
 from src.db.named_credentials import NamedCredentialRecord, NamedCredentialRepository
 from src.middleware.admin import require_authenticated, require_master_key
+from src.upstream_auth import (
+    supports_custom_openai_compatible_auth,
+    validate_auth_header_format,
+    validate_auth_header_name,
+)
 from src.providers.healthcheck import probe_provider_health
 from src.providers.model_discovery import discover_provider_models
 from src.providers.resolution import provider_presets, resolve_provider, validate_provider_mode_compatibility
@@ -24,6 +29,7 @@ from src.services.model_deployments import DuplicateModelNameError, ensure_model
 from src.services.named_credentials import (
     canonicalize_named_credential_provider,
     merge_named_credential_params,
+    redact_connection_config,
     resolve_named_credential_record,
 )
 from src.services.organization_callable_target_sync import sync_auto_follow_organization_bindings
@@ -34,7 +40,15 @@ _CREDENTIAL_CONNECTION_FIELDS = {
     "api_key",
     "api_base",
     "api_version",
+    "auth_header_name",
+    "auth_header_format",
     "region",
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+}
+_INLINE_SECRET_FIELDS = {
+    "api_key",
     "aws_access_key_id",
     "aws_secret_access_key",
     "aws_session_token",
@@ -48,6 +62,30 @@ class ProviderModelDiscoveryRequest(BaseModel):
     api_key: str | None = None
     api_base: str | None = None
     api_version: str | None = None
+    auth_header_name: str | None = None
+    auth_header_format: str | None = None
+
+    @field_validator("auth_header_name")
+    @classmethod
+    def validate_custom_auth_header_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_auth_header_name(value)
+
+    @field_validator("auth_header_format")
+    @classmethod
+    def validate_custom_auth_header_format(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_auth_header_format(value)
+
+    @model_validator(mode="after")
+    def validate_custom_auth_header_provider(self) -> "ProviderModelDiscoveryRequest":
+        if self.auth_header_name is None and self.auth_header_format is None:
+            return self
+        if not supports_custom_openai_compatible_auth(self.provider):
+            raise ValueError(f"Custom auth headers are not supported for provider '{self.provider}'")
+        return self
 
 
 def _find_runtime_deployment(app: Any, deployment_id: str) -> Any | None:
@@ -176,7 +214,7 @@ def _serialize_model_write_response(
             "credential_source": credential_source,
             "inline_credentials_present": credential_source == "inline" and any(
                 str(deltallm_params.get(field) or "").strip()
-                for field in _CREDENTIAL_CONNECTION_FIELDS
+                for field in _INLINE_SECRET_FIELDS
             ),
             "connection_summary": {
                 "api_base": deltallm_params.get("api_base") or None,
@@ -185,14 +223,7 @@ def _serialize_model_write_response(
             },
             "named_credential_id": named_credential_id,
             "named_credential_name": named_credential_name,
-            "deltallm_params": {
-                **deltallm_params,
-                **{
-                    field: "***REDACTED***"
-                    for field in _CREDENTIAL_CONNECTION_FIELDS
-                    if field in deltallm_params and deltallm_params.get(field) not in (None, "")
-                },
-            },
+            "deltallm_params": redact_connection_config(deltallm_params),
             "model_info": model_info,
         }
     )
@@ -452,6 +483,8 @@ async def discover_models_for_provider(request: Request, payload: ProviderModelD
             "api_key": payload.api_key,
             "api_base": payload.api_base,
             "api_version": payload.api_version,
+            "auth_header_name": payload.auth_header_name,
+            "auth_header_format": payload.auth_header_format,
         },
         named_credential,
     )
@@ -462,6 +495,8 @@ async def discover_models_for_provider(request: Request, payload: ProviderModelD
         api_key=merged_params.get("api_key"),
         api_base=merged_params.get("api_base"),
         api_version=merged_params.get("api_version"),
+        auth_header_name=merged_params.get("auth_header_name"),
+        auth_header_format=merged_params.get("auth_header_format"),
         default_openai_base_url=getattr(request.app.state.settings, "openai_base_url", "https://api.openai.com/v1"),
     )
 
