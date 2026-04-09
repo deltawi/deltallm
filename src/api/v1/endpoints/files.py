@@ -77,7 +77,7 @@ async def get_file(request: Request, file_id: str):
         if not can_access_owned_resource(
             owner_api_key=record.created_by_api_key,
             owner_team_id=record.created_by_team_id,
-            owner_organization_id=record.created_by_organization_id,
+            owner_organization_id=getattr(record, "created_by_organization_id", None),
             auth=auth,
         ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="File access denied")
