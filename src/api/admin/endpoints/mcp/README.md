@@ -6,8 +6,8 @@ implemented in a single `mcp.py` module.
 ## Public Surface
 
 - Keep `from src.api.admin.endpoints.mcp import router` working.
-- [__init__.py](/Users/mehditantaoui/Documents/Challenges/deltallm/src/api/admin/endpoints/mcp/__init__.py) should remain a thin compatibility layer.
-- [router.py](/Users/mehditantaoui/Documents/Challenges/deltallm/src/api/admin/endpoints/mcp/router.py) is the aggregation point for route modules.
+- [__init__.py](./__init__.py) should remain a thin compatibility layer.
+- [router.py](./router.py) is the aggregation point for route modules.
 
 ## Module Ownership
 
