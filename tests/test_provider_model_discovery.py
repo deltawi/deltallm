@@ -160,6 +160,74 @@ async def test_provider_model_discovery_supports_named_credentials(client, test_
 
 
 @pytest.mark.asyncio
+async def test_provider_model_discovery_supports_named_credentials_with_custom_auth_headers(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.named_credential_repository = _FakeNamedCredentialRepository(
+        [
+            NamedCredentialRecord(
+                credential_id="cred-1",
+                name="vLLM prod",
+                provider="vllm",
+                connection_config={
+                    "api_key": "provider-key",
+                    "api_base": "https://vllm.example/v1",
+                    "auth_header_name": "X-API-Key",
+                    "auth_header_format": "{api_key}",
+                },
+            )
+        ]
+    )
+
+    async def get(url: str, headers: dict[str, str] | None = None, timeout: float = 10.0):  # noqa: ANN201
+        assert url == "https://vllm.example/v1/models"
+        assert headers == {"X-API-Key": "provider-key"}
+        del timeout
+        return httpx.Response(200, json={"data": [{"id": "meta-llama/Llama-3.1-8B-Instruct", "name": "Llama"}]})
+
+    test_app.state.http_client.get = get
+
+    response = await client.post(
+        "/ui/api/provider-models/discover",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"provider": "vllm", "mode": "chat", "named_credential_id": "cred-1"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["warnings"] == []
+
+
+@pytest.mark.asyncio
+async def test_provider_model_discovery_supports_inline_custom_auth_headers(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    async def get(url: str, headers: dict[str, str] | None = None, timeout: float = 10.0):  # noqa: ANN201
+        assert url == "https://proxy.example/v1/models"
+        assert headers == {"Authorization": "Token provider-key"}
+        del timeout
+        return httpx.Response(200, json={"data": [{"id": "gpt-4o", "name": "gpt-4o"}]})
+
+    test_app.state.http_client.get = get
+
+    response = await client.post(
+        "/ui/api/provider-models/discover",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "provider": "openai",
+            "mode": "chat",
+            "api_key": "provider-key",
+            "api_base": "https://proxy.example/v1",
+            "auth_header_name": "Authorization",
+            "auth_header_format": "Token {api_key}",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["warnings"] == []
+
+
+@pytest.mark.asyncio
 async def test_provider_model_discovery_resolves_named_credential_env_refs(
     client,
     test_app,

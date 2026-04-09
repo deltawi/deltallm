@@ -8,8 +8,14 @@ from typing import Any, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import yaml
-from pydantic import AliasChoices, BaseModel, Field, ValidationError, field_validator
+from pydantic import AliasChoices, BaseModel, Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from src.upstream_auth import (
+    supports_custom_openai_compatible_auth,
+    validate_auth_header_format,
+    validate_auth_header_name,
+)
 
 
 ModelMode = Literal[
@@ -44,12 +50,42 @@ class DeltaLLMParams(BaseModel):
     api_key: str | None = None
     api_base: str | None = None
     api_version: str | None = None
+    auth_header_name: str | None = None
+    auth_header_format: str | None = None
     timeout: int | None = 300
     rpm: int | None = None
     tpm: int | None = None
     weight: int = 1
     stream_timeout: int | None = None
     max_tokens: int | None = None
+
+    @field_validator("auth_header_name")
+    @classmethod
+    def validate_custom_auth_header_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_auth_header_name(value)
+
+    @field_validator("auth_header_format")
+    @classmethod
+    def validate_custom_auth_header_format(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_auth_header_format(value)
+
+    @model_validator(mode="after")
+    def validate_custom_auth_headers_supported_provider(self) -> "DeltaLLMParams":
+        if self.auth_header_name is None and self.auth_header_format is None:
+            return self
+
+        provider = str(self.provider or "").strip().lower()
+        if not provider:
+            model_value = str(self.model or "").strip()
+            provider = model_value.split("/", 1)[0].strip().lower() if "/" in model_value else ""
+
+        if not supports_custom_openai_compatible_auth(provider):
+            raise ValueError(f"Custom auth headers are not supported for provider '{provider or 'unknown'}'")
+        return self
 
 
 class ModelInfo(BaseModel):

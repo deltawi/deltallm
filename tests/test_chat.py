@@ -797,6 +797,38 @@ async def test_chat_completion_uses_azure_api_key_header_when_provider_is_azure(
 
 
 @pytest.mark.asyncio
+async def test_chat_completion_uses_custom_auth_headers_for_openai_compatible_provider(client, test_app):
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.deltallm_params["provider"] = "vllm"
+    deployment.deltallm_params["api_base"] = "https://vllm.example/v1"
+    deployment.deltallm_params["api_key"] = "vllm-provider-key"
+    deployment.deltallm_params["auth_header_name"] = "X-Provider-Auth"
+    deployment.deltallm_params["auth_header_format"] = "Token {api_key}"
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del timeout
+        assert url.endswith("/chat/completions")
+        assert headers.get("X-Provider-Auth") == "Token vllm-provider-key"
+        assert "Authorization" not in headers
+        payload = {
+            "id": "chatcmpl-vllm",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": json["model"],
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+        return httpx.Response(200, json=payload)
+
+    test_app.state.http_client.post = post
+
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_chat_completion_does_not_forward_internal_metadata_upstream(client, test_app):
     async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
         del url, headers, timeout

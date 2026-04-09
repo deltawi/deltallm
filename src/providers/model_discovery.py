@@ -7,6 +7,7 @@ import httpx
 from src.config import ModelMode
 from src.providers.model_catalog import canonical_catalog_provider, catalog_model_metadata, catalog_models_for_provider
 from src.providers.resolution import PROVIDER_PRESETS, is_openai_compatible_provider
+from src.upstream_auth import build_openai_compatible_auth_headers
 
 
 def _normalized_provider(provider: str | None) -> str:
@@ -136,6 +137,8 @@ async def _discover_live_models(
     api_key: str | None,
     api_base: str | None,
     api_version: str | None,
+    auth_header_name: str | None,
+    auth_header_format: str | None,
 ) -> list[dict[str, Any]]:
     if provider == "bedrock":
         raise NotImplementedError("Live discovery is not yet implemented for AWS Bedrock.")
@@ -180,7 +183,12 @@ async def _discover_live_models(
     payload = await _load_json(
         http_client,
         url=f"{str(api_base).rstrip('/')}/models",
-        headers={"Authorization": f"Bearer {api_key}"},
+        headers=build_openai_compatible_auth_headers(
+            provider=provider,
+            api_key=str(api_key),
+            auth_header_name=auth_header_name,
+            auth_header_format=auth_header_format,
+        ),
     )
     return _extract_openai_style_models(payload, provider=response_provider)
 
@@ -246,6 +254,8 @@ async def discover_provider_models(
     api_key: str | None = None,
     api_base: str | None = None,
     api_version: str | None = None,
+    auth_header_name: str | None = None,
+    auth_header_format: str | None = None,
     default_openai_base_url: str,
 ) -> dict[str, Any]:
     normalized_provider = _normalized_provider(provider)
@@ -263,6 +273,8 @@ async def discover_provider_models(
             api_key=str(api_key or "").strip() or None,
             api_base=resolved_api_base,
             api_version=str(api_version or "").strip() or None,
+            auth_header_name=str(auth_header_name or "").strip() or None,
+            auth_header_format=str(auth_header_format or "").strip() or None,
         )
     except NotImplementedError as exc:
         live_options = []

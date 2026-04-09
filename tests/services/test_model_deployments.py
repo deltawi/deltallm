@@ -231,6 +231,8 @@ async def test_load_model_registry_resolves_named_credential_connection_params()
                 connection_config={
                     "api_key": "named-secret",
                     "api_base": "https://named.example/v1",
+                    "auth_header_name": "X-API-Key",
+                    "auth_header_format": "{api_key}",
                 },
             )
         ]
@@ -249,6 +251,8 @@ async def test_load_model_registry_resolves_named_credential_connection_params()
     assert entry["named_credential_name"] == "OpenAI prod"
     assert entry["deltallm_params"]["api_key"] == "named-secret"
     assert entry["deltallm_params"]["api_base"] == "https://named.example/v1"
+    assert entry["deltallm_params"]["auth_header_name"] == "X-API-Key"
+    assert entry["deltallm_params"]["auth_header_format"] == "{api_key}"
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,7 @@ from fastapi import Request
 from src.models.errors import InvalidRequestError
 from src.providers.base import ProviderAdapter
 from src.providers.resolution import is_openai_compatible_provider, resolve_provider, resolve_upstream_model
+from src.upstream_auth import build_openai_compatible_auth_headers
 
 
 @dataclass
@@ -93,6 +94,12 @@ def resolve_chat_upstream(
         adapter=request.app.state.openai_adapter,
         api_base=str(params.get("api_base", request.app.state.settings.openai_base_url)).rstrip("/"),
         endpoint="/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        headers=build_openai_compatible_auth_headers(
+            provider=provider,
+            api_key=str(api_key),
+            auth_header_name=params.get("auth_header_name"),
+            auth_header_format=params.get("auth_header_format"),
+            content_type="application/json",
+        ),
         timeout=timeout,
     )

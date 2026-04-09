@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from src.providers.resolution import is_openai_compatible_provider, resolve_provider
+from src.upstream_auth import build_openai_compatible_auth_headers
 
 
 @dataclass
@@ -123,7 +124,12 @@ async def probe_provider_health(
     try:
         response = await http_client.get(
             f"{api_base}/models",
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers=build_openai_compatible_auth_headers(
+                provider=provider,
+                api_key=api_key,
+                auth_header_name=str(params.get("auth_header_name") or "").strip() or None,
+                auth_header_format=str(params.get("auth_header_format") or "").strip() or None,
+            ),
             timeout=10.0,
         )
         if response.status_code >= 400:

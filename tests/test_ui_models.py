@@ -276,7 +276,7 @@ async def test_update_model_clears_old_connection_fields_when_provider_changes(c
     assert response.status_code == 200
     payload = response.json()
     assert payload["deltallm_params"]["provider"] == "anthropic"
-    assert payload["deltallm_params"]["api_base"] == "***REDACTED***"
+    assert payload["deltallm_params"]["api_base"] == "https://api.anthropic.com/v1"
     assert "api_key" not in payload["deltallm_params"]
 
 
@@ -343,6 +343,83 @@ async def test_create_model_response_redacts_inline_api_key(client, test_app):
 
 
 @pytest.mark.asyncio
+async def test_create_model_accepts_custom_auth_headers_for_openai_compatible_provider(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.post(
+        "/ui/api/models",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "model_name": "custom-auth-model",
+            "deltallm_params": {
+                "provider": "vllm",
+                "model": "vllm/meta-llama/Llama-3.1-8B-Instruct",
+                "api_base": "https://vllm.example/v1",
+                "api_key": "provider-key",
+                "auth_header_name": "X-API-Key",
+                "auth_header_format": "{api_key}",
+            },
+            "model_info": {"mode": "chat"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["deltallm_params"]["api_key"] == "***REDACTED***"
+    assert payload["deltallm_params"]["auth_header_name"] == "X-API-Key"
+    assert payload["deltallm_params"]["auth_header_format"] == "{api_key}"
+
+
+@pytest.mark.asyncio
+async def test_create_model_rejects_custom_auth_headers_for_azure_provider(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.post(
+        "/ui/api/models",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "model_name": "azure-custom-auth-model",
+            "deltallm_params": {
+                "provider": "azure_openai",
+                "model": "azure/gpt-4o-mini",
+                "api_base": "https://example.azure.com/openai/v1",
+                "api_key": "provider-key",
+                "auth_header_name": "X-API-Key",
+            },
+            "model_info": {"mode": "chat"},
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Custom auth headers are not supported" in response.text
+
+
+@pytest.mark.asyncio
+async def test_create_model_rejects_reserved_auth_header_names(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.post(
+        "/ui/api/models",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "model_name": "reserved-auth-header-model",
+            "deltallm_params": {
+                "provider": "vllm",
+                "model": "vllm/meta-llama/Llama-3.1-8B-Instruct",
+                "api_base": "https://vllm.example/v1",
+                "api_key": "provider-key",
+                "auth_header_name": "Content-Type",
+                "auth_header_format": "Token {api_key}",
+            },
+            "model_info": {"mode": "chat"},
+        },
+    )
+
+    assert response.status_code == 400
+    assert "reserved header name" in response.text
+
+
+@pytest.mark.asyncio
 async def test_update_model_response_redacts_inline_api_key(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
 
@@ -356,6 +433,8 @@ async def test_update_model_response_redacts_inline_api_key(client, test_app):
                 "model": "openai/gpt-4o-mini",
                 "api_base": "https://api.openai.com/v1",
                 "api_key": "provider-key-updated",
+                "auth_header_name": "X-Provider-Auth",
+                "auth_header_format": "Token {api_key}",
             },
             "model_info": {"mode": "chat"},
         },
@@ -365,6 +444,8 @@ async def test_update_model_response_redacts_inline_api_key(client, test_app):
     payload = response.json()
     assert payload["credential_source"] == "inline"
     assert payload["deltallm_params"]["api_key"] == "***REDACTED***"
+    assert payload["deltallm_params"]["auth_header_name"] == "X-Provider-Auth"
+    assert payload["deltallm_params"]["auth_header_format"] == "Token {api_key}"
 
 
 @pytest.mark.asyncio

@@ -194,6 +194,34 @@ async def test_named_credentials_create_and_list_are_redacted(client, test_app):
 
 
 @pytest.mark.asyncio
+async def test_named_credentials_create_accepts_custom_auth_header_fields(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    repository = _FakeNamedCredentialRepository()
+    test_app.state.named_credential_repository = repository
+
+    response = await client.post(
+        "/ui/api/named-credentials",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "name": "vLLM Shared",
+            "provider": "vllm",
+            "connection_config": {
+                "api_key": "provider-key",
+                "api_base": "https://vllm.example/v1",
+                "auth_header_name": "X-API-Key",
+                "auth_header_format": "{api_key}",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["connection_config"]["api_key"] == "***REDACTED***"
+    assert payload["connection_config"]["auth_header_name"] == "X-API-Key"
+    assert payload["connection_config"]["auth_header_format"] == "{api_key}"
+
+
+@pytest.mark.asyncio
 async def test_named_credentials_update_reloads_runtime_when_in_use_and_delete_blocks(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
     repository = _FakeNamedCredentialRepository()
@@ -276,6 +304,54 @@ async def test_named_credentials_validate_provider_specific_fields(client, test_
     )
     assert invalid_openai.status_code == 400
     assert "unsupported fields" in invalid_openai.text
+
+    invalid_azure_custom_auth = await client.post(
+        "/ui/api/named-credentials",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "name": "Azure Prod",
+            "provider": "azure_openai",
+            "connection_config": {"api_key": "provider-key", "auth_header_name": "X-API-Key"},
+        },
+    )
+    assert invalid_azure_custom_auth.status_code == 400
+    assert "unsupported fields" in invalid_azure_custom_auth.text
+
+    invalid_auth_format = await client.post(
+        "/ui/api/named-credentials",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "name": "vLLM Prod",
+            "provider": "vllm",
+            "connection_config": {"api_key": "provider-key", "auth_header_format": "Bearer {token}"},
+        },
+    )
+    assert invalid_auth_format.status_code == 400
+    assert "only supports the {api_key} placeholder" in invalid_auth_format.text
+
+    escaped_auth_format = await client.post(
+        "/ui/api/named-credentials",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "name": "vLLM Prod",
+            "provider": "vllm",
+            "connection_config": {"api_key": "provider-key", "auth_header_format": "Token {{api_key}}"},
+        },
+    )
+    assert escaped_auth_format.status_code == 400
+    assert "must include the {api_key} placeholder" in escaped_auth_format.text
+
+    invalid_reserved_header_name = await client.post(
+        "/ui/api/named-credentials",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "name": "vLLM Prod",
+            "provider": "vllm",
+            "connection_config": {"api_key": "provider-key", "auth_header_name": "Content-Type"},
+        },
+    )
+    assert invalid_reserved_header_name.status_code == 400
+    assert "reserved header name" in invalid_reserved_header_name.text
 
     invalid_bedrock = await client.post(
         "/ui/api/named-credentials",
