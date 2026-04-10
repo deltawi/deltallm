@@ -4,7 +4,13 @@ import { ChevronDown, Plus, X } from 'lucide-react';
 import ProviderBadge from './ProviderBadge';
 import { useApi } from '../lib/hooks';
 import { models, namedCredentials, type NamedCredential, type ProviderModelDiscoveryPayload, type ProviderModelOption } from '../lib/api';
-import { canonicalNamedCredentialProvider, providerDisplayName } from '../lib/providers';
+import {
+  canonicalNamedCredentialProvider,
+  DEFAULT_CUSTOM_AUTH_HEADER_FORMAT,
+  DEFAULT_CUSTOM_AUTH_HEADER_NAME,
+  providerDisplayName,
+  supportsCustomUpstreamAuthProvider,
+} from '../lib/providers';
 import {
   EMPTY_FORM,
   MODE_OPTIONS,
@@ -123,6 +129,8 @@ function buildLiveDiscoveryRequestKey(payload: ProviderModelDiscoveryPayload): s
     payload.api_key || '',
     payload.api_base || '',
     payload.api_version || '',
+    payload.auth_header_name || '',
+    payload.auth_header_format || '',
   ].join('::');
 }
 
@@ -204,6 +212,7 @@ export default function ModelForm({
 
   const providerPresets = providerPresetResponse?.data || [];
   const availableNamedCredentials = namedCredentialResponse?.data || [];
+  const supportsCustomAuth = supportsCustomUpstreamAuthProvider(form.provider, form.model);
   const liveDiscoveryPayload: ProviderModelDiscoveryPayload = {
     provider: form.provider,
     mode,
@@ -211,6 +220,8 @@ export default function ModelForm({
     api_key: form.credential_source === 'inline' ? form.api_key.trim() || null : null,
     api_base: form.credential_source === 'inline' ? form.api_base.trim() || null : null,
     api_version: form.credential_source === 'inline' ? form.api_version.trim() || null : null,
+    auth_header_name: form.credential_source === 'inline' && supportsCustomAuth ? form.auth_header_name.trim() || null : null,
+    auth_header_format: form.credential_source === 'inline' && supportsCustomAuth ? form.auth_header_format.trim() || null : null,
   };
   const liveDiscoveryRequestKey = buildLiveDiscoveryRequestKey(liveDiscoveryPayload);
   const hasActiveLiveDiscovery = liveDiscoveryState.requestKey === liveDiscoveryRequestKey;
@@ -639,6 +650,31 @@ export default function ModelForm({
                     <input type="number" value={form.timeout} onChange={(e) => setForm({ ...form, timeout: e.target.value })} placeholder="300" className={inputClass} />
                   </div>
                 </div>
+                {supportsCustomAuth ? (
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <FieldLabel label="Auth Header Name" />
+                      <input
+                        value={form.auth_header_name}
+                        onChange={(e) => setForm({ ...form, auth_header_name: e.target.value })}
+                        placeholder={DEFAULT_CUSTOM_AUTH_HEADER_NAME}
+                        className={inputClass}
+                      />
+                    </div>
+                    <div>
+                      <FieldLabel label="Auth Header Format" />
+                      <input
+                        value={form.auth_header_format}
+                        onChange={(e) => setForm({ ...form, auth_header_format: e.target.value })}
+                        placeholder={DEFAULT_CUSTOM_AUTH_HEADER_FORMAT}
+                        className={inputClass}
+                      />
+                    </div>
+                    <p className="sm:col-span-2 text-xs text-gray-400">
+                      Optional override for OpenAI-compatible providers. Only the <code>{'{api_key}'}</code> placeholder is supported.
+                    </p>
+                  </div>
+                ) : null}
               </>
             )}
           </div>

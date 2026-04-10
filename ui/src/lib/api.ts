@@ -527,6 +527,8 @@ export interface ProviderModelDiscoveryPayload {
   api_key?: string | null;
   api_base?: string | null;
   api_version?: string | null;
+  auth_header_name?: string | null;
+  auth_header_format?: string | null;
 }
 
 export interface ProviderModelDiscoveryResponse {

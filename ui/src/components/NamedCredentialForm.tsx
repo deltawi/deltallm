@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { type NamedCredential, type ProviderPreset } from '../lib/api';
-import { providerDisplayName } from '../lib/providers';
+import {
+  DEFAULT_CUSTOM_AUTH_HEADER_FORMAT,
+  DEFAULT_CUSTOM_AUTH_HEADER_NAME,
+  providerDisplayName,
+  supportsCustomUpstreamAuthProvider,
+} from '../lib/providers';
 
 type SecretField = 'api_key' | 'aws_access_key_id' | 'aws_secret_access_key' | 'aws_session_token';
 
@@ -10,6 +15,8 @@ type NamedCredentialFormValues = {
   api_key: string;
   api_base: string;
   api_version: string;
+  auth_header_name: string;
+  auth_header_format: string;
   region: string;
   aws_access_key_id: string;
   aws_secret_access_key: string;
@@ -43,6 +50,8 @@ function emptyForm(): NamedCredentialFormValues {
     api_key: '',
     api_base: '',
     api_version: '',
+    auth_header_name: '',
+    auth_header_format: '',
     region: '',
     aws_access_key_id: '',
     aws_secret_access_key: '',
@@ -75,6 +84,8 @@ function formFromCredential(credential: NamedCredential | null | undefined): Nam
     api_key: '',
     api_base: typeof config.api_base === 'string' ? config.api_base : '',
     api_version: typeof config.api_version === 'string' ? config.api_version : '',
+    auth_header_name: typeof config.auth_header_name === 'string' ? config.auth_header_name : '',
+    auth_header_format: typeof config.auth_header_format === 'string' ? config.auth_header_format : '',
     region: typeof config.region === 'string' ? config.region : '',
     aws_access_key_id: '',
     aws_secret_access_key: '',
@@ -93,7 +104,7 @@ function buildPayload(values: NamedCredentialFormValues, initialCredential?: Nam
   const trim = (value: string) => value.trim();
   const initialConfig = initialCredential?.connection_config || {};
 
-  const assignOptionalText = (field: 'api_base' | 'api_version' | 'region') => {
+  const assignOptionalText = (field: 'api_base' | 'api_version' | 'auth_header_name' | 'auth_header_format' | 'region') => {
     const nextValue = trim(values[field]);
     const hadInitial = typeof initialConfig[field] === 'string' && String(initialConfig[field]).trim() !== '';
     if (nextValue) {
@@ -124,6 +135,10 @@ function buildPayload(values: NamedCredentialFormValues, initialCredential?: Nam
     assignOptionalText('api_base');
     assignOptionalText('api_version');
     assignSecretField('api_key');
+    if (supportsCustomUpstreamAuthProvider(values.provider)) {
+      assignOptionalText('auth_header_name');
+      assignOptionalText('auth_header_format');
+    }
   }
 
   return {
@@ -144,6 +159,7 @@ export default function NamedCredentialForm({
   const [form, setForm] = useState<NamedCredentialFormValues>(() => formFromCredential(initialCredential));
   const [validationError, setValidationError] = useState<string | null>(null);
   const editing = Boolean(initialCredential);
+  const supportsCustomAuth = supportsCustomUpstreamAuthProvider(form.provider);
 
   useEffect(() => {
     setForm(formFromCredential(initialCredential));
@@ -281,6 +297,31 @@ export default function NamedCredentialForm({
               />
             </div>
           </div>
+          {supportsCustomAuth ? (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Auth Header Name</label>
+                <input
+                  value={form.auth_header_name}
+                  onChange={(e) => setForm((current) => ({ ...current, auth_header_name: e.target.value }))}
+                  placeholder={DEFAULT_CUSTOM_AUTH_HEADER_NAME}
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Auth Header Format</label>
+                <input
+                  value={form.auth_header_format}
+                  onChange={(e) => setForm((current) => ({ ...current, auth_header_format: e.target.value }))}
+                  placeholder={DEFAULT_CUSTOM_AUTH_HEADER_FORMAT}
+                  className={inputClass}
+                />
+              </div>
+              <p className="sm:col-span-2 text-xs text-gray-400">
+                Optional override for OpenAI-compatible providers. Only the <code>{'{api_key}'}</code> placeholder is supported.
+              </p>
+            </div>
+          ) : null}
         </>
       )}
 

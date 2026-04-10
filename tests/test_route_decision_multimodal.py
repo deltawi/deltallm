@@ -91,3 +91,88 @@ async def test_multimodal_endpoints_emit_route_decision_headers(client, test_app
     assert rerank_response.headers.get("x-deltallm-route-fallback-used") == "false"
     rerank_usage = await test_app.state.router_state_backend.get_usage(rerank_response.headers["x-deltallm-route-deployment"])
     assert rerank_usage == {"rpm": 1, "tpm": 0, "rerank_units_pm": 2}
+
+
+@pytest.mark.asyncio
+async def test_multimodal_endpoints_use_custom_auth_headers_for_openai_compatible_providers(client, test_app):
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.deltallm_params["provider"] = "openrouter"
+    deployment.deltallm_params["api_base"] = "https://openrouter.example/api/v1"
+    deployment.deltallm_params["api_key"] = "provider-key"
+    deployment.deltallm_params["auth_header_name"] = "X-Provider-Auth"
+    deployment.deltallm_params["auth_header_format"] = "Token {api_key}"
+
+    captured: dict[str, dict[str, str]] = {}
+
+    async def post(url, headers=None, json=None, timeout=None, files=None, data=None):  # noqa: ANN001, ANN201
+        captured[url] = dict(headers or {})
+        del timeout, files, data
+        request = httpx.Request("POST", url)
+        if url.endswith("/images/generations"):
+            return httpx.Response(
+                200,
+                json={"created": 1700000000, "data": [{"url": "https://example.com/image.png"}], "model": json["model"]},
+                request=request,
+            )
+        if url.endswith("/audio/speech"):
+            return httpx.Response(200, content=b"audio-bytes", request=request)
+        if url.endswith("/audio/transcriptions"):
+            return httpx.Response(200, json={"text": "hello", "duration": 1.0}, request=request)
+        if url.endswith("/rerank"):
+            return httpx.Response(
+                200,
+                json={"results": [{"index": 0, "relevance_score": 0.91}], "model": json["model"]},
+                request=request,
+            )
+        return httpx.Response(404, json={"error": "not found"}, request=request)
+
+    test_app.state.http_client.post = post
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+
+    image_response = await client.post(
+        "/v1/images/generations",
+        headers=headers,
+        json={"model": "gpt-4o-mini", "prompt": "sunset"},
+    )
+    assert image_response.status_code == 200
+    test_app.state.redis.store.clear()
+
+    speech_response = await client.post(
+        "/v1/audio/speech",
+        headers=headers,
+        json={"model": "gpt-4o-mini", "input": "hello world", "voice": "alloy"},
+    )
+    assert speech_response.status_code == 200
+    test_app.state.redis.store.clear()
+
+    transcription_response = await client.post(
+        "/v1/audio/transcriptions",
+        headers=headers,
+        data={"model": "gpt-4o-mini", "response_format": "json"},
+        files={"file": ("sample.wav", b"RIFFDATA", "audio/wav")},
+    )
+    assert transcription_response.status_code == 200
+    test_app.state.redis.store.clear()
+
+    rerank_response = await client.post(
+        "/v1/rerank",
+        headers=headers,
+        json={"model": "gpt-4o-mini", "query": "hello", "documents": ["hello world", "bye world"]},
+    )
+    assert rerank_response.status_code == 200
+
+    assert captured["https://openrouter.example/api/v1/images/generations"] == {
+        "X-Provider-Auth": "Token provider-key",
+        "Content-Type": "application/json",
+    }
+    assert captured["https://openrouter.example/api/v1/audio/speech"] == {
+        "X-Provider-Auth": "Token provider-key",
+        "Content-Type": "application/json",
+    }
+    assert captured["https://openrouter.example/api/v1/audio/transcriptions"] == {
+        "X-Provider-Auth": "Token provider-key",
+    }
+    assert captured["https://openrouter.example/api/v1/rerank"] == {
+        "X-Provider-Auth": "Token provider-key",
+        "Content-Type": "application/json",
+    }

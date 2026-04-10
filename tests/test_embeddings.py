@@ -65,3 +65,46 @@ async def test_embeddings_runs_failure_callback(client, test_app):
     assert response.status_code == 503
     await asyncio.sleep(0.05)
     assert recorder.failure == 1
+
+
+@pytest.mark.asyncio
+async def test_embeddings_use_custom_auth_headers_for_openai_compatible_provider(client, test_app):
+    deployment = test_app.state.router.deployment_registry["text-embedding-3-small"][0]
+    deployment.deltallm_params["provider"] = "vllm"
+    deployment.deltallm_params["api_base"] = "https://vllm.example/v1"
+    deployment.deltallm_params["api_key"] = "provider-key"
+    deployment.deltallm_params["auth_header_name"] = "X-Provider-Auth"
+    deployment.deltallm_params["auth_header_format"] = "Token {api_key}"
+
+    captured: dict[str, object] = {}
+
+    async def fake_post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        captured["url"] = url
+        captured["headers"] = dict(headers)
+        captured["json"] = dict(json)
+        del timeout
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "model": json["model"],
+                "usage": {"prompt_tokens": 2, "total_tokens": 2},
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    test_app.state.http_client.post = fake_post
+
+    response = await client.post(
+        "/v1/embeddings",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={"model": "text-embedding-3-small", "input": "hello"},
+    )
+
+    assert response.status_code == 200
+    assert captured["url"] == "https://vllm.example/v1/embeddings"
+    assert captured["headers"] == {
+        "X-Provider-Auth": "Token provider-key",
+        "Content-Type": "application/json",
+    }

@@ -24,6 +24,7 @@ from src.metrics import (
 from src.models.errors import InvalidRequestError
 from src.models.requests import EmbeddingRequest
 from src.providers.resolution import resolve_provider, resolve_upstream_model
+from src.upstream_auth import build_openai_compatible_auth_headers
 from src.router.router import Deployment
 from src.router.usage import record_router_usage
 from src.telemetry.request_failures import enqueue_request_log_write, seed_request_failure_context
@@ -118,7 +119,13 @@ async def _execute_embedding(
         raise InvalidRequestError(message="Provider API key is missing for selected model")
 
     api_base = params.get("api_base", request.app.state.settings.openai_base_url).rstrip("/")
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    headers = build_openai_compatible_auth_headers(
+        provider=resolve_provider(params),
+        api_key=str(api_key),
+        auth_header_name=params.get("auth_header_name"),
+        auth_header_format=params.get("auth_header_format"),
+        content_type="application/json",
+    )
 
     upstream_payload = payload.model_dump(exclude_none=True)
     upstream_model = resolve_upstream_model(params)

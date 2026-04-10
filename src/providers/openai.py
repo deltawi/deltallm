@@ -10,6 +10,7 @@ from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
 from src.providers.base import ProviderAdapter
 from src.providers.resolution import normalize_openai_chat_payload, resolve_provider, resolve_upstream_model
+from src.upstream_auth import build_openai_compatible_auth_headers
 
 
 class OpenAIAdapter(ProviderAdapter):
@@ -89,7 +90,12 @@ class OpenAIAdapter(ProviderAdapter):
         try:
             response = await self.http_client.get(
                 f"{api_base}/models",
-                headers={"Authorization": f"Bearer {api_key}"},
+                headers=build_openai_compatible_auth_headers(
+                    provider=resolve_provider(provider_config),
+                    api_key=str(api_key),
+                    auth_header_name=provider_config.get("auth_header_name"),
+                    auth_header_format=provider_config.get("auth_header_format"),
+                ),
                 timeout=10.0,
             )
             return response.status_code < 500
