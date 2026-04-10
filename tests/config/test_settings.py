@@ -4,6 +4,7 @@ import pytest
 
 from src.config import (
     AppConfig,
+    ModelInfo,
     Settings,
     resolve_app_config_with_secrets,
     resolve_database_settings,
@@ -145,3 +146,15 @@ def test_settings_load_database_pool_overrides_from_environment(monkeypatch):
 
     assert settings.db_pool_size == 13
     assert settings.db_pool_timeout == 21
+
+
+def test_model_info_accepts_valid_upstream_max_batch_inputs():
+    assert ModelInfo.model_validate({}).upstream_max_batch_inputs is None
+    assert ModelInfo.model_validate({"upstream_max_batch_inputs": 1}).upstream_max_batch_inputs == 1
+    assert ModelInfo.model_validate({"upstream_max_batch_inputs": 8}).upstream_max_batch_inputs == 8
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_model_info_rejects_non_positive_upstream_max_batch_inputs(value: int):
+    with pytest.raises(ValueError, match="greater than or equal to 1"):
+        ModelInfo.model_validate({"upstream_max_batch_inputs": value})

@@ -11,6 +11,12 @@ from typing import Any, AsyncIterator
 
 import httpx
 
+from src.batch.embedding_microbatch import (
+    _ExecutionSignature,
+    build_embedding_execution_signature,
+    classify_embedding_microbatch_request,
+    resolve_effective_upstream_max_batch_inputs,
+)
 from src.batch.models import BatchJobStatus
 from src.batch.models import is_operator_failed_reason
 from src.batch.repository import BatchRepository
@@ -56,6 +62,22 @@ class BatchWorkerConfig:
 @dataclass
 class _RequestShim:
     app: Any
+
+
+@dataclass(slots=True)
+class _PreparedEmbeddingItem:
+    item: Any
+    payload: EmbeddingRequest
+    model_name: str
+    model_group: str
+    primary_deployment: Any
+    request_context: dict[str, Any]
+    failover_kwargs: dict[str, Any]
+    request_shim: _RequestShim
+    effective_upstream_max_batch_inputs: int
+    microbatch_eligible: bool
+    microbatch_ineligible_reason: str | None
+    execution_signature: _ExecutionSignature
 
 
 class BatchExecutorWorker:
@@ -146,6 +168,49 @@ class BatchExecutorWorker:
             await self._stop_heartbeat(job_heartbeat)
             await self.repository.release_job_lease(batch_id=job.batch_id, worker_id=self.config.worker_id)
 
+    async def _prepare_item_for_execution(self, job, item) -> _PreparedEmbeddingItem:
+        payload = EmbeddingRequest.model_validate(item.request_body)
+        budget_service = getattr(self.app.state, "budget_service", None)
+        if budget_service is not None:
+            await budget_service.check_budgets(
+                api_key=job.created_by_api_key,
+                user_id=job.created_by_user_id,
+                team_id=job.created_by_team_id,
+                organization_id=job.created_by_organization_id,
+                model=payload.model,
+            )
+
+        request_context: dict[str, Any] = {"metadata": {}, "user_id": "batch-worker"}
+        app_router = self.app.state.router
+        model_group = app_router.resolve_model_group(payload.model)
+        primary_deployment = app_router.require_deployment(
+            model_group=model_group,
+            deployment=await app_router.select_deployment(model_group, request_context),
+        )
+        input_kind, microbatch_eligible, microbatch_ineligible_reason = classify_embedding_microbatch_request(payload)
+        primary_deployment_id = str(getattr(primary_deployment, "deployment_id", None) or "")
+        return _PreparedEmbeddingItem(
+            item=item,
+            payload=payload,
+            model_name=payload.model,
+            model_group=model_group,
+            primary_deployment=primary_deployment,
+            request_context=request_context,
+            failover_kwargs=route_failover_kwargs(request_context),
+            request_shim=_RequestShim(app=self.app),
+            effective_upstream_max_batch_inputs=resolve_effective_upstream_max_batch_inputs(
+                getattr(primary_deployment, "model_info", None)
+            ),
+            microbatch_eligible=microbatch_eligible,
+            microbatch_ineligible_reason=microbatch_ineligible_reason,
+            execution_signature=build_embedding_execution_signature(
+                payload=payload,
+                model_group=model_group,
+                primary_deployment_id=primary_deployment_id,
+                input_kind=input_kind,
+            ),
+        )
+
     async def _process_item(self, job, item) -> None:
         batch_id = job.batch_id
         started = perf_counter()
@@ -153,28 +218,13 @@ class BatchExecutorWorker:
         model_name = str(request_body.get("model") or job.model or "")
         payload: EmbeddingRequest | None = None
         primary = None
+        prepared: _PreparedEmbeddingItem | None = None
         item_heartbeat: asyncio.Task[None] | None = None
-        request_shim = _RequestShim(app=self.app)
-        app_router = self.app.state.router
-        request_context = {"metadata": {}, "user_id": "batch-worker"}
-        budget_service = getattr(self.app.state, "budget_service", None)
         try:
-            payload = EmbeddingRequest.model_validate(item.request_body)
-            model_name = payload.model
-            if budget_service is not None:
-                await budget_service.check_budgets(
-                    api_key=job.created_by_api_key,
-                    user_id=job.created_by_user_id,
-                    team_id=job.created_by_team_id,
-                    organization_id=job.created_by_organization_id,
-                    model=payload.model,
-                )
-            model_group = app_router.resolve_model_group(payload.model)
-            primary = app_router.require_deployment(
-                model_group=model_group,
-                deployment=await app_router.select_deployment(model_group, request_context),
-            )
-            failover_kwargs = route_failover_kwargs(request_context)
+            prepared = await self._prepare_item_for_execution(job, item)
+            payload = prepared.payload
+            model_name = prepared.model_name
+            primary = prepared.primary_deployment
             item_heartbeat = self._start_heartbeat(
                 renew=lambda: self.repository.renew_item_lease(
                     item_id=item.item_id,
@@ -184,11 +234,11 @@ class BatchExecutorWorker:
                 label=f"item:{item.item_id}",
             )
             data, served_deployment = await self.app.state.failover_manager.execute_with_failover(
-                primary_deployment=primary,
-                model_group=model_group,
-                execute=lambda dep: _execute_embedding(request_shim, payload, dep),
+                primary_deployment=prepared.primary_deployment,
+                model_group=prepared.model_group,
+                execute=lambda dep: _execute_embedding(prepared.request_shim, prepared.payload, dep),
                 return_deployment=True,
-                **failover_kwargs,
+                **prepared.failover_kwargs,
             )
             api_provider = resolve_provider(served_deployment.deltallm_params)
             usage = data.get("usage") or {}

@@ -118,6 +118,7 @@ class ModelInfo(BaseModel):
     max_tokens: int | None = None
     max_input_tokens: int | None = None
     max_output_tokens: int | None = None
+    upstream_max_batch_inputs: int | None = Field(default=None, ge=1)
     default_params: dict[str, Any] | None = None
 
 
