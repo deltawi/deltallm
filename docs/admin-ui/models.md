@@ -59,6 +59,49 @@ Create a route group when:
 - you want controlled failover behavior
 - you want to bind prompt behavior at the route-group level
 
+## Custom Upstream Auth Headers
+
+For these OpenAI-compatible providers, the model form supports inline upstream auth-header overrides:
+
+- `openai`
+- `openrouter`
+- `groq`
+- `together`
+- `fireworks`
+- `deepinfra`
+- `perplexity`
+- `vllm`
+- `lmstudio`
+- `ollama`
+
+In the model form:
+
+1. Choose **Inline credentials**
+2. Enter `api_key` and any `api_base`
+3. Expand the provider connection fields
+4. Fill `Auth Header Name` and `Auth Header Format` if the upstream does not accept `Authorization: Bearer ...`
+
+Example inline deployment payload:
+
+```json
+{
+  "model_name": "support-vllm",
+  "deltallm_params": {
+    "provider": "vllm",
+    "model": "vllm/meta-llama/Llama-3.1-8B-Instruct",
+    "api_key": "gateway-key",
+    "api_base": "https://vllm.example/v1",
+    "auth_header_name": "X-API-Key",
+    "auth_header_format": "{api_key}"
+  },
+  "model_info": {
+    "mode": "chat"
+  }
+}
+```
+
+For shared gateway credentials, [Named Credentials](named-credentials.md) remain the recommended workflow. If a deployment references a named credential and also carries overlapping connection fields locally, the named credential values win.
+
 ## Operational Notes
 
 - DeltaLLM validates provider and mode compatibility when you create or update a deployment

@@ -68,6 +68,49 @@ These endpoints back browser login, invitation acceptance, password recovery, MF
 | `GET` | `/ui/api/provider-presets` | List provider presets for the UI |
 | `POST` | `/ui/api/provider-models/discover` | Discover provider model suggestions for the UI |
 
+Model create and update payloads accept custom upstream auth-header overrides inside `deltallm_params` for these OpenAI-compatible providers:
+
+- `openai`
+- `openrouter`
+- `groq`
+- `together`
+- `fireworks`
+- `deepinfra`
+- `perplexity`
+- `vllm`
+- `lmstudio`
+- `ollama`
+
+Relevant fields:
+
+- `deltallm_params.auth_header_name`
+- `deltallm_params.auth_header_format`
+
+`auth_header_format` must contain the exact `{api_key}` placeholder, and reserved header names such as `Content-Type` are rejected. If a deployment uses `named_credential_id` and also carries overlapping local connection fields, the named credential values win.
+
+List, detail, create, and update responses continue to redact secrets such as `api_key`. When custom upstream auth is configured, `connection_summary` may include the effective `auth_header_name` plus a compact `custom_auth_label` such as `X-API-Key` or `Authorization (Token)`, but not the rendered header value.
+
+Example inline model create payload:
+
+```json
+{
+  "model_name": "support-vllm",
+  "deltallm_params": {
+    "provider": "vllm",
+    "model": "vllm/meta-llama/Llama-3.1-8B-Instruct",
+    "api_key": "gateway-key",
+    "api_base": "https://vllm.example/v1",
+    "auth_header_name": "X-API-Key",
+    "auth_header_format": "{api_key}"
+  },
+  "model_info": {
+    "mode": "chat"
+  }
+}
+```
+
+`POST /ui/api/provider-models/discover` accepts the same connection fields, including `auth_header_name` and `auth_header_format`, so the UI can probe OpenAI-compatible gateways before saving a deployment.
+
 ### Named Credentials
 
 | Method | Endpoint | Purpose |
@@ -88,7 +131,12 @@ Use them when you want to:
 - reduce duplicated inline secrets in model payloads
 - centralize shared connection settings such as `api_key`, `api_base`, `api_version`, or Bedrock fields
 
-Read responses always redact secret-bearing fields. Updating an in-use named credential triggers a runtime reload so linked deployments pick up the new connection settings.
+For the same OpenAI-compatible providers listed above, named-credential `connection_config` also supports:
+
+- `auth_header_name`
+- `auth_header_format`
+
+Read responses always redact secret-bearing fields. Updating an in-use named credential triggers a runtime reload so linked deployments pick up the new connection settings. The raw secret value is never readable back out of the admin API.
 
 For full UI and `curl` examples, see [Admin UI: Named Credentials](../admin-ui/named-credentials.md).
 

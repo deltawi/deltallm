@@ -192,6 +192,8 @@ async def test_get_model_returns_health_block(client, test_app):
     assert payload["credential_source"] == "inline"
     assert payload["inline_credentials_present"] is True
     assert payload["connection_summary"]["api_base"] is None
+    assert "auth_header_name" not in payload["connection_summary"]
+    assert "custom_auth_label" not in payload["connection_summary"]
     assert payload["deltallm_params"]["api_key"] == "***REDACTED***"
 
 
@@ -209,6 +211,7 @@ async def test_get_model_redacts_named_credential_backed_params(client, test_app
                     "model": "openai/gpt-4o-mini",
                     "api_base": "https://api.openai.com/v1",
                     "api_key": "provider-key",
+                    "auth_header_format": "Token {api_key}",
                 },
                 "model_info": {"mode": "chat"},
             }
@@ -228,7 +231,10 @@ async def test_get_model_redacts_named_credential_backed_params(client, test_app
     assert payload["named_credential_name"] == "OpenAI prod"
     assert payload["deltallm_params"]["api_key"] == "***REDACTED***"
     assert payload["deltallm_params"]["api_base"] == "https://api.openai.com/v1"
+    assert payload["deltallm_params"]["auth_header_format"] == "Token {api_key}"
     assert payload["connection_summary"]["api_base"] == "https://api.openai.com/v1"
+    assert payload["connection_summary"]["auth_header_name"] == "Authorization"
+    assert payload["connection_summary"]["custom_auth_label"] == "Authorization (Token)"
 
 
 @pytest.mark.asyncio
@@ -343,6 +349,48 @@ async def test_create_model_response_redacts_inline_api_key(client, test_app):
 
 
 @pytest.mark.asyncio
+async def test_create_model_response_uses_effective_named_credential_custom_auth_summary(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.named_credential_repository = _FakeNamedCredentialRepository(
+        [
+            NamedCredentialRecord(
+                credential_id="cred-vllm",
+                name="vLLM Shared Gateway",
+                provider="vllm",
+                connection_config={
+                    "api_key": "provider-key",
+                    "api_base": "https://vllm.example/v1",
+                    "auth_header_format": "Token {api_key}",
+                },
+            )
+        ]
+    )
+
+    response = await client.post(
+        "/ui/api/models",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "model_name": "named-custom-auth-model",
+            "named_credential_id": "cred-vllm",
+            "deltallm_params": {
+                "provider": "vllm",
+                "model": "vllm/meta-llama/Llama-3.1-8B-Instruct",
+            },
+            "model_info": {"mode": "chat"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["credential_source"] == "named"
+    assert payload["named_credential_id"] == "cred-vllm"
+    assert payload["connection_summary"]["api_base"] == "https://vllm.example/v1"
+    assert payload["connection_summary"]["auth_header_name"] == "Authorization"
+    assert payload["connection_summary"]["custom_auth_label"] == "Authorization (Token)"
+    assert "auth_header_format" not in payload["deltallm_params"]
+
+
+@pytest.mark.asyncio
 async def test_create_model_accepts_custom_auth_headers_for_openai_compatible_provider(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
 
@@ -368,6 +416,8 @@ async def test_create_model_accepts_custom_auth_headers_for_openai_compatible_pr
     assert payload["deltallm_params"]["api_key"] == "***REDACTED***"
     assert payload["deltallm_params"]["auth_header_name"] == "X-API-Key"
     assert payload["deltallm_params"]["auth_header_format"] == "{api_key}"
+    assert payload["connection_summary"]["auth_header_name"] == "X-API-Key"
+    assert payload["connection_summary"]["custom_auth_label"] == "X-API-Key"
 
 
 @pytest.mark.asyncio
@@ -446,6 +496,50 @@ async def test_update_model_response_redacts_inline_api_key(client, test_app):
     assert payload["deltallm_params"]["api_key"] == "***REDACTED***"
     assert payload["deltallm_params"]["auth_header_name"] == "X-Provider-Auth"
     assert payload["deltallm_params"]["auth_header_format"] == "Token {api_key}"
+    assert payload["connection_summary"]["auth_header_name"] == "X-Provider-Auth"
+    assert payload["connection_summary"]["custom_auth_label"] == "X-Provider-Auth"
+
+
+@pytest.mark.asyncio
+async def test_update_model_response_uses_effective_named_credential_custom_auth_summary(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.named_credential_repository = _FakeNamedCredentialRepository(
+        [
+            NamedCredentialRecord(
+                credential_id="cred-vllm",
+                name="vLLM Shared Gateway",
+                provider="vllm",
+                connection_config={
+                    "api_key": "provider-key",
+                    "api_base": "https://vllm.example/v1",
+                    "auth_header_format": "Token {api_key}",
+                },
+            )
+        ]
+    )
+
+    response = await client.put(
+        "/ui/api/models/gpt-4o-mini-0",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "model_name": "named-custom-auth-model",
+            "named_credential_id": "cred-vllm",
+            "deltallm_params": {
+                "provider": "vllm",
+                "model": "vllm/meta-llama/Llama-3.1-8B-Instruct",
+            },
+            "model_info": {"mode": "chat"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["credential_source"] == "named"
+    assert payload["named_credential_id"] == "cred-vllm"
+    assert payload["connection_summary"]["api_base"] == "https://vllm.example/v1"
+    assert payload["connection_summary"]["auth_header_name"] == "Authorization"
+    assert payload["connection_summary"]["custom_auth_label"] == "Authorization (Token)"
+    assert "auth_header_format" not in payload["deltallm_params"]
 
 
 @pytest.mark.asyncio

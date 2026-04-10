@@ -26,12 +26,43 @@ Typical connection fields include:
 - `api_key`
 - `api_base`
 - `api_version`
+- `auth_header_name`
+- `auth_header_format`
 - `region`
 - `aws_access_key_id`
 - `aws_secret_access_key`
 - `aws_session_token`
 
-Responses always redact secret-bearing values. You can read metadata and connection summaries, but not the raw stored secret back out of the API.
+Responses always redact secret-bearing values. You can read metadata and connection summaries, but not the raw stored secret back out of the API. For custom upstream auth, compact summaries may show labels such as `X-API-Key` or `Authorization (Token)`.
+
+## Custom Upstream Auth Headers
+
+For these OpenAI-compatible providers, named credentials can override the default `Authorization: Bearer ...` upstream auth behavior:
+
+- `openai`
+- `openrouter`
+- `groq`
+- `together`
+- `fireworks`
+- `deepinfra`
+- `perplexity`
+- `vllm`
+- `lmstudio`
+- `ollama`
+
+Use:
+
+- `auth_header_name` to choose the header key, such as `X-API-Key`
+- `auth_header_format` to choose the header value template, such as `Token {api_key}`
+
+Validation rules:
+
+- `auth_header_format` must contain the exact `{api_key}` placeholder
+- format specifiers or conversions such as `{api_key!r}` or `{api_key:>10}` are rejected
+- escaped placeholders such as `{{api_key}}` are rejected
+- reserved header names such as `Content-Type` are rejected
+
+If you leave both fields unset, DeltaLLM keeps the default upstream behavior: `Authorization: Bearer {api_key}`.
 
 ## UI Workflow
 
@@ -59,6 +90,7 @@ The page shows whether credentials are present and how many deployments currentl
 6. Save the deployment
 
 The deployment keeps its own runtime identity, but shared provider connection settings come from the named credential.
+If both the named credential and the deployment define overlapping connection fields, the named credential wins.
 
 ### Rotate a credential
 
@@ -89,18 +121,20 @@ Admin endpoints accept either:
 
 ### 1. Create the named credential
 
-Example with Groq:
+Example with a shared vLLM gateway that expects `X-API-Key`:
 
 ```bash
 curl http://localhost:4002/ui/api/named-credentials \
   -H "Authorization: Bearer $DELTALLM_MASTER_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "Groq Shared Prod",
-    "provider": "groq",
+    "name": "vLLM Shared Gateway",
+    "provider": "vllm",
     "connection_config": {
-      "api_key": "gsk_...",
-      "api_base": "https://api.groq.com/openai/v1"
+      "api_key": "gateway-key",
+      "api_base": "https://vllm.example/v1",
+      "auth_header_name": "X-API-Key",
+      "auth_header_format": "{api_key}"
     }
   }'
 ```
@@ -110,11 +144,13 @@ Example response shape:
 ```json
 {
   "credential_id": "cred-123",
-  "name": "Groq Shared Prod",
-  "provider": "groq",
+  "name": "vLLM Shared Gateway",
+  "provider": "vllm",
   "connection_config": {
     "api_key": "***REDACTED***",
-    "api_base": "https://api.groq.com/openai/v1"
+    "api_base": "https://vllm.example/v1",
+    "auth_header_name": "X-API-Key",
+    "auth_header_format": "{api_key}"
   },
   "credentials_present": true,
   "usage_count": 0
@@ -123,18 +159,18 @@ Example response shape:
 
 ### 2. Create deployments that reference it
 
-When a deployment uses a named credential, keep provider-specific connection fields out of the deployment payload unless you intentionally want deployment-local overrides.
+When a deployment uses a named credential, keep provider-specific connection fields out of the deployment payload. If both are present, the named credential connection config wins over deployment-local connection fields.
 
 ```bash
 curl http://localhost:4002/ui/api/models \
   -H "Authorization: Bearer $DELTALLM_MASTER_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model_name": "groq-support",
+    "model_name": "support-vllm",
     "named_credential_id": "cred-123",
     "deltallm_params": {
-      "provider": "groq",
-      "model": "llama-3.1-8b-instant"
+      "provider": "vllm",
+      "model": "vllm/meta-llama/Llama-3.1-8B-Instruct"
     },
     "model_info": {
       "mode": "chat"
@@ -152,13 +188,16 @@ curl http://localhost:4002/ui/api/named-credentials/cred-123 \
   -H "Authorization: Bearer $DELTALLM_MASTER_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "Groq Shared Prod",
-    "provider": "groq",
+    "name": "vLLM Shared Gateway",
+    "provider": "vllm",
     "connection_config": {
-      "api_key": "gsk_rotated_..."
+      "auth_header_name": "Authorization",
+      "auth_header_format": "Token {api_key}"
     }
   }'
 ```
+
+That example switches the upstream request format from `X-API-Key: <api_key>` to `Authorization: Token <api_key>` without changing linked deployments.
 
 Update semantics:
 

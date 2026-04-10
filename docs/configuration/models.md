@@ -66,8 +66,53 @@ After the initial seed, set `model_deployment_bootstrap_from_config` back to `fa
 | `deltallm_params.model` | Yes | Provider-prefixed upstream model ID, such as `openai/gpt-4o-mini` |
 | `deltallm_params.api_key` | Yes | Provider API key |
 | `deltallm_params.api_base` | No | Custom provider base URL |
+| `deltallm_params.auth_header_name` | No | Custom upstream auth header key for supported OpenAI-compatible providers |
+| `deltallm_params.auth_header_format` | No | Custom upstream auth header value template, must include `{api_key}` |
 | `deltallm_params.timeout` | No | Upstream timeout in seconds |
 | `deltallm_params.weight` | No | Relative weight when multiple deployments share one public model |
+
+## Custom Upstream Auth Headers
+
+These `deltallm_params` fields are available for the OpenAI-compatible providers that support custom upstream auth headers:
+
+- `openai`
+- `openrouter`
+- `groq`
+- `together`
+- `fireworks`
+- `deepinfra`
+- `perplexity`
+- `vllm`
+- `lmstudio`
+- `ollama`
+
+Use:
+
+- `auth_header_name` for the header key, such as `X-API-Key`
+- `auth_header_format` for the value template, such as `Token {api_key}`
+
+If you omit both fields, DeltaLLM uses the default `Authorization: Bearer {api_key}` upstream auth pattern.
+
+Example config-file deployment for a vLLM gateway that expects `X-API-Key`:
+
+```yaml
+model_list:
+  - model_name: support-vllm
+    deltallm_params:
+      model: vllm/meta-llama/Llama-3.1-8B-Instruct
+      api_key: os.environ/VLLM_GATEWAY_KEY
+      api_base: https://vllm.example/v1
+      auth_header_name: X-API-Key
+      auth_header_format: "{api_key}"
+    model_info:
+      mode: chat
+```
+
+Validation rules:
+
+- `auth_header_format` must contain the exact `{api_key}` placeholder
+- extra placeholders, format specifiers, and conversions are rejected
+- reserved header names such as `Content-Type` are rejected
 
 ## Multiple Deployments Behind One Public Model
 
