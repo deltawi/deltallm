@@ -8,7 +8,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { ModelDeploymentDetail } from '../lib/api';
-import { normalizeProvider } from '../lib/providers';
+import { normalizeProvider, supportsCustomUpstreamAuthProvider } from '../lib/providers';
 
 export type ModelMode =
   | 'chat'
@@ -56,6 +56,10 @@ export interface ModelFormValues {
   api_key: string;
   api_base: string;
   api_version: string;
+  auth_header_name: string;
+  auth_header_format: string;
+  existing_auth_header_name: boolean;
+  existing_auth_header_format: boolean;
   rpm: string;
   tpm: string;
   timeout: string;
@@ -104,6 +108,10 @@ export const EMPTY_FORM: ModelFormValues = {
   api_key: '',
   api_base: '',
   api_version: '',
+  auth_header_name: '',
+  auth_header_format: '',
+  existing_auth_header_name: false,
+  existing_auth_header_format: false,
   rpm: '',
   tpm: '',
   timeout: '',
@@ -151,6 +159,7 @@ export function buildModelPayload(
   defaultParams: { key: string; value: string }[],
 ): ModelPayload {
   const useNamedCredential = form.credential_source === 'named';
+  const supportsCustomAuth = supportsCustomUpstreamAuthProvider(form.provider, form.model);
   const deltallm_params: Record<string, unknown> = {
     provider: form.provider.trim() || undefined,
     model: form.model.trim(),
@@ -161,6 +170,12 @@ export function buildModelPayload(
         : form.api_key || undefined,
     api_base: useNamedCredential ? undefined : form.api_base.trim() || undefined,
     api_version: useNamedCredential ? undefined : form.api_version.trim() || undefined,
+    auth_header_name: useNamedCredential || !supportsCustomAuth
+      ? undefined
+      : form.auth_header_name.trim() || (form.existing_auth_header_name ? null : undefined),
+    auth_header_format: useNamedCredential || !supportsCustomAuth
+      ? undefined
+      : form.auth_header_format.trim() || (form.existing_auth_header_format ? null : undefined),
     rpm: numOrUndef(form.rpm),
     tpm: numOrUndef(form.tpm),
     timeout: numOrUndef(form.timeout),
@@ -263,6 +278,10 @@ export function formFromModel(
     api_key: '',
     api_base: strOrEmpty(lp.api_base),
     api_version: strOrEmpty(lp.api_version),
+    auth_header_name: strOrEmpty(lp.auth_header_name),
+    auth_header_format: strOrEmpty(lp.auth_header_format),
+    existing_auth_header_name: Boolean(strOrEmpty(lp.auth_header_name).trim()),
+    existing_auth_header_format: Boolean(strOrEmpty(lp.auth_header_format).trim()),
     rpm: strOrEmpty(lp.rpm),
     tpm: strOrEmpty(lp.tpm),
     timeout: strOrEmpty(lp.timeout),

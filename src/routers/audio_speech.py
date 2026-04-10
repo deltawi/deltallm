@@ -27,6 +27,7 @@ from src.metrics import (
 from src.models.errors import InvalidRequestError
 from src.models.requests import AudioSpeechRequest
 from src.providers.resolution import resolve_provider, resolve_upstream_model
+from src.upstream_auth import build_openai_compatible_auth_headers
 from src.router.router import Deployment
 from src.router.usage import record_router_usage
 from src.audit.actions import AuditAction
@@ -81,7 +82,13 @@ async def _execute_tts(
             api_key=str(api_key),
         )
 
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    headers = build_openai_compatible_auth_headers(
+        provider=provider,
+        api_key=str(api_key),
+        auth_header_name=params.get("auth_header_name"),
+        auth_header_format=params.get("auth_header_format"),
+        content_type="application/json",
+    )
 
     upstream_payload = payload.model_dump(exclude_unset=True)
     upstream_model = resolve_upstream_model(params)

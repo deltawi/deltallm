@@ -159,6 +159,38 @@ async def test_openai_adapter_surfaces_provider_error_message() -> None:
 
 
 @pytest.mark.asyncio
+async def test_openai_adapter_health_check_uses_custom_auth_headers() -> None:
+    adapter = OpenAIAdapter(httpx.AsyncClient())
+    try:
+        captured: dict[str, object] = {}
+
+        async def fake_get(url, headers, timeout):  # noqa: ANN001, ANN201
+            captured["url"] = url
+            captured["headers"] = dict(headers)
+            captured["timeout"] = timeout
+            return httpx.Response(200, json={"data": []}, request=httpx.Request("GET", url))
+
+        adapter.http_client.get = fake_get  # type: ignore[method-assign]
+
+        healthy = await adapter.health_check(
+            {
+                "provider": "vllm",
+                "api_base": "https://vllm.example/v1",
+                "api_key": "provider-key",
+                "auth_header_name": "X-API-Key",
+                "auth_header_format": "{api_key}",
+            }
+        )
+
+        assert healthy is True
+        assert captured["url"] == "https://vllm.example/v1/models"
+        assert captured["headers"] == {"X-API-Key": "provider-key"}
+        assert captured["timeout"] == 10.0
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_azure_openai_adapter_maps_max_tokens_to_max_completion_tokens_for_gpt5() -> None:
     adapter = AzureOpenAIAdapter(httpx.AsyncClient())
     try:

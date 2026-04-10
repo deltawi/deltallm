@@ -6,7 +6,7 @@ import NamedCredentialForm from '../components/NamedCredentialForm';
 import { ContentCard, IndexShell } from '../components/admin/shells';
 import DataTable from '../components/DataTable';
 import { models, namedCredentials, type InlineCredentialGroup, type NamedCredential } from '../lib/api';
-import { providerDisplayName } from '../lib/providers';
+import { customUpstreamAuthHeaderLabel, providerDisplayName, supportsCustomUpstreamAuthProvider } from '../lib/providers';
 import { useApi } from '../lib/hooks';
 import { useToast } from '../components/ToastProvider';
 
@@ -14,6 +14,12 @@ function connectionSummary(credential: NamedCredential): string {
   const config = credential.connection_config || {};
   if (typeof config.api_base === 'string' && config.api_base.trim()) {
     return config.api_base;
+  }
+  const customAuthHeader = supportsCustomUpstreamAuthProvider(credential.provider)
+    ? customUpstreamAuthHeaderLabel(config)
+    : null;
+  if (customAuthHeader) {
+    return `Custom auth header: ${customAuthHeader}`;
   }
   if (typeof config.region === 'string' && config.region.trim()) {
     return `Region ${config.region}`;
