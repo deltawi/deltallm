@@ -195,6 +195,7 @@ function OverviewTab({ model }: { model: any }) {
   const lp = model.deltallm_params || {};
   const connectionSummary = model.connection_summary || {};
   const health: DeploymentHealth = model.health || EMPTY_DEPLOYMENT_HEALTH;
+  const customAuthSummary = connectionSummary.custom_auth_label || connectionSummary.auth_header_name || null;
   const credentialSource = model.credential_source === 'named' ? 'Named credential' : 'Inline credentials';
   const credentialDetail = model.credential_source === 'named'
     ? (model.named_credential_name || 'Managed by named credential')
@@ -211,6 +212,7 @@ function OverviewTab({ model }: { model: any }) {
       <Field label="API Base"             value={connectionSummary.api_base || lp.api_base || '—'} mono full />
       {connectionSummary.api_version && <Field label="API Version" value={connectionSummary.api_version} mono />}
       {connectionSummary.region && <Field label="Region" value={connectionSummary.region} mono />}
+      {customAuthSummary && <Field label="Custom Auth" value={customAuthSummary} mono />}
       <Field label="Timeout"              value={formatDurationSeconds(lp.timeout) || '—'} />
       <Field label="Consecutive Failures" value={String(health.consecutive_failures ?? 0)} />
       <Field label="Last Success"         value={timeSince(health.last_success_at) || '—'} />

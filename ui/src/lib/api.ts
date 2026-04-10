@@ -558,6 +558,8 @@ export interface ModelDeploymentDetail {
     api_base?: string | null;
     api_version?: string | null;
     region?: string | null;
+    auth_header_name?: string | null;
+    custom_auth_label?: string | null;
   };
   healthy?: boolean;
   health?: DeploymentHealth;

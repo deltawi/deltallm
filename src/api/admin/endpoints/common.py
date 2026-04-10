@@ -19,6 +19,11 @@ from src.guardrails.catalog import (
 )
 from src.providers.resolution import resolve_provider
 from src.services.named_credentials import redact_connection_config
+from src.upstream_auth import (
+    DEFAULT_OPENAI_COMPATIBLE_AUTH_HEADER_FORMAT,
+    DEFAULT_OPENAI_COMPATIBLE_AUTH_HEADER_NAME,
+    supports_custom_openai_compatible_auth,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -357,16 +362,17 @@ def model_entries(app: Any) -> list[dict[str, Any]]:
                 if deployment.get("named_credential_id") is not None
                 else None
             )
+            provider = resolve_provider(params)
             credential_source = "named" if named_credential_id else "inline"
             entries.append(
                 {
                     "deployment_id": deployment_id,
                     "model_name": model_name,
-                    "provider": resolve_provider(params),
+                    "provider": provider,
                     "mode": model_info.get("mode", "chat"),
                     "credential_source": credential_source,
                     "inline_credentials_present": _inline_credentials_present(params) if credential_source == "inline" else False,
-                    "connection_summary": _connection_summary(params),
+                    "connection_summary": build_connection_summary(params, provider=provider),
                     "named_credential_id": named_credential_id or None,
                     "named_credential_name": (
                         str(deployment.get("named_credential_name")).strip()
@@ -384,11 +390,60 @@ def _inline_credentials_present(params: dict[str, Any]) -> bool:
     return any(str(params.get(field) or "").strip() for field in _INLINE_SECRET_FIELDS)
 
 
-def _connection_summary(params: dict[str, Any]) -> dict[str, Any]:
-    return {
+def build_connection_summary(params: dict[str, Any], *, provider: str | None = None) -> dict[str, Any]:
+    summary = {
         field: params.get(field) or None
         for field in _CONNECTION_SUMMARY_FIELDS
     }
+    summary_auth_header_name, custom_auth_label = _custom_auth_summary(params, provider=provider)
+    if summary_auth_header_name:
+        summary["auth_header_name"] = summary_auth_header_name
+    if custom_auth_label:
+        summary["custom_auth_label"] = custom_auth_label
+    return summary
+
+
+def _custom_auth_summary(params: dict[str, Any], *, provider: str | None = None) -> tuple[str | None, str | None]:
+    resolved_provider = provider or resolve_provider(params)
+    if not supports_custom_openai_compatible_auth(resolved_provider):
+        return None, None
+
+    raw_header_name = str(params.get("auth_header_name") or "").strip()
+    raw_header_format = str(params.get("auth_header_format") or "").strip()
+    if not raw_header_name and not raw_header_format:
+        return None, None
+
+    effective_header_name = raw_header_name or DEFAULT_OPENAI_COMPATIBLE_AUTH_HEADER_NAME
+    effective_header_format = raw_header_format or DEFAULT_OPENAI_COMPATIBLE_AUTH_HEADER_FORMAT
+    uses_custom_auth = (
+        effective_header_name != DEFAULT_OPENAI_COMPATIBLE_AUTH_HEADER_NAME
+        or effective_header_format != DEFAULT_OPENAI_COMPATIBLE_AUTH_HEADER_FORMAT
+    )
+    if not uses_custom_auth:
+        return None, None
+
+    return effective_header_name, _custom_auth_label(effective_header_name, effective_header_format)
+
+
+def _custom_auth_label(header_name: str, header_format: str) -> str:
+    if header_name != DEFAULT_OPENAI_COMPATIBLE_AUTH_HEADER_NAME:
+        return header_name
+
+    auth_scheme = _extract_auth_scheme(header_format)
+    if auth_scheme and auth_scheme != "Bearer":
+        return f"{header_name} ({auth_scheme})"
+    return f"{header_name} (custom)"
+
+
+def _extract_auth_scheme(header_format: str) -> str | None:
+    if header_format.count("{api_key}") != 1:
+        return None
+    prefix, suffix = header_format.split("{api_key}", 1)
+    if suffix.strip():
+        return None
+    scheme = prefix.strip()
+    return scheme or None
+
 
 def serialize_guardrail(raw: Any) -> dict[str, Any]:
     item = raw.model_dump(mode="python") if hasattr(raw, "model_dump") else dict(raw)

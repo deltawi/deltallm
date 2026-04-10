@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, field_validator, model_validator
 
-from src.api.admin.endpoints.common import model_entries, to_json_value
+from src.api.admin.endpoints.common import build_connection_summary, model_entries, to_json_value
 from src.api.audit import emit_control_audit_event
 from src.audit.actions import AuditAction
 from src.config import ModelMode
@@ -202,9 +202,11 @@ def _serialize_model_write_response(
     named_credential_id: str | None,
     named_credential_name: str | None,
     deltallm_params: dict[str, Any],
+    summary_params: dict[str, Any] | None,
     model_info: dict[str, Any],
 ) -> dict[str, Any]:
     credential_source = "named" if named_credential_id else "inline"
+    effective_summary_params = summary_params or deltallm_params
     return to_json_value(
         {
             "deployment_id": deployment_id,
@@ -216,11 +218,10 @@ def _serialize_model_write_response(
                 str(deltallm_params.get(field) or "").strip()
                 for field in _INLINE_SECRET_FIELDS
             ),
-            "connection_summary": {
-                "api_base": deltallm_params.get("api_base") or None,
-                "api_version": deltallm_params.get("api_version") or None,
-                "region": deltallm_params.get("region") or None,
-            },
+            "connection_summary": build_connection_summary(
+                effective_summary_params,
+                provider=provider or resolve_provider(effective_summary_params),
+            ),
             "named_credential_id": named_credential_id,
             "named_credential_name": named_credential_name,
             "deltallm_params": redact_connection_config(deltallm_params),
@@ -594,6 +595,7 @@ async def create_model(request: Request, payload: dict[str, Any]) -> dict[str, A
         named_credential_id=named_credential_id,
         named_credential_name=named_credential.name if named_credential is not None else None,
         deltallm_params=deltallm_params,
+        summary_params=effective_params,
         model_info=model_info,
     )
     await emit_control_audit_event(
@@ -720,6 +722,7 @@ async def update_model(request: Request, deployment_id: str, payload: dict[str, 
         named_credential_id=named_credential_id,
         named_credential_name=named_credential.name if named_credential is not None else None,
         deltallm_params=deltallm_params,
+        summary_params=effective_params,
         model_info=model_info,
     )
     await emit_control_audit_event(
