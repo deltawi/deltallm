@@ -225,6 +225,32 @@ async def test_batch_feature_status_returns_embeddings_batch_flag(client, test_a
 
 
 @pytest.mark.asyncio
+async def test_batch_feature_status_requires_batch_page_permission(client, test_app):
+    class StubIdentityService:
+        async def get_context_for_session(self, token: str):
+            if token != "session-token":
+                return None
+            return PlatformAuthContext(
+                account_id="acct-3",
+                email="viewer@example.com",
+                role="org_user",
+                permissions=[],
+                organization_memberships=[],
+                team_memberships=[{"team_id": "team-1", "role": "team_viewer"}],
+                mfa_enabled=False,
+                mfa_verified=False,
+                force_password_change=False,
+            )
+
+    test_app.state.platform_identity_service = StubIdentityService()
+
+    response = await client.get("/ui/api/batches/feature-status", cookies={"deltallm_session": "session-token"})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Insufficient permissions"
+
+
+@pytest.mark.asyncio
 async def test_list_teams_uses_team_scope_and_returns_capabilities(client, test_app, monkeypatch):
     fake_db = FakeAuthorizationDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
