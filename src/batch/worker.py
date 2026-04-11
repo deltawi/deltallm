@@ -489,7 +489,8 @@ class BatchExecutorWorker:
                 **prepared.failover_kwargs,
             )
             response_body, api_base, deployment_model = self._sanitize_embedding_response(data)
-            usage = dict(response_body.get("usage") or {})
+            usage_allocations = allocate_embedding_usage(response_body.get("usage"), item_weights=[1])
+            usage = dict(usage_allocations[0] if usage_allocations else {})
             api_provider = resolve_provider(served_deployment.deltallm_params)
             response_body["_provider"] = api_provider
             api_base = api_base or served_deployment.deltallm_params.get("api_base")
