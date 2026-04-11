@@ -6,7 +6,7 @@ import logging
 from typing import Any, Iterator
 from time import perf_counter
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
 from src.auth.roles import Permission
@@ -18,6 +18,7 @@ from src.metrics import (
     increment_batch_repair_action,
     publish_batch_runtime_summary,
 )
+from src.middleware.admin import require_admin_permission
 from src.services.ui_authorization import build_batch_capabilities
 
 router = APIRouter(tags=["Admin Batches"])
@@ -256,13 +257,10 @@ async def batch_summary(
     }
 
 
-@router.get("/ui/api/batches/feature-status")
+@router.get("/ui/api/batches/feature-status", dependencies=[Depends(require_admin_permission(Permission.KEY_READ))])
 async def batch_feature_status(
     request: Request,
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, bool]:
-    get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
     general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
     return {
         "embeddings_batch_enabled": bool(getattr(general_settings, "embeddings_batch_enabled", False)),
