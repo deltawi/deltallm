@@ -2,6 +2,9 @@ ALTER TABLE "deltallm_batch_completion_outbox"
   ADD COLUMN IF NOT EXISTS "locked_by" TEXT,
   ADD COLUMN IF NOT EXISTS "lease_expires_at" TIMESTAMP(3);
 
+ALTER TABLE "deltallm_batch_completion_outbox"
+  ALTER COLUMN "completion_id" SET DEFAULT gen_random_uuid()::text;
+
 CREATE INDEX IF NOT EXISTS "deltallm_batchcompletionoutbox_lease_expires_idx"
   ON "deltallm_batch_completion_outbox" ("lease_expires_at");
 

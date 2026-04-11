@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from src.batch.models import BatchCompletionOutboxCreate, BatchCompletionOutboxRecord
 
@@ -58,14 +59,18 @@ class BatchCompletionOutboxRepository:
         values_sql: list[str] = []
         params: list[Any] = []
         param_index = 1
+        completion_ids: list[str] = []
         for record in records:
+            completion_id = str(uuid4())
+            completion_ids.append(completion_id)
             values_sql.append(
-                f"(${param_index}, ${param_index + 1}, ${param_index + 2}::jsonb, "
-                f"${param_index + 3}, ${param_index + 4}, ${param_index + 5}, ${param_index + 6}::timestamptz, "
-                f"${param_index + 7}, NOW(), NOW())"
+                f"(${param_index}, ${param_index + 1}, ${param_index + 2}, ${param_index + 3}::jsonb, "
+                f"${param_index + 4}, ${param_index + 5}, ${param_index + 6}, ${param_index + 7}::timestamptz, "
+                f"${param_index + 8}, NOW(), NOW())"
             )
             params.extend(
                 [
+                    completion_id,
                     record.batch_id,
                     record.item_id,
                     json.dumps(record.payload_json),
@@ -76,11 +81,12 @@ class BatchCompletionOutboxRepository:
                     record.last_error,
                 ]
             )
-            param_index += 8
+            param_index += 9
 
         rows = await self.prisma.query_raw(
             f"""
             INSERT INTO deltallm_batch_completion_outbox (
+                completion_id,
                 batch_id,
                 item_id,
                 payload_json,
