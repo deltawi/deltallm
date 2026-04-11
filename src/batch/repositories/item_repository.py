@@ -172,6 +172,162 @@ class BatchItemRepository:
         )
         return bool(rows)
 
+    async def mark_items_completed_bulk(
+        self,
+        *,
+        items: list[dict[str, Any]],
+        worker_id: str | None,
+    ) -> bool:
+        if self.prisma is None:
+            return False
+        if not items:
+            return True
+
+        values_sql: list[str] = []
+        params: list[Any] = []
+        param_index = 1
+        for item in items:
+            values_sql.append(
+                f"(${param_index}, ${param_index + 1}::jsonb, ${param_index + 2}::jsonb, "
+                f"${param_index + 3}, ${param_index + 4})"
+            )
+            params.extend(
+                [
+                    item["item_id"],
+                    json.dumps(item["response_body"]),
+                    json.dumps(item.get("usage") or {}),
+                    item["provider_cost"],
+                    item["billed_cost"],
+                ]
+            )
+            param_index += 5
+
+        if worker_id is None:
+            expected_count_param = param_index
+            params.append(len(items))
+            rows = await self.prisma.query_raw(
+                f"""
+                WITH payload(item_id, response_body, usage, provider_cost, billed_cost) AS (
+                    VALUES {", ".join(values_sql)}
+                ),
+                candidate AS (
+                    SELECT i.item_id
+                    FROM deltallm_batch_item i
+                    JOIN payload p ON i.item_id = p.item_id
+                    WHERE i.status = 'in_progress'
+                    FOR UPDATE SKIP LOCKED
+                ),
+                eligible AS (
+                    SELECT COUNT(*) AS eligible_count
+                    FROM candidate
+                ),
+                updated AS (
+                    UPDATE deltallm_batch_item i
+                    SET status = 'completed',
+                        response_body = p.response_body,
+                        usage = p.usage,
+                        provider_cost = p.provider_cost,
+                        billed_cost = p.billed_cost,
+                        lease_expires_at = NULL,
+                        locked_by = NULL,
+                        completed_at = NOW()
+                    FROM payload p
+                    JOIN candidate c ON c.item_id = p.item_id
+                    CROSS JOIN eligible
+                    WHERE i.item_id = c.item_id
+                      AND eligible.eligible_count = ${expected_count_param}
+                    RETURNING i.item_id
+                )
+                SELECT item_id FROM updated
+                """,
+                *params,
+            )
+            return len(rows) == len(items)
+
+        worker_id_param = param_index
+        expected_count_param = param_index + 1
+        params.extend([worker_id, len(items)])
+        rows = await self.prisma.query_raw(
+            f"""
+            WITH payload(item_id, response_body, usage, provider_cost, billed_cost) AS (
+                VALUES {", ".join(values_sql)}
+            ),
+            candidate AS (
+                SELECT i.item_id
+                FROM deltallm_batch_item i
+                JOIN payload p ON i.item_id = p.item_id
+                WHERE i.status = 'in_progress'
+                  AND i.locked_by = ${worker_id_param}
+                FOR UPDATE SKIP LOCKED
+            ),
+            eligible AS (
+                SELECT COUNT(*) AS eligible_count
+                FROM candidate
+            ),
+            updated AS (
+                UPDATE deltallm_batch_item i
+                SET status = 'completed',
+                    response_body = p.response_body,
+                    usage = p.usage,
+                    provider_cost = p.provider_cost,
+                    billed_cost = p.billed_cost,
+                    lease_expires_at = NULL,
+                    locked_by = NULL,
+                    completed_at = NOW()
+                FROM payload p
+                JOIN candidate c ON c.item_id = p.item_id
+                CROSS JOIN eligible
+                WHERE i.item_id = c.item_id
+                  AND eligible.eligible_count = ${expected_count_param}
+                RETURNING i.item_id
+            )
+            SELECT item_id FROM updated
+            """,
+            *params,
+        )
+        return len(rows) == len(items)
+
+    async def release_items_for_retry(
+        self,
+        *,
+        item_ids: list[str],
+        worker_id: str,
+    ) -> list[str]:
+        if self.prisma is None or not item_ids:
+            return []
+
+        values_sql: list[str] = []
+        params: list[Any] = []
+        param_index = 1
+        for item_id in item_ids:
+            values_sql.append(f"(${param_index})")
+            params.append(item_id)
+            param_index += 1
+
+        worker_id_param = param_index
+        params.append(worker_id)
+        rows = await self.prisma.query_raw(
+            f"""
+            WITH payload(item_id) AS (
+                VALUES {", ".join(values_sql)}
+            ),
+            updated AS (
+                UPDATE deltallm_batch_item i
+                SET status = 'pending',
+                    lease_expires_at = NULL,
+                    locked_by = NULL
+                FROM payload p
+                WHERE i.item_id = p.item_id
+                  AND i.locked_by = ${worker_id_param}
+                  AND i.status = 'in_progress'
+                RETURNING i.item_id
+            )
+            SELECT item_id FROM updated
+            """,
+            *params,
+        )
+        return [str(row["item_id"]) for row in rows]
+
     async def mark_item_failed(
         self,
         *,
@@ -309,6 +465,48 @@ class BatchItemRepository:
             ORDER BY line_number ASC
             """,
             batch_id,
+        )
+        return [item_from_row(row) for row in rows]
+
+    async def list_items_by_ids(self, item_ids: list[str]) -> list[BatchItemRecord]:
+        if self.prisma is None or not item_ids:
+            return []
+
+        values_sql: list[str] = []
+        params: list[Any] = []
+        for index, item_id in enumerate(item_ids, start=1):
+            values_sql.append(f"(${index})")
+            params.append(item_id)
+
+        rows = await self.prisma.query_raw(
+            f"""
+            WITH payload(item_id) AS (
+                VALUES {", ".join(values_sql)}
+            )
+            SELECT
+                i.item_id,
+                i.batch_id,
+                i.line_number,
+                i.custom_id,
+                i.status,
+                i.request_body,
+                i.response_body,
+                i.error_body,
+                i.usage,
+                i.provider_cost,
+                i.billed_cost,
+                i.attempts,
+                i.last_error,
+                i.locked_by,
+                i.lease_expires_at,
+                i.created_at,
+                i.started_at,
+                i.completed_at
+            FROM deltallm_batch_item i
+            JOIN payload p ON p.item_id = i.item_id
+            ORDER BY i.line_number ASC
+            """,
+            *params,
         )
         return [item_from_row(row) for row in rows]
 

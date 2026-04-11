@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.batch import BatchCleanupConfig, BatchRetentionCleanupWorker, BatchRepository
+from src.batch.completion_outbox import BatchCompletionOutboxWorker, BatchCompletionOutboxWorkerConfig
 from src.batch.service import BatchService
 from src.batch.storage import LocalBatchArtifactStorage, S3BatchArtifactStorage
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
@@ -27,6 +28,8 @@ _WORKER_SHUTDOWN_DRAIN_TIMEOUT_SECONDS = 30.0
 class BatchRuntime:
     worker: BatchExecutorWorker | None = None
     worker_task: Task[None] | None = None
+    completion_outbox_worker: BatchCompletionOutboxWorker | None = None
+    completion_outbox_task: Task[None] | None = None
     gc_worker: BatchRetentionCleanupWorker | None = None
     gc_task: Task[None] | None = None
     statuses: tuple[BootstrapStatus, ...] = ()
@@ -142,6 +145,23 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         )
         runtime.worker_task = create_task(runtime.worker.run())
 
+    runtime.completion_outbox_worker = BatchCompletionOutboxWorker(
+        app=app,
+        repository=repository,
+        config=BatchCompletionOutboxWorkerConfig(
+            worker_id=f"completion-outbox-{id(app)}",
+            poll_interval_seconds=cfg.general_settings.embeddings_batch_poll_interval_seconds,
+            max_batch_size=max(10, int(cfg.general_settings.embeddings_batch_item_claim_limit or 20)),
+            max_concurrency=min(8, max(1, int(cfg.general_settings.embeddings_batch_worker_concurrency or 4))),
+            lease_seconds=max(15, int(cfg.general_settings.embeddings_batch_item_lease_seconds or 60)),
+            heartbeat_interval_seconds=max(
+                1.0,
+                float(cfg.general_settings.embeddings_batch_heartbeat_interval_seconds or 10.0),
+            ),
+        ),
+    )
+    runtime.completion_outbox_task = create_task(runtime.completion_outbox_worker.run())
+
     if cfg.general_settings.embeddings_batch_gc_enabled:
         runtime.gc_worker = BatchRetentionCleanupWorker(
             repository=repository,
@@ -157,6 +177,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
     runtime.statuses = (
         BootstrapStatus("embeddings_batch", "ready"),
         BootstrapStatus("embeddings_batch_worker", "ready" if runtime.worker is not None else "disabled"),
+        BootstrapStatus("embeddings_batch_completion_outbox", "ready" if runtime.completion_outbox_worker is not None else "disabled"),
         BootstrapStatus("embeddings_batch_gc", "ready" if runtime.gc_worker is not None else "disabled"),
     )
     return runtime
@@ -199,6 +220,15 @@ async def shutdown_batch_runtime(runtime: BatchRuntime) -> None:
             runtime.worker_task,
             label="batch worker",
             timeout=_WORKER_SHUTDOWN_DRAIN_TIMEOUT_SECONDS,
+        )
+
+    if runtime.completion_outbox_worker is not None:
+        runtime.completion_outbox_worker.stop()
+    if runtime.completion_outbox_task is not None:
+        await _drain_worker_task(
+            runtime.completion_outbox_task,
+            label="batch completion outbox worker",
+            timeout=5.0,
         )
 
     if runtime.gc_worker is not None:

@@ -23,6 +23,18 @@ class RecordingDB:
         return None
 
 
+class DuplicateSpendEventDB(RecordingDB):
+    async def query_raw(self, query: str, *args):
+        self.calls.append((query, args))
+        return []
+
+
+class FailingSpendEventDB:
+    async def query_raw(self, query: str, *args):
+        del query, args
+        raise RuntimeError("spend event insert failed")
+
+
 class BudgetDB:
     async def query_raw(self, query: str, *args):
         normalized = " ".join(query.lower().split())
@@ -188,6 +200,52 @@ async def test_spend_tracking_writes_normalized_event_and_team_model_counter():
     assert event_call[14] == "character"
     assert event_call[23] == 1200
     assert any("insert into deltallm_teammodelspend" in q.lower() for q, _ in db.calls)
+
+
+@pytest.mark.asyncio
+async def test_log_spend_once_returns_duplicate_without_ledger_update():
+    db = DuplicateSpendEventDB()
+    service = SpendTrackingService(db_client=db)
+
+    result = await service.log_spend_once(
+        event_id="event-1",
+        request_id="req-1",
+        api_key="key_hash",
+        user_id="user_1",
+        team_id="team_1",
+        organization_id="org_1",
+        end_user_id=None,
+        model="gpt-4o-mini",
+        call_type="completion",
+        usage={"total_tokens": 10, "prompt_tokens": 6, "completion_tokens": 4},
+        cost=0.02,
+        metadata={"api_base": "https://api.openai.com/v1"},
+    )
+
+    assert result == "duplicate"
+    assert any("insert into deltallm_spendlog_events" in q.lower() for q, _ in db.calls)
+    assert not any("update deltallm_verificationtoken" in q.lower() for q, _ in db.calls)
+
+
+@pytest.mark.asyncio
+async def test_log_spend_once_raises_on_write_failure():
+    service = SpendTrackingService(db_client=FailingSpendEventDB())
+
+    with pytest.raises(RuntimeError, match="spend event insert failed"):
+        await service.log_spend_once(
+            event_id="event-1",
+            request_id="req-1",
+            api_key="key_hash",
+            user_id="user_1",
+            team_id="team_1",
+            organization_id="org_1",
+            end_user_id=None,
+            model="gpt-4o-mini",
+            call_type="completion",
+            usage={"total_tokens": 10, "prompt_tokens": 6, "completion_tokens": 4},
+            cost=0.02,
+            metadata={"api_base": "https://api.openai.com/v1"},
+        )
 
 
 @pytest.mark.asyncio

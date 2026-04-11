@@ -22,6 +22,10 @@ class _SpendRecorder:
     async def log_spend(self, **kwargs):
         self.events.append({"status": "success", **kwargs})
 
+    async def log_spend_once(self, **kwargs):
+        self.events.append({"status": "success_once", **kwargs})
+        return "inserted"
+
     async def log_request_failure(self, **kwargs):
         self.events.append({"status": "error", "cost": 0.0, **kwargs})
 
@@ -37,13 +41,39 @@ class _PassiveHealthRecorder:
 class _FakeRepository:
     def __init__(self) -> None:
         self.completed_calls: list[dict] = []
+        self.completion_outbox_calls: list[dict] = []
+        self.release_for_retry_calls: list[dict] = []
 
     async def mark_item_completed(self, **kwargs) -> bool:
         self.completed_calls.append(kwargs)
         return True
 
+    async def complete_items_with_outbox_bulk(self, **kwargs) -> str:
+        worker_id = kwargs.get("worker_id")
+        for item in kwargs["items"]:
+            updated = await self.mark_item_completed(
+                item_id=item["item_id"],
+                worker_id=worker_id,
+                response_body=item["response_body"],
+                usage=item["usage"],
+                provider_cost=item["provider_cost"],
+                billed_cost=item["billed_cost"],
+            )
+            if not updated:
+                return "not_owned"
+            self.completion_outbox_calls.append(dict(item["outbox_payload"]))
+        return "completed"
+
     async def mark_item_failed(self, **kwargs) -> bool:  # pragma: no cover
         raise AssertionError(f"unexpected failure path: {kwargs}")
+
+    async def renew_item_lease(self, **kwargs) -> bool:
+        del kwargs
+        return True
+
+    async def release_items_for_retry(self, **kwargs) -> list[str]:
+        self.release_for_retry_calls.append(kwargs)
+        return list(kwargs["item_ids"])
 
     async def get_job(self, batch_id: str):  # for BatchService test
         return self.job if batch_id == self.job.batch_id else None
@@ -175,14 +205,14 @@ async def test_batch_worker_logs_batch_pricing_and_spend(monkeypatch):
     completed = repo.completed_calls[0]
     assert completed["provider_cost"] == 0.005
     assert completed["billed_cost"] == 0.0025
-    assert len(spend.events) == 1
-    logged = spend.events[0]
-    assert logged["call_type"] == "embedding_batch"
-    assert logged["cost"] == 0.0025
-    assert logged["organization_id"] == "org-1"
-    assert logged["metadata"]["deployment_model"] == "vllm/sentence-transformers/all-MiniLM-L6-v2"
-    assert logged["metadata"]["pricing_tier"] == "batch"
-    assert logged["metadata"]["provider_cost"] == 0.005
+    assert len(repo.completion_outbox_calls) == 1
+    outbox_payload = repo.completion_outbox_calls[0]
+    assert outbox_payload["call_type"] == "embedding_batch"
+    assert outbox_payload["billed_cost"] == 0.0025
+    assert outbox_payload["provider_cost"] == 0.005
+    assert outbox_payload["organization_id"] == "org-1"
+    assert outbox_payload["deployment_model"] == "vllm/sentence-transformers/all-MiniLM-L6-v2"
+    assert spend.events == []
 
 
 @pytest.mark.asyncio
@@ -197,7 +227,7 @@ async def test_batch_worker_keeps_completed_state_when_side_effects_fail(monkeyp
         del args, kwargs
         raise RuntimeError("metrics backend unavailable")
 
-    monkeypatch.setattr("src.batch.worker.increment_request", _boom)
+    monkeypatch.setattr("src.batch.worker.observe_batch_item_execution_latency", _boom)
 
     deployment = SimpleNamespace(
         deltallm_params={"model": "vllm/sentence-transformers/all-MiniLM-L6-v2", "api_base": "http://localhost:9090/v1"},
@@ -2226,6 +2256,18 @@ async def test_second_worker_reclaims_expired_in_progress_item_after_crash(monke
             self.completed_by = worker_id
             return True
 
+        async def complete_items_with_outbox_bulk(self, *, items: list[dict], worker_id: str | None) -> str:
+            assert len(items) == 1
+            updated = await self.mark_item_completed(
+                item_id=items[0]["item_id"],
+                worker_id=worker_id,
+                response_body=items[0]["response_body"],
+                usage=items[0]["usage"],
+                provider_cost=items[0]["provider_cost"],
+                billed_cost=items[0]["billed_cost"],
+            )
+            return "completed" if updated else "not_owned"
+
         async def mark_item_failed(self, **kwargs) -> bool:  # pragma: no cover
             raise AssertionError(f"unexpected failure path: {kwargs}")
 
@@ -2252,6 +2294,10 @@ async def test_second_worker_reclaims_expired_in_progress_item_after_crash(monke
                 return False
             self.item_lease_expires_at = self.now + timedelta(seconds=lease_seconds)
             return True
+
+        async def release_items_for_retry(self, *, item_ids: list[str], worker_id: str) -> list[str]:
+            del item_ids, worker_id
+            return []
 
     deployment_obj = deployment
     repo = _CrashRecoveryRepo()

@@ -24,6 +24,14 @@ class BatchItemStatus:
     CANCELLED = "cancelled"
 
 
+class BatchCompletionOutboxStatus:
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    RETRYING = "retrying"
+    SENT = "sent"
+    FAILED = "failed"
+
+
 OPERATOR_FAILED_PREFIX = "__operator_failed__:"
 
 
@@ -115,6 +123,36 @@ class BatchItemRecord:
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
+
+
+@dataclass
+class BatchCompletionOutboxRecord:
+    completion_id: str
+    batch_id: str
+    item_id: str
+    payload_json: dict[str, Any]
+    status: str
+    attempt_count: int
+    max_attempts: int
+    next_attempt_at: datetime | None
+    last_error: str | None
+    created_at: datetime
+    updated_at: datetime
+    processed_at: datetime | None
+    locked_by: str | None = None
+    lease_expires_at: datetime | None = None
+
+
+@dataclass
+class BatchCompletionOutboxCreate:
+    batch_id: str
+    item_id: str
+    payload_json: dict[str, Any]
+    status: str = BatchCompletionOutboxStatus.QUEUED
+    attempt_count: int = 0
+    max_attempts: int = 5
+    next_attempt_at: datetime | None = None
+    last_error: str | None = None
 
 
 @dataclass

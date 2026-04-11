@@ -966,3 +966,25 @@ model DeltaLLM_BatchItem {
   @@index([lease_expires_at])
   @@map("deltallm_batch_item")
 }
+
+model DeltaLLM_BatchCompletionOutbox {
+  completion_id    String   @id @default(uuid())
+  batch_id         String
+  item_id          String   @unique
+  payload_json     Json
+  status           String   @default("queued")
+  attempt_count    Int      @default(0)
+  max_attempts     Int      @default(5)
+  next_attempt_at  DateTime @default(now())
+  last_error       String?
+  locked_by        String?
+  lease_expires_at DateTime?
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+  processed_at     DateTime?
+
+  @@index([status, next_attempt_at], map: "deltallm_batchcompletionoutbox_status_next_attempt_idx")
+  @@index([lease_expires_at], map: "deltallm_batchcompletionoutbox_lease_expires_idx")
+  @@index([batch_id, created_at], map: "deltallm_batchcompletionoutbox_batch_created_idx")
+  @@map("deltallm_batch_completion_outbox")
+}
