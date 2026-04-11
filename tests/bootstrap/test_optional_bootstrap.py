@@ -217,9 +217,25 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
         def stop(self) -> None:
             self.stopped = True
 
+    class FakeCompletionOutboxWorker:
+        def __init__(self, app, repository, config) -> None:  # noqa: ANN001
+            self.app = app
+            self.repository = repository
+            self.config = config
+            self.stopped = False
+            created["completion_outbox_worker"] = self
+
+        async def run(self) -> None:
+            while not self.stopped:
+                await asyncio.sleep(0.01)
+
+        def stop(self) -> None:
+            self.stopped = True
+
     monkeypatch.setattr("src.bootstrap.batch.LocalBatchArtifactStorage", lambda path: {"path": path})
     monkeypatch.setattr("src.bootstrap.batch.BatchService", FakeBatchService)
     monkeypatch.setattr("src.bootstrap.batch.BatchExecutorWorker", FakeBatchWorker)
+    monkeypatch.setattr("src.bootstrap.batch.BatchCompletionOutboxWorker", FakeCompletionOutboxWorker)
     monkeypatch.setattr("src.bootstrap.batch.BatchRetentionCleanupWorker", FakeGCWorker)
 
     app = SimpleNamespace(state=SimpleNamespace())
@@ -240,6 +256,8 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
     assert created["service"].create_buffer_size == 200
     assert runtime.worker is created["worker"]
     assert runtime.worker_task is not None
+    assert runtime.completion_outbox_worker is created["completion_outbox_worker"]
+    assert runtime.completion_outbox_task is not None
     assert runtime.gc_worker is created["gc_worker"]
     assert runtime.gc_task is not None
     assert created["gc_worker"].storage_registry == {"local": {"path": "/tmp/batch-artifacts"}}
@@ -249,12 +267,14 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
     assert runtime.statuses == (
         BootstrapStatus("embeddings_batch", "ready"),
         BootstrapStatus("embeddings_batch_worker", "ready"),
+        BootstrapStatus("embeddings_batch_completion_outbox", "ready"),
         BootstrapStatus("embeddings_batch_gc", "ready"),
     )
 
     await shutdown_batch_runtime(runtime)
 
     assert created["worker"].stopped is True
+    assert created["completion_outbox_worker"].stopped is True
     assert created["gc_worker"].stopped is True
 
 

@@ -11,7 +11,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.batch.cleanup import BatchCleanupConfig, BatchRetentionCleanupWorker
-from src.batch.models import BatchItemCreate
+from src.batch.models import BatchCompletionOutboxCreate, BatchItemCreate
 from src.batch.models import encode_operator_failed_reason
 from src.batch.repository import BatchRepository
 from src.batch.service import BatchService
@@ -92,6 +92,7 @@ async def _connect_prisma() -> Any:
 
 
 async def _reset_batch_tables(db: Any) -> None:
+    await db.execute_raw("DELETE FROM deltallm_batch_completion_outbox")
     await db.execute_raw("DELETE FROM deltallm_batch_item")
     await db.execute_raw("DELETE FROM deltallm_batch_job")
     await db.execute_raw("DELETE FROM deltallm_batch_file")
@@ -101,8 +102,15 @@ async def _reset_batch_tables(db: Any) -> None:
 async def batch_db():
     db = await _connect_prisma()
     try:
-        rows = await db.query_raw("SELECT to_regclass('public.deltallm_batch_job')::text AS name")
-        if not rows or dict(rows[0]).get("name") is None:
+        rows = await db.query_raw(
+            """
+            SELECT
+                to_regclass('public.deltallm_batch_job')::text AS batch_job,
+                to_regclass('public.deltallm_batch_completion_outbox')::text AS batch_completion_outbox
+            """
+        )
+        row = dict(rows[0]) if rows else {}
+        if row.get("batch_job") is None or row.get("batch_completion_outbox") is None:
             pytest.skip("Batch tables are missing; run prisma db push before DB-backed batch tests")
         await _reset_batch_tables(db)
         yield db
@@ -388,6 +396,299 @@ async def test_db_backed_expired_item_can_be_reclaimed_after_crash(batch_db) -> 
     assert refreshed is not None
     assert refreshed.completed_items == 1
     assert refreshed.status == "finalizing"
+
+
+@pytest.mark.asyncio
+async def test_db_backed_bulk_completion_is_all_or_nothing_when_any_item_is_no_longer_owned(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert job is not None
+    inserted = await repository.create_items(
+        job.batch_id,
+        [
+            BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}),
+            BatchItemCreate(line_number=2, custom_id="c2", request_body={"model": "m1", "input": "b"}),
+        ],
+    )
+    assert inserted == 2
+    await repository.set_job_queued(job.batch_id, inserted)
+
+    claimed = await repository.claim_items(batch_id=job.batch_id, worker_id="w1", limit=2, lease_seconds=120)
+    assert [item.line_number for item in claimed] == [1, 2]
+
+    second_item_id = claimed[1].item_id
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_item
+        SET locked_by = 'w2'
+        WHERE item_id = $1
+        """,
+        second_item_id,
+    )
+
+    updated = await repository.mark_items_completed_bulk(
+        items=[
+            {
+                "item_id": claimed[0].item_id,
+                "response_body": {"object": "list", "data": [{"index": 0, "embedding": [0.1]}]},
+                "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
+                "provider_cost": 0.01,
+                "billed_cost": 0.01,
+            },
+            {
+                "item_id": claimed[1].item_id,
+                "response_body": {"object": "list", "data": [{"index": 0, "embedding": [0.2]}]},
+                "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
+                "provider_cost": 0.01,
+                "billed_cost": 0.01,
+            },
+        ],
+        worker_id="w1",
+    )
+
+    assert updated is False
+    rows = await batch_db.query_raw(
+        """
+        SELECT line_number, status, locked_by
+        FROM deltallm_batch_item
+        WHERE batch_id = $1
+        ORDER BY line_number ASC
+        """,
+        job.batch_id,
+    )
+    assert [dict(row) for row in rows] == [
+        {"line_number": 1, "status": "in_progress", "locked_by": "w1"},
+        {"line_number": 2, "status": "in_progress", "locked_by": "w2"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_db_backed_bulk_completion_with_outbox_persists_completed_items_and_outbox_rows(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id="user-1",
+        created_by_team_id="team-1",
+        expires_at=None,
+    )
+    assert job is not None
+    inserted = await repository.create_items(
+        job.batch_id,
+        [
+            BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}),
+            BatchItemCreate(line_number=2, custom_id="c2", request_body={"model": "m1", "input": "b"}),
+        ],
+    )
+    assert inserted == 2
+    await repository.set_job_queued(job.batch_id, inserted)
+
+    claimed = await repository.claim_items(batch_id=job.batch_id, worker_id="w1", limit=2, lease_seconds=120)
+    assert [item.line_number for item in claimed] == [1, 2]
+
+    items = [
+        {
+            "item_id": claimed[0].item_id,
+            "response_body": {"object": "list", "data": [{"index": 0, "embedding": [0.1]}]},
+            "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
+            "provider_cost": 0.01,
+            "billed_cost": 0.01,
+            "outbox_payload": {
+                "batch_id": job.batch_id,
+                "item_id": claimed[0].item_id,
+                "model": "m1",
+                "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
+                "billed_cost": 0.01,
+            },
+            "outbox_max_attempts": 7,
+        },
+        {
+            "item_id": claimed[1].item_id,
+            "response_body": {"object": "list", "data": [{"index": 0, "embedding": [0.2]}]},
+            "usage": {"prompt_tokens": 2, "completion_tokens": 0, "total_tokens": 2},
+            "provider_cost": 0.02,
+            "billed_cost": 0.02,
+            "outbox_payload": {
+                "batch_id": job.batch_id,
+                "item_id": claimed[1].item_id,
+                "model": "m1",
+                "usage": {"prompt_tokens": 2, "completion_tokens": 0, "total_tokens": 2},
+                "billed_cost": 0.02,
+            },
+            "outbox_max_attempts": 7,
+        },
+    ]
+
+    result = await repository.complete_items_with_outbox_bulk(items=items, worker_id="w1")
+
+    assert result == "completed"
+    item_rows = await batch_db.query_raw(
+        """
+        SELECT line_number, item_id, status, locked_by
+        FROM deltallm_batch_item
+        WHERE batch_id = $1
+        ORDER BY line_number ASC
+        """,
+        job.batch_id,
+    )
+    assert [dict(row) for row in item_rows] == [
+        {"line_number": 1, "item_id": claimed[0].item_id, "status": "completed", "locked_by": None},
+        {"line_number": 2, "item_id": claimed[1].item_id, "status": "completed", "locked_by": None},
+    ]
+
+    outbox_rows = await batch_db.query_raw(
+        """
+        SELECT item_id, status, attempt_count, max_attempts
+        FROM deltallm_batch_completion_outbox
+        WHERE batch_id = $1
+        ORDER BY item_id ASC
+        """,
+        job.batch_id,
+    )
+    expected_outbox_rows = sorted(
+        [
+            {"item_id": claimed[0].item_id, "status": "queued", "attempt_count": 0, "max_attempts": 7},
+            {"item_id": claimed[1].item_id, "status": "queued", "attempt_count": 0, "max_attempts": 7},
+        ],
+        key=lambda row: row["item_id"],
+    )
+    assert [dict(row) for row in outbox_rows] == expected_outbox_rows
+
+
+@pytest.mark.asyncio
+async def test_db_backed_bulk_completion_with_outbox_reports_already_completed_after_prior_commit(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id="user-1",
+        created_by_team_id="team-1",
+        expires_at=None,
+    )
+    assert job is not None
+    inserted = await repository.create_items(
+        job.batch_id,
+        [
+            BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}),
+            BatchItemCreate(line_number=2, custom_id="c2", request_body={"model": "m1", "input": "b"}),
+        ],
+    )
+    assert inserted == 2
+    await repository.set_job_queued(job.batch_id, inserted)
+
+    claimed = await repository.claim_items(batch_id=job.batch_id, worker_id="w1", limit=2, lease_seconds=120)
+    items = [
+        {
+            "item_id": claimed[0].item_id,
+            "response_body": {"object": "list", "data": [{"index": 0, "embedding": [0.1]}]},
+            "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
+            "provider_cost": 0.01,
+            "billed_cost": 0.01,
+            "outbox_payload": {"batch_id": job.batch_id, "item_id": claimed[0].item_id},
+            "outbox_max_attempts": 5,
+        },
+        {
+            "item_id": claimed[1].item_id,
+            "response_body": {"object": "list", "data": [{"index": 0, "embedding": [0.2]}]},
+            "usage": {"prompt_tokens": 2, "completion_tokens": 0, "total_tokens": 2},
+            "provider_cost": 0.02,
+            "billed_cost": 0.02,
+            "outbox_payload": {"batch_id": job.batch_id, "item_id": claimed[1].item_id},
+            "outbox_max_attempts": 5,
+        },
+    ]
+
+    first_result = await repository.complete_items_with_outbox_bulk(items=items, worker_id="w1")
+    second_result = await repository.complete_items_with_outbox_bulk(items=items, worker_id="w1")
+
+    assert first_result == "completed"
+    assert second_result == "already_completed"
+
+    outbox_rows = await batch_db.query_raw(
+        """
+        SELECT COUNT(*)::int AS count
+        FROM deltallm_batch_completion_outbox
+        WHERE batch_id = $1
+        """,
+        job.batch_id,
+    )
+    assert int(dict(outbox_rows[0])["count"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_db_backed_completion_outbox_reclaims_expired_processing_and_enforces_owner_cas(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    completion_ids = await repository.enqueue_completion_outbox_many(
+        [
+            BatchCompletionOutboxCreate(
+                batch_id="b1",
+                item_id="i1",
+                payload_json={"request_id": "batch:b1:i1", "item_id": "i1"},
+            )
+        ]
+    )
+    assert len(completion_ids) == 1
+    completion_id = completion_ids[0]
+
+    claimed = await repository.claim_completion_outbox_due(worker_id="w1", lease_seconds=30, limit=10)
+
+    assert len(claimed) == 1
+    assert claimed[0].completion_id == completion_id
+    assert claimed[0].locked_by == "w1"
+    assert claimed[0].status == "processing"
+    assert await repository.mark_completion_outbox_sent(completion_id, worker_id="w2") is False
+
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_completion_outbox
+        SET lease_expires_at = NOW() - INTERVAL '1 second'
+        WHERE completion_id = $1
+        """,
+        completion_id,
+    )
+
+    reclaimed = await repository.claim_completion_outbox_due(worker_id="w2", lease_seconds=30, limit=10)
+
+    assert len(reclaimed) == 1
+    assert reclaimed[0].completion_id == completion_id
+    assert reclaimed[0].locked_by == "w2"
+    assert reclaimed[0].attempt_count == 2
+    assert await repository.mark_completion_outbox_sent(completion_id, worker_id="w2") is True
+
+    rows = await batch_db.query_raw(
+        """
+        SELECT status, locked_by, lease_expires_at, processed_at
+        FROM deltallm_batch_completion_outbox
+        WHERE completion_id = $1
+        """,
+        completion_id,
+    )
+    assert [dict(row) for row in rows] == [
+        {
+            "status": "sent",
+            "locked_by": None,
+            "lease_expires_at": None,
+            "processed_at": rows[0]["processed_at"],
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -803,3 +1104,159 @@ async def test_db_backed_shared_storage_flow_uses_recorded_backends_end_to_end(
     remaining_files = await batch_db.query_raw("SELECT file_id FROM deltallm_batch_file")
     assert remaining_jobs == []
     assert remaining_files == []
+
+
+@pytest.mark.asyncio
+async def test_db_backed_grouped_embedding_execution_preserves_item_and_batch_totals(
+    batch_db,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("src.batch.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+
+    async def _fake_execute_embedding(request, payload, deployment):  # noqa: ANN001
+        del request, deployment
+        inputs = payload.input if isinstance(payload.input, list) else [payload.input]
+        return {
+            "object": "list",
+            "data": [
+                {"index": index, "embedding": [float(index), float(index) + 0.1]}
+                for index, _ in enumerate(inputs)
+            ],
+            "model": "provider-embedding-model",
+            "usage": {"prompt_tokens": 4 * len(inputs), "total_tokens": 4 * len(inputs)},
+        }
+
+    monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
+
+    repository = BatchRepository(batch_db)
+    storage = LocalBatchArtifactStorage(str(tmp_path / "artifacts"))
+    service = BatchService(repository=repository, storage=storage)
+    auth = UserAPIKeyAuth(api_key="key-a")
+    input_file_id = await _create_input_file(
+        service,
+        auth=auth,
+        payload=(
+            b'{"custom_id":"c1","url":"/v1/embeddings","body":{"model":"m1","input":"aaaa"}}\n'
+            b'{"custom_id":"c2","url":"/v1/embeddings","body":{"model":"m1","input":"bbbb"}}\n'
+            b'{"custom_id":"c3","url":"/v1/embeddings","body":{"model":"m1","input":"cccc"}}\n'
+        ),
+    )
+
+    created = await service.create_embeddings_batch(
+        auth=auth,
+        input_file_id=input_file_id,
+        endpoint="/v1/embeddings",
+        metadata=None,
+        completion_window=None,
+    )
+    batch_id = str(created["id"])
+
+    deployment_obj = SimpleNamespace(
+        deployment_id="dep-1",
+        deltallm_params={"model": "m1", "api_base": "http://localhost"},
+        input_cost_per_token=0.001,
+        output_cost_per_token=0.0,
+        model_info={
+            "upstream_max_batch_inputs": 2,
+            "batch_input_cost_per_token": 0.0005,
+            "batch_output_cost_per_token": 0.0,
+        },
+    )
+
+    class _Router:
+        def resolve_model_group(self, model: str) -> str:
+            return model
+
+        async def select_deployment(self, model_group: str, request_context: dict) -> str:
+            del model_group, request_context
+            return "dep-1"
+
+        def require_deployment(self, model_group: str, deployment: str):  # noqa: ANN001
+            del model_group, deployment
+            return deployment_obj
+
+    class _Failover:
+        async def execute_with_failover(
+            self,
+            *,
+            primary_deployment,
+            model_group,
+            execute,
+            return_deployment=False,
+            **kwargs,
+        ):
+            del model_group, kwargs
+            data = await execute(primary_deployment)
+            if return_deployment:
+                return data, primary_deployment
+            return data
+
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                router=_Router(),
+                failover_manager=_Failover(),
+                spend_tracking_service=_NoopSpendTrackingService(),
+                budget_service=_NoopBudgetService(),
+                passive_health_tracker=_NoopPassiveHealthTracker(),
+                router_state_backend=_NoopRouterStateBackend(),
+            )
+        ),
+        repository=repository,
+        storage=storage,
+        config=BatchWorkerConfig(worker_id="w-microbatch", worker_concurrency=1),
+    )
+
+    did_work = await worker.process_once()
+    assert did_work is True
+
+    item_rows = await batch_db.query_raw(
+        """
+        SELECT line_number, status, usage, provider_cost, billed_cost
+        FROM deltallm_batch_item
+        WHERE batch_id = $1
+        ORDER BY line_number ASC
+        """,
+        batch_id,
+    )
+    items = [dict(row) for row in item_rows]
+    assert [item["status"] for item in items] == ["completed", "completed", "completed"]
+    assert [item["usage"] for item in items] == [
+        {"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 4},
+        {"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 4},
+        {"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 4},
+    ]
+
+    total_provider_cost = sum(float(item["provider_cost"]) for item in items)
+    total_billed_cost = sum(float(item["billed_cost"]) for item in items)
+    assert total_provider_cost == pytest.approx(0.012)
+    assert total_billed_cost == pytest.approx(0.006)
+
+    cost_rows = await batch_db.query_raw(
+        """
+        SELECT COALESCE(SUM(provider_cost), 0) AS total_provider_cost,
+               COALESCE(SUM(billed_cost), 0) AS total_billed_cost
+        FROM deltallm_batch_item
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    cost_row = dict(cost_rows[0])
+    assert float(cost_row["total_provider_cost"]) == pytest.approx(total_provider_cost)
+    assert float(cost_row["total_billed_cost"]) == pytest.approx(total_billed_cost)
+
+    job_rows = await batch_db.query_raw(
+        """
+        SELECT status, completed_items, failed_items, output_file_id, error_file_id
+        FROM deltallm_batch_job
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    job_row = dict(job_rows[0])
+    assert job_row["status"] == "completed"
+    assert int(job_row["completed_items"] or 0) == 3
+    assert int(job_row["failed_items"] or 0) == 0
+    assert job_row["output_file_id"] is not None
+    assert job_row["error_file_id"] is None

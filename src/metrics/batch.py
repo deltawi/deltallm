@@ -87,6 +87,38 @@ deltallm_batch_item_execution_latency_metric = Histogram(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_microbatch_requests_metric = Counter(
+    "deltallm_batch_microbatch_requests_total",
+    "Upstream embedding microbatch requests executed by the batch worker",
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_microbatch_inputs_metric = Counter(
+    "deltallm_batch_microbatch_inputs_total",
+    "Upstream embedding inputs sent through grouped batch worker microbatches",
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_microbatch_isolation_fallback_metric = Counter(
+    "deltallm_batch_microbatch_isolation_fallback_total",
+    "Grouped embedding microbatch chunks isolated back to single-item execution",
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_microbatch_ineligible_items_metric = Counter(
+    "deltallm_batch_microbatch_ineligible_items_total",
+    "Batch items that could not be grouped into embedding microbatches by reason",
+    ["reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_microbatch_size_metric = Histogram(
+    "deltallm_batch_microbatch_size",
+    "Number of inputs in each grouped embedding microbatch request",
+    buckets=[1, 2, 4, 8, 16, 32, 64],
+    registry=get_prometheus_registry(),
+)
+
 
 def set_batch_job_count(*, status: str, count: int) -> None:
     deltallm_batch_jobs_metric.labels(status=sanitize_label(status)).set(max(0, int(count)))
@@ -139,6 +171,26 @@ def observe_batch_finalize_latency(*, status: str, latency_seconds: float) -> No
 
 def observe_batch_item_execution_latency(*, status: str, latency_seconds: float) -> None:
     deltallm_batch_item_execution_latency_metric.labels(status=sanitize_label(status)).observe(max(0.0, float(latency_seconds)))
+
+
+def increment_batch_microbatch_requests() -> None:
+    deltallm_batch_microbatch_requests_metric.inc()
+
+
+def increment_batch_microbatch_inputs(*, count: int) -> None:
+    deltallm_batch_microbatch_inputs_metric.inc(max(0, int(count)))
+
+
+def increment_batch_microbatch_isolation_fallback() -> None:
+    deltallm_batch_microbatch_isolation_fallback_metric.inc()
+
+
+def increment_batch_microbatch_ineligible_item(*, reason: str) -> None:
+    deltallm_batch_microbatch_ineligible_items_metric.labels(reason=sanitize_label(reason)).inc()
+
+
+def observe_batch_microbatch_size(*, batch_size: int) -> None:
+    deltallm_batch_microbatch_size_metric.observe(max(0, int(batch_size)))
 
 
 def publish_batch_runtime_summary(summary: Mapping[str, Any]) -> None:
