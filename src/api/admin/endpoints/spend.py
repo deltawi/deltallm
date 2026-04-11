@@ -423,6 +423,19 @@ async def spend_report(
     }
 
 
+@router.get("/ui/api/spend/feature-status", dependencies=[Depends(require_admin_permission(Permission.SPEND_READ))])
+async def spend_feature_status(
+    request: Request,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, bool]:
+    get_auth_scope(request, authorization, x_master_key, required_permission=Permission.SPEND_READ)
+    general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+    return {
+        "cache_enabled": bool(getattr(general_settings, "cache_enabled", False)),
+    }
+
+
 @router.get("/ui/api/logs", dependencies=[Depends(require_admin_permission(Permission.SPEND_READ))])
 async def request_logs(
     request: Request,

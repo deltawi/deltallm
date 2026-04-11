@@ -213,6 +213,18 @@ async def test_auth_me_hides_team_create_for_team_scoped_admin_only(client, test
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_batch_feature_status_returns_embeddings_batch_flag(client, test_app, enabled):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    setattr(test_app.state.app_config.general_settings, "embeddings_batch_enabled", enabled)
+
+    response = await client.get("/ui/api/batches/feature-status", headers={"Authorization": "Bearer mk-test"})
+
+    assert response.status_code == 200
+    assert response.json() == {"embeddings_batch_enabled": enabled}
+
+
+@pytest.mark.asyncio
 async def test_list_teams_uses_team_scope_and_returns_capabilities(client, test_app, monkeypatch):
     fake_db = FakeAuthorizationDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
