@@ -76,6 +76,7 @@ export interface ModelFormValues {
   max_input_tokens: string;
   max_output_tokens: string;
   output_vector_size: string;
+  upstream_max_batch_inputs: string;
   input_cost_per_image: string;
   input_cost_per_character: string;
   output_cost_per_character: string;
@@ -128,6 +129,7 @@ export const EMPTY_FORM: ModelFormValues = {
   max_input_tokens: '',
   max_output_tokens: '',
   output_vector_size: '',
+  upstream_max_batch_inputs: '',
   input_cost_per_image: '',
   input_cost_per_character: '',
   output_cost_per_character: '',
@@ -142,6 +144,12 @@ export const EMPTY_FORM: ModelFormValues = {
 
 function numOrUndef(val: string): number | undefined {
   return val ? Number(val) : undefined;
+}
+
+function positiveIntOrUndef(val: string): number | undefined {
+  if (!val) return undefined;
+  const parsed = Number(val);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 export function strOrEmpty(val: unknown): string {
@@ -207,6 +215,7 @@ export function buildModelPayload(
     model_info.input_cost_per_token_cache_hit = numOrUndef(form.input_cost_per_token_cache_hit);
     model_info.output_vector_size = numOrUndef(form.output_vector_size);
     model_info.max_tokens = numOrUndef(form.max_context_window);
+    model_info.upstream_max_batch_inputs = positiveIntOrUndef(form.upstream_max_batch_inputs);
   } else if (form.mode === 'image_generation') {
     model_info.input_cost_per_image = numOrUndef(form.input_cost_per_image);
   } else if (form.mode === 'audio_speech') {
@@ -298,6 +307,7 @@ export function formFromModel(
     max_input_tokens: strOrEmpty(mi.max_input_tokens),
     max_output_tokens: strOrEmpty(mi.max_output_tokens),
     output_vector_size: strOrEmpty(mi.output_vector_size),
+    upstream_max_batch_inputs: strOrEmpty(mi.upstream_max_batch_inputs),
     input_cost_per_image: strOrEmpty(mi.input_cost_per_image),
     input_cost_per_character: strOrEmpty(mi.input_cost_per_character),
     output_cost_per_character: strOrEmpty(mi.output_cost_per_character),
