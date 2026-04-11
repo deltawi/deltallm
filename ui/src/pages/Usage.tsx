@@ -3,17 +3,19 @@ import type { ReactNode } from 'react';
 import {
   spend,
   type Pagination,
+  type SpendFeatureStatus,
   type SpendGroupBy,
   type SpendGroupReport,
   type SpendGroupRow,
   type SpendLog,
   type SpendSummary,
 } from '../lib/api';
+import { useApi } from '../lib/hooks';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import StatCard from '../components/StatCard';
 import Modal from '../components/Modal';
-import { DollarSign, LoaderCircle, Zap, Hash, Calendar } from 'lucide-react';
+import { DollarSign, LoaderCircle, Zap, Hash, Calendar, Info } from 'lucide-react';
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 
 const SPEND_GROUP_OPTIONS: Array<{ value: SpendGroupBy; label: string }> = [
@@ -167,6 +169,10 @@ export default function Usage() {
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [autoRefreshMs, setAutoRefreshMs] = useState<AutoRefreshMs>(0);
   const [pageVisible, setPageVisible] = useState(() => (typeof document === 'undefined' ? true : document.visibilityState === 'visible'));
+  const { data: spendFeatureStatus } = useApi<SpendFeatureStatus | null>(
+    () => (tab === 'logs' ? spend.featureStatus() : Promise.resolve(null)),
+    [tab],
+  );
   const spendPageSize = 5;
   const logsPageSize = 25;
   const activeControllerRef = useRef<AbortController | null>(null);
@@ -515,6 +521,20 @@ export default function Usage() {
           title="Request Logs"
           action={<span className="text-xs text-gray-500">Click a row for details</span>}
         >
+          {spendFeatureStatus?.cache_enabled === false && (
+            <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <div className="flex items-start gap-3">
+                <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                <div>
+                  <p className="font-medium">Cache is disabled.</p>
+                  <p className="mt-1 text-amber-800">
+                    New requests are expected to appear as <code className="rounded bg-amber-100 px-1 py-0.5 text-xs">Miss</code> in the{' '}
+                    <code className="rounded bg-amber-100 px-1 py-0.5 text-xs">Cache</code> column while caching is off.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
           <DataTable
             columns={logColumns}
             data={logs || []}

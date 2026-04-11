@@ -24,6 +24,18 @@ class FakeSpendDB:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_spend_feature_status_returns_cache_flag(client, test_app, enabled):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    setattr(test_app.state.app_config.general_settings, "cache_enabled", enabled)
+
+    response = await client.get("/ui/api/spend/feature-status", headers={"Authorization": "Bearer mk-test"})
+
+    assert response.status_code == 200
+    assert response.json() == {"cache_enabled": enabled}
+
+
+@pytest.mark.asyncio
 async def test_spend_summary_applies_org_scope_for_non_platform(client, test_app, monkeypatch):
     fake_db = FakeSpendDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()

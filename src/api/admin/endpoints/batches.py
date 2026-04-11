@@ -256,6 +256,19 @@ async def batch_summary(
     }
 
 
+@router.get("/ui/api/batches/feature-status")
+async def batch_feature_status(
+    request: Request,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, bool]:
+    get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+    return {
+        "embeddings_batch_enabled": bool(getattr(general_settings, "embeddings_batch_enabled", False)),
+    }
+
+
 @router.get("/ui/api/batches/{batch_id}")
 async def get_batch(
     request: Request,

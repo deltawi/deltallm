@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
-import { batches, type BatchJobListItem, type BatchJobSummary } from '../lib/api';
+import { batches, type BatchFeatureStatus, type BatchJobListItem, type BatchJobSummary } from '../lib/api';
 import DataTable from '../components/DataTable';
-import { Layers, Search, Clock, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
+import { Layers, Search, Clock, CheckCircle2, XCircle, Loader2, Info } from 'lucide-react';
 import clsx from 'clsx';
 import { ContentCard, IndexShell } from '../components/admin/shells';
 
@@ -97,6 +97,7 @@ export default function BatchJobs() {
     return () => clearTimeout(t);
   }, [searchInput]);
 
+  const { data: featureStatus } = useApi<BatchFeatureStatus | null>(() => batches.featureStatus(), []);
   const { data: summary } = useApi<BatchJobSummary | null>(() => batches.summary(), []);
   const { data: result, loading } = useApi(
     () => batches.list({ search, status: statusFilter || undefined, limit: pageSize, offset: pageOffset }),
@@ -227,17 +228,34 @@ export default function BatchJobs() {
         </div>
       )}
     >
-      <ContentCard>
-        <DataTable
-          columns={columns}
-          data={items}
-          loading={loading}
-          emptyMessage="No batch jobs found"
-          onRowClick={(row) => navigate(`/batches/${row.batch_id}`)}
-          pagination={pagination}
-          onPageChange={setPageOffset}
-        />
-      </ContentCard>
+      <div className="space-y-4">
+        {featureStatus?.embeddings_batch_enabled === false && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <div className="flex items-start gap-3">
+              <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+              <div>
+                <p className="font-medium">Embeddings batch API is disabled.</p>
+                <p className="mt-1 text-amber-800">
+                  Enable <code className="rounded bg-amber-100 px-1 py-0.5 text-xs">general_settings.embeddings_batch_enabled: true</code>{' '}
+                  to allow <code className="rounded bg-amber-100 px-1 py-0.5 text-xs">/v1/files</code> and{' '}
+                  <code className="rounded bg-amber-100 px-1 py-0.5 text-xs">/v1/batches</code>. Existing batch records remain visible here.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+        <ContentCard>
+          <DataTable
+            columns={columns}
+            data={items}
+            loading={loading}
+            emptyMessage="No batch jobs found"
+            onRowClick={(row) => navigate(`/batches/${row.batch_id}`)}
+            pagination={pagination}
+            onPageChange={setPageOffset}
+          />
+        </ContentCard>
+      </div>
     </IndexShell>
   );
 }

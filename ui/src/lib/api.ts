@@ -147,6 +147,10 @@ export interface SpendGroupReport {
   pagination: Pagination;
 }
 
+export interface SpendFeatureStatus {
+  cache_enabled: boolean;
+}
+
 export type ProviderHealthStatus = 'healthy' | 'degraded' | 'down';
 
 export interface ProviderHealthSummaryRow {
@@ -348,6 +352,10 @@ export interface ApiKey {
 export interface BatchCapabilities {
   view: boolean;
   cancel: boolean;
+}
+
+export interface BatchFeatureStatus {
+  embeddings_batch_enabled: boolean;
 }
 
 export interface BatchJobListItem {
@@ -651,6 +659,7 @@ export const health = {
 };
 
 export const spend = {
+  featureStatus: (opts?: RequestInit) => apiFetch<SpendFeatureStatus>('/ui/api/spend/feature-status', opts),
   summary: (start_date?: string, end_date?: string, opts?: RequestInit) => {
     const qs = new URLSearchParams();
     if (start_date) qs.set('start_date', start_date);
@@ -1072,6 +1081,7 @@ export const users = {
 };
 
 export const batches = {
+  featureStatus: () => apiFetch<BatchFeatureStatus>('/ui/api/batches/feature-status'),
   list: (params?: { search?: string; status?: string; limit?: number; offset?: number }) =>
     apiFetch<Paginated<BatchJobListItem>>(withQuery('/ui/api/batches', params as any)),
   summary: () => apiFetch<BatchJobSummary>('/ui/api/batches/summary'),
