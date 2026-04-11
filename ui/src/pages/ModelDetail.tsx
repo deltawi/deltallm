@@ -102,6 +102,7 @@ function modeSpecificItems(mode: string, model: any): Array<{ label: string; val
       return [
         { label: 'Context Window', value: formatInteger(mi.max_tokens) },
         { label: 'Vector Size',    value: formatInteger(mi.output_vector_size) },
+        { label: 'Batch Worker Upstream Max Inputs', value: formatInteger(mi.upstream_max_batch_inputs) || '—' },
       ];
     case 'image_generation':
       return [{ label: 'Cost / Image', value: formatCost(mi.input_cost_per_image) }];
@@ -233,7 +234,8 @@ function OverviewTab({ model }: { model: any }) {
 function RuntimeTab({ model }: { model: any }) {
   const lp = model.deltallm_params || {};
   const mi = model.model_info || {};
-  const modeItems = modeSpecificItems(model.mode || mi.mode || 'chat', model)
+  const mode = model.mode || mi.mode || 'chat';
+  const modeItems = modeSpecificItems(mode, model)
     .filter((i) => i.value);
   const defaults = mi.default_params && typeof mi.default_params === 'object'
     ? Object.entries(mi.default_params)
@@ -247,7 +249,14 @@ function RuntimeTab({ model }: { model: any }) {
     <div className="space-y-5">
       {modeItems.length > 0 && (
         <div>
-          <h3 className="mb-3 text-sm font-semibold text-gray-700">Token Limits &amp; Timeouts</h3>
+          <h3 className="mb-3 text-sm font-semibold text-gray-700">Runtime Settings</h3>
+          {mode === 'embedding' && (
+            <p className="mb-3 text-xs text-gray-500">
+              Batch worker settings apply only to compatible async embedding batch jobs. Synchronous{' '}
+              <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[11px] text-gray-700">/v1/embeddings</code>
+              {' '}requests are unchanged.
+            </p>
+          )}
           <div className="grid grid-cols-2 gap-3">
             {modeItems.map((item) => (
               <Field key={item.label} label={item.label} value={item.value!} />

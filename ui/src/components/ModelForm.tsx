@@ -401,6 +401,15 @@ export default function ModelForm({
       setValidationError('Fill in the required fields highlighted below.');
       return;
     }
+    if (mode === 'embedding' && form.upstream_max_batch_inputs.trim()) {
+      const upstreamMaxBatchInputs = Number(form.upstream_max_batch_inputs);
+      if (!Number.isInteger(upstreamMaxBatchInputs) || upstreamMaxBatchInputs < 1) {
+        setValidationError(
+          'Batch Worker Upstream Max Inputs must be a whole number greater than or equal to 1. Leave it blank to keep batch-worker micro-batching disabled.',
+        );
+        return;
+      }
+    }
     setFieldErrors({});
     if (selectedProviderPreset && !selectedProviderPreset.supported_modes.includes(mode)) {
       const modeLabel = MODE_OPTIONS.find((m) => m.value === mode)?.label || mode;
@@ -751,7 +760,7 @@ export default function ModelForm({
 
       {mode === 'embedding' && (
         <CollapsibleCard title="Embedding Settings">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Context Window</label>
               <input type="number" value={form.max_context_window} onChange={(e) => setForm({ ...form, max_context_window: e.target.value })} placeholder="8192" className={inputClass} />
@@ -759,6 +768,26 @@ export default function ModelForm({
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Output Vector Size</label>
               <input type="number" value={form.output_vector_size} onChange={(e) => setForm({ ...form, output_vector_size: e.target.value })} placeholder="1536" className={inputClass} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Batch Worker Upstream Max Inputs</label>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={form.upstream_max_batch_inputs}
+                onChange={(e) => {
+                  setForm({ ...form, upstream_max_batch_inputs: e.target.value });
+                  clearValidation();
+                }}
+                placeholder="Optional, e.g. 8"
+                className={inputClass}
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                Advanced. Only used for compatible async embedding batch jobs, not synchronous /v1/embeddings.
+                Leave blank or use 1 to disable batch-worker micro-batching. Start small and increase only after
+                validating provider behavior and throughput.
+              </p>
             </div>
           </div>
         </CollapsibleCard>

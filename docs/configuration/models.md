@@ -159,6 +159,36 @@ model_list:
       mode: audio_transcription
 ```
 
+## Embedding Batch Worker Micro-batching
+
+`model_info.upstream_max_batch_inputs` only applies to compatible embedding items
+processed by the async batch worker. It does not change synchronous
+`/v1/embeddings` behavior or make realtime embedding requests batch together.
+
+```yaml
+model_list:
+  - model_name: text-embedding-3-large
+    deltallm_params:
+      model: openai/text-embedding-3-large
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: embedding
+      output_vector_size: 3072
+      upstream_max_batch_inputs: 8
+```
+
+Rollout guidance:
+
+- leave the field unset or set it to `1` to disable batch-worker micro-batching
+- start with small values such as `4` or `8`
+- validate provider behavior, error rates, and throughput before increasing further
+
+Operational note:
+
+- when DeltaLLM groups multiple embedding items into one upstream request, the provider usually returns usage at the grouped-call level
+- DeltaLLM allocates per-item usage and cost from that aggregate usage so total usage and total cost stay consistent
+- per-item usage is therefore allocated from aggregate upstream usage, not exact provider-native attribution for each grouped item
+
 ## Add Pricing and Defaults
 
 Pricing metadata powers spend tracking.
