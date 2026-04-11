@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS "deltallm_batch_completion_outbox" (
-  "completion_id" TEXT NOT NULL,
+  "completion_id" TEXT NOT NULL DEFAULT gen_random_uuid()::text,
   "batch_id" TEXT NOT NULL,
   "item_id" TEXT NOT NULL,
   "payload_json" JSONB NOT NULL,
