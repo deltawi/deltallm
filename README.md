@@ -1,4 +1,10 @@
-# DeltaLLM
+[![CI](https://github.com/deltawi/deltallm/actions/workflows/ci.yml/badge.svg)](https://github.com/deltawi/deltallm/actions/workflows/ci.yml)
+[![Documentation](https://img.shields.io/badge/docs-readthedocs-blue.svg)](https://deltallm.readthedocs.io/en/latest)
+[![Latest Release](https://img.shields.io/github/v/release/deltawi/deltallm.svg?sort=semver)](https://github.com/deltawi/deltallm/releases)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Last Commit](https://img.shields.io/github/last-commit/deltawi/deltallm.svg)](https://github.com/deltawi/deltallm/commits/main)
+[![Stars](https://img.shields.io/github/stars/deltawi/deltallm.svg?style=social)](https://github.com/deltawi/deltallm/stargazers)
 
 
 
