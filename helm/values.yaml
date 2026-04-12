@@ -157,6 +157,7 @@ config:
     health_check_interval: 300
     health_check_model: gpt-3.5-turbo
     model_deployment_source: hybrid
+    model_deployment_bootstrap_from_config: true
 
 s3:
   enabled: false

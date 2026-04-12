@@ -45,3 +45,9 @@ prometheus:
     enabled: true
     interval: 15s
     scrapeTimeout: 10s
+
+config:
+  general_settings:
+    cache_backend: redis
+    model_deployment_source: db_only
+    model_deployment_bootstrap_from_config: false
