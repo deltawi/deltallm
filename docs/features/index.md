@@ -13,6 +13,7 @@ Use this section when DeltaLLM is already running and you want to turn on a capa
 | Block or sanitize unsafe content | [Guardrails](guardrails.md) |
 | Control request volume at each scope | [Rate Limiting](rate-limiting.md) |
 | Track or cap spend | [Budgets & Spend](budgets.md) |
+| Process large embedding workloads asynchronously | [Embeddings Batch API](batching.md) |
 | Export evidence for compliance or investigations | [Audit Log](audit-log.md) |
 | Monitor health, latency, and request volume | [Observability](observability.md) |
 
