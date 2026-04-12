@@ -14,6 +14,7 @@ import { useApi } from '../lib/hooks';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import StatCard from '../components/StatCard';
+import { fmtCompact } from '../lib/format';
 import Modal from '../components/Modal';
 import { DollarSign, LoaderCircle, Zap, Hash, Calendar, Info } from 'lucide-react';
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
@@ -376,8 +377,8 @@ export default function Usage() {
       render: (row: SpendGroupRow) => renderSpendGroupValue(spendBy, row),
     },
     { key: 'total_spend', header: 'Spend', render: (r: any) => fmt(r.total_spend) },
-    { key: 'total_tokens', header: 'Tokens', render: (r: any) => fmtNum(r.total_tokens) },
-    { key: 'request_count', header: 'Requests', render: (r: any) => fmtNum(r.request_count) },
+    { key: 'total_tokens', header: 'Tokens', render: (r: any) => fmtCompact(r.total_tokens) },
+    { key: 'request_count', header: 'Requests', render: (r: any) => fmtCompact(r.request_count) },
   ];
 
   const logColumns = [
@@ -386,9 +387,9 @@ export default function Usage() {
     { key: 'call_type', header: 'Type', render: (r: SpendLog) => <span className="text-xs capitalize">{r.call_type}</span> },
     { key: 'status', header: 'Status', render: (r: SpendLog) => <StatusBadge status={logStatus(r)} /> },
     { key: 'spend', header: 'Cost', render: (r: SpendLog) => fmt(r.spend) },
-    { key: 'prompt_tokens', header: 'Prompt', render: (r: SpendLog) => fmtNum(r.prompt_tokens) },
-    { key: 'completion_tokens', header: 'Completion', render: (r: SpendLog) => fmtNum(r.completion_tokens) },
-    { key: 'prompt_tokens_cached', header: 'Cached Prompt', render: (r: SpendLog) => fmtNum(r.prompt_tokens_cached) },
+    { key: 'prompt_tokens', header: 'Prompt', render: (r: SpendLog) => fmtCompact(r.prompt_tokens) },
+    { key: 'completion_tokens', header: 'Completion', render: (r: SpendLog) => fmtCompact(r.completion_tokens) },
+    { key: 'prompt_tokens_cached', header: 'Cached Prompt', render: (r: SpendLog) => fmtCompact(r.prompt_tokens_cached) },
     { key: 'team_id', header: 'Team', render: (r: SpendLog) => <span className="text-xs">{r.team_id || '—'}</span> },
     { key: 'cache_hit', header: 'Cache', render: (r: SpendLog) => r.cache_hit ? <span className="text-green-600 text-xs">Hit</span> : <span className="text-gray-400 text-xs">Miss</span> },
   ];
@@ -402,9 +403,9 @@ export default function Usage() {
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard title="Total Spend" value={fmt(summary?.total_spend)} icon={<DollarSign className="w-5 h-5" />} />
-        <StatCard title="Total Tokens" value={fmtNum(summary?.total_tokens)} icon={<Hash className="w-5 h-5" />} />
-        <StatCard title="Total Requests" value={fmtNum(summary?.total_requests)} icon={<Zap className="w-5 h-5" />} />
-        <StatCard title="Unique Models" value={fmtNum(summary?.unique_models)} icon={<Calendar className="w-5 h-5" />} />
+        <StatCard title="Total Tokens" value={fmtCompact(summary?.total_tokens)} icon={<Hash className="w-5 h-5" />} />
+        <StatCard title="Total Requests" value={fmtCompact(summary?.total_requests)} icon={<Zap className="w-5 h-5" />} />
+        <StatCard title="Unique Models" value={fmtCompact(summary?.unique_models)} icon={<Calendar className="w-5 h-5" />} />
       </div>
 
       <div className="mb-6 flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">

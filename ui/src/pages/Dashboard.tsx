@@ -1,5 +1,6 @@
 import { useApi } from '../lib/hooks';
 import { spend, models as modelsApi, keys as keysApi, health, type ProviderHealthStatus } from '../lib/api';
+import { fmtCompact } from '../lib/format';
 import { providerDisplayName } from '../lib/providers';
 import {
   DollarSign,
@@ -38,11 +39,6 @@ function fmtDollar(n: number | null | undefined): string {
 function fmtDollarPrecise(n: number | null | undefined): string {
   if (n == null) return '$0.0000';
   return `$${Number(n).toFixed(4)}`;
-}
-
-function fmtNum(n: number | null | undefined): string {
-  if (n == null) return '0';
-  return Number(n).toLocaleString();
 }
 
 interface ProviderAgg {
@@ -111,7 +107,7 @@ export default function Dashboard() {
             <div>
               <p className="text-sm font-medium text-gray-500">Total Spend</p>
               <p className="mt-1 text-2xl font-bold text-gray-900 tabular-nums">{fmtDollar(summary?.total_spend)}</p>
-              <p className="mt-1 text-xs text-gray-500">{fmtNum(summary?.total_tokens)} tokens used</p>
+              <p className="mt-1 text-xs text-gray-500">{fmtCompact(summary?.total_tokens)} tokens used</p>
             </div>
           </div>
 
@@ -121,8 +117,8 @@ export default function Dashboard() {
             </div>
             <div>
               <p className="text-sm font-medium text-gray-500">Total Requests</p>
-              <p className="mt-1 text-2xl font-bold text-gray-900 tabular-nums">{fmtNum(totalRequests)}</p>
-              <p className={`mt-1 text-xs font-medium ${failedRequests > 0 ? 'text-red-500' : 'text-gray-400'}`}>{fmtNum(failedRequests)} failed</p>
+              <p className="mt-1 text-2xl font-bold text-gray-900 tabular-nums">{fmtCompact(totalRequests)}</p>
+              <p className={`mt-1 text-xs font-medium ${failedRequests > 0 ? 'text-red-500' : 'text-gray-400'}`}>{fmtCompact(failedRequests)} failed</p>
             </div>
           </div>
 
@@ -132,7 +128,7 @@ export default function Dashboard() {
             </div>
             <div>
               <p className="text-sm font-medium text-gray-500">Active Keys</p>
-              <p className="mt-1 text-2xl font-bold text-gray-900 tabular-nums">{fmtNum(keysResult?.pagination?.total ?? keysResult?.data?.length)}</p>
+              <p className="mt-1 text-2xl font-bold text-gray-900 tabular-nums">{fmtCompact(keysResult?.pagination?.total ?? keysResult?.data?.length)}</p>
             </div>
           </div>
 
@@ -142,7 +138,7 @@ export default function Dashboard() {
             </div>
             <div>
               <p className="text-sm font-medium text-gray-500">Models</p>
-              <p className="mt-1 text-2xl font-bold text-gray-900 tabular-nums">{fmtNum(totalModels)}</p>
+              <p className="mt-1 text-2xl font-bold text-gray-900 tabular-nums">{fmtCompact(totalModels)}</p>
             </div>
           </div>
 
@@ -277,14 +273,14 @@ export default function Dashboard() {
 
           <div className="flex items-center gap-1.5 text-gray-600">
             <Database className="h-4 w-4 text-gray-400" />
-            <span>{fmtNum(totalModels)} Model{totalModels !== 1 ? 's' : ''} Deployed</span>
+            <span>{fmtCompact(totalModels)} Model{totalModels !== 1 ? 's' : ''} Deployed</span>
           </div>
 
           <div className="h-4 w-px bg-gray-300 hidden sm:block"></div>
 
           <div className="flex items-center gap-1.5 text-gray-600">
             <TrendingUp className="h-4 w-4 text-gray-400" />
-            <span>{fmtNum(totalRequests)} Total Requests</span>
+            <span>{fmtCompact(totalRequests)} Total Requests</span>
           </div>
         </div>
 
