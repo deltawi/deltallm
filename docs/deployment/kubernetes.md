@@ -312,9 +312,13 @@ env:
 
 This covers provider API keys, bootstrap admin credentials, SSO client credentials, JWT settings, and any other runtime env.
 
-### 4. Model bootstrap from config
+### 4. Model deployment lifecycle
 
-You can still seed deployments from `config.model_list`:
+DeltaLLM stores model deployments in the database at runtime. On first install you can seed them from `config.model_list` using the bootstrap mechanism.
+
+#### Initial seed with config bootstrap
+
+Set `model_deployment_source: hybrid` and `model_deployment_bootstrap_from_config: true` (the base chart default):
 
 ```yaml
 config:
@@ -329,7 +333,63 @@ config:
         mode: chat
   general_settings:
     model_deployment_source: hybrid
+    model_deployment_bootstrap_from_config: true
 ```
+
+On startup, DeltaLLM checks whether the `deltallm_modeldeployment` table is empty. If it is, the entries from `model_list` are inserted as a one-time seed. If the table already has rows, the bootstrap is skipped — it is safe to leave enabled.
+
+In `hybrid` mode, DeltaLLM reads deployments from the database first. If the database is empty or unreachable, it falls back to `model_list` from the config file.
+
+#### Transition to database-only
+
+Once your models are in the database (seeded by bootstrap or created through the Admin UI), switch to the recommended steady-state:
+
+```yaml
+config:
+  general_settings:
+    model_deployment_source: db_only
+    model_deployment_bootstrap_from_config: false
+```
+
+In `db_only` mode, DeltaLLM reads deployments exclusively from the database and ignores `model_list` in the config. If the database is empty and no bootstrap happened, the instance starts with zero models.
+
+#### What the production profile sets
+
+The production values file (`values-production.yaml`) ships with production-appropriate defaults:
+
+```yaml
+config:
+  general_settings:
+    cache_backend: redis
+    model_deployment_source: db_only
+    model_deployment_bootstrap_from_config: false
+```
+
+If you use `values-production.yaml`, model management is database-only from the start. To seed models on the first install, either:
+
+- temporarily override during the initial install:
+
+  ```bash
+  helm upgrade --install deltallm ./helm \
+    -f helm/values-production.yaml \
+    --set config.general_settings.model_deployment_source=hybrid \
+    --set config.general_settings.model_deployment_bootstrap_from_config=true
+  ```
+
+  then remove the overrides on the next upgrade
+
+- or create deployments through the Admin UI or Admin API after the first install
+
+#### Summary of modes
+
+| Setting combination | Behavior | When to use |
+|---|---|---|
+| `hybrid` + `bootstrap: true` | Seeds empty DB from config, then reads from DB with config fallback | First install, initial seeding |
+| `hybrid` + `bootstrap: false` | Reads from DB with config fallback, no seeding | Transitional if you want config as a safety net |
+| `db_only` + `bootstrap: false` | Database only, config ignored | Recommended production steady-state |
+| `db_only` + `bootstrap: true` | Seeds empty DB from config, then reads from DB only | One-time seed then database-only |
+
+See [Model Deployments](../configuration/models.md) and [General Settings](../configuration/general.md) for the full reference.
 
 ## Service and ingress
 
@@ -378,6 +438,9 @@ helm upgrade --install deltallm ./helm \
 - topology spread constraints
 - soft anti-affinity
 - bundled PostgreSQL and Redis disabled
+- `cache_backend: redis` (shared cache across replicas)
+- `model_deployment_source: db_only` (database-managed models)
+- `model_deployment_bootstrap_from_config: false` (no auto-seeding)
 
 A typical HA overlay looks like this:
 
