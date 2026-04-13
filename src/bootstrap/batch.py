@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.batch import BatchCleanupConfig, BatchRetentionCleanupWorker, BatchRepository
+from src.batch.create.cleanup import BatchCreateSessionCleanupConfig, BatchCreateSessionCleanupWorker
 from src.batch.completion_outbox import BatchCompletionOutboxWorker, BatchCompletionOutboxWorkerConfig
 from src.batch.service import BatchService
 from src.batch.storage import LocalBatchArtifactStorage, S3BatchArtifactStorage
@@ -32,6 +33,8 @@ class BatchRuntime:
     completion_outbox_task: Task[None] | None = None
     gc_worker: BatchRetentionCleanupWorker | None = None
     gc_task: Task[None] | None = None
+    create_session_cleanup_worker: BatchCreateSessionCleanupWorker | None = None
+    create_session_cleanup_task: Task[None] | None = None
     statuses: tuple[BootstrapStatus, ...] = ()
 
 
@@ -91,6 +94,18 @@ def _build_batch_storage(cfg: Any, storage_registry: dict[str, Any]):
     return storage
 
 
+def _build_create_session_cleanup_worker(cfg: Any) -> BatchCreateSessionCleanupWorker:
+    general = cfg.general_settings
+    return BatchCreateSessionCleanupWorker(
+        config=BatchCreateSessionCleanupConfig(
+            interval_seconds=general.embeddings_batch_create_session_cleanup_interval_seconds,
+            completed_retention_seconds=general.embeddings_batch_create_session_completed_retention_seconds,
+            retryable_retention_seconds=general.embeddings_batch_create_session_retryable_retention_seconds,
+            failed_retention_seconds=general.embeddings_batch_create_session_failed_retention_seconds,
+        )
+    )
+
+
 async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) -> BatchRuntime:
     runtime = BatchRuntime()
 
@@ -98,6 +113,8 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         app.state.batch_storage = None
         app.state.batch_storage_registry = None
         app.state.batch_service = None
+        app.state.batch_create_session_repository = None
+        app.state.batch_create_session_cleanup_worker = None
         runtime.statuses = (BootstrapStatus("embeddings_batch", "disabled"),)
         return runtime
 
@@ -105,6 +122,8 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
     batch_storage = _build_batch_storage(cfg, batch_storage_registry)
     app.state.batch_storage = batch_storage
     app.state.batch_storage_registry = batch_storage_registry
+    app.state.batch_create_session_repository = getattr(repository, "create_sessions", None)
+    app.state.batch_create_session_cleanup_worker = None
     app.state.batch_service = BatchService(
         repository=repository,
         storage=batch_storage,
@@ -174,11 +193,23 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         )
         runtime.gc_task = create_task(runtime.gc_worker.run())
 
+    if (
+        cfg.general_settings.embeddings_batch_create_sessions_enabled
+        and cfg.general_settings.embeddings_batch_create_session_cleanup_enabled
+    ):
+        runtime.create_session_cleanup_worker = _build_create_session_cleanup_worker(cfg)
+        app.state.batch_create_session_cleanup_worker = runtime.create_session_cleanup_worker
+        runtime.create_session_cleanup_task = create_task(runtime.create_session_cleanup_worker.run())
+
     runtime.statuses = (
         BootstrapStatus("embeddings_batch", "ready"),
         BootstrapStatus("embeddings_batch_worker", "ready" if runtime.worker is not None else "disabled"),
         BootstrapStatus("embeddings_batch_completion_outbox", "ready" if runtime.completion_outbox_worker is not None else "disabled"),
         BootstrapStatus("embeddings_batch_gc", "ready" if runtime.gc_worker is not None else "disabled"),
+        BootstrapStatus(
+            "embeddings_batch_create_session_cleanup",
+            "ready" if runtime.create_session_cleanup_worker is not None else "disabled",
+        ),
     )
     return runtime
 
@@ -238,5 +269,14 @@ async def shutdown_batch_runtime(runtime: BatchRuntime) -> None:
         await _drain_worker_task(
             runtime.gc_task,
             label="batch gc worker",
+            timeout=5.0,
+        )
+
+    if runtime.create_session_cleanup_worker is not None:
+        runtime.create_session_cleanup_worker.stop()
+    if runtime.create_session_cleanup_task is not None:
+        await _drain_worker_task(
+            runtime.create_session_cleanup_task,
+            label="batch create-session cleanup worker",
             timeout=5.0,
         )

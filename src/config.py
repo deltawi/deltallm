@@ -11,6 +11,12 @@ import yaml
 from pydantic import AliasChoices, BaseModel, Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src.batch.create.defaults import (
+    DEFAULT_CREATE_SESSION_CLEANUP_INTERVAL_SECONDS,
+    DEFAULT_CREATE_SESSION_COMPLETED_RETENTION_SECONDS,
+    DEFAULT_CREATE_SESSION_FAILED_RETENTION_SECONDS,
+    DEFAULT_CREATE_SESSION_RETRYABLE_RETENTION_SECONDS,
+)
 from src.upstream_auth import (
     supports_custom_openai_compatible_auth,
     validate_auth_header_format,
@@ -304,6 +310,27 @@ class GeneralSettings(BaseModel):
     embeddings_batch_storage_chunk_size: int = Field(default=65_536, ge=1_024)
     embeddings_batch_finalization_page_size: int = Field(default=500, ge=10, le=10_000)
     embeddings_batch_create_buffer_size: int = Field(default=200, ge=1, le=10_000)
+    embeddings_batch_create_sessions_enabled: bool = False
+    embeddings_batch_create_session_cleanup_enabled: bool = False
+    embeddings_batch_create_session_cleanup_interval_seconds: float = Field(
+        default=DEFAULT_CREATE_SESSION_CLEANUP_INTERVAL_SECONDS,
+        gt=0,
+    )
+    embeddings_batch_create_session_completed_retention_seconds: int = Field(
+        default=DEFAULT_CREATE_SESSION_COMPLETED_RETENTION_SECONDS,
+        ge=60,
+    )
+    embeddings_batch_create_session_retryable_retention_seconds: int = Field(
+        default=DEFAULT_CREATE_SESSION_RETRYABLE_RETENTION_SECONDS,
+        ge=60,
+    )
+    embeddings_batch_create_session_failed_retention_seconds: int = Field(
+        default=DEFAULT_CREATE_SESSION_FAILED_RETENTION_SECONDS,
+        ge=60,
+    )
+    embeddings_batch_create_soft_precheck_enabled: bool = False
+    embeddings_batch_create_idempotency_enabled: bool = False
+    embeddings_batch_create_promotion_insert_chunk_size: int = Field(default=500, ge=1, le=10_000)
     embeddings_batch_max_file_bytes: int = Field(default=52_428_800, ge=1_024)
     embeddings_batch_max_items_per_batch: int = Field(default=10_000, ge=1)
     embeddings_batch_max_line_bytes: int = Field(default=1_048_576, ge=1_024)

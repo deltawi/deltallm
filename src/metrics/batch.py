@@ -15,6 +15,13 @@ deltallm_batch_jobs_metric = Gauge(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_create_sessions_metric = Gauge(
+    "deltallm_batch_create_sessions",
+    "Current batch create sessions by status",
+    ["status"],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_batch_items_metric = Gauge(
     "deltallm_batch_items",
     "Current batch items by status",
@@ -87,6 +94,13 @@ deltallm_batch_item_execution_latency_metric = Histogram(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_create_session_actions_metric = Counter(
+    "deltallm_batch_create_session_actions_total",
+    "Batch create-session actions by action and status",
+    ["action", "status"],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_batch_microbatch_requests_metric = Counter(
     "deltallm_batch_microbatch_requests_total",
     "Upstream embedding microbatch requests executed by the batch worker",
@@ -122,6 +136,10 @@ deltallm_batch_microbatch_size_metric = Histogram(
 
 def set_batch_job_count(*, status: str, count: int) -> None:
     deltallm_batch_jobs_metric.labels(status=sanitize_label(status)).set(max(0, int(count)))
+
+
+def set_batch_create_session_count(*, status: str, count: int) -> None:
+    deltallm_batch_create_sessions_metric.labels(status=sanitize_label(status)).set(max(0, int(count)))
 
 
 def set_batch_item_count(*, status: str, count: int) -> None:
@@ -173,6 +191,13 @@ def observe_batch_item_execution_latency(*, status: str, latency_seconds: float)
     deltallm_batch_item_execution_latency_metric.labels(status=sanitize_label(status)).observe(max(0.0, float(latency_seconds)))
 
 
+def increment_batch_create_session_action(*, action: str, status: str) -> None:
+    deltallm_batch_create_session_actions_metric.labels(
+        action=sanitize_label(action),
+        status=sanitize_label(status),
+    ).inc()
+
+
 def increment_batch_microbatch_requests() -> None:
     deltallm_batch_microbatch_requests_metric.inc()
 
@@ -214,3 +239,8 @@ def publish_batch_runtime_summary(summary: Mapping[str, Any]) -> None:
         status="in_progress",
         age_seconds=float(summary.get("oldest_in_progress_item_age_seconds", 0.0)),
     )
+
+
+def publish_batch_create_session_summary(summary: Mapping[str, Any]) -> None:
+    for status, count in summary.items():
+        set_batch_create_session_count(status=str(status), count=int(count))
