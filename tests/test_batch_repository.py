@@ -226,3 +226,24 @@ async def test_expired_file_gc_excludes_files_referenced_by_create_sessions() ->
     assert files == []
     assert "FROM deltallm_batch_create_session s" in prisma.sql
     assert "WHERE s.input_file_id = f.file_id" in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_create_job_rejects_invalid_status_before_sql() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    with pytest.raises(ValueError, match="batch job status"):
+        await repository.create_job(
+            endpoint="/v1/embeddings",
+            input_file_id="file-1",
+            model="m1",
+            metadata=None,
+            created_by_api_key="key-1",
+            created_by_user_id=None,
+            created_by_team_id=None,
+            expires_at=None,
+            status="broken",
+        )
+
+    assert prisma.queries == []

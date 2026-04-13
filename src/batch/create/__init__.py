@@ -5,7 +5,11 @@ from src.batch.create.models import (
     BatchCreateSessionStatus,
     BatchCreateStagedRequest,
 )
-from src.batch.create.promoter import BatchCreatePromotionResult
+from src.batch.create.promoter import (
+    BatchCreatePromotionError,
+    BatchCreatePromotionResult,
+    BatchCreateSessionPromoter,
+)
 from src.batch.create.session_repository import BatchCreateSessionRepository
 from src.batch.create.session_stager import BatchCreateSessionStager
 from src.batch.create.staging import (
@@ -17,10 +21,12 @@ from src.batch.create.staging import (
 
 __all__ = [
     "BatchCreateArtifactStorageBackend",
+    "BatchCreatePromotionError",
     "BatchCreatePromotionResult",
     "BatchCreateSessionCleanupConfig",
     "BatchCreateSessionCleanupWorker",
     "BatchCreateSessionCreate",
+    "BatchCreateSessionPromoter",
     "BatchCreateSessionRecord",
     "BatchCreateSessionRepository",
     "BatchCreateSessionStager",

@@ -59,4 +59,4 @@ EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
   CMD curl -fsS "http://localhost:${PORT}/health/liveliness" || exit 1
 
-CMD ["sh", "-c", "attempt=0; until prisma db push --schema=./prisma/schema.prisma --accept-data-loss; do attempt=$((attempt + 1)); if [ \"$attempt\" -ge 30 ]; then echo 'Database never became reachable for Prisma schema push' >&2; exit 1; fi; echo \"Waiting for database before Prisma schema push... (${attempt}/30)\"; sleep 2; done; exec uvicorn src.main:app --host ${HOST} --port ${PORT}"]
+CMD ["sh", "-c", "python -m src.prisma_bootstrap --schema ./prisma/schema.prisma --max-attempts 30 --sleep-seconds 2 && exec uvicorn src.main:app --host ${HOST} --port ${PORT}"]

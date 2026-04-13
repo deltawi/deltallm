@@ -11,12 +11,16 @@ from src.batch.create.defaults import (
     DEFAULT_CREATE_SESSION_COMPLETED_RETENTION_SECONDS,
     DEFAULT_CREATE_SESSION_FAILED_RETENTION_SECONDS,
     DEFAULT_CREATE_SESSION_ORPHAN_GRACE_SECONDS,
+    DEFAULT_CREATE_SESSION_PROMOTION_TX_MAX_WAIT_SECONDS,
+    DEFAULT_CREATE_SESSION_PROMOTION_TX_TIMEOUT_SECONDS,
     DEFAULT_CREATE_SESSION_RETRYABLE_RETENTION_SECONDS,
 )
 from src.batch.create import (
     BatchCreateArtifactStorageBackend,
+    BatchCreatePromotionError,
     BatchCreatePromotionResult,
     BatchCreateSessionCreate,
+    BatchCreateSessionPromoter,
     BatchCreateSessionRepository,
     BatchCreateSessionStager,
     BatchCreateSessionStatus,
@@ -55,6 +59,7 @@ def test_batch_create_session_scaffold_exports_are_constructible() -> None:
         checksum="abc123",
     )
     result = BatchCreatePromotionResult(session_id="session-1", batch_id="batch-1", promoted=False)
+    error = BatchCreatePromotionError("failed", code="promotion_failed", retryable=True)
     record = BatchCreateStagedRequest(
         line_number=1,
         custom_id="req-1",
@@ -64,8 +69,10 @@ def test_batch_create_session_scaffold_exports_are_constructible() -> None:
     assert artifact.storage_backend == "local"
     assert artifact.storage_key.endswith(".jsonl")
     assert result.batch_id == "batch-1"
+    assert error.retryable is True
     assert record.to_jsonable()["custom_id"] == "req-1"
     assert BatchCreateSessionStager is not None
+    assert BatchCreateSessionPromoter is not None
     assert staged_artifact_from_session(
         type(
             "Session",
@@ -105,6 +112,13 @@ def test_batch_create_session_cleanup_defaults_match_general_settings() -> None:
     assert settings.embeddings_batch_create_session_completed_retention_seconds == cleanup.completed_retention_seconds
     assert settings.embeddings_batch_create_session_retryable_retention_seconds == cleanup.retryable_retention_seconds
     assert settings.embeddings_batch_create_session_failed_retention_seconds == cleanup.failed_retention_seconds
+    assert settings.embeddings_batch_create_soft_precheck_enabled is True
+    assert settings.embeddings_batch_create_promotion_tx_max_wait_seconds == (
+        DEFAULT_CREATE_SESSION_PROMOTION_TX_MAX_WAIT_SECONDS
+    )
+    assert settings.embeddings_batch_create_promotion_tx_timeout_seconds == (
+        DEFAULT_CREATE_SESSION_PROMOTION_TX_TIMEOUT_SECONDS
+    )
 
 
 def test_batch_create_session_create_requires_full_idempotency_pair() -> None:

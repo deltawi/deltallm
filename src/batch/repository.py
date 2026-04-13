@@ -72,6 +72,7 @@ class BatchRepository:
     async def create_job(
         self,
         *,
+        batch_id: str | None = None,
         endpoint: str,
         input_file_id: str,
         model: str | None,
@@ -82,8 +83,11 @@ class BatchRepository:
         created_by_organization_id: str | None = None,
         expires_at: datetime | None = None,
         execution_mode: str = "managed_internal",
+        status: str = "validating",
+        total_items: int = 0,
     ) -> BatchJobRecord | None:
         return await self.jobs.create_job(
+            batch_id=batch_id,
             endpoint=endpoint,
             input_file_id=input_file_id,
             model=model,
@@ -94,6 +98,8 @@ class BatchRepository:
             created_by_organization_id=created_by_organization_id,
             expires_at=expires_at,
             execution_mode=execution_mode,
+            status=status,
+            total_items=total_items,
         )
 
     async def get_job(self, batch_id: str) -> BatchJobRecord | None:

@@ -16,6 +16,26 @@ class BatchJobStatus:
     EXPIRED = "expired"
 
 
+BATCH_JOB_STATUSES = (
+    BatchJobStatus.VALIDATING,
+    BatchJobStatus.QUEUED,
+    BatchJobStatus.IN_PROGRESS,
+    BatchJobStatus.FINALIZING,
+    BatchJobStatus.COMPLETED,
+    BatchJobStatus.FAILED,
+    BatchJobStatus.CANCELLED,
+    BatchJobStatus.EXPIRED,
+)
+_BATCH_JOB_STATUS_SET = frozenset(BATCH_JOB_STATUSES)
+
+
+def normalize_batch_job_status(status: str) -> str:
+    normalized = str(status or "").strip()
+    if normalized not in _BATCH_JOB_STATUS_SET:
+        raise ValueError("batch job status must be one of: " + ", ".join(BATCH_JOB_STATUSES))
+    return normalized
+
+
 class BatchItemStatus:
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
@@ -101,6 +121,9 @@ class BatchJobRecord:
     completed_at: datetime | None
     expires_at: datetime | None
     created_by_organization_id: str | None = None
+
+    def __post_init__(self) -> None:
+        self.status = normalize_batch_job_status(self.status)
 
 
 @dataclass

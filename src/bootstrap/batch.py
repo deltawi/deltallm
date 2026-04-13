@@ -9,6 +9,7 @@ from typing import Any
 
 from src.batch import BatchCleanupConfig, BatchRetentionCleanupWorker, BatchRepository
 from src.batch.create.cleanup import BatchCreateSessionCleanupConfig, BatchCreateSessionCleanupWorker
+from src.batch.create.promoter import BatchCreateSessionPromoter
 from src.batch.create.session_repository import BatchCreateSessionRepository
 from src.batch.create.staging import BatchCreateArtifactStorageBackend
 from src.batch.completion_outbox import BatchCompletionOutboxWorker, BatchCompletionOutboxWorkerConfig
@@ -36,6 +37,7 @@ class BatchRuntime:
     gc_worker: BatchRetentionCleanupWorker | None = None
     gc_task: Task[None] | None = None
     create_session_staging_backend: BatchCreateArtifactStorageBackend | None = None
+    create_session_promoter: BatchCreateSessionPromoter | None = None
     create_session_cleanup_worker: BatchCreateSessionCleanupWorker | None = None
     create_session_cleanup_task: Task[None] | None = None
     statuses: tuple[BootstrapStatus, ...] = ()
@@ -133,6 +135,25 @@ def _build_create_session_cleanup_worker(
     return cleanup_worker
 
 
+def _build_create_session_promoter(
+    cfg: Any,
+    *,
+    repository: BatchRepository,
+    staging_backend: BatchCreateArtifactStorageBackend,
+) -> BatchCreateSessionPromoter:
+    general = cfg.general_settings
+    return BatchCreateSessionPromoter(
+        repository=repository,
+        staging=staging_backend,
+        metadata_retention_days=general.batch_metadata_retention_days,
+        max_pending_batches_per_scope=general.embeddings_batch_max_pending_batches_per_scope,
+        insert_chunk_size=general.embeddings_batch_create_promotion_insert_chunk_size,
+        soft_precheck_enabled=general.embeddings_batch_create_soft_precheck_enabled,
+        tx_max_wait_seconds=general.embeddings_batch_create_promotion_tx_max_wait_seconds,
+        tx_timeout_seconds=general.embeddings_batch_create_promotion_tx_timeout_seconds,
+    )
+
+
 async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) -> BatchRuntime:
     runtime = BatchRuntime()
 
@@ -142,6 +163,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         app.state.batch_service = None
         app.state.batch_create_session_repository = None
         app.state.batch_create_staging_backend = None
+        app.state.batch_create_promoter = None
         app.state.batch_create_session_cleanup_worker = None
         runtime.statuses = (BootstrapStatus("embeddings_batch", "disabled"),)
         return runtime
@@ -152,6 +174,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
     app.state.batch_storage_registry = batch_storage_registry
     app.state.batch_create_session_repository = getattr(repository, "create_sessions", None)
     app.state.batch_create_staging_backend = None
+    app.state.batch_create_promoter = None
     app.state.batch_create_session_cleanup_worker = None
     app.state.batch_service = BatchService(
         repository=repository,
@@ -232,6 +255,12 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
             storage_registry=batch_storage_registry,
         )
         app.state.batch_create_staging_backend = runtime.create_session_staging_backend
+        runtime.create_session_promoter = _build_create_session_promoter(
+            cfg,
+            repository=repository,
+            staging_backend=runtime.create_session_staging_backend,
+        )
+        app.state.batch_create_promoter = runtime.create_session_promoter
 
     if (
         cfg.general_settings.embeddings_batch_create_sessions_enabled
