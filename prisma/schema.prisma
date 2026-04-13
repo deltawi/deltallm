@@ -885,11 +885,56 @@ model DeltaLLM_BatchFile {
   input_jobs          DeltaLLM_BatchJob[] @relation("BatchInputFile")
   output_jobs         DeltaLLM_BatchJob[] @relation("BatchOutputFile")
   error_jobs          DeltaLLM_BatchJob[] @relation("BatchErrorFile")
+  create_sessions     DeltaLLM_BatchCreateSession[] @relation("BatchCreateSessionInputFile")
 
   @@index([purpose])
   @@index([created_at])
   @@index([expires_at])
   @@map("deltallm_batch_file")
+}
+
+model DeltaLLM_BatchCreateSession {
+  session_id                  String   @id @default(uuid())
+  target_batch_id             String   @unique
+  status                      String
+  endpoint                    String
+  input_file_id               String
+  staged_storage_backend      String
+  staged_storage_key          String
+  staged_checksum             String?
+  staged_bytes                Int
+  expected_item_count         Int
+  inferred_model              String?
+  metadata                    Json?
+  requested_service_tier      String?
+  effective_service_tier      String?
+  service_tier_source         String?
+  scheduling_scope_key        String?
+  priority_quota_scope_key    String?
+  idempotency_scope_key       String?
+  idempotency_key             String?
+  last_error_code             String?
+  last_error_message          String?
+  promotion_attempt_count     Int      @default(0)
+  created_by_api_key          String?
+  created_by_user_id          String?
+  created_by_team_id          String?
+  created_by_organization_id  String?
+  created_at                  DateTime @default(now())
+  completed_at                DateTime?
+  last_attempt_at             DateTime?
+  expires_at                  DateTime?
+
+  input_file                  DeltaLLM_BatchFile @relation("BatchCreateSessionInputFile", fields: [input_file_id], references: [file_id], onDelete: Restrict)
+
+  @@unique([idempotency_scope_key, idempotency_key], map: "deltallm_batch_create_session_idempotency_key")
+  @@index([input_file_id], map: "deltallm_batch_create_session_input_file_idx")
+  @@index([status, created_at], map: "deltallm_batch_create_session_status_created_idx")
+  @@index([created_by_api_key, status, created_at], map: "deltallm_batch_create_session_api_key_status_created_idx")
+  @@index([created_by_team_id, status, created_at], map: "deltallm_batch_create_session_team_status_created_idx")
+  @@index([created_by_organization_id, status, created_at], map: "deltallm_batch_create_session_org_status_created_idx")
+  @@index([expires_at], map: "deltallm_batch_create_session_expires_idx")
+  @@map("deltallm_batch_create_session")
 }
 
 model DeltaLLM_BatchJob {

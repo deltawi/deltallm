@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 
 import pytest
 
@@ -213,3 +214,15 @@ async def test_create_items_uses_bulk_insert_statement():
     assert inserted == 0
     assert "VALUES ($1, $2, $3, $4, $5, $6::jsonb), ($7, $8, $9, $10, $11, $12::jsonb)" in prisma.sql
     assert "ON CONFLICT (batch_id, line_number) DO NOTHING" in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_expired_file_gc_excludes_files_referenced_by_create_sessions() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    files = await repository.files.list_expired_unreferenced_files(now=datetime.now(tz=UTC), limit=50)
+
+    assert files == []
+    assert "FROM deltallm_batch_create_session s" in prisma.sql
+    assert "WHERE s.input_file_id = f.file_id" in prisma.sql
