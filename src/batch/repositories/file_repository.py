@@ -88,6 +88,11 @@ class BatchFileRepository:
                        OR j.output_file_id = f.file_id
                        OR j.error_file_id = f.file_id
               )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM deltallm_batch_create_session s
+                    WHERE s.input_file_id = f.file_id
+              )
             ORDER BY f.expires_at ASC
             LIMIT $2
             """,

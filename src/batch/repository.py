@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
+from src.batch.create import BatchCreateSessionRepository
 from src.batch.models import (
     BatchCompletionOutboxCreate,
     BatchCompletionOutboxRecord,
@@ -26,6 +27,7 @@ class BatchRepository:
 
     def __init__(self, prisma_client: Any | None = None) -> None:
         self.prisma = prisma_client
+        self.create_sessions = BatchCreateSessionRepository(prisma_client)
         self.files = BatchFileRepository(prisma_client)
         self.jobs = BatchJobRepository(prisma_client)
         self.items = BatchItemRepository(prisma_client)
