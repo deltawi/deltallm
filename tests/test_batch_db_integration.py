@@ -13,9 +13,11 @@ from fastapi import HTTPException
 
 from src.batch.create import (
     BatchCreateArtifactStorageBackend,
+    BatchCreatePromotionError,
     BatchCreateSessionCleanupConfig,
     BatchCreateSessionCleanupWorker,
     BatchCreateSessionCreate,
+    BatchCreateSessionPromoter,
     BatchCreateSessionStager,
     BatchCreateStagedRequest,
 )
@@ -135,7 +137,7 @@ async def batch_db():
         )
         row = dict(rows[0]) if rows else {}
         if row.get("batch_job") is None or row.get("batch_completion_outbox") is None:
-            pytest.skip("Batch tables are missing; run prisma db push before DB-backed batch tests")
+            pytest.skip("Batch tables are missing; run prisma migrate deploy before DB-backed batch tests")
         await _reset_batch_tables(db)
         yield db
     finally:
@@ -182,6 +184,48 @@ async def _seed_create_session_input_file(repository: BatchRepository) -> str:
     )
     assert file_record is not None
     return file_record.file_id
+
+
+async def _seed_staged_create_session(
+    *,
+    repository: BatchRepository,
+    staging: BatchCreateArtifactStorageBackend,
+    input_file_id: str,
+    target_batch_id: str,
+    request_count: int = 1,
+    created_by_api_key: str = "key-a",
+    created_by_team_id: str | None = None,
+    created_by_organization_id: str | None = None,
+    status: str = "staged",
+) -> Any:
+    requests = [
+        BatchCreateStagedRequest(
+            line_number=index,
+            custom_id=f"req-{index}",
+            request_body={"model": "m1", "input": f"hello-{index}"},
+        )
+        for index in range(1, request_count + 1)
+    ]
+    artifact = await staging.write_records(requests, filename=f"{target_batch_id}.jsonl")
+    session = await repository.create_sessions.create_session(
+        BatchCreateSessionCreate(
+            target_batch_id=target_batch_id,
+            endpoint="/v1/embeddings",
+            input_file_id=input_file_id,
+            staged_storage_backend=artifact.storage_backend,
+            staged_storage_key=artifact.storage_key,
+            staged_checksum=artifact.checksum,
+            staged_bytes=artifact.bytes_size,
+            expected_item_count=request_count,
+            status=status,
+            inferred_model="m1",
+            created_by_api_key=created_by_api_key,
+            created_by_team_id=created_by_team_id,
+            created_by_organization_id=created_by_organization_id,
+        )
+    )
+    assert session is not None
+    return session
 
 
 @pytest.mark.asyncio
@@ -388,6 +432,426 @@ async def test_db_backed_create_session_repository_lifecycle_round_trip(
     fetched = await repository.create_sessions.get_session(created.session_id)
     assert fetched is not None
     assert fetched.status == "failed_retryable"
+
+
+@pytest.mark.asyncio
+async def test_db_backed_create_session_promotion_materializes_atomic_queued_batch(
+    batch_db,
+    tmp_path: Path,
+) -> None:
+    repository = BatchRepository(batch_db)
+    storage = LocalBatchArtifactStorage(str(tmp_path / "create-session-artifacts"))
+    staging = BatchCreateArtifactStorageBackend(storage=storage)
+    input_file_id = await _seed_create_session_input_file(repository)
+    session = await _seed_staged_create_session(
+        repository=repository,
+        staging=staging,
+        input_file_id=input_file_id,
+        target_batch_id="batch-promote-1",
+        request_count=2,
+    )
+    promoter = BatchCreateSessionPromoter(repository=repository, staging=staging)
+
+    result = await promoter.promote_session(session.session_id)
+
+    assert result.promoted is True
+    assert result.batch_id == "batch-promote-1"
+    assert result.job is not None
+    assert result.job.status == "queued"
+    assert result.job.total_items == 2
+
+    session_rows = await batch_db.query_raw(
+        """
+        SELECT status, promotion_attempt_count, completed_at, last_attempt_at
+        FROM deltallm_batch_create_session
+        WHERE session_id = $1
+        """,
+        session.session_id,
+    )
+    job_rows = await batch_db.query_raw(
+        """
+        SELECT batch_id, status, total_items
+        FROM deltallm_batch_job
+        WHERE batch_id = $1
+        """,
+        result.batch_id,
+    )
+    item_rows = await batch_db.query_raw(
+        """
+        SELECT line_number, custom_id
+        FROM deltallm_batch_item
+        WHERE batch_id = $1
+        ORDER BY line_number ASC
+        """,
+        result.batch_id,
+    )
+
+    assert dict(session_rows[0])["status"] == "completed"
+    assert int(dict(session_rows[0])["promotion_attempt_count"]) == 1
+    assert dict(session_rows[0])["completed_at"] is not None
+    assert dict(session_rows[0])["last_attempt_at"] is not None
+    assert dict(job_rows[0]) == {
+        "batch_id": "batch-promote-1",
+        "status": "queued",
+        "total_items": 2,
+    }
+    assert [dict(row) for row in item_rows] == [
+        {"line_number": 1, "custom_id": "req-1"},
+        {"line_number": 2, "custom_id": "req-2"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_db_backed_create_session_promotion_rolls_back_after_item_insert_failure(
+    batch_db,
+    tmp_path: Path,
+) -> None:
+    class _FailingPromotionRepository(BatchRepository):
+        def __init__(self, prisma_client: Any, state: dict[str, int]) -> None:
+            super().__init__(prisma_client)
+            self.state = state
+
+        def with_prisma(self, prisma_client: Any | None) -> "_FailingPromotionRepository":
+            return _FailingPromotionRepository(prisma_client, self.state)
+
+        async def create_items(self, batch_id: str, items: list[BatchItemCreate]) -> int:
+            del batch_id, items
+            self.state["calls"] += 1
+            raise RuntimeError("simulated promotion item insert failure")
+
+    state = {"calls": 0}
+    repository = _FailingPromotionRepository(batch_db, state)
+    storage = LocalBatchArtifactStorage(str(tmp_path / "create-session-artifacts"))
+    staging = BatchCreateArtifactStorageBackend(storage=storage)
+    input_file_id = await _seed_create_session_input_file(repository)
+    session = await _seed_staged_create_session(
+        repository=repository,
+        staging=staging,
+        input_file_id=input_file_id,
+        target_batch_id="batch-promote-rollback",
+    )
+    promoter = BatchCreateSessionPromoter(repository=repository, staging=staging)
+
+    with pytest.raises(BatchCreatePromotionError, match="Failed to promote batch create session") as exc:
+        await promoter.promote_session(session.session_id)
+
+    assert exc.value.retryable is True
+    assert exc.value.code == "promotion_failed"
+    assert state["calls"] == 1
+
+    session_rows = await batch_db.query_raw(
+        """
+        SELECT status, promotion_attempt_count, last_error_code
+        FROM deltallm_batch_create_session
+        WHERE session_id = $1
+        """,
+        session.session_id,
+    )
+    job_rows = await batch_db.query_raw(
+        "SELECT batch_id FROM deltallm_batch_job WHERE batch_id = $1",
+        session.target_batch_id,
+    )
+    item_rows = await batch_db.query_raw(
+        "SELECT item_id FROM deltallm_batch_item WHERE batch_id = $1",
+        session.target_batch_id,
+    )
+
+    assert dict(session_rows[0]) == {
+        "status": "failed_retryable",
+        "promotion_attempt_count": 1,
+        "last_error_code": "promotion_failed",
+    }
+    assert job_rows == []
+    assert item_rows == []
+
+
+@pytest.mark.asyncio
+async def test_db_backed_create_session_promotion_enforces_pending_cap_per_scope(
+    batch_db,
+    tmp_path: Path,
+) -> None:
+    repository = BatchRepository(batch_db)
+    storage = LocalBatchArtifactStorage(str(tmp_path / "create-session-artifacts"))
+    staging = BatchCreateArtifactStorageBackend(storage=storage)
+    input_file_id = await _seed_create_session_input_file(repository)
+    first = await _seed_staged_create_session(
+        repository=repository,
+        staging=staging,
+        input_file_id=input_file_id,
+        target_batch_id="batch-promote-cap-1",
+        created_by_api_key="key-a",
+    )
+    second = await _seed_staged_create_session(
+        repository=repository,
+        staging=staging,
+        input_file_id=input_file_id,
+        target_batch_id="batch-promote-cap-2",
+        created_by_api_key="key-a",
+    )
+    promoter = BatchCreateSessionPromoter(
+        repository=repository,
+        staging=staging,
+        max_pending_batches_per_scope=1,
+    )
+
+    results = await asyncio.gather(
+        promoter.promote_session(first.session_id),
+        promoter.promote_session(second.session_id),
+        return_exceptions=True,
+    )
+
+    successes = [result for result in results if not isinstance(result, Exception)]
+    failures = [result for result in results if isinstance(result, Exception)]
+    assert len(successes) == 1
+    assert len(failures) == 1
+    assert isinstance(failures[0], BatchCreatePromotionError)
+    assert failures[0].retryable is True
+    assert failures[0].code == "pending_limit_exceeded"
+
+    job_rows = await batch_db.query_raw(
+        """
+        SELECT batch_id, status
+        FROM deltallm_batch_job
+        ORDER BY batch_id ASC
+        """
+    )
+    session_rows = await batch_db.query_raw(
+        """
+        SELECT session_id, status, promotion_attempt_count
+        FROM deltallm_batch_create_session
+        ORDER BY session_id ASC
+        """
+    )
+
+    assert len(job_rows) == 1
+    assert dict(job_rows[0])["status"] == "queued"
+    status_by_session = {
+        str(row["session_id"]): (str(row["status"]), int(row["promotion_attempt_count"]))
+        for row in session_rows
+    }
+    assert status_by_session[first.session_id][0] in {"completed", "failed_retryable", "staged"}
+    assert status_by_session[second.session_id][0] in {"completed", "failed_retryable", "staged"}
+    assert sorted(status for status, _attempts in status_by_session.values()) in (
+        ["completed", "failed_retryable"],
+        ["completed", "staged"],
+    )
+    assert sorted(attempts for _status, attempts in status_by_session.values()) in ([0, 1], [1, 1])
+
+
+@pytest.mark.asyncio
+async def test_db_backed_create_session_soft_precheck_rejects_without_mutating_session(
+    batch_db,
+    tmp_path: Path,
+) -> None:
+    repository = BatchRepository(batch_db)
+    storage = LocalBatchArtifactStorage(str(tmp_path / "create-session-artifacts"))
+    staging = BatchCreateArtifactStorageBackend(storage=storage)
+    input_file_id = await _seed_create_session_input_file(repository)
+    active_input_file_id = await _seed_batch_file(repository)
+    active_job = await repository.create_job(
+        batch_id="batch-active-cap",
+        endpoint="/v1/embeddings",
+        input_file_id=active_input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        created_by_organization_id=None,
+        expires_at=None,
+        status="queued",
+        total_items=1,
+    )
+    assert active_job is not None
+
+    session = await _seed_staged_create_session(
+        repository=repository,
+        staging=staging,
+        input_file_id=input_file_id,
+        target_batch_id="batch-precheck-cap",
+        created_by_api_key="key-a",
+    )
+    promoter = BatchCreateSessionPromoter(
+        repository=repository,
+        staging=staging,
+        max_pending_batches_per_scope=1,
+        soft_precheck_enabled=True,
+    )
+
+    with pytest.raises(BatchCreatePromotionError, match="Active batch count exceeds") as exc:
+        await promoter.promote_session(session.session_id)
+
+    assert exc.value.retryable is True
+    assert exc.value.code == "pending_limit_exceeded"
+
+    session_rows = await batch_db.query_raw(
+        """
+        SELECT status, promotion_attempt_count, last_error_code, last_error_message
+        FROM deltallm_batch_create_session
+        WHERE session_id = $1
+        """,
+        session.session_id,
+    )
+    job_rows = await batch_db.query_raw(
+        "SELECT batch_id FROM deltallm_batch_job WHERE batch_id = $1",
+        session.target_batch_id,
+    )
+
+    assert dict(session_rows[0]) == {
+        "status": "staged",
+        "promotion_attempt_count": 0,
+        "last_error_code": None,
+        "last_error_message": None,
+    }
+    assert job_rows == []
+
+
+@pytest.mark.asyncio
+async def test_db_backed_create_session_promotion_is_idempotent_after_completion(
+    batch_db,
+    tmp_path: Path,
+) -> None:
+    repository = BatchRepository(batch_db)
+    storage = LocalBatchArtifactStorage(str(tmp_path / "create-session-artifacts"))
+    staging = BatchCreateArtifactStorageBackend(storage=storage)
+    input_file_id = await _seed_create_session_input_file(repository)
+    session = await _seed_staged_create_session(
+        repository=repository,
+        staging=staging,
+        input_file_id=input_file_id,
+        target_batch_id="batch-promote-idempotent",
+        request_count=3,
+    )
+    promoter = BatchCreateSessionPromoter(repository=repository, staging=staging)
+
+    first = await promoter.promote_session(session.session_id)
+    second = await promoter.promote_session(session.session_id)
+
+    assert first.promoted is True
+    assert second.promoted is False
+    assert second.batch_id == first.batch_id
+
+    job_rows = await batch_db.query_raw(
+        "SELECT batch_id FROM deltallm_batch_job WHERE batch_id = $1",
+        first.batch_id,
+    )
+    item_rows = await batch_db.query_raw(
+        "SELECT item_id FROM deltallm_batch_item WHERE batch_id = $1",
+        first.batch_id,
+    )
+    session_rows = await batch_db.query_raw(
+        """
+        SELECT status, promotion_attempt_count
+        FROM deltallm_batch_create_session
+        WHERE session_id = $1
+        """,
+        session.session_id,
+    )
+
+    assert len(job_rows) == 1
+    assert len(item_rows) == 3
+    assert dict(session_rows[0]) == {
+        "status": "completed",
+        "promotion_attempt_count": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_db_backed_create_session_promotion_handles_large_item_counts(
+    batch_db,
+    tmp_path: Path,
+) -> None:
+    repository = BatchRepository(batch_db)
+    storage = LocalBatchArtifactStorage(str(tmp_path / "create-session-artifacts"))
+    staging = BatchCreateArtifactStorageBackend(storage=storage)
+    input_file_id = await _seed_create_session_input_file(repository)
+    session = await _seed_staged_create_session(
+        repository=repository,
+        staging=staging,
+        input_file_id=input_file_id,
+        target_batch_id="batch-promote-large",
+        request_count=401,
+    )
+    promoter = BatchCreateSessionPromoter(
+        repository=repository,
+        staging=staging,
+        insert_chunk_size=250,
+    )
+
+    result = await promoter.promote_session(session.session_id)
+
+    item_rows = await batch_db.query_raw(
+        """
+        SELECT COUNT(*) AS total
+        FROM deltallm_batch_item
+        WHERE batch_id = $1
+        """,
+        result.batch_id,
+    )
+    job_rows = await batch_db.query_raw(
+        """
+        SELECT total_items, status
+        FROM deltallm_batch_job
+        WHERE batch_id = $1
+        """,
+        result.batch_id,
+    )
+
+    assert result.promoted is True
+    assert int(dict(item_rows[0])["total"]) == 401
+    assert dict(job_rows[0]) == {
+        "total_items": 401,
+        "status": "queued",
+    }
+
+
+@pytest.mark.asyncio
+async def test_db_backed_create_session_promotion_is_not_claimable_before_commit(
+    batch_db,
+    tmp_path: Path,
+) -> None:
+    class _BlockingPromotionRepository(BatchRepository):
+        def __init__(self, prisma_client: Any, entered: asyncio.Event, release: asyncio.Event) -> None:
+            super().__init__(prisma_client)
+            self.entered = entered
+            self.release = release
+
+        def with_prisma(self, prisma_client: Any | None) -> "_BlockingPromotionRepository":
+            return _BlockingPromotionRepository(prisma_client, self.entered, self.release)
+
+        async def create_items(self, batch_id: str, items: list[BatchItemCreate]) -> int:
+            inserted = await super().create_items(batch_id, items)
+            self.entered.set()
+            await self.release.wait()
+            return inserted
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    repository = _BlockingPromotionRepository(batch_db, entered, release)
+    storage = LocalBatchArtifactStorage(str(tmp_path / "create-session-artifacts"))
+    staging = BatchCreateArtifactStorageBackend(storage=storage)
+    input_file_id = await _seed_create_session_input_file(repository)
+    session = await _seed_staged_create_session(
+        repository=repository,
+        staging=staging,
+        input_file_id=input_file_id,
+        target_batch_id="batch-promote-claim-race",
+    )
+    promoter = BatchCreateSessionPromoter(repository=repository, staging=staging)
+
+    promotion_task = asyncio.create_task(promoter.promote_session(session.session_id))
+    await entered.wait()
+
+    claimed_before_commit = await BatchRepository(batch_db).claim_next_job(worker_id="worker-before")
+    assert claimed_before_commit is None
+
+    release.set()
+    result = await promotion_task
+    claimed_after_commit = await BatchRepository(batch_db).claim_next_job(worker_id="worker-after")
+
+    assert result.promoted is True
+    assert claimed_after_commit is not None
+    assert claimed_after_commit.batch_id == result.batch_id
 
 
 @pytest.mark.asyncio
@@ -766,6 +1230,30 @@ async def test_db_backed_batch_create_session_status_check_rejects_invalid_rows(
                 'batch-create-stage/invalid.jsonl',
                 16,
                 1
+            )
+            """,
+            input_file_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_db_backed_batch_job_status_check_rejects_invalid_rows(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+
+    with pytest.raises(Exception):
+        await batch_db.execute_raw(
+            """
+            INSERT INTO deltallm_batch_job (
+                batch_id, endpoint, status, execution_mode, input_file_id, total_items
+            )
+            VALUES (
+                'batch-invalid-job-status',
+                '/v1/embeddings',
+                'broken',
+                'managed_internal',
+                $1,
+                0
             )
             """,
             input_file_id,

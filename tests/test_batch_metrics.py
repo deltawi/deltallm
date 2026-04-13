@@ -29,6 +29,7 @@ def test_batch_metrics_are_exported() -> None:
     set_batch_oldest_item_age(status="pending", age_seconds=12.5)
     set_batch_worker_saturation(worker_id="worker-1", active=2, capacity=4)
     increment_batch_create_session_action(action="stage", status="success")
+    increment_batch_create_session_action(action="promotion_precheck", status="rejected")
     increment_batch_finalization_retry(result="scheduled")
     increment_batch_artifact_failure(operation="delete", backend="s3")
     increment_batch_repair_action(action="retry_finalization", status="success")
@@ -46,6 +47,8 @@ def test_batch_metrics_are_exported() -> None:
     assert "deltallm_batch_oldest_item_age_seconds" in metrics_text
     assert "deltallm_batch_worker_saturation_ratio" in metrics_text
     assert "deltallm_batch_create_session_actions_total" in metrics_text
+    assert 'action="promotion_precheck"' in metrics_text
+    assert 'status="rejected"' in metrics_text
     assert "deltallm_batch_finalization_retries_total" in metrics_text
     assert "deltallm_batch_artifact_failures_total" in metrics_text
     assert "deltallm_batch_repair_actions_total" in metrics_text

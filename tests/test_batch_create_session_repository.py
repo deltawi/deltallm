@@ -118,6 +118,20 @@ async def test_mark_session_expired_sets_expired_status() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_session_for_update_uses_row_lock() -> None:
+    now = datetime.now(tz=UTC)
+    prisma = _PrismaSpy(rows=[_session_row(status=BatchCreateSessionStatus.STAGED, now=now)])
+    repository = BatchCreateSessionRepository(prisma)
+
+    record = await repository.get_session_for_update("session-1")
+
+    assert record is not None
+    assert record.status == BatchCreateSessionStatus.STAGED
+    assert "FOR UPDATE" in prisma.sql
+    assert "LIMIT 1" in prisma.sql
+
+
+@pytest.mark.asyncio
 async def test_summarize_statuses_returns_all_known_statuses() -> None:
     prisma = _PrismaSpy(
         rows=[
@@ -209,6 +223,30 @@ async def test_delete_cleanup_candidate_requires_snapshot_match() -> None:
     assert "last_attempt_at IS NOT DISTINCT FROM $7::timestamp" in prisma.sql
     assert prisma.params[0] == "session-1"
     assert prisma.params[1] == BatchCreateSessionStatus.FAILED_RETRYABLE
+
+
+@pytest.mark.asyncio
+async def test_mark_session_failed_retryable_can_increment_attempts_with_status_guard() -> None:
+    now = datetime.now(tz=UTC)
+    row = _session_row(status=BatchCreateSessionStatus.FAILED_RETRYABLE, now=now)
+    row["promotion_attempt_count"] = 1
+    prisma = _PrismaSpy(rows=[row])
+    repository = BatchCreateSessionRepository(prisma)
+
+    record = await repository.mark_session_failed_retryable(
+        "session-1",
+        error_code="pending_limit_exceeded",
+        error_message="active batch count exceeds the configured cap",
+        attempted_at=now,
+        expires_at=None,
+        increment_promotion_attempt_count=True,
+        from_statuses=(BatchCreateSessionStatus.STAGED, BatchCreateSessionStatus.FAILED_RETRYABLE),
+    )
+
+    assert record is not None
+    assert record.status == BatchCreateSessionStatus.FAILED_RETRYABLE
+    assert "promotion_attempt_count = promotion_attempt_count + 1" in prisma.sql
+    assert "status IN ($7, $8)" in prisma.sql
 
 
 @pytest.mark.asyncio

@@ -938,10 +938,21 @@ model DeltaLLM_BatchCreateSession {
   @@map("deltallm_batch_create_session")
 }
 
+enum DeltaLLM_BatchJobStatus {
+  validating
+  queued
+  in_progress
+  finalizing
+  completed
+  failed
+  cancelled
+  expired
+}
+
 model DeltaLLM_BatchJob {
   batch_id                 String   @id @default(uuid())
   endpoint                 String
-  status                   String
+  status                   DeltaLLM_BatchJobStatus
   execution_mode           String   @default("managed_internal")
   input_file_id            String
   output_file_id           String?
