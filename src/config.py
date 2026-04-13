@@ -13,8 +13,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.batch.create.defaults import (
     DEFAULT_CREATE_SESSION_CLEANUP_INTERVAL_SECONDS,
+    DEFAULT_CREATE_SESSION_CLEANUP_SCAN_LIMIT,
     DEFAULT_CREATE_SESSION_COMPLETED_RETENTION_SECONDS,
     DEFAULT_CREATE_SESSION_FAILED_RETENTION_SECONDS,
+    DEFAULT_CREATE_SESSION_ORPHAN_GRACE_SECONDS,
     DEFAULT_CREATE_SESSION_RETRYABLE_RETENTION_SECONDS,
 )
 from src.upstream_auth import (
@@ -315,6 +317,15 @@ class GeneralSettings(BaseModel):
     embeddings_batch_create_session_cleanup_interval_seconds: float = Field(
         default=DEFAULT_CREATE_SESSION_CLEANUP_INTERVAL_SECONDS,
         gt=0,
+    )
+    embeddings_batch_create_session_cleanup_scan_limit: int = Field(
+        default=DEFAULT_CREATE_SESSION_CLEANUP_SCAN_LIMIT,
+        ge=1,
+        le=1000,
+    )
+    embeddings_batch_create_stage_orphan_grace_seconds: int = Field(
+        default=DEFAULT_CREATE_SESSION_ORPHAN_GRACE_SECONDS,
+        ge=60,
     )
     embeddings_batch_create_session_completed_retention_seconds: int = Field(
         default=DEFAULT_CREATE_SESSION_COMPLETED_RETENTION_SECONDS,

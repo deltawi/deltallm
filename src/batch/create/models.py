@@ -13,6 +13,26 @@ class BatchCreateSessionStatus:
     EXPIRED = "expired"
 
 
+BATCH_CREATE_SESSION_STATUSES = (
+    BatchCreateSessionStatus.STAGED,
+    BatchCreateSessionStatus.COMPLETED,
+    BatchCreateSessionStatus.FAILED_RETRYABLE,
+    BatchCreateSessionStatus.FAILED_PERMANENT,
+    BatchCreateSessionStatus.EXPIRED,
+)
+_BATCH_CREATE_SESSION_STATUS_SET = frozenset(BATCH_CREATE_SESSION_STATUSES)
+
+
+def normalize_batch_create_session_status(status: str) -> str:
+    normalized = str(status or "").strip()
+    if normalized not in _BATCH_CREATE_SESSION_STATUS_SET:
+        raise ValueError(
+            "batch create session status must be one of: "
+            + ", ".join(BATCH_CREATE_SESSION_STATUSES)
+        )
+    return normalized
+
+
 def normalize_idempotency_pair(
     idempotency_scope_key: str | None,
     idempotency_key: str | None,
@@ -22,6 +42,41 @@ def normalize_idempotency_pair(
     if (normalized_scope_key is None) != (normalized_key is None):
         raise ValueError("idempotency_scope_key and idempotency_key must both be set or both be omitted")
     return normalized_scope_key, normalized_key
+
+
+@dataclass
+class BatchCreateStagedRequest:
+    line_number: int
+    custom_id: str
+    request_body: dict[str, Any]
+
+    def __post_init__(self) -> None:
+        if int(self.line_number) <= 0:
+            raise ValueError("line_number must be positive")
+        self.line_number = int(self.line_number)
+        self.custom_id = str(self.custom_id or "").strip()
+        if not self.custom_id:
+            raise ValueError("custom_id is required")
+        if not isinstance(self.request_body, dict):
+            raise ValueError("request_body must be an object")
+        self.request_body = dict(self.request_body)
+
+    def to_jsonable(self) -> dict[str, Any]:
+        return {
+            "line_number": self.line_number,
+            "custom_id": self.custom_id,
+            "request_body": self.request_body,
+        }
+
+    @classmethod
+    def from_jsonable(cls, payload: dict[str, Any]) -> "BatchCreateStagedRequest":
+        if not isinstance(payload, dict):
+            raise ValueError("staged batch-create line must be an object")
+        return cls(
+            line_number=int(payload.get("line_number") or 0),
+            custom_id=str(payload.get("custom_id") or ""),
+            request_body=payload.get("request_body"),
+        )
 
 
 @dataclass
@@ -56,6 +111,7 @@ class BatchCreateSessionCreate:
     expires_at: datetime | None = None
 
     def __post_init__(self) -> None:
+        self.status = normalize_batch_create_session_status(self.status)
         self.idempotency_scope_key, self.idempotency_key = normalize_idempotency_pair(
             self.idempotency_scope_key,
             self.idempotency_key,
@@ -94,3 +150,6 @@ class BatchCreateSessionRecord:
     completed_at: datetime | None
     last_attempt_at: datetime | None
     expires_at: datetime | None
+
+    def __post_init__(self) -> None:
+        self.status = normalize_batch_create_session_status(self.status)

@@ -56,6 +56,59 @@ Out of scope for PR 2:
 4. Admin session endpoints.
 5. Legacy staged-job deletion.
 
+## PR-Specific Invariants
+
+PR 2 must maintain these invariants:
+
+1. Staged artifacts are internal-only and never represented as `BatchFile` rows.
+2. Orphan cleanup must use the full configured `scan_limit` whenever enough eligible artifacts exist.
+3. Orphan selection must not starve a backend and must not waste cleanup capacity when another backend is sparse or empty.
+4. Local orphan discovery work must scale with `limit`, not with the total number of files under the stage prefix.
+5. Legacy flat local staged artifacts must remain discoverable until PR 2 explicitly removes compatibility.
+6. Cleanup must remain scoped to create sessions and internal staged artifacts only.
+7. Session cleanup must prefer recoverable leftover artifacts over deleting live or refreshed session state.
+
+## Failure-Mode Pass
+
+PR 2 review must explicitly cover:
+
+1. artifact write succeeds but session insert fails
+2. compensation delete fails and orphan sweep must recover later
+3. cleanup races with a session refresh or retry
+4. one backend is hot while another backend is empty
+5. a large single-day shard on local storage
+6. legacy flat artifacts mixed with newer sharded artifacts
+7. day rollover with a cutoff earlier than the current day
+
+## Implementation Status
+
+Current branch status:
+
+- implemented: create-session repository lifecycle methods for create, lookup, status transitions, summary, expiry listing, and delete
+- implemented: normalized staged artifact backend with typed JSONL write, read, and delete over the existing local/S3 artifact storage layer
+- implemented: write-side line-size enforcement so staged artifacts obey the same max-line contract on write and read
+- implemented: a small create-session staging coordinator that compensates staged-artifact writes when session insertion fails, preventing orphaned internal artifacts
+- implemented: dedicated create-session cleanup worker with bootstrap wiring, interruptible shutdown, conditional session-row deletion, staged-artifact deletion, orphan staged-artifact sweep, metrics refresh, and transient-iteration resilience
+- implemented: retention-aware cleanup candidate selection driven by worker config rather than requiring every caller to precompute `expires_at`
+- implemented: create-session status validation in application code and a DB-side status check constraint plus stage-artifact lookup index
+- implemented: time-sharded staged artifact keys plus full-budget fair orphan selection across backends
+- implemented: local sharded artifact listing that uses timestamp-prefixed filenames, stops at the configured limit, and keeps legacy flat artifacts discoverable
+- implemented: dark-launch bootstrap seam so staged artifact storage is available whenever create sessions are enabled, even if cleanup remains disabled
+- implemented: focused unit coverage for repository lifecycle, staging round-trips, cleanup behavior, and bootstrap wiring
+- implemented: DB-backed tests for session lifecycle, staging compensation, orphan cleanup, and cleanup delete race semantics
+
+Validation status on this branch:
+
+- passed: focused PR 2 unit/bootstrap slice
+- blocked in this environment: DB-backed PR 2 tests require a running Postgres on `localhost:5432`
+
+Commands run:
+
+- `/Users/mehditantaoui/Documents/Challenges/deltallm/.venv/bin/pytest tests/test_batch_storage.py tests/test_batch_create_session_repository.py tests/test_batch_create_staging.py tests/test_batch_create_session_cleanup.py tests/test_batch_db_integration.py`
+  Result: `38 passed, 20 skipped`
+- `/Users/mehditantaoui/Documents/Challenges/deltallm/.venv/bin/ruff check src/batch/create src/batch/storage.py tests/test_batch_storage.py tests/test_batch_create_session_repository.py tests/test_batch_create_staging.py tests/test_batch_create_session_cleanup.py tests/test_batch_db_integration.py`
+  Result: `All checks passed!`
+
 ## Design Decisions
 
 ### 1. Staged artifact is the retry boundary
@@ -91,7 +144,19 @@ Reason:
 - different retention windows
 - different failure semantics
 
-### 4. Keep write format append-friendly and streaming-friendly
+### 4. Staging compensation is part of the durability boundary
+
+The system must not rely on the cleanup worker to discover artifacts for sessions that never committed.
+
+That means:
+
+- staged artifact write and session insert are still separate operations
+- but the coordinator that performs them must best-effort delete the artifact if session insertion fails
+- cleanup worker discovery remains row-driven and only applies to sessions that actually exist
+- if best-effort compensation still fails, a bounded orphan sweep on the staged-artifact prefix provides eventual recovery without adding another persistence object
+- orphan sweeping must be fair across configured backends so one hot backend does not starve another during migration or rollback windows
+
+### 5. Keep write format append-friendly and streaming-friendly
 
 The staging abstraction should support:
 
@@ -99,7 +164,9 @@ The staging abstraction should support:
 - streaming reads for later promotion
 - backend reuse across local and S3 artifact stores
 
-### 5. Failure classification starts here
+It must also enforce the same max-line contract at write time that promotion will enforce at read time.
+
+### 6. Failure classification starts here
 
 The session repository should support:
 
@@ -116,6 +183,14 @@ Even before promotion exists, the code should carry those states explicitly.
 Recommended storage prefix:
 
 - `batch-create-stage/`
+
+Implemented storage layout on this branch:
+
+- `batch-create-stage/YYYY/MM/DD/<timestamp>-<uuid>-<filename>`
+- the sharded layout keeps local orphan discovery bounded by day directories instead of full-tree scans
+- local listing uses the timestamp embedded in sharded filenames to stop at the configured limit without statting every file in a busy day shard
+- cross-backend orphan selection merges the oldest candidates after asking each backend for up to the full global limit
+- legacy flat local artifacts remain discoverable while PR 2 compatibility is still required
 
 Recommended staged artifact properties:
 
@@ -164,7 +239,8 @@ Recommended new worker:
 Responsibilities:
 
 1. list expirable sessions
-2. delete staged artifacts if still present
+2. delete session rows only if the cleanup snapshot still matches the persisted row
+3. delete staged artifacts for rows cleanup actually won
 3. mark or delete session rows according to retention policy
 4. emit cleanup metrics/logs
 
@@ -173,6 +249,20 @@ Retention recommendations:
 - completed session retention: 24 hours
 - retryable failure retention: 24 hours
 - permanent failure retention: 7 days
+
+Retention behavior implemented on this branch:
+
+- `expires_at` remains an explicit override when present
+- otherwise cleanup derives candidates from status-specific retention windows
+- `staged` sessions are not auto-cleaned in PR 2
+- old unreferenced staged artifacts are also swept by prefix after a configurable orphan grace period
+- row-driven cleanup now deletes the session row first with a null-safe snapshot match and lets orphan sweep handle any later artifact-delete failure
+
+Status integrity implemented on this branch:
+
+- create-session status is validated in the dataclasses and repository update path
+- parsed DB rows fail fast on unknown status values
+- the database now rejects unknown statuses with a check constraint
 
 ## Affected Files
 
@@ -217,6 +307,8 @@ PR 2 is complete when:
 3. A cleanup worker can expire sessions and delete internal staged artifacts.
 4. No public batch-create behavior changes.
 5. No executable `BatchJob` behavior changes.
+6. Orphan sweep can consume the full configured `scan_limit` even when backends are uneven.
+7. Local sharded orphan discovery remains bounded by `limit`, and legacy flat artifacts remain discoverable.
 
 ## Risks
 

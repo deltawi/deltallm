@@ -6,11 +6,16 @@ from typing import Any
 from uuid import uuid4
 
 from src.batch.create.models import (
+    BATCH_CREATE_SESSION_STATUSES,
     BatchCreateSessionCreate,
     BatchCreateSessionRecord,
+    BatchCreateSessionStatus,
+    normalize_batch_create_session_status,
     normalize_idempotency_pair,
 )
 from src.batch.repositories.mappers import parse_datetime, parse_json_dict
+
+_UNSET = object()
 
 
 def _session_from_row(row: dict[str, Any]) -> BatchCreateSessionRecord:
@@ -20,7 +25,7 @@ def _session_from_row(row: dict[str, Any]) -> BatchCreateSessionRecord:
     return BatchCreateSessionRecord(
         session_id=str(row.get("session_id") or ""),
         target_batch_id=str(row.get("target_batch_id") or ""),
-        status=str(row.get("status") or ""),
+        status=normalize_batch_create_session_status(str(row.get("status") or "")),
         endpoint=str(row.get("endpoint") or ""),
         input_file_id=str(row.get("input_file_id") or ""),
         staged_storage_backend=str(row.get("staged_storage_backend") or ""),
@@ -62,6 +67,7 @@ class BatchCreateSessionRepository:
             session.idempotency_scope_key,
             session.idempotency_key,
         )
+        normalized_status = normalize_batch_create_session_status(session.status)
         session_id = str(uuid4())
         metadata_json = json.dumps(session.metadata) if session.metadata is not None else None
         rows = await self.prisma.query_raw(
@@ -90,7 +96,7 @@ class BatchCreateSessionRepository:
             """,
             session_id,
             session.target_batch_id,
-            session.status,
+            normalized_status,
             session.endpoint,
             session.input_file_id,
             session.staged_storage_backend,
@@ -186,30 +192,230 @@ class BatchCreateSessionRepository:
             return None
         return _session_from_row(rows[0])
 
-    async def list_expired_sessions(self, *, now: datetime, limit: int = 100) -> list[BatchCreateSessionRecord]:
+    async def mark_session_completed(
+        self,
+        session_id: str,
+        *,
+        completed_at: datetime,
+        expires_at: datetime | None,
+    ) -> BatchCreateSessionRecord | None:
+        return await self._update_session(
+            session_id,
+            status=BatchCreateSessionStatus.COMPLETED,
+            completed_at=completed_at,
+            last_attempt_at=completed_at,
+            expires_at=expires_at,
+            last_error_code=None,
+            last_error_message=None,
+        )
+
+    async def mark_session_failed_retryable(
+        self,
+        session_id: str,
+        *,
+        error_code: str | None,
+        error_message: str | None,
+        attempted_at: datetime,
+        expires_at: datetime | None,
+    ) -> BatchCreateSessionRecord | None:
+        return await self._update_session(
+            session_id,
+            status=BatchCreateSessionStatus.FAILED_RETRYABLE,
+            last_attempt_at=attempted_at,
+            expires_at=expires_at,
+            last_error_code=error_code,
+            last_error_message=error_message,
+        )
+
+    async def mark_session_failed_permanent(
+        self,
+        session_id: str,
+        *,
+        error_code: str | None,
+        error_message: str | None,
+        attempted_at: datetime,
+        expires_at: datetime | None,
+    ) -> BatchCreateSessionRecord | None:
+        return await self._update_session(
+            session_id,
+            status=BatchCreateSessionStatus.FAILED_PERMANENT,
+            last_attempt_at=attempted_at,
+            expires_at=expires_at,
+            last_error_code=error_code,
+            last_error_message=error_message,
+        )
+
+    async def mark_session_expired(
+        self,
+        session_id: str,
+        *,
+        expired_at: datetime,
+    ) -> BatchCreateSessionRecord | None:
+        return await self._update_session(
+            session_id,
+            status=BatchCreateSessionStatus.EXPIRED,
+            expires_at=expired_at,
+        )
+
+    async def list_cleanup_candidates(
+        self,
+        *,
+        now: datetime,
+        completed_before: datetime,
+        retryable_before: datetime,
+        failed_before: datetime,
+        limit: int = 100,
+    ) -> list[BatchCreateSessionRecord]:
         if self.prisma is None:
             return []
         rows = await self.prisma.query_raw(
             """
             SELECT *
             FROM deltallm_batch_create_session
-            WHERE expires_at IS NOT NULL
-              AND expires_at < $1::timestamp
-            ORDER BY expires_at ASC
-            LIMIT $2
+            WHERE (
+                    expires_at IS NOT NULL
+                AND expires_at < $1::timestamp
+            )
+               OR (
+                    expires_at IS NULL
+                AND (
+                        (status = 'completed' AND COALESCE(completed_at, created_at) < $2::timestamp)
+                     OR (status = 'failed_retryable' AND COALESCE(last_attempt_at, created_at) < $3::timestamp)
+                     OR (status = 'failed_permanent' AND COALESCE(last_attempt_at, created_at) < $4::timestamp)
+                )
+            )
+            ORDER BY COALESCE(expires_at, completed_at, last_attempt_at, created_at) ASC
+            LIMIT $5
             """,
             now,
+            completed_before,
+            retryable_before,
+            failed_before,
             max(1, min(limit, 1000)),
         )
         return [_session_from_row(row) for row in rows]
 
-    async def delete_session(self, session_id: str) -> None:
+    async def summarize_statuses(self) -> dict[str, int]:
         if self.prisma is None:
-            return
-        await self.prisma.execute_raw(
+            return {status: 0 for status in BATCH_CREATE_SESSION_STATUSES}
+        rows = await self.prisma.query_raw(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE status = 'staged') AS staged,
+                COUNT(*) FILTER (WHERE status = 'completed') AS completed,
+                COUNT(*) FILTER (WHERE status = 'failed_retryable') AS failed_retryable,
+                COUNT(*) FILTER (WHERE status = 'failed_permanent') AS failed_permanent,
+                COUNT(*) FILTER (WHERE status = 'expired') AS expired
+            FROM deltallm_batch_create_session
+            """
+        )
+        row = dict(rows[0]) if rows else {}
+        return {
+            status: int(row.get(status) or 0)
+            for status in BATCH_CREATE_SESSION_STATUSES
+        }
+
+    async def is_stage_artifact_referenced(
+        self,
+        *,
+        storage_backend: str,
+        storage_key: str,
+    ) -> bool:
+        if self.prisma is None:
+            return False
+        rows = await self.prisma.query_raw(
+            """
+            SELECT 1
+            FROM deltallm_batch_create_session
+            WHERE staged_storage_backend = $1
+              AND staged_storage_key = $2
+            LIMIT 1
+            """,
+            str(storage_backend or "").strip(),
+            str(storage_key or "").strip(),
+        )
+        return bool(rows)
+
+    async def delete_cleanup_candidate(self, session: BatchCreateSessionRecord) -> BatchCreateSessionRecord | None:
+        if self.prisma is None:
+            return None
+        rows = await self.prisma.query_raw(
+            """
+            DELETE FROM deltallm_batch_create_session
+            WHERE session_id = $1
+              AND status = $2
+              AND staged_storage_backend = $3
+              AND staged_storage_key = $4
+              AND expires_at IS NOT DISTINCT FROM $5::timestamp
+              AND completed_at IS NOT DISTINCT FROM $6::timestamp
+              AND last_attempt_at IS NOT DISTINCT FROM $7::timestamp
+            RETURNING *
+            """,
+            session.session_id,
+            normalize_batch_create_session_status(session.status),
+            session.staged_storage_backend,
+            session.staged_storage_key,
+            session.expires_at,
+            session.completed_at,
+            session.last_attempt_at,
+        )
+        if not rows:
+            return None
+        return _session_from_row(rows[0])
+
+    async def delete_session(self, session_id: str) -> bool:
+        if self.prisma is None:
+            return False
+        deleted = await self.prisma.execute_raw(
             """
             DELETE FROM deltallm_batch_create_session
             WHERE session_id = $1
             """,
             session_id,
         )
+        return bool(deleted)
+
+    async def _update_session(
+        self,
+        session_id: str,
+        *,
+        status: str,
+        completed_at: datetime | None | object = _UNSET,
+        last_attempt_at: datetime | None | object = _UNSET,
+        expires_at: datetime | None | object = _UNSET,
+        last_error_code: str | None | object = _UNSET,
+        last_error_message: str | None | object = _UNSET,
+    ) -> BatchCreateSessionRecord | None:
+        if self.prisma is None:
+            return None
+        normalized_status = normalize_batch_create_session_status(status)
+        params: list[Any] = [session_id, normalized_status]
+        set_clauses = ["status = $2"]
+
+        def _add_clause(column: str, value: Any, cast: str | None = None) -> None:
+            if value is _UNSET:
+                return
+            params.append(value)
+            placeholder = f"${len(params)}"
+            if cast is not None:
+                placeholder = f"{placeholder}::{cast}"
+            set_clauses.append(f"{column} = {placeholder}")
+
+        _add_clause("completed_at", completed_at, "timestamp")
+        _add_clause("last_attempt_at", last_attempt_at, "timestamp")
+        _add_clause("expires_at", expires_at, "timestamp")
+        _add_clause("last_error_code", last_error_code)
+        _add_clause("last_error_message", last_error_message)
+
+        rows = await self.prisma.query_raw(
+            f"""
+            UPDATE deltallm_batch_create_session
+            SET {", ".join(set_clauses)}
+            WHERE session_id = $1
+            RETURNING *
+            """,
+            *params,
+        )
+        if not rows:
+            return None
+        return _session_from_row(rows[0])

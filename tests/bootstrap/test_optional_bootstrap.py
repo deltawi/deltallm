@@ -61,6 +61,8 @@ def _batch_config(
             embeddings_batch_create_sessions_enabled=create_sessions_enabled,
             embeddings_batch_create_session_cleanup_enabled=create_session_cleanup_enabled,
             embeddings_batch_create_session_cleanup_interval_seconds=300,
+            embeddings_batch_create_session_cleanup_scan_limit=25,
+            embeddings_batch_create_stage_orphan_grace_seconds=1800,
             embeddings_batch_create_session_completed_retention_seconds=604_800,
             embeddings_batch_create_session_retryable_retention_seconds=259_200,
             embeddings_batch_create_session_failed_retention_seconds=1_209_600,
@@ -158,6 +160,7 @@ async def test_init_batch_runtime_disabled_sets_batch_state_to_none() -> None:
     assert app.state.batch_storage_registry is None
     assert app.state.batch_service is None
     assert app.state.batch_create_session_repository is None
+    assert app.state.batch_create_staging_backend is None
     assert app.state.batch_create_session_cleanup_worker is None
     assert runtime.worker is None
     assert runtime.gc_worker is None
@@ -263,6 +266,7 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
     assert app.state.batch_storage == {"path": "/tmp/batch-artifacts"}
     assert app.state.batch_storage_registry == {"local": {"path": "/tmp/batch-artifacts"}}
     assert app.state.batch_create_session_repository == "create-session-repo"
+    assert app.state.batch_create_staging_backend is None
     assert app.state.batch_create_session_cleanup_worker is None
     assert isinstance(app.state.batch_service, FakeBatchService)
     assert created["service"].repository is repository
@@ -275,6 +279,7 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
     assert runtime.completion_outbox_task is not None
     assert runtime.gc_worker is created["gc_worker"]
     assert runtime.gc_task is not None
+    assert runtime.create_session_staging_backend is None
     assert runtime.create_session_cleanup_worker is None
     assert runtime.create_session_cleanup_task is None
     assert created["gc_worker"].storage_registry == {"local": {"path": "/tmp/batch-artifacts"}}
@@ -317,8 +322,19 @@ async def test_init_and_shutdown_batch_runtime_with_create_session_cleanup_worke
         def stop(self) -> None:
             self.stopped = True
 
+    class FakeStagingBackend:
+        def __init__(self, *, storage, storage_registry=None, stage_purpose="batch-create-stage", chunk_size=65_536, max_line_bytes=1_048_576) -> None:  # noqa: ANN001,E501
+            self.storage = storage
+            self.storage_registry = storage_registry
+            self.stage_purpose = stage_purpose
+            self.chunk_size = chunk_size
+            self.max_line_bytes = max_line_bytes
+            created["staging_backend"] = self
+
     class FakeCreateSessionCleanupWorker:
-        def __init__(self, *, config) -> None:  # noqa: ANN001
+        def __init__(self, *, repository, staging, config) -> None:  # noqa: ANN001
+            self.repository = repository
+            self.staging = staging
             self.config = config
             self.stopped = False
             created["cleanup_worker"] = self
@@ -333,6 +349,7 @@ async def test_init_and_shutdown_batch_runtime_with_create_session_cleanup_worke
     monkeypatch.setattr("src.bootstrap.batch.LocalBatchArtifactStorage", lambda path: {"path": path})
     monkeypatch.setattr("src.bootstrap.batch.BatchService", FakeBatchService)
     monkeypatch.setattr("src.bootstrap.batch.BatchCompletionOutboxWorker", FakeCompletionOutboxWorker)
+    monkeypatch.setattr("src.bootstrap.batch.BatchCreateArtifactStorageBackend", FakeStagingBackend)
     monkeypatch.setattr("src.bootstrap.batch.BatchCreateSessionCleanupWorker", FakeCreateSessionCleanupWorker)
 
     app = SimpleNamespace(state=SimpleNamespace())
@@ -351,10 +368,20 @@ async def test_init_and_shutdown_batch_runtime_with_create_session_cleanup_worke
     )
 
     assert app.state.batch_create_session_repository == "create-session-repo"
+    assert app.state.batch_create_staging_backend is created["staging_backend"]
     assert app.state.batch_create_session_cleanup_worker is created["cleanup_worker"]
+    assert runtime.create_session_staging_backend is created["staging_backend"]
     assert runtime.create_session_cleanup_worker is created["cleanup_worker"]
     assert runtime.create_session_cleanup_task is not None
+    assert created["staging_backend"].storage == {"path": "/tmp/batch-artifacts"}
+    assert created["staging_backend"].storage_registry == {"local": {"path": "/tmp/batch-artifacts"}}
+    assert created["staging_backend"].chunk_size == 65_536
+    assert created["staging_backend"].max_line_bytes == 1_048_576
+    assert created["cleanup_worker"].repository == "create-session-repo"
+    assert created["cleanup_worker"].staging is created["staging_backend"]
     assert created["cleanup_worker"].config.interval_seconds == 300
+    assert created["cleanup_worker"].config.scan_limit == 25
+    assert created["cleanup_worker"].config.orphan_grace_seconds == 1800
     assert runtime.statuses == (
         BootstrapStatus("embeddings_batch", "ready"),
         BootstrapStatus("embeddings_batch_worker", "disabled"),
@@ -366,6 +393,77 @@ async def test_init_and_shutdown_batch_runtime_with_create_session_cleanup_worke
     await shutdown_batch_runtime(runtime)
 
     assert created["cleanup_worker"].stopped is True
+
+
+@pytest.mark.asyncio
+async def test_init_batch_runtime_with_create_sessions_enabled_builds_staging_backend_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: dict[str, object] = {}
+
+    class FakeBatchService:
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            del args, kwargs
+
+    class FakeCompletionOutboxWorker:
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            self.stopped = False
+
+        async def run(self) -> None:
+            while not self.stopped:
+                await asyncio.sleep(0.01)
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    class FakeStagingBackend:
+        def __init__(self, *, storage, storage_registry=None, stage_purpose="batch-create-stage", chunk_size=65_536, max_line_bytes=1_048_576) -> None:  # noqa: ANN001,E501
+            self.storage = storage
+            self.storage_registry = storage_registry
+            self.stage_purpose = stage_purpose
+            self.chunk_size = chunk_size
+            self.max_line_bytes = max_line_bytes
+            created["staging_backend"] = self
+
+    monkeypatch.setattr("src.bootstrap.batch.LocalBatchArtifactStorage", lambda path: {"path": path})
+    monkeypatch.setattr("src.bootstrap.batch.BatchService", FakeBatchService)
+    monkeypatch.setattr("src.bootstrap.batch.BatchCompletionOutboxWorker", FakeCompletionOutboxWorker)
+    monkeypatch.setattr("src.bootstrap.batch.BatchCreateArtifactStorageBackend", FakeStagingBackend)
+
+    app = SimpleNamespace(state=SimpleNamespace())
+    repository = SimpleNamespace(create_sessions="create-session-repo")
+
+    runtime = await init_batch_runtime(
+        app,
+        _batch_config(
+            enabled=True,
+            worker_enabled=False,
+            gc_enabled=False,
+            create_sessions_enabled=True,
+            create_session_cleanup_enabled=False,
+        ),
+        repository=repository,
+    )
+
+    assert app.state.batch_create_session_repository == "create-session-repo"
+    assert app.state.batch_create_staging_backend is created["staging_backend"]
+    assert app.state.batch_create_session_cleanup_worker is None
+    assert runtime.create_session_staging_backend is created["staging_backend"]
+    assert runtime.create_session_cleanup_worker is None
+    assert runtime.create_session_cleanup_task is None
+    assert created["staging_backend"].storage == {"path": "/tmp/batch-artifacts"}
+    assert created["staging_backend"].storage_registry == {"local": {"path": "/tmp/batch-artifacts"}}
+    assert created["staging_backend"].chunk_size == 65_536
+    assert created["staging_backend"].max_line_bytes == 1_048_576
+    assert runtime.statuses == (
+        BootstrapStatus("embeddings_batch", "ready"),
+        BootstrapStatus("embeddings_batch_worker", "disabled"),
+        BootstrapStatus("embeddings_batch_completion_outbox", "ready"),
+        BootstrapStatus("embeddings_batch_gc", "disabled"),
+        BootstrapStatus("embeddings_batch_create_session_cleanup", "disabled"),
+    )
+
+    await shutdown_batch_runtime(runtime)
 
 
 @pytest.mark.asyncio
