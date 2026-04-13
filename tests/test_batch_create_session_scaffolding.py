@@ -7,16 +7,22 @@ import pytest
 from src.batch.create.cleanup import BatchCreateSessionCleanupConfig
 from src.batch.create.defaults import (
     DEFAULT_CREATE_SESSION_CLEANUP_INTERVAL_SECONDS,
+    DEFAULT_CREATE_SESSION_CLEANUP_SCAN_LIMIT,
     DEFAULT_CREATE_SESSION_COMPLETED_RETENTION_SECONDS,
     DEFAULT_CREATE_SESSION_FAILED_RETENTION_SECONDS,
+    DEFAULT_CREATE_SESSION_ORPHAN_GRACE_SECONDS,
     DEFAULT_CREATE_SESSION_RETRYABLE_RETENTION_SECONDS,
 )
 from src.batch.create import (
+    BatchCreateArtifactStorageBackend,
     BatchCreatePromotionResult,
     BatchCreateSessionCreate,
     BatchCreateSessionRepository,
+    BatchCreateSessionStager,
     BatchCreateSessionStatus,
+    BatchCreateStagedRequest,
     StagedBatchCreateArtifact,
+    staged_artifact_from_session,
 )
 from src.batch.repository import BatchRepository
 from src.config import GeneralSettings
@@ -49,10 +55,30 @@ def test_batch_create_session_scaffold_exports_are_constructible() -> None:
         checksum="abc123",
     )
     result = BatchCreatePromotionResult(session_id="session-1", batch_id="batch-1", promoted=False)
+    record = BatchCreateStagedRequest(
+        line_number=1,
+        custom_id="req-1",
+        request_body={"model": "m1", "input": "hello"},
+    )
 
     assert artifact.storage_backend == "local"
     assert artifact.storage_key.endswith(".jsonl")
     assert result.batch_id == "batch-1"
+    assert record.to_jsonable()["custom_id"] == "req-1"
+    assert BatchCreateSessionStager is not None
+    assert staged_artifact_from_session(
+        type(
+            "Session",
+            (),
+            {
+                "staged_storage_backend": "local",
+                "staged_storage_key": "batch-create/session-1.jsonl",
+                "staged_bytes": 128,
+                "staged_checksum": "abc123",
+            },
+        )()
+    ).storage_key.endswith(".jsonl")
+    assert BatchCreateArtifactStorageBackend is not None
 
 
 def test_batch_repository_exposes_create_session_repository() -> None:
@@ -68,10 +94,14 @@ def test_batch_create_session_cleanup_defaults_match_general_settings() -> None:
     settings = GeneralSettings()
 
     assert cleanup.interval_seconds == DEFAULT_CREATE_SESSION_CLEANUP_INTERVAL_SECONDS
+    assert cleanup.scan_limit == DEFAULT_CREATE_SESSION_CLEANUP_SCAN_LIMIT
+    assert cleanup.orphan_grace_seconds == DEFAULT_CREATE_SESSION_ORPHAN_GRACE_SECONDS
     assert cleanup.completed_retention_seconds == DEFAULT_CREATE_SESSION_COMPLETED_RETENTION_SECONDS
     assert cleanup.retryable_retention_seconds == DEFAULT_CREATE_SESSION_RETRYABLE_RETENTION_SECONDS
     assert cleanup.failed_retention_seconds == DEFAULT_CREATE_SESSION_FAILED_RETENTION_SECONDS
     assert settings.embeddings_batch_create_session_cleanup_interval_seconds == cleanup.interval_seconds
+    assert settings.embeddings_batch_create_session_cleanup_scan_limit == cleanup.scan_limit
+    assert settings.embeddings_batch_create_stage_orphan_grace_seconds == cleanup.orphan_grace_seconds
     assert settings.embeddings_batch_create_session_completed_retention_seconds == cleanup.completed_retention_seconds
     assert settings.embeddings_batch_create_session_retryable_retention_seconds == cleanup.retryable_retention_seconds
     assert settings.embeddings_batch_create_session_failed_retention_seconds == cleanup.failed_retention_seconds
@@ -106,6 +136,20 @@ def test_batch_create_session_create_normalizes_blank_idempotency_values() -> No
 
     assert session.idempotency_scope_key is None
     assert session.idempotency_key is None
+
+
+def test_batch_create_session_create_rejects_invalid_status() -> None:
+    with pytest.raises(ValueError, match="batch create session status"):
+        BatchCreateSessionCreate(
+            target_batch_id="batch-1",
+            endpoint="/v1/embeddings",
+            input_file_id="file-1",
+            staged_storage_backend="local",
+            staged_storage_key="staged/file-1.jsonl",
+            staged_bytes=512,
+            expected_item_count=3,
+            status="unknown",
+        )
 
 
 @pytest.mark.asyncio
@@ -225,7 +269,7 @@ async def test_get_session_by_idempotency_key_rejects_blank_lookup_inputs() -> N
 
 
 @pytest.mark.asyncio
-async def test_create_session_repository_lists_expired_and_deletes() -> None:
+async def test_create_session_repository_lists_cleanup_candidates_and_deletes() -> None:
     now = datetime.now(tz=UTC)
     prisma = _PrismaSpy(
         rows=[
@@ -265,11 +309,19 @@ async def test_create_session_repository_lists_expired_and_deletes() -> None:
     )
     repository = BatchCreateSessionRepository(prisma_client=prisma)
 
-    sessions = await repository.list_expired_sessions(now=now, limit=20)
+    sessions = await repository.list_cleanup_candidates(
+        now=now,
+        completed_before=now,
+        retryable_before=now,
+        failed_before=now,
+        limit=20,
+    )
 
     assert len(sessions) == 1
-    assert "ORDER BY expires_at ASC" in prisma.sql
-    assert prisma.params[1] == 20
+    assert "COALESCE(completed_at, created_at) < $2::timestamp" in prisma.sql
+    assert "COALESCE(last_attempt_at, created_at) < $3::timestamp" in prisma.sql
+    assert "LIMIT $5" in prisma.sql
+    assert prisma.params[4] == 20
 
     await repository.delete_session("session-2")
 

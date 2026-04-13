@@ -9,6 +9,8 @@ from typing import Any
 
 from src.batch import BatchCleanupConfig, BatchRetentionCleanupWorker, BatchRepository
 from src.batch.create.cleanup import BatchCreateSessionCleanupConfig, BatchCreateSessionCleanupWorker
+from src.batch.create.session_repository import BatchCreateSessionRepository
+from src.batch.create.staging import BatchCreateArtifactStorageBackend
 from src.batch.completion_outbox import BatchCompletionOutboxWorker, BatchCompletionOutboxWorkerConfig
 from src.batch.service import BatchService
 from src.batch.storage import LocalBatchArtifactStorage, S3BatchArtifactStorage
@@ -33,6 +35,7 @@ class BatchRuntime:
     completion_outbox_task: Task[None] | None = None
     gc_worker: BatchRetentionCleanupWorker | None = None
     gc_task: Task[None] | None = None
+    create_session_staging_backend: BatchCreateArtifactStorageBackend | None = None
     create_session_cleanup_worker: BatchCreateSessionCleanupWorker | None = None
     create_session_cleanup_task: Task[None] | None = None
     statuses: tuple[BootstrapStatus, ...] = ()
@@ -93,17 +96,41 @@ def _build_batch_storage(cfg: Any, storage_registry: dict[str, Any]):
         raise RuntimeError(f"Unsupported embeddings batch storage backend: {backend}")
     return storage
 
-
-def _build_create_session_cleanup_worker(cfg: Any) -> BatchCreateSessionCleanupWorker:
+def _build_create_session_staging_backend(
+    cfg: Any,
+    *,
+    storage: Any,
+    storage_registry: dict[str, Any],
+) -> BatchCreateArtifactStorageBackend:
     general = cfg.general_settings
-    return BatchCreateSessionCleanupWorker(
+    return BatchCreateArtifactStorageBackend(
+        storage=storage,
+        storage_registry=storage_registry,
+        chunk_size=general.embeddings_batch_storage_chunk_size,
+        max_line_bytes=general.embeddings_batch_max_line_bytes,
+    )
+
+
+def _build_create_session_cleanup_worker(
+    cfg: Any,
+    *,
+    session_repository: BatchCreateSessionRepository,
+    staging_backend: BatchCreateArtifactStorageBackend,
+) -> BatchCreateSessionCleanupWorker:
+    general = cfg.general_settings
+    cleanup_worker = BatchCreateSessionCleanupWorker(
+        repository=session_repository,
+        staging=staging_backend,
         config=BatchCreateSessionCleanupConfig(
             interval_seconds=general.embeddings_batch_create_session_cleanup_interval_seconds,
+            scan_limit=general.embeddings_batch_create_session_cleanup_scan_limit,
+            orphan_grace_seconds=general.embeddings_batch_create_stage_orphan_grace_seconds,
             completed_retention_seconds=general.embeddings_batch_create_session_completed_retention_seconds,
             retryable_retention_seconds=general.embeddings_batch_create_session_retryable_retention_seconds,
             failed_retention_seconds=general.embeddings_batch_create_session_failed_retention_seconds,
         )
     )
+    return cleanup_worker
 
 
 async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) -> BatchRuntime:
@@ -114,6 +141,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         app.state.batch_storage_registry = None
         app.state.batch_service = None
         app.state.batch_create_session_repository = None
+        app.state.batch_create_staging_backend = None
         app.state.batch_create_session_cleanup_worker = None
         runtime.statuses = (BootstrapStatus("embeddings_batch", "disabled"),)
         return runtime
@@ -123,6 +151,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
     app.state.batch_storage = batch_storage
     app.state.batch_storage_registry = batch_storage_registry
     app.state.batch_create_session_repository = getattr(repository, "create_sessions", None)
+    app.state.batch_create_staging_backend = None
     app.state.batch_create_session_cleanup_worker = None
     app.state.batch_service = BatchService(
         repository=repository,
@@ -193,11 +222,29 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         )
         runtime.gc_task = create_task(runtime.gc_worker.run())
 
+    if cfg.general_settings.embeddings_batch_create_sessions_enabled:
+        session_repository = app.state.batch_create_session_repository
+        if session_repository is None:
+            raise RuntimeError("Batch create-session repository is unavailable while create sessions are enabled")
+        runtime.create_session_staging_backend = _build_create_session_staging_backend(
+            cfg,
+            storage=batch_storage,
+            storage_registry=batch_storage_registry,
+        )
+        app.state.batch_create_staging_backend = runtime.create_session_staging_backend
+
     if (
         cfg.general_settings.embeddings_batch_create_sessions_enabled
         and cfg.general_settings.embeddings_batch_create_session_cleanup_enabled
     ):
-        runtime.create_session_cleanup_worker = _build_create_session_cleanup_worker(cfg)
+        session_repository = app.state.batch_create_session_repository
+        assert session_repository is not None
+        assert runtime.create_session_staging_backend is not None
+        runtime.create_session_cleanup_worker = _build_create_session_cleanup_worker(
+            cfg,
+            session_repository=session_repository,
+            staging_backend=runtime.create_session_staging_backend,
+        )
         app.state.batch_create_session_cleanup_worker = runtime.create_session_cleanup_worker
         runtime.create_session_cleanup_task = create_task(runtime.create_session_cleanup_worker.run())
 
