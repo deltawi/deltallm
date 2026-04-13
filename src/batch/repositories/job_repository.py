@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from src.batch.models import BatchJobRecord, BatchJobStatus
+from src.batch.models import BatchJobRecord, BatchJobStatus, normalize_batch_job_status
 from src.batch.repositories.mappers import job_from_row
 
 
@@ -37,6 +37,7 @@ class BatchJobRepository:
     async def create_job(
         self,
         *,
+        batch_id: str | None = None,
         endpoint: str,
         input_file_id: str,
         model: str | None,
@@ -47,26 +48,45 @@ class BatchJobRepository:
         created_by_organization_id: str | None = None,
         expires_at: datetime | None = None,
         execution_mode: str = "managed_internal",
+        status: str = BatchJobStatus.VALIDATING,
+        total_items: int = 0,
     ) -> BatchJobRecord | None:
         if self.prisma is None:
             return None
-        batch_id = str(uuid4())
+        batch_id = str(batch_id or uuid4())
+        normalized_status = normalize_batch_job_status(status)
         rows = await self.prisma.query_raw(
             """
             INSERT INTO deltallm_batch_job (
                 batch_id, endpoint, status, execution_mode, input_file_id, model, metadata,
-                created_by_api_key, created_by_user_id, created_by_team_id, created_by_organization_id, expires_at
+                total_items, created_by_api_key, created_by_user_id, created_by_team_id,
+                created_by_organization_id, expires_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12::timestamp)
+            VALUES (
+                $1,
+                $2,
+                $3::"DeltaLLM_BatchJobStatus",
+                $4,
+                $5,
+                $6,
+                $7::jsonb,
+                $8,
+                $9,
+                $10,
+                $11,
+                $12,
+                $13::timestamp
+            )
             RETURNING *
             """,
             batch_id,
             endpoint,
-            BatchJobStatus.VALIDATING,
+            normalized_status,
             execution_mode,
             input_file_id,
             model,
             json.dumps(metadata or {}),
+            max(0, int(total_items)),
             created_by_api_key,
             created_by_user_id,
             created_by_team_id,

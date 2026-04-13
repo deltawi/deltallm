@@ -144,6 +144,23 @@ class BatchCreateSessionRepository:
             return None
         return _session_from_row(rows[0])
 
+    async def get_session_for_update(self, session_id: str) -> BatchCreateSessionRecord | None:
+        if self.prisma is None:
+            return None
+        rows = await self.prisma.query_raw(
+            """
+            SELECT *
+            FROM deltallm_batch_create_session
+            WHERE session_id = $1
+            FOR UPDATE
+            LIMIT 1
+            """,
+            session_id,
+        )
+        if not rows:
+            return None
+        return _session_from_row(rows[0])
+
     async def get_session_by_target_batch_id(self, target_batch_id: str) -> BatchCreateSessionRecord | None:
         if self.prisma is None:
             return None
@@ -198,6 +215,8 @@ class BatchCreateSessionRepository:
         *,
         completed_at: datetime,
         expires_at: datetime | None,
+        increment_promotion_attempt_count: bool = False,
+        from_statuses: tuple[str, ...] | None = None,
     ) -> BatchCreateSessionRecord | None:
         return await self._update_session(
             session_id,
@@ -207,6 +226,8 @@ class BatchCreateSessionRepository:
             expires_at=expires_at,
             last_error_code=None,
             last_error_message=None,
+            increment_promotion_attempt_count=increment_promotion_attempt_count,
+            from_statuses=from_statuses,
         )
 
     async def mark_session_failed_retryable(
@@ -217,6 +238,8 @@ class BatchCreateSessionRepository:
         error_message: str | None,
         attempted_at: datetime,
         expires_at: datetime | None,
+        increment_promotion_attempt_count: bool = False,
+        from_statuses: tuple[str, ...] | None = None,
     ) -> BatchCreateSessionRecord | None:
         return await self._update_session(
             session_id,
@@ -225,6 +248,8 @@ class BatchCreateSessionRepository:
             expires_at=expires_at,
             last_error_code=error_code,
             last_error_message=error_message,
+            increment_promotion_attempt_count=increment_promotion_attempt_count,
+            from_statuses=from_statuses,
         )
 
     async def mark_session_failed_permanent(
@@ -235,6 +260,8 @@ class BatchCreateSessionRepository:
         error_message: str | None,
         attempted_at: datetime,
         expires_at: datetime | None,
+        increment_promotion_attempt_count: bool = False,
+        from_statuses: tuple[str, ...] | None = None,
     ) -> BatchCreateSessionRecord | None:
         return await self._update_session(
             session_id,
@@ -243,6 +270,8 @@ class BatchCreateSessionRepository:
             expires_at=expires_at,
             last_error_code=error_code,
             last_error_message=error_message,
+            increment_promotion_attempt_count=increment_promotion_attempt_count,
+            from_statuses=from_statuses,
         )
 
     async def mark_session_expired(
@@ -385,12 +414,18 @@ class BatchCreateSessionRepository:
         expires_at: datetime | None | object = _UNSET,
         last_error_code: str | None | object = _UNSET,
         last_error_message: str | None | object = _UNSET,
+        increment_promotion_attempt_count: bool = False,
+        from_statuses: tuple[str, ...] | None = None,
     ) -> BatchCreateSessionRecord | None:
         if self.prisma is None:
             return None
         normalized_status = normalize_batch_create_session_status(status)
         params: list[Any] = [session_id, normalized_status]
         set_clauses = ["status = $2"]
+        where_clauses = ["session_id = $1"]
+
+        if increment_promotion_attempt_count:
+            set_clauses.append("promotion_attempt_count = promotion_attempt_count + 1")
 
         def _add_clause(column: str, value: Any, cast: str | None = None) -> None:
             if value is _UNSET:
@@ -407,11 +442,18 @@ class BatchCreateSessionRepository:
         _add_clause("last_error_code", last_error_code)
         _add_clause("last_error_message", last_error_message)
 
+        if from_statuses:
+            placeholders: list[str] = []
+            for value in from_statuses:
+                params.append(normalize_batch_create_session_status(value))
+                placeholders.append(f"${len(params)}")
+            where_clauses.append(f"status IN ({', '.join(placeholders)})")
+
         rows = await self.prisma.query_raw(
             f"""
             UPDATE deltallm_batch_create_session
             SET {", ".join(set_clauses)}
-            WHERE session_id = $1
+            WHERE {" AND ".join(where_clauses)}
             RETURNING *
             """,
             *params,

@@ -17,6 +17,8 @@ from src.batch.create.defaults import (
     DEFAULT_CREATE_SESSION_COMPLETED_RETENTION_SECONDS,
     DEFAULT_CREATE_SESSION_FAILED_RETENTION_SECONDS,
     DEFAULT_CREATE_SESSION_ORPHAN_GRACE_SECONDS,
+    DEFAULT_CREATE_SESSION_PROMOTION_TX_MAX_WAIT_SECONDS,
+    DEFAULT_CREATE_SESSION_PROMOTION_TX_TIMEOUT_SECONDS,
     DEFAULT_CREATE_SESSION_RETRYABLE_RETENTION_SECONDS,
 )
 from src.upstream_auth import (
@@ -339,8 +341,16 @@ class GeneralSettings(BaseModel):
         default=DEFAULT_CREATE_SESSION_FAILED_RETENTION_SECONDS,
         ge=60,
     )
-    embeddings_batch_create_soft_precheck_enabled: bool = False
+    embeddings_batch_create_soft_precheck_enabled: bool = True
     embeddings_batch_create_idempotency_enabled: bool = False
+    embeddings_batch_create_promotion_tx_max_wait_seconds: float = Field(
+        default=DEFAULT_CREATE_SESSION_PROMOTION_TX_MAX_WAIT_SECONDS,
+        gt=0.0,
+    )
+    embeddings_batch_create_promotion_tx_timeout_seconds: float = Field(
+        default=DEFAULT_CREATE_SESSION_PROMOTION_TX_TIMEOUT_SECONDS,
+        gt=0.0,
+    )
     embeddings_batch_create_promotion_insert_chunk_size: int = Field(default=500, ge=1, le=10_000)
     embeddings_batch_max_file_bytes: int = Field(default=52_428_800, ge=1_024)
     embeddings_batch_max_items_per_batch: int = Field(default=10_000, ge=1)
