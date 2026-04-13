@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,14 @@ from typing import Any
 import pytest
 from fastapi import HTTPException
 
+from src.batch.create import (
+    BatchCreateArtifactStorageBackend,
+    BatchCreateSessionCleanupConfig,
+    BatchCreateSessionCleanupWorker,
+    BatchCreateSessionCreate,
+    BatchCreateSessionStager,
+    BatchCreateStagedRequest,
+)
 from src.batch.cleanup import BatchCleanupConfig, BatchRetentionCleanupWorker
 from src.batch.models import BatchCompletionOutboxCreate, BatchItemCreate
 from src.batch.models import encode_operator_failed_reason
@@ -47,10 +56,12 @@ class _Upload:
 class _FakeS3Client:
     def __init__(self) -> None:
         self.objects: dict[tuple[str, str], bytes] = {}
+        self.modified_at: dict[tuple[str, str], datetime] = {}
 
     def upload_fileobj(self, fileobj, bucket: str, key: str, ExtraArgs=None) -> None:  # noqa: ANN001, N803
         del ExtraArgs
         self.objects[(bucket, key)] = fileobj.read()
+        self.modified_at[(bucket, key)] = datetime.now(tz=UTC)
 
     def download_fileobj(self, bucket: str, key: str, fileobj) -> None:  # noqa: ANN001
         fileobj.write(self.objects[(bucket, key)])
@@ -58,6 +69,18 @@ class _FakeS3Client:
 
     def delete_object(self, *, Bucket: str, Key: str) -> None:
         self.objects.pop((Bucket, Key), None)
+        self.modified_at.pop((Bucket, Key), None)
+
+    def list_objects_v2(self, *, Bucket: str, Prefix: str, MaxKeys: int, ContinuationToken=None):  # noqa: ANN001, N803
+        del ContinuationToken
+        contents = []
+        for (bucket, key), _payload in sorted(self.objects.items()):
+            if bucket != Bucket or not key.startswith(Prefix):
+                continue
+            contents.append({"Key": key, "LastModified": self.modified_at[(bucket, key)]})
+            if len(contents) >= MaxKeys:
+                break
+        return {"Contents": contents, "IsTruncated": False}
 
 
 class _NoopBudgetService:
@@ -92,6 +115,7 @@ async def _connect_prisma() -> Any:
 
 
 async def _reset_batch_tables(db: Any) -> None:
+    await db.execute_raw("DELETE FROM deltallm_batch_create_session")
     await db.execute_raw("DELETE FROM deltallm_batch_completion_outbox")
     await db.execute_raw("DELETE FROM deltallm_batch_item")
     await db.execute_raw("DELETE FROM deltallm_batch_job")
@@ -133,6 +157,22 @@ async def _seed_batch_file(repository: BatchRepository) -> str:
         purpose="batch",
         filename="input.jsonl",
         bytes_size=16,
+        storage_backend="local",
+        storage_key="seed/input.jsonl",
+        checksum="seed",
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+    )
+    assert file_record is not None
+    return file_record.file_id
+
+
+async def _seed_create_session_input_file(repository: BatchRepository) -> str:
+    file_record = await repository.create_file(
+        purpose="batch",
+        filename="input.jsonl",
+        bytes_size=32,
         storage_backend="local",
         storage_key="seed/input.jsonl",
         checksum="seed",
@@ -295,6 +335,441 @@ async def test_db_backed_batch_create_persists_organization_ownership(
         "created_by_team_id": None,
         "created_by_organization_id": "org-1",
     }
+
+
+@pytest.mark.asyncio
+async def test_db_backed_create_session_repository_lifecycle_round_trip(
+    batch_db,
+    tmp_path: Path,
+) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_create_session_input_file(repository)
+    staging = BatchCreateArtifactStorageBackend(
+        storage=LocalBatchArtifactStorage(str(tmp_path / "create-session-artifacts")),
+    )
+    artifact = await staging.write_records(
+        [
+            BatchCreateStagedRequest(
+                line_number=1,
+                custom_id="req-1",
+                request_body={"model": "m1", "input": "hello"},
+            )
+        ],
+        filename="session-1.jsonl",
+    )
+
+    created = await repository.create_sessions.create_session(
+        BatchCreateSessionCreate(
+            target_batch_id="batch-session-1",
+            endpoint="/v1/embeddings",
+            input_file_id=input_file_id,
+            staged_storage_backend=artifact.storage_backend,
+            staged_storage_key=artifact.storage_key,
+            staged_checksum=artifact.checksum,
+            staged_bytes=artifact.bytes_size,
+            expected_item_count=1,
+            created_by_api_key="key-a",
+        )
+    )
+    assert created is not None
+    assert created.status == "staged"
+
+    failed = await repository.create_sessions.mark_session_failed_retryable(
+        created.session_id,
+        error_code="timeout",
+        error_message="timed out",
+        attempted_at=datetime.now(tz=UTC),
+        expires_at=datetime.now(tz=UTC) + timedelta(hours=1),
+    )
+    assert failed is not None
+    assert failed.status == "failed_retryable"
+    assert failed.last_error_code == "timeout"
+
+    fetched = await repository.create_sessions.get_session(created.session_id)
+    assert fetched is not None
+    assert fetched.status == "failed_retryable"
+
+
+@pytest.mark.asyncio
+async def test_db_backed_create_session_cleanup_deletes_expired_session_artifact_without_touching_batch_file(
+    batch_db,
+    tmp_path: Path,
+) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_create_session_input_file(repository)
+    storage = LocalBatchArtifactStorage(str(tmp_path / "create-session-artifacts"))
+    staging = BatchCreateArtifactStorageBackend(storage=storage)
+    artifact = await staging.write_records(
+        [
+            BatchCreateStagedRequest(
+                line_number=1,
+                custom_id="req-1",
+                request_body={"model": "m1", "input": "hello"},
+            )
+        ],
+        filename="session-1.jsonl",
+    )
+
+    session = await repository.create_sessions.create_session(
+        BatchCreateSessionCreate(
+            target_batch_id="batch-session-1",
+            endpoint="/v1/embeddings",
+            input_file_id=input_file_id,
+            staged_storage_backend=artifact.storage_backend,
+            staged_storage_key=artifact.storage_key,
+            staged_checksum=artifact.checksum,
+            staged_bytes=artifact.bytes_size,
+            expected_item_count=1,
+            status="failed_retryable",
+            created_by_api_key="key-a",
+            last_error_code="timeout",
+            last_error_message="timed out",
+            last_attempt_at=datetime.now(tz=UTC) - timedelta(hours=1),
+            expires_at=datetime.now(tz=UTC) - timedelta(minutes=1),
+        )
+    )
+    assert session is not None
+
+    worker = BatchCreateSessionCleanupWorker(
+        repository=repository.create_sessions,
+        staging=staging,
+        config=BatchCreateSessionCleanupConfig(interval_seconds=0.01, scan_limit=10),
+    )
+
+    deleted_sessions, deleted_artifacts = await worker.process_once()
+
+    assert deleted_sessions == 1
+    assert deleted_artifacts == 1
+    assert not (tmp_path / "create-session-artifacts" / artifact.storage_key).exists()
+
+    session_rows = await batch_db.query_raw(
+        "SELECT session_id FROM deltallm_batch_create_session WHERE session_id = $1",
+        session.session_id,
+    )
+    file_rows = await batch_db.query_raw(
+        "SELECT file_id FROM deltallm_batch_file WHERE file_id = $1",
+        input_file_id,
+    )
+
+    assert session_rows == []
+    assert len(file_rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_db_backed_session_stager_compensates_artifact_on_session_insert_conflict(
+    batch_db,
+    tmp_path: Path,
+) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_create_session_input_file(repository)
+    storage = LocalBatchArtifactStorage(str(tmp_path / "create-session-artifacts"))
+    staging = BatchCreateArtifactStorageBackend(storage=storage)
+    stager = BatchCreateSessionStager(
+        repository=repository.create_sessions,
+        staging=staging,
+    )
+    existing = await repository.create_sessions.create_session(
+        BatchCreateSessionCreate(
+            target_batch_id="batch-session-1",
+            endpoint="/v1/embeddings",
+            input_file_id=input_file_id,
+            staged_storage_backend="local",
+            staged_storage_key="existing/session-1.jsonl",
+            staged_checksum="seed",
+            staged_bytes=16,
+            expected_item_count=1,
+            created_by_api_key="key-a",
+        )
+    )
+    assert existing is not None
+
+    with pytest.raises(Exception):
+        await stager.stage_session(
+            records=[
+                BatchCreateStagedRequest(
+                    line_number=1,
+                    custom_id="req-1",
+                    request_body={"model": "m1", "input": "hello"},
+                )
+            ],
+            filename="duplicate-session.jsonl",
+            build_session=lambda artifact: BatchCreateSessionCreate(
+                target_batch_id="batch-session-1",
+                endpoint="/v1/embeddings",
+                input_file_id=input_file_id,
+                staged_storage_backend=artifact.storage_backend,
+                staged_storage_key=artifact.storage_key,
+                staged_checksum=artifact.checksum,
+                staged_bytes=artifact.bytes_size,
+                expected_item_count=1,
+                created_by_api_key="key-a",
+            ),
+        )
+
+    assert list((tmp_path / "create-session-artifacts").rglob("*")) == []
+
+
+@pytest.mark.asyncio
+async def test_db_backed_create_session_cleanup_uses_status_retention_when_expires_at_is_null(
+    batch_db,
+    tmp_path: Path,
+) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_create_session_input_file(repository)
+    storage = LocalBatchArtifactStorage(str(tmp_path / "create-session-artifacts"))
+    staging = BatchCreateArtifactStorageBackend(storage=storage)
+    old = datetime.now(tz=UTC) - timedelta(days=2)
+
+    completed_artifact = await staging.write_records(
+        [
+            BatchCreateStagedRequest(
+                line_number=1,
+                custom_id="req-completed",
+                request_body={"model": "m1", "input": "hello"},
+            )
+        ],
+        filename="completed.jsonl",
+    )
+    retryable_artifact = await staging.write_records(
+        [
+            BatchCreateStagedRequest(
+                line_number=1,
+                custom_id="req-retryable",
+                request_body={"model": "m1", "input": "hello"},
+            )
+        ],
+        filename="retryable.jsonl",
+    )
+    staged_artifact = await staging.write_records(
+        [
+            BatchCreateStagedRequest(
+                line_number=1,
+                custom_id="req-staged",
+                request_body={"model": "m1", "input": "hello"},
+            )
+        ],
+        filename="staged.jsonl",
+    )
+
+    completed = await repository.create_sessions.create_session(
+        BatchCreateSessionCreate(
+            target_batch_id="batch-session-completed",
+            endpoint="/v1/embeddings",
+            input_file_id=input_file_id,
+            staged_storage_backend=completed_artifact.storage_backend,
+            staged_storage_key=completed_artifact.storage_key,
+            staged_checksum=completed_artifact.checksum,
+            staged_bytes=completed_artifact.bytes_size,
+            expected_item_count=1,
+            status="completed",
+            created_by_api_key="key-a",
+            completed_at=old,
+        )
+    )
+    retryable = await repository.create_sessions.create_session(
+        BatchCreateSessionCreate(
+            target_batch_id="batch-session-retryable",
+            endpoint="/v1/embeddings",
+            input_file_id=input_file_id,
+            staged_storage_backend=retryable_artifact.storage_backend,
+            staged_storage_key=retryable_artifact.storage_key,
+            staged_checksum=retryable_artifact.checksum,
+            staged_bytes=retryable_artifact.bytes_size,
+            expected_item_count=1,
+            status="failed_retryable",
+            created_by_api_key="key-a",
+            last_error_code="timeout",
+            last_error_message="timed out",
+            last_attempt_at=old,
+        )
+    )
+    staged_session = await repository.create_sessions.create_session(
+        BatchCreateSessionCreate(
+            target_batch_id="batch-session-staged",
+            endpoint="/v1/embeddings",
+            input_file_id=input_file_id,
+            staged_storage_backend=staged_artifact.storage_backend,
+            staged_storage_key=staged_artifact.storage_key,
+            staged_checksum=staged_artifact.checksum,
+            staged_bytes=staged_artifact.bytes_size,
+            expected_item_count=1,
+            status="staged",
+            created_by_api_key="key-a",
+        )
+    )
+    assert completed is not None
+    assert retryable is not None
+    assert staged_session is not None
+
+    worker = BatchCreateSessionCleanupWorker(
+        repository=repository.create_sessions,
+        staging=staging,
+        config=BatchCreateSessionCleanupConfig(
+            interval_seconds=0.01,
+            scan_limit=10,
+            completed_retention_seconds=3600,
+            retryable_retention_seconds=3600,
+            failed_retention_seconds=3600,
+        ),
+    )
+
+    deleted_sessions, deleted_artifacts = await worker.process_once()
+
+    assert deleted_sessions == 2
+    assert deleted_artifacts == 2
+    assert not (tmp_path / "create-session-artifacts" / completed_artifact.storage_key).exists()
+    assert not (tmp_path / "create-session-artifacts" / retryable_artifact.storage_key).exists()
+    assert (tmp_path / "create-session-artifacts" / staged_artifact.storage_key).exists()
+
+    completed_rows = await batch_db.query_raw(
+        "SELECT session_id FROM deltallm_batch_create_session WHERE session_id = $1",
+        completed.session_id,
+    )
+    retryable_rows = await batch_db.query_raw(
+        "SELECT session_id FROM deltallm_batch_create_session WHERE session_id = $1",
+        retryable.session_id,
+    )
+    staged_rows = await batch_db.query_raw(
+        "SELECT session_id FROM deltallm_batch_create_session WHERE session_id = $1",
+        staged_session.session_id,
+    )
+
+    assert completed_rows == []
+    assert retryable_rows == []
+    assert len(staged_rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_db_backed_create_session_cleanup_delete_skips_refreshed_candidate(
+    batch_db,
+    tmp_path: Path,
+) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_create_session_input_file(repository)
+    staging = BatchCreateArtifactStorageBackend(
+        storage=LocalBatchArtifactStorage(str(tmp_path / "create-session-artifacts")),
+    )
+    artifact = await staging.write_records(
+        [
+            BatchCreateStagedRequest(
+                line_number=1,
+                custom_id="req-1",
+                request_body={"model": "m1", "input": "hello"},
+            )
+        ],
+        filename="refreshable.jsonl",
+    )
+    old_attempt = datetime.now(tz=UTC) - timedelta(days=2)
+    session = await repository.create_sessions.create_session(
+        BatchCreateSessionCreate(
+            target_batch_id="batch-session-refreshable",
+            endpoint="/v1/embeddings",
+            input_file_id=input_file_id,
+            staged_storage_backend=artifact.storage_backend,
+            staged_storage_key=artifact.storage_key,
+            staged_checksum=artifact.checksum,
+            staged_bytes=artifact.bytes_size,
+            expected_item_count=1,
+            status="failed_retryable",
+            created_by_api_key="key-a",
+            last_error_code="timeout",
+            last_error_message="timed out",
+            last_attempt_at=old_attempt,
+        )
+    )
+    assert session is not None
+
+    candidates = await repository.create_sessions.list_cleanup_candidates(
+        now=datetime.now(tz=UTC),
+        completed_before=datetime.now(tz=UTC) - timedelta(hours=1),
+        retryable_before=datetime.now(tz=UTC) - timedelta(hours=1),
+        failed_before=datetime.now(tz=UTC) - timedelta(hours=1),
+        limit=10,
+    )
+    assert [candidate.session_id for candidate in candidates] == [session.session_id]
+
+    refreshed = await repository.create_sessions.mark_session_failed_retryable(
+        session.session_id,
+        error_code="retrying",
+        error_message="retried",
+        attempted_at=datetime.now(tz=UTC),
+        expires_at=None,
+    )
+    assert refreshed is not None
+
+    deleted = await repository.create_sessions.delete_cleanup_candidate(candidates[0])
+
+    assert deleted is None
+    fetched = await repository.create_sessions.get_session(session.session_id)
+    assert fetched is not None
+    assert fetched.last_error_code == "retrying"
+
+
+@pytest.mark.asyncio
+async def test_db_backed_create_session_cleanup_deletes_old_unreferenced_orphan_artifact(
+    batch_db,
+    tmp_path: Path,
+) -> None:
+    repository = BatchRepository(batch_db)
+    storage = LocalBatchArtifactStorage(str(tmp_path / "create-session-artifacts"))
+    staging = BatchCreateArtifactStorageBackend(storage=storage)
+    artifact = await staging.write_records(
+        [
+            BatchCreateStagedRequest(
+                line_number=1,
+                custom_id="req-orphan",
+                request_body={"model": "m1", "input": "hello"},
+            )
+        ],
+        filename="orphan.jsonl",
+    )
+    orphan_target = tmp_path / "create-session-artifacts" / artifact.storage_key
+    old_time = datetime.now(tz=UTC) - timedelta(hours=2)
+    os.utime(orphan_target, (old_time.timestamp(), old_time.timestamp()))
+
+    worker = BatchCreateSessionCleanupWorker(
+        repository=repository.create_sessions,
+        staging=staging,
+        config=BatchCreateSessionCleanupConfig(
+            interval_seconds=0.01,
+            scan_limit=10,
+            orphan_grace_seconds=3600,
+        ),
+    )
+
+    deleted_sessions, deleted_artifacts = await worker.process_once()
+
+    assert deleted_sessions == 0
+    assert deleted_artifacts == 1
+    assert not orphan_target.exists()
+
+
+@pytest.mark.asyncio
+async def test_db_backed_batch_create_session_status_check_rejects_invalid_rows(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_create_session_input_file(repository)
+
+    with pytest.raises(Exception):
+        await batch_db.execute_raw(
+            """
+            INSERT INTO deltallm_batch_create_session (
+                session_id, target_batch_id, status, endpoint, input_file_id,
+                staged_storage_backend, staged_storage_key, staged_bytes, expected_item_count
+            )
+            VALUES (
+                'session-invalid-status',
+                'batch-invalid-status',
+                'broken',
+                '/v1/embeddings',
+                $1,
+                'local',
+                'batch-create-stage/invalid.jsonl',
+                16,
+                1
+            )
+            """,
+            input_file_id,
+        )
 
 
 @pytest.mark.asyncio

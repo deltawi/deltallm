@@ -929,6 +929,7 @@ model DeltaLLM_BatchCreateSession {
 
   @@unique([idempotency_scope_key, idempotency_key], map: "deltallm_batch_create_session_idempotency_key")
   @@index([input_file_id], map: "deltallm_batch_create_session_input_file_idx")
+  @@index([staged_storage_backend, staged_storage_key], map: "deltallm_batch_create_session_stage_artifact_idx")
   @@index([status, created_at], map: "deltallm_batch_create_session_status_created_idx")
   @@index([created_by_api_key, status, created_at], map: "deltallm_batch_create_session_api_key_status_created_idx")
   @@index([created_by_team_id, status, created_at], map: "deltallm_batch_create_session_team_status_created_idx")

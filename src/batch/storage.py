@@ -4,6 +4,8 @@ import asyncio
 import contextlib
 import hashlib
 import tempfile
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import AsyncIterable, AsyncIterator, Iterable
 from uuid import uuid4
@@ -24,6 +26,44 @@ class BatchArtifactLineTooLongError(ValueError):
         self.max_line_bytes = max_line_bytes
 
 
+@dataclass(frozen=True)
+class BatchArtifactListEntry:
+    storage_key: str
+    modified_at: datetime
+
+
+def _safe_artifact_filename(filename: str) -> str:
+    return filename.replace("/", "_")
+
+
+def _build_sharded_storage_key(*, purpose: str, filename: str, now: datetime) -> str:
+    timestamp = now.astimezone(UTC)
+    return (
+        f"{purpose}/{timestamp:%Y/%m/%d}/"
+        f"{timestamp:%Y%m%dT%H%M%S%fZ}-{uuid4().hex}-{_safe_artifact_filename(filename)}"
+    )
+
+
+def _parse_sharded_filename_timestamp(filename: str) -> datetime | None:
+    prefix, _separator, _remainder = str(filename or "").partition("-")
+    if not prefix:
+        return None
+    try:
+        return datetime.strptime(prefix, "%Y%m%dT%H%M%S%fZ").replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+def _parse_sharded_day(day_dir: Path) -> date | None:
+    try:
+        year = int(day_dir.parent.parent.name)
+        month = int(day_dir.parent.name)
+        day = int(day_dir.name)
+        return date(year, month, day)
+    except (TypeError, ValueError):
+        return None
+
+
 class BatchArtifactStorage:
     backend_name = "unknown"
 
@@ -38,6 +78,31 @@ class BatchArtifactStorage:
 
     async def iter_bytes(self, storage_key: str, chunk_size: int = 65_536) -> AsyncIterator[bytes]:
         raise NotImplementedError
+
+    async def list_entries(
+        self,
+        *,
+        prefix: str,
+        older_than: datetime,
+        limit: int,
+    ) -> list[BatchArtifactListEntry]:
+        raise NotImplementedError
+
+    async def list_keys(
+        self,
+        *,
+        prefix: str,
+        older_than: datetime,
+        limit: int,
+    ) -> list[str]:
+        return [
+            entry.storage_key
+            for entry in await self.list_entries(
+                prefix=prefix,
+                older_than=older_than,
+                limit=limit,
+            )
+        ]
 
     async def delete(self, storage_key: str) -> None:
         raise NotImplementedError
@@ -109,8 +174,11 @@ class LocalBatchArtifactStorage(BatchArtifactStorage):
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     def _build_target(self, *, purpose: str, filename: str) -> tuple[str, Path]:
-        safe_name = filename.replace("/", "_")
-        storage_key = f"{purpose}/{uuid4().hex}-{safe_name}"
+        storage_key = _build_sharded_storage_key(
+            purpose=purpose,
+            filename=filename,
+            now=datetime.now(tz=UTC),
+        )
         return storage_key, self.base_dir / storage_key
 
     async def write_chunks(
@@ -164,6 +232,106 @@ class LocalBatchArtifactStorage(BatchArtifactStorage):
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(handle.close)
 
+    async def list_entries(
+        self,
+        *,
+        prefix: str,
+        older_than: datetime,
+        limit: int,
+    ) -> list[BatchArtifactListEntry]:
+        normalized_prefix = str(prefix or "").strip("/")
+        cutoff = older_than.astimezone(UTC)
+        bounded_limit = max(1, int(limit))
+
+        def _scan_day(day_dir: Path, *, remaining: int) -> list[BatchArtifactListEntry]:
+            matches: list[BatchArtifactListEntry] = []
+            for path in sorted(day_dir.iterdir()):
+                if path.name.startswith(".tmp-") or path.suffix != ".jsonl":
+                    continue
+                modified_at = _parse_sharded_filename_timestamp(path.name)
+                if modified_at is not None:
+                    if modified_at >= cutoff:
+                        break
+                else:
+                    try:
+                        stat = path.stat()
+                    except FileNotFoundError:
+                        continue
+                    modified_at = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+                    if modified_at >= cutoff:
+                        continue
+                matches.append(
+                    BatchArtifactListEntry(
+                        storage_key=str(path.relative_to(self.base_dir).as_posix()),
+                        modified_at=modified_at,
+                    )
+                )
+                if len(matches) >= remaining:
+                    break
+            matches.sort(key=lambda entry: (entry.modified_at, entry.storage_key))
+            return matches[:remaining]
+
+        def _scan_legacy(root: Path, *, remaining: int) -> list[BatchArtifactListEntry]:
+            matches: list[BatchArtifactListEntry] = []
+            for path in sorted(root.iterdir()):
+                if not path.is_file():
+                    continue
+                relative_path = path.relative_to(self.base_dir)
+                try:
+                    stat = path.stat()
+                except FileNotFoundError:
+                    continue
+                modified_at = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+                if modified_at >= cutoff:
+                    continue
+                matches.append(
+                    BatchArtifactListEntry(
+                        storage_key=str(relative_path.as_posix()),
+                        modified_at=modified_at,
+                    )
+                )
+            matches.sort(key=lambda entry: (entry.modified_at, entry.storage_key))
+            return matches[:remaining]
+
+        def _scan() -> list[BatchArtifactListEntry]:
+            root = self.base_dir / normalized_prefix if normalized_prefix else self.base_dir
+            if not root.exists():
+                return []
+            entries: list[BatchArtifactListEntry] = []
+            should_scan_legacy = True
+            for year_dir in sorted(root.iterdir()):
+                if not year_dir.is_dir():
+                    continue
+                for month_dir in sorted(year_dir.iterdir()):
+                    if not month_dir.is_dir():
+                        continue
+                    for day_dir in sorted(month_dir.iterdir()):
+                        if not day_dir.is_dir():
+                            continue
+                        day_value = _parse_sharded_day(day_dir)
+                        if day_value is None:
+                            continue
+                        if day_value > cutoff.date():
+                            should_scan_legacy = True
+                            break
+                        remaining = bounded_limit - len(entries)
+                        if remaining <= 0:
+                            return entries[:bounded_limit]
+                        entries.extend(_scan_day(day_dir, remaining=remaining))
+                        if len(entries) >= bounded_limit:
+                            return entries[:bounded_limit]
+                    else:
+                        continue
+                    break
+                else:
+                    continue
+                break
+            if should_scan_legacy and len(entries) < bounded_limit:
+                entries.extend(_scan_legacy(root, remaining=bounded_limit - len(entries)))
+            return entries[:bounded_limit]
+
+        return await asyncio.to_thread(_scan)
+
     async def delete(self, storage_key: str) -> None:
         target = self.base_dir / storage_key
         if target.exists():
@@ -212,8 +380,11 @@ class S3BatchArtifactStorage(BatchArtifactStorage):
         return self._client
 
     def _storage_key(self, *, purpose: str, filename: str) -> str:
-        safe_name = filename.replace("/", "_")
-        relative = f"{purpose}/{uuid4().hex}-{safe_name}"
+        relative = _build_sharded_storage_key(
+            purpose=purpose,
+            filename=filename,
+            now=datetime.now(tz=UTC),
+        )
         return f"{self.prefix}/{relative}" if self.prefix else relative
 
     async def write_chunks(
@@ -262,6 +433,61 @@ class S3BatchArtifactStorage(BatchArtifactStorage):
         finally:
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(spool.close)
+
+    async def list_entries(
+        self,
+        *,
+        prefix: str,
+        older_than: datetime,
+        limit: int,
+    ) -> list[BatchArtifactListEntry]:
+        bounded_limit = max(1, int(limit))
+        cutoff = older_than.astimezone(UTC)
+        normalized_prefix = str(prefix or "").strip("/")
+        effective_prefix = normalized_prefix
+        if self.prefix:
+            effective_prefix = (
+                normalized_prefix
+                if normalized_prefix.startswith(f"{self.prefix}/") or normalized_prefix == self.prefix
+                else f"{self.prefix}/{normalized_prefix}" if normalized_prefix else self.prefix
+            )
+        continuation_token: str | None = None
+        matches: list[BatchArtifactListEntry] = []
+
+        while len(matches) < bounded_limit:
+            kwargs: dict[str, object] = {
+                "Bucket": self.bucket,
+                "Prefix": effective_prefix,
+                "MaxKeys": bounded_limit,
+            }
+            if continuation_token:
+                kwargs["ContinuationToken"] = continuation_token
+            response = await asyncio.to_thread(self.s3.list_objects_v2, **kwargs)
+            contents = list(response.get("Contents") or [])
+            for entry in contents:
+                key = str(entry.get("Key") or "")
+                if not key:
+                    continue
+                last_modified = entry.get("LastModified")
+                if isinstance(last_modified, datetime):
+                    modified_at = last_modified.astimezone(UTC)
+                elif isinstance(last_modified, str):
+                    modified_at = datetime.fromisoformat(last_modified.replace("Z", "+00:00")).astimezone(UTC)
+                else:
+                    continue
+                if modified_at >= cutoff:
+                    continue
+                matches.append(BatchArtifactListEntry(storage_key=key, modified_at=modified_at))
+                if len(matches) >= bounded_limit:
+                    break
+            if len(matches) >= bounded_limit or not response.get("IsTruncated"):
+                break
+            continuation_token = str(response.get("NextContinuationToken") or "")
+            if not continuation_token:
+                break
+
+        matches.sort(key=lambda entry: (entry.modified_at, entry.storage_key))
+        return matches[:bounded_limit]
 
     async def delete(self, storage_key: str) -> None:
         await asyncio.to_thread(self.s3.delete_object, Bucket=self.bucket, Key=storage_key)
