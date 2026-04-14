@@ -4,16 +4,17 @@ import asyncio
 import json
 import logging
 import tempfile
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
-from typing import Any
-from typing import AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from fastapi import HTTPException, UploadFile, status
 
 from src.batch.access import can_access_owned_resource
 from src.batch.models import BatchItemCreate, BatchJobRecord
 from src.batch.repository import BatchRepository
+from src.batch.scopes import batch_pending_scope_target_for_auth
 from src.batch.storage import BatchArtifactLineTooLongError, BatchArtifactStorage
 from src.metrics import (
     increment_batch_artifact_failure,
@@ -25,7 +26,16 @@ from src.models.responses import UserAPIKeyAuth
 from src.services.model_visibility import CallableTargetPolicyMode, ensure_batch_model_allowed
 from src.services.callable_target_grants import CallableTargetGrantService
 
+if TYPE_CHECKING:
+    from src.batch.create import BatchCreateSessionService
+
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class BatchCreateResponseResult:
+    response: dict[str, Any]
+    audit_metadata: dict[str, Any]
 
 
 class BatchService:
@@ -44,6 +54,7 @@ class BatchService:
         max_pending_batches_per_scope: int = 20,
         callable_target_grant_service: CallableTargetGrantService | None = None,
         callable_target_scope_policy_mode: CallableTargetPolicyMode | str = "enforce",
+        create_session_service: "BatchCreateSessionService" | None = None,
     ) -> None:
         self.repository = repository
         self.storage = storage
@@ -62,6 +73,10 @@ class BatchService:
         self.max_pending_batches_per_scope = max_pending_batches_per_scope
         self.callable_target_grant_service = callable_target_grant_service
         self.callable_target_scope_policy_mode = callable_target_scope_policy_mode
+        self.create_session_service = create_session_service
+
+    def bind_create_session_service(self, create_session_service: "BatchCreateSessionService" | None) -> None:
+        self.create_session_service = create_session_service
 
     async def _refresh_batch_runtime_metrics(self) -> None:
         try:
@@ -82,11 +97,7 @@ class BatchService:
         return storage
 
     def _scope_limit_target(self, auth: UserAPIKeyAuth) -> tuple[str, str, str | None, str | None] | None:
-        if auth.team_id:
-            return ("team", auth.team_id, None, auth.team_id)
-        if auth.api_key:
-            return ("api_key", auth.api_key, auth.api_key, None)
-        return None
+        return batch_pending_scope_target_for_auth(auth)
 
     async def _precheck_pending_batch_capacity(self, *, auth: UserAPIKeyAuth) -> None:
         if self.max_pending_batches_per_scope <= 0:
@@ -390,6 +401,65 @@ class BatchService:
             raise
 
     async def create_embeddings_batch(
+        self,
+        *,
+        auth: UserAPIKeyAuth,
+        input_file_id: str,
+        endpoint: str,
+        metadata: dict[str, Any] | None,
+        completion_window: str | None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        result = await self.create_embeddings_batch_result(
+            auth=auth,
+            input_file_id=input_file_id,
+            endpoint=endpoint,
+            metadata=metadata,
+            completion_window=completion_window,
+            idempotency_key=idempotency_key,
+        )
+        return result.response
+
+    async def create_embeddings_batch_result(
+        self,
+        *,
+        auth: UserAPIKeyAuth,
+        input_file_id: str,
+        endpoint: str,
+        metadata: dict[str, Any] | None,
+        completion_window: str | None,
+        idempotency_key: str | None = None,
+    ) -> BatchCreateResponseResult:
+        if self.create_session_service is not None:
+            result = await self.create_session_service.create_embeddings_batch(
+                auth=auth,
+                input_file_id=input_file_id,
+                endpoint=endpoint,
+                metadata=metadata,
+                completion_window=completion_window,
+                idempotency_key=idempotency_key,
+            )
+            return BatchCreateResponseResult(
+                response=self.job_to_response(result.job),
+                audit_metadata=result.audit_metadata,
+            )
+        response = await self._create_embeddings_batch_legacy(
+            auth=auth,
+            input_file_id=input_file_id,
+            endpoint=endpoint,
+            metadata=metadata,
+            completion_window=completion_window,
+        )
+        return BatchCreateResponseResult(
+            response=response,
+            audit_metadata={
+                "create_path": "legacy",
+                "idempotency_key_present": bool(str(idempotency_key or "").strip()),
+                "idempotency_resolution": "disabled",
+            },
+        )
+
+    async def _create_embeddings_batch_legacy(
         self,
         *,
         auth: UserAPIKeyAuth,

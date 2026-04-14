@@ -164,6 +164,7 @@ async def test_init_batch_runtime_disabled_sets_batch_state_to_none() -> None:
     assert app.state.batch_create_session_repository is None
     assert app.state.batch_create_staging_backend is None
     assert app.state.batch_create_promoter is None
+    assert app.state.batch_create_session_service is None
     assert app.state.batch_create_session_cleanup_worker is None
     assert runtime.worker is None
     assert runtime.gc_worker is None
@@ -202,7 +203,11 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
             self.max_pending_batches_per_scope = max_pending_batches_per_scope
             self.callable_target_grant_service = callable_target_grant_service
             self.callable_target_scope_policy_mode = callable_target_scope_policy_mode
+            self.create_session_service = None
             created["service"] = self
+
+        def bind_create_session_service(self, create_session_service) -> None:  # noqa: ANN001
+            self.create_session_service = create_session_service
 
     class FakeBatchWorker:
         def __init__(self, app, repository, storage, config) -> None:  # noqa: ANN001
@@ -270,6 +275,7 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
     assert app.state.batch_storage_registry == {"local": {"path": "/tmp/batch-artifacts"}}
     assert app.state.batch_create_session_repository == "create-session-repo"
     assert app.state.batch_create_staging_backend is None
+    assert app.state.batch_create_session_service is None
     assert app.state.batch_create_session_cleanup_worker is None
     assert isinstance(app.state.batch_service, FakeBatchService)
     assert created["service"].repository is repository
@@ -313,6 +319,10 @@ async def test_init_and_shutdown_batch_runtime_with_create_session_cleanup_worke
     class FakeBatchService:
         def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
             del args, kwargs
+            self.create_session_service = None
+
+        def bind_create_session_service(self, create_session_service) -> None:  # noqa: ANN001
+            self.create_session_service = create_session_service
 
     class FakeCompletionOutboxWorker:
         def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
@@ -386,6 +396,7 @@ async def test_init_and_shutdown_batch_runtime_with_create_session_cleanup_worke
     assert app.state.batch_create_session_repository == "create-session-repo"
     assert app.state.batch_create_staging_backend is created["staging_backend"]
     assert app.state.batch_create_promoter is created["promoter"]
+    assert app.state.batch_create_session_service is not None
     assert app.state.batch_create_session_cleanup_worker is created["cleanup_worker"]
     assert runtime.create_session_staging_backend is created["staging_backend"]
     assert runtime.create_session_promoter is created["promoter"]
@@ -430,6 +441,10 @@ async def test_init_batch_runtime_with_create_sessions_enabled_builds_staging_ba
     class FakeBatchService:
         def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
             del args, kwargs
+            self.create_session_service = None
+
+        def bind_create_session_service(self, create_session_service) -> None:  # noqa: ANN001
+            self.create_session_service = create_session_service
 
     class FakeCompletionOutboxWorker:
         def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
@@ -487,6 +502,7 @@ async def test_init_batch_runtime_with_create_sessions_enabled_builds_staging_ba
     assert app.state.batch_create_session_repository == "create-session-repo"
     assert app.state.batch_create_staging_backend is created["staging_backend"]
     assert app.state.batch_create_promoter is created["promoter"]
+    assert app.state.batch_create_session_service is not None
     assert app.state.batch_create_session_cleanup_worker is None
     assert runtime.create_session_staging_backend is created["staging_backend"]
     assert runtime.create_session_promoter is created["promoter"]

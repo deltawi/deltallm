@@ -13,6 +13,7 @@ from src.batch.create.defaults import (
     DEFAULT_CREATE_SESSION_PROMOTION_TX_TIMEOUT_SECONDS,
 )
 from src.batch.create.models import BatchCreateSessionRecord, BatchCreateSessionStatus
+from src.batch.scopes import batch_pending_scope_target_for_session
 from src.batch.create.staging import BatchCreateStagingBackend, staged_artifact_from_session
 from src.batch.models import BatchItemCreate, BatchJobRecord, BatchJobStatus
 from src.batch.storage import BatchArtifactLineTooLongError
@@ -321,11 +322,7 @@ class BatchCreateSessionPromoter:
         self,
         session: BatchCreateSessionRecord,
     ) -> tuple[str, str, str | None, str | None] | None:
-        if session.created_by_team_id:
-            return ("team", session.created_by_team_id, None, session.created_by_team_id)
-        if session.created_by_api_key:
-            return ("api_key", session.created_by_api_key, session.created_by_api_key, None)
-        return None
+        return batch_pending_scope_target_for_session(session)
 
     async def _precheck_pending_capacity(self, session: BatchCreateSessionRecord) -> None:
         if not self.soft_precheck_enabled or self.max_pending_batches_per_scope <= 0:

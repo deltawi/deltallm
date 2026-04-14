@@ -27,15 +27,30 @@ async def create_batch(request: Request, payload: dict[str, Any]):
     endpoint = str(payload.get("endpoint") or "").strip()
     completion_window = payload.get("completion_window")
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else None
+    idempotency_key = str(request.headers.get("Idempotency-Key") or "").strip() or None
     try:
         service = _batch_service_or_404(request)
-        created = await service.create_embeddings_batch(
-            auth=auth,
-            input_file_id=input_file_id,
-            endpoint=endpoint,
-            metadata=metadata,
-            completion_window=completion_window,
-        )
+        audit_metadata = {"route": request.url.path, "idempotency_key_present": bool(idempotency_key)}
+        if hasattr(service, "create_embeddings_batch_result"):
+            result = await service.create_embeddings_batch_result(
+                auth=auth,
+                input_file_id=input_file_id,
+                endpoint=endpoint,
+                metadata=metadata,
+                completion_window=completion_window,
+                idempotency_key=idempotency_key,
+            )
+            created = result.response
+            audit_metadata.update(result.audit_metadata)
+        else:
+            created = await service.create_embeddings_batch(
+                auth=auth,
+                input_file_id=input_file_id,
+                endpoint=endpoint,
+                metadata=metadata,
+                completion_window=completion_window,
+                idempotency_key=idempotency_key,
+            )
         emit_audit_event(
             request=request,
             request_start=request_start,
@@ -47,9 +62,15 @@ async def create_batch(request: Request, payload: dict[str, Any]):
             api_key=auth.api_key,
             resource_type="batch",
             resource_id=created.get("id") if isinstance(created, dict) else None,
-            request_payload={"input_file_id": input_file_id, "endpoint": endpoint, "completion_window": completion_window, "metadata": metadata},
+            request_payload={
+                "input_file_id": input_file_id,
+                "endpoint": endpoint,
+                "completion_window": completion_window,
+                "metadata": metadata,
+                "idempotency_key_present": bool(idempotency_key),
+            },
             response_payload=created if isinstance(created, dict) else None,
-            metadata={"route": request.url.path},
+            metadata=audit_metadata,
         )
         return created
     except Exception as exc:
@@ -63,9 +84,15 @@ async def create_batch(request: Request, payload: dict[str, Any]):
             organization_id=getattr(auth, "organization_id", None),
             api_key=auth.api_key,
             resource_type="batch",
-            request_payload={"input_file_id": input_file_id, "endpoint": endpoint, "completion_window": completion_window, "metadata": metadata},
+            request_payload={
+                "input_file_id": input_file_id,
+                "endpoint": endpoint,
+                "completion_window": completion_window,
+                "metadata": metadata,
+                "idempotency_key_present": bool(idempotency_key),
+            },
             error=exc,
-            metadata={"route": request.url.path},
+            metadata={"route": request.url.path, "idempotency_key_present": bool(idempotency_key)},
         )
         raise
 
