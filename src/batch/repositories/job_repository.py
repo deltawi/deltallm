@@ -48,7 +48,7 @@ class BatchJobRepository:
         created_by_organization_id: str | None = None,
         expires_at: datetime | None = None,
         execution_mode: str = "managed_internal",
-        status: str = BatchJobStatus.VALIDATING,
+        status: str = BatchJobStatus.QUEUED,
         total_items: int = 0,
     ) -> BatchJobRecord | None:
         if self.prisma is None:

@@ -247,3 +247,23 @@ async def test_create_job_rejects_invalid_status_before_sql() -> None:
         )
 
     assert prisma.queries == []
+
+
+@pytest.mark.asyncio
+async def test_create_job_defaults_to_queued_status() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id="file-1",
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-1",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+
+    assert '::"DeltaLLM_BatchJobStatus"' in prisma.sql
+    assert prisma.params[2] == "queued"

@@ -6,7 +6,6 @@ from typing import Any
 
 
 class BatchJobStatus:
-    VALIDATING = "validating"
     QUEUED = "queued"
     IN_PROGRESS = "in_progress"
     FINALIZING = "finalizing"
@@ -17,7 +16,6 @@ class BatchJobStatus:
 
 
 BATCH_JOB_STATUSES = (
-    BatchJobStatus.VALIDATING,
     BatchJobStatus.QUEUED,
     BatchJobStatus.IN_PROGRESS,
     BatchJobStatus.FINALIZING,

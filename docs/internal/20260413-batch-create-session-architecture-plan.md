@@ -54,10 +54,11 @@ Companion PR plans:
 
 Current stack status:
 
-- PRs 1 through 4 are merged into `feature/batch-create-session`
-- active implementation branch: `pr/batch-create-session-5-admin-ops-surface`
-- PR 5 implementation is active in this branch
-- PR 6 remains plan-only
+- PRs 1 through 5 are merged into `feature/batch-create-session`
+- active implementation branch: `pr/batch-create-session-6-legacy-removal`
+- PR 6 implementation is active in this branch
+- PR 6 is now intentionally narrowed to final cutover and `validating` compatibility removal, not a broad “remove preparing systems” sweep
+- the remaining PR 6 work is focused on final DB-backed validation and review, not on adding new runtime surfaces
 
 ## Decision Summary
 
