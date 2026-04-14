@@ -939,7 +939,6 @@ model DeltaLLM_BatchCreateSession {
 }
 
 enum DeltaLLM_BatchJobStatus {
-  validating
   queued
   in_progress
   finalizing

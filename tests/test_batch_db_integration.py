@@ -1583,6 +1583,24 @@ async def test_db_backed_batch_job_status_check_rejects_invalid_rows(batch_db) -
             input_file_id,
         )
 
+    with pytest.raises(Exception):
+        await batch_db.execute_raw(
+            """
+            INSERT INTO deltallm_batch_job (
+                batch_id, endpoint, status, execution_mode, input_file_id, total_items
+            )
+            VALUES (
+                'batch-invalid-job-status-validating',
+                '/v1/embeddings',
+                'validating',
+                'managed_internal',
+                $1,
+                0
+            )
+            """,
+            input_file_id,
+        )
+
 
 @pytest.mark.asyncio
 async def test_db_backed_admin_expire_marks_retryable_session_expired_and_deletes_artifact(batch_db, tmp_path: Path) -> None:

@@ -148,7 +148,7 @@ async def list_batches(
         params.append(f"%{search}%")
         clauses.append(f"(j.batch_id ILIKE ${len(params)} OR j.model ILIKE ${len(params)})")
 
-    valid_statuses = {"validating", "queued", "in_progress", "finalizing", "completed", "failed", "cancelled", "expired"}
+    valid_statuses = {"queued", "in_progress", "finalizing", "completed", "failed", "cancelled", "expired"}
     if status_filter and status_filter in valid_statuses:
         params.append(status_filter)
         clauses.append(f"j.status = ${len(params)}")
