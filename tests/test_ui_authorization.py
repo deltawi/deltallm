@@ -7,6 +7,7 @@ import pytest
 from src.api.admin.endpoints.common import AuthScope
 from src.auth.roles import Permission
 from src.models.platform_auth import PlatformAuthContext
+from src.services.ui_authorization import build_batch_create_session_capabilities
 
 
 class FakeAuthorizationDB:
@@ -248,6 +249,45 @@ async def test_batch_feature_status_requires_batch_page_permission(client, test_
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Insufficient permissions"
+
+
+def test_build_batch_create_session_capabilities_disables_admin_actions_when_runtime_unavailable() -> None:
+    scope = AuthScope(
+        is_platform_admin=False,
+        team_ids=["team-1"],
+        team_permissions_by_id={"team-1": {Permission.KEY_UPDATE}},
+    )
+
+    capabilities = build_batch_create_session_capabilities(
+        scope,
+        {
+            "status": "failed_retryable",
+            "created_by_team_id": "team-1",
+            "organization_id": "org-1",
+        },
+        admin_actions_enabled=False,
+    )
+
+    assert capabilities == {"view": True, "retry": False, "expire": False}
+
+
+def test_build_batch_create_session_capabilities_allows_actions_when_runtime_available() -> None:
+    scope = AuthScope(
+        is_platform_admin=False,
+        team_ids=["team-1"],
+        team_permissions_by_id={"team-1": {Permission.KEY_UPDATE}},
+    )
+
+    capabilities = build_batch_create_session_capabilities(
+        scope,
+        {
+            "status": "failed_retryable",
+            "created_by_team_id": "team-1",
+            "organization_id": "org-1",
+        },
+    )
+
+    assert capabilities == {"view": True, "retry": True, "expire": True}
 
 
 @pytest.mark.asyncio
@@ -521,4 +561,73 @@ async def test_batch_summary_includes_org_owned_batches_when_scope_has_team_and_
         "completed": 1,
         "failed": 0,
         "cancelled": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_batch_create_sessions_exposes_session_capabilities_for_updating_scope(client, test_app, monkeypatch):
+    class SessionDB(FakeAuthorizationDB):
+        def __init__(self) -> None:
+            super().__init__()
+            now = datetime.now(tz=UTC)
+            self.sessions = [
+                {
+                    "session_id": "session-1",
+                    "target_batch_id": "batch-1",
+                    "status": "failed_retryable",
+                    "endpoint": "/v1/embeddings",
+                    "input_file_id": "file-1",
+                    "expected_item_count": 3,
+                    "inferred_model": "text-embedding-3-small",
+                    "requested_service_tier": None,
+                    "effective_service_tier": None,
+                    "created_by_api_key": "sk-session-test-key-1234",
+                    "created_by_user_id": "user-1",
+                    "created_by_team_id": "team-1",
+                    "created_by_organization_id": "org-1",
+                    "last_error_code": "pending_limit_exceeded",
+                    "last_error_message": "cap reached",
+                    "promotion_attempt_count": 2,
+                    "created_at": now,
+                    "completed_at": None,
+                    "expires_at": None,
+                    "team_alias": "Team One",
+                    "organization_id": "org-1",
+                }
+            ]
+
+        async def query_raw(self, query: str, *params):
+            if "COUNT(*) AS total" in query and "FROM deltallm_batch_create_session s" in query:
+                return [{"total": len(self.sessions)}]
+            if "FROM deltallm_batch_create_session s" in query and "LEFT JOIN deltallm_teamtable t" in query:
+                if "WHERE s.session_id = $1" in query:
+                    return [self.sessions[0]]
+                return list(self.sessions)
+            return await super().query_raw(query, *params)
+
+    fake_db = SessionDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    test_app.state.batch_create_session_admin_service = object()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batch_create_sessions.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
+            is_platform_admin=False,
+            org_ids=[],
+            team_ids=["team-1"],
+            team_permissions_by_id={"team-1": {Permission.TEAM_READ, Permission.KEY_READ, Permission.KEY_UPDATE}},
+        ),
+    )
+
+    response = await client.get("/ui/api/batch-create-sessions", headers={"Authorization": "Bearer mk-test"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["pagination"]["total"] == 1
+    assert payload["data"][0]["session_id"] == "session-1"
+    assert payload["data"][0]["capabilities"] == {
+        "view": True,
+        "retry": True,
+        "expire": True,
     }

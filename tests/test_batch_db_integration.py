@@ -11,7 +11,9 @@ from typing import Any
 import pytest
 from fastapi import HTTPException
 
+from src.api.admin.endpoints.common import AuthScope
 from src.batch.create import (
+    BatchCreateSessionAdminService,
     BatchCreateArtifactStorageBackend,
     BatchCreatePromotionError,
     BatchCreateSessionCleanupConfig,
@@ -30,6 +32,7 @@ from src.batch.repository import BatchRepository
 from src.batch.service import BatchService
 from src.batch.storage import LocalBatchArtifactStorage, S3BatchArtifactStorage
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
+from src.auth.roles import Permission
 from src.models.responses import UserAPIKeyAuth
 
 try:
@@ -1579,6 +1582,144 @@ async def test_db_backed_batch_job_status_check_rejects_invalid_rows(batch_db) -
             """,
             input_file_id,
         )
+
+
+@pytest.mark.asyncio
+async def test_db_backed_admin_expire_marks_retryable_session_expired_and_deletes_artifact(batch_db, tmp_path: Path) -> None:
+    repository = BatchRepository(batch_db)
+    storage = LocalBatchArtifactStorage(str(tmp_path / "create-session-artifacts"))
+    staging = BatchCreateArtifactStorageBackend(storage=storage, storage_registry={"local": storage})
+    session = await _seed_staged_create_session(
+        repository=repository,
+        staging=staging,
+        input_file_id=await _seed_create_session_input_file(repository),
+        target_batch_id="batch-admin-expire",
+        request_count=1,
+        created_by_api_key="key-a",
+        created_by_team_id="team-1",
+        created_by_organization_id="org-1",
+        status=BatchCreateSessionStatus.FAILED_RETRYABLE,
+    )
+    service = BatchCreateSessionAdminService(
+        repository=repository.create_sessions,
+        promoter=SimpleNamespace(),  # type: ignore[arg-type]
+        staging=staging,
+    )
+
+    artifact_path = tmp_path / "create-session-artifacts" / session.staged_storage_key
+    assert artifact_path.exists()
+
+    result = await service.expire_session(session.session_id)
+
+    assert result.session.status == BatchCreateSessionStatus.EXPIRED
+    assert result.artifact_deleted is True
+    refreshed = await repository.create_sessions.get_session(session.session_id)
+    assert refreshed is not None
+    assert refreshed.status == BatchCreateSessionStatus.EXPIRED
+    assert not artifact_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_db_backed_admin_expire_rejects_completed_session_without_touching_batch(batch_db, tmp_path: Path) -> None:
+    repository = BatchRepository(batch_db)
+    storage = LocalBatchArtifactStorage(str(tmp_path / "create-session-artifacts"))
+    staging = BatchCreateArtifactStorageBackend(storage=storage, storage_registry={"local": storage})
+    input_file_id = await _seed_create_session_input_file(repository)
+    batch = await repository.create_job(
+        batch_id="batch-admin-completed",
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id="team-1",
+        created_by_organization_id="org-1",
+        status="queued",
+        total_items=1,
+    )
+    assert batch is not None
+    staged_session = await _seed_staged_create_session(
+        repository=repository,
+        staging=staging,
+        input_file_id=input_file_id,
+        target_batch_id=batch.batch_id,
+        request_count=1,
+        created_by_api_key="key-a",
+        created_by_team_id="team-1",
+        created_by_organization_id="org-1",
+        status=BatchCreateSessionStatus.STAGED,
+    )
+    completed = await repository.create_sessions.mark_session_completed(
+        staged_session.session_id,
+        completed_at=datetime.now(tz=UTC),
+        expires_at=None,
+        from_statuses=(BatchCreateSessionStatus.STAGED,),
+    )
+    assert completed is not None
+    service = BatchCreateSessionAdminService(
+        repository=repository.create_sessions,
+        promoter=SimpleNamespace(),  # type: ignore[arg-type]
+        staging=staging,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await service.expire_session(completed.session_id)
+
+    assert exc.value.status_code == 400
+    refreshed_session = await repository.create_sessions.get_session(completed.session_id)
+    refreshed_batch = await repository.get_job(batch.batch_id)
+    assert refreshed_session is not None
+    assert refreshed_session.status == BatchCreateSessionStatus.COMPLETED
+    assert refreshed_batch is not None
+    assert refreshed_batch.batch_id == batch.batch_id
+
+
+@pytest.mark.asyncio
+async def test_db_backed_batch_create_session_admin_scope_blocks_other_team(
+    client,
+    test_app,
+    batch_db,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = BatchRepository(batch_db)
+    storage = LocalBatchArtifactStorage(str(tmp_path / "create-session-artifacts"))
+    staging = BatchCreateArtifactStorageBackend(storage=storage, storage_registry={"local": storage})
+    session = await _seed_staged_create_session(
+        repository=repository,
+        staging=staging,
+        input_file_id=await _seed_create_session_input_file(repository),
+        target_batch_id="batch-admin-scope",
+        request_count=1,
+        created_by_api_key="key-a",
+        created_by_team_id="team-1",
+        created_by_organization_id="org-1",
+        status=BatchCreateSessionStatus.FAILED_RETRYABLE,
+    )
+    test_app.state.prisma_manager = type("Prisma", (), {"client": batch_db})()
+
+    class _AdminServiceStub:
+        async def expire_session(self, session_id: str):  # noqa: ANN201
+            raise AssertionError(f"expire_session should not be called for forbidden session: {session_id}")
+
+    test_app.state.batch_create_session_admin_service = _AdminServiceStub()
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batch_create_sessions.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=False,
+            team_ids=["team-2"],
+            team_permissions_by_id={"team-2": {Permission.KEY_READ, Permission.KEY_UPDATE}},
+        ),
+    )
+
+    response = await client.post(
+        f"/ui/api/batch-create-sessions/{session.session_id}/expire",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 403
 
 
 @pytest.mark.asyncio

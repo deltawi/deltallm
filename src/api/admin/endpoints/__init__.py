@@ -1,6 +1,7 @@
 from src.api.admin.endpoints.auth_ui import router as auth_ui_router
 from src.api.admin.endpoints.audit import router as audit_router
 from src.api.admin.endpoints.batches import router as batches_router
+from src.api.admin.endpoints.batch_create_sessions import router as batch_create_sessions_router
 from src.api.admin.endpoints.callable_targets import router as callable_targets_router
 from src.api.admin.endpoints.config import router as config_router
 from src.api.admin.endpoints.email import router as email_router
@@ -24,6 +25,7 @@ __all__ = [
     "audit_router",
     "auth_ui_router",
     "batches_router",
+    "batch_create_sessions_router",
     "callable_targets_router",
     "config_router",
     "email_router",
