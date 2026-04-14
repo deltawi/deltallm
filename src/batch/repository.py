@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from src.batch.create import BatchCreateSessionRepository
+from src.batch.create.session_repository import BatchCreateSessionRepository
 from src.batch.models import (
     BatchCompletionOutboxCreate,
     BatchCompletionOutboxRecord,
