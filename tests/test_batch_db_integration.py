@@ -18,9 +18,11 @@ from src.batch.create import (
     BatchCreateSessionCleanupWorker,
     BatchCreateSessionCreate,
     BatchCreateSessionPromoter,
+    BatchCreateSessionStatus,
     BatchCreateSessionStager,
     BatchCreateStagedRequest,
 )
+from src.batch.create.service import BatchCreateSessionService
 from src.batch.cleanup import BatchCleanupConfig, BatchRetentionCleanupWorker
 from src.batch.models import BatchCompletionOutboxCreate, BatchItemCreate
 from src.batch.models import encode_operator_failed_reason
@@ -228,6 +230,46 @@ async def _seed_staged_create_session(
     return session
 
 
+def _build_cutover_batch_service(
+    *,
+    repository: BatchRepository,
+    storage: LocalBatchArtifactStorage,
+    idempotency_enabled: bool = False,
+    max_pending_batches_per_scope: int = 20,
+) -> BatchService:
+    storage_registry = {"local": storage}
+    staging_backend = BatchCreateArtifactStorageBackend(
+        storage=storage,
+        storage_registry=storage_registry,
+    )
+    create_session_service = BatchCreateSessionService(
+        repository=repository,
+        create_session_repository=repository.create_sessions,
+        stager=BatchCreateSessionStager(
+            repository=repository.create_sessions,
+            staging=staging_backend,
+        ),
+        promoter=BatchCreateSessionPromoter(
+            repository=repository,
+            staging=staging_backend,
+            max_pending_batches_per_scope=max_pending_batches_per_scope,
+        ),
+        storage_registry=storage_registry,
+        max_file_bytes=52_428_800,
+        max_items_per_batch=10_000,
+        max_line_bytes=1_048_576,
+        storage_chunk_size=65_536,
+        idempotency_enabled=idempotency_enabled,
+    )
+    return BatchService(
+        repository=repository,
+        storage=storage,
+        storage_registry=storage_registry,
+        max_pending_batches_per_scope=max_pending_batches_per_scope,
+        create_session_service=create_session_service,
+    )
+
+
 @pytest.mark.asyncio
 async def test_db_backed_concurrent_batch_create_enforces_pending_cap(
     batch_db,
@@ -379,6 +421,285 @@ async def test_db_backed_batch_create_persists_organization_ownership(
         "created_by_team_id": None,
         "created_by_organization_id": "org-1",
     }
+
+
+@pytest.mark.asyncio
+async def test_db_backed_batch_create_cutover_returns_normal_batch_object_and_queued_job(
+    batch_db,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+
+    repository = BatchRepository(batch_db)
+    storage = LocalBatchArtifactStorage(str(tmp_path / "cutover-artifacts"))
+    service = _build_cutover_batch_service(repository=repository, storage=storage)
+    auth = UserAPIKeyAuth(api_key="key-a")
+    input_file_id = await _create_input_file(
+        service,
+        auth=auth,
+        payload=b'{"custom_id":"c1","url":"/v1/embeddings","body":{"model":"m1","input":"hello"}}\n',
+    )
+
+    result = await service.create_embeddings_batch_result(
+        auth=auth,
+        input_file_id=input_file_id,
+        endpoint="/v1/embeddings",
+        metadata={"region": "eu"},
+        completion_window=None,
+    )
+
+    assert result.response["id"]
+    assert result.response["status"] == "queued"
+    assert result.audit_metadata["create_path"] == "create_session"
+    assert result.audit_metadata["idempotency_resolution"] == "not_requested"
+
+    session = await repository.create_sessions.get_session_by_target_batch_id(str(result.response["id"]))
+    assert session is not None
+    assert session.status == BatchCreateSessionStatus.COMPLETED
+
+    job_rows = await batch_db.query_raw(
+        """
+        SELECT batch_id, status, total_items
+        FROM deltallm_batch_job
+        WHERE batch_id = $1
+        """,
+        str(result.response["id"]),
+    )
+    assert len(job_rows) == 1
+    assert dict(job_rows[0])["status"] == "queued"
+    assert int(dict(job_rows[0])["total_items"]) == 1
+
+    all_job_rows = await batch_db.query_raw("SELECT status FROM deltallm_batch_job")
+    assert {str(dict(row)["status"]) for row in all_job_rows} == {"queued"}
+
+
+@pytest.mark.asyncio
+async def test_db_backed_batch_create_cutover_reuses_same_batch_for_same_idempotency_key(
+    batch_db,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+
+    repository = BatchRepository(batch_db)
+    storage = LocalBatchArtifactStorage(str(tmp_path / "cutover-idempotent-artifacts"))
+    service = _build_cutover_batch_service(
+        repository=repository,
+        storage=storage,
+        idempotency_enabled=True,
+    )
+    auth = UserAPIKeyAuth(api_key="key-a")
+    input_file_id = await _create_input_file(
+        service,
+        auth=auth,
+        payload=b'{"custom_id":"c1","url":"/v1/embeddings","body":{"model":"m1","input":"hello"}}\n',
+    )
+
+    first = await service.create_embeddings_batch_result(
+        auth=auth,
+        input_file_id=input_file_id,
+        endpoint="/v1/embeddings",
+        metadata={"region": "eu"},
+        completion_window=None,
+        idempotency_key="idem-1",
+    )
+    second = await service.create_embeddings_batch_result(
+        auth=auth,
+        input_file_id=input_file_id,
+        endpoint="/v1/embeddings",
+        metadata={"region": "eu"},
+        completion_window=None,
+        idempotency_key="idem-1",
+    )
+
+    assert first.response["id"] == second.response["id"]
+    assert second.audit_metadata["idempotency_resolution"] == "existing"
+
+    session = await repository.create_sessions.get_session_by_idempotency_key(
+        idempotency_scope_key="api_key:key-a",
+        idempotency_key="idem-1",
+    )
+    assert session is not None
+    assert session.status == BatchCreateSessionStatus.COMPLETED
+    assert session.promotion_attempt_count == 1
+
+    session_rows = await batch_db.query_raw("SELECT session_id FROM deltallm_batch_create_session")
+    job_rows = await batch_db.query_raw("SELECT batch_id FROM deltallm_batch_job")
+    assert len(session_rows) == 1
+    assert len(job_rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_db_backed_batch_create_cutover_rejects_idempotency_payload_mismatch(
+    batch_db,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+
+    repository = BatchRepository(batch_db)
+    storage = LocalBatchArtifactStorage(str(tmp_path / "cutover-idempotent-mismatch-artifacts"))
+    service = _build_cutover_batch_service(
+        repository=repository,
+        storage=storage,
+        idempotency_enabled=True,
+    )
+    auth = UserAPIKeyAuth(api_key="key-a")
+    input_file_id = await _create_input_file(
+        service,
+        auth=auth,
+        payload=b'{"custom_id":"c1","url":"/v1/embeddings","body":{"model":"m1","input":"hello"}}\n',
+    )
+
+    first = await service.create_embeddings_batch_result(
+        auth=auth,
+        input_file_id=input_file_id,
+        endpoint="/v1/embeddings",
+        metadata={"region": "eu"},
+        completion_window=None,
+        idempotency_key="idem-1",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await service.create_embeddings_batch_result(
+            auth=auth,
+            input_file_id=input_file_id,
+            endpoint="/v1/embeddings",
+            metadata={"region": "us"},
+            completion_window=None,
+            idempotency_key="idem-1",
+        )
+
+    assert exc.value.status_code == 409
+    assert first.response["id"]
+
+    session_rows = await batch_db.query_raw("SELECT session_id FROM deltallm_batch_create_session")
+    job_rows = await batch_db.query_raw("SELECT batch_id FROM deltallm_batch_job")
+    assert len(session_rows) == 1
+    assert len(job_rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_db_backed_batch_create_cutover_isolates_idempotency_by_team_within_same_org(
+    batch_db,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+
+    repository = BatchRepository(batch_db)
+    storage = LocalBatchArtifactStorage(str(tmp_path / "cutover-team-idempotency-artifacts"))
+    service = _build_cutover_batch_service(
+        repository=repository,
+        storage=storage,
+        idempotency_enabled=True,
+    )
+    team_a_auth = UserAPIKeyAuth(api_key="key-a", team_id="team-a", organization_id="org-1")
+    team_b_auth = UserAPIKeyAuth(api_key="key-b", team_id="team-b", organization_id="org-1")
+
+    input_file_id_a = await _create_input_file(
+        service,
+        auth=team_a_auth,
+        payload=b'{"custom_id":"c1","url":"/v1/embeddings","body":{"model":"m1","input":"hello"}}\n',
+    )
+    input_file_id_b = await _create_input_file(
+        service,
+        auth=team_b_auth,
+        payload=b'{"custom_id":"c1","url":"/v1/embeddings","body":{"model":"m1","input":"hello"}}\n',
+    )
+
+    first = await service.create_embeddings_batch_result(
+        auth=team_a_auth,
+        input_file_id=input_file_id_a,
+        endpoint="/v1/embeddings",
+        metadata={"region": "eu"},
+        completion_window=None,
+        idempotency_key="shared-key",
+    )
+    second = await service.create_embeddings_batch_result(
+        auth=team_b_auth,
+        input_file_id=input_file_id_b,
+        endpoint="/v1/embeddings",
+        metadata={"region": "eu"},
+        completion_window=None,
+        idempotency_key="shared-key",
+    )
+
+    assert first.response["id"] != second.response["id"]
+
+    session_rows = await batch_db.query_raw(
+        """
+        SELECT idempotency_scope_key, target_batch_id
+        FROM deltallm_batch_create_session
+        ORDER BY idempotency_scope_key ASC
+        """
+    )
+    assert [dict(row) for row in session_rows] == [
+        {"idempotency_scope_key": "team:team-a", "target_batch_id": str(first.response["id"])},
+        {"idempotency_scope_key": "team:team-b", "target_batch_id": str(second.response["id"])},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_db_backed_batch_create_cutover_precheck_rejects_before_session_staging(
+    batch_db,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+
+    repository = BatchRepository(batch_db)
+    storage_root = tmp_path / "cutover-precheck-artifacts"
+    storage = LocalBatchArtifactStorage(str(storage_root))
+    service = _build_cutover_batch_service(
+        repository=repository,
+        storage=storage,
+        max_pending_batches_per_scope=1,
+    )
+    auth = UserAPIKeyAuth(api_key="key-a")
+
+    existing_input_file_id = await _seed_batch_file(repository)
+    existing_job = await repository.create_job(
+        batch_id="existing-batch",
+        endpoint="/v1/embeddings",
+        input_file_id=existing_input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        created_by_organization_id=None,
+        execution_mode="managed_internal",
+        status="queued",
+        total_items=1,
+    )
+    assert existing_job is not None
+
+    input_file_id = await _create_input_file(
+        service,
+        auth=auth,
+        payload=b'{"custom_id":"c1","url":"/v1/embeddings","body":{"model":"m1","input":"hello"}}\n',
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await service.create_embeddings_batch_result(
+            auth=auth,
+            input_file_id=input_file_id,
+            endpoint="/v1/embeddings",
+            metadata=None,
+            completion_window=None,
+        )
+
+    assert exc.value.status_code == 429
+
+    session_rows = await batch_db.query_raw("SELECT session_id FROM deltallm_batch_create_session")
+    job_rows = await batch_db.query_raw("SELECT batch_id FROM deltallm_batch_job ORDER BY batch_id ASC")
+    assert session_rows == []
+    assert [dict(row) for row in job_rows] == [{"batch_id": "existing-batch"}]
+
+    staged_paths = [path for path in storage_root.rglob("*") if "batch-create-stage" in path.parts]
+    assert staged_paths == []
 
 
 @pytest.mark.asyncio

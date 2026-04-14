@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from types import SimpleNamespace
+from dataclasses import dataclass
 
 import httpx
 import pytest
@@ -41,6 +42,11 @@ class _FakeBatchRepository:
 
 
 class _FakeBatchService:
+    @dataclass
+    class _CreateResult:
+        response: dict
+        audit_metadata: dict
+
     async def create_file(self, auth, upload, purpose):  # noqa: ANN001, ANN201
         del auth, upload, purpose
         return {"id": "file-1", "object": "file", "status": "processed"}
@@ -55,6 +61,17 @@ class _FakeBatchService:
     async def create_embeddings_batch(self, **kwargs):  # noqa: ANN003, ANN201
         del kwargs
         return {"id": "batch-1", "status": "validating"}
+
+    async def create_embeddings_batch_result(self, **kwargs):  # noqa: ANN003, ANN201
+        idempotency_key = kwargs.get("idempotency_key")
+        return self._CreateResult(
+            response={"id": "batch-1", "status": "queued"},
+            audit_metadata={
+                "create_path": "create_session",
+                "idempotency_key_present": bool(idempotency_key),
+                "idempotency_resolution": "created" if idempotency_key else "not_requested",
+            },
+        )
 
     async def get_batch(self, **kwargs):  # noqa: ANN003, ANN201
         del kwargs
@@ -250,6 +267,39 @@ async def test_files_and_batches_emit_audit_success(client, test_app):
     assert "BATCH_READ_REQUEST" in actions
     assert "BATCH_LIST_REQUEST" in actions
     assert "BATCH_CANCEL_REQUEST" in actions
+    batch_create_records = [record[0] for record in audit.records if record[0].action == "BATCH_CREATE_REQUEST"]
+    assert batch_create_records
+    assert batch_create_records[-1].metadata["create_path"] == "create_session"
+    assert batch_create_records[-1].metadata["idempotency_key_present"] is False
+
+
+@pytest.mark.asyncio
+async def test_batch_create_audit_marks_idempotency_key_presence(client, test_app):
+    audit = _RecordingAuditService()
+    test_app.state.audit_service = audit
+    test_app.state.batch_service = _FakeBatchService()
+    test_app.state.batch_repository = _FakeBatchRepository()
+
+    headers = {
+        "Authorization": f"Bearer {test_app.state._test_key}",
+        "x-request-id": "req-batch-idempotency",
+        "Idempotency-Key": "idem-1",
+    }
+
+    response = await client.post(
+        "/v1/batches",
+        headers=headers,
+        json={"input_file_id": "file-1", "endpoint": "/v1/embeddings", "completion_window": "24h"},
+    )
+    assert response.status_code == 200
+
+    batch_create_records = [record[0] for record in audit.records if record[0].action == "BATCH_CREATE_REQUEST"]
+    assert batch_create_records
+    assert batch_create_records[-1].metadata["idempotency_key_present"] is True
+    assert batch_create_records[-1].metadata["idempotency_resolution"] == "created"
+    batch_create_payloads = [record[1] for record in audit.records if record[0].action == "BATCH_CREATE_REQUEST"]
+    assert batch_create_payloads
+    assert batch_create_payloads[-1][0].content_json["idempotency_key_present"] is True
 
 
 @pytest.mark.asyncio

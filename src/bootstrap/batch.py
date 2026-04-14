@@ -10,7 +10,9 @@ from typing import Any
 from src.batch import BatchCleanupConfig, BatchRetentionCleanupWorker, BatchRepository
 from src.batch.create.cleanup import BatchCreateSessionCleanupConfig, BatchCreateSessionCleanupWorker
 from src.batch.create.promoter import BatchCreateSessionPromoter
+from src.batch.create.service import BatchCreateSessionService
 from src.batch.create.session_repository import BatchCreateSessionRepository
+from src.batch.create.session_stager import BatchCreateSessionStager
 from src.batch.create.staging import BatchCreateArtifactStorageBackend
 from src.batch.completion_outbox import BatchCompletionOutboxWorker, BatchCompletionOutboxWorkerConfig
 from src.batch.service import BatchService
@@ -164,6 +166,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         app.state.batch_create_session_repository = None
         app.state.batch_create_staging_backend = None
         app.state.batch_create_promoter = None
+        app.state.batch_create_session_service = None
         app.state.batch_create_session_cleanup_worker = None
         runtime.statuses = (BootstrapStatus("embeddings_batch", "disabled"),)
         return runtime
@@ -175,6 +178,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
     app.state.batch_create_session_repository = getattr(repository, "create_sessions", None)
     app.state.batch_create_staging_backend = None
     app.state.batch_create_promoter = None
+    app.state.batch_create_session_service = None
     app.state.batch_create_session_cleanup_worker = None
     app.state.batch_service = BatchService(
         repository=repository,
@@ -261,6 +265,27 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
             staging_backend=runtime.create_session_staging_backend,
         )
         app.state.batch_create_promoter = runtime.create_session_promoter
+        app.state.batch_create_session_service = BatchCreateSessionService(
+            repository=repository,
+            create_session_repository=session_repository,
+            stager=BatchCreateSessionStager(
+                repository=session_repository,
+                staging=runtime.create_session_staging_backend,
+            ),
+            promoter=runtime.create_session_promoter,
+            storage_registry=batch_storage_registry,
+            max_file_bytes=cfg.general_settings.embeddings_batch_max_file_bytes,
+            max_items_per_batch=cfg.general_settings.embeddings_batch_max_items_per_batch,
+            max_line_bytes=cfg.general_settings.embeddings_batch_max_line_bytes,
+            storage_chunk_size=cfg.general_settings.embeddings_batch_storage_chunk_size,
+            max_pending_batches_per_scope=cfg.general_settings.embeddings_batch_max_pending_batches_per_scope,
+            callable_target_grant_service=getattr(app.state, "callable_target_grant_service", None),
+            callable_target_scope_policy_mode=normalize_callable_target_policy_mode(
+                getattr(cfg.general_settings, "callable_target_scope_policy_mode", "enforce")
+            ),
+            idempotency_enabled=cfg.general_settings.embeddings_batch_create_idempotency_enabled,
+        )
+        app.state.batch_service.bind_create_session_service(app.state.batch_create_session_service)
 
     if (
         cfg.general_settings.embeddings_batch_create_sessions_enabled

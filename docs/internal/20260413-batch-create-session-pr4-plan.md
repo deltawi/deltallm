@@ -57,6 +57,34 @@ Out of scope for PR 4:
 3. Removal of staged repair worker.
 4. UI changes.
 
+## Review Discipline
+
+PR 4 must follow the shared review checklist in:
+
+- [`20260413-batch-create-session-review-checklist.md`](20260413-batch-create-session-review-checklist.md)
+
+PR-specific invariants:
+
+1. Public batch-create success responses remain normal batch objects.
+2. With cutover enabled, new jobs are created directly as `queued`; the public path must not create `preparing` or `validating` jobs.
+3. `Idempotency-Key` resolution must not use a namespace broader than the caller's real access boundary.
+4. Idempotent payload mismatch returns `409` without creating a second session or batch.
+5. New requests rejected for a full pending scope must fail before staged artifact or create-session persistence.
+6. The promoter soft precheck stays advisory; only the promoter's authoritative path may mutate durable promotion state.
+6. The old batch-create path remains available when the create-session service is not bound.
+7. Audit events for `/v1/batches` include whether an idempotency key was present and whether the request used the create-session path.
+
+Failure-mode pass for PR 4:
+
+1. Matching idempotent retry after the original input file is no longer readable.
+2. Same key with mismatched metadata.
+3. Same key with a permanently failed session.
+4. Same organization, different teams, same `Idempotency-Key`.
+5. Early public capacity rejection after cutover.
+6. Promotion-time capacity rejection after cutover.
+5. Storage read failure while validating the uploaded batch input.
+6. Rollback path with create-session cutover disabled.
+
 ## Design Decisions
 
 ### 1. Keep public response contract stable
@@ -74,9 +102,14 @@ Recommended behavior:
 
 Scope key recommendation:
 
-1. organization id if present
-2. else team id
+1. team id if present
+2. else organization id if present
 3. else api key
+
+Pending-cap and scheduling scope recommendation:
+
+1. team id if present
+2. else api key
 
 ### 3. Soft precheck remains advisory
 
@@ -120,15 +153,18 @@ Implementation:
 - `src/models/requests.py` only if request metadata or helper types need small changes
 - `src/batch/service.py`
 - `src/batch/create/service.py`
+- `src/batch/create/__init__.py`
 - `src/batch/create/session_repository.py`
 - `src/batch/create/promoter.py`
-- `src/routers/audit_helpers.py` or related audit helpers if extra metadata is emitted
+- `src/bootstrap/batch.py`
 
 Tests:
 
+- `tests/test_batch_create_service.py`
 - `tests/test_batch_service.py`
 - `tests/test_batch_db_integration.py`
-- request/audit tests if present for public batch endpoints
+- `tests/test_data_plane_audit_extended.py`
+- `tests/bootstrap/test_optional_bootstrap.py`
 
 ## Test Plan
 
@@ -140,6 +176,10 @@ Required:
 4. Payload mismatch under same idempotency key returns `409`.
 5. Promotion failure returns correct client-visible error without creating a partial batch.
 6. Existing old-path behavior still works when the flag is off.
+7. Matching idempotent retry can resolve an existing session before reloading the input file.
+8. Audit coverage records `idempotency_key_present` and the create-path outcome.
+9. Different teams in the same organization do not collide on the same `Idempotency-Key`.
+10. Full pending scope returns `429` before staged artifact or create-session persistence for new requests.
 
 ## Acceptance Criteria
 
@@ -149,6 +189,8 @@ PR 4 is complete when:
 2. New jobs are born `queued`, not `preparing` / `validating`.
 3. Idempotent retry is supported when requested.
 4. Rollback to the old path is still possible by config.
+5. The focused PR4 validation slice passes on unit tests, and DB-backed cutover tests exist for environments with Postgres available.
+6. Cross-team org callers do not share an idempotency namespace.
 
 ## Risks
 
@@ -167,3 +209,27 @@ Mitigation:
 ## Deliverable Summary
 
 PR 4 should turn live create traffic onto the new architecture without yet deleting the fallback.
+
+## Implementation Status
+
+Implemented in this branch:
+
+1. `BatchService` delegates public create requests to `src/batch/create/service.py` when the create-session service is bound.
+2. `/v1/batches` forwards `Idempotency-Key` and emits cutover-aware audit metadata.
+3. Bootstrap wires `BatchCreateSessionService` behind `embeddings_batch_create_sessions_enabled`.
+4. Focused unit and audit tests cover the cutover path.
+5. DB-backed cutover tests cover queued-job creation, idempotent retry reuse, and idempotency mismatch rejection.
+6. Shared batch-scope helpers keep idempotency and pending-cap semantics aligned across the public service, legacy service, and promoter.
+7. The public cutover path restores the cheap pending-cap reject before staged artifact creation.
+
+Validation currently run in this worktree:
+
+1. `tests/test_batch_service.py`
+2. `tests/test_batch_create_service.py`
+3. `tests/test_data_plane_audit_extended.py`
+4. `tests/bootstrap/test_optional_bootstrap.py`
+5. Targeted PR4 DB-backed cutover tests in `tests/test_batch_db_integration.py`
+
+Note:
+
+- the DB-backed PR4 tests are present and collect cleanly, but they skip locally unless `DATABASE_URL` points to a live Postgres instance.
