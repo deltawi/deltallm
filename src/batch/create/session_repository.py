@@ -279,11 +279,13 @@ class BatchCreateSessionRepository:
         session_id: str,
         *,
         expired_at: datetime,
+        from_statuses: tuple[str, ...] | None = None,
     ) -> BatchCreateSessionRecord | None:
         return await self._update_session(
             session_id,
             status=BatchCreateSessionStatus.EXPIRED,
             expires_at=expired_at,
+            from_statuses=from_statuses,
         )
 
     async def list_cleanup_candidates(

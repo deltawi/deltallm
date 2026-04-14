@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.batch import BatchCleanupConfig, BatchRetentionCleanupWorker, BatchRepository
+from src.batch.create.admin_service import BatchCreateSessionAdminService
 from src.batch.create.cleanup import BatchCreateSessionCleanupConfig, BatchCreateSessionCleanupWorker
 from src.batch.create.promoter import BatchCreateSessionPromoter
 from src.batch.create.service import BatchCreateSessionService
@@ -40,6 +41,7 @@ class BatchRuntime:
     gc_task: Task[None] | None = None
     create_session_staging_backend: BatchCreateArtifactStorageBackend | None = None
     create_session_promoter: BatchCreateSessionPromoter | None = None
+    create_session_admin_service: BatchCreateSessionAdminService | None = None
     create_session_cleanup_worker: BatchCreateSessionCleanupWorker | None = None
     create_session_cleanup_task: Task[None] | None = None
     statuses: tuple[BootstrapStatus, ...] = ()
@@ -167,6 +169,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         app.state.batch_create_staging_backend = None
         app.state.batch_create_promoter = None
         app.state.batch_create_session_service = None
+        app.state.batch_create_session_admin_service = None
         app.state.batch_create_session_cleanup_worker = None
         runtime.statuses = (BootstrapStatus("embeddings_batch", "disabled"),)
         return runtime
@@ -179,6 +182,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
     app.state.batch_create_staging_backend = None
     app.state.batch_create_promoter = None
     app.state.batch_create_session_service = None
+    app.state.batch_create_session_admin_service = None
     app.state.batch_create_session_cleanup_worker = None
     app.state.batch_service = BatchService(
         repository=repository,
@@ -249,22 +253,30 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         )
         runtime.gc_task = create_task(runtime.gc_worker.run())
 
+    session_repository = app.state.batch_create_session_repository
+    if session_repository is None:
+        raise RuntimeError("Batch create-session repository is unavailable while embeddings batching is enabled")
+
+    runtime.create_session_staging_backend = _build_create_session_staging_backend(
+        cfg,
+        storage=batch_storage,
+        storage_registry=batch_storage_registry,
+    )
+    app.state.batch_create_staging_backend = runtime.create_session_staging_backend
+    runtime.create_session_promoter = _build_create_session_promoter(
+        cfg,
+        repository=repository,
+        staging_backend=runtime.create_session_staging_backend,
+    )
+    app.state.batch_create_promoter = runtime.create_session_promoter
+    runtime.create_session_admin_service = BatchCreateSessionAdminService(
+        repository=session_repository,
+        promoter=runtime.create_session_promoter,
+        staging=runtime.create_session_staging_backend,
+    )
+    app.state.batch_create_session_admin_service = runtime.create_session_admin_service
+
     if cfg.general_settings.embeddings_batch_create_sessions_enabled:
-        session_repository = app.state.batch_create_session_repository
-        if session_repository is None:
-            raise RuntimeError("Batch create-session repository is unavailable while create sessions are enabled")
-        runtime.create_session_staging_backend = _build_create_session_staging_backend(
-            cfg,
-            storage=batch_storage,
-            storage_registry=batch_storage_registry,
-        )
-        app.state.batch_create_staging_backend = runtime.create_session_staging_backend
-        runtime.create_session_promoter = _build_create_session_promoter(
-            cfg,
-            repository=repository,
-            staging_backend=runtime.create_session_staging_backend,
-        )
-        app.state.batch_create_promoter = runtime.create_session_promoter
         app.state.batch_create_session_service = BatchCreateSessionService(
             repository=repository,
             create_session_repository=session_repository,
@@ -287,12 +299,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         )
         app.state.batch_service.bind_create_session_service(app.state.batch_create_session_service)
 
-    if (
-        cfg.general_settings.embeddings_batch_create_sessions_enabled
-        and cfg.general_settings.embeddings_batch_create_session_cleanup_enabled
-    ):
-        session_repository = app.state.batch_create_session_repository
-        assert session_repository is not None
+    if cfg.general_settings.embeddings_batch_create_session_cleanup_enabled:
         assert runtime.create_session_staging_backend is not None
         runtime.create_session_cleanup_worker = _build_create_session_cleanup_worker(
             cfg,
@@ -307,6 +314,10 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         BootstrapStatus("embeddings_batch_worker", "ready" if runtime.worker is not None else "disabled"),
         BootstrapStatus("embeddings_batch_completion_outbox", "ready" if runtime.completion_outbox_worker is not None else "disabled"),
         BootstrapStatus("embeddings_batch_gc", "ready" if runtime.gc_worker is not None else "disabled"),
+        BootstrapStatus(
+            "embeddings_batch_create_session_admin",
+            "ready" if runtime.create_session_admin_service is not None else "disabled",
+        ),
         BootstrapStatus(
             "embeddings_batch_create_session_cleanup",
             "ready" if runtime.create_session_cleanup_worker is not None else "disabled",
