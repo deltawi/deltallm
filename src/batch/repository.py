@@ -83,7 +83,7 @@ class BatchRepository:
         created_by_organization_id: str | None = None,
         expires_at: datetime | None = None,
         execution_mode: str = "managed_internal",
-        status: str = "validating",
+        status: str = "queued",
         total_items: int = 0,
     ) -> BatchJobRecord | None:
         return await self.jobs.create_job(

@@ -1,6 +1,25 @@
 DO $$
 DECLARE
     existing_labels text[];
+    old_labels constant text[] := ARRAY[
+        'validating',
+        'queued',
+        'in_progress',
+        'finalizing',
+        'completed',
+        'failed',
+        'cancelled',
+        'expired'
+    ]::text[];
+    final_labels constant text[] := ARRAY[
+        'queued',
+        'in_progress',
+        'finalizing',
+        'completed',
+        'failed',
+        'cancelled',
+        'expired'
+    ]::text[];
 BEGIN
     IF NOT EXISTS (
         SELECT 1
@@ -25,25 +44,27 @@ BEGIN
     JOIN pg_type t ON t.oid = e.enumtypid
     WHERE t.typname = 'DeltaLLM_BatchJobStatus';
 
-    IF existing_labels IS DISTINCT FROM ARRAY[
-        'validating',
-        'queued',
-        'in_progress',
-        'finalizing',
-        'completed',
-        'failed',
-        'cancelled',
-        'expired'
-    ]::text[] THEN
-        RAISE EXCEPTION 'Cannot migrate DeltaLLM_BatchJobStatus: existing enum labels do not match the expected set';
+    IF existing_labels IS DISTINCT FROM old_labels
+       AND existing_labels IS DISTINCT FROM final_labels THEN
+        RAISE EXCEPTION 'Cannot migrate DeltaLLM_BatchJobStatus: existing enum labels do not match the expected old or final set';
     END IF;
 
-    IF EXISTS (
-        SELECT 1
-        FROM "deltallm_batch_job"
-        WHERE "status" NOT IN ('validating', 'queued', 'in_progress', 'finalizing', 'completed', 'failed', 'cancelled', 'expired')
-    ) THEN
-        RAISE EXCEPTION 'Cannot migrate deltallm_batch_job.status to enum: found invalid existing values';
+    IF existing_labels = old_labels THEN
+        IF EXISTS (
+            SELECT 1
+            FROM "deltallm_batch_job"
+            WHERE "status" NOT IN ('validating', 'queued', 'in_progress', 'finalizing', 'completed', 'failed', 'cancelled', 'expired')
+        ) THEN
+            RAISE EXCEPTION 'Cannot migrate deltallm_batch_job.status to enum: found invalid existing values';
+        END IF;
+    ELSE
+        IF EXISTS (
+            SELECT 1
+            FROM "deltallm_batch_job"
+            WHERE "status" NOT IN ('queued', 'in_progress', 'finalizing', 'completed', 'failed', 'cancelled', 'expired')
+        ) THEN
+            RAISE EXCEPTION 'Cannot migrate deltallm_batch_job.status to enum: found invalid existing values for the final enum shape';
+        END IF;
     END IF;
 END $$;
 

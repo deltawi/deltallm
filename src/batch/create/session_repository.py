@@ -60,6 +60,20 @@ class BatchCreateSessionRepository:
     def __init__(self, prisma_client: Any | None = None) -> None:
         self.prisma = prisma_client
 
+    async def ensure_schema_ready(self) -> None:
+        if self.prisma is None:
+            raise RuntimeError("Batch create-session repository is unavailable")
+        try:
+            await self.prisma.query_raw(
+                """
+                SELECT 1
+                FROM deltallm_batch_create_session
+                LIMIT 0
+                """
+            )
+        except Exception as exc:
+            raise RuntimeError("Batch create-session schema is unavailable") from exc
+
     async def create_session(self, session: BatchCreateSessionCreate) -> BatchCreateSessionRecord | None:
         if self.prisma is None:
             return None

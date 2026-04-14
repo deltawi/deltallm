@@ -119,16 +119,15 @@ The `body` object follows the standard embeddings request format:
 ## Batch Lifecycle
 
 ```
-validating --> queued --> in_progress --> finalizing --> completed
-                 |            |                             |
-                 |            +---> cancelled                |
-                 |                                          |
-                 +---> failed                               +--> failed
+queued --> in_progress --> finalizing --> completed
+   |            |                             |
+   |            +---> cancelled                |
+   |                                          |
+   +---> failed                               +--> failed
 ```
 
 | Status | Description |
 |--------|-------------|
-| `validating` | Input file is being parsed and validated |
 | `queued` | Items are ready; waiting for the worker to pick up the job |
 | `in_progress` | Worker is executing items against the upstream provider |
 | `finalizing` | All items are done; output and error files are being assembled |
