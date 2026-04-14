@@ -1,3 +1,8 @@
+from src.batch.create.admin_service import (
+    BatchCreateSessionAdminService,
+    BatchCreateSessionExpireResult,
+    BatchCreateSessionRetryResult,
+)
 from src.batch.create.cleanup import BatchCreateSessionCleanupConfig, BatchCreateSessionCleanupWorker
 from src.batch.create.models import (
     BatchCreateSessionCreate,
@@ -21,14 +26,17 @@ from src.batch.create.staging import (
 
 __all__ = [
     "BatchCreateArtifactStorageBackend",
+    "BatchCreateSessionAdminService",
     "BatchCreatePromotionError",
     "BatchCreatePromotionResult",
     "BatchCreateSessionCleanupConfig",
     "BatchCreateSessionCleanupWorker",
     "BatchCreateSessionCreate",
+    "BatchCreateSessionExpireResult",
     "BatchCreateSessionPromoter",
     "BatchCreateSessionRecord",
     "BatchCreateSessionRepository",
+    "BatchCreateSessionRetryResult",
     "BatchCreateSessionStager",
     "BatchCreateSessionStatus",
     "BatchCreateStagedRequest",

@@ -54,9 +54,10 @@ Companion PR plans:
 
 Current stack status:
 
-- active implementation branch: `pr/batch-create-session-1-schema-foundation`
-- PR 1 is implemented locally and remains dark-launched
-- PRs 2 through 6 are still plan-only
+- PRs 1 through 4 are merged into `feature/batch-create-session`
+- active implementation branch: `pr/batch-create-session-5-admin-ops-surface`
+- PR 5 implementation is active in this branch
+- PR 6 remains plan-only
 
 ## Decision Summary
 

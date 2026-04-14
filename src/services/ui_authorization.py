@@ -144,3 +144,24 @@ def build_batch_capabilities(scope: Any, batch: dict[str, Any]) -> dict[str, boo
         "requeue_stale": can_update and status == "in_progress",
         "mark_failed": can_update and status not in {"completed", "failed", "cancelled", "expired"},
     }
+
+
+def build_batch_create_session_capabilities(
+    scope: Any,
+    session: dict[str, Any],
+    *,
+    admin_actions_enabled: bool = True,
+) -> dict[str, bool]:
+    team_id = str(session.get("created_by_team_id") or "").strip()
+    organization_id = str(session.get("organization_id") or "").strip()
+    status = str(session.get("status") or "").strip().lower()
+    can_update = (
+        _scope_has_team_permission(scope, team_id, Permission.KEY_UPDATE)
+        or _scope_has_org_permission(scope, organization_id, Permission.KEY_UPDATE)
+    )
+
+    return {
+        "view": True,
+        "retry": admin_actions_enabled and can_update and status in {"staged", "failed_retryable"},
+        "expire": admin_actions_enabled and can_update and status in {"staged", "failed_retryable", "failed_permanent"},
+    }

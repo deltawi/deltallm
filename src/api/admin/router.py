@@ -4,6 +4,7 @@ from src.api.admin.endpoints import (
     audit_router,
     auth_ui_router,
     batches_router,
+    batch_create_sessions_router,
     callable_targets_router,
     config_router,
     email_router,
@@ -42,6 +43,7 @@ admin_router.include_router(teams_router)
 admin_router.include_router(users_router)
 admin_router.include_router(organizations_router)
 admin_router.include_router(batches_router)
+admin_router.include_router(batch_create_sessions_router)
 admin_router.include_router(rbac_router)
 admin_router.include_router(guardrails_router)
 admin_router.include_router(route_groups_router)
