@@ -79,10 +79,10 @@ jobs:
       - name: Generate Prisma client
         run: uv run prisma generate --schema=./prisma/schema.prisma
 
-      - name: Push Prisma schema
+      - name: Apply Prisma migrations
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/deltallm_test
-        run: uv run prisma db push --schema=./prisma/schema.prisma
+        run: uv run prisma migrate deploy --schema=./prisma/schema.prisma
 
       - name: Run tests
         env:
