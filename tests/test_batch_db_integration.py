@@ -265,6 +265,7 @@ def _build_cutover_batch_service(
         max_items_per_batch=10_000,
         max_line_bytes=1_048_576,
         storage_chunk_size=65_536,
+        max_pending_batches_per_scope=max_pending_batches_per_scope,
         idempotency_enabled=idempotency_enabled,
     )
     return BatchService(
