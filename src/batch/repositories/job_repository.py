@@ -238,7 +238,7 @@ class BatchJobRepository:
         rows = await self.prisma.query_raw(
             """
             UPDATE deltallm_batch_job
-            SET status = $2,
+            SET status = $2::"DeltaLLM_BatchJobStatus",
                 total_items = $3,
                 status_last_updated_at = NOW()
             WHERE batch_id = $1
@@ -259,11 +259,13 @@ class BatchJobRepository:
             """
             UPDATE deltallm_batch_job
             SET cancel_requested_at = NOW(),
-                status = CASE
+                status = (
+                    CASE
                     WHEN status IN ('completed', 'failed', 'cancelled', 'expired') THEN status
                     WHEN status = 'finalizing' THEN status
                     ELSE 'in_progress'
-                END,
+                    END
+                )::"DeltaLLM_BatchJobStatus",
                 status_last_updated_at = NOW()
             WHERE batch_id = $1
             RETURNING *
@@ -291,10 +293,12 @@ class BatchJobRepository:
             UPDATE deltallm_batch_job j
             SET locked_by = $1,
                 lease_expires_at = NOW() + ($2 || ' seconds')::interval,
-                status = CASE
+                status = (
+                    CASE
                     WHEN j.status = 'queued' THEN 'in_progress'
                     ELSE j.status
-                END,
+                    END
+                )::"DeltaLLM_BatchJobStatus",
                 started_at = COALESCE(j.started_at, NOW()),
                 status_last_updated_at = NOW()
             FROM candidate
@@ -374,12 +378,14 @@ class BatchJobRepository:
                 completed_items = s.completed_items,
                 failed_items = s.failed_items,
                 cancelled_items = s.cancelled_items,
-                status = CASE
+                status = (
+                    CASE
                     WHEN j.status IN ('completed', 'failed', 'cancelled', 'expired') THEN j.status
                     WHEN s.pending_items = 0 AND s.in_progress_items = 0 THEN 'finalizing'
                     WHEN s.in_progress_items > 0 OR s.completed_items > 0 OR s.failed_items > 0 OR s.cancelled_items > 0 THEN 'in_progress'
                     ELSE j.status
-                END,
+                    END
+                )::"DeltaLLM_BatchJobStatus",
                 completed_at = CASE WHEN j.status IN ('completed', 'failed', 'cancelled', 'expired') THEN COALESCE(j.completed_at, NOW()) ELSE NULL END,
                 status_last_updated_at = NOW()
             FROM stats s
@@ -418,13 +424,14 @@ class BatchJobRepository:
     ) -> BatchJobRecord | None:
         if self.prisma is None:
             return None
+        normalized_final_status = normalize_batch_job_status(final_status)
         if worker_id is None:
             rows = await self.prisma.query_raw(
                 """
                 UPDATE deltallm_batch_job
                 SET output_file_id = $2,
                     error_file_id = $3,
-                    status = $4,
+                    status = $4::"DeltaLLM_BatchJobStatus",
                     completed_at = COALESCE(completed_at, NOW()),
                     lease_expires_at = NULL,
                     locked_by = NULL,
@@ -435,7 +442,7 @@ class BatchJobRepository:
                 batch_id,
                 output_file_id,
                 error_file_id,
-                final_status,
+                normalized_final_status,
             )
         else:
             rows = await self.prisma.query_raw(
@@ -443,7 +450,7 @@ class BatchJobRepository:
                 UPDATE deltallm_batch_job
                 SET output_file_id = $3,
                     error_file_id = $4,
-                    status = $5,
+                    status = $5::"DeltaLLM_BatchJobStatus",
                     completed_at = COALESCE(completed_at, NOW()),
                     lease_expires_at = NULL,
                     locked_by = NULL,
@@ -457,7 +464,7 @@ class BatchJobRepository:
                 worker_id,
                 output_file_id,
                 error_file_id,
-                final_status,
+                normalized_final_status,
             )
         if not rows:
             return None

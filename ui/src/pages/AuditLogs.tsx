@@ -38,6 +38,12 @@ function formatActionLabel(action: string): string {
     .join(' ');
 }
 
+function formatErrorSummary(event: Pick<AuditEvent, 'error_type' | 'error_code'>): string | null {
+  if (!event.error_type && !event.error_code) return null;
+  if (event.error_type && event.error_code) return `${event.error_type} (${event.error_code})`;
+  return event.error_type || event.error_code || null;
+}
+
 function timeAgo(dateStr: string): string {
   const now = Date.now();
   const then = new Date(dateStr).getTime();
@@ -84,6 +90,7 @@ function DetailField({ label, value, mono = false }: { label: string; value: Rea
 
 function EventDetailPanel({ eventId, onClose, onViewTimeline }: { eventId: string; onClose: () => void; onViewTimeline: (requestId: string) => void }) {
   const { data: event, loading, error } = useApi(() => audit.get(eventId), [eventId]);
+  const errorSummary = event ? formatErrorSummary(event) : null;
   if (loading) {
     return (
       <div className="fixed inset-y-0 right-0 w-full max-w-lg bg-white shadow-xl z-50 flex items-center justify-center">
@@ -125,6 +132,19 @@ function EventDetailPanel({ eventId, onClose, onViewTimeline }: { eventId: strin
             <DetailField label="Action" value={event.action} mono />
             <DetailField label="Status" value={event.status || 'unknown'} />
           </div>
+
+          {errorSummary ? (
+            <CollapsibleSection title="Error" defaultOpen>
+              <div className="grid grid-cols-2 gap-x-4">
+                <DetailField label="Error Type" value={event.error_type} mono />
+                <DetailField label="Error Code" value={event.error_code} mono />
+              </div>
+              <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2">
+                <p className="text-xs font-medium uppercase tracking-wider text-red-700">Summary</p>
+                <p className="mt-1 text-sm text-red-900">{errorSummary}</p>
+              </div>
+            </CollapsibleSection>
+          ) : null}
 
           <CollapsibleSection title="Actor Information" defaultOpen>
             <div className="grid grid-cols-2 gap-x-4">

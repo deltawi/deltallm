@@ -165,7 +165,7 @@ async def get_audit_event(
         scope=scope,
     )
     params.append(event_id)
-    event_clause = f"event_id = ${len(params)}"
+    event_clause = f"event_id = ${len(params)}::uuid"
     if where_sql:
         where_sql = f"{where_sql} AND {event_clause}"
     else:
@@ -190,7 +190,7 @@ async def get_audit_event(
         """
         SELECT payload_id, event_id, kind, storage_mode, content_json, storage_uri, content_sha256, size_bytes, redacted, created_at
         FROM deltallm_auditpayload
-        WHERE event_id = $1
+        WHERE event_id = $1::uuid
         ORDER BY created_at ASC
         """,
         event_id,
