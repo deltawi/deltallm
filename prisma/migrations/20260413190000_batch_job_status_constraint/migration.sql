@@ -83,6 +83,10 @@ BEGIN
     ) THEN
         EXECUTE '
             ALTER TABLE "deltallm_batch_job"
+            ALTER COLUMN "status" DROP DEFAULT
+        ';
+        EXECUTE '
+            ALTER TABLE "deltallm_batch_job"
             ALTER COLUMN "status" TYPE "DeltaLLM_BatchJobStatus"
             USING ("status"::"DeltaLLM_BatchJobStatus")
         ';

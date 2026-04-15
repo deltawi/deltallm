@@ -66,6 +66,12 @@ async def test_audit_event_detail_includes_payloads(client, test_app):
     payload = response.json()
     assert payload["event_id"] == "evt-1"
     assert payload["payloads"][0]["payload_id"] == "pl-1"
+    event_query, event_params = fake_db.calls[0]
+    assert "event_id = $1::uuid" in event_query or "event_id = $2::uuid" in event_query
+    assert event_params[-1] == "evt-1"
+    payload_query, payload_params = fake_db.calls[1]
+    assert "where event_id = $1::uuid" in " ".join(payload_query.lower().split())
+    assert payload_params == ("evt-1",)
 
 
 @pytest.mark.asyncio

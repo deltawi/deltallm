@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import Request
 
 from src.audit.actions import AuditAction, normalize_audit_action
+from src.audit.errors import derive_audit_error_code
 from src.auth.roles import Permission, has_platform_permission
 from src.middleware.platform_auth import get_platform_auth_context
 from src.services.audit_service import AuditEventInput, AuditPayloadInput, AuditService
@@ -140,7 +141,7 @@ async def emit_control_audit_event(
         status=status,
         latency_ms=int((perf_counter() - request_start) * 1000),
         error_type=error.__class__.__name__ if error is not None else None,
-        error_code=getattr(getattr(error, "response", None), "status_code", None) if error is not None else None,
+        error_code=derive_audit_error_code(error),
         metadata=event_metadata,
     )
     if _should_sync_control_audit(request, action, critical=critical):

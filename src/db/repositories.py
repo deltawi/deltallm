@@ -454,7 +454,7 @@ class AuditRepository:
                 error_type, error_code, metadata, content_stored, prev_hash, event_hash
             )
             VALUES (
-                $1, $2, $3, $4, $5, $6,
+                $1::uuid, $2, $3, $4, $5, $6,
                 $7, $8, $9, $10,
                 $11, $12, $13, $14, $15, $16,
                 $17, $18, $19::jsonb, $20, $21, $22
@@ -506,7 +506,7 @@ class AuditRepository:
                 payload_id, event_id, kind, storage_mode, content_json, storage_uri,
                 content_sha256, size_bytes, redacted
             )
-            VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)
+            VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, $6, $7, $8, $9)
             RETURNING payload_id, event_id, kind, storage_mode, content_json, storage_uri,
                       content_sha256, size_bytes, redacted, created_at
             """,

@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import Request
 
 from src.audit.actions import AuditAction, normalize_audit_action
+from src.audit.errors import derive_audit_error_code
 from src.services.audit_service import AuditEventInput, AuditPayloadInput, AuditService
 
 
@@ -69,7 +70,7 @@ def emit_audit_event(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             error_type=error.__class__.__name__ if error is not None else None,
-            error_code=getattr(getattr(error, "response", None), "status_code", None) if error is not None else None,
+            error_code=derive_audit_error_code(error),
             metadata=metadata or {},
         ),
         payloads=payloads,
