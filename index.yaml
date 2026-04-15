@@ -2,8 +2,28 @@ apiVersion: v1
 entries:
   deltallm:
   - apiVersion: v2
+    appVersion: v0.1.20-rc1
+    created: "2026-04-15T07:42:08.018394631Z"
+    dependencies:
+    - condition: postgresql.enabled
+      name: postgresql
+      repository: https://charts.bitnami.com/bitnami
+      version: 16.x.x
+    - condition: redis.enabled
+      name: redis
+      repository: https://charts.bitnami.com/bitnami
+      version: 20.x.x
+    description: DeltaLLM - OpenAI-compatible LLM gateway
+    digest: bdbb68a378d4916ade3fcbcef92b8db1e103ec677ccea0955e65f1dfa7f4f3fb
+    kubeVersion: '>=1.24.0-0'
+    name: deltallm
+    type: application
+    urls:
+    - https://deltawi.github.io/deltallm/deltallm-0.1.20-rc1.tgz
+    version: 0.1.20-rc1
+  - apiVersion: v2
     appVersion: v0.1.19
-    created: "2026-04-11T09:02:02.17677014Z"
+    created: "2026-04-15T07:42:08.004607515Z"
     dependencies:
     - condition: postgresql.enabled
       name: postgresql
@@ -23,7 +43,7 @@ entries:
     version: 0.1.19
   - apiVersion: v2
     appVersion: v0.1.18
-    created: "2026-04-11T09:02:02.164926079Z"
+    created: "2026-04-15T07:42:07.992716531Z"
     dependencies:
     - condition: postgresql.enabled
       name: postgresql
@@ -43,7 +63,7 @@ entries:
     version: 0.1.18
   - apiVersion: v2
     appVersion: v0.1.17
-    created: "2026-04-11T09:02:02.152789162Z"
+    created: "2026-04-15T07:42:07.979951481Z"
     dependencies:
     - condition: postgresql.enabled
       name: postgresql
@@ -63,7 +83,7 @@ entries:
     version: 0.1.17
   - apiVersion: v2
     appVersion: v0.1.15
-    created: "2026-04-11T09:02:02.141669183Z"
+    created: "2026-04-15T07:42:07.966052869Z"
     dependencies:
     - condition: postgresql.enabled
       name: postgresql
@@ -81,4 +101,4 @@ entries:
     urls:
     - https://deltawi.github.io/deltallm/deltallm-0.1.15.tgz
     version: 0.1.15
-generated: "2026-04-11T09:02:02.128633153Z"
+generated: "2026-04-15T07:42:07.948536643Z"
