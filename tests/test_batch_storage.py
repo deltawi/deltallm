@@ -251,20 +251,25 @@ async def test_local_batch_storage_list_keys_keeps_legacy_flat_files_visible_aft
     tmp_path: Path,
 ) -> None:
     storage = LocalBatchArtifactStorage(str(tmp_path / "batch-artifacts"))
+    cutoff = datetime.now(tz=UTC) - timedelta(hours=1)
     legacy_target = tmp_path / "batch-artifacts" / "batch-create-stage" / "legacy.jsonl"
     legacy_target.parent.mkdir(parents=True, exist_ok=True)
     legacy_target.write_bytes(b"legacy\n")
-    old_time = datetime.now(tz=UTC) - timedelta(days=2)
+    old_time = cutoff - timedelta(days=1)
     os.utime(legacy_target, (old_time.timestamp(), old_time.timestamp()))
 
-    current_artifact_key = "batch-create-stage/2026/04/13/20260413T120000000000Z-a-current.jsonl"
+    current_time = cutoff + timedelta(hours=1)
+    current_artifact_key = (
+        f"batch-create-stage/{current_time:%Y/%m/%d}/"
+        f"{current_time:%Y%m%dT%H%M%S%fZ}-a-current.jsonl"
+    )
     current_target = tmp_path / "batch-artifacts" / current_artifact_key
     current_target.parent.mkdir(parents=True, exist_ok=True)
     current_target.write_bytes(b"current\n")
 
     keys = await storage.list_keys(
         prefix="batch-create-stage",
-        older_than=datetime(2026, 4, 12, 23, 0, tzinfo=UTC),
+        older_than=cutoff,
         limit=10,
     )
 

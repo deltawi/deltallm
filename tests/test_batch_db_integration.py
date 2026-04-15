@@ -236,14 +236,17 @@ async def _seed_staged_create_session(
 def _build_cutover_batch_service(
     *,
     repository: BatchRepository,
-    storage: LocalBatchArtifactStorage,
+    storage,
+    storage_registry: dict[str, Any] | None = None,
     idempotency_enabled: bool = False,
     max_pending_batches_per_scope: int = 20,
 ) -> BatchService:
-    storage_registry = {"local": storage}
+    active_storage_registry = {"local": storage}
+    if storage_registry:
+        active_storage_registry.update(storage_registry)
     staging_backend = BatchCreateArtifactStorageBackend(
         storage=storage,
-        storage_registry=storage_registry,
+        storage_registry=active_storage_registry,
     )
     create_session_service = BatchCreateSessionService(
         repository=repository,
@@ -257,7 +260,7 @@ def _build_cutover_batch_service(
             staging=staging_backend,
             max_pending_batches_per_scope=max_pending_batches_per_scope,
         ),
-        storage_registry=storage_registry,
+        storage_registry=active_storage_registry,
         max_file_bytes=52_428_800,
         max_items_per_batch=10_000,
         max_line_bytes=1_048_576,
@@ -267,8 +270,7 @@ def _build_cutover_batch_service(
     return BatchService(
         repository=repository,
         storage=storage,
-        storage_registry=storage_registry,
-        max_pending_batches_per_scope=max_pending_batches_per_scope,
+        storage_registry=active_storage_registry,
         create_session_service=create_session_service,
     )
 
@@ -279,11 +281,11 @@ async def test_db_backed_concurrent_batch_create_enforces_pending_cap(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("src.batch.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
 
     repository = BatchRepository(batch_db)
     storage = LocalBatchArtifactStorage(str(tmp_path / "artifacts"))
-    service = BatchService(
+    service = _build_cutover_batch_service(
         repository=repository,
         storage=storage,
         max_pending_batches_per_scope=1,
@@ -329,7 +331,7 @@ async def test_db_backed_batch_create_rolls_back_after_insert_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("src.batch.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
 
     class _FailingBatchRepository(BatchRepository):
         def __init__(self, prisma_client: Any, state: dict[str, int]) -> None:
@@ -347,7 +349,7 @@ async def test_db_backed_batch_create_rolls_back_after_insert_failure(
     state = {"calls": 0}
     repository = _FailingBatchRepository(batch_db, state)
     storage = LocalBatchArtifactStorage(str(tmp_path / "artifacts"))
-    service = BatchService(repository=repository, storage=storage)
+    service = _build_cutover_batch_service(repository=repository, storage=storage)
     auth = UserAPIKeyAuth(api_key="key-a")
     input_file_id = await _create_input_file(
         service,
@@ -355,7 +357,7 @@ async def test_db_backed_batch_create_rolls_back_after_insert_failure(
         payload=b'{"custom_id":"c1","url":"/v1/embeddings","body":{"model":"m1","input":"hello"}}\n',
     )
 
-    with pytest.raises(RuntimeError, match="simulated item insert failure"):
+    with pytest.raises(HTTPException) as exc:
         await service.create_embeddings_batch(
             auth=auth,
             input_file_id=input_file_id,
@@ -364,6 +366,8 @@ async def test_db_backed_batch_create_rolls_back_after_insert_failure(
             completion_window=None,
         )
 
+    assert exc.value.status_code == 503
+    assert "simulated item insert failure" in str(exc.value.detail)
     assert state["calls"] == 1
     job_rows = await batch_db.query_raw("SELECT batch_id FROM deltallm_batch_job")
     item_rows = await batch_db.query_raw("SELECT item_id FROM deltallm_batch_item")
@@ -377,11 +381,11 @@ async def test_db_backed_batch_create_persists_organization_ownership(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("src.batch.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
 
     repository = BatchRepository(batch_db)
     storage = LocalBatchArtifactStorage(str(tmp_path / "artifacts"))
-    service = BatchService(repository=repository, storage=storage)
+    service = _build_cutover_batch_service(repository=repository, storage=storage)
     auth = UserAPIKeyAuth(api_key="key-a", organization_id="org-1")
     input_file_id = await _create_input_file(
         service,
@@ -1294,7 +1298,7 @@ async def test_db_backed_session_stager_compensates_artifact_on_session_insert_c
             ),
         )
 
-    assert list((tmp_path / "create-session-artifacts").rglob("*")) == []
+    assert [path for path in (tmp_path / "create-session-artifacts").rglob("*") if path.is_file()] == []
 
 
 @pytest.mark.asyncio
@@ -1501,19 +1505,17 @@ async def test_db_backed_create_session_cleanup_deletes_old_unreferenced_orphan_
     repository = BatchRepository(batch_db)
     storage = LocalBatchArtifactStorage(str(tmp_path / "create-session-artifacts"))
     staging = BatchCreateArtifactStorageBackend(storage=storage)
-    artifact = await staging.write_records(
-        [
-            BatchCreateStagedRequest(
-                line_number=1,
-                custom_id="req-orphan",
-                request_body={"model": "m1", "input": "hello"},
-            )
-        ],
-        filename="orphan.jsonl",
-    )
-    orphan_target = tmp_path / "create-session-artifacts" / artifact.storage_key
     old_time = datetime.now(tz=UTC) - timedelta(hours=2)
-    os.utime(orphan_target, (old_time.timestamp(), old_time.timestamp()))
+    orphan_key = (
+        f"batch-create-stage/{old_time:%Y/%m/%d}/"
+        f"{old_time:%Y%m%dT%H%M%S%fZ}-manual-orphan.jsonl"
+    )
+    orphan_target = tmp_path / "create-session-artifacts" / orphan_key
+    orphan_target.parent.mkdir(parents=True, exist_ok=True)
+    orphan_target.write_text(
+        '{"line_number":1,"custom_id":"req-orphan","request_body":{"model":"m1","input":"hello"}}\n',
+        encoding="utf-8",
+    )
 
     worker = BatchCreateSessionCleanupWorker(
         repository=repository.create_sessions,
@@ -2387,7 +2389,7 @@ async def test_db_backed_shared_storage_flow_uses_recorded_backends_end_to_end(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("src.batch.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
 
     async def _fake_execute_embedding(request, payload, deployment):  # noqa: ANN001
         del request, payload, deployment
@@ -2409,7 +2411,7 @@ async def test_db_backed_shared_storage_flow_uses_recorded_backends_end_to_end(
         storage=local_storage,
         storage_registry=storage_registry,
     )
-    active_service = BatchService(
+    active_service = _build_cutover_batch_service(
         repository=repository,
         storage=s3_storage,
         storage_registry=storage_registry,
@@ -2539,14 +2541,18 @@ async def test_db_backed_shared_storage_flow_uses_recorded_backends_end_to_end(
     deleted_jobs, deleted_files = await cleanup.process_once()
 
     assert deleted_jobs == 1
-    assert deleted_files == 2
+    assert deleted_files == 1
     remaining_local_files = [path for path in (tmp_path / "local-artifacts").rglob("*") if path.is_file()]
-    assert remaining_local_files == []
-    assert s3_client.objects == {}
+    assert remaining_local_files == [tmp_path / "local-artifacts" / str(file_by_purpose["batch"]["storage_key"])]
+    assert len(s3_client.objects) == 1
+    remaining_s3_key = next(iter(s3_client.objects.keys()))[1]
+    assert remaining_s3_key.startswith("prefix/batch-create-stage/")
     remaining_jobs = await batch_db.query_raw("SELECT batch_id FROM deltallm_batch_job WHERE batch_id = $1", batch_id)
-    remaining_files = await batch_db.query_raw("SELECT file_id FROM deltallm_batch_file")
+    remaining_files = await batch_db.query_raw("SELECT file_id, purpose FROM deltallm_batch_file")
     assert remaining_jobs == []
-    assert remaining_files == []
+    assert [dict(row) for row in remaining_files] == [
+        {"file_id": input_file_id, "purpose": "batch"},
+    ]
 
 
 @pytest.mark.asyncio
@@ -2555,7 +2561,7 @@ async def test_db_backed_grouped_embedding_execution_preserves_item_and_batch_to
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("src.batch.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
 
     async def _fake_execute_embedding(request, payload, deployment):  # noqa: ANN001
         del request, deployment
@@ -2574,7 +2580,7 @@ async def test_db_backed_grouped_embedding_execution_preserves_item_and_batch_to
 
     repository = BatchRepository(batch_db)
     storage = LocalBatchArtifactStorage(str(tmp_path / "artifacts"))
-    service = BatchService(repository=repository, storage=storage)
+    service = _build_cutover_batch_service(repository=repository, storage=storage)
     auth = UserAPIKeyAuth(api_key="key-a")
     input_file_id = await _create_input_file(
         service,

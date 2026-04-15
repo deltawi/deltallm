@@ -139,7 +139,7 @@ class BatchCreateSessionCleanupWorker:
             try:
                 await asyncio.wait_for(
                     self._stop_event.wait(),
-                    timeout=max(0.1, float(self.config.interval_seconds)),
+                    timeout=max(0.0, float(self.config.interval_seconds)),
                 )
             except asyncio.TimeoutError:
                 continue
