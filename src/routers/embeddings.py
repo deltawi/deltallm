@@ -41,6 +41,7 @@ from src.routers.utils import enforce_budget_if_configured, fire_and_forget
 from src.services.model_visibility import ensure_model_allowed, get_callable_target_policy_mode_from_app
 from src.services.audit_service import AuditEventInput, AuditPayloadInput, AuditService
 from src.audit.actions import AuditAction
+from src.audit.errors import derive_audit_error_code
 
 router = APIRouter(prefix="/v1", tags=["embeddings"])
 
@@ -100,7 +101,7 @@ def _emit_embedding_audit_event(
             input_tokens=prompt_tokens,
             output_tokens=completion_tokens,
             error_type=error.__class__.__name__ if error is not None else None,
-            error_code=getattr(getattr(error, "response", None), "status_code", None) if error is not None else None,
+            error_code=derive_audit_error_code(error),
             metadata=metadata or {},
         ),
         payloads=payloads,

@@ -102,6 +102,8 @@ async def test_audit_repository_creates_event_and_payload():
     assert event.organization_id == "org-1"
     assert event.metadata == {"model": "openai/gpt-4o-mini"}
     assert event.content_stored is False
+    assert prisma.last_query is not None
+    assert "$1::uuid" in prisma.last_query
 
     payload = await repo.create_payload(
         AuditPayloadRecord(
@@ -117,6 +119,9 @@ async def test_audit_repository_creates_event_and_payload():
     assert payload.event_id == event.event_id
     assert payload.kind == "prompt"
     assert payload.content_json == {"messages": [{"role": "user", "content": "hello"}]}
+    assert prisma.last_query is not None
+    assert "$1::uuid" in prisma.last_query
+    assert "$2::uuid" in prisma.last_query
 
 
 @pytest.mark.asyncio

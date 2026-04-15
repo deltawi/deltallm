@@ -151,7 +151,7 @@ async def list_batches(
     valid_statuses = {"queued", "in_progress", "finalizing", "completed", "failed", "cancelled", "expired"}
     if status_filter and status_filter in valid_statuses:
         params.append(status_filter)
-        clauses.append(f"j.status = ${len(params)}")
+        clauses.append(f'j.status = ${len(params)}::"DeltaLLM_BatchJobStatus"')
 
     where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 

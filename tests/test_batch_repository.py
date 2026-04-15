@@ -126,6 +126,7 @@ async def test_claim_next_job_includes_finalizing_jobs():
     assert job is None
     assert "'finalizing'" in prisma.sql
     assert "CASE WHEN status = 'finalizing' THEN 1 ELSE 0 END" in prisma.sql
+    assert '::"DeltaLLM_BatchJobStatus"' in prisma.sql
 
 
 @pytest.mark.asyncio
@@ -137,6 +138,7 @@ async def test_request_cancel_preserves_finalizing_status():
 
     assert job is None
     assert "WHEN status = 'finalizing' THEN status" in prisma.sql
+    assert '::"DeltaLLM_BatchJobStatus"' in prisma.sql
 
 
 @pytest.mark.asyncio
@@ -267,3 +269,59 @@ async def test_create_job_defaults_to_queued_status() -> None:
 
     assert '::"DeltaLLM_BatchJobStatus"' in prisma.sql
     assert prisma.params[2] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_set_job_queued_casts_status_parameter_to_enum() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    queued = await repository.set_job_queued("batch-1", 2)
+
+    assert queued is None
+    assert 'status = $2::"DeltaLLM_BatchJobStatus"' in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_refresh_job_progress_casts_status_case_to_enum() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    refreshed = await repository.refresh_job_progress("batch-1")
+
+    assert refreshed is None
+    assert "WHEN s.pending_items = 0 AND s.in_progress_items = 0 THEN 'finalizing'" in prisma.sql
+    assert '::"DeltaLLM_BatchJobStatus"' in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_attach_artifacts_and_finalize_casts_status_parameter_to_enum() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id="batch-1",
+        output_file_id="out-1",
+        error_file_id="err-1",
+        final_status="completed",
+    )
+
+    assert finalized is None
+    assert 'status = $4::"DeltaLLM_BatchJobStatus"' in prisma.sql
+    assert prisma.params[3] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_attach_artifacts_and_finalize_rejects_invalid_status_before_sql() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    with pytest.raises(ValueError, match="batch job status"):
+        await repository.attach_artifacts_and_finalize(
+            batch_id="batch-1",
+            output_file_id=None,
+            error_file_id=None,
+            final_status="broken",
+        )
+
+    assert prisma.queries == []
