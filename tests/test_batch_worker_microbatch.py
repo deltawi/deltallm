@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -552,43 +553,94 @@ async def test_worker_fans_out_grouped_embedding_responses_into_single_item_rows
     assert first["usage"] == {"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 4}
     assert second["usage"] == {"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 4}
 
-    first_artifact_row = worker._serialize_completed_artifact_row(
-        SimpleNamespace(item_id="i1", custom_id="custom-i1", response_body=first["response_body"])
-    )
-    second_artifact_row = worker._serialize_completed_artifact_row(
-        SimpleNamespace(item_id="i2", custom_id="custom-i2", response_body=second["response_body"])
-    )
+    artifact_now = datetime.now(tz=UTC)
 
-    assert first_artifact_row == {
-        "id": "batch_req_i1",
-        "custom_id": "custom-i1",
-        "response": {
-            "status_code": 200,
-            "request_id": "req_batch_i1",
-            "body": {
-                "object": "list",
-                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
-                "model": "provider-embedding-model",
-                "usage": {"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 4},
+    class _ArtifactRepo:
+        async def list_items(self, batch_id: str):
+            assert batch_id == "b1"
+            return [
+                BatchItemRecord(
+                    item_id="i1",
+                    batch_id=batch_id,
+                    line_number=1,
+                    custom_id="custom-i1",
+                    status="completed",
+                    request_body={},
+                    response_body=first["response_body"],
+                    error_body=None,
+                    usage=None,
+                    provider_cost=0.0,
+                    billed_cost=0.0,
+                    attempts=1,
+                    last_error=None,
+                    locked_by=None,
+                    lease_expires_at=None,
+                    created_at=artifact_now,
+                    started_at=artifact_now,
+                    completed_at=artifact_now,
+                ),
+                BatchItemRecord(
+                    item_id="i2",
+                    batch_id=batch_id,
+                    line_number=2,
+                    custom_id="custom-i2",
+                    status="completed",
+                    request_body={},
+                    response_body=second["response_body"],
+                    error_body=None,
+                    usage=None,
+                    provider_cost=0.0,
+                    billed_cost=0.0,
+                    attempts=1,
+                    last_error=None,
+                    locked_by=None,
+                    lease_expires_at=None,
+                    created_at=artifact_now,
+                    started_at=artifact_now,
+                    completed_at=artifact_now,
+                ),
+            ]
+
+    artifact_worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=_ArtifactRepo(),  # type: ignore[arg-type]
+        storage=_Storage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+    artifact_rows = [json.loads(line) async for line in artifact_worker._iter_output_lines("b1")]
+
+    assert artifact_rows == [
+        {
+            "id": "batch_req_i1",
+            "custom_id": "custom-i1",
+            "response": {
+                "status_code": 200,
+                "request_id": "req_batch_i1",
+                "body": {
+                    "object": "list",
+                    "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                    "model": "provider-embedding-model",
+                    "usage": {"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 4},
+                },
             },
+            "error": None,
         },
-        "error": None,
-    }
-    assert second_artifact_row == {
-        "id": "batch_req_i2",
-        "custom_id": "custom-i2",
-        "response": {
-            "status_code": 200,
-            "request_id": "req_batch_i2",
-            "body": {
-                "object": "list",
-                "data": [{"object": "embedding", "index": 0, "embedding": [0.3, 0.4]}],
-                "model": "provider-embedding-model",
-                "usage": {"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 4},
+        {
+            "id": "batch_req_i2",
+            "custom_id": "custom-i2",
+            "response": {
+                "status_code": 200,
+                "request_id": "req_batch_i2",
+                "body": {
+                    "object": "list",
+                    "data": [{"object": "embedding", "index": 0, "embedding": [0.3, 0.4]}],
+                    "model": "provider-embedding-model",
+                    "usage": {"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 4},
+                },
             },
+            "error": None,
         },
-        "error": None,
-    }
+    ]
 
 
 @pytest.mark.asyncio

@@ -246,24 +246,48 @@ class BatchExecutorWorker:
 
     def _sanitize_public_embedding_body(self, response_body: dict[str, Any] | None) -> dict[str, Any]:
         if not isinstance(response_body, dict):
-            return {}
+            raise ValueError("completed batch item is missing an embedding response body")
 
         sanitized = dict(response_body)
         sanitized.pop("_provider", None)
-        sanitized["object"] = str(sanitized.get("object") or "list")
+        object_type = sanitized.get("object")
+        if object_type is None:
+            sanitized["object"] = "list"
+        elif object_type != "list":
+            raise ValueError(f"completed batch item has invalid embedding response object={object_type!r}")
+
+        data_rows = sanitized.get("data")
+        if not isinstance(data_rows, list):
+            raise ValueError("completed batch item embedding response data is not a list")
+        if not data_rows:
+            raise ValueError("completed batch item embedding response data is empty")
 
         normalized_rows: list[Any] = []
-        for row_number, row in enumerate(sanitized.get("data") or []):
+        for row_number, row in enumerate(data_rows):
             if not isinstance(row, dict):
-                normalized_rows.append(row)
-                continue
+                raise ValueError(f"completed batch item embedding response row {row_number} is not an object")
             normalized_row = dict(row)
-            normalized_row["object"] = str(normalized_row.get("object") or "embedding")
-            if type(normalized_row.get("index")) is not int:
+            if "embedding" not in normalized_row:
+                raise ValueError(f"completed batch item embedding response row {row_number} is missing embedding")
+
+            row_object = normalized_row.get("object")
+            if row_object is None:
+                normalized_row["object"] = "embedding"
+            elif row_object != "embedding":
+                raise ValueError(
+                    f"completed batch item embedding response row {row_number} has invalid object={row_object!r}"
+                )
+
+            response_index = normalized_row.get("index")
+            if response_index is None:
                 normalized_row["index"] = row_number
+            elif type(response_index) is not int:
+                raise ValueError(
+                    f"completed batch item embedding response row {row_number} has invalid index={response_index!r}"
+                )
             normalized_rows.append(normalized_row)
-        if isinstance(sanitized.get("data"), list):
-            sanitized["data"] = normalized_rows
+
+        sanitized["data"] = normalized_rows
 
         return sanitized
 
