@@ -238,6 +238,63 @@ class BatchExecutorWorker:
         deployment_model = response_body.pop("_deployment_model", None)
         return response_body, api_base, deployment_model
 
+    def _public_batch_row_id(self, item) -> str:  # noqa: ANN001
+        return f"batch_req_{item.item_id}"
+
+    def _public_batch_request_id(self, item) -> str:  # noqa: ANN001
+        return f"req_batch_{item.item_id}"
+
+    def _sanitize_public_embedding_body(self, response_body: dict[str, Any] | None) -> dict[str, Any]:
+        if not isinstance(response_body, dict):
+            return {}
+
+        sanitized = dict(response_body)
+        sanitized.pop("_provider", None)
+        sanitized["object"] = str(sanitized.get("object") or "list")
+
+        normalized_rows: list[Any] = []
+        for row_number, row in enumerate(sanitized.get("data") or []):
+            if not isinstance(row, dict):
+                normalized_rows.append(row)
+                continue
+            normalized_row = dict(row)
+            normalized_row["object"] = str(normalized_row.get("object") or "embedding")
+            if type(normalized_row.get("index")) is not int:
+                normalized_row["index"] = row_number
+            normalized_rows.append(normalized_row)
+        if isinstance(sanitized.get("data"), list):
+            sanitized["data"] = normalized_rows
+
+        return sanitized
+
+    def _serialize_completed_artifact_row(self, item) -> dict[str, Any]:  # noqa: ANN001
+        return {
+            "id": self._public_batch_row_id(item),
+            "custom_id": item.custom_id,
+            "response": {
+                "status_code": 200,
+                "request_id": self._public_batch_request_id(item),
+                "body": self._sanitize_public_embedding_body(item.response_body),
+            },
+            "error": None,
+        }
+
+    def _serialize_failed_artifact_row(self, item) -> dict[str, Any]:  # noqa: ANN001
+        error_body = dict(item.error_body) if isinstance(item.error_body, dict) else {}
+        if not error_body.get("message"):
+            error_body["message"] = item.last_error or (
+                "Batch request cancelled" if item.status == "cancelled" else "Batch request failed"
+            )
+        if not error_body.get("type"):
+            error_body["type"] = "BatchItemCancelled" if item.status == "cancelled" else "BatchItemError"
+
+        return {
+            "id": self._public_batch_row_id(item),
+            "custom_id": item.custom_id,
+            "response": None,
+            "error": error_body,
+        }
+
     def _build_single_item_embedding_response_body(
         self,
         *,
@@ -1185,12 +1242,12 @@ class BatchExecutorWorker:
     async def _iter_output_lines(self, batch_id: str) -> AsyncIterator[str]:
         async for item in self._iter_batch_items(batch_id):
             if item.status == "completed":
-                yield json.dumps({"custom_id": item.custom_id, "response": item.response_body or {}})
+                yield json.dumps(self._serialize_completed_artifact_row(item))
 
     async def _iter_error_lines(self, batch_id: str) -> AsyncIterator[str]:
         async for item in self._iter_batch_items(batch_id):
             if item.status in {"failed", "cancelled"}:
-                yield json.dumps({"custom_id": item.custom_id, "error": item.error_body or {}})
+                yield json.dumps(self._serialize_failed_artifact_row(item))
 
     async def _finalize_artifacts(self, job) -> None:
         storage_backend = getattr(self.storage, "backend_name", "local")
