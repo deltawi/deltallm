@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+import json
 import logging
 from types import SimpleNamespace
 
@@ -318,6 +319,209 @@ async def test_batch_worker_normalizes_single_item_embedding_usage(monkeypatch):
     await worker._process_item(job, item)
 
     assert repo.completed_calls[0]["usage"] == {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5}
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_serializes_single_item_embedding_artifact_row_in_openai_batch_shape(monkeypatch):
+    async def _fake_execute_embedding(request, payload, deployment):
+        del request, payload, deployment
+        return {
+            "object": "list",
+            "data": [{"index": 0, "embedding": [0.1, 0.2]}],
+            "model": "provider-embedding-model",
+            "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+        }
+
+    monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
+
+    deployment = SimpleNamespace(
+        deltallm_params={"model": "vllm/sentence-transformers/all-MiniLM-L6-v2", "api_base": "http://localhost:9090/v1"},
+        input_cost_per_token=0.001,
+        output_cost_per_token=0.0,
+        model_info={"batch_input_cost_per_token": 0.0005, "batch_output_cost_per_token": 0.0},
+    )
+
+    class _Router:
+        def resolve_model_group(self, model: str) -> str:
+            return model
+
+        async def select_deployment(self, model_group: str, request_context: dict) -> str:
+            del model_group, request_context
+            return "dep-1"
+
+        def require_deployment(self, model_group: str, deployment: str):
+            del model_group, deployment
+            return deployment_obj
+
+    class _Failover:
+        async def execute_with_failover(self, *, primary_deployment, model_group, execute, return_deployment=False, **kwargs):
+            del model_group, kwargs
+            data = await execute(primary_deployment)
+            if return_deployment:
+                return data, primary_deployment
+            return data
+
+    deployment_obj = deployment
+    repo = _FakeRepository()
+    app = SimpleNamespace(state=SimpleNamespace(router=_Router(), failover_manager=_Failover(), spend_tracking_service=_SpendRecorder()))
+    worker = BatchExecutorWorker(
+        app=app,
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+
+    now = datetime.now(tz=UTC)
+    job = BatchJobRecord(
+        batch_id="b1",
+        endpoint="/v1/embeddings",
+        status=BatchJobStatus.IN_PROGRESS,
+        execution_mode="managed_internal",
+        input_file_id="f1",
+        output_file_id=None,
+        error_file_id=None,
+        model="m-1",
+        metadata={},
+        provider_batch_id=None,
+        provider_status=None,
+        provider_error=None,
+        provider_last_sync_at=None,
+        total_items=1,
+        in_progress_items=1,
+        completed_items=0,
+        failed_items=0,
+        cancelled_items=0,
+        locked_by="w1",
+        lease_expires_at=now,
+        cancel_requested_at=None,
+        status_last_updated_at=now,
+        created_by_api_key="key-1",
+        created_by_user_id="user-1",
+        created_by_team_id="team-1",
+        created_by_organization_id="org-1",
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+        expires_at=None,
+    )
+    item = BatchItemRecord(
+        item_id="i1",
+        batch_id="b1",
+        line_number=1,
+        custom_id="c1",
+        status="in_progress",
+        request_body={"model": "m-1", "input": "hello"},
+        response_body=None,
+        error_body=None,
+        usage=None,
+        provider_cost=0.0,
+        billed_cost=0.0,
+        attempts=0,
+        last_error=None,
+        locked_by="w1",
+        lease_expires_at=now,
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+    )
+
+    await worker._process_item(job, item)
+
+    completed = repo.completed_calls[0]
+    artifact_row = worker._serialize_completed_artifact_row(
+        SimpleNamespace(item_id=item.item_id, custom_id=item.custom_id, response_body=completed["response_body"])
+    )
+
+    assert artifact_row == {
+        "id": "batch_req_i1",
+        "custom_id": "c1",
+        "response": {
+            "status_code": 200,
+            "request_id": "req_batch_i1",
+            "body": {
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "model": "provider-embedding-model",
+                "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+            },
+        },
+        "error": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_iter_error_lines_emit_openai_batch_error_rows():
+    now = datetime.now(tz=UTC)
+
+    class _ArtifactRepo:
+        async def list_items(self, batch_id: str):
+            assert batch_id == "b1"
+            return [
+                BatchItemRecord(
+                    item_id="i1",
+                    batch_id=batch_id,
+                    line_number=1,
+                    custom_id="req-1",
+                    status="failed",
+                    request_body={},
+                    response_body=None,
+                    error_body={"message": "boom"},
+                    usage=None,
+                    provider_cost=0.0,
+                    billed_cost=0.0,
+                    attempts=1,
+                    last_error="boom",
+                    locked_by=None,
+                    lease_expires_at=None,
+                    created_at=now,
+                    started_at=now,
+                    completed_at=now,
+                ),
+                BatchItemRecord(
+                    item_id="i2",
+                    batch_id=batch_id,
+                    line_number=2,
+                    custom_id="req-2",
+                    status="cancelled",
+                    request_body={},
+                    response_body=None,
+                    error_body=None,
+                    usage=None,
+                    provider_cost=0.0,
+                    billed_cost=0.0,
+                    attempts=1,
+                    last_error=None,
+                    locked_by=None,
+                    lease_expires_at=None,
+                    created_at=now,
+                    started_at=now,
+                    completed_at=now,
+                ),
+            ]
+
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=_ArtifactRepo(),  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+
+    rows = [json.loads(line) async for line in worker._iter_error_lines("b1")]
+
+    assert rows == [
+        {
+            "id": "batch_req_i1",
+            "custom_id": "req-1",
+            "response": None,
+            "error": {"message": "boom", "type": "BatchItemError"},
+        },
+        {
+            "id": "batch_req_i2",
+            "custom_id": "req-2",
+            "response": None,
+            "error": {"message": "Batch request cancelled", "type": "BatchItemCancelled"},
+        },
+    ]
 
 
 @pytest.mark.asyncio

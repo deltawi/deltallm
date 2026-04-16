@@ -552,6 +552,44 @@ async def test_worker_fans_out_grouped_embedding_responses_into_single_item_rows
     assert first["usage"] == {"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 4}
     assert second["usage"] == {"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 4}
 
+    first_artifact_row = worker._serialize_completed_artifact_row(
+        SimpleNamespace(item_id="i1", custom_id="custom-i1", response_body=first["response_body"])
+    )
+    second_artifact_row = worker._serialize_completed_artifact_row(
+        SimpleNamespace(item_id="i2", custom_id="custom-i2", response_body=second["response_body"])
+    )
+
+    assert first_artifact_row == {
+        "id": "batch_req_i1",
+        "custom_id": "custom-i1",
+        "response": {
+            "status_code": 200,
+            "request_id": "req_batch_i1",
+            "body": {
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "model": "provider-embedding-model",
+                "usage": {"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 4},
+            },
+        },
+        "error": None,
+    }
+    assert second_artifact_row == {
+        "id": "batch_req_i2",
+        "custom_id": "custom-i2",
+        "response": {
+            "status_code": 200,
+            "request_id": "req_batch_i2",
+            "body": {
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.3, 0.4]}],
+                "model": "provider-embedding-model",
+                "usage": {"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 4},
+            },
+        },
+        "error": None,
+    }
+
 
 @pytest.mark.asyncio
 async def test_worker_isolates_duplicate_response_indexes_back_to_single_item_execution(monkeypatch):
