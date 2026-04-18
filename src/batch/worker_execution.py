@@ -965,7 +965,12 @@ class BatchExecutionEngine:
         if passive_health_tracker is None or deployment_id is None:
             return
         try:
-            await passive_health_tracker.record_request_outcome(deployment_id, success=False, error=str(exc))
+            await passive_health_tracker.record_request_outcome(
+                deployment_id,
+                success=False,
+                error=str(exc),
+                exc=exc,
+            )
         except Exception as hook_exc:
             logger.warning(
                 "batch passive health upstream failure hook failed batch_id=%s reference=%s deployment_id=%s error=%s",
@@ -988,7 +993,12 @@ class BatchExecutionEngine:
         passive_health_tracker = getattr(self.app.state, "passive_health_tracker", None)
         if passive_health_tracker is not None and deployment_id is not None:
             try:
-                await passive_health_tracker.record_request_outcome(deployment_id, success=False, error=str(exc))
+                await passive_health_tracker.record_request_outcome(
+                    deployment_id,
+                    success=False,
+                    error=str(exc),
+                    exc=exc,
+                )
             except Exception as hook_exc:
                 logger.warning(
                     "batch passive health failure hook failed batch_id=%s item_id=%s deployment_id=%s error=%s",

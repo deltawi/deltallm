@@ -35,7 +35,15 @@ class _PassiveHealthRecorder:
     def __init__(self) -> None:
         self.calls: list[tuple[str, bool, str | None]] = []
 
-    async def record_request_outcome(self, deployment_id: str, success: bool, error: str | None = None) -> None:
+    async def record_request_outcome(
+        self,
+        deployment_id: str,
+        success: bool,
+        error: str | None = None,
+        *,
+        exc: Exception | None = None,
+    ) -> None:
+        del exc
         self.calls.append((deployment_id, success, error))
 
 
@@ -1165,8 +1173,15 @@ async def test_batch_worker_keeps_completed_state_when_passive_health_success_ho
     )
 
     class _FailingPassiveHealth:
-        async def record_request_outcome(self, deployment_id: str, success: bool, error: str | None = None) -> None:
-            del deployment_id, success, error
+        async def record_request_outcome(
+            self,
+            deployment_id: str,
+            success: bool,
+            error: str | None = None,
+            *,
+            exc: Exception | None = None,
+        ) -> None:
+            del deployment_id, success, error, exc
             raise RuntimeError("health sink unavailable")
 
     class _RouterStateBackend:
@@ -1708,7 +1723,15 @@ async def test_batch_worker_keeps_failed_state_when_passive_health_failure_hook_
         def __init__(self) -> None:
             self.calls: list[tuple[str, bool, str | None]] = []
 
-        async def record_request_outcome(self, deployment_id: str, success: bool, error: str | None = None) -> None:
+        async def record_request_outcome(
+            self,
+            deployment_id: str,
+            success: bool,
+            error: str | None = None,
+            *,
+            exc: Exception | None = None,
+        ) -> None:
+            del exc
             self.calls.append((deployment_id, success, error))
             raise RuntimeError("health sink unavailable")
 

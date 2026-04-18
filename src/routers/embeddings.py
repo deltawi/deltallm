@@ -368,7 +368,12 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         failure_provider = str(failure_target.provider or api_provider)
         failure_api_base = failure_target.api_base or primary_api_base
         failure_deployment_model = failure_target.deployment_model or primary.deltallm_params.get("model")
-        await request.app.state.passive_health_tracker.record_request_outcome(failure_deployment_id, success=False, error=str(exc))
+        await request.app.state.passive_health_tracker.record_request_outcome(
+            failure_deployment_id,
+            success=False,
+            error=str(exc),
+            exc=exc,
+        )
         status_code = getattr(getattr(exc, "response", None), "status_code", 502)
         increment_request(
             model=payload.model, api_provider=failure_provider,
@@ -435,7 +440,12 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         failure_provider = str(failure_target.provider or api_provider)
         failure_api_base = failure_target.api_base or primary_api_base
         failure_deployment_model = failure_target.deployment_model or primary.deltallm_params.get("model")
-        await request.app.state.passive_health_tracker.record_request_outcome(failure_deployment_id, success=False, error=str(exc))
+        await request.app.state.passive_health_tracker.record_request_outcome(
+            failure_deployment_id,
+            success=False,
+            error=str(exc),
+            exc=exc,
+        )
         status_code = int(getattr(exc, "status_code", 500) or 500)
         callback_payload = build_standard_logging_payload(
             call_type="embedding", request_id=request_id, model=payload.model,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any, Awaitable, Callable
 
+from src.router.health_policy import affects_deployment_health
 from src.router.state import DeploymentStateBackend
 
 
@@ -19,7 +20,18 @@ class CooldownManager:
         self.allowed_fails = allowed_fails
         self.alert_callback = alert_callback
 
-    async def record_failure(self, deployment_id: str, error: str) -> bool:
+    async def record_failure(
+        self,
+        deployment_id: str,
+        error: str,
+        *,
+        exc: Exception | None = None,
+        affects_health: bool | None = None,
+    ) -> bool:
+        if affects_health is None and exc is not None:
+            affects_health = affects_deployment_health(exc)
+        if affects_health is False:
+            return False
         failure_count = await self.state.record_failure(deployment_id, error)
         if failure_count > self.allowed_fails:
             await self._enter_cooldown(deployment_id, error, failure_count)

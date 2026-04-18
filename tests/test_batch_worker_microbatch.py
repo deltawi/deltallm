@@ -879,7 +879,15 @@ async def test_worker_records_one_upstream_failure_before_isolation_fallback(mon
         def __init__(self) -> None:
             self.calls: list[tuple[str, bool, str | None]] = []
 
-        async def record_request_outcome(self, deployment_id: str, success: bool, error: str | None = None) -> None:
+        async def record_request_outcome(
+            self,
+            deployment_id: str,
+            success: bool,
+            error: str | None = None,
+            *,
+            exc: Exception | None = None,
+        ) -> None:
+            del exc
             self.calls.append((deployment_id, success, error))
 
     async def _fake_execute_embedding(request, payload, deployment):
@@ -922,7 +930,15 @@ async def test_worker_attributes_grouped_response_validation_failures_to_served_
         def __init__(self) -> None:
             self.calls: list[tuple[str, bool, str | None]] = []
 
-        async def record_request_outcome(self, deployment_id: str, success: bool, error: str | None = None) -> None:
+        async def record_request_outcome(
+            self,
+            deployment_id: str,
+            success: bool,
+            error: str | None = None,
+            *,
+            exc: Exception | None = None,
+        ) -> None:
+            del exc
             self.calls.append((deployment_id, success, error))
 
     async def _fake_execute_embedding(request, payload, deployment):
@@ -1001,7 +1017,15 @@ async def test_worker_salvages_grouped_chunk_when_bulk_completion_fails_without_
         def __init__(self) -> None:
             self.calls: list[tuple[str, bool, str | None]] = []
 
-        async def record_request_outcome(self, deployment_id: str, success: bool, error: str | None = None) -> None:
+        async def record_request_outcome(
+            self,
+            deployment_id: str,
+            success: bool,
+            error: str | None = None,
+            *,
+            exc: Exception | None = None,
+        ) -> None:
+            del exc
             self.calls.append((deployment_id, success, error))
 
     async def _fake_execute_embedding(request, payload, deployment):

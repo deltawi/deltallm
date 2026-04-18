@@ -245,7 +245,12 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
         failure_provider = str(failure_target.provider or api_provider)
         failure_api_base = failure_target.api_base or primary_api_base
         failure_deployment_model = failure_target.deployment_model or primary.deltallm_params.get("model")
-        await request.app.state.passive_health_tracker.record_request_outcome(failure_deployment_id, success=False, error=str(exc))
+        await request.app.state.passive_health_tracker.record_request_outcome(
+            failure_deployment_id,
+            success=False,
+            error=str(exc),
+            exc=exc,
+        )
         status_code = getattr(getattr(exc, "response", None), "status_code", 502)
         increment_request(model=payload.model, api_provider=failure_provider, api_key=auth.api_key, user=auth.user_id, team=auth.team_id, status_code=status_code)
         increment_request_failure(model=payload.model, api_provider=failure_provider, error_type=exc.__class__.__name__)
@@ -307,7 +312,12 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
         failure_provider = str(failure_target.provider or api_provider)
         failure_api_base = failure_target.api_base or primary_api_base
         failure_deployment_model = failure_target.deployment_model or primary.deltallm_params.get("model")
-        await request.app.state.passive_health_tracker.record_request_outcome(failure_deployment_id, success=False, error=str(exc))
+        await request.app.state.passive_health_tracker.record_request_outcome(
+            failure_deployment_id,
+            success=False,
+            error=str(exc),
+            exc=exc,
+        )
         status_code = int(getattr(exc, "status_code", 500) or 500)
         enqueue_request_log_write(
             request,

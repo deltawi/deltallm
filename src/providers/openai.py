@@ -5,10 +5,9 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from src.models.errors import InvalidRequestError, ServiceUnavailableError, TimeoutError
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
-from src.providers.base import ProviderAdapter
+from src.providers.base import ProviderAdapter, map_standard_provider_error
 from src.providers.resolution import normalize_openai_chat_payload, resolve_provider, resolve_upstream_model
 from src.upstream_auth import build_openai_compatible_auth_headers
 
@@ -59,7 +58,7 @@ class OpenAIAdapter(ProviderAdapter):
         response = provider_error.response
         try:
             payload = response.json()
-        except ValueError:
+        except (AttributeError, ValueError):
             payload = None
         if isinstance(payload, dict):
             error = payload.get("error")
@@ -67,20 +66,24 @@ class OpenAIAdapter(ProviderAdapter):
                 message = str(error.get("message") or "").strip()
                 if message:
                     return message
-        body = response.text.strip()
+        body = str(getattr(response, "text", "") or "").strip()
         if body:
             return body
         return f"Provider rejected request: {response.status_code}"
 
     def map_error(self, provider_error: Exception) -> Exception:
-        if isinstance(provider_error, httpx.TimeoutException):
-            return TimeoutError()
-        if isinstance(provider_error, httpx.HTTPStatusError):
-            status = provider_error.response.status_code
-            if status >= 500:
-                return ServiceUnavailableError(message=f"Provider error: {status}")
-            return InvalidRequestError(message=self._http_error_message(provider_error))
-        return ServiceUnavailableError(message="Provider unavailable")
+        status = provider_error.response.status_code if isinstance(provider_error, httpx.HTTPStatusError) else None
+        message = (
+            self._http_error_message(provider_error)
+            if isinstance(provider_error, httpx.HTTPStatusError) and status is not None and status < 500
+            else "Provider unavailable"
+        )
+        return map_standard_provider_error(
+            provider_error,
+            invalid_request_message=message,
+            unavailable_message="Provider unavailable",
+            rate_limit_message=message if status == 429 else None,
+        )
 
     async def health_check(self, provider_config: dict[str, Any]) -> bool:
         api_base = provider_config.get("api_base", "https://api.openai.com/v1")

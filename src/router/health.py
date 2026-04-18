@@ -13,6 +13,7 @@ from src.metrics import (
 )
 from src.models.errors import ServiceUnavailableError
 from src.providers.healthcheck import HealthProbeResult
+from src.router.health_policy import affects_deployment_health
 from src.router.router import Deployment
 from src.router.state import DeploymentStateBackend
 
@@ -101,10 +102,23 @@ class PassiveHealthTracker:
         self.state = state_backend
         self.failure_threshold = failure_threshold
 
-    async def record_request_outcome(self, deployment_id: str, success: bool, error: str | None = None) -> None:
+    async def record_request_outcome(
+        self,
+        deployment_id: str,
+        success: bool,
+        error: str | None = None,
+        *,
+        exc: Exception | None = None,
+        affects_health: bool | None = None,
+    ) -> None:
         if success:
             await self.state.record_success(deployment_id)
             await self.state.set_health(deployment_id, True)
+            return
+
+        if affects_health is None and exc is not None:
+            affects_health = affects_deployment_health(exc)
+        if affects_health is False:
             return
 
         failures = await self.state.record_failure(deployment_id, error or "request_failed")

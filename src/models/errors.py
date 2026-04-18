@@ -1,15 +1,52 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
+from math import ceil
+
+
+def parse_retry_after_header(value: str | None) -> int | None:
+    if value is None:
+        return None
+
+    normalized = value.strip()
+    if not normalized:
+        return None
+
+    try:
+        return max(0, ceil(float(normalized)))
+    except (OverflowError, TypeError, ValueError):
+        pass
+
+    try:
+        retry_at = parsedate_to_datetime(normalized)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=UTC)
+
+    remaining = ceil((retry_at - datetime.now(tz=UTC)).total_seconds())
+    return max(0, remaining)
+
 
 class ProxyError(Exception):
     status_code: int = 500
     error_type: str = "server_error"
     message: str = "Internal server error"
 
-    def __init__(self, message: str | None = None, param: str | None = None, code: str | None = None):
+    def __init__(
+        self,
+        message: str | None = None,
+        param: str | None = None,
+        code: str | None = None,
+        *,
+        affects_deployment_health: bool | None = None,
+    ):
         self.message = message or self.message
         self.param = param
         self.code = code
+        self.affects_deployment_health = affects_deployment_health
         super().__init__(self.message)
 
 

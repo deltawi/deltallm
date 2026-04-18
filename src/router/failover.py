@@ -10,8 +10,16 @@ from typing import Any, Awaitable, Callable
 
 import httpx
 
-from src.models.errors import InvalidRequestError, ProxyError, ServiceUnavailableError, TimeoutError
+from src.models.errors import (
+    InvalidRequestError,
+    ProxyError,
+    RateLimitError,
+    ServiceUnavailableError,
+    TimeoutError,
+    parse_retry_after_header,
+)
 from src.router.cooldown import CooldownManager
+from src.router.health_policy import affects_deployment_health
 from src.router.router import Deployment
 from src.router.state import DeploymentStateBackend
 
@@ -228,6 +236,86 @@ class FailoverManager:
         except Exception:
             logger.warning("failover attempt callback failed", exc_info=True)
 
+    @staticmethod
+    def _http_error_message(error: httpx.HTTPError) -> str:
+        response = getattr(error, "response", None)
+        if response is None:
+            return str(error)
+
+        try:
+            payload = response.json()
+        except Exception:
+            payload = None
+
+        if isinstance(payload, dict):
+            nested_error = payload.get("error")
+            if isinstance(nested_error, dict):
+                for key in ("message", "detail"):
+                    message = nested_error.get(key)
+                    if isinstance(message, str) and message.strip():
+                        return message.strip()
+            if isinstance(nested_error, str) and nested_error.strip():
+                return nested_error.strip()
+            for key in ("message", "detail"):
+                message = payload.get(key)
+                if isinstance(message, str) and message.strip():
+                    return message.strip()
+
+        body = str(getattr(response, "text", "") or "").strip()
+        if body:
+            return body
+
+        content = getattr(response, "content", None)
+        if isinstance(content, bytes):
+            decoded = content.decode("utf-8", errors="replace").strip()
+            if decoded:
+                return decoded
+
+        return str(error)
+
+    def _normalize_http_error(self, error: httpx.HTTPError) -> ProxyError:
+        if isinstance(error, httpx.TimeoutException):
+            return TimeoutError(
+                message=str(error) or None,
+                affects_deployment_health=True,
+            )
+        response = getattr(error, "response", None)
+        status_code = getattr(response, "status_code", None)
+        if status_code == 429:
+            return RateLimitError(
+                message=self._http_error_message(error),
+                retry_after=parse_retry_after_header(response.headers.get("retry-after")),
+                affects_deployment_health=True,
+            )
+        if affects_deployment_health(error):
+            return ServiceUnavailableError(
+                message=str(error),
+                affects_deployment_health=True,
+            )
+        return InvalidRequestError(
+            message=self._http_error_message(error),
+            affects_deployment_health=False,
+        )
+
+    def _normalize_execution_error(
+        self,
+        error: Exception,
+        deployment: Deployment,
+    ) -> tuple[Exception, str, bool]:
+        if isinstance(error, asyncio.TimeoutError):
+            normalized = TimeoutError(message=f"Deployment '{deployment.deployment_id}' timed out")
+            return normalized, ErrorClassification.TIMEOUT, True
+
+        if isinstance(error, ProxyError):
+            return error, ErrorClassification.classify(error), True
+
+        if isinstance(error, httpx.HTTPError):
+            normalized = self._normalize_http_error(error)
+            return normalized, ErrorClassification.classify(normalized), True
+
+        normalized = ServiceUnavailableError(message=str(error))
+        return normalized, ErrorClassification.classify(normalized), False
+
     async def execute_with_failover(
         self,
         primary_deployment: Deployment,
@@ -283,132 +371,54 @@ class FailoverManager:
                     if return_deployment:
                         return result, deployment
                     return result
-                except asyncio.TimeoutError:
-                    last_error = TimeoutError(message=f"Deployment '{deployment.deployment_id}' timed out")
-                    classification = ErrorClassification.TIMEOUT
-                    await self.cooldown.record_failure(deployment.deployment_id, "timeout")
+                except Exception as exc:
+                    last_error, classification, allow_classified_fallbacks = self._normalize_execution_error(
+                        exc,
+                        deployment,
+                    )
+                    error_message = str(last_error)
+                    reason = "timeout" if classification == ErrorClassification.TIMEOUT else classification
+                    await self.cooldown.record_failure(
+                        deployment.deployment_id,
+                        error_message,
+                        exc=last_error,
+                    )
 
                     self._record_fallback_event(
                         model_group=model_group,
                         from_id=deployment.deployment_id,
                         to_id=None,
-                        reason="timeout",
+                        reason=reason,
                         classification=classification,
-                        error_msg=str(last_error),
+                        error_msg=error_message,
                         attempt=attempt,
                         success=False,
                     )
+
+                    if allow_classified_fallbacks:
+                        extra_chain = self._get_classified_fallbacks(classification, model_group)
+                        if extra_chain:
+                            extra_result = await self._try_classified_fallbacks(
+                                extra_chain,
+                                model_group,
+                                execute,
+                                deployment.deployment_id,
+                                classification,
+                                on_attempt=on_attempt,
+                                timeout_seconds=effective_timeout,
+                            )
+                            if extra_result is not None:
+                                if return_deployment:
+                                    result, served = extra_result
+                                    return result, served
+                                return extra_result[0]
+
+                    if not affects_deployment_health(last_error):
+                        if last_error is exc:
+                            raise
+                        raise last_error from exc
 
                     if self._should_retry(classification, last_error, effective_retry_classes) and attempt < effective_retries:
-                        await asyncio.sleep(self._compute_backoff(attempt))
-                except ProxyError as exc:
-                    last_error = exc
-                    classification = ErrorClassification.classify(exc)
-                    await self.cooldown.record_failure(deployment.deployment_id, str(exc))
-
-                    self._record_fallback_event(
-                        model_group=model_group,
-                        from_id=deployment.deployment_id,
-                        to_id=None,
-                        reason=classification,
-                        classification=classification,
-                        error_msg=str(exc),
-                        attempt=attempt,
-                        success=False,
-                    )
-
-                    extra_chain = self._get_classified_fallbacks(classification, model_group)
-                    if extra_chain:
-                        extra_result = await self._try_classified_fallbacks(
-                            extra_chain,
-                            model_group,
-                            execute,
-                            deployment.deployment_id,
-                            classification,
-                            on_attempt=on_attempt,
-                            timeout_seconds=effective_timeout,
-                        )
-                        if extra_result is not None:
-                            if return_deployment:
-                                result, served = extra_result
-                                return result, served
-                            return extra_result[0]
-
-                    if self._should_retry(classification, exc, effective_retry_classes) and attempt < effective_retries:
-                        await asyncio.sleep(self._compute_backoff(attempt))
-                        continue
-                    break
-                except httpx.HTTPError as exc:
-                    classification = ErrorClassification.classify(exc)
-                    last_error = ServiceUnavailableError(message=str(exc))
-                    await self.cooldown.record_failure(deployment.deployment_id, str(exc))
-
-                    self._record_fallback_event(
-                        model_group=model_group,
-                        from_id=deployment.deployment_id,
-                        to_id=None,
-                        reason=classification,
-                        classification=classification,
-                        error_msg=str(exc),
-                        attempt=attempt,
-                        success=False,
-                    )
-
-                    extra_chain = self._get_classified_fallbacks(classification, model_group)
-                    if extra_chain:
-                        extra_result = await self._try_classified_fallbacks(
-                            extra_chain,
-                            model_group,
-                            execute,
-                            deployment.deployment_id,
-                            classification,
-                            on_attempt=on_attempt,
-                            timeout_seconds=effective_timeout,
-                        )
-                        if extra_result is not None:
-                            if return_deployment:
-                                result, served = extra_result
-                                return result, served
-                            return extra_result[0]
-
-                    if self._should_retry(classification, exc, effective_retry_classes) and attempt < effective_retries:
-                        await asyncio.sleep(self._compute_backoff(attempt))
-                        continue
-                    break
-                except Exception as exc:
-                    classification = ErrorClassification.classify(exc)
-                    last_error = ServiceUnavailableError(message=str(exc))
-                    await self.cooldown.record_failure(deployment.deployment_id, str(exc))
-
-                    self._record_fallback_event(
-                        model_group=model_group,
-                        from_id=deployment.deployment_id,
-                        to_id=None,
-                        reason=classification,
-                        classification=classification,
-                        error_msg=str(exc),
-                        attempt=attempt,
-                        success=False,
-                    )
-
-                    extra_chain = self._get_classified_fallbacks(classification, model_group)
-                    if extra_chain:
-                        extra_result = await self._try_classified_fallbacks(
-                            extra_chain,
-                            model_group,
-                            execute,
-                            deployment.deployment_id,
-                            classification,
-                            on_attempt=on_attempt,
-                            timeout_seconds=effective_timeout,
-                        )
-                        if extra_result is not None:
-                            if return_deployment:
-                                result, served = extra_result
-                                return result, served
-                            return extra_result[0]
-
-                    if self._should_retry(classification, exc, effective_retry_classes) and attempt < effective_retries:
                         await asyncio.sleep(self._compute_backoff(attempt))
                         continue
                     break
@@ -491,17 +501,35 @@ class FailoverManager:
 
                 return result, deployment
             except Exception as exc:
-                await self.cooldown.record_failure(deployment.deployment_id, str(exc))
+                normalized_error, failure_classification, allow_classified_fallbacks = self._normalize_execution_error(
+                    exc,
+                    deployment,
+                )
+                error_message = str(normalized_error)
+                await self.cooldown.record_failure(
+                    deployment.deployment_id,
+                    error_message,
+                    exc=normalized_error,
+                )
                 self._record_fallback_event(
                     model_group=model_group,
                     from_id=from_deployment_id,
                     to_id=deployment.deployment_id,
                     reason=classification,
-                    classification=classification,
-                    error_msg=str(exc),
+                    classification=failure_classification,
+                    error_msg=error_message,
                     attempt=0,
                     success=False,
                 )
+                if not allow_classified_fallbacks:
+                    raise normalized_error from exc
+                if not affects_deployment_health(normalized_error) and failure_classification not in {
+                    ErrorClassification.CONTEXT_WINDOW,
+                    ErrorClassification.CONTENT_POLICY,
+                }:
+                    if normalized_error is exc:
+                        raise
+                    raise normalized_error from exc
             finally:
                 await self.state.decrement_active(deployment.deployment_id)
 
