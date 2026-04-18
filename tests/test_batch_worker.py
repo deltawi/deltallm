@@ -12,7 +12,7 @@ from fastapi import HTTPException
 
 from src.batch.models import BatchItemRecord, BatchJobRecord, BatchJobStatus, encode_operator_failed_reason
 from src.batch.service import BatchService
-from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
+from src.batch.worker import BatchArtifactValidationError, BatchExecutorWorker, BatchWorkerConfig
 from src.models.responses import UserAPIKeyAuth
 
 
@@ -90,6 +90,16 @@ class _FakeStorage:
     async def delete(self, storage_key: str) -> None:  # pragma: no cover
         del storage_key
         raise AssertionError("unexpected artifact delete in this test")
+
+
+def _valid_embedding_artifact_response_body() -> dict[str, object]:
+    return {
+        "object": "list",
+        "data": [{"index": 0, "embedding": [0.1, 0.2]}],
+        "model": "provider-embedding-model",
+        "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+        "_provider": "openai",
+    }
 
 
 @pytest.mark.asyncio
@@ -217,6 +227,283 @@ async def test_batch_worker_logs_batch_pricing_and_spend(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_batch_worker_uses_post_construction_hook_patches(monkeypatch):
+    execute_inputs: list[object] = []
+    router_usage_calls: list[tuple[str, str, dict[str, int]]] = []
+    metric_statuses: list[str] = []
+
+    deployment = SimpleNamespace(
+        deployment_id="dep-1",
+        deltallm_params={"model": "vllm/sentence-transformers/all-MiniLM-L6-v2", "api_base": "http://localhost:9090/v1"},
+        input_cost_per_token=0.001,
+        output_cost_per_token=0.0,
+        model_info={"batch_input_cost_per_token": 0.0005, "batch_output_cost_per_token": 0.0},
+    )
+
+    class _RouterStateBackend:
+        async def increment_usage_counters(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+            return None
+
+    class _Router:
+        def resolve_model_group(self, model: str) -> str:
+            return model
+
+        async def select_deployment(self, model_group: str, request_context: dict) -> str:
+            del model_group, request_context
+            return "dep-1"
+
+        def require_deployment(self, model_group: str, deployment: str):
+            del model_group, deployment
+            return deployment_obj
+
+    class _Failover:
+        async def execute_with_failover(
+            self,
+            *,
+            primary_deployment,
+            model_group,
+            execute,
+            return_deployment=False,
+            **kwargs,
+        ):
+            del model_group, kwargs
+            data = await execute(primary_deployment)
+            if return_deployment:
+                return data, primary_deployment
+            return data
+
+    deployment_obj = deployment
+    repo = _FakeRepository()
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            router=_Router(),
+            failover_manager=_Failover(),
+            spend_tracking_service=None,
+            passive_health_tracker=None,
+            router_state_backend=_RouterStateBackend(),
+        )
+    )
+    worker = BatchExecutorWorker(
+        app=app,
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+
+    async def _patched_execute_embedding(request, payload, deployment):
+        del request, deployment
+        execute_inputs.append(payload.input)
+        return {
+            "object": "list",
+            "data": [{"index": 0, "embedding": [0.1]}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+        }
+
+    async def _patched_record_router_usage(state_backend, deployment_id: str, *, mode: str, usage: dict):
+        del state_backend
+        router_usage_calls.append((deployment_id, mode, dict(usage)))
+
+    def _patched_observe_batch_item_execution_latency(*, status: str, latency_seconds: float) -> None:
+        assert latency_seconds >= 0
+        metric_statuses.append(status)
+
+    monkeypatch.setattr("src.batch.worker._execute_embedding", _patched_execute_embedding)
+    monkeypatch.setattr("src.batch.worker.record_router_usage", _patched_record_router_usage)
+    monkeypatch.setattr(
+        "src.batch.worker.observe_batch_item_execution_latency",
+        _patched_observe_batch_item_execution_latency,
+    )
+
+    now = datetime.now(tz=UTC)
+    job = BatchJobRecord(
+        batch_id="b1",
+        endpoint="/v1/embeddings",
+        status=BatchJobStatus.IN_PROGRESS,
+        execution_mode="managed_internal",
+        input_file_id="f1",
+        output_file_id=None,
+        error_file_id=None,
+        model="m-1",
+        metadata={},
+        provider_batch_id=None,
+        provider_status=None,
+        provider_error=None,
+        provider_last_sync_at=None,
+        total_items=1,
+        in_progress_items=1,
+        completed_items=0,
+        failed_items=0,
+        cancelled_items=0,
+        locked_by=None,
+        lease_expires_at=None,
+        cancel_requested_at=None,
+        status_last_updated_at=now,
+        created_by_api_key="tok-1",
+        created_by_user_id="u1",
+        created_by_team_id="t1",
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+        expires_at=None,
+    )
+    item = BatchItemRecord(
+        item_id="i1",
+        batch_id="b1",
+        line_number=1,
+        custom_id="c1",
+        status="in_progress",
+        request_body={"model": "m-1", "input": "hello"},
+        response_body=None,
+        error_body=None,
+        usage=None,
+        provider_cost=0.0,
+        billed_cost=0.0,
+        attempts=0,
+        last_error=None,
+        locked_by="w1",
+        lease_expires_at=now,
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+    )
+
+    await worker._process_item(job, item)
+
+    assert execute_inputs == ["hello"]
+    assert router_usage_calls == [
+        ("dep-1", "embedding", {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5})
+    ]
+    assert metric_statuses == ["success"]
+    assert len(repo.completed_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_process_item_uses_worker_prepare_override(monkeypatch):
+    async def _fake_execute_embedding(request, payload, deployment):
+        del request, deployment
+        return {
+            "object": "list",
+            "data": [{"index": 0, "embedding": [0.1]}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+        }
+
+    monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
+
+    deployment = SimpleNamespace(
+        deployment_id="dep-1",
+        deltallm_params={"model": "vllm/sentence-transformers/all-MiniLM-L6-v2", "api_base": "http://localhost:9090/v1"},
+        input_cost_per_token=0.001,
+        output_cost_per_token=0.0,
+        model_info={"batch_input_cost_per_token": 0.0005, "batch_output_cost_per_token": 0.0},
+    )
+
+    class _Router:
+        def resolve_model_group(self, model: str) -> str:
+            return model
+
+        async def select_deployment(self, model_group: str, request_context: dict) -> str:
+            del model_group, request_context
+            return "dep-1"
+
+        def require_deployment(self, model_group: str, deployment: str):
+            del model_group, deployment
+            return deployment_obj
+
+    class _Failover:
+        async def execute_with_failover(
+            self,
+            *,
+            primary_deployment,
+            model_group,
+            execute,
+            return_deployment=False,
+            **kwargs,
+        ):
+            del model_group, kwargs
+            data = await execute(primary_deployment)
+            if return_deployment:
+                return data, primary_deployment
+            return data
+
+    deployment_obj = deployment
+    repo = _FakeRepository()
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace(router=_Router(), failover_manager=_Failover(), spend_tracking_service=None)),
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+
+    prepare_calls: list[str] = []
+    original_prepare_item = worker._prepare_item_for_execution
+
+    async def _prepare_item_override(job, item):  # noqa: ANN001
+        prepare_calls.append(item.item_id)
+        return await original_prepare_item(job, item)
+
+    worker._prepare_item_for_execution = _prepare_item_override  # type: ignore[assignment]
+
+    now = datetime.now(tz=UTC)
+    job = BatchJobRecord(
+        batch_id="b1",
+        endpoint="/v1/embeddings",
+        status=BatchJobStatus.IN_PROGRESS,
+        execution_mode="managed_internal",
+        input_file_id="f1",
+        output_file_id=None,
+        error_file_id=None,
+        model="m-1",
+        metadata={},
+        provider_batch_id=None,
+        provider_status=None,
+        provider_error=None,
+        provider_last_sync_at=None,
+        total_items=1,
+        in_progress_items=1,
+        completed_items=0,
+        failed_items=0,
+        cancelled_items=0,
+        locked_by=None,
+        lease_expires_at=None,
+        cancel_requested_at=None,
+        status_last_updated_at=now,
+        created_by_api_key="tok-1",
+        created_by_user_id="u1",
+        created_by_team_id="t1",
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+        expires_at=None,
+        created_by_organization_id="org-1",
+    )
+    item = BatchItemRecord(
+        item_id="i1",
+        batch_id="b1",
+        line_number=1,
+        custom_id="c1",
+        status="in_progress",
+        request_body={"model": "m-1", "input": "hello"},
+        response_body=None,
+        error_body=None,
+        usage=None,
+        provider_cost=0.0,
+        billed_cost=0.0,
+        attempts=0,
+        last_error=None,
+        locked_by="w1",
+        lease_expires_at=now,
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+    )
+
+    await worker._process_item(job, item)
+
+    assert prepare_calls == ["i1"]
+    assert len(repo.completed_calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_batch_worker_normalizes_single_item_embedding_usage(monkeypatch):
     async def _fake_execute_embedding(request, payload, deployment):
         del request, payload, deployment
@@ -318,7 +605,69 @@ async def test_batch_worker_normalizes_single_item_embedding_usage(monkeypatch):
 
     await worker._process_item(job, item)
 
+    assert repo.completed_calls[0]["response_body"] == {
+        "object": "list",
+        "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}],
+        "model": "vllm/sentence-transformers/all-MiniLM-L6-v2",
+        "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+        "_provider": "vllm",
+    }
     assert repo.completed_calls[0]["usage"] == {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5}
+
+    artifact_now = datetime.now(tz=UTC)
+
+    class _ArtifactRepo:
+        async def list_items(self, batch_id: str):
+            assert batch_id == "b1"
+            return [
+                BatchItemRecord(
+                    item_id="i1",
+                    batch_id=batch_id,
+                    line_number=1,
+                    custom_id="c1",
+                    status="completed",
+                    request_body=item.request_body,
+                    response_body=repo.completed_calls[0]["response_body"],
+                    error_body=None,
+                    usage=repo.completed_calls[0]["usage"],
+                    provider_cost=0.0,
+                    billed_cost=0.0,
+                    attempts=1,
+                    last_error=None,
+                    locked_by=None,
+                    lease_expires_at=None,
+                    created_at=artifact_now,
+                    started_at=artifact_now,
+                    completed_at=artifact_now,
+                )
+            ]
+
+    artifact_worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=_ArtifactRepo(),  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+
+    rows = [json.loads(line) async for line in artifact_worker._iter_output_lines("b1")]
+
+    assert rows == [
+        {
+            "id": "batch_req_i1",
+            "custom_id": "c1",
+            "response": {
+                "status_code": 200,
+                "request_id": "req_batch_i1",
+                "body": {
+                    "object": "list",
+                    "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}],
+                    "model": "vllm/sentence-transformers/all-MiniLM-L6-v2",
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+                },
+            },
+            "error": None,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -336,13 +685,7 @@ async def test_batch_worker_iter_output_lines_emit_openai_batch_success_rows():
                     custom_id="req-1",
                     status="completed",
                     request_body={},
-                    response_body={
-                        "object": "list",
-                        "data": [{"index": 0, "embedding": [0.1, 0.2]}],
-                        "model": "provider-embedding-model",
-                        "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
-                        "_provider": "openai",
-                    },
+                    response_body=_valid_embedding_artifact_response_body(),
                     error_body=None,
                     usage=None,
                     provider_cost=0.0,
@@ -422,7 +765,7 @@ async def test_batch_worker_iter_output_lines_reject_missing_response_body_for_c
         config=BatchWorkerConfig(worker_id="w1"),
     )
 
-    with pytest.raises(ValueError, match="missing an embedding response body"):
+    with pytest.raises(BatchArtifactValidationError, match="missing an embedding response body"):
         _ = [json.loads(line) async for line in worker._iter_output_lines("b1")]
 
 
@@ -468,7 +811,147 @@ async def test_batch_worker_iter_output_lines_reject_malformed_embedding_payload
         config=BatchWorkerConfig(worker_id="w1"),
     )
 
-    with pytest.raises(ValueError, match="missing embedding"):
+    with pytest.raises(BatchArtifactValidationError, match="missing embedding"):
+        _ = [json.loads(line) async for line in worker._iter_output_lines("b1")]
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_iter_output_lines_backfill_legacy_model_and_usage_from_item_fields():
+    now = datetime.now(tz=UTC)
+
+    class _ArtifactRepo:
+        async def list_items(self, batch_id: str):
+            assert batch_id == "b1"
+            return [
+                BatchItemRecord(
+                    item_id="i1",
+                    batch_id=batch_id,
+                    line_number=1,
+                    custom_id="req-1",
+                    status="completed",
+                    request_body={"model": "request-model", "input": "hello"},
+                    response_body={
+                        "object": "list",
+                        "data": [{"index": 0, "embedding": [0.1, 0.2]}],
+                        "usage": {"prompt_tokens": 5, "total_tokens": 5},
+                        "_provider": "openai",
+                    },
+                    error_body=None,
+                    usage={"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+                    provider_cost=0.0,
+                    billed_cost=0.0,
+                    attempts=1,
+                    last_error=None,
+                    locked_by=None,
+                    lease_expires_at=None,
+                    created_at=now,
+                    started_at=now,
+                    completed_at=now,
+                )
+            ]
+
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=_ArtifactRepo(),  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+
+    rows = [json.loads(line) async for line in worker._iter_output_lines("b1")]
+
+    assert rows == [
+        {
+            "id": "batch_req_i1",
+            "custom_id": "req-1",
+            "response": {
+                "status_code": 200,
+                "request_id": "req_batch_i1",
+                "body": {
+                    "object": "list",
+                    "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                    "model": "request-model",
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+                },
+            },
+            "error": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mutate", "match"),
+    [
+        pytest.param(lambda body: body.pop("model"), "missing a valid model", id="missing-model"),
+        pytest.param(lambda body: body.__setitem__("model", " "), "missing a valid model", id="blank-model"),
+        pytest.param(lambda body: body.pop("usage"), "usage is not an object", id="missing-usage"),
+        pytest.param(lambda body: body.__setitem__("usage", "invalid"), "usage is not an object", id="non-object-usage"),
+        pytest.param(
+            lambda body: body.__setitem__("usage", {"completion_tokens": 0, "total_tokens": 5}),
+            "invalid prompt_tokens",
+            id="missing-prompt-tokens",
+        ),
+        pytest.param(
+            lambda body: body.__setitem__("usage", {"prompt_tokens": 5, "total_tokens": 5}),
+            "invalid completion_tokens",
+            id="missing-completion-tokens",
+        ),
+        pytest.param(
+            lambda body: body.__setitem__("usage", {"prompt_tokens": 5, "completion_tokens": 0}),
+            "invalid total_tokens",
+            id="missing-total-tokens",
+        ),
+        pytest.param(
+            lambda body: body.__setitem__("usage", {"prompt_tokens": "five", "completion_tokens": 0, "total_tokens": 5}),
+            "invalid prompt_tokens",
+            id="non-int-prompt-tokens",
+        ),
+        pytest.param(
+            lambda body: body.__setitem__("usage", {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": -1}),
+            "negative total_tokens",
+            id="negative-total-tokens",
+        ),
+    ],
+)
+async def test_batch_worker_iter_output_lines_reject_invalid_success_body_fields(mutate, match):
+    now = datetime.now(tz=UTC)
+    response_body = _valid_embedding_artifact_response_body()
+    mutate(response_body)
+
+    class _ArtifactRepo:
+        async def list_items(self, batch_id: str):
+            assert batch_id == "b1"
+            return [
+                BatchItemRecord(
+                    item_id="i1",
+                    batch_id=batch_id,
+                    line_number=1,
+                    custom_id="req-1",
+                    status="completed",
+                    request_body={},
+                    response_body=response_body,
+                    error_body=None,
+                    usage=None,
+                    provider_cost=0.0,
+                    billed_cost=0.0,
+                    attempts=1,
+                    last_error=None,
+                    locked_by=None,
+                    lease_expires_at=None,
+                    created_at=now,
+                    started_at=now,
+                    completed_at=now,
+                )
+            ]
+
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=_ArtifactRepo(),  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+
+    with pytest.raises(BatchArtifactValidationError, match=match):
         _ = [json.loads(line) async for line in worker._iter_output_lines("b1")]
 
 
@@ -2201,7 +2684,7 @@ async def test_batch_worker_retries_finalizing_job_after_storage_failure(caplog:
                     custom_id="req-1",
                     status="completed",
                     request_body={},
-                    response_body={"ok": True},
+                    response_body=_valid_embedding_artifact_response_body(),
                     error_body=None,
                     usage=None,
                     provider_cost=0.0,
@@ -2306,6 +2789,146 @@ async def test_batch_worker_retries_finalizing_job_after_storage_failure(caplog:
 
 
 @pytest.mark.asyncio
+async def test_batch_worker_marks_invalid_completed_artifacts_failed_without_retry(
+    caplog: pytest.LogCaptureFixture,
+):
+    now = datetime.now(tz=UTC)
+
+    class _FinalizingRepo:
+        def __init__(self) -> None:
+            self.claim_count = 0
+            self.attach_calls: list[dict] = []
+            self.provider_error_calls: list[dict] = []
+            self.rescheduled: list[int] = []
+            self.released = 0
+            self.job = BatchJobRecord(
+                batch_id="b-finalize",
+                endpoint="/v1/embeddings",
+                status=BatchJobStatus.FINALIZING,
+                execution_mode="managed_internal",
+                input_file_id="f-1",
+                output_file_id=None,
+                error_file_id=None,
+                model="m-1",
+                metadata={},
+                provider_batch_id=None,
+                provider_status=None,
+                provider_error=None,
+                provider_last_sync_at=None,
+                total_items=1,
+                in_progress_items=0,
+                completed_items=1,
+                failed_items=0,
+                cancelled_items=0,
+                locked_by="w1",
+                lease_expires_at=now,
+                cancel_requested_at=None,
+                status_last_updated_at=now,
+                created_by_api_key="tok-1",
+                created_by_user_id="u1",
+                created_by_team_id="t1",
+                created_at=now,
+                started_at=now,
+                completed_at=None,
+                expires_at=None,
+                created_by_organization_id="org-1",
+            )
+
+        async def claim_next_job(self, *, worker_id: str, lease_seconds: int = 30):
+            del worker_id, lease_seconds
+            self.claim_count += 1
+            if self.claim_count > 1:
+                return None
+            return self.job
+
+        async def list_items(self, batch_id: str):
+            assert batch_id == "b-finalize"
+            invalid_body = _valid_embedding_artifact_response_body()
+            invalid_body.pop("model")
+            return [
+                BatchItemRecord(
+                    item_id="i1",
+                    batch_id=batch_id,
+                    line_number=1,
+                    custom_id="req-1",
+                    status="completed",
+                    request_body={},
+                    response_body=invalid_body,
+                    error_body=None,
+                    usage=None,
+                    provider_cost=0.0,
+                    billed_cost=0.0,
+                    attempts=1,
+                    last_error=None,
+                    locked_by=None,
+                    lease_expires_at=None,
+                    created_at=now,
+                    started_at=now,
+                    completed_at=now,
+                )
+            ]
+
+        async def attach_artifacts_and_finalize(self, **kwargs):
+            self.attach_calls.append(kwargs)
+            return self.job
+
+        async def set_provider_error(self, **kwargs):
+            self.provider_error_calls.append(kwargs)
+            return self.job
+
+        async def reschedule_finalization(self, *, batch_id: str, worker_id: str, retry_delay_seconds: int) -> bool:
+            assert batch_id == "b-finalize"
+            assert worker_id == "w1"
+            self.rescheduled.append(retry_delay_seconds)
+            return True
+
+        async def release_job_lease(self, *, batch_id: str, worker_id: str) -> None:
+            assert batch_id == "b-finalize"
+            assert worker_id == "w1"
+            self.released += 1
+
+    class _StreamingStorage:
+        backend_name = "local"
+
+        async def write_lines_stream(self, *, purpose: str, filename: str, lines):  # noqa: ANN001
+            assert purpose == "batch_output"
+            assert filename == "b-finalize-output.jsonl"
+            _ = [line async for line in lines]
+            raise AssertionError("expected artifact validation failure before write completion")
+
+    repo = _FinalizingRepo()
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=repo,  # type: ignore[arg-type]
+        storage=_StreamingStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        did_work = await worker.process_once()
+
+    assert did_work is True
+    assert repo.attach_calls == [
+        {
+            "batch_id": "b-finalize",
+            "output_file_id": None,
+            "error_file_id": None,
+            "final_status": BatchJobStatus.FAILED,
+            "worker_id": "w1",
+        }
+    ]
+    assert repo.provider_error_calls == [
+        {
+            "batch_id": "b-finalize",
+            "provider_error": "artifact_validation_failed: completed batch item embedding response is missing a valid model",
+        }
+    ]
+    assert repo.rescheduled == []
+    assert repo.released == 1
+    assert "batch finalization permanently failed batch_id=b-finalize" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_batch_worker_finalize_artifacts_writes_openai_compatible_rows():
     now = datetime.now(tz=UTC)
 
@@ -2324,13 +2947,7 @@ async def test_batch_worker_finalize_artifacts_writes_openai_compatible_rows():
                     custom_id="req-1",
                     status="completed",
                     request_body={},
-                    response_body={
-                        "object": "list",
-                        "data": [{"index": 0, "embedding": [0.1, 0.2]}],
-                        "model": "provider-embedding-model",
-                        "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
-                        "_provider": "openai",
-                    },
+                    response_body=_valid_embedding_artifact_response_body(),
                     error_body=None,
                     usage=None,
                     provider_cost=0.0,

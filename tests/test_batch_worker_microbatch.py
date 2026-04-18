@@ -393,6 +393,44 @@ async def test_prepare_item_for_execution_returns_reusable_metadata_without_exec
 
 
 @pytest.mark.asyncio
+async def test_worker_process_items_uses_worker_prepare_override(monkeypatch):
+    async def _fake_execute_embedding(request, payload, deployment):
+        del request, deployment
+        return {
+            "object": "list",
+            "data": [{"index": 0, "embedding": [0.1]}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+        }
+
+    monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
+
+    worker, repo, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 1})
+    worker.config.worker_concurrency = 1
+
+    prepare_calls: list[str] = []
+    original_prepare_item = worker._prepare_item_for_execution
+
+    async def _prepare_item_override(job, item):  # noqa: ANN001
+        prepare_calls.append(item.item_id)
+        return await original_prepare_item(job, item)
+
+    worker._prepare_item_for_execution = _prepare_item_override  # type: ignore[assignment]
+
+    await worker._process_items(
+        _build_job(),
+        [
+            _build_item(item_id="i1", input_value="hello"),
+            _build_item(item_id="i2", input_value="world"),
+        ],
+    )
+
+    assert prepare_calls == ["i1", "i2"]
+    assert len(repo.completed_calls) == 2
+    assert repo.failed_calls == []
+    assert len(failover.calls) == 2
+
+
+@pytest.mark.asyncio
 async def test_worker_groups_eligible_items_into_upstream_microbatch_chunks(monkeypatch):
     execute_inputs: list[object] = []
 
@@ -517,7 +555,6 @@ async def test_worker_fans_out_grouped_embedding_responses_into_single_item_rows
                 {"index": 1, "embedding": [0.3, 0.4]},
                 {"index": 0, "embedding": [0.1, 0.2]},
             ],
-            "model": "provider-embedding-model",
             "usage": {"prompt_tokens": 8, "total_tokens": 8},
         }
 
@@ -538,15 +575,15 @@ async def test_worker_fans_out_grouped_embedding_responses_into_single_item_rows
     first, second = repo.completed_calls
     assert first["response_body"] == {
         "object": "list",
-        "data": [{"index": 0, "embedding": [0.1, 0.2]}],
-        "model": "provider-embedding-model",
+        "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+        "model": "openai/text-embedding-3-small",
         "usage": {"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 4},
         "_provider": "openai",
     }
     assert second["response_body"] == {
         "object": "list",
-        "data": [{"index": 0, "embedding": [0.3, 0.4]}],
-        "model": "provider-embedding-model",
+        "data": [{"object": "embedding", "index": 0, "embedding": [0.3, 0.4]}],
+        "model": "openai/text-embedding-3-small",
         "usage": {"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 4},
         "_provider": "openai",
     }
@@ -619,7 +656,7 @@ async def test_worker_fans_out_grouped_embedding_responses_into_single_item_rows
                 "body": {
                     "object": "list",
                     "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
-                    "model": "provider-embedding-model",
+                    "model": "openai/text-embedding-3-small",
                     "usage": {"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 4},
                 },
             },
@@ -634,7 +671,7 @@ async def test_worker_fans_out_grouped_embedding_responses_into_single_item_rows
                 "body": {
                     "object": "list",
                     "data": [{"object": "embedding", "index": 0, "embedding": [0.3, 0.4]}],
-                    "model": "provider-embedding-model",
+                    "model": "openai/text-embedding-3-small",
                     "usage": {"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 4},
                 },
             },
@@ -751,6 +788,86 @@ async def test_worker_isolates_upstream_exception_back_to_single_item_execution(
     )
 
     assert execute_inputs == [["hello", "world"], "hello", "world"]
+    assert len(failover.calls) == 3
+    assert len(repo.completed_calls) == 2
+    assert repo.failed_calls == []
+
+
+@pytest.mark.asyncio
+async def test_worker_grouped_fallback_uses_worker_process_item_override(monkeypatch):
+    async def _fake_execute_embedding(request, payload, deployment):
+        del request, deployment
+        if payload.input == ["hello", "world"]:
+            raise RuntimeError("upstream exploded")
+        return {
+            "object": "list",
+            "data": [{"index": 0, "embedding": [0.1]}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+        }
+
+    worker, repo, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker.config.worker_concurrency = 1
+
+    overridden_item_ids: list[str] = []
+
+    async def _process_item_override(job, item):  # noqa: ANN001
+        del job
+        overridden_item_ids.append(item.item_id)
+
+    worker._process_item = _process_item_override  # type: ignore[assignment]
+
+    monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
+
+    await worker._process_items(
+        _build_job(),
+        [
+            _build_item(item_id="i1", input_value="hello"),
+            _build_item(item_id="i2", input_value="world"),
+        ],
+    )
+
+    assert overridden_item_ids == ["i1", "i2"]
+    assert len(failover.calls) == 1
+    assert repo.completed_calls == []
+    assert repo.failed_calls == []
+
+
+@pytest.mark.asyncio
+async def test_worker_grouped_fallback_reprepares_items_before_isolated_retries(monkeypatch):
+    async def _fake_execute_embedding(request, payload, deployment):
+        del request, deployment
+        if payload.input == ["hello", "world"]:
+            raise RuntimeError("upstream exploded")
+        return {
+            "object": "list",
+            "data": [{"index": 0, "embedding": [0.1]}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+        }
+
+    monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
+
+    worker, repo, _, router, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker.config.worker_concurrency = 1
+
+    prepare_calls: list[str] = []
+    original_prepare_item = worker._prepare_item_for_execution
+
+    async def _prepare_item_override(job, item):  # noqa: ANN001
+        prepare_calls.append(item.item_id)
+        return await original_prepare_item(job, item)
+
+    worker._prepare_item_for_execution = _prepare_item_override  # type: ignore[assignment]
+
+    await worker._process_items(
+        _build_job(),
+        [
+            _build_item(item_id="i1", input_value="hello"),
+            _build_item(item_id="i2", input_value="world"),
+        ],
+    )
+
+    assert prepare_calls == ["i1", "i2", "i1", "i2"]
+    assert len(router.select_calls) == 4
     assert len(failover.calls) == 3
     assert len(repo.completed_calls) == 2
     assert repo.failed_calls == []
