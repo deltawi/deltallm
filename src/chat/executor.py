@@ -158,7 +158,10 @@ async def open_stream_with_first_chunk(
                 first_line = line
                 break
         if first_line is None:
-            raise ServiceUnavailableError(message="Provider stream ended before first chunk")
+            raise ServiceUnavailableError(
+                message="Provider stream ended before first chunk",
+                affects_deployment_health=True,
+            )
 
         return OpenedStream(
             context_manager=context_manager,

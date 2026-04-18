@@ -104,8 +104,15 @@ class _NoopSpendTrackingService:
 
 
 class _NoopPassiveHealthTracker:
-    async def record_request_outcome(self, deployment_id: str, success: bool, error: str | None = None) -> None:
-        del deployment_id, success, error
+    async def record_request_outcome(
+        self,
+        deployment_id: str,
+        success: bool,
+        error: str | None = None,
+        *,
+        exc: Exception | None = None,
+    ) -> None:
+        del deployment_id, success, error, exc
 
 
 class _NoopRouterStateBackend:

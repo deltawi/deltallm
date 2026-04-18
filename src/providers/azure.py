@@ -5,10 +5,9 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from src.models.errors import InvalidRequestError, ServiceUnavailableError, TimeoutError
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
-from src.providers.base import ProviderAdapter
+from src.providers.base import ProviderAdapter, map_standard_provider_error
 from src.providers.resolution import normalize_openai_chat_payload, resolve_provider, resolve_upstream_model
 
 
@@ -40,14 +39,12 @@ class AzureOpenAIAdapter(ProviderAdapter):
             yield chunk
 
     def map_error(self, provider_error: Exception) -> Exception:
-        if isinstance(provider_error, httpx.TimeoutException):
-            return TimeoutError()
-        if isinstance(provider_error, httpx.HTTPStatusError):
-            status = provider_error.response.status_code
-            if status >= 500:
-                return ServiceUnavailableError(message=f"Provider error: {status}")
-            return InvalidRequestError(message=f"Provider rejected request: {status}")
-        return ServiceUnavailableError(message=str(provider_error))
+        status = provider_error.response.status_code if isinstance(provider_error, httpx.HTTPStatusError) else None
+        return map_standard_provider_error(
+            provider_error,
+            invalid_request_message=f"Provider rejected request: {status}",
+            rate_limit_message=f"Provider rate limited request: {status}",
+        )
 
     async def health_check(self, provider_config: dict[str, Any]) -> bool:
         api_base = str(provider_config.get("api_base") or "").rstrip("/")

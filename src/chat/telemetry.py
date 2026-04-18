@@ -19,6 +19,7 @@ from src.metrics import (
     observe_request_latency,
 )
 from src.providers.resolution import resolve_provider
+from src.router.health_policy import exception_status_code
 from src.telemetry.request_failures import enqueue_request_log_write
 from src.routers.routing_decision import attach_route_decision, resolve_failure_target
 from src.routers.utils import fire_and_forget
@@ -26,17 +27,6 @@ from src.routers.utils import fire_and_forget
 
 def _append_route_decision_metadata(request: Request, metadata: dict[str, Any]) -> dict[str, Any]:
     return attach_route_decision(metadata, request)
-
-
-def _exception_status_code(exc: Exception) -> int | None:
-    response = getattr(exc, "response", None)
-    raw_status = getattr(exc, "status_code", None)
-    if raw_status is None and response is not None:
-        raw_status = getattr(response, "status_code", None)
-    try:
-        return int(raw_status) if raw_status is not None else None
-    except (TypeError, ValueError):
-        return None
 
 
 def _resolve_failure_fields(
@@ -181,7 +171,7 @@ async def emit_stream_failure(
             cache_hit=cache_hit,
             start_time=callback_start,
             end_time=datetime.now(tz=UTC),
-            http_status_code=_exception_status_code(exc),
+            http_status_code=exception_status_code(exc),
             exc=exc,
         )
     )
@@ -190,6 +180,7 @@ async def emit_stream_failure(
             str(failure_fields["deployment_id"]),
             success=False,
             error=str(exc),
+            exc=exc,
         )
     callback_payload = build_standard_logging_payload(
         call_type="completion",
@@ -462,6 +453,7 @@ async def emit_nonstream_failure(
         str(failure_fields["deployment_id"] or primary_deployment.deployment_id),
         success=False,
         error=str(exc),
+        exc=exc,
     )
     increment_request(
         model=payload.model,
