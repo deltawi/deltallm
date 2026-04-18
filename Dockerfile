@@ -53,10 +53,14 @@ ENV PYTHONUNBUFFERED=1
 ENV DELTALLM_CONFIG_PATH=/app/config/config.yaml
 ENV HOST=0.0.0.0
 ENV PORT=4000
+ENV DELTALLM_PRISMA_STARTUP_MODE=deploy
+ENV DELTALLM_PRISMA_SCHEMA_PATH=./prisma/schema.prisma
+ENV DELTALLM_PRISMA_MAX_ATTEMPTS=30
+ENV DELTALLM_PRISMA_SLEEP_SECONDS=2
 
 EXPOSE 4000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
   CMD curl -fsS "http://localhost:${PORT}/health/liveliness" || exit 1
 
-CMD ["sh", "-c", "python -m src.prisma_bootstrap --schema ./prisma/schema.prisma --max-attempts 30 --sleep-seconds 2 && exec uvicorn src.main:app --host ${HOST} --port ${PORT}"]
+CMD ["sh", "-c", "python -m src.prisma_bootstrap --mode \"${DELTALLM_PRISMA_STARTUP_MODE}\" --schema \"${DELTALLM_PRISMA_SCHEMA_PATH}\" --max-attempts \"${DELTALLM_PRISMA_MAX_ATTEMPTS}\" --sleep-seconds \"${DELTALLM_PRISMA_SLEEP_SECONDS}\" && exec uvicorn src.main:app --host ${HOST} --port ${PORT}"]

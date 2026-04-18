@@ -45,8 +45,10 @@ Thank you for your interest in contributing to DeltaLLM! This document provides 
    ```bash
    cp config.example.yaml config.yaml
    uv run prisma generate --schema=./prisma/schema.prisma
-   uv run prisma db push --schema=./prisma/schema.prisma
+   uv run prisma migrate deploy --schema=./prisma/schema.prisma
    ```
+
+   If you are changing the Prisma schema itself, use `uv run prisma migrate dev` to create a migration rather than papering over failures with `db push`.
 
 6. **Start the development servers**
    

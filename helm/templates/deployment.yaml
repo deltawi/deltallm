@@ -4,6 +4,10 @@
 {{- $hasGeneratedAppSecret := not .Values.secret.existingSecret -}}
 {{- $hasGeneratedS3Secret := and .Values.s3.enabled (not .Values.s3.existingSecret.name) (or .Values.s3.accessKeyId .Values.s3.secretAccessKey) -}}
 {{- $hasRuntimeDependencies := or $dbSecretName .Values.runtime.database.url .Values.postgresql.enabled $redisSecretName .Values.runtime.redis.url .Values.redis.enabled -}}
+{{- $prismaStartupMode := include "deltallm.prismaStartupMode" . -}}
+{{- $waitForMigrationJob := and .Values.migrationJob.enabled .Values.migrationJob.waitForCompletion.enabled -}}
+{{- $migrationStateLeaseName := include "deltallm.migrationStateLeaseName" . -}}
+{{- $migrationIdentityConfigMapName := include "deltallm.migrationIdentityConfigMapName" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -61,8 +65,42 @@ spec:
       {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      {{- if and .Values.dependencyWait.enabled $hasRuntimeDependencies }}
+      {{- if or $waitForMigrationJob (and .Values.dependencyWait.enabled $hasRuntimeDependencies) }}
       initContainers:
+        {{- if $waitForMigrationJob }}
+        - name: wait-for-migration-job
+          image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          command:
+            - python
+            - -m
+            - src.k8s_migration_state
+            - wait
+          env:
+            - name: DELTALLM_MIGRATION_IDENTITY_CONFIGMAP_NAME
+              value: {{ $migrationIdentityConfigMapName | quote }}
+            - name: DELTALLM_MIGRATION_STATE_LEASE_NAME
+              value: {{ $migrationStateLeaseName | quote }}
+            - name: DELTALLM_MIGRATION_JOB_NAME
+              value: {{ include "deltallm.migrationJobName" . | quote }}
+            - name: DELTALLM_RELEASE_REVISION
+              value: {{ .Release.Revision | quote }}
+            - name: DELTALLM_MIGRATION_WAIT_TIMEOUT_SECONDS
+              value: {{ .Values.migrationJob.waitForCompletion.timeoutSeconds | quote }}
+            - name: DELTALLM_MIGRATION_WAIT_PERIOD_SECONDS
+              value: {{ .Values.migrationJob.waitForCompletion.periodSeconds | quote }}
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - name: migration-api-access
+              mountPath: /var/run/secrets/deltallm-migration
+              readOnly: true
+        {{- end }}
+        {{- if and .Values.dependencyWait.enabled $hasRuntimeDependencies }}
         - name: wait-for-runtime-dependencies
           image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -131,6 +169,7 @@ spec:
               value: {{ include "deltallm.bundledRedisUrl" . | quote }}
               {{- end }}
             {{- end }}
+        {{- end }}
       {{- end }}
       containers:
         - name: {{ .Chart.Name }}
@@ -155,6 +194,8 @@ spec:
               value: "0.0.0.0"
             - name: PORT
               value: {{ .Values.service.port | quote }}
+            - name: DELTALLM_PRISMA_STARTUP_MODE
+              value: {{ $prismaStartupMode | quote }}
             - name: DELTALLM_CONFIG_PATH
               value: /app/config/config.yaml
             - name: DELTALLM_MASTER_KEY
@@ -269,8 +310,21 @@ spec:
         - name: config
           configMap:
             name: {{ include "deltallm.fullname" . }}-config
+        {{- if $waitForMigrationJob }}
+        - name: migration-api-access
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+        {{- end }}
         {{- with .Values.extraVolumes }}
-        {{- toYaml . | nindent 8 }}
+          {{- toYaml . | nindent 8 }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

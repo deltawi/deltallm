@@ -6,6 +6,9 @@ autoscaling:
 podDisruptionBudget:
   enabled: false
 
+migrationJob:
+  enabled: true
+
 postgresql:
   enabled: true
   auth:

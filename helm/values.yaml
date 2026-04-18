@@ -100,6 +100,9 @@ envFrom: []
 extraVolumes: []
 extraVolumeMounts: []
 
+prismaStartup:
+  mode: auto
+
 dependencyWait:
   enabled: true
   timeoutSeconds: 180
@@ -185,19 +188,26 @@ prometheus:
 migrationJob:
   enabled: false
   annotations: {}
-  hook:
-    enabled: false
-    deletePolicy: before-hook-creation,hook-succeeded
   backoffLimit: 4
   activeDeadlineSeconds: 600
   ttlSecondsAfterFinished: 300
+  waitForCompletion:
+    enabled: true
+    timeoutSeconds: 900
+    periodSeconds: 2
   resources: {}
   command:
-    - sh
-    - -c
+    - python
+    - -m
+    - src.k8s_migration_state
   args:
-    - |
-      prisma migrate deploy --schema=./prisma/schema.prisma || prisma db push --schema=./prisma/schema.prisma --accept-data-loss
+    - deploy-and-mark
+    - --schema
+    - ./prisma/schema.prisma
+    - --max-attempts
+    - "30"
+    - --sleep-seconds
+    - "2"
 
 postgresql:
   enabled: false

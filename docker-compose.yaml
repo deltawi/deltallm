@@ -1,11 +1,34 @@
 services:
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_PRESIDIO: ${INSTALL_PRESIDIO:-false}
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/deltallm
+    command:
+      - python
+      - -m
+      - src.prisma_bootstrap
+      - --mode
+      - deploy
+      - --schema
+      - ./prisma/schema.prisma
+      - --max-attempts
+      - "30"
+      - --sleep-seconds
+      - "2"
+    depends_on:
+      db:
+        condition: service_healthy
+
   deltallm:
     build:
       context: .
       dockerfile: Dockerfile
       args:
         INSTALL_PRESIDIO: ${INSTALL_PRESIDIO:-false}
-    profiles: ["single"]
     ports:
       - "4002:4000"
     environment:
@@ -23,9 +46,12 @@ services:
       DELTALLM_REDIS_URL: redis://redis:6379/0
       REDIS_URL: redis://redis:6379/0
       DELTALLM_SALT_KEY: ${DELTALLM_SALT_KEY:-change-me}
+      DELTALLM_PRISMA_STARTUP_MODE: verify
     volumes:
       - ./config.yaml:/app/config/config.yaml:ro
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
       redis:
@@ -60,9 +86,12 @@ services:
       REDIS_URL: redis://redis:6379/0
       DELTALLM_SALT_KEY: ${DELTALLM_SALT_KEY:-change-me}
       INSTANCE_ID: instance-1
+      DELTALLM_PRISMA_STARTUP_MODE: verify
     volumes:
       - ./config.yaml:/app/config/config.yaml:ro
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
       redis:
@@ -91,9 +120,12 @@ services:
       REDIS_URL: redis://redis:6379/0
       DELTALLM_SALT_KEY: ${DELTALLM_SALT_KEY:-change-me}
       INSTANCE_ID: instance-2
+      DELTALLM_PRISMA_STARTUP_MODE: verify
     volumes:
       - ./config.yaml:/app/config/config.yaml:ro
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
       redis:

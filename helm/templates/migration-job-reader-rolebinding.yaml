@@ -1,0 +1,16 @@
+{{- if .Values.migrationJob.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "deltallm.migrationAccessRoleName" . }}
+  labels:
+    {{- include "deltallm.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "deltallm.migrationAccessRoleName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deltallm.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

@@ -480,20 +480,26 @@ prometheus:
     enabled: true
 ```
 
-## Optional migration job
+## Migration job
 
-The current container image still bootstraps Prisma on startup by default.
+The image supports explicit Prisma startup modes. For shared Kubernetes environments, prefer a dedicated migration step over letting every app pod attempt schema writes on startup.
 
-The chart also exposes an optional `migrationJob` for teams that want a separate Kubernetes job for explicit migration control:
+The chart exposes a `migrationJob` for that purpose, and the released eval and production value overlays enable it:
 
 ```yaml
 migrationJob:
   enabled: true
-  hook:
-    enabled: true
 ```
 
-Use that only if your rollout process is intentionally built around a separate migration step. If you want the application pods to stop using the image default bootstrap path, set `command` and `args` explicitly for the app container.
+When `migrationJob.enabled=true`, the chart automatically resolves app startup to `prismaStartup.mode=verify`, so serving pods stop performing write-side migrations on startup. The migration job remains in `deploy` mode and is recreated on each Helm revision.
+
+The chart also renders a small migration-identity ConfigMap for the current release instance. The migration Job records successful completion in a runtime-owned Kubernetes Lease named after the release, and that Lease is owner-linked to the identity ConfigMap. Because the Lease itself is not rendered by Helm, GitOps or Helm reconciliation cannot reset the recorded revision back to an empty or stale value, and uninstall/reinstall with the same release name does not trust stale Lease state from an older release instance.
+
+By default, the Deployment adds a `wait-for-migration-job` init container. It waits for the migration-state Lease to report the current release revision for the current migration-identity ConfigMap and uses the current revision's migration Job only for progress and failure reporting. That keeps later pod restarts and scale-ups working even after Kubernetes garbage-collects finished Jobs. The chart renders a minimal Role and RoleBinding so the Job and init container can read the migration-identity ConfigMap, manage the named Lease, and read the current revision's Job. RBAC and token projection errors fail fast instead of timing out behind repeated retries.
+
+If you override `migrationJob.command` or `migrationJob.args`, keep `src.k8s_migration_state deploy-and-mark` as the entrypoint so the durable migration-state contract remains intact.
+
+For the supported rollout path, use `helm install` and `helm upgrade` with `--wait --wait-for-jobs`. That lets Helm wait on both the migration Job and the gated app rollout before considering the release healthy.
 
 ## S3 request logging
 
@@ -576,4 +582,6 @@ helm dependency build ./helm
 | App cannot connect to Redis | Wrong Redis URL or missing Redis auth password | Check `runtime.redis.*` or bundled `redis.auth.password` |
 | Provider calls fail immediately | Missing provider env vars | Add them via `envFrom` / `env` |
 | Config change did not roll pods | External secret changed outside Helm | Restart the deployment or rotate through your secret operator |
-| Migration job fails | DB not reachable or migration command not appropriate | Inspect `kubectl logs job/<release>-migrate` and adjust `migrationJob.args` |
+| Pod is stuck in `Init` | The current revision is not yet recorded in the migration-state Lease for the current release identity | Inspect `kubectl logs deploy/<release>-deltallm -c wait-for-migration-job`, `kubectl get configmap/<release>-deltallm-migration-identity -o yaml`, `kubectl get lease/<release>-deltallm-migration-state -o yaml`, and the latest migration Job selected by `app.kubernetes.io/component=migration` |
+| Migration job fails | DB not reachable or migration command not appropriate | Inspect the latest migration Job selected by `app.kubernetes.io/component=migration` and adjust `migrationJob.args` |
+| Migration wait/job fails with access denied | Missing Role/RoleBinding permission or projected token issue | Inspect the migration Role/RoleBinding, ServiceAccount, and projected `migration-api-access` volume |

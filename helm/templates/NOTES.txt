@@ -17,4 +17,10 @@ Health endpoints:
   /health/readiness
 
 If you enabled a migration job:
-  kubectl logs job/{{ include "deltallm.fullname" . }}-migrate -n {{ .Release.Namespace }}
+  kubectl get jobs -l app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=migration -n {{ .Release.Namespace }}
+  kubectl logs job/{{ include "deltallm.migrationJobName" . }} -n {{ .Release.Namespace }}
+  kubectl get configmap/{{ include "deltallm.migrationIdentityConfigMapName" . }} -o yaml -n {{ .Release.Namespace }}
+  kubectl get lease/{{ include "deltallm.migrationStateLeaseName" . }} -o yaml -n {{ .Release.Namespace }}
+  kubectl logs deploy/{{ include "deltallm.fullname" . }} -c wait-for-migration-job -n {{ .Release.Namespace }}
+  App pods wait in the wait-for-migration-job init container until the runtime-owned migration-state Lease records the current release revision and matches the current migration-identity ConfigMap.
+  Prefer helm install/upgrade --wait --wait-for-jobs so Helm waits on both the migration job and the gated app rollout.
