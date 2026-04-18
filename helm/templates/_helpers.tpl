@@ -78,3 +78,35 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "redis://%s:6379/0" (include "deltallm.redisHost" .) -}}
 {{- end -}}
 {{- end -}}
+
+{{- define "deltallm.prismaStartupMode" -}}
+{{- $mode := default "auto" .Values.prismaStartup.mode | trim | lower -}}
+{{- if eq $mode "auto" -}}
+{{- if .Values.migrationJob.enabled -}}verify{{- else -}}deploy{{- end -}}
+{{- else if and .Values.migrationJob.enabled (eq $mode "deploy") -}}
+{{- fail "prismaStartup.mode=deploy cannot be used when migrationJob.enabled=true; use auto, verify, or skip" -}}
+{{- else if or (eq $mode "deploy") (eq $mode "verify") (eq $mode "skip") -}}
+{{- $mode -}}
+{{- else -}}
+{{- fail "prismaStartup.mode must be one of: auto, deploy, verify, skip" -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "deltallm.migrationJobName" -}}
+{{- $suffix := printf "-migrate-r%d" .Release.Revision -}}
+{{- $nameLimit := int (sub 63 (len $suffix)) -}}
+{{- $baseName := include "deltallm.fullname" . | trunc $nameLimit | trimSuffix "-" -}}
+{{- printf "%s%s" $baseName $suffix | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "deltallm.migrationStateLeaseName" -}}
+{{- printf "%s-migration-state" (include "deltallm.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "deltallm.migrationIdentityConfigMapName" -}}
+{{- printf "%s-migration-identity" (include "deltallm.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "deltallm.migrationAccessRoleName" -}}
+{{- printf "%s-migration-access" (include "deltallm.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}

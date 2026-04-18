@@ -103,7 +103,7 @@ def peak_rss_mib() -> float:
 async def ensure_batch_schema(db: Any) -> None:
     rows = await db.query_raw("SELECT to_regclass('public.deltallm_batch_job')::text AS name")
     if not rows or dict(rows[0]).get("name") is None:
-        raise RuntimeError("Batch tables are missing. Run `uv run prisma db push --schema=./prisma/schema.prisma` first.")
+        raise RuntimeError("Batch tables are missing. Run `uv run prisma migrate deploy --schema=./prisma/schema.prisma` first.")
 
 
 def validate_database_url(database_url: str, *, force: bool) -> None:

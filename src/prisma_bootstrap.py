@@ -10,6 +10,13 @@ from typing import TextIO
 DEFAULT_PRISMA_BOOTSTRAP_ATTEMPTS = 30
 DEFAULT_PRISMA_BOOTSTRAP_SLEEP_SECONDS = 2.0
 DEFAULT_PRISMA_SCHEMA_PATH = "./prisma/schema.prisma"
+DEFAULT_PRISMA_BOOTSTRAP_MODE = "deploy"
+
+_PRISMA_BOOTSTRAP_MODES = ("deploy", "verify", "skip")
+_PRISMA_COMMAND_LABELS = {
+    "deploy": "Prisma migrate deploy",
+    "verify": "Prisma migrate status",
+}
 
 _RETRYABLE_CONNECTIVITY_MARKERS = (
     "p1001",
@@ -30,6 +37,14 @@ class PrismaBootstrapError(RuntimeError):
         self.retryable = bool(retryable)
 
 
+def normalize_prisma_bootstrap_mode(mode: str) -> str:
+    normalized = str(mode or DEFAULT_PRISMA_BOOTSTRAP_MODE).strip().lower()
+    if normalized not in _PRISMA_BOOTSTRAP_MODES:
+        allowed = ", ".join(_PRISMA_BOOTSTRAP_MODES)
+        raise ValueError(f"Prisma bootstrap mode must be one of: {allowed}")
+    return normalized
+
+
 def classify_prisma_failure(output: str) -> str:
     normalized = str(output or "").lower()
     if any(marker in normalized for marker in _RETRYABLE_CONNECTIVITY_MARKERS):
@@ -44,8 +59,17 @@ def _emit_command_output(*, stdout: str, stderr: str, out: TextIO, err: TextIO) 
         print(stderr, file=err, end="" if stderr.endswith("\n") else "\n")
 
 
+def _build_prisma_command(*, mode: str, schema_path: str) -> list[str]:
+    if mode == "deploy":
+        return ["prisma", "migrate", "deploy", "--schema", schema_path]
+    if mode == "verify":
+        return ["prisma", "migrate", "status", "--schema", schema_path]
+    raise ValueError(f"Unsupported Prisma bootstrap mode: {mode}")
+
+
 def run_prisma_bootstrap(
     *,
+    mode: str = DEFAULT_PRISMA_BOOTSTRAP_MODE,
     schema_path: str = DEFAULT_PRISMA_SCHEMA_PATH,
     max_attempts: int = DEFAULT_PRISMA_BOOTSTRAP_ATTEMPTS,
     sleep_seconds: float = DEFAULT_PRISMA_BOOTSTRAP_SLEEP_SECONDS,
@@ -54,7 +78,11 @@ def run_prisma_bootstrap(
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
 ) -> None:
-    command = ["prisma", "migrate", "deploy", "--schema", schema_path]
+    normalized_mode = normalize_prisma_bootstrap_mode(mode)
+    if normalized_mode == "skip":
+        return
+    command = _build_prisma_command(mode=normalized_mode, schema_path=schema_path)
+    command_label = _PRISMA_COMMAND_LABELS[normalized_mode]
     attempts = max(1, int(max_attempts))
     delay = max(0.0, float(sleep_seconds))
     out_stream = stdout if stdout is not None else sys.stdout
@@ -79,7 +107,7 @@ def run_prisma_bootstrap(
         if failure_type == "retryable_connectivity" and attempt < attempts:
             _emit_command_output(stdout=result.stdout, stderr=result.stderr, out=out_stream, err=err_stream)
             print(
-                f"Waiting for database before Prisma migrate deploy... ({attempt}/{attempts})",
+                f"Waiting for database before {command_label}... ({attempt}/{attempts})",
                 file=err_stream,
             )
             sleeper(delay)
@@ -88,14 +116,15 @@ def run_prisma_bootstrap(
         _emit_command_output(stdout=result.stdout, stderr=result.stderr, out=out_stream, err=err_stream)
         if failure_type == "retryable_connectivity":
             raise PrismaBootstrapError(
-                f"Prisma migrate deploy did not succeed after {attempts} attempts",
+                f"{command_label} did not succeed after {attempts} attempts",
                 retryable=True,
             )
-        raise PrismaBootstrapError("Prisma migrate deploy failed with a non-retryable error", retryable=False)
+        raise PrismaBootstrapError(f"{command_label} failed with a non-retryable error", retryable=False)
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run Prisma migrate deploy with connectivity retries.")
+    parser = argparse.ArgumentParser(description="Run Prisma bootstrap commands with connectivity retries.")
+    parser.add_argument("--mode", choices=_PRISMA_BOOTSTRAP_MODES, default=DEFAULT_PRISMA_BOOTSTRAP_MODE)
     parser.add_argument("--schema", default=DEFAULT_PRISMA_SCHEMA_PATH)
     parser.add_argument("--max-attempts", type=int, default=DEFAULT_PRISMA_BOOTSTRAP_ATTEMPTS)
     parser.add_argument("--sleep-seconds", type=float, default=DEFAULT_PRISMA_BOOTSTRAP_SLEEP_SECONDS)
@@ -106,6 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
         run_prisma_bootstrap(
+            mode=args.mode,
             schema_path=args.schema,
             max_attempts=args.max_attempts,
             sleep_seconds=args.sleep_seconds,

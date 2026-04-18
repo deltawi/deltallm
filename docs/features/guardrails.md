@@ -176,7 +176,7 @@ Regex fallback supports this smaller entity set:
 To enable the full Presidio engine in Docker:
 
 ```bash
-INSTALL_PRESIDIO=true docker compose --profile single up -d --build
+INSTALL_PRESIDIO=true docker compose up -d --build
 ```
 
 For local development from source:

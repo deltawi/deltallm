@@ -133,8 +133,10 @@ Generate the Prisma client artifacts, fetch the required binaries, and apply the
 ```bash
 uv run prisma generate --schema=./prisma/schema.prisma
 uv run prisma py fetch
-uv run prisma db push --schema=./prisma/schema.prisma
+uv run prisma migrate deploy --schema=./prisma/schema.prisma
 ```
+
+When you are actively changing the schema, use `uv run prisma migrate dev` to generate and apply a migration in your local development database.
 
 ## 6. Start the backend API
 

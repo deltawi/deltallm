@@ -19,6 +19,9 @@ podDisruptionBudget:
   enabled: true
   minAvailable: 2
 
+migrationJob:
+  enabled: true
+
 topologySpreadConstraints:
   - maxSkew: 1
     topologyKey: kubernetes.io/hostname

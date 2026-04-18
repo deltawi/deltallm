@@ -47,7 +47,7 @@ BODY=""
 
 cleanup() {
   set +e
-  docker compose --profile single up -d deltallm >/dev/null 2>&1 || true
+  docker compose up -d deltallm >/dev/null 2>&1 || true
   rm -f "$TMP_CONFIG" "$TMP_OVERRIDE"
 }
 trap cleanup EXIT
@@ -148,7 +148,7 @@ KEY_NAME="budget-alert-key-${RUN_ID}"
 echo "== Step 1: Start Docker app with test-only budget notification config =="
 write_temp_config
 write_temp_override
-docker compose -f docker-compose.yaml -f "$TMP_OVERRIDE" --profile single up -d --build deltallm
+docker compose -f docker-compose.yaml -f "$TMP_OVERRIDE" up -d --build deltallm
 wait_for_http_200 "$BASE/health/liveliness" "app health check"
 
 request "${AUTH_HEADER[@]}" "$BASE/v1/models"

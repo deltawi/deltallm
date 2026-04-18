@@ -105,13 +105,13 @@ The sample config uses `OPENAI_API_KEY`. If you want a different provider, edit 
 ### 4. Start DeltaLLM
 
 ```bash
-docker compose --profile single up -d --build
+docker compose up -d --build
 ```
 
 If you want the full Presidio engine for guardrails instead of the default regex fallback:
 
 ```bash
-INSTALL_PRESIDIO=true docker compose --profile single up -d --build
+INSTALL_PRESIDIO=true docker compose up -d --build
 ```
 
 This starts:
@@ -285,8 +285,10 @@ general_settings:
 ```bash
 uv run prisma generate --schema=./prisma/schema.prisma
 uv run prisma py fetch
-uv run prisma db push --schema=./prisma/schema.prisma
+uv run prisma migrate deploy --schema=./prisma/schema.prisma
 ```
+
+If you are intentionally changing the schema during development, use `uv run prisma migrate dev` to create and apply a migration instead of reaching for `db push`.
 
 ### 5. Start the backend
 

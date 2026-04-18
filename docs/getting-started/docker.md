@@ -9,7 +9,7 @@ Run DeltaLLM with Docker for a quick, reproducible setup.
 
 ## Using Docker Compose (Recommended)
 
-The project includes a `docker-compose.yaml` with two deployment profiles: **single** (one instance) and **ha** (high availability with load balancing).
+The project includes a `docker-compose.yaml` with a default single-instance stack and an optional `ha` profile for load-balanced multi-instance deployments.
 
 ## Before You Start
 
@@ -42,24 +42,24 @@ The fastest way to get everything running:
 ```bash
 # Edit config.yaml with your API keys and settings
 
-docker compose --profile single up -d --build
+docker compose up -d --build
 ```
 
 If you want the full Presidio engine for guardrails instead of the default regex fallback:
 
 ```bash
-INSTALL_PRESIDIO=true docker compose --profile single up -d --build
+INSTALL_PRESIDIO=true docker compose up -d --build
 ```
 
 Run the command from the repository root so Compose can read the project `.env` file automatically.
 
-On startup, the DeltaLLM container applies the Prisma schema with:
+Compose runs a one-shot migration service that applies pending Prisma migrations with:
 
 ```bash
-prisma db push --schema=./prisma/schema.prisma --accept-data-loss
+prisma migrate deploy --schema=./prisma/schema.prisma
 ```
 
-Then it starts the API server.
+After that succeeds, the DeltaLLM API container starts in verification mode and refuses to serve if the database migration state is not healthy.
 
 This starts:
 - DeltaLLM on port **4002** on the host (`4000` inside the container)
@@ -77,10 +77,12 @@ Once a model is available, see [Quick Start](quickstart.md) for `curl`, Python, 
 Run two DeltaLLM instances behind an Nginx load balancer:
 
 ```bash
-docker compose --profile ha up -d --build
+docker compose --profile ha up -d --build nginx
 ```
 
-Each DeltaLLM container applies the Prisma schema with `prisma db push --schema=./prisma/schema.prisma --accept-data-loss` before starting the API.
+Compose runs the shared migration service once, then each DeltaLLM API container starts in verification mode instead of trying to write schema changes independently.
+
+Targeting `nginx` starts the HA stack and its dependencies without also launching the default single-instance `deltallm` service.
 
 This starts:
 - 2 DeltaLLM instances (load balanced)
@@ -155,7 +157,7 @@ The starter config keeps the common optional features commented out with guidanc
 - JWT auth: optional bearer-token validation for proxy traffic
 - Guardrails and S3 callbacks: enable only when the related provider credentials are configured
 
-The container applies the Prisma schema automatically on boot, so you do not need a separate schema initialization step for the default Compose setup.
+The default Compose setup already includes the dedicated `migrate` service, so you do not need to run a separate manual schema initialization step.
 
 ## Custom Config
 
@@ -184,7 +186,7 @@ To build an image with the full Presidio engine:
 docker build --build-arg INSTALL_PRESIDIO=true -t deltallm .
 ```
 
-The image runs `prisma db push --schema=./prisma/schema.prisma --accept-data-loss` before starting `uvicorn`, so the target database must be reachable when the container starts.
+The image runs the Prisma startup bootstrap before starting `uvicorn`. By default that bootstrap uses `prisma migrate deploy`, so the target database must be reachable when the container starts. In shared or multi-instance environments, prefer a dedicated migration step and run app containers in verification mode.
 
 ## Health Check
 

@@ -61,7 +61,7 @@ When you open the Guardrails page:
 To enable the full Presidio engine in Docker:
 
 ```bash
-INSTALL_PRESIDIO=true docker compose --profile single up -d --build
+INSTALL_PRESIDIO=true docker compose up -d --build
 ```
 
 ## What the user experiences

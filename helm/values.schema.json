@@ -75,6 +75,16 @@
     },
     "env": { "type": "array" },
     "envFrom": { "type": "array" },
+    "prismaStartup": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["auto", "deploy", "verify", "skip"]
+        }
+      }
+    },
     "dependencyWait": {
       "type": "object",
       "additionalProperties": true,
@@ -205,17 +215,18 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "annotations": { "type": "object" },
-        "hook": {
+        "backoffLimit": { "type": "integer", "minimum": 0 },
+        "activeDeadlineSeconds": { "type": "integer", "minimum": 1 },
+        "ttlSecondsAfterFinished": { "type": "integer", "minimum": 0 },
+        "waitForCompletion": {
           "type": "object",
           "additionalProperties": true,
           "properties": {
             "enabled": { "type": "boolean" },
-            "deletePolicy": { "type": "string" }
+            "timeoutSeconds": { "type": "integer", "minimum": 1 },
+            "periodSeconds": { "type": "integer", "minimum": 1 }
           }
         },
-        "backoffLimit": { "type": "integer", "minimum": 0 },
-        "activeDeadlineSeconds": { "type": "integer", "minimum": 1 },
-        "ttlSecondsAfterFinished": { "type": "integer", "minimum": 0 },
         "command": { "type": "array" },
         "args": { "type": "array" }
       }

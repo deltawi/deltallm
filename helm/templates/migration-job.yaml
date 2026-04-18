@@ -2,21 +2,18 @@
 {{- $dbSecretName := .Values.runtime.database.existingSecret.name -}}
 {{- $redisSecretName := .Values.runtime.redis.existingSecret.name -}}
 {{- $s3SecretName := include "deltallm.s3SecretName" . -}}
+{{- $migrationStateLeaseName := include "deltallm.migrationStateLeaseName" . -}}
+{{- $migrationIdentityConfigMapName := include "deltallm.migrationIdentityConfigMapName" . -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "deltallm.fullname" . }}-migrate
+  name: {{ include "deltallm.migrationJobName" . }}
   labels:
     {{- include "deltallm.labels" . | nindent 4 }}
-  {{- if or .Values.migrationJob.annotations .Values.migrationJob.hook.enabled }}
+    app.kubernetes.io/component: migration
+  {{- with .Values.migrationJob.annotations }}
   annotations:
-    {{- with .Values.migrationJob.annotations }}
     {{- toYaml . | nindent 4 }}
-    {{- end }}
-    {{- if .Values.migrationJob.hook.enabled }}
-    helm.sh/hook: post-install,post-upgrade
-    helm.sh/hook-delete-policy: {{ .Values.migrationJob.hook.deletePolicy }}
-    {{- end }}
   {{- end }}
 spec:
   backoffLimit: {{ .Values.migrationJob.backoffLimit }}
@@ -26,6 +23,7 @@ spec:
     metadata:
       labels:
         {{- include "deltallm.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migration
     spec:
       restartPolicy: OnFailure
       serviceAccountName: {{ include "deltallm.serviceAccountName" . }}
@@ -47,6 +45,16 @@ spec:
           args:
             {{- toYaml .Values.migrationJob.args | nindent 12 }}
           env:
+            - name: DELTALLM_MIGRATION_IDENTITY_CONFIGMAP_NAME
+              value: {{ $migrationIdentityConfigMapName | quote }}
+            - name: DELTALLM_MIGRATION_STATE_LEASE_NAME
+              value: {{ $migrationStateLeaseName | quote }}
+            - name: DELTALLM_RELEASE_REVISION
+              value: {{ .Release.Revision | quote }}
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             - name: DELTALLM_CONFIG_PATH
               value: /app/config/config.yaml
             - name: DELTALLM_MASTER_KEY
@@ -127,6 +135,9 @@ spec:
             - name: config
               mountPath: /app/config
               readOnly: true
+            - name: migration-api-access
+              mountPath: /var/run/secrets/deltallm-migration
+              readOnly: true
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -136,6 +147,17 @@ spec:
         - name: config
           configMap:
             name: {{ include "deltallm.fullname" . }}-config
+        - name: migration-api-access
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

@@ -1,82 +1,28 @@
 # Docker Deployment
 
-See the [Getting Started: Docker](../getting-started/docker.md) guide for basic Docker setup.
+See the [Getting Started: Docker](../getting-started/docker.md) guide for the basic local flow.
 
-## Production Docker Compose
+## Repository Compose File
 
-A production-ready `docker-compose.yml`:
+The checked-in [docker-compose.yaml](../../docker-compose.yaml) is the supported local, evaluation, and demo Compose path. It runs:
 
-```yaml
-version: "3.8"
+- a one-shot `migrate` service that applies pending Prisma migrations with `prisma migrate deploy`
+- the default `deltallm` service in Prisma verification mode
+- bundled PostgreSQL and Redis services with local-development defaults
+- optional HA services behind Nginx through the `ha` profile
 
-services:
-  deltallm:
-    build: .
-    ports:
-      - "4002:4000"
-    environment:
-      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/deltallm
-      - REDIS_URL=redis://redis:6379/0
-      - DELTALLM_CONFIG_PATH=/app/config/config.yaml
-      - DELTALLM_MASTER_KEY=${DELTALLM_MASTER_KEY}
-      - DELTALLM_SALT_KEY=${DELTALLM_SALT_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - PLATFORM_BOOTSTRAP_ADMIN_EMAIL=${ADMIN_EMAIL}
-      - PLATFORM_BOOTSTRAP_ADMIN_PASSWORD=${ADMIN_PASSWORD}
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    volumes:
-      - ./config.yaml:/app/config/config.yaml:ro
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  db:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: deltallm
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: redis:7-alpine
-    volumes:
-      - redisdata:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-volumes:
-  pgdata:
-  redisdata:
-```
+It is not a production deployment template: it hardcodes bundled infrastructure and local credentials for convenience.
 
 ## Environment File
 
-Create a `.env` file alongside `docker-compose.yml`:
+Create a `.env` file in the repository root and set at least:
 
 ```bash
-POSTGRES_PASSWORD=strong-random-password
 DELTALLM_MASTER_KEY=replace-me
 DELTALLM_SALT_KEY=replace-me
 OPENAI_API_KEY=sk-...
-ADMIN_EMAIL=admin@company.com
-ADMIN_PASSWORD=initial-admin-password
+PLATFORM_BOOTSTRAP_ADMIN_EMAIL=admin@company.com
+PLATFORM_BOOTSTRAP_ADMIN_PASSWORD=initial-admin-password
 ```
 
 Generate working values for the master key and salt key with:
@@ -91,10 +37,10 @@ The generated master key always satisfies DeltaLLM's validator: it is longer tha
 ## Starting
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
-With this host mapping, the Docker deployment is reachable at `http://localhost:4002`.
+With the default host mapping, DeltaLLM is reachable at `http://localhost:4002`.
 
 ## Upgrading
 
@@ -103,4 +49,21 @@ docker compose pull
 docker compose up -d --build
 ```
 
-The application container runs the shared database bootstrap script on startup before launching the API. It prefers `prisma migrate deploy` and falls back to `prisma db push` for legacy or unbaselined databases.
+The `migrate` service runs before the API container starts, and the API container then verifies the migration state before serving traffic.
+
+## Production Docker Pattern
+
+For production Docker deployments, use the image as a building block rather than the checked-in Compose file:
+
+- run a one-shot migration container with `python -m src.prisma_bootstrap --mode deploy`
+- run the long-lived API containers with `DELTALLM_PRISMA_STARTUP_MODE=verify`
+- point both at external PostgreSQL and Redis instances managed outside the container stack
+- supply real secrets through your orchestrator or secret manager instead of the repo `.env` defaults
+
+## High Availability
+
+```bash
+docker compose --profile ha up -d --build nginx
+```
+
+Targeting `nginx` starts the HA stack and its dependencies without also launching the default single-instance `deltallm` service.
