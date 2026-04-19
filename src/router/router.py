@@ -60,7 +60,7 @@ class RouterConfig:
     retry_after: float = 0.0
     timeout: float = 600.0
     cooldown_time: int = 60
-    allowed_fails: int = 0
+    allowed_fails: int = 2
     enable_pre_call_checks: bool = False
     model_group_alias: dict[str, str] = field(default_factory=dict)
     route_group_policies: dict[str, "RouteGroupPolicy"] = field(default_factory=dict)

@@ -12,7 +12,7 @@ class CooldownManager:
         self,
         state_backend: DeploymentStateBackend,
         cooldown_time: int = 60,
-        allowed_fails: int = 0,
+        allowed_fails: int = 2,
         alert_callback: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ):
         self.state = state_backend

@@ -78,6 +78,31 @@ async def test_failover_applies_timeout_override():
         )
 
 
+@pytest.mark.asyncio
+async def test_cooldown_manager_default_marks_unhealthy_on_third_failure():
+    state = RedisStateBackend(redis=None)
+    cooldown = CooldownManager(state)
+
+    first = await cooldown.record_failure("dep-a", "boom-1")
+    second = await cooldown.record_failure("dep-a", "boom-2")
+
+    assert first is False
+    assert second is False
+    assert not await state.is_cooled_down("dep-a")
+    health = await state.get_health("dep-a")
+    assert health.get("healthy", "true") != "false"
+    assert int(health.get("consecutive_failures", 0) or 0) == 2
+
+    third = await cooldown.record_failure("dep-a", "boom-3")
+
+    assert third is True
+    assert await state.is_cooled_down("dep-a")
+    health = await state.get_health("dep-a")
+    assert health.get("healthy") == "false"
+    assert int(health.get("consecutive_failures", 0) or 0) == 3
+    assert health.get("last_error") == "boom-3"
+
+
 @pytest.mark.parametrize(
     ("exc", "expected"),
     [
