@@ -18,6 +18,8 @@ router_settings:
 
 That is enough for most first deployments.
 
+Tip: check the effective `allowed_fails` value in the config your deployment actually loads. Depending on how you run DeltaLLM, the source of truth is usually your `config.yaml` from `DELTALLM_CONFIG_PATH`, your Helm `values.yaml`, or the rendered Kubernetes ConfigMap.
+
 ## Reference
 
 | Setting | Default | What it controls |

@@ -362,6 +362,8 @@ router_settings:
 - `cooldown_time`: how long a failing deployment stays out of rotation
 - `allowed_fails`: how many failures are allowed before cooldown starts
 
+Tip: verify the effective `allowed_fails` value in the config your environment actually applies. In practice that usually means your mounted `config.yaml`, your Helm `values.yaml`, or the rendered ConfigMap in the cluster.
+
 When you publish a route-group policy, that group can override timeout and retry behavior without changing the global config.
 
 ## Fallback Chains
