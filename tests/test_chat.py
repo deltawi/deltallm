@@ -685,7 +685,11 @@ async def test_chat_upstream_rate_limit_returns_429(client, test_app):
         "param": None,
         "code": None,
     }
-    assert await test_app.state.router_state_backend.is_cooled_down(deployment.deployment_id)
+    health = await test_app.state.router_state_backend.get_health(deployment.deployment_id)
+    assert health.get("healthy", "true") != "false"
+    assert int(health.get("consecutive_failures", 0) or 0) == 2
+    assert health.get("last_error") == "provider quota exhausted"
+    assert not await test_app.state.router_state_backend.is_cooled_down(deployment.deployment_id)
 
 
 @pytest.mark.asyncio

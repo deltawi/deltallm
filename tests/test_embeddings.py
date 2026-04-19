@@ -89,7 +89,11 @@ async def test_embeddings_upstream_rate_limit_returns_429(client, test_app):
     assert response.status_code == 429
     assert response.headers.get("Retry-After") == "11"
     assert response.json()["error"]["type"] == "rate_limit_error"
-    assert await test_app.state.router_state_backend.is_cooled_down(deployment.deployment_id)
+    health = await test_app.state.router_state_backend.get_health(deployment.deployment_id)
+    assert health.get("healthy", "true") != "false"
+    assert int(health.get("consecutive_failures", 0) or 0) == 2
+    assert health.get("last_error") == "provider quota exhausted"
+    assert not await test_app.state.router_state_backend.is_cooled_down(deployment.deployment_id)
 
 
 @pytest.mark.asyncio
@@ -107,11 +111,11 @@ async def test_embeddings_upstream_service_unavailable_updates_passive_health(cl
     response = await client.post("/v1/embeddings", headers=headers, json=body)
 
     assert response.status_code == 503
-    assert await test_app.state.router_state_backend.is_cooled_down(deployment.deployment_id)
     health = await test_app.state.router_state_backend.get_health(deployment.deployment_id)
-    assert health.get("healthy") == "false"
+    assert health.get("healthy", "true") != "false"
     assert int(health.get("consecutive_failures", 0) or 0) == 2
     assert health.get("last_error") == "Upstream embedding call failed with status 503"
+    assert not await test_app.state.router_state_backend.is_cooled_down(deployment.deployment_id)
 
 
 @pytest.mark.asyncio
