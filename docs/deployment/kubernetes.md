@@ -501,8 +501,6 @@ If you override `migrationJob.command` or `migrationJob.args`, keep `src.k8s_mig
 
 For the supported rollout path, use `helm install` and `helm upgrade` with `--wait --wait-for-jobs`. That lets Helm wait on both the migration Job and the gated app rollout before considering the release healthy.
 
-If you are upgrading a legacy environment that was created with `prisma db push`, use the one-time [Prisma migration runbook](prisma-migration-runbook.md) before relying on the normal Helm migration path.
-
 ## S3 request logging
 
 Use workload identity or an existing secret.

@@ -51,8 +51,6 @@ docker compose up -d --build
 
 The `migrate` service runs before the API container starts, and the API container then verifies the migration state before serving traffic.
 
-If you are upgrading a legacy database that was originally initialized with `prisma db push`, use the one-time [Prisma migration runbook](prisma-migration-runbook.md) before relying on the normal deploy path.
-
 ## Production Docker Pattern
 
 For production Docker deployments, use the image as a building block rather than the checked-in Compose file:
@@ -61,8 +59,6 @@ For production Docker deployments, use the image as a building block rather than
 - run the long-lived API containers with `DELTALLM_PRISMA_STARTUP_MODE=verify`
 - point both at external PostgreSQL and Redis instances managed outside the container stack
 - supply real secrets through your orchestrator or secret manager instead of the repo `.env` defaults
-
-For legacy `db push` databases, run the one-time [Prisma migration runbook](prisma-migration-runbook.md) before switching to this contract.
 
 ## High Availability
 
