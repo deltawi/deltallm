@@ -44,12 +44,17 @@ general_settings:
 - `GET /health/readiness` for dependency readiness
 - `GET /metrics` for Prometheus scraping
 
-### Expect Schema Setup on Startup
+### Use Explicit Prisma Migration Steps
 
-The application runs Prisma schema setup automatically during container startup. You do not need a separate manual migration step for the default deployment paths documented here.
+Supported DeltaLLM deployments now rely on explicit Prisma migration steps:
+
+- shared and production-style environments should run `prisma migrate deploy`
+- long-lived app containers should verify migration state rather than write schema changes implicitly
+- legacy databases created with `db push` may need the one-time [Prisma migration runbook](prisma-migration-runbook.md)
 
 ## Next Steps
 
 - [Docker deployment guide](docker.md)
 - [Kubernetes deployment guide](kubernetes.md)
+- [Prisma migration runbook](prisma-migration-runbook.md)
 - [Observability](../features/observability.md)

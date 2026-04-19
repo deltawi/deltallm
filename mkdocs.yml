@@ -100,6 +100,7 @@ nav:
       - Docker: deployment/docker.md
       - Governance Rollout: deployment/governance.md
       - Kubernetes: deployment/kubernetes.md
+      - Prisma Migration Runbook: deployment/prisma-migration-runbook.md
 
 extra:
   social:
