@@ -228,7 +228,7 @@ async def test_failover_http_429_maps_to_rate_limit_error():
         config=FallbackConfig(num_retries=0, timeout=1.0),
         deployment_registry={"group-a": [primary]},
         state_backend=state,
-        cooldown_manager=CooldownManager(state),
+        cooldown_manager=CooldownManager(state, allowed_fails=0),
     )
 
     async def run(_deployment: Deployment) -> str:
@@ -257,7 +257,7 @@ async def test_failover_http_503_maps_to_health_affecting_service_unavailable_er
         config=FallbackConfig(num_retries=0, timeout=1.0),
         deployment_registry={"group-a": [primary]},
         state_backend=state,
-        cooldown_manager=CooldownManager(state),
+        cooldown_manager=CooldownManager(state, allowed_fails=0),
     )
 
     async def run(_deployment: Deployment) -> str:
@@ -286,7 +286,7 @@ async def test_failover_transport_error_maps_to_health_affecting_service_unavail
         config=FallbackConfig(num_retries=0, timeout=1.0),
         deployment_registry={"group-a": [primary]},
         state_backend=state,
-        cooldown_manager=CooldownManager(state),
+        cooldown_manager=CooldownManager(state, allowed_fails=0),
     )
 
     async def run(_deployment: Deployment) -> str:
@@ -311,7 +311,7 @@ async def test_failover_http_timeout_maps_to_timeout_error():
         config=FallbackConfig(num_retries=0, timeout=1.0),
         deployment_registry={"group-a": [primary]},
         state_backend=state,
-        cooldown_manager=CooldownManager(state),
+        cooldown_manager=CooldownManager(state, allowed_fails=0),
     )
 
     async def run(_deployment: Deployment) -> str:
@@ -413,7 +413,7 @@ async def test_failover_classified_fallback_continues_after_upstream_service_una
         ),
         deployment_registry={"group-a": [primary], "ctx-fallbacks": [fallback_a, fallback_b]},
         state_backend=state,
-        cooldown_manager=CooldownManager(state),
+        cooldown_manager=CooldownManager(state, allowed_fails=0),
     )
     attempts: list[str] = []
 
