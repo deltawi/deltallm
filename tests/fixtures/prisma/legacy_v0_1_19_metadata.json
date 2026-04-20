@@ -1,0 +1,13 @@
+{
+  "scenario": "legacy_v0_1_19_refusal",
+  "source_tag": "v0.1.19",
+  "source_commit": "44e5ee2658cf534514dcf588447fb03b0e671a3f",
+  "expected_history_state": "none",
+  "latest_matching_repo_migration": "20260411100000_batch_completion_outbox_leases",
+  "seed_rows": {
+    "batch_file_id": "00000000-0000-0000-0000-000000000191",
+    "batch_job_id": "00000000-0000-0000-0000-000000000192",
+    "batch_item_id": "00000000-0000-0000-0000-000000000193",
+    "completion_id": "00000000-0000-0000-0000-000000000194"
+  }
+}

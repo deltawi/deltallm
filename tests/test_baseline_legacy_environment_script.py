@@ -232,6 +232,127 @@ async def test_build_baseline_plan_succeeds_for_legacy_unbaselined_database(
 
 
 @pytest.mark.asyncio
+async def test_build_baseline_plan_ignores_extension_only_live_diff(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    migration_names = (
+        "20260301090000_core_schema_baseline",
+        "20260302133000_audit_log_foundation",
+    )
+    migrations_dir = _create_migrations_dir(tmp_path, migration_names)
+
+    inspection = _inspection(
+        public_tables=("deltallm_usertable",),
+        repo_migration_names=migration_names,
+    )
+
+    async def _fake_inspect(**kwargs):  # noqa: ANN003
+        return inspection
+
+    def _fake_runner(command: list[str], **kwargs) -> subprocess.CompletedProcess[str]:  # noqa: ANN003
+        del kwargs
+        if command[3:5] == ["migrate", "status"]:
+            return _completed_process(returncode=1, stderr="P3005 legacy database")
+        if command[3:5] == ["migrate", "diff"]:
+            output_path = Path(command[command.index("--output") + 1])
+            output_path.write_text(
+                '-- CreateExtension\nCREATE EXTENSION IF NOT EXISTS "pg_trgm";\n',
+                encoding="utf-8",
+            )
+            return _completed_process(returncode=2)
+        raise AssertionError(f"Unexpected command: {command}")
+
+    monkeypatch.setattr(_SCRIPT_MODULE, "load_inspection_result", _fake_inspect)
+
+    args = SimpleNamespace(
+        database_url="postgresql://postgres:postgres@localhost:5432/deltallm",
+        shadow_database_url="postgresql://postgres:postgres@localhost:5432/deltallm_shadow",
+        schema=Path("./prisma/schema.prisma"),
+        migrations_dir=migrations_dir,
+        output_diff=None,
+    )
+
+    plan = await _SCRIPT_MODULE.build_baseline_plan(args, runner=_fake_runner)
+
+    assert plan.classification.kind == "legacy_unbaselined"
+    assert plan.pending_migration_names == migration_names
+    assert plan.diff_path is None
+
+
+@pytest.mark.asyncio
+async def test_build_baseline_plan_matches_longest_repo_prefix_for_legacy_database(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    migration_names = (
+        "20260301090000_core_schema_baseline",
+        "20260302133000_audit_log_foundation",
+        "20260304123000_audit_id_defaults",
+    )
+    migrations_dir = _create_migrations_dir(tmp_path, migration_names)
+
+    inspection = _inspection(
+        public_tables=("deltallm_usertable",),
+        repo_migration_names=migration_names,
+    )
+
+    async def _fake_inspect(**kwargs):  # noqa: ANN003
+        return inspection
+
+    datasource_calls: list[tuple[str, ...]] = []
+    datamodel_calls: list[tuple[str, ...]] = []
+
+    def _fake_runner(command: list[str], **kwargs) -> subprocess.CompletedProcess[str]:  # noqa: ANN003
+        del kwargs
+        if command[3:5] == ["migrate", "status"]:
+            return _completed_process(returncode=1, stderr="P3005 legacy database")
+        if command[3:5] != ["migrate", "diff"]:
+            raise AssertionError(f"Unexpected command: {command}")
+
+        output_path = Path(command[command.index("--output") + 1])
+        selected_migrations = tuple(
+            entry.name
+            for entry in sorted(Path(command[command.index("--from-migrations") + 1]).iterdir())
+            if entry.is_dir()
+        )
+        if "--to-schema-datamodel" in command:
+            datamodel_calls.append(selected_migrations)
+            return _completed_process(returncode=0, stdout="Repo chain matches schema")
+
+        datasource_calls.append(selected_migrations)
+        if selected_migrations == migration_names:
+            output_path.write_text(
+                '-- AlterTable\nALTER TABLE "deltallm_batch_job" ADD COLUMN "status" TEXT;\n',
+                encoding="utf-8",
+            )
+            return _completed_process(returncode=2)
+        if selected_migrations == migration_names[:2]:
+            return _completed_process(returncode=0, stdout="Prefix matches live database")
+        raise AssertionError(f"Unexpected datasource diff for migrations: {selected_migrations}")
+
+    monkeypatch.setattr(_SCRIPT_MODULE, "load_inspection_result", _fake_inspect)
+
+    args = SimpleNamespace(
+        database_url="postgresql://postgres:postgres@localhost:5432/deltallm",
+        shadow_database_url="postgresql://postgres:postgres@localhost:5432/deltallm_shadow",
+        schema=Path("./prisma/schema.prisma"),
+        migrations_dir=migrations_dir,
+        output_diff=None,
+    )
+
+    plan = await _SCRIPT_MODULE.build_baseline_plan(args, runner=_fake_runner)
+
+    assert plan.classification.kind == "legacy_unbaselined"
+    assert plan.repo_migration_names == migration_names
+    assert plan.pending_migration_names == migration_names[:2]
+    assert plan.status_result.returncode == 1
+    assert plan.diff_path is None
+    assert datasource_calls == [migration_names, migration_names[:2]]
+    assert datamodel_calls == [migration_names]
+
+
+@pytest.mark.asyncio
 async def test_build_baseline_plan_resumes_from_remaining_migrations_for_clean_partial_history(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -307,8 +428,15 @@ async def test_build_baseline_plan_refuses_when_live_database_differs_from_repo_
     )
 
     def _fake_runner(command: list[str], **kwargs) -> subprocess.CompletedProcess[str]:  # noqa: ANN003
-        del command, kwargs
-        return next(results)
+        del kwargs
+        result = next(results)
+        if command[3:5] == ["migrate", "diff"] and result.returncode == 2:
+            output_path = Path(command[command.index("--output") + 1])
+            output_path.write_text(
+                '-- AlterTable\nALTER TABLE "deltallm_teamtable" ALTER COLUMN "team_id" DROP DEFAULT;\n',
+                encoding="utf-8",
+            )
+        return result
 
     monkeypatch.setattr(_SCRIPT_MODULE, "load_inspection_result", _fake_inspect)
 
@@ -348,8 +476,15 @@ async def test_build_baseline_plan_reports_repo_migration_mismatch_before_blamin
     )
 
     def _fake_runner(command: list[str], **kwargs) -> subprocess.CompletedProcess[str]:  # noqa: ANN003
-        del command, kwargs
-        return next(results)
+        del kwargs
+        result = next(results)
+        if command[3:5] == ["migrate", "diff"] and result.returncode == 2:
+            output_path = Path(command[command.index("--output") + 1])
+            output_path.write_text(
+                '-- AlterTable\nALTER TABLE "deltallm_teamtable" ALTER COLUMN "team_id" DROP DEFAULT;\n',
+                encoding="utf-8",
+            )
+        return result
 
     monkeypatch.setattr(_SCRIPT_MODULE, "load_inspection_result", _fake_inspect)
 
@@ -397,8 +532,15 @@ async def test_build_baseline_plan_refuses_when_database_has_partial_history_tha
     )
 
     def _fake_runner(command: list[str], **kwargs) -> subprocess.CompletedProcess[str]:  # noqa: ANN003
-        del command, kwargs
-        return next(results)
+        del kwargs
+        result = next(results)
+        if command[3:5] == ["migrate", "diff"] and result.returncode == 2:
+            output_path = Path(command[command.index("--output") + 1])
+            output_path.write_text(
+                '-- AlterTable\nALTER TABLE "deltallm_teamtable" ALTER COLUMN "team_id" DROP DEFAULT;\n',
+                encoding="utf-8",
+            )
+        return result
 
     monkeypatch.setattr(_SCRIPT_MODULE, "load_inspection_result", _fake_inspect)
 
@@ -446,8 +588,15 @@ async def test_build_baseline_plan_refuses_when_partial_history_has_drift(
     )
 
     def _fake_runner(command: list[str], **kwargs) -> subprocess.CompletedProcess[str]:  # noqa: ANN003
-        del command, kwargs
-        return next(results)
+        del kwargs
+        result = next(results)
+        if command[3:5] == ["migrate", "diff"] and result.returncode == 2:
+            output_path = Path(command[command.index("--output") + 1])
+            output_path.write_text(
+                '-- AlterTable\nALTER TABLE "deltallm_teamtable" ALTER COLUMN "team_id" DROP DEFAULT;\n',
+                encoding="utf-8",
+            )
+        return result
 
     monkeypatch.setattr(_SCRIPT_MODULE, "load_inspection_result", _fake_inspect)
 
@@ -895,6 +1044,26 @@ def test_run_inspection_worker_surfaces_only_the_last_operator_error_line(tmp_pa
             migrations_dir=tmp_path,
             runner=_fake_runner,
         )
+
+
+def test_is_ignorable_prisma_diff_recognizes_extension_only_diff(tmp_path: Path) -> None:
+    diff_path = tmp_path / "diff.sql"
+    diff_path.write_text(
+        '-- CreateExtension\nCREATE EXTENSION IF NOT EXISTS "pg_trgm" WITH SCHEMA "public" VERSION "1.6";\n',
+        encoding="utf-8",
+    )
+
+    assert _SCRIPT_MODULE.is_ignorable_prisma_diff(diff_path) is True
+
+
+def test_is_ignorable_prisma_diff_rejects_structural_sql(tmp_path: Path) -> None:
+    diff_path = tmp_path / "diff.sql"
+    diff_path.write_text(
+        '-- AlterTable\nALTER TABLE "deltallm_teamtable" ALTER COLUMN "team_id" DROP DEFAULT;\n',
+        encoding="utf-8",
+    )
+
+    assert _SCRIPT_MODULE.is_ignorable_prisma_diff(diff_path) is False
 
 
 def test_main_apply_requires_yes() -> None:

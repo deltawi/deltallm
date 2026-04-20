@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, master]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, feature/issue94-prisma-upgrade-path]
 
 jobs:
   ui-build:
@@ -91,6 +91,61 @@ jobs:
           DELTALLM_MASTER_KEY: sk-test-master-key-for-ci-only
           DELTALLM_SALT_KEY: ci-salt-key-for-testing-only-do-not-use-in-production
         run: uv run pytest -v --ignore=tests/test_provider_presets_smoke.py
+
+  prisma-upgrade-paths:
+    runs-on: ubuntu-latest
+    name: Prisma Upgrade Paths (${{ matrix.scenario }})
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - fresh_install
+          - head_db_push_no_history_baseline
+          - legacy_v0_1_19_refusal
+          - previous_release_v0_1_20_rc2_upgrade
+
+    services:
+      postgres:
+        image: postgres:15
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: deltallm_upgrade_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Generate Prisma client
+        run: uv run prisma generate --schema=./prisma/schema.prisma
+
+      - name: Run Prisma upgrade-path scenario
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/deltallm_upgrade_test
+          PRISMA_SHADOW_DATABASE_NAME: deltallm_upgrade_shadow
+          PRISMA_SHADOW_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/deltallm_upgrade_shadow
+          POSTGRES_SERVICE_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: ./scripts/ci/prisma_upgrade_paths.sh ${{ matrix.scenario }}
 
   lint:
     runs-on: ubuntu-latest

@@ -1,0 +1,15 @@
+{
+  "scenario": "previous_release_v0_1_20_rc2_upgrade",
+  "source_tag": "v0.1.20-rc2",
+  "source_commit": "5df60c85671121ac0fbbb1420402da8389d15a4f",
+  "latest_fixture_migration": "20260414103000_batch_job_remove_validating_status",
+  "migration_count": 33,
+  "seed_rows": {
+    "batch_file_id": "00000000-0000-0000-0000-000000000201",
+    "session_file_id": "00000000-0000-0000-0000-000000000202",
+    "batch_job_id": "00000000-0000-0000-0000-000000000203",
+    "batch_item_id": "00000000-0000-0000-0000-000000000204",
+    "completion_id": "00000000-0000-0000-0000-000000000205",
+    "create_session_id": "00000000-0000-0000-0000-000000000206"
+  }
+}

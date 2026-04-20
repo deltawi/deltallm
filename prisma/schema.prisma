@@ -1,11 +1,13 @@
 generator client {
   provider  = "prisma-client-py"
   interface = "asyncio"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  extensions = [pg_trgm]
 }
 
 model DeltaLLM_SpendLogEvents {
@@ -103,7 +105,7 @@ model DeltaLLM_VerificationToken {
   team       DeltaLLM_TeamTable? @relation(fields: [team_id], references: [team_id])
   owner_account DeltaLLM_PlatformAccount? @relation("verificationtoken_account_owner", fields: [owner_account_id], references: [account_id])
   owner_service_account DeltaLLM_ServiceAccount? @relation("verificationtoken_service_account_owner", fields: [owner_service_account_id], references: [service_account_id])
-  @@index([token])
+  @@index([key_name(ops: raw("gin_trgm_ops"))], type: Gin, map: "deltallm_verificationtoken_key_name_trgm_idx")
   @@index([user_id])
   @@index([team_id])
   @@index([owner_account_id])
@@ -172,6 +174,7 @@ model DeltaLLM_TeamTable {
   service_accounts DeltaLLM_ServiceAccount[]
 
   @@index([organization_id])
+  @@index([team_alias(ops: raw("gin_trgm_ops"))], type: Gin, map: "deltallm_teamtable_team_alias_trgm_idx")
   @@map("deltallm_teamtable")
 }
 
@@ -217,6 +220,7 @@ model DeltaLLM_OrganizationTable {
   created_at        DateTime @default(now())
   updated_at        DateTime @updatedAt
 
+  @@index([organization_name(ops: raw("gin_trgm_ops"))], type: Gin, map: "deltallm_organizationtable_name_trgm_idx")
   @@map("deltallm_organizationtable")
 }
 
@@ -271,7 +275,7 @@ model DeltaLLM_AuditPayload {
   redacted        Boolean  @default(false)
   created_at      DateTime @default(now())
 
-  event DeltaLLM_AuditEvent @relation(fields: [event_id], references: [event_id], onDelete: Cascade)
+  event DeltaLLM_AuditEvent @relation(fields: [event_id], references: [event_id], onDelete: Cascade, map: "deltallm_auditpayload_event_fk")
 
   @@index([event_id])
   @@index([kind])
@@ -651,7 +655,7 @@ model DeltaLLM_MCPServerBinding {
   created_at      DateTime @default(now())
   updated_at      DateTime @updatedAt
 
-  server DeltaLLM_MCPServer @relation(fields: [mcp_server_id], references: [mcp_server_id], onDelete: Cascade)
+  server DeltaLLM_MCPServer @relation(fields: [mcp_server_id], references: [mcp_server_id], onDelete: Cascade, map: "deltallm_mcpbinding_server_fk")
 
   @@unique([mcp_server_id, scope_type, scope_id], map: "deltallm_mcpbinding_server_scope_key")
   @@index([scope_type, scope_id, enabled], map: "deltallm_mcpbinding_scope_idx")
@@ -688,7 +692,7 @@ model DeltaLLM_MCPToolPolicy {
   created_at               DateTime @default(now())
   updated_at               DateTime @updatedAt
 
-  server DeltaLLM_MCPServer @relation(fields: [mcp_server_id], references: [mcp_server_id], onDelete: Cascade)
+  server DeltaLLM_MCPServer @relation(fields: [mcp_server_id], references: [mcp_server_id], onDelete: Cascade, map: "deltallm_mcptoolpolicy_server_fk")
 
   @@unique([mcp_server_id, tool_name, scope_type, scope_id], map: "deltallm_mcptoolpolicy_server_tool_scope_key")
   @@index([mcp_server_id, tool_name], map: "deltallm_mcptoolpolicy_server_tool_idx")
@@ -723,6 +727,7 @@ model DeltaLLM_MCPApprovalRequest {
   @@index([mcp_server_id, status, created_at], map: "deltallm_mcpapproval_server_status_created_idx")
   @@index([status, created_at], map: "deltallm_mcpapproval_status_created_idx")
   @@index([request_fingerprint], map: "deltallm_mcpapproval_fingerprint_idx")
+  @@index([request_fingerprint, status, expires_at], map: "deltallm_mcpapproval_fingerprint_status_expires_idx")
   @@map("deltallm_mcpapprovalrequest")
 }
 
@@ -759,7 +764,7 @@ model DeltaLLM_PromptVersion {
   created_at         DateTime @default(now())
   updated_at         DateTime @updatedAt
 
-  template DeltaLLM_PromptTemplate @relation(fields: [prompt_template_id], references: [prompt_template_id], onDelete: Cascade)
+  template DeltaLLM_PromptTemplate @relation(fields: [prompt_template_id], references: [prompt_template_id], onDelete: Cascade, map: "deltallm_promptversion_template_fk")
   labels   DeltaLLM_PromptLabel[]
 
   @@unique([prompt_template_id, version], map: "deltallm_promptversion_template_version_key")
@@ -775,8 +780,8 @@ model DeltaLLM_PromptLabel {
   created_at         DateTime @default(now())
   updated_at         DateTime @updatedAt
 
-  template DeltaLLM_PromptTemplate @relation(fields: [prompt_template_id], references: [prompt_template_id], onDelete: Cascade)
-  version  DeltaLLM_PromptVersion  @relation(fields: [prompt_version_id], references: [prompt_version_id], onDelete: Cascade)
+  template DeltaLLM_PromptTemplate @relation(fields: [prompt_template_id], references: [prompt_template_id], onDelete: Cascade, map: "deltallm_promptlabel_template_fk")
+  version  DeltaLLM_PromptVersion  @relation(fields: [prompt_version_id], references: [prompt_version_id], onDelete: Cascade, map: "deltallm_promptlabel_version_fk")
 
   @@unique([prompt_template_id, label], map: "deltallm_promptlabel_template_label_key")
   @@index([prompt_version_id], map: "deltallm_promptlabel_version_idx")
@@ -795,7 +800,7 @@ model DeltaLLM_PromptBinding {
   created_at         DateTime @default(now())
   updated_at         DateTime @updatedAt
 
-  template DeltaLLM_PromptTemplate @relation(fields: [prompt_template_id], references: [prompt_template_id], onDelete: Cascade)
+  template DeltaLLM_PromptTemplate @relation(fields: [prompt_template_id], references: [prompt_template_id], onDelete: Cascade, map: "deltallm_promptbinding_template_fk")
 
   @@index([scope_type, scope_id, enabled, priority], map: "deltallm_promptbinding_scope_idx")
   @@index([prompt_template_id], map: "deltallm_promptbinding_template_idx")
@@ -840,8 +845,8 @@ model DeltaLLM_RouteGroupMember {
   created_at      DateTime @default(now())
   updated_at      DateTime @updatedAt
 
-  route_group DeltaLLM_RouteGroup @relation(fields: [route_group_id], references: [route_group_id], onDelete: Cascade)
-  deployment  DeltaLLM_ModelDeployment @relation(fields: [deployment_id], references: [deployment_id], onDelete: Cascade)
+  route_group DeltaLLM_RouteGroup @relation(fields: [route_group_id], references: [route_group_id], onDelete: Cascade, map: "deltallm_routegroupmember_route_group_fk")
+  deployment  DeltaLLM_ModelDeployment @relation(fields: [deployment_id], references: [deployment_id], onDelete: Cascade, map: "deltallm_routegroupmember_deployment_fk")
 
   @@unique([route_group_id, deployment_id], map: "deltallm_routegroupmember_route_group_id_deployment_id_key")
   @@index([deployment_id], map: "deltallm_routegroupmember_deployment_id_idx")
@@ -859,7 +864,7 @@ model DeltaLLM_RoutePolicy {
   created_at      DateTime @default(now())
   updated_at      DateTime @updatedAt
 
-  route_group DeltaLLM_RouteGroup @relation(fields: [route_group_id], references: [route_group_id], onDelete: Cascade)
+  route_group DeltaLLM_RouteGroup @relation(fields: [route_group_id], references: [route_group_id], onDelete: Cascade, map: "deltallm_routepolicy_route_group_fk")
 
   @@unique([route_group_id, version], map: "deltallm_routepolicy_route_group_id_version_key")
   @@index([route_group_id, status], map: "deltallm_routepolicy_group_status_idx")
