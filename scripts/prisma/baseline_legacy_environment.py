@@ -235,53 +235,6 @@ def normalize_ignorable_diff_result(result: CommandResult, *, output_path: Path)
     return result
 
 
-def find_matching_repo_prefix(
-    *,
-    migrations_dir: Path,
-    repo_migration_names: Sequence[str],
-    schema_path: Path,
-    shadow_database_url: str,
-    database_url: str,
-    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
-) -> tuple[str, ...] | None:
-    repo_history_names = tuple(repo_migration_names)
-    for prefix_length in range(len(repo_history_names) - 1, 0, -1):
-        prefix_migration_names = repo_history_names[:prefix_length]
-        prefix_migrations_dir, prefix_root = prepare_filtered_migrations_dir(
-            migrations_dir,
-            migration_names=prefix_migration_names,
-            schema_path=schema_path,
-        )
-        prefix_diff_path, prefix_diff_path_was_temporary = prepare_diff_output_path(None)
-        try:
-            prefix_diff_result = run_migration_diff(
-                migrations_dir=prefix_migrations_dir,
-                schema_path=schema_path,
-                shadow_database_url=shadow_database_url,
-                database_url=database_url,
-                output_path=prefix_diff_path,
-                compare_to="datasource",
-                runner=runner,
-            )
-            prefix_diff_result = normalize_ignorable_diff_result(
-                prefix_diff_result,
-                output_path=prefix_diff_path,
-            )
-            if prefix_diff_result.returncode == 0:
-                return prefix_migration_names
-            if prefix_diff_result.returncode != 2:
-                raise BaselineHelperError(
-                    (
-                        "Failed to compare the live database against a historical Prisma migration prefix: "
-                        f"{prefix_diff_result.combined_output or 'prisma migrate diff exited with an error'}"
-                    )
-                )
-        finally:
-            cleanup_temporary_path(prefix_diff_path, was_temporary=prefix_diff_path_was_temporary)
-            shutil.rmtree(prefix_root, ignore_errors=True)
-    return None
-
-
 async def inspect_database_state(
     *,
     database_url: str,
@@ -749,31 +702,6 @@ async def build_baseline_plan(
                         f"{prefix_diff_result.combined_output or 'prisma migrate diff exited with an error'}"
                     )
                 )
-            if classification.kind == "legacy_unbaselined":
-                matched_repo_prefix = find_matching_repo_prefix(
-                    migrations_dir=migrations_dir,
-                    repo_migration_names=repo_history_names,
-                    schema_path=schema_path,
-                    shadow_database_url=shadow_database_url,
-                    database_url=args.database_url,
-                    runner=runner,
-                )
-                if matched_repo_prefix is not None:
-                    planned_migration_names = matched_repo_prefix
-                    if diff_path_was_temporary and diff_path.exists():
-                        cleanup_temporary_path(diff_path, was_temporary=True)
-                        planned_diff_path = None
-                    else:
-                        planned_diff_path = diff_path
-                    return BaselinePlan(
-                        inspection=inspection,
-                        classification=classification,
-                        status_result=status_result,
-                        repo_migration_names=repo_history_names,
-                        pending_migration_names=planned_migration_names,
-                        diff_path=planned_diff_path,
-                        diff_path_was_temporary=diff_path_was_temporary,
-                    )
             raise BaselineHelperError(
                 (
                     "Refusing to baseline because the live database differs from the checked-in migration chain. "
@@ -833,24 +761,11 @@ async def run_plan_command(
         file=out_stream,
     )
     print_command_output(plan.status_result, stdout=out_stream, stderr=out_stream)
-    if (
-        plan.classification.kind == "legacy_unbaselined"
-        and plan.pending_migration_names != plan.repo_migration_names
-    ):
-        print(
-            "Live database matches a historical repo migration prefix with no recorded Prisma history.",
-            file=out_stream,
-        )
-        print(
-            "Would record this matching repo-prefix migration history as applied in lexical order:",
-            file=out_stream,
-        )
+    print("No schema drift detected between the live database and the checked-in migration chain.", file=out_stream)
+    if recorded_count > 0:
+        print("Would record these remaining migrations as applied in lexical order:", file=out_stream)
     else:
-        print("No schema drift detected between the live database and the checked-in migration chain.", file=out_stream)
-        if recorded_count > 0:
-            print("Would record these remaining migrations as applied in lexical order:", file=out_stream)
-        else:
-            print("Would record these migrations as applied in lexical order:", file=out_stream)
+        print("Would record these migrations as applied in lexical order:", file=out_stream)
     for migration_name in plan.pending_migration_names:
         print(f"  - {migration_name}", file=out_stream)
     print(

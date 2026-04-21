@@ -100,9 +100,7 @@ jobs:
       matrix:
         scenario:
           - fresh_install
-          - head_db_push_no_history_baseline
-          - legacy_v0_1_19_refusal
-          - previous_release_v0_1_20_rc2_upgrade
+          - previous_release_upgrade
 
     services:
       postgres:
@@ -142,9 +140,6 @@ jobs:
       - name: Run Prisma upgrade-path scenario
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/deltallm_upgrade_test
-          PRISMA_SHADOW_DATABASE_NAME: deltallm_upgrade_shadow
-          PRISMA_SHADOW_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/deltallm_upgrade_shadow
-          POSTGRES_SERVICE_CONTAINER_ID: ${{ job.services.postgres.id }}
         run: ./scripts/ci/prisma_upgrade_paths.sh ${{ matrix.scenario }}
 
   lint:

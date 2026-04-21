@@ -126,7 +126,7 @@ INSERT INTO "public"."deltallm_batch_job" (
     'finalizing'::"public"."DeltaLLM_BatchJobStatus",
     '00000000-0000-0000-0000-000000000201',
     'text-embedding-3-small',
-    '{"scenario":"previous_release_v0_1_20_rc2_upgrade","source_tag":"v0.1.20-rc2"}',
+    '{"scenario":"previous_release_upgrade","source_tag":"v0.1.20-rc2"}',
     1,
     '2026-04-02 09:10:00+00',
     'prev-release-key',
@@ -203,7 +203,7 @@ INSERT INTO "public"."deltallm_batch_create_session" (
     96,
     1,
     'text-embedding-3-small',
-    '{"scenario":"previous_release_v0_1_20_rc2_upgrade","surface":"create_session"}',
+    '{"scenario":"previous_release_upgrade","surface":"create_session"}',
     'prev-release-key',
     '2026-04-02 09:15:00+00',
     '2026-04-02 10:15:00+00'

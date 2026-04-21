@@ -1,5 +1,5 @@
 {
-  "scenario": "previous_release_v0_1_20_rc2_upgrade",
+  "scenario": "previous_release_upgrade",
   "source_tag": "v0.1.20-rc2",
   "source_commit": "5df60c85671121ac0fbbb1420402da8389d15a4f",
   "latest_fixture_migration": "20260414103000_batch_job_remove_validating_status",

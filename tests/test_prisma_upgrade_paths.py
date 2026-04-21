@@ -29,8 +29,7 @@ SCENARIO = os.getenv("PRISMA_UPGRADE_PATH_SCENARIO", "").strip() or "unknown"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "prisma"
 SCENARIO_METADATA_PATHS = {
-    "legacy_v0_1_19_refusal": FIXTURE_DIR / "legacy_v0_1_19_metadata.json",
-    "previous_release_v0_1_20_rc2_upgrade": FIXTURE_DIR / "previous_release_metadata.json",
+    "previous_release_upgrade": FIXTURE_DIR / "previous_release_metadata.json",
 }
 LATEST_REPO_MIGRATION = max(
     path.name
@@ -128,7 +127,7 @@ async def test_upgrade_path_records_prisma_migration_history(upgrade_db: Any) ->
     assert latest_migration_name == LATEST_REPO_MIGRATION
 
     metadata = _scenario_fixture_metadata()
-    if SCENARIO == "previous_release_v0_1_20_rc2_upgrade":
+    if SCENARIO == "previous_release_upgrade":
         assert metadata is not None
         assert metadata["latest_fixture_migration"] != LATEST_REPO_MIGRATION
         assert migration_count > int(metadata["migration_count"])
@@ -156,29 +155,7 @@ async def test_upgrade_path_seeded_fixture_rows_survive(upgrade_db: Any) -> None
 
     seed_rows = metadata["seed_rows"]
 
-    if SCENARIO == "legacy_v0_1_19_refusal":
-        rows = await upgrade_db.query_raw(
-            """
-            SELECT
-                (SELECT filename::text FROM deltallm_batch_file WHERE file_id = $1) AS batch_file_name,
-                (SELECT status::text FROM deltallm_batch_job WHERE batch_id = $2) AS batch_job_status,
-                (SELECT status::text FROM deltallm_batch_item WHERE item_id = $3) AS batch_item_status,
-                (SELECT status::text FROM deltallm_batch_completion_outbox WHERE completion_id = $4) AS completion_status
-            """,
-            seed_rows["batch_file_id"],
-            seed_rows["batch_job_id"],
-            seed_rows["batch_item_id"],
-            seed_rows["completion_id"],
-        )
-        row = dict(rows[0]) if rows else {}
-
-        assert row.get("batch_file_name") == "legacy-v019-input.jsonl"
-        assert row.get("batch_job_status") == BatchJobStatus.QUEUED
-        assert row.get("batch_item_status") == "completed"
-        assert row.get("completion_status") == BatchCompletionOutboxStatus.QUEUED
-        return
-
-    if SCENARIO == "previous_release_v0_1_20_rc2_upgrade":
+    if SCENARIO == "previous_release_upgrade":
         rows = await upgrade_db.query_raw(
             """
             SELECT
