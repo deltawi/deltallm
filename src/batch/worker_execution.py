@@ -5,6 +5,8 @@ from collections import deque
 from datetime import UTC, datetime
 import json
 import logging
+from math import ceil
+import random
 from time import perf_counter
 from typing import Any, Awaitable, Callable
 
@@ -27,6 +29,13 @@ from src.metrics import (
     observe_batch_microbatch_size,
     set_batch_worker_saturation,
 )
+from src.models.errors import (
+    ModelNotFoundError,
+    RateLimitError,
+    ServiceUnavailableError,
+    TimeoutError,
+    parse_retry_after_header,
+)
 from src.models.requests import EmbeddingRequest
 from src.providers.resolution import resolve_provider
 from src.routers.routing_decision import route_failover_kwargs
@@ -35,6 +44,7 @@ from src.batch.worker_types import _PreparedEmbeddingItem, _RequestShim, BatchWo
 
 logger = logging.getLogger(__name__)
 _COMPLETION_OUTBOX_MAX_ATTEMPTS = 5
+_NO_HEALTHY_DEPLOYMENTS_MARKER = "no healthy deployments available"
 
 
 class BatchExecutionEngine:
@@ -208,7 +218,7 @@ class BatchExecutionEngine:
         batch_id = job.batch_id
         retryable = self._is_retryable(exc) and item.attempts < self.config.max_attempts
         error_payload = {"message": str(exc), "type": exc.__class__.__name__}
-        retry_delay = min(30, max(1, item.attempts * 2))
+        retry_delay = self._retry_delay_seconds(item_attempts=item.attempts, exc=exc) if retryable else 0
         updated = await self.repository.mark_item_failed(
             item_id=item.item_id,
             worker_id=self.config.worker_id,
@@ -1033,9 +1043,41 @@ class BatchExecutionEngine:
                     hook_exc,
                 )
 
+    def _retry_delay_seconds(self, *, item_attempts: int, exc: Exception) -> int:
+        initial = max(1, int(self.config.retry_initial_seconds))
+        max_delay = max(initial, int(self.config.retry_max_seconds))
+        multiplier = max(1.0, float(self.config.retry_multiplier))
+        retry_after = self._retry_after_seconds(exc)
+        provider_delay = min(max_delay, retry_after) if retry_after is not None else None
+
+        exponent = max(0, item_attempts - 1)
+        backoff_delay = min(max_delay, ceil(initial * (multiplier**exponent)))
+        target_delay = max(backoff_delay, provider_delay or 0)
+        if not self.config.retry_jitter or target_delay <= 1:
+            return target_delay
+
+        lower_bound = max(1, provider_delay or 0, ceil(target_delay / 2))
+        return random.randint(lower_bound, target_delay)
+
+    def _retry_after_seconds(self, exc: Exception) -> int | None:
+        if isinstance(exc, RateLimitError):
+            retry_after = getattr(exc, "retry_after", None)
+            if retry_after is None:
+                return None
+            return max(0, int(retry_after))
+
+        if isinstance(exc, httpx.HTTPStatusError):
+            return parse_retry_after_header(exc.response.headers.get("Retry-After"))
+        return None
+
+    def _has_no_healthy_deployments_message(self, exc: Exception) -> bool:
+        return _NO_HEALTHY_DEPLOYMENTS_MARKER in str(exc).lower()
+
     def _is_retryable(self, exc: Exception) -> bool:
-        if isinstance(exc, httpx.TimeoutException):
+        if isinstance(exc, (httpx.TimeoutException, httpx.TransportError, TimeoutError, RateLimitError, ServiceUnavailableError)):
             return True
+        if isinstance(exc, ModelNotFoundError):
+            return self._has_no_healthy_deployments_message(exc)
         if isinstance(exc, httpx.HTTPStatusError):
             status_code = exc.response.status_code
             return status_code == 429 or status_code >= 500

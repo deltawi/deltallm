@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import json
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from src.batch.embedding_microbatch import (
@@ -15,6 +16,7 @@ from src.batch.embedding_microbatch import (
 )
 from src.batch.models import BatchItemRecord, BatchJobRecord, BatchJobStatus
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
+from src.models.errors import BudgetExceededError, ModelNotFoundError, RateLimitError, ServiceUnavailableError
 from src.models.requests import EmbeddingRequest
 
 
@@ -216,6 +218,159 @@ def _build_worker(*, deployment_model_info: dict | None = None, inject_route_pol
         config=BatchWorkerConfig(worker_id="w1"),
     )
     return worker, repo, budget, router, failover
+
+
+@pytest.mark.asyncio
+async def test_batch_retries_no_healthy_deployments_with_backoff(monkeypatch):
+    worker, repo, _, _, _ = _build_worker()
+    worker.config.max_attempts = 5
+
+    monkeypatch.setattr("src.batch.worker_execution.random.randint", lambda lower, upper: upper)
+
+    item = _build_item(item_id="i1", input_value="hello")
+    item.attempts = 1
+
+    await worker._execution_engine._mark_item_failed(
+        job=_build_job(),
+        item=item,
+        model_name=item.request_body["model"],
+        exc=ModelNotFoundError(message="No healthy deployments available for model 'text-embedding-3-small'"),
+        deployment_id=None,
+        started_at_monotonic=0.0,
+    )
+
+    assert repo.failed_calls == [
+        {
+            "item_id": "i1",
+            "worker_id": "w1",
+            "error_body": {
+                "message": "No healthy deployments available for model 'text-embedding-3-small'",
+                "type": "ModelNotFoundError",
+            },
+            "last_error": "No healthy deployments available for model 'text-embedding-3-small'",
+            "retryable": True,
+            "retry_delay_seconds": 5,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_batch_does_not_retry_regular_model_not_found_errors():
+    worker, repo, _, _, _ = _build_worker()
+    worker.config.max_attempts = 5
+
+    item = _build_item(item_id="i1", input_value="hello")
+    item.attempts = 1
+
+    await worker._execution_engine._mark_item_failed(
+        job=_build_job(),
+        item=item,
+        model_name=item.request_body["model"],
+        exc=ModelNotFoundError(message="Model not found"),
+        deployment_id=None,
+        started_at_monotonic=0.0,
+    )
+
+    assert repo.failed_calls[0]["retryable"] is False
+    assert repo.failed_calls[0]["retry_delay_seconds"] == 0
+
+
+@pytest.mark.asyncio
+async def test_batch_does_not_retry_budget_exceeded_errors():
+    worker, repo, _, _, _ = _build_worker()
+    worker.config.max_attempts = 5
+
+    item = _build_item(item_id="i1", input_value="hello")
+    item.attempts = 1
+
+    await worker._execution_engine._mark_item_failed(
+        job=_build_job(),
+        item=item,
+        model_name=item.request_body["model"],
+        exc=BudgetExceededError(message="Budget exceeded"),
+        deployment_id=None,
+        started_at_monotonic=0.0,
+    )
+
+    assert repo.failed_calls[0]["retryable"] is False
+    assert repo.failed_calls[0]["retry_delay_seconds"] == 0
+
+
+@pytest.mark.asyncio
+async def test_batch_retry_delay_caps_retry_after_header(monkeypatch):
+    worker, repo, _, _, _ = _build_worker()
+    worker.config.max_attempts = 5
+    worker.config.retry_max_seconds = 60
+
+    monkeypatch.setattr("src.batch.worker_execution.random.randint", lambda lower, upper: upper)
+
+    request = httpx.Request("POST", "http://localhost:9090/v1/embeddings")
+    response = httpx.Response(429, headers={"Retry-After": "1200"}, request=request)
+    error = httpx.HTTPStatusError("rate limited", request=request, response=response)
+
+    item = _build_item(item_id="i1", input_value="hello")
+    item.attempts = 1
+
+    await worker._execution_engine._mark_item_failed(
+        job=_build_job(),
+        item=item,
+        model_name=item.request_body["model"],
+        exc=error,
+        deployment_id=None,
+        started_at_monotonic=0.0,
+    )
+
+    assert repo.failed_calls[0]["retryable"] is True
+    assert repo.failed_calls[0]["retry_delay_seconds"] == 60
+
+
+@pytest.mark.asyncio
+async def test_batch_retry_delay_caps_rate_limit_retry_after(monkeypatch):
+    worker, repo, _, _, _ = _build_worker()
+    worker.config.max_attempts = 5
+    worker.config.retry_max_seconds = 45
+
+    monkeypatch.setattr("src.batch.worker_execution.random.randint", lambda lower, upper: upper)
+
+    item = _build_item(item_id="i1", input_value="hello")
+    item.attempts = 1
+
+    await worker._execution_engine._mark_item_failed(
+        job=_build_job(),
+        item=item,
+        model_name=item.request_body["model"],
+        exc=RateLimitError(message="rate limited", retry_after=300),
+        deployment_id=None,
+        started_at_monotonic=0.0,
+    )
+
+    assert repo.failed_calls[0]["retryable"] is True
+    assert repo.failed_calls[0]["retry_delay_seconds"] == 45
+
+
+@pytest.mark.asyncio
+async def test_batch_retry_delay_respects_config_without_jitter():
+    worker, repo, _, _, _ = _build_worker()
+    worker.config.max_attempts = 5
+    worker.config.retry_jitter = False
+    worker.config.retry_initial_seconds = 5
+    worker.config.retry_multiplier = 2.0
+    worker.config.retry_max_seconds = 300
+
+    item = _build_item(item_id="i1", input_value="hello")
+    item.attempts = 3
+
+    await worker._execution_engine._mark_item_failed(
+        job=_build_job(),
+        item=item,
+        model_name=item.request_body["model"],
+        exc=ServiceUnavailableError(message="upstream overloaded"),
+        deployment_id=None,
+        started_at_monotonic=0.0,
+    )
+
+    assert repo.failed_calls[0]["retryable"] is True
+    assert repo.failed_calls[0]["retry_delay_seconds"] == 20
 
 
 def test_resolve_effective_upstream_max_batch_inputs_defaults_to_one():

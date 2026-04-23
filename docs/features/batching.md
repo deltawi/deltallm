@@ -222,6 +222,10 @@ The batch worker runs as a background loop that claims jobs and executes items.
 | `embeddings_batch_item_claim_limit` | `20` | Maximum items claimed per worker iteration |
 | `embeddings_batch_item_buffer_multiplier` | `2` | Multiplier on concurrency for item prefetch. Effective claim limit is `max(item_claim_limit, concurrency * buffer_multiplier)` |
 | `embeddings_batch_max_attempts` | `3` | Maximum retry attempts for a failed item |
+| `embeddings_batch_retry_initial_seconds` | `5` | Initial retry delay for retryable item failures |
+| `embeddings_batch_retry_max_seconds` | `300` | Maximum retry delay for retryable item failures, including capped `Retry-After` hints |
+| `embeddings_batch_retry_multiplier` | `2.0` | Exponential backoff multiplier between retry attempts |
+| `embeddings_batch_retry_jitter` | `true` | Add jitter to spread retries and reduce synchronized retry spikes |
 
 #### Lease and heartbeat
 
@@ -375,9 +379,12 @@ Finalization assembles the output file from completed items. If storage writes f
 ### Items keep failing
 
 Each item is retried up to `embeddings_batch_max_attempts` times (default: 3).
+Retry delays use exponential backoff starting from `embeddings_batch_retry_initial_seconds`, capped by `embeddings_batch_retry_max_seconds`.
+Provider `Retry-After` hints are honored for retryable rate-limit failures, but are also capped by `embeddings_batch_retry_max_seconds`.
 
 - Open the batch detail in the admin UI to see per-item error messages
 - Common causes: invalid model name, provider rate limits, upstream timeouts
+- Budget exhaustion is treated as terminal and is not retried
 - Check that the model deployment is healthy and reachable
 
 ## Known Limitations

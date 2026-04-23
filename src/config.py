@@ -356,6 +356,10 @@ class GeneralSettings(BaseModel):
     embeddings_batch_max_pending_batches_per_scope: int = Field(default=20, ge=0)
     embeddings_batch_item_claim_limit: int = 20
     embeddings_batch_max_attempts: int = 3
+    embeddings_batch_retry_initial_seconds: int = Field(default=5, ge=1)
+    embeddings_batch_retry_max_seconds: int = Field(default=300, ge=1)
+    embeddings_batch_retry_multiplier: float = Field(default=2.0, ge=1.0)
+    embeddings_batch_retry_jitter: bool = True
     batch_completed_artifact_retention_days: int = 7
     batch_failed_artifact_retention_days: int = 14
     batch_metadata_retention_days: int = 30
