@@ -239,6 +239,39 @@ async def test_batch_job_status_column_uses_final_enum_contract(batch_db) -> Non
 
 
 @pytest.mark.asyncio
+async def test_batch_job_status_enum_query_shape_works_against_real_postgres(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        created_by_organization_id=None,
+        expires_at=None,
+        status="queued",
+    )
+
+    assert job is not None
+    await _assert_final_batch_job_status_contract(batch_db)
+
+    rows = await batch_db.query_raw(
+        """
+        SELECT batch_id, status
+        FROM deltallm_batch_job
+        WHERE status = $1::"DeltaLLM_BatchJobStatus"
+        """,
+        "queued",
+    )
+
+    assert [str(dict(row)["batch_id"]) for row in rows] == [job.batch_id]
+    assert [str(dict(row)["status"]) for row in rows] == ["queued"]
+
+
+@pytest.mark.asyncio
 async def test_batch_job_status_reconciliation_converts_text_backed_column(batch_db) -> None:
     repository = BatchRepository(batch_db)
     input_file_id = await _seed_batch_file(repository)
