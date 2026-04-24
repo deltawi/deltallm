@@ -1,0 +1,225 @@
+nameOverride: ""
+fullnameOverride: ""
+
+replicaCount: 2
+revisionHistoryLimit: 10
+minReadySeconds: 5
+
+image:
+  repository: deltallm/deltallm
+  pullPolicy: IfNotPresent
+  tag: "v0.1.20-rc3"
+  pullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  automountServiceAccountToken: false
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext: {}
+securityContext: {}
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
+service:
+  type: ClusterIP
+  port: 4000
+  annotations: {}
+  labels: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  tls: []
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+probes:
+  startup:
+    enabled: true
+    path: /health/readiness
+    failureThreshold: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+  liveness:
+    path: /health/liveliness
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    path: /health/readiness
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: false
+  ingress: []
+  egress: []
+  allowDns: true
+
+priorityClassName: ""
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
+command: []
+args: []
+env: []
+envFrom: []
+extraVolumes: []
+extraVolumeMounts: []
+
+dependencyWait:
+  enabled: true
+  timeoutSeconds: 180
+  periodSeconds: 2
+
+secret:
+  existingSecret: ""
+  keys:
+    masterKey: master-key
+    saltKey: salt-key
+  values:
+    masterKey: ""
+    saltKey: ""
+
+runtime:
+  database:
+    url: ""
+    existingSecret:
+      name: ""
+      urlKey: DATABASE_URL
+  redis:
+    url: ""
+    existingSecret:
+      name: ""
+      urlKey: REDIS_URL
+
+config:
+  model_list: []
+  router_settings:
+    routing_strategy: simple-shuffle
+    num_retries: 3
+    retry_after: 1
+    timeout: 300
+    cooldown_time: 60
+    allowed_fails: 0
+    enable_pre_call_checks: false
+    model_group_alias: {}
+  deltallm_settings:
+    fallbacks: []
+    context_window_fallbacks: []
+    content_policy_fallbacks: []
+    guardrails: []
+    success_callback: []
+    failure_callback: []
+    callbacks: []
+    callback_settings: {}
+    turn_off_message_logging: false
+  general_settings:
+    deltallm_key_header_name: Authorization
+    cache_enabled: false
+    cache_backend: memory
+    cache_ttl: 3600
+    cache_max_size: 10000
+    background_health_checks: true
+    health_check_interval: 300
+    health_check_model: gpt-3.5-turbo
+    model_deployment_source: hybrid
+    model_deployment_bootstrap_from_config: true
+
+s3:
+  enabled: false
+  bucket: ""
+  region: us-east-1
+  prefix: deltallm-logs/
+  compression: ""
+  accessKeyId: ""
+  secretAccessKey: ""
+  existingSecret:
+    name: ""
+    accessKeyIdKey: aws-access-key-id
+    secretAccessKeyKey: aws-secret-access-key
+
+prometheus:
+  podAnnotations:
+    enabled: true
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+
+migrationJob:
+  enabled: false
+  annotations: {}
+  hook:
+    enabled: false
+    deletePolicy: before-hook-creation,hook-succeeded
+  backoffLimit: 4
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 300
+  resources: {}
+  command:
+    - sh
+    - -c
+  args:
+    - |
+      prisma migrate deploy --schema=./prisma/schema.prisma || prisma db push --schema=./prisma/schema.prisma --accept-data-loss
+
+postgresql:
+  enabled: false
+  image:
+    tag: latest
+  auth:
+    username: deltallm
+    password: ""
+    database: deltallm
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+
+redis:
+  enabled: false
+  image:
+    tag: latest
+  auth:
+    enabled: false
+    password: ""
+  master:
+    persistence:
+      enabled: true
+      size: 5Gi
