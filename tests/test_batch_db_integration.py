@@ -183,15 +183,25 @@ async def _enum_labels(db: Any, type_name: str) -> list[str]:
 
 
 async def _seed_raw_batch_job(db: Any, *, input_file_id: str, batch_id: str, status: str) -> None:
+    column = await _batch_job_status_column_contract(db)
+    status_udt_name = str(column.get("udt_name") or "")
+
+    if status_udt_name == "text":
+        status_value_sql = "$2"
+    elif status_udt_name in {"DeltaLLM_BatchJobStatus", "DeltaLLM_BatchJobStatus_next"}:
+        status_value_sql = f'$2::"{status_udt_name}"'
+    else:  # pragma: no cover - defensive branch for unexpected schema drift in tests
+        raise AssertionError(f"unexpected deltallm_batch_job.status type in test setup: {status_udt_name}")
+
     await db.execute_raw(
-        """
+        f"""
         INSERT INTO deltallm_batch_job (
             batch_id, endpoint, status, execution_mode, input_file_id, total_items
         )
         VALUES (
             $1,
             '/v1/embeddings',
-            $2,
+            {status_value_sql},
             'managed_internal',
             $3,
             0
