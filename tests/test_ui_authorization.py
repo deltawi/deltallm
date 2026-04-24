@@ -413,27 +413,34 @@ async def test_list_batches_exposes_repair_capabilities_for_updating_scope(clien
 
 
 @pytest.mark.asyncio
-async def test_list_batches_status_filter_uses_enum_safe_query(client, test_app, monkeypatch):
+@pytest.mark.parametrize(
+    ("status_filter", "expected_batch_id"),
+    [
+        ("queued", "batch-queued"),
+        ("in_progress", "batch-in-progress"),
+    ],
+)
+async def test_list_batches_status_filter_uses_text_safe_query(client, test_app, monkeypatch, status_filter, expected_batch_id):
     class FilteredBatchDB(FakeAuthorizationDB):
         async def query_raw(self, query: str, *params):
             if 'COUNT(*) AS total FROM deltallm_batch_job j' in query:
-                if 'j.status =' in query:
-                    assert '::"DeltaLLM_BatchJobStatus"' in query
-                    return [{"total": 1 if "queued" in params else 0}]
+                if "j.status::text =" in query:
+                    assert '::"DeltaLLM_BatchJobStatus"' not in query
+                    return [{"total": 1 if status_filter in params else 0}]
                 return [{"total": len(self.batches)}]
             if "FROM deltallm_batch_job j" in query and "LEFT JOIN deltallm_teamtable t" in query:
                 if "WHERE j.batch_id = $1" in query:
                     row = self.batches.get(str(params[0]))
                     return [row] if row else []
-                if 'j.status =' in query:
-                    assert '::"DeltaLLM_BatchJobStatus"' in query
+                if "j.status::text =" in query:
+                    assert '::"DeltaLLM_BatchJobStatus"' not in query
                     return [{
                         **self.batches["batch-1"],
-                        "batch_id": "batch-queued",
-                        "status": "queued",
-                        "in_progress_items": 0,
-                        "completed_items": 0,
-                    }] if "queued" in params else []
+                        "batch_id": expected_batch_id,
+                        "status": status_filter,
+                        "in_progress_items": 0 if status_filter == "queued" else self.batches["batch-1"]["in_progress_items"],
+                        "completed_items": 0 if status_filter == "queued" else self.batches["batch-1"]["completed_items"],
+                    }] if status_filter in params else []
                 return [self.batches["batch-1"]]
             return await super().query_raw(query, *params)
 
@@ -451,13 +458,13 @@ async def test_list_batches_status_filter_uses_enum_safe_query(client, test_app,
         ),
     )
 
-    response = await client.get("/ui/api/batches?status=queued", headers={"Authorization": "Bearer mk-test"})
+    response = await client.get(f"/ui/api/batches?status={status_filter}", headers={"Authorization": "Bearer mk-test"})
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["pagination"]["total"] == 1
-    assert payload["data"][0]["batch_id"] == "batch-queued"
-    assert payload["data"][0]["status"] == "queued"
+    assert payload["data"][0]["batch_id"] == expected_batch_id
+    assert payload["data"][0]["status"] == status_filter
 
 
 @pytest.mark.asyncio

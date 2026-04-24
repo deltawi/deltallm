@@ -23,6 +23,7 @@ from src.services.ui_authorization import build_batch_capabilities
 
 router = APIRouter(tags=["Admin Batches"])
 logger = logging.getLogger(__name__)
+FILTERABLE_BATCH_STATUSES = frozenset({"queued", "in_progress", "finalizing", "completed", "failed", "cancelled", "expired"})
 
 
 class MarkBatchFailedRequest(BaseModel):
@@ -148,10 +149,9 @@ async def list_batches(
         params.append(f"%{search}%")
         clauses.append(f"(j.batch_id ILIKE ${len(params)} OR j.model ILIKE ${len(params)})")
 
-    valid_statuses = {"queued", "in_progress", "finalizing", "completed", "failed", "cancelled", "expired"}
-    if status_filter and status_filter in valid_statuses:
+    if status_filter and status_filter in FILTERABLE_BATCH_STATUSES:
         params.append(status_filter)
-        clauses.append(f'j.status = ${len(params)}::"DeltaLLM_BatchJobStatus"')
+        clauses.append(f"j.status::text = ${len(params)}")
 
     where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 
