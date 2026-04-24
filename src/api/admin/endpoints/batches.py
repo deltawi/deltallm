@@ -13,7 +13,7 @@ from src.auth.roles import Permission
 from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, to_json_value, get_auth_scope
 from src.audit.actions import AuditAction
 from src.batch.repository import BatchRepository
-from src.batch.models import decode_operator_failed_reason, encode_operator_failed_reason
+from src.batch.models import BATCH_JOB_STATUS_SET, decode_operator_failed_reason, encode_operator_failed_reason
 from src.metrics import (
     increment_batch_repair_action,
     publish_batch_runtime_summary,
@@ -23,7 +23,6 @@ from src.services.ui_authorization import build_batch_capabilities
 
 router = APIRouter(tags=["Admin Batches"])
 logger = logging.getLogger(__name__)
-FILTERABLE_BATCH_STATUSES = frozenset({"queued", "in_progress", "finalizing", "completed", "failed", "cancelled", "expired"})
 
 
 class MarkBatchFailedRequest(BaseModel):
@@ -149,7 +148,7 @@ async def list_batches(
         params.append(f"%{search}%")
         clauses.append(f"(j.batch_id ILIKE ${len(params)} OR j.model ILIKE ${len(params)})")
 
-    if status_filter and status_filter in FILTERABLE_BATCH_STATUSES:
+    if status_filter and status_filter in BATCH_JOB_STATUS_SET:
         params.append(status_filter)
         clauses.append(f"j.status::text = ${len(params)}")
 
