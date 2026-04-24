@@ -19,6 +19,8 @@ class FakeAuditDB:
         if "from deltallm_auditpayload" in normalized:
             return [{"payload_id": "pl-1", "event_id": "evt-1", "kind": "request", "content_json": {"foo": "bar"}}]
         if "limit 1" in normalized and "from deltallm_auditevent" in normalized:
+            if params[-1] == "missing":
+                return []
             return [{"event_id": "evt-1", "action": "AUTH_INTERNAL_LOGIN", "organization_id": "org-1"}]
         if "from deltallm_auditevent" in normalized:
             return [
@@ -67,11 +69,29 @@ async def test_audit_event_detail_includes_payloads(client, test_app):
     assert payload["event_id"] == "evt-1"
     assert payload["payloads"][0]["payload_id"] == "pl-1"
     event_query, event_params = fake_db.calls[0]
-    assert "event_id = $1::uuid" in event_query or "event_id = $2::uuid" in event_query
+    assert "event_id::text" in event_query
+    assert "::uuid" not in event_query
     assert event_params[-1] == "evt-1"
     payload_query, payload_params = fake_db.calls[1]
-    assert "where event_id = $1::uuid" in " ".join(payload_query.lower().split())
+    assert "where event_id::text = $1" in " ".join(payload_query.lower().split())
+    assert "::uuid" not in payload_query
     assert payload_params == ("evt-1",)
+
+
+@pytest.mark.asyncio
+async def test_audit_event_detail_missing_event_returns_404(client, test_app):
+    fake_db = FakeAuditDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    test_app.state.settings.master_key = "mk-test"
+
+    response = await client.get("/ui/api/audit/events/missing", headers={"Authorization": "Bearer mk-test"})
+
+    assert response.status_code == 404
+    assert len(fake_db.calls) == 1
+    event_query, event_params = fake_db.calls[0]
+    assert "event_id::text" in event_query
+    assert "::uuid" not in event_query
+    assert event_params[-1] == "missing"
 
 
 @pytest.mark.asyncio
