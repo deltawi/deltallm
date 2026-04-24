@@ -98,8 +98,11 @@ class DynamicConfigManager:
                     except json.JSONDecodeError:
                         data = {}
 
-                if data.get("type") in {"config_updated", "model_updated"}:
+                event_type = data.get("type")
+                if event_type == "config_updated":
                     await self._reload_config()
+                elif event_type == "model_updated":
+                    await self._reload_config(forced_modified_keys=("model_list",))
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -112,18 +115,26 @@ class DynamicConfigManager:
                 pass
             await pubsub.close()
 
-    async def _reload_config(self) -> None:
+    async def _reload_config(self, *, forced_modified_keys: tuple[str, ...] = ()) -> None:
         old_config = self._config.model_dump(mode="python", exclude_none=True)
         self._db_config = await self._load_from_db()
         new_app_config = build_app_config(self.file_config, self._db_config, self.secret_resolver)
         new_config = new_app_config.model_dump(mode="python", exclude_none=True)
 
         changes = self._detect_changes(old_config, new_config)
+        if forced_modified_keys:
+            # Some runtime changes are driven by repository state rather than the
+            # persisted config blob. Merge in the synthetic keys so subscribers
+            # still refresh the relevant in-memory state on peer pods.
+            changes["modified"] = sorted(set(changes["modified"]) | set(forced_modified_keys))
         self._config = new_app_config
 
         if not any(changes.values()):
             return
 
+        await self._notify_subscribers(changes)
+
+    async def _notify_subscribers(self, changes: dict[str, list[str]]) -> None:
         for callback in list(self._subscribers):
             try:
                 result = callback(self._config, changes)
