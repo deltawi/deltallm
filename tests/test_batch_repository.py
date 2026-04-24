@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from src.batch.models import BatchJobStatus
 from src.batch.repository import BatchRepository
 
 
@@ -268,7 +269,7 @@ async def test_create_job_defaults_to_queued_status() -> None:
     )
 
     assert '::"DeltaLLM_BatchJobStatus"' in prisma.sql
-    assert prisma.params[2] == "queued"
+    assert prisma.params[2] == BatchJobStatus.QUEUED.value
 
 
 @pytest.mark.asyncio
@@ -308,7 +309,7 @@ async def test_attach_artifacts_and_finalize_casts_status_parameter_to_enum() ->
 
     assert finalized is None
     assert 'status = $4::"DeltaLLM_BatchJobStatus"' in prisma.sql
-    assert prisma.params[3] == "completed"
+    assert prisma.params[3] == BatchJobStatus.COMPLETED.value
 
 
 @pytest.mark.asyncio
