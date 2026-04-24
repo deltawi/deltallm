@@ -190,6 +190,60 @@ async def test_dynamic_config_merges_db_and_notifies_subscribers(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_dynamic_config_model_updated_notifies_subscribers_without_config_diff():
+    redis = FakeRedis()
+    manager = DynamicConfigManager(db_client=FakeDB(), redis_client=redis, file_config={})
+
+    called: list[dict[str, list[str]]] = []
+
+    async def on_change(new_config, changes):
+        del new_config
+        called.append(changes)
+
+    manager.subscribe(on_change)
+    await manager.initialize()
+
+    await redis.pubsub_obj.queue.put(
+        {
+            "type": "message",
+            "data": json.dumps({"type": "model_updated"}),
+        }
+    )
+    await asyncio.sleep(0.05)
+
+    assert called == [{"added": [], "removed": [], "modified": ["model_list"]}]
+
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_config_config_updated_without_diff_is_noop():
+    redis = FakeRedis()
+    manager = DynamicConfigManager(db_client=FakeDB(), redis_client=redis, file_config={})
+
+    called: list[dict[str, list[str]]] = []
+
+    async def on_change(new_config, changes):
+        del new_config
+        called.append(changes)
+
+    manager.subscribe(on_change)
+    await manager.initialize()
+
+    await redis.pubsub_obj.queue.put(
+        {
+            "type": "message",
+            "data": json.dumps({"type": "config_updated"}),
+        }
+    )
+    await asyncio.sleep(0.05)
+
+    assert called == []
+
+    await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_model_hot_reload_manager_updates_runtime_registries():
     settings = SimpleNamespace(
         openai_api_key="provider-key",
@@ -374,6 +428,102 @@ async def test_model_hot_reload_manager_model_crud_refreshes_runtime_registry():
     assert removed is True
     assert "gpt-4.1-mini" not in app.state.model_registry
     assert route_group_cache.invalidate_calls == 3
+
+    await dynamic.close()
+
+
+@pytest.mark.asyncio
+async def test_model_hot_reload_manager_reloads_runtime_on_model_updated_event():
+    settings = SimpleNamespace(
+        openai_api_key="provider-key",
+        openai_base_url="https://api.openai.com/v1",
+        salt_key="test-salt",
+    )
+    initial_model_registry = {
+        "gpt-4o-mini": [
+            {
+                "deployment_id": "old-dep",
+                "deltallm_params": {"model": "openai/gpt-4o-mini", "api_key": "provider-key"},
+                "model_info": {},
+            }
+        ]
+    }
+    deployment_registry = build_deployment_registry(initial_model_registry)
+    state_backend = RedisStateBackend(None)
+    router = Router(
+        strategy=RoutingStrategy.SIMPLE_SHUFFLE,
+        state_backend=state_backend,
+        config=RouterConfig(),
+        deployment_registry=deployment_registry,
+    )
+    cooldown_manager = CooldownManager(state_backend=state_backend)
+    failover_manager = FailoverManager(
+        config=FallbackConfig(),
+        deployment_registry=deployment_registry,
+        state_backend=state_backend,
+        cooldown_manager=cooldown_manager,
+    )
+    health_handler = HealthEndpointHandler(deployment_registry=deployment_registry, state_backend=state_backend)
+    health_checker = BackgroundHealthChecker(
+        config=HealthCheckConfig(enabled=False),
+        deployment_registry=deployment_registry,
+        state_backend=state_backend,
+        checker=lambda _: asyncio.sleep(0, result=True),
+    )
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            settings=settings,
+            app_config=AppConfig.model_validate({}),
+            model_registry=initial_model_registry,
+            router=router,
+            failover_manager=failover_manager,
+            router_health_handler=health_handler,
+            background_health_checker=health_checker,
+            cooldown_manager=cooldown_manager,
+            guardrail_registry=SimpleNamespace(load_from_config=lambda _: None),
+            callback_manager=SimpleNamespace(load_from_settings=lambda **_: None),
+            turn_off_message_logging=False,
+        )
+    )
+    redis = FakeRedis()
+    dynamic = DynamicConfigManager(db_client=FakeDB(), redis_client=redis, file_config={})
+    await dynamic.initialize()
+    repo = InMemoryModelRepository(
+        records=[
+            ModelDeploymentRecord(
+                deployment_id="old-dep",
+                model_name="gpt-4o-mini",
+                deltallm_params={"model": "openai/gpt-4o-mini"},
+                model_info={},
+            )
+        ]
+    )
+    ModelHotReloadManager(
+        app=app,
+        dynamic_config=dynamic,
+        model_repository=repo,
+        route_group_cache=FakeRouteGroupCache(),
+    )
+
+    repo.records.append(
+        ModelDeploymentRecord(
+            deployment_id="new-dep",
+            model_name="gpt-4.1-mini",
+            deltallm_params={"model": "openai/gpt-4.1-mini"},
+            model_info={"weight": 2},
+        )
+    )
+
+    await redis.pubsub_obj.queue.put(
+        {
+            "type": "message",
+            "data": json.dumps({"type": "model_updated"}),
+        }
+    )
+    await asyncio.sleep(0.05)
+
+    assert "gpt-4.1-mini" in app.state.model_registry
+    assert app.state.router.deployment_registry["gpt-4.1-mini"][0].deployment_id == "new-dep"
 
     await dynamic.close()
 
