@@ -12,6 +12,7 @@ from src.batch.models import (
     BatchItemCreate,
     BatchItemRecord,
     BatchJobRecord,
+    BatchJobStatus,
 )
 from src.batch.repositories import (
     BatchCompletionOutboxRepository,
@@ -83,7 +84,7 @@ class BatchRepository:
         created_by_organization_id: str | None = None,
         expires_at: datetime | None = None,
         execution_mode: str = "managed_internal",
-        status: str = "queued",
+        status: str | BatchJobStatus = BatchJobStatus.QUEUED,
         total_items: int = 0,
     ) -> BatchJobRecord | None:
         return await self.jobs.create_job(
@@ -337,7 +338,7 @@ class BatchRepository:
         batch_id: str,
         output_file_id: str | None,
         error_file_id: str | None,
-        final_status: str,
+        final_status: str | BatchJobStatus,
         worker_id: str | None = None,
     ) -> BatchJobRecord | None:
         return await self.jobs.attach_artifacts_and_finalize(

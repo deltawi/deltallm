@@ -26,7 +26,7 @@ from src.batch.create import (
 )
 from src.batch.create.service import BatchCreateSessionService
 from src.batch.cleanup import BatchCleanupConfig, BatchRetentionCleanupWorker
-from src.batch.models import BatchCompletionOutboxCreate, BatchItemCreate
+from src.batch.models import BATCH_JOB_STATUS_VALUES, BatchCompletionOutboxCreate, BatchItemCreate
 from src.batch.models import encode_operator_failed_reason
 from src.batch.repository import BatchRepository
 from src.batch.service import BatchService
@@ -42,6 +42,13 @@ except Exception:  # pragma: no cover
 
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+BATCH_JOB_STATUS_RECONCILIATION_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "prisma"
+    / "migrations"
+    / "20260424120000_batch_job_status_contract_reconciliation"
+    / "migration.sql"
+)
 
 
 class _Upload:
@@ -136,6 +143,85 @@ async def _reset_batch_tables(db: Any) -> None:
     await db.execute_raw("DELETE FROM deltallm_batch_file")
 
 
+def _batch_job_status_reconciliation_sql() -> str:
+    return BATCH_JOB_STATUS_RECONCILIATION_MIGRATION_PATH.read_text()
+
+
+async def _execute_batch_job_status_reconciliation(db: Any) -> None:
+    await db.execute_raw(_batch_job_status_reconciliation_sql())
+
+
+async def _batch_job_status_column_contract(db: Any) -> dict[str, Any]:
+    rows = await db.query_raw(
+        """
+        SELECT
+            data_type,
+            udt_name,
+            column_default
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'deltallm_batch_job'
+          AND column_name = 'status'
+        """
+    )
+    assert rows
+    return dict(rows[0])
+
+
+async def _enum_labels(db: Any, type_name: str) -> list[str]:
+    rows = await db.query_raw(
+        """
+        SELECT e.enumlabel
+        FROM pg_enum e
+        JOIN pg_type t ON t.oid = e.enumtypid
+        WHERE t.typname = $1
+        ORDER BY e.enumsortorder
+        """,
+        type_name,
+    )
+    return [str(row["enumlabel"]) for row in rows]
+
+
+async def _seed_raw_batch_job(db: Any, *, input_file_id: str, batch_id: str, status: str) -> None:
+    column = await _batch_job_status_column_contract(db)
+    status_udt_name = str(column.get("udt_name") or "")
+
+    if status_udt_name == "text":
+        status_value_sql = "$2"
+    elif status_udt_name in {"DeltaLLM_BatchJobStatus", "DeltaLLM_BatchJobStatus_next"}:
+        status_value_sql = f'$2::"{status_udt_name}"'
+    else:  # pragma: no cover - defensive branch for unexpected schema drift in tests
+        raise AssertionError(f"unexpected deltallm_batch_job.status type in test setup: {status_udt_name}")
+
+    await db.execute_raw(
+        f"""
+        INSERT INTO deltallm_batch_job (
+            batch_id, endpoint, status, execution_mode, input_file_id, total_items
+        )
+        VALUES (
+            $1,
+            '/v1/embeddings',
+            {status_value_sql},
+            'managed_internal',
+            $3,
+            0
+        )
+        """,
+        batch_id,
+        status,
+        input_file_id,
+    )
+
+
+async def _assert_final_batch_job_status_contract(db: Any) -> None:
+    column = await _batch_job_status_column_contract(db)
+    assert column["udt_name"] == "DeltaLLM_BatchJobStatus"
+    assert column["data_type"] == "USER-DEFINED"
+    assert column["column_default"] is None
+    assert await _enum_labels(db, "DeltaLLM_BatchJobStatus") == list(BATCH_JOB_STATUS_VALUES)
+    assert await _enum_labels(db, "DeltaLLM_BatchJobStatus_next") == []
+
+
 @pytest.fixture
 async def batch_db():
     db = await _connect_prisma()
@@ -155,6 +241,247 @@ async def batch_db():
     finally:
         await _reset_batch_tables(db)
         await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_batch_job_status_column_uses_final_enum_contract(batch_db) -> None:
+    await _assert_final_batch_job_status_contract(batch_db)
+
+
+@pytest.mark.asyncio
+async def test_batch_job_status_enum_query_shape_works_against_real_postgres(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        created_by_organization_id=None,
+        expires_at=None,
+        status="queued",
+    )
+
+    assert job is not None
+    await _assert_final_batch_job_status_contract(batch_db)
+
+    rows = await batch_db.query_raw(
+        """
+        SELECT batch_id, status
+        FROM deltallm_batch_job
+        WHERE status = $1::"DeltaLLM_BatchJobStatus"
+        """,
+        "queued",
+    )
+
+    assert [str(dict(row)["batch_id"]) for row in rows] == [job.batch_id]
+    assert [str(dict(row)["status"]) for row in rows] == ["queued"]
+
+
+@pytest.mark.asyncio
+async def test_batch_job_status_reconciliation_converts_text_backed_column(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+
+    try:
+        await batch_db.execute_raw(
+            """
+            ALTER TABLE deltallm_batch_job
+            ALTER COLUMN status DROP DEFAULT
+            """
+        )
+        await batch_db.execute_raw(
+            """
+            ALTER TABLE deltallm_batch_job
+            ALTER COLUMN status TYPE text
+            USING (status::text)
+            """
+        )
+        await _seed_raw_batch_job(
+            batch_db,
+            input_file_id=input_file_id,
+            batch_id="batch-text-status",
+            status="queued",
+        )
+
+        column = await _batch_job_status_column_contract(batch_db)
+        assert column["udt_name"] == "text"
+
+        await _execute_batch_job_status_reconciliation(batch_db)
+
+        await _assert_final_batch_job_status_contract(batch_db)
+    finally:
+        await _reset_batch_tables(batch_db)
+        await _execute_batch_job_status_reconciliation(batch_db)
+
+
+@pytest.mark.asyncio
+async def test_batch_job_status_reconciliation_converts_legacy_enum_shape(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+
+    try:
+        await batch_db.execute_raw(
+            """
+            CREATE TYPE "DeltaLLM_BatchJobStatus_legacy" AS ENUM (
+                'validating',
+                'queued',
+                'in_progress',
+                'finalizing',
+                'completed',
+                'failed',
+                'cancelled',
+                'expired'
+            )
+            """
+        )
+        await batch_db.execute_raw(
+            """
+            ALTER TABLE deltallm_batch_job
+            ALTER COLUMN status DROP DEFAULT
+            """
+        )
+        await batch_db.execute_raw(
+            """
+            ALTER TABLE deltallm_batch_job
+            ALTER COLUMN status TYPE "DeltaLLM_BatchJobStatus_legacy"
+            USING (status::text::"DeltaLLM_BatchJobStatus_legacy")
+            """
+        )
+        await batch_db.execute_raw('DROP TYPE "DeltaLLM_BatchJobStatus"')
+        await batch_db.execute_raw('ALTER TYPE "DeltaLLM_BatchJobStatus_legacy" RENAME TO "DeltaLLM_BatchJobStatus"')
+        await _seed_raw_batch_job(
+            batch_db,
+            input_file_id=input_file_id,
+            batch_id="batch-legacy-enum",
+            status="queued",
+        )
+
+        assert await _enum_labels(batch_db, "DeltaLLM_BatchJobStatus") == [
+            "validating",
+            *list(BATCH_JOB_STATUS_VALUES),
+        ]
+
+        await _execute_batch_job_status_reconciliation(batch_db)
+
+        await _assert_final_batch_job_status_contract(batch_db)
+    finally:
+        await _reset_batch_tables(batch_db)
+        await _execute_batch_job_status_reconciliation(batch_db)
+
+
+@pytest.mark.asyncio
+async def test_batch_job_status_reconciliation_finishes_partial_next_type_cutover(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+
+    try:
+        await batch_db.execute_raw(
+            """
+            CREATE TYPE "DeltaLLM_BatchJobStatus_legacy" AS ENUM (
+                'validating',
+                'queued',
+                'in_progress',
+                'finalizing',
+                'completed',
+                'failed',
+                'cancelled',
+                'expired'
+            )
+            """
+        )
+        await batch_db.execute_raw(
+            """
+            ALTER TABLE deltallm_batch_job
+            ALTER COLUMN status DROP DEFAULT
+            """
+        )
+        await batch_db.execute_raw(
+            """
+            ALTER TABLE deltallm_batch_job
+            ALTER COLUMN status TYPE "DeltaLLM_BatchJobStatus_legacy"
+            USING (status::text::"DeltaLLM_BatchJobStatus_legacy")
+            """
+        )
+        await batch_db.execute_raw('DROP TYPE "DeltaLLM_BatchJobStatus"')
+        await batch_db.execute_raw('ALTER TYPE "DeltaLLM_BatchJobStatus_legacy" RENAME TO "DeltaLLM_BatchJobStatus"')
+        await batch_db.execute_raw(
+            """
+            CREATE TYPE "DeltaLLM_BatchJobStatus_next" AS ENUM (
+                'queued',
+                'in_progress',
+                'finalizing',
+                'completed',
+                'failed',
+                'cancelled',
+                'expired'
+            )
+            """
+        )
+        await batch_db.execute_raw(
+            """
+            ALTER TABLE deltallm_batch_job
+            ALTER COLUMN status TYPE "DeltaLLM_BatchJobStatus_next"
+            USING (status::text::"DeltaLLM_BatchJobStatus_next")
+            """
+        )
+        await _seed_raw_batch_job(
+            batch_db,
+            input_file_id=input_file_id,
+            batch_id="batch-partial-next-cutover",
+            status="queued",
+        )
+
+        column = await _batch_job_status_column_contract(batch_db)
+        assert column["udt_name"] == "DeltaLLM_BatchJobStatus_next"
+        assert await _enum_labels(batch_db, "DeltaLLM_BatchJobStatus") == [
+            "validating",
+            *list(BATCH_JOB_STATUS_VALUES),
+        ]
+        assert await _enum_labels(batch_db, "DeltaLLM_BatchJobStatus_next") == list(BATCH_JOB_STATUS_VALUES)
+
+        await _execute_batch_job_status_reconciliation(batch_db)
+
+        await _assert_final_batch_job_status_contract(batch_db)
+    finally:
+        await _reset_batch_tables(batch_db)
+        await _execute_batch_job_status_reconciliation(batch_db)
+
+
+@pytest.mark.asyncio
+async def test_batch_job_status_reconciliation_rejects_invalid_text_values(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+
+    try:
+        await batch_db.execute_raw(
+            """
+            ALTER TABLE deltallm_batch_job
+            ALTER COLUMN status DROP DEFAULT
+            """
+        )
+        await batch_db.execute_raw(
+            """
+            ALTER TABLE deltallm_batch_job
+            ALTER COLUMN status TYPE text
+            USING (status::text)
+            """
+        )
+        await _seed_raw_batch_job(
+            batch_db,
+            input_file_id=input_file_id,
+            batch_id="batch-invalid-text-status",
+            status="broken",
+        )
+
+        with pytest.raises(Exception, match="invalid existing values"):
+            await _execute_batch_job_status_reconciliation(batch_db)
+    finally:
+        await _reset_batch_tables(batch_db)
+        await _execute_batch_job_status_reconciliation(batch_db)
 
 
 async def _create_input_file(service: BatchService, *, auth: UserAPIKeyAuth, payload: bytes) -> str:

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 
 
-class BatchJobStatus:
+class BatchJobStatus(StrEnum):
     QUEUED = "queued"
     IN_PROGRESS = "in_progress"
     FINALIZING = "finalizing"
@@ -15,23 +16,19 @@ class BatchJobStatus:
     EXPIRED = "expired"
 
 
-BATCH_JOB_STATUSES = (
-    BatchJobStatus.QUEUED,
-    BatchJobStatus.IN_PROGRESS,
-    BatchJobStatus.FINALIZING,
-    BatchJobStatus.COMPLETED,
-    BatchJobStatus.FAILED,
-    BatchJobStatus.CANCELLED,
-    BatchJobStatus.EXPIRED,
-)
-_BATCH_JOB_STATUS_SET = frozenset(BATCH_JOB_STATUSES)
+BATCH_JOB_STATUSES = tuple(BatchJobStatus)
+BATCH_JOB_STATUS_VALUES = tuple(status.value for status in BatchJobStatus)
+BATCH_JOB_STATUS_SET = frozenset(BATCH_JOB_STATUS_VALUES)
 
 
-def normalize_batch_job_status(status: str) -> str:
+def normalize_batch_job_status(status: str | BatchJobStatus) -> BatchJobStatus:
+    if isinstance(status, BatchJobStatus):
+        return status
     normalized = str(status or "").strip()
-    if normalized not in _BATCH_JOB_STATUS_SET:
-        raise ValueError("batch job status must be one of: " + ", ".join(BATCH_JOB_STATUSES))
-    return normalized
+    try:
+        return BatchJobStatus(normalized)
+    except ValueError as exc:
+        raise ValueError("batch job status must be one of: " + ", ".join(BATCH_JOB_STATUS_VALUES)) from exc
 
 
 class BatchItemStatus:
@@ -91,7 +88,7 @@ class BatchFileRecord:
 class BatchJobRecord:
     batch_id: str
     endpoint: str
-    status: str
+    status: BatchJobStatus
     execution_mode: str
     input_file_id: str
     output_file_id: str | None

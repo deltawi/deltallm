@@ -64,7 +64,7 @@ def job_from_row(row: dict[str, Any]) -> BatchJobRecord:
     return BatchJobRecord(
         batch_id=str(row.get("batch_id") or ""),
         endpoint=str(row.get("endpoint") or ""),
-        status=normalize_batch_job_status(str(row.get("status") or "")),
+        status=normalize_batch_job_status(row.get("status") or ""),
         execution_mode=str(row.get("execution_mode") or "managed_internal"),
         input_file_id=str(row.get("input_file_id") or ""),
         output_file_id=row.get("output_file_id"),

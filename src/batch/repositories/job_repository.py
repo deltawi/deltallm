@@ -48,7 +48,7 @@ class BatchJobRepository:
         created_by_organization_id: str | None = None,
         expires_at: datetime | None = None,
         execution_mode: str = "managed_internal",
-        status: str = BatchJobStatus.QUEUED,
+        status: str | BatchJobStatus = BatchJobStatus.QUEUED,
         total_items: int = 0,
     ) -> BatchJobRecord | None:
         if self.prisma is None:
@@ -81,7 +81,7 @@ class BatchJobRepository:
             """,
             batch_id,
             endpoint,
-            normalized_status,
+            normalized_status.value,
             execution_mode,
             input_file_id,
             model,
@@ -245,7 +245,7 @@ class BatchJobRepository:
             RETURNING *
             """,
             batch_id,
-            BatchJobStatus.QUEUED,
+            BatchJobStatus.QUEUED.value,
             total_items,
         )
         if not rows:
@@ -419,7 +419,7 @@ class BatchJobRepository:
         batch_id: str,
         output_file_id: str | None,
         error_file_id: str | None,
-        final_status: str,
+        final_status: str | BatchJobStatus,
         worker_id: str | None = None,
     ) -> BatchJobRecord | None:
         if self.prisma is None:
@@ -442,7 +442,7 @@ class BatchJobRepository:
                 batch_id,
                 output_file_id,
                 error_file_id,
-                normalized_final_status,
+                normalized_final_status.value,
             )
         else:
             rows = await self.prisma.query_raw(
@@ -464,7 +464,7 @@ class BatchJobRepository:
                 worker_id,
                 output_file_id,
                 error_file_id,
-                normalized_final_status,
+                normalized_final_status.value,
             )
         if not rows:
             return None
