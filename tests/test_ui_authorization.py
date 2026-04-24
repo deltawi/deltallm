@@ -420,20 +420,22 @@ async def test_list_batches_exposes_repair_capabilities_for_updating_scope(clien
         ("in_progress", "batch-in-progress"),
     ],
 )
-async def test_list_batches_status_filter_uses_text_safe_query(client, test_app, monkeypatch, status_filter, expected_batch_id):
+async def test_list_batches_status_filter_uses_enum_query(client, test_app, monkeypatch, status_filter, expected_batch_id):
     class FilteredBatchDB(FakeAuthorizationDB):
         async def query_raw(self, query: str, *params):
             if 'COUNT(*) AS total FROM deltallm_batch_job j' in query:
-                if "j.status::text =" in query:
-                    assert '::"DeltaLLM_BatchJobStatus"' not in query
+                if 'j.status = $' in query:
+                    assert '::"DeltaLLM_BatchJobStatus"' in query
+                    assert "j.status::text =" not in query
                     return [{"total": 1 if status_filter in params else 0}]
                 return [{"total": len(self.batches)}]
             if "FROM deltallm_batch_job j" in query and "LEFT JOIN deltallm_teamtable t" in query:
                 if "WHERE j.batch_id = $1" in query:
                     row = self.batches.get(str(params[0]))
                     return [row] if row else []
-                if "j.status::text =" in query:
-                    assert '::"DeltaLLM_BatchJobStatus"' not in query
+                if 'j.status = $' in query:
+                    assert '::"DeltaLLM_BatchJobStatus"' in query
+                    assert "j.status::text =" not in query
                     return [{
                         **self.batches["batch-1"],
                         "batch_id": expected_batch_id,
