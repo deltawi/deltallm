@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import json
 import logging
 from math import ceil
@@ -33,8 +33,10 @@ from src.metrics import (
     increment_batch_microbatch_ineligible_item,
     increment_batch_microbatch_inputs,
     increment_batch_microbatch_isolation_fallback,
+    increment_batch_microbatch_requeue,
     increment_batch_microbatch_requests,
     observe_batch_item_retry_delay,
+    observe_batch_microbatch_retry_delay,
     observe_batch_microbatch_size,
     set_batch_worker_saturation,
 )
@@ -97,6 +99,12 @@ class BatchExecutionEngine:
             embedding_request
         )
         primary_deployment_id = str(getattr(primary_deployment, "deployment_id", None) or "")
+        effective_upstream_max_batch_inputs = resolve_effective_upstream_max_batch_inputs(
+            getattr(primary_deployment, "model_info", None)
+        )
+        metadata_max_inputs = self._microbatch_next_max_inputs(item.error_body)
+        if metadata_max_inputs is not None:
+            effective_upstream_max_batch_inputs = min(effective_upstream_max_batch_inputs, metadata_max_inputs)
         return _PreparedEmbeddingItem(
             item=item,
             started_at_monotonic=started_at_monotonic,
@@ -107,9 +115,7 @@ class BatchExecutionEngine:
             request_context=request_context,
             failover_kwargs=route_failover_kwargs(request_context),
             request_shim=_RequestShim(app=self.app),
-            effective_upstream_max_batch_inputs=resolve_effective_upstream_max_batch_inputs(
-                getattr(primary_deployment, "model_info", None)
-            ),
+            effective_upstream_max_batch_inputs=effective_upstream_max_batch_inputs,
             microbatch_eligible=microbatch_eligible,
             microbatch_ineligible_reason=microbatch_ineligible_reason,
             microbatch_weight=estimate_embedding_microbatch_weight(embedding_request) if microbatch_eligible else None,
@@ -205,6 +211,220 @@ class BatchExecutionEngine:
             prepared.execution_signature,
             json.dumps(prepared.failover_kwargs, sort_keys=True, default=str),
         )
+
+    @staticmethod
+    def _microbatch_metadata(error_body: Any) -> dict[str, Any]:
+        if not isinstance(error_body, dict):
+            return {}
+        metadata = error_body.get("microbatch")
+        return dict(metadata) if isinstance(metadata, dict) else {}
+
+    @classmethod
+    def _microbatch_next_max_inputs(cls, error_body: Any) -> int | None:
+        metadata = cls._microbatch_metadata(error_body)
+        try:
+            value = int(metadata.get("next_max_inputs"))
+        except (TypeError, ValueError):
+            return None
+        return value if value > 0 else None
+
+    @classmethod
+    def _microbatch_retry_count(cls, error_body: Any) -> int:
+        metadata = cls._microbatch_metadata(error_body)
+        try:
+            return max(0, int(metadata.get("retry_count") or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    @classmethod
+    def _microbatch_original_size(cls, *, error_body: Any, fallback: int) -> int:
+        metadata = cls._microbatch_metadata(error_body)
+        try:
+            return max(1, int(metadata.get("original_size") or fallback))
+        except (TypeError, ValueError):
+            return max(1, int(fallback))
+
+    def _next_reduced_microbatch_size(self, chunk_size: int) -> int | None:
+        min_size = max(1, int(self.config.microbatch_min_reduced_size))
+        factor = min(1.0, max(0.0, float(self.config.microbatch_reduce_factor)))
+        reduced_size = max(min_size, ceil(chunk_size * factor))
+        if reduced_size >= chunk_size:
+            return None
+        return reduced_size
+
+    def _build_microbatch_retry_error_payload(
+        self,
+        *,
+        exc: Exception,
+        decision: BatchRetryDecision,
+        retry_delay_seconds: int,
+        retry_count: int,
+        original_size: int,
+        failed_size: int,
+        next_max_inputs: int,
+        result: str,
+    ) -> dict[str, Any]:
+        return {
+            "message": str(exc),
+            "type": exc.__class__.__name__,
+            "retryable": True,
+            "retry_category": decision.category.value,
+            "retry_delay_seconds": int(retry_delay_seconds),
+            "microbatch": {
+                "retry_count": int(retry_count),
+                "original_size": int(original_size),
+                "failed_size": int(failed_size),
+                "next_max_inputs": int(next_max_inputs),
+                "last_result": result,
+            },
+        }
+
+    def _record_microbatch_requeue(
+        self,
+        *,
+        category: BatchRetryCategory,
+        result: str,
+        retry_delay_seconds: int | None = None,
+    ) -> None:
+        category_value = category.value
+        try:
+            increment_batch_microbatch_requeue(category=category_value, result=result)
+            if retry_delay_seconds is not None and result in {"scheduled", "reduced"}:
+                observe_batch_microbatch_retry_delay(category=category_value, delay_seconds=retry_delay_seconds)
+        except Exception as exc:
+            logger.warning(
+                "batch embedding microbatch retry metric publish failed category=%s result=%s error=%s",
+                category_value,
+                result,
+                exc,
+            )
+
+    def _microbatch_retry_fits_job_deadline(self, *, job: BatchJobRecord, retry_delay_seconds: int) -> bool:
+        if job.expires_at is None:
+            return True
+        expires_at = job.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        return datetime.now(tz=UTC) + timedelta(seconds=retry_delay_seconds) < expires_at
+
+    async def _release_failed_microbatch_for_retry(
+        self,
+        *,
+        job: BatchJobRecord,
+        prepared_items: list[_PreparedEmbeddingItem],
+        item_heartbeats: dict[str, asyncio.Task[None]],
+        exc: Exception,
+        decision: BatchRetryDecision,
+    ) -> bool:
+        if not decision.retryable:
+            return False
+
+        if not self.config.microbatch_retry_enabled:
+            self._record_microbatch_requeue(category=decision.category, result="disabled")
+            return False
+
+        retry_delay = self._retry_delay_seconds(
+            item_attempts=max((prepared.item.attempts for prepared in prepared_items), default=0),
+            decision=decision,
+        )
+        if not self._microbatch_retry_fits_job_deadline(job=job, retry_delay_seconds=retry_delay):
+            self._record_microbatch_requeue(category=decision.category, result="exhausted")
+            return False
+
+        for prepared in prepared_items:
+            if not self._can_retry_item(
+                job=job,
+                item=prepared.item,
+                decision=decision,
+                retry_delay_seconds=retry_delay,
+            ):
+                self._record_microbatch_requeue(category=decision.category, result="exhausted")
+                return False
+
+        chunk_size = len(prepared_items)
+        retry_count = max(
+            self._microbatch_retry_count(prepared.item.error_body) for prepared in prepared_items
+        ) + 1
+        original_size = max(
+            self._microbatch_original_size(error_body=prepared.item.error_body, fallback=chunk_size)
+            for prepared in prepared_items
+        )
+        next_max_inputs = chunk_size
+        result = "scheduled"
+
+        if retry_count > max(0, int(self.config.microbatch_max_group_retries)):
+            reduced_size = self._next_reduced_microbatch_size(chunk_size)
+            if reduced_size is None:
+                self._record_microbatch_requeue(category=decision.category, result="exhausted")
+                return False
+            next_max_inputs = reduced_size
+            result = "reduced"
+
+        item_ids = [prepared.item.item_id for prepared in prepared_items]
+        error_body = self._build_microbatch_retry_error_payload(
+            exc=exc,
+            decision=decision,
+            retry_delay_seconds=retry_delay,
+            retry_count=retry_count,
+            original_size=original_size,
+            failed_size=chunk_size,
+            next_max_inputs=next_max_inputs,
+            result=result,
+        )
+        try:
+            released_item_ids = await self.repository.release_items_for_retry(
+                item_ids=item_ids,
+                worker_id=self.config.worker_id,
+                retry_delay_seconds=retry_delay,
+                error_body=error_body,
+                last_error=str(exc),
+            )
+        except Exception as release_exc:
+            self._record_microbatch_requeue(category=decision.category, result="partial_release")
+            logger.warning(
+                "batch embedding microbatch retry release failed batch_id=%s item_ids=%s error=%s",
+                job.batch_id,
+                item_ids,
+                release_exc,
+                exc_info=True,
+            )
+            return False
+
+        expected_item_ids = set(item_ids)
+        if set(released_item_ids) != expected_item_ids:
+            self._record_microbatch_requeue(category=decision.category, result="partial_release")
+            logger.warning(
+                "batch embedding microbatch retry release incomplete batch_id=%s item_ids=%s released_item_ids=%s",
+                job.batch_id,
+                item_ids,
+                released_item_ids,
+            )
+            if released_item_ids:
+                await self._stop_heartbeat_tasks(item_heartbeats.values())
+                item_heartbeats.clear()
+                await self.repository.refresh_job_progress(job.batch_id)
+                return True
+            return False
+
+        await self._stop_heartbeat_tasks(item_heartbeats.values())
+        item_heartbeats.clear()
+        self._record_microbatch_requeue(
+            category=decision.category,
+            result=result,
+            retry_delay_seconds=retry_delay,
+        )
+        await self.repository.refresh_job_progress(job.batch_id)
+        logger.info(
+            "batch embedding microbatch retry scheduled batch_id=%s category=%s result=%s size=%s next_max_inputs=%s delay_seconds=%s item_ids=%s",
+            job.batch_id,
+            decision.category.value,
+            result,
+            chunk_size,
+            next_max_inputs,
+            retry_delay,
+            item_ids,
+        )
+        return True
 
     async def _mark_item_failed(
         self,
@@ -621,6 +841,17 @@ class BatchExecutionEngine:
                     chunk_size,
                     exc,
                 )
+            else:
+                retry_decision = classify_batch_retry(exc)
+                requeued = await self._release_failed_microbatch_for_retry(
+                    job=job,
+                    prepared_items=prepared_items,
+                    item_heartbeats=item_heartbeats,
+                    exc=exc,
+                    decision=retry_decision,
+                )
+                if requeued:
+                    return
             increment_batch_microbatch_isolation_fallback()
             logger.warning(
                 "batch embedding microbatch isolated batch_id=%s deployment_id=%s size=%s item_ids=%s error=%s",

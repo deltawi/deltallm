@@ -360,6 +360,10 @@ class GeneralSettings(BaseModel):
     embeddings_batch_retry_max_seconds: int = Field(default=300, ge=1)
     embeddings_batch_retry_multiplier: float = Field(default=2.0, ge=1.0)
     embeddings_batch_retry_jitter: bool = True
+    embeddings_batch_microbatch_retry_enabled: bool = True
+    embeddings_batch_microbatch_max_group_retries: int = Field(default=2, ge=0)
+    embeddings_batch_microbatch_min_reduced_size: int = Field(default=1, ge=1)
+    embeddings_batch_microbatch_reduce_factor: float = Field(default=0.5, gt=0.0, le=1.0)
     batch_completed_artifact_retention_days: int = 7
     batch_failed_artifact_retention_days: int = 14
     batch_metadata_retention_days: int = 30

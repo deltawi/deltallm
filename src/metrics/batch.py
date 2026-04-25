@@ -148,6 +148,21 @@ deltallm_batch_microbatch_ineligible_items_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_microbatch_requeues_metric = Counter(
+    "deltallm_batch_microbatch_requeues_total",
+    "Grouped embedding microbatch retry decisions by retry category and result",
+    ["category", "result"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_microbatch_retry_delay_metric = Histogram(
+    "deltallm_batch_microbatch_retry_delay_seconds",
+    "Grouped embedding microbatch retry delay by retry category",
+    ["category"],
+    buckets=[1, 2, 5, 10, 30, 60, 120, 300, 600],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_batch_microbatch_size_metric = Histogram(
     "deltallm_batch_microbatch_size",
     "Number of inputs in each grouped embedding microbatch request",
@@ -251,6 +266,19 @@ def increment_batch_microbatch_isolation_fallback() -> None:
 
 def increment_batch_microbatch_ineligible_item(*, reason: str) -> None:
     deltallm_batch_microbatch_ineligible_items_metric.labels(reason=sanitize_label(reason)).inc()
+
+
+def increment_batch_microbatch_requeue(*, category: str, result: str) -> None:
+    deltallm_batch_microbatch_requeues_metric.labels(
+        category=sanitize_label(category),
+        result=sanitize_label(result),
+    ).inc()
+
+
+def observe_batch_microbatch_retry_delay(*, category: str, delay_seconds: float) -> None:
+    deltallm_batch_microbatch_retry_delay_metric.labels(category=sanitize_label(category)).observe(
+        max(0.0, float(delay_seconds))
+    )
 
 
 def observe_batch_microbatch_size(*, batch_size: int) -> None:

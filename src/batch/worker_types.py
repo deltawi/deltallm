@@ -28,6 +28,10 @@ class BatchWorkerConfig:
     retry_max_seconds: int = 300
     retry_multiplier: float = 2.0
     retry_jitter: bool = True
+    microbatch_retry_enabled: bool = True
+    microbatch_max_group_retries: int = 2
+    microbatch_min_reduced_size: int = 1
+    microbatch_reduce_factor: float = 0.5
     completed_artifact_retention_days: int = 7
     failed_artifact_retention_days: int = 14
 

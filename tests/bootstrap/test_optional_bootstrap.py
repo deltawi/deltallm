@@ -78,6 +78,10 @@ def _batch_config(
             embeddings_batch_retry_max_seconds=300,
             embeddings_batch_retry_multiplier=2.0,
             embeddings_batch_retry_jitter=True,
+            embeddings_batch_microbatch_retry_enabled=True,
+            embeddings_batch_microbatch_max_group_retries=2,
+            embeddings_batch_microbatch_min_reduced_size=1,
+            embeddings_batch_microbatch_reduce_factor=0.5,
             batch_completed_artifact_retention_days=7,
             batch_failed_artifact_retention_days=2,
             embeddings_batch_gc_interval_seconds=60,
@@ -341,6 +345,8 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
     assert created["worker"].config.worker_concurrency == 4
     assert created["worker"].config.item_buffer_multiplier == 2
     assert created["worker"].config.finalization_page_size == 500
+    assert created["worker"].config.microbatch_retry_enabled is True
+    assert created["worker"].config.microbatch_max_group_retries == 2
     assert runtime.statuses == (
         BootstrapStatus("embeddings_batch", "ready"),
         BootstrapStatus("embeddings_batch_worker", "ready"),

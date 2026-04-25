@@ -253,8 +253,17 @@ class BatchRepository:
         *,
         item_ids: list[str],
         worker_id: str,
+        retry_delay_seconds: int = 0,
+        error_body: dict[str, Any] | None = None,
+        last_error: str | None = None,
     ) -> list[str]:
-        return await self.items.release_items_for_retry(item_ids=item_ids, worker_id=worker_id)
+        return await self.items.release_items_for_retry(
+            item_ids=item_ids,
+            worker_id=worker_id,
+            retry_delay_seconds=retry_delay_seconds,
+            error_body=error_body,
+            last_error=last_error,
+        )
 
     async def enqueue_completion_outbox_many(self, records: list[BatchCompletionOutboxCreate]) -> list[str]:
         return await self.completion_outbox.enqueue_many(records)
