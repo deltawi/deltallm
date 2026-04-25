@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime
 
@@ -175,6 +176,48 @@ async def test_retryable_mark_item_failed_uses_database_deadline_guard():
     assert "FROM deltallm_batch_job j" in prisma.sql
     assert "j.batch_id = i.batch_id" in prisma.sql
     assert "NOW() + ($4 || ' seconds')::interval < j.expires_at" in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_release_items_for_retry_preserves_immediate_requeue_defaults():
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    item_ids = await repository.release_items_for_retry(
+        item_ids=["item-1"],
+        worker_id="worker-1",
+    )
+
+    assert item_ids == []
+    assert prisma.params == ("item-1", "worker-1", 0, None, None)
+    assert "status = 'pending'" in prisma.sql
+    assert "ELSE NULL" in prisma.sql
+    assert "error_body = COALESCE($4::jsonb, i.error_body)" in prisma.sql
+    assert "last_error = COALESCE($5, i.last_error)" in prisma.sql
+    assert "j.batch_id = i.batch_id" in prisma.sql
+    assert "NOW() + ($3 || ' seconds')::interval < j.expires_at" in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_release_items_for_retry_can_store_retry_metadata_and_delay():
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    await repository.release_items_for_retry(
+        item_ids=["item-1", "item-2"],
+        worker_id="worker-1",
+        retry_delay_seconds=30,
+        error_body={"retry_category": "upstream_5xx"},
+        last_error="upstream unavailable",
+    )
+
+    assert prisma.params[0:2] == ("item-1", "item-2")
+    assert prisma.params[2] == "worker-1"
+    assert prisma.params[3] == 30
+    assert json.loads(prisma.params[4]) == {"retry_category": "upstream_5xx"}
+    assert prisma.params[5] == "upstream unavailable"
+    assert "WHEN $4 > 0 THEN NOW() + ($4 || ' seconds')::interval" in prisma.sql
+    assert "i.locked_by = $3" in prisma.sql
 
 
 @pytest.mark.asyncio

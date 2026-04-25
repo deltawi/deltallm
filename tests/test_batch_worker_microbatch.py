@@ -167,7 +167,13 @@ def _build_job() -> BatchJobRecord:
     )
 
 
-def _build_item(*, item_id: str, input_value, request_overrides: dict | None = None) -> BatchItemRecord:
+def _build_item(
+    *,
+    item_id: str,
+    input_value,
+    request_overrides: dict | None = None,
+    error_body: dict | None = None,
+) -> BatchItemRecord:
     now = datetime.now(tz=UTC)
     request_body = {"model": "text-embedding-3-small", "input": input_value}
     if request_overrides:
@@ -180,7 +186,7 @@ def _build_item(*, item_id: str, input_value, request_overrides: dict | None = N
         status="in_progress",
         request_body=request_body,
         response_body=None,
-        error_body=None,
+        error_body=error_body,
         usage=None,
         provider_cost=0.0,
         billed_cost=0.0,
@@ -1066,6 +1072,199 @@ async def test_worker_isolates_upstream_exception_back_to_single_item_execution(
     assert len(failover.calls) == 3
     assert len(repo.completed_calls) == 2
     assert repo.failed_calls == []
+
+
+@pytest.mark.asyncio
+async def test_worker_requeues_retryable_grouped_http_failures_before_isolation(monkeypatch):
+    execute_inputs: list[object] = []
+    http_request = httpx.Request("POST", "http://localhost:9090/v1/embeddings")
+    response = httpx.Response(503, request=http_request)
+
+    async def _fake_execute_embedding(request, payload, deployment):
+        del request, deployment
+        execute_inputs.append(payload.input)
+        raise httpx.HTTPStatusError("upstream unavailable", request=http_request, response=response)
+
+    monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
+
+    worker, repo, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker.config.worker_concurrency = 1
+    worker.config.retry_jitter = False
+
+    await worker._process_items(
+        _build_job(),
+        [
+            _build_item(item_id="i1", input_value="hello"),
+            _build_item(item_id="i2", input_value="world"),
+        ],
+    )
+
+    assert execute_inputs == [["hello", "world"]]
+    assert len(failover.calls) == 1
+    assert repo.completed_calls == []
+    assert repo.failed_calls == []
+    assert len(repo.release_for_retry_calls) == 1
+    release_call = repo.release_for_retry_calls[0]
+    assert release_call["item_ids"] == ["i1", "i2"]
+    assert release_call["worker_id"] == "w1"
+    assert release_call["retry_delay_seconds"] == 5
+    assert release_call["last_error"] == "upstream unavailable"
+    assert release_call["error_body"]["retry_category"] == "upstream_5xx"
+    assert release_call["error_body"]["microbatch"] == {
+        "retry_count": 1,
+        "original_size": 2,
+        "failed_size": 2,
+        "next_max_inputs": 2,
+        "last_result": "scheduled",
+    }
+
+
+@pytest.mark.asyncio
+async def test_worker_requeues_no_healthy_grouped_failures_before_isolation(monkeypatch):
+    execute_inputs: list[object] = []
+
+    async def _fake_execute_embedding(request, payload, deployment):
+        del request, deployment
+        execute_inputs.append(payload.input)
+        raise ServiceUnavailableError(
+            message="No healthy deployments available for model 'text-embedding-3-small'",
+            code=NO_HEALTHY_DEPLOYMENTS_CODE,
+        )
+
+    monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
+
+    worker, repo, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker.config.worker_concurrency = 1
+    worker.config.retry_jitter = False
+
+    await worker._process_items(
+        _build_job(),
+        [
+            _build_item(item_id="i1", input_value="hello"),
+            _build_item(item_id="i2", input_value="world"),
+        ],
+    )
+
+    assert execute_inputs == [["hello", "world"]]
+    assert len(failover.calls) == 1
+    assert repo.completed_calls == []
+    assert repo.failed_calls == []
+    assert repo.release_for_retry_calls[0]["error_body"]["retry_category"] == "no_healthy_deployments"
+    assert repo.release_for_retry_calls[0]["error_body"]["microbatch"]["last_result"] == "scheduled"
+
+
+@pytest.mark.asyncio
+async def test_worker_reduces_grouped_retry_size_after_group_retries_exhaust(monkeypatch):
+    http_request = httpx.Request("POST", "http://localhost:9090/v1/embeddings")
+    response = httpx.Response(503, request=http_request)
+
+    async def _fake_execute_embedding(request, payload, deployment):
+        del request, deployment
+        raise httpx.HTTPStatusError("upstream unavailable", request=http_request, response=response)
+
+    monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
+
+    worker, repo, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker.config.worker_concurrency = 1
+    worker.config.retry_jitter = False
+    worker.config.microbatch_max_group_retries = 2
+    worker.config.microbatch_reduce_factor = 0.5
+    retry_metadata = {"microbatch": {"retry_count": 2, "original_size": 4}}
+
+    await worker._process_items(
+        _build_job(),
+        [
+            _build_item(item_id="i1", input_value="hello-1", error_body=retry_metadata),
+            _build_item(item_id="i2", input_value="hello-2", error_body=retry_metadata),
+            _build_item(item_id="i3", input_value="hello-3", error_body=retry_metadata),
+            _build_item(item_id="i4", input_value="hello-4", error_body=retry_metadata),
+        ],
+    )
+
+    assert len(failover.calls) == 1
+    assert repo.completed_calls == []
+    assert repo.failed_calls == []
+    release_call = repo.release_for_retry_calls[0]
+    assert release_call["item_ids"] == ["i1", "i2", "i3", "i4"]
+    assert release_call["error_body"]["microbatch"] == {
+        "retry_count": 3,
+        "original_size": 4,
+        "failed_size": 4,
+        "next_max_inputs": 2,
+        "last_result": "reduced",
+    }
+
+
+@pytest.mark.asyncio
+async def test_worker_uses_reduced_microbatch_size_metadata_for_later_attempts(monkeypatch):
+    execute_inputs: list[object] = []
+
+    async def _fake_execute_embedding(request, payload, deployment):
+        del request, deployment
+        execute_inputs.append(payload.input)
+        return {
+            "object": "list",
+            "data": [{"index": 0, "embedding": [0.1]}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+        }
+
+    monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
+
+    worker, repo, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker.config.worker_concurrency = 1
+    retry_metadata = {"microbatch": {"retry_count": 3, "original_size": 4, "next_max_inputs": 1}}
+
+    await worker._process_items(
+        _build_job(),
+        [
+            _build_item(item_id="i1", input_value="hello", error_body=retry_metadata),
+            _build_item(item_id="i2", input_value="world", error_body=retry_metadata),
+        ],
+    )
+
+    assert execute_inputs == ["hello", "world"]
+    assert len(failover.calls) == 2
+    assert len(repo.completed_calls) == 2
+    assert repo.failed_calls == []
+    assert repo.release_for_retry_calls == []
+
+
+@pytest.mark.asyncio
+async def test_worker_disables_group_retry_and_uses_isolation_when_configured(monkeypatch):
+    execute_inputs: list[object] = []
+    http_request = httpx.Request("POST", "http://localhost:9090/v1/embeddings")
+    response = httpx.Response(503, request=http_request)
+
+    async def _fake_execute_embedding(request, payload, deployment):
+        del request, deployment
+        execute_inputs.append(payload.input)
+        if isinstance(payload.input, list):
+            raise httpx.HTTPStatusError("upstream unavailable", request=http_request, response=response)
+        return {
+            "object": "list",
+            "data": [{"index": 0, "embedding": [0.1]}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+        }
+
+    monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
+
+    worker, repo, _, _, failover = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 4})
+    worker.config.worker_concurrency = 1
+    worker.config.microbatch_retry_enabled = False
+
+    await worker._process_items(
+        _build_job(),
+        [
+            _build_item(item_id="i1", input_value="hello"),
+            _build_item(item_id="i2", input_value="world"),
+        ],
+    )
+
+    assert execute_inputs == [["hello", "world"], "hello", "world"]
+    assert len(failover.calls) == 3
+    assert len(repo.completed_calls) == 2
+    assert repo.failed_calls == []
+    assert repo.release_for_retry_calls == []
 
 
 @pytest.mark.asyncio
