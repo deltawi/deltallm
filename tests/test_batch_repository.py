@@ -158,6 +158,26 @@ async def test_reschedule_finalization_pushes_lease_forward():
 
 
 @pytest.mark.asyncio
+async def test_retryable_mark_item_failed_uses_database_deadline_guard():
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    updated = await repository.mark_item_failed(
+        item_id="item-1",
+        worker_id="worker-1",
+        error_body={"message": "rate limited"},
+        last_error="rate limited",
+        retryable=True,
+        retry_delay_seconds=60,
+    )
+
+    assert updated is False
+    assert "FROM deltallm_batch_job j" in prisma.sql
+    assert "j.batch_id = i.batch_id" in prisma.sql
+    assert "NOW() + ($4 || ' seconds')::interval < j.expires_at" in prisma.sql
+
+
+@pytest.mark.asyncio
 async def test_count_active_jobs_for_scope_prefers_team_scope():
     prisma = _PrismaSpy()
     repository = BatchRepository(prisma_client=prisma)

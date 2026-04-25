@@ -18,6 +18,7 @@ from src.batch.models import BatchItemRecord, BatchJobRecord, BatchJobStatus
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
 from src.models.errors import (
     BudgetExceededError,
+    InvalidRequestError,
     ModelNotFoundError,
     NO_HEALTHY_DEPLOYMENTS_CODE,
     RateLimitError,
@@ -255,6 +256,11 @@ async def test_batch_retries_no_healthy_deployments_with_backoff(monkeypatch):
             "error_body": {
                 "message": "No healthy deployments available for model 'text-embedding-3-small'",
                 "type": "ServiceUnavailableError",
+                "retryable": True,
+                "retry_category": "no_healthy_deployments",
+                "retry_delay_seconds": 5,
+                "attempt": 1,
+                "max_attempts": 5,
             },
             "last_error": "No healthy deployments available for model 'text-embedding-3-small'",
             "retryable": True,
@@ -282,6 +288,9 @@ async def test_batch_does_not_retry_regular_model_not_found_errors():
 
     assert repo.failed_calls[0]["retryable"] is False
     assert repo.failed_calls[0]["retry_delay_seconds"] == 0
+    assert repo.failed_calls[0]["error_body"]["retryable"] is False
+    assert repo.failed_calls[0]["error_body"]["retry_category"] == "missing_model"
+    assert repo.failed_calls[0]["error_body"]["terminal_reason"] == "not_retryable"
 
 
 @pytest.mark.asyncio
@@ -303,6 +312,39 @@ async def test_batch_does_not_retry_budget_exceeded_errors():
 
     assert repo.failed_calls[0]["retryable"] is False
     assert repo.failed_calls[0]["retry_delay_seconds"] == 0
+    assert repo.failed_calls[0]["error_body"]["retryable"] is False
+    assert repo.failed_calls[0]["error_body"]["retry_category"] == "budget"
+    assert repo.failed_calls[0]["error_body"]["terminal_reason"] == "not_retryable"
+
+
+@pytest.mark.asyncio
+async def test_batch_does_not_retry_invalid_request_errors():
+    worker, repo, _, _, _ = _build_worker()
+    worker.config.max_attempts = 5
+
+    item = _build_item(item_id="i1", input_value="hello")
+    item.attempts = 1
+
+    await worker._execution_engine._mark_item_failed(
+        job=_build_job(),
+        item=item,
+        model_name=item.request_body["model"],
+        exc=InvalidRequestError(message="invalid embedding payload"),
+        deployment_id=None,
+        started_at_monotonic=0.0,
+    )
+
+    assert repo.failed_calls[0]["retryable"] is False
+    assert repo.failed_calls[0]["retry_delay_seconds"] == 0
+    assert repo.failed_calls[0]["error_body"] == {
+        "message": "invalid embedding payload",
+        "type": "InvalidRequestError",
+        "retryable": False,
+        "retry_category": "invalid_request",
+        "terminal_reason": "not_retryable",
+        "attempt": 1,
+        "max_attempts": 5,
+    }
 
 
 @pytest.mark.asyncio
@@ -331,6 +373,8 @@ async def test_batch_retry_delay_caps_retry_after_header(monkeypatch):
 
     assert repo.failed_calls[0]["retryable"] is True
     assert repo.failed_calls[0]["retry_delay_seconds"] == 60
+    assert repo.failed_calls[0]["error_body"]["retry_category"] == "rate_limit"
+    assert repo.failed_calls[0]["error_body"]["retry_delay_seconds"] == 60
 
 
 @pytest.mark.asyncio
@@ -355,6 +399,8 @@ async def test_batch_retry_delay_caps_rate_limit_retry_after(monkeypatch):
 
     assert repo.failed_calls[0]["retryable"] is True
     assert repo.failed_calls[0]["retry_delay_seconds"] == 45
+    assert repo.failed_calls[0]["error_body"]["retry_category"] == "rate_limit"
+    assert repo.failed_calls[0]["error_body"]["retry_delay_seconds"] == 45
 
 
 @pytest.mark.asyncio
@@ -380,6 +426,71 @@ async def test_batch_retry_delay_respects_config_without_jitter():
 
     assert repo.failed_calls[0]["retryable"] is True
     assert repo.failed_calls[0]["retry_delay_seconds"] == 20
+    assert repo.failed_calls[0]["error_body"]["retry_category"] == "service_unavailable"
+    assert repo.failed_calls[0]["error_body"]["retry_delay_seconds"] == 20
+
+
+@pytest.mark.asyncio
+async def test_batch_retry_attempts_exhausted_becomes_terminal():
+    worker, repo, _, _, _ = _build_worker()
+    worker.config.max_attempts = 3
+    worker.config.retry_jitter = False
+
+    item = _build_item(item_id="i1", input_value="hello")
+    item.attempts = 3
+
+    await worker._execution_engine._mark_item_failed(
+        job=_build_job(),
+        item=item,
+        model_name=item.request_body["model"],
+        exc=ServiceUnavailableError(message="upstream overloaded"),
+        deployment_id=None,
+        started_at_monotonic=0.0,
+    )
+
+    assert repo.failed_calls[0]["retryable"] is False
+    assert repo.failed_calls[0]["retry_delay_seconds"] == 0
+    assert repo.failed_calls[0]["error_body"]["retry_category"] == "service_unavailable"
+    assert repo.failed_calls[0]["error_body"]["terminal_reason"] == "attempts_exhausted"
+    assert "retry_delay_seconds" not in repo.failed_calls[0]["error_body"]
+
+
+@pytest.mark.asyncio
+async def test_batch_retry_rejected_by_db_deadline_becomes_terminal():
+    class _DeadlineRejectingRepo(_Repo):
+        async def mark_item_failed(self, **kwargs) -> bool:
+            self.failed_calls.append(kwargs)
+            return not kwargs["retryable"]
+
+    worker, _, _, _, _ = _build_worker()
+    repo = _DeadlineRejectingRepo()
+    worker.repository = repo  # type: ignore[assignment]
+    worker._execution_engine.repository = repo  # type: ignore[assignment]
+    worker.config.max_attempts = 5
+    worker.config.retry_jitter = False
+    worker.config.retry_initial_seconds = 5
+
+    job = _build_job()
+    item = _build_item(item_id="i1", input_value="hello")
+    item.attempts = 1
+
+    await worker._execution_engine._mark_item_failed(
+        job=job,
+        item=item,
+        model_name=item.request_body["model"],
+        exc=ServiceUnavailableError(message="upstream overloaded"),
+        deployment_id=None,
+        started_at_monotonic=0.0,
+    )
+
+    assert len(repo.failed_calls) == 2
+    assert repo.failed_calls[0]["retryable"] is True
+    assert repo.failed_calls[0]["retry_delay_seconds"] == 5
+    assert repo.failed_calls[1]["retryable"] is False
+    assert repo.failed_calls[1]["retry_delay_seconds"] == 0
+    assert repo.failed_calls[1]["error_body"]["retry_category"] == "service_unavailable"
+    assert repo.failed_calls[1]["error_body"]["terminal_reason"] == "batch_expired"
+    assert "retry_delay_seconds" not in repo.failed_calls[1]["error_body"]
 
 
 def test_resolve_effective_upstream_max_batch_inputs_defaults_to_one():

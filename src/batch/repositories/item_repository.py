@@ -344,15 +344,18 @@ class BatchItemRepository:
             if worker_id is None:
                 rows = await self.prisma.query_raw(
                     """
-                    UPDATE deltallm_batch_item
+                    UPDATE deltallm_batch_item i
                     SET status = 'pending',
                         error_body = $2::jsonb,
                         last_error = $3,
                         lease_expires_at = NOW() + ($4 || ' seconds')::interval,
                         locked_by = NULL
-                    WHERE item_id = $1
-                      AND status = 'in_progress'
-                    RETURNING item_id
+                    FROM deltallm_batch_job j
+                    WHERE i.item_id = $1
+                      AND i.status = 'in_progress'
+                      AND j.batch_id = i.batch_id
+                      AND (j.expires_at IS NULL OR NOW() + ($4 || ' seconds')::interval < j.expires_at)
+                    RETURNING i.item_id
                     """,
                     item_id,
                     json.dumps(error_body),
@@ -362,16 +365,19 @@ class BatchItemRepository:
                 return bool(rows)
             rows = await self.prisma.query_raw(
                 """
-                UPDATE deltallm_batch_item
+                UPDATE deltallm_batch_item i
                 SET status = 'pending',
                     error_body = $2::jsonb,
                     last_error = $3,
                     lease_expires_at = NOW() + ($4 || ' seconds')::interval,
                     locked_by = NULL
-                WHERE item_id = $1
-                  AND locked_by = $5
-                  AND status = 'in_progress'
-                RETURNING item_id
+                FROM deltallm_batch_job j
+                WHERE i.item_id = $1
+                  AND i.locked_by = $5
+                  AND i.status = 'in_progress'
+                  AND j.batch_id = i.batch_id
+                  AND (j.expires_at IS NULL OR NOW() + ($4 || ' seconds')::interval < j.expires_at)
+                RETURNING i.item_id
                 """,
                 item_id,
                 json.dumps(error_body),

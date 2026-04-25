@@ -39,12 +39,18 @@ class BatchRetryCategory(StrEnum):
     UNKNOWN = "unknown"
 
 
+class BatchRetryTerminalReason(StrEnum):
+    NOT_RETRYABLE = "not_retryable"
+    ATTEMPTS_EXHAUSTED = "attempts_exhausted"
+    BATCH_EXPIRED = "batch_expired"
+
+
 @dataclass(frozen=True, slots=True)
 class BatchRetryDecision:
     retryable: bool
     category: BatchRetryCategory
     retry_after_seconds: int | None = None
-    terminal_reason: str | None = None
+    terminal_reason: BatchRetryTerminalReason | None = None
 
 
 def classify_batch_retry(exc: Exception) -> BatchRetryDecision:
@@ -73,21 +79,21 @@ def classify_batch_retry(exc: Exception) -> BatchRetryDecision:
         return BatchRetryDecision(
             retryable=False,
             category=BatchRetryCategory.BUDGET,
-            terminal_reason="not_retryable",
+            terminal_reason=BatchRetryTerminalReason.NOT_RETRYABLE,
         )
 
     if isinstance(exc, InvalidRequestError):
         return BatchRetryDecision(
             retryable=False,
             category=BatchRetryCategory.INVALID_REQUEST,
-            terminal_reason="not_retryable",
+            terminal_reason=BatchRetryTerminalReason.NOT_RETRYABLE,
         )
 
     if isinstance(exc, PermissionDeniedError):
         return BatchRetryDecision(
             retryable=False,
             category=BatchRetryCategory.PERMISSION,
-            terminal_reason="not_retryable",
+            terminal_reason=BatchRetryTerminalReason.NOT_RETRYABLE,
         )
 
     if isinstance(exc, ModelNotFoundError):
@@ -96,20 +102,20 @@ def classify_batch_retry(exc: Exception) -> BatchRetryDecision:
         return BatchRetryDecision(
             retryable=False,
             category=BatchRetryCategory.MISSING_MODEL,
-            terminal_reason="not_retryable",
+            terminal_reason=BatchRetryTerminalReason.NOT_RETRYABLE,
         )
 
     if isinstance(exc, BatchResponseShapeError):
         return BatchRetryDecision(
             retryable=False,
             category=BatchRetryCategory.RESPONSE_SHAPE,
-            terminal_reason="not_retryable",
+            terminal_reason=BatchRetryTerminalReason.NOT_RETRYABLE,
         )
 
     return BatchRetryDecision(
         retryable=False,
         category=BatchRetryCategory.UNKNOWN,
-        terminal_reason="not_retryable",
+        terminal_reason=BatchRetryTerminalReason.NOT_RETRYABLE,
     )
 
 
@@ -138,7 +144,7 @@ def _classify_http_status_error(exc: httpx.HTTPStatusError) -> BatchRetryDecisio
     return BatchRetryDecision(
         retryable=False,
         category=BatchRetryCategory.INVALID_REQUEST,
-        terminal_reason="not_retryable",
+        terminal_reason=BatchRetryTerminalReason.NOT_RETRYABLE,
     )
 
 
