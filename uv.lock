@@ -445,6 +445,7 @@ name = "deltallm-core-api"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "boto3" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "prisma" },
@@ -474,6 +475,7 @@ guardrails-presidio = [
 
 [package.metadata]
 requires-dist = [
+    { name = "boto3", specifier = ">=1.35,<2.0" },
     { name = "boto3", marker = "extra == 'batch-s3'", specifier = ">=1.35,<2.0" },
     { name = "fastapi", specifier = ">=0.109,<1.0" },
     { name = "httpx", specifier = ">=0.26,<1.0" },
