@@ -10,6 +10,7 @@ import random
 from time import perf_counter
 from typing import Any, Awaitable, Callable
 
+from src.batch.backpressure import BatchModelGroupDeferred
 from src.batch.embedding_microbatch import (
     allocate_embedding_usage,
     build_embedding_execution_signature,
@@ -30,12 +31,15 @@ from src.billing.cost import ModelPricing, completion_cost
 from src.metrics import (
     increment_batch_item_retry,
     increment_batch_item_terminal_failure,
+    increment_batch_model_group_deferral,
+    increment_batch_model_group_deferred_items,
     increment_batch_microbatch_ineligible_item,
     increment_batch_microbatch_inputs,
     increment_batch_microbatch_isolation_fallback,
     increment_batch_microbatch_requeue,
     increment_batch_microbatch_requests,
     observe_batch_item_retry_delay,
+    observe_batch_model_group_deferral_seconds,
     observe_batch_microbatch_retry_delay,
     observe_batch_microbatch_size,
     set_batch_worker_saturation,
@@ -91,6 +95,8 @@ class BatchExecutionEngine:
         request_context: dict[str, Any] = {"metadata": {}, "user_id": "batch-worker"}
         app_router = self.app.state.router
         model_group = app_router.resolve_model_group(embedding_request.model)
+        await self._raise_if_model_group_deferred(model_group)
+
         primary_deployment = app_router.require_deployment(
             model_group=model_group,
             deployment=await app_router.select_deployment(model_group, request_context),
@@ -307,6 +313,133 @@ class BatchExecutionEngine:
             expires_at = expires_at.replace(tzinfo=UTC)
         return datetime.now(tz=UTC) + timedelta(seconds=retry_delay_seconds) < expires_at
 
+    def _batch_backpressure_coordinator(self):  # noqa: ANN201
+        coordinator = getattr(self.app.state, "batch_backpressure", None)
+        if coordinator is None or not getattr(coordinator, "enabled", True):
+            return None
+        return coordinator
+
+    def _resolve_item_model_group(self, *, item: BatchItemRecord | None, model_name: str | None) -> str | None:
+        app_router = getattr(self.app.state, "router", None)
+        if app_router is None:
+            return None
+        model = str(model_name or "").strip()
+        if not model and item is not None:
+            request_body = item.request_body if isinstance(item.request_body, dict) else {}
+            model = str(request_body.get("model") or "").strip()
+        if not model:
+            return None
+        try:
+            return str(app_router.resolve_model_group(model))
+        except Exception as exc:
+            logger.debug("batch model-group backpressure model resolution skipped model=%s error=%s", model, exc)
+            return None
+
+    async def _get_model_group_deferral(self, model_group: str):  # noqa: ANN201
+        coordinator = self._batch_backpressure_coordinator()
+        if coordinator is None:
+            return None
+        try:
+            return await coordinator.get_model_group_deferral(model_group)
+        except Exception as exc:
+            logger.warning(
+                "batch model-group backpressure read failed model_group=%s error=%s",
+                model_group,
+                exc,
+                exc_info=True,
+            )
+            return None
+
+    async def _raise_if_model_group_deferred(self, model_group: str) -> None:
+        deferral = await self._get_model_group_deferral(model_group)
+        if deferral is None:
+            return
+        retry_after = max(1, int(deferral.remaining_seconds()))
+        logger.info(
+            "batch item deferred by model group backpressure model_group=%s reason=%s delay_seconds=%s",
+            model_group,
+            deferral.reason,
+            retry_after,
+        )
+        raise BatchModelGroupDeferred(
+            model_group=model_group,
+            reason=deferral.reason,
+            retry_after_seconds=retry_after,
+        )
+
+    def _record_model_group_deferral(self, *, reason: str, delay_seconds: int) -> None:
+        try:
+            increment_batch_model_group_deferral(reason=reason)
+            observe_batch_model_group_deferral_seconds(reason=reason, delay_seconds=delay_seconds)
+        except Exception as exc:
+            logger.warning(
+                "batch model-group backpressure metric publish failed reason=%s error=%s",
+                reason,
+                exc,
+            )
+
+    def _record_model_group_deferred_item(self, *, reason: str) -> None:
+        try:
+            increment_batch_model_group_deferred_items(reason=reason)
+        except Exception as exc:
+            logger.warning(
+                "batch model-group deferred item metric publish failed reason=%s error=%s",
+                reason,
+                exc,
+            )
+
+    async def _maybe_defer_model_group_for_retry(
+        self,
+        *,
+        item: BatchItemRecord | None,
+        model_name: str | None,
+        model_group: str | None,
+        exc: Exception,
+        decision: BatchRetryDecision,
+        retry_delay_seconds: int,
+    ) -> None:
+        if decision.category is not BatchRetryCategory.NO_HEALTHY_DEPLOYMENTS:
+            return
+        if isinstance(exc, BatchModelGroupDeferred):
+            return
+
+        resolved_model_group = model_group or self._resolve_item_model_group(item=item, model_name=model_name)
+        if not resolved_model_group:
+            return
+
+        coordinator = self._batch_backpressure_coordinator()
+        if coordinator is None:
+            return
+
+        reason = decision.category.value
+        try:
+            deferral = await coordinator.defer_model_group(
+                resolved_model_group,
+                delay_seconds=retry_delay_seconds,
+                reason=reason,
+            )
+        except Exception as defer_exc:
+            logger.warning(
+                "batch model-group backpressure deferral failed model_group=%s reason=%s error=%s",
+                resolved_model_group,
+                reason,
+                defer_exc,
+                exc_info=True,
+            )
+            return
+        if deferral is None:
+            return
+
+        effective_delay_seconds = max(0, int(deferral.remaining_seconds()))
+        effective_reason = str(deferral.reason or reason)
+        self._record_model_group_deferral(reason=effective_reason, delay_seconds=effective_delay_seconds)
+        logger.info(
+            "batch model group deferred model_group=%s reason=%s delay_seconds=%s",
+            deferral.model_group,
+            effective_reason,
+            effective_delay_seconds,
+        )
+
     async def _release_failed_microbatch_for_retry(
         self,
         *,
@@ -326,6 +459,14 @@ class BatchExecutionEngine:
         retry_delay = self._retry_delay_seconds(
             item_attempts=max((prepared.item.attempts for prepared in prepared_items), default=0),
             decision=decision,
+        )
+        await self._maybe_defer_model_group_for_retry(
+            item=None,
+            model_name=None,
+            model_group=prepared_items[0].model_group if prepared_items else None,
+            exc=exc,
+            decision=decision,
+            retry_delay_seconds=retry_delay,
         )
         if not self._microbatch_retry_fits_job_deadline(job=job, retry_delay_seconds=retry_delay):
             self._record_microbatch_requeue(category=decision.category, result="exhausted")
@@ -443,6 +584,14 @@ class BatchExecutionEngine:
             if retry_decision.retryable
             else 0
         )
+        await self._maybe_defer_model_group_for_retry(
+            item=item,
+            model_name=model_name,
+            model_group=None,
+            exc=exc,
+            decision=retry_decision,
+            retry_delay_seconds=candidate_retry_delay,
+        )
         retryable = self._can_retry_item(
             job=job,
             item=item,
@@ -499,6 +648,8 @@ class BatchExecutionEngine:
         if not updated:
             logger.warning("batch item failure update skipped after lease loss batch_id=%s item_id=%s", batch_id, item.item_id)
             return
+        if isinstance(exc, BatchModelGroupDeferred):
+            self._record_model_group_deferred_item(reason=exc.reason)
         self._record_item_failure_decision(
             batch_id=batch_id,
             item=item,

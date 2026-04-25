@@ -226,6 +226,9 @@ The batch worker runs as a background loop that claims jobs and executes items.
 | `embeddings_batch_retry_max_seconds` | `300` | Maximum retry delay for retryable item failures, including capped `Retry-After` hints |
 | `embeddings_batch_retry_multiplier` | `2.0` | Exponential backoff multiplier between retry attempts |
 | `embeddings_batch_retry_jitter` | `true` | Add jitter to spread retries and reduce synchronized retry spikes |
+| `embeddings_batch_model_group_backpressure_enabled` | `true` | Temporarily defer model groups that have no healthy deployments |
+| `embeddings_batch_model_group_backpressure_min_seconds` | `5` | Minimum model-group deferral duration |
+| `embeddings_batch_model_group_backpressure_max_seconds` | `300` | Maximum model-group deferral duration |
 
 #### Lease and heartbeat
 
@@ -297,9 +300,11 @@ Only single-value inputs can be grouped:
 
 Multi-input arrays already contain multiple embeddings in a single request and are executed as-is without grouping.
 
-### Failure isolation
+### Failure recovery
 
-If a grouped upstream request fails, the worker automatically falls back to executing each item individually. This ensures a single bad input doesn't fail the entire group. The `deltallm_batch_microbatch_isolation_fallback_total` metric tracks how often this happens.
+If a grouped upstream request returns a response shape that cannot be split safely, the worker falls back to executing each item individually. This ensures a single bad grouped response does not corrupt the entire group. Retryable overload, timeout, and no-healthy-deployment errors are requeued first; repeated grouped failures reduce the future chunk size before falling back to single-item execution.
+
+When a model group has no healthy deployments, workers also create a short-lived backpressure deferral. With Redis available, this deferral is shared across worker instances so newly claimed items for that model group are quickly requeued without calling the router or upstream provider. If Redis is unavailable, the worker falls back to a local in-process deferral and still uses Postgres retry scheduling as the source of truth.
 
 ### Rollout guidance
 
@@ -351,12 +356,18 @@ DeltaLLM exposes Prometheus metrics for batch processing on the configured metri
 | `deltallm_batch_microbatch_size` | Histogram | Number of inputs per grouped request (buckets: 1, 2, 4, 8, 16, 32, 64) |
 | `deltallm_batch_microbatch_isolation_fallback_total` | Counter | Groups that fell back to single-item execution |
 | `deltallm_batch_microbatch_ineligible_items_total` | Counter | Items that could not be grouped, by reason |
+| `deltallm_batch_microbatch_requeues_total` | Counter | Grouped retry decisions by retry category and result |
+| `deltallm_batch_microbatch_retry_delay_seconds` | Histogram | Grouped retry delay by retry category |
+| `deltallm_batch_model_group_deferrals_total` | Counter | Model-group backpressure deferrals by reason |
+| `deltallm_batch_model_group_deferred_items_total` | Counter | Items deferred by model-group backpressure by reason |
+| `deltallm_batch_model_group_deferral_seconds` | Histogram | Model-group backpressure deferral duration by reason |
 
 ### What to watch
 
 - **`deltallm_batch_oldest_item_age_seconds{status="pending"}`** growing indicates the worker can't keep up. Increase `worker_concurrency` or add instances.
 - **`deltallm_batch_artifact_failures_total`** indicates storage issues. Check disk space (local) or S3 credentials/connectivity.
 - **`deltallm_batch_microbatch_isolation_fallback_total`** increasing after enabling micro-batching may indicate the provider doesn't handle multi-input requests well. Consider reducing `upstream_max_batch_inputs`.
+- **`deltallm_batch_model_group_deferrals_total`** increasing means workers are seeing temporary model-group unavailability. Check deployment health and router cooldown state.
 
 ## Troubleshooting
 

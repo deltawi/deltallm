@@ -163,6 +163,28 @@ deltallm_batch_microbatch_retry_delay_metric = Histogram(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_model_group_deferrals_metric = Counter(
+    "deltallm_batch_model_group_deferrals_total",
+    "Model-group backpressure deferrals created by reason",
+    ["reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_model_group_deferred_items_metric = Counter(
+    "deltallm_batch_model_group_deferred_items_total",
+    "Batch items deferred by model-group backpressure by reason",
+    ["reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_model_group_deferral_seconds_metric = Histogram(
+    "deltallm_batch_model_group_deferral_seconds",
+    "Model-group backpressure deferral duration by reason",
+    ["reason"],
+    buckets=[1, 2, 5, 10, 30, 60, 120, 300, 600],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_batch_microbatch_size_metric = Histogram(
     "deltallm_batch_microbatch_size",
     "Number of inputs in each grouped embedding microbatch request",
@@ -277,6 +299,22 @@ def increment_batch_microbatch_requeue(*, category: str, result: str) -> None:
 
 def observe_batch_microbatch_retry_delay(*, category: str, delay_seconds: float) -> None:
     deltallm_batch_microbatch_retry_delay_metric.labels(category=sanitize_label(category)).observe(
+        max(0.0, float(delay_seconds))
+    )
+
+
+def increment_batch_model_group_deferral(*, reason: str) -> None:
+    deltallm_batch_model_group_deferrals_metric.labels(reason=sanitize_label(reason)).inc()
+
+
+def increment_batch_model_group_deferred_items(*, reason: str, count: int = 1) -> None:
+    deltallm_batch_model_group_deferred_items_metric.labels(reason=sanitize_label(reason)).inc(
+        max(0, int(count))
+    )
+
+
+def observe_batch_model_group_deferral_seconds(*, reason: str, delay_seconds: float) -> None:
+    deltallm_batch_model_group_deferral_seconds_metric.labels(reason=sanitize_label(reason)).observe(
         max(0.0, float(delay_seconds))
     )
 
