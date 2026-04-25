@@ -5,7 +5,7 @@ from enum import Enum
 import logging
 from typing import Any
 
-from src.models.errors import ModelNotFoundError
+from src.models.errors import ModelNotFoundError, NO_HEALTHY_DEPLOYMENTS_CODE, ServiceUnavailableError
 from src.router.state import DeploymentStateBackend
 from src.router.strategies import (
     CostBasedStrategy,
@@ -288,7 +288,12 @@ class Router:
 
     def require_deployment(self, model_group: str, deployment: Deployment | None) -> Deployment:
         if deployment is None:
-            raise ModelNotFoundError(message=f"No healthy deployments available for model '{model_group}'")
+            if self.deployment_registry.get(model_group):
+                raise ServiceUnavailableError(
+                    message=f"No healthy deployments available for model '{model_group}'",
+                    code=NO_HEALTHY_DEPLOYMENTS_CODE,
+                )
+            raise ModelNotFoundError(message=f"Model '{model_group}' is not configured", code="model_not_found")
         return deployment
 
 

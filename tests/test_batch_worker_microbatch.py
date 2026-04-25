@@ -16,7 +16,13 @@ from src.batch.embedding_microbatch import (
 )
 from src.batch.models import BatchItemRecord, BatchJobRecord, BatchJobStatus
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
-from src.models.errors import BudgetExceededError, ModelNotFoundError, RateLimitError, ServiceUnavailableError
+from src.models.errors import (
+    BudgetExceededError,
+    ModelNotFoundError,
+    NO_HEALTHY_DEPLOYMENTS_CODE,
+    RateLimitError,
+    ServiceUnavailableError,
+)
 from src.models.requests import EmbeddingRequest
 
 
@@ -234,7 +240,10 @@ async def test_batch_retries_no_healthy_deployments_with_backoff(monkeypatch):
         job=_build_job(),
         item=item,
         model_name=item.request_body["model"],
-        exc=ModelNotFoundError(message="No healthy deployments available for model 'text-embedding-3-small'"),
+        exc=ServiceUnavailableError(
+            message="No healthy deployments available for model 'text-embedding-3-small'",
+            code=NO_HEALTHY_DEPLOYMENTS_CODE,
+        ),
         deployment_id=None,
         started_at_monotonic=0.0,
     )
@@ -245,7 +254,7 @@ async def test_batch_retries_no_healthy_deployments_with_backoff(monkeypatch):
             "worker_id": "w1",
             "error_body": {
                 "message": "No healthy deployments available for model 'text-embedding-3-small'",
-                "type": "ModelNotFoundError",
+                "type": "ServiceUnavailableError",
             },
             "last_error": "No healthy deployments available for model 'text-embedding-3-small'",
             "retryable": True,

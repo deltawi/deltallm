@@ -10,8 +10,6 @@ import random
 from time import perf_counter
 from typing import Any, Awaitable, Callable
 
-import httpx
-
 from src.batch.embedding_microbatch import (
     allocate_embedding_usage,
     build_embedding_execution_signature,
@@ -19,6 +17,7 @@ from src.batch.embedding_microbatch import (
     estimate_embedding_microbatch_weight,
     resolve_effective_upstream_max_batch_inputs,
 )
+from src.batch.retry import BatchResponseShapeError, BatchRetryDecision, classify_batch_retry
 from src.batch.repository import BatchRepository
 from src.billing.cost import ModelPricing, completion_cost
 from src.metrics import (
@@ -29,13 +28,6 @@ from src.metrics import (
     observe_batch_microbatch_size,
     set_batch_worker_saturation,
 )
-from src.models.errors import (
-    ModelNotFoundError,
-    RateLimitError,
-    ServiceUnavailableError,
-    TimeoutError,
-    parse_retry_after_header,
-)
 from src.models.requests import EmbeddingRequest
 from src.providers.resolution import resolve_provider
 from src.routers.routing_decision import route_failover_kwargs
@@ -44,7 +36,6 @@ from src.batch.worker_types import _PreparedEmbeddingItem, _RequestShim, BatchWo
 
 logger = logging.getLogger(__name__)
 _COMPLETION_OUTBOX_MAX_ATTEMPTS = 5
-_NO_HEALTHY_DEPLOYMENTS_MARKER = "no healthy deployments available"
 
 
 class BatchExecutionEngine:
@@ -163,32 +154,32 @@ class BatchExecutionEngine:
     ) -> list[dict[str, Any]]:
         data_rows = response_body.get("data")
         if not isinstance(data_rows, list):
-            raise ValueError("microbatch response data is not a list")
+            raise BatchResponseShapeError("microbatch response data is not a list")
         if len(data_rows) != expected_count:
-            raise ValueError(
+            raise BatchResponseShapeError(
                 f"microbatch response length mismatch expected={expected_count} actual={len(data_rows)}"
             )
 
         normalized_rows: list[dict[str, Any] | None] = [None] * expected_count
         for row_number, row in enumerate(data_rows):
             if not isinstance(row, dict):
-                raise ValueError(f"microbatch response item {row_number} is not an object")
+                raise BatchResponseShapeError(f"microbatch response item {row_number} is not an object")
             if "embedding" not in row:
-                raise ValueError(f"microbatch response item {row_number} is missing embedding")
+                raise BatchResponseShapeError(f"microbatch response item {row_number} is missing embedding")
 
             response_index = row.get("index")
             if type(response_index) is not int:
-                raise ValueError(f"microbatch response item {row_number} has invalid index")
+                raise BatchResponseShapeError(f"microbatch response item {row_number} has invalid index")
             if response_index < 0 or response_index >= expected_count:
-                raise ValueError(
+                raise BatchResponseShapeError(
                     f"microbatch response item {row_number} index out of range index={response_index}"
                 )
             if normalized_rows[response_index] is not None:
-                raise ValueError(f"microbatch response contains duplicate index={response_index}")
+                raise BatchResponseShapeError(f"microbatch response contains duplicate index={response_index}")
             normalized_rows[response_index] = dict(row)
 
         if any(row is None for row in normalized_rows):
-            raise ValueError("microbatch response is missing one or more expected indexes")
+            raise BatchResponseShapeError("microbatch response is missing one or more expected indexes")
 
         return [row for row in normalized_rows if row is not None]
 
@@ -216,9 +207,10 @@ class BatchExecutionEngine:
         started_at_monotonic: float,
     ) -> None:
         batch_id = job.batch_id
-        retryable = self._is_retryable(exc) and item.attempts < self.config.max_attempts
+        retry_decision = classify_batch_retry(exc)
+        retryable = retry_decision.retryable and item.attempts < self.config.max_attempts
         error_payload = {"message": str(exc), "type": exc.__class__.__name__}
-        retry_delay = self._retry_delay_seconds(item_attempts=item.attempts, exc=exc) if retryable else 0
+        retry_delay = self._retry_delay_seconds(item_attempts=item.attempts, decision=retry_decision) if retryable else 0
         updated = await self.repository.mark_item_failed(
             item_id=item.item_id,
             worker_id=self.config.worker_id,
@@ -556,7 +548,7 @@ class BatchExecutionEngine:
                 exc=exc,
                 reference=",".join(item_ids),
             )
-            if isinstance(exc, ValueError):
+            if isinstance(exc, BatchResponseShapeError):
                 logger.warning(
                     "batch embedding microbatch response mismatch batch_id=%s deployment_id=%s size=%s error=%s",
                     batch_id,
@@ -1043,11 +1035,11 @@ class BatchExecutionEngine:
                     hook_exc,
                 )
 
-    def _retry_delay_seconds(self, *, item_attempts: int, exc: Exception) -> int:
+    def _retry_delay_seconds(self, *, item_attempts: int, decision: BatchRetryDecision) -> int:
         initial = max(1, int(self.config.retry_initial_seconds))
         max_delay = max(initial, int(self.config.retry_max_seconds))
         multiplier = max(1.0, float(self.config.retry_multiplier))
-        retry_after = self._retry_after_seconds(exc)
+        retry_after = decision.retry_after_seconds
         provider_delay = min(max_delay, retry_after) if retry_after is not None else None
 
         exponent = max(0, item_attempts - 1)
@@ -1058,27 +1050,3 @@ class BatchExecutionEngine:
 
         lower_bound = max(1, provider_delay or 0, ceil(target_delay / 2))
         return random.randint(lower_bound, target_delay)
-
-    def _retry_after_seconds(self, exc: Exception) -> int | None:
-        if isinstance(exc, RateLimitError):
-            retry_after = getattr(exc, "retry_after", None)
-            if retry_after is None:
-                return None
-            return max(0, int(retry_after))
-
-        if isinstance(exc, httpx.HTTPStatusError):
-            return parse_retry_after_header(exc.response.headers.get("Retry-After"))
-        return None
-
-    def _has_no_healthy_deployments_message(self, exc: Exception) -> bool:
-        return _NO_HEALTHY_DEPLOYMENTS_MARKER in str(exc).lower()
-
-    def _is_retryable(self, exc: Exception) -> bool:
-        if isinstance(exc, (httpx.TimeoutException, httpx.TransportError, TimeoutError, RateLimitError, ServiceUnavailableError)):
-            return True
-        if isinstance(exc, ModelNotFoundError):
-            return self._has_no_healthy_deployments_message(exc)
-        if isinstance(exc, httpx.HTTPStatusError):
-            status_code = exc.response.status_code
-            return status_code == 429 or status_code >= 500
-        return False

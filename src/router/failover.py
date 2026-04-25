@@ -12,6 +12,7 @@ import httpx
 
 from src.models.errors import (
     InvalidRequestError,
+    NO_HEALTHY_DEPLOYMENTS_CODE,
     ProxyError,
     RateLimitError,
     ServiceUnavailableError,
@@ -431,7 +432,10 @@ class FailoverManager:
             raise last_error
         if last_error is not None:
             raise ServiceUnavailableError(message=f"All deployments exhausted: {last_error}")
-        raise ServiceUnavailableError(message="No healthy deployments available")
+        raise ServiceUnavailableError(
+            message="No healthy deployments available",
+            code=NO_HEALTHY_DEPLOYMENTS_CODE,
+        )
 
     def _get_classified_fallbacks(
         self,

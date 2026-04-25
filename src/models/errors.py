@@ -5,6 +5,9 @@ from email.utils import parsedate_to_datetime
 from math import ceil
 
 
+NO_HEALTHY_DEPLOYMENTS_CODE = "no_healthy_deployments"
+
+
 def parse_retry_after_header(value: str | None) -> int | None:
     if value is None:
         return None
