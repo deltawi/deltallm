@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.models.errors import ServiceUnavailableError
+from src.models.errors import ModelNotFoundError, NO_HEALTHY_DEPLOYMENTS_CODE, ServiceUnavailableError
 import src.router.strategies as strategies_module
 from src.router import (
     HealthEndpointHandler,
@@ -263,6 +263,38 @@ async def test_cooldown_batch_uses_local_fallback_state():
     cooldowns = await state.get_cooldown_batch(["dep-a", "dep-b"])
 
     assert cooldowns == {"dep-a": True, "dep-b": False}
+
+
+def test_require_deployment_raises_service_unavailable_when_group_exists_but_none_healthy():
+    router = Router(
+        strategy=RoutingStrategy.SIMPLE_SHUFFLE,
+        state_backend=RedisStateBackend(redis=None),
+        config=RouterConfig(),
+        deployment_registry=build_deployment_registry(
+            {"gpt-4o-mini": [{"deployment_id": "dep-a", "deltallm_params": {"model": "openai/gpt-4o-mini"}}]}
+        ),
+    )
+
+    with pytest.raises(ServiceUnavailableError) as exc_info:
+        router.require_deployment("gpt-4o-mini", None)
+
+    assert exc_info.value.code == NO_HEALTHY_DEPLOYMENTS_CODE
+    assert exc_info.value.status_code == 503
+
+
+def test_require_deployment_raises_model_not_found_for_missing_group():
+    router = Router(
+        strategy=RoutingStrategy.SIMPLE_SHUFFLE,
+        state_backend=RedisStateBackend(redis=None),
+        config=RouterConfig(),
+        deployment_registry=build_deployment_registry({}),
+    )
+
+    with pytest.raises(ModelNotFoundError) as exc_info:
+        router.require_deployment("missing-model", None)
+
+    assert exc_info.value.code == "model_not_found"
+    assert exc_info.value.status_code == 404
 
 
 @pytest.mark.asyncio
