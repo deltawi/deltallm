@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.batch import BatchCleanupConfig, BatchRetentionCleanupWorker, BatchRepository
+from src.batch.backpressure import BatchBackpressureCoordinator
 from src.batch.create.admin_service import BatchCreateSessionAdminService
 from src.batch.create.cleanup import BatchCreateSessionCleanupConfig, BatchCreateSessionCleanupWorker
 from src.batch.create.promoter import BatchCreateSessionPromoter
@@ -33,6 +34,7 @@ _WORKER_SHUTDOWN_DRAIN_TIMEOUT_SECONDS = 30.0
 
 @dataclass
 class BatchRuntime:
+    backpressure: BatchBackpressureCoordinator | None = None
     worker: BatchExecutorWorker | None = None
     worker_task: Task[None] | None = None
     completion_outbox_worker: BatchCompletionOutboxWorker | None = None
@@ -171,6 +173,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         app.state.batch_create_session_service = None
         app.state.batch_create_session_admin_service = None
         app.state.batch_create_session_cleanup_worker = None
+        app.state.batch_backpressure = None
         runtime.statuses = (BootstrapStatus("embeddings_batch", "disabled"),)
         return runtime
 
@@ -184,6 +187,13 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
     app.state.batch_create_session_service = None
     app.state.batch_create_session_admin_service = None
     app.state.batch_create_session_cleanup_worker = None
+    runtime.backpressure = BatchBackpressureCoordinator(
+        redis_client=getattr(app.state, "redis", None),
+        enabled=cfg.general_settings.embeddings_batch_model_group_backpressure_enabled,
+        min_delay_seconds=cfg.general_settings.embeddings_batch_model_group_backpressure_min_seconds,
+        max_delay_seconds=cfg.general_settings.embeddings_batch_model_group_backpressure_max_seconds,
+    )
+    app.state.batch_backpressure = runtime.backpressure
     app.state.batch_service = BatchService(
         repository=repository,
         storage=batch_storage,

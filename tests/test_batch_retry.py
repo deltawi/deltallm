@@ -3,6 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from src.batch.backpressure import BatchModelGroupDeferred
 from src.batch.retry import BatchResponseShapeError, BatchRetryCategory, classify_batch_retry
 from src.models.errors import (
     BudgetExceededError,
@@ -49,6 +50,16 @@ def _http_status_error(status_code: int, *, retry_after: str | None = None) -> h
             BatchRetryCategory.NO_HEALTHY_DEPLOYMENTS,
             True,
             None,
+        ),
+        (
+            BatchModelGroupDeferred(
+                model_group="group:text-embedding-3-small",
+                reason="no_healthy_deployments",
+                retry_after_seconds=12,
+            ),
+            BatchRetryCategory.NO_HEALTHY_DEPLOYMENTS,
+            True,
+            12,
         ),
         (BudgetExceededError(message="Budget exceeded"), BatchRetryCategory.BUDGET, False, None),
         (InvalidRequestError(message="bad request"), BatchRetryCategory.INVALID_REQUEST, False, None),

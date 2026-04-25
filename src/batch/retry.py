@@ -5,6 +5,7 @@ from enum import StrEnum
 
 import httpx
 
+from src.batch.backpressure import BatchModelGroupDeferred
 from src.models.errors import (
     BudgetExceededError,
     InvalidRequestError,
@@ -54,6 +55,13 @@ class BatchRetryDecision:
 
 
 def classify_batch_retry(exc: Exception) -> BatchRetryDecision:
+    if isinstance(exc, BatchModelGroupDeferred):
+        return BatchRetryDecision(
+            retryable=True,
+            category=BatchRetryCategory.NO_HEALTHY_DEPLOYMENTS,
+            retry_after_seconds=exc.retry_after_seconds,
+        )
+
     if isinstance(exc, RateLimitError):
         return BatchRetryDecision(
             retryable=True,
