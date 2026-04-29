@@ -26,3 +26,61 @@ export function fmtCompact(n: number | null | undefined): string {
   }
   return v.toLocaleString();
 }
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+function parseUtcDate(value: string | Date | null | undefined): Date | null {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const hasTimezone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(trimmed);
+  const date = new Date(hasTimezone ? trimmed : `${trimmed}Z`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function toUtcDateTimeLocalInputValue(value: string | Date | null | undefined): string {
+  const date = parseUtcDate(value);
+  if (!date) return '';
+  return [
+    date.getUTCFullYear(),
+    '-',
+    pad2(date.getUTCMonth() + 1),
+    '-',
+    pad2(date.getUTCDate()),
+    'T',
+    pad2(date.getUTCHours()),
+    ':',
+    pad2(date.getUTCMinutes()),
+  ].join('');
+}
+
+export function dateTimeLocalUtcInputToIso(value: string): string | null {
+  if (!value.trim()) return null;
+  const date = new Date(`${value.trim()}Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
+}
+
+export function defaultMonthlyResetUtcInputValue(): string {
+  const nextMonth = new Date();
+  nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1, 1);
+  nextMonth.setUTCHours(0, 0, 0, 0);
+  return toUtcDateTimeLocalInputValue(nextMonth);
+}
+
+export function fmtUtcDateTime(value: string | null | undefined): string {
+  const date = parseUtcDate(value);
+  if (!date) return '';
+  return date.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'UTC',
+    timeZoneName: 'short',
+  });
+}

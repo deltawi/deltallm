@@ -18,6 +18,8 @@ class FakeAdminDB:
                 organization_name,
                 max_budget,
                 soft_budget,
+                budget_duration,
+                budget_reset_at,
                 rpm_limit,
                 tpm_limit,
                 rph_limit,
@@ -27,12 +29,14 @@ class FakeAdminDB:
                 model_tpm_limit,
                 audit_content_storage_enabled,
                 metadata,
-            ) = params[:13]
+            ) = params[:15]
             self.organizations[organization_id] = {
                 "organization_id": organization_id,
                 "organization_name": organization_name,
                 "max_budget": max_budget,
                 "soft_budget": soft_budget,
+                "budget_duration": budget_duration,
+                "budget_reset_at": budget_reset_at,
                 "spend": 0.0,
                 "rpm_limit": rpm_limit,
                 "tpm_limit": tpm_limit,
@@ -53,6 +57,8 @@ class FakeAdminDB:
                 organization_name,
                 max_budget,
                 soft_budget,
+                budget_duration,
+                budget_reset_at,
                 rpm_limit,
                 tpm_limit,
                 rph_limit,
@@ -63,13 +69,15 @@ class FakeAdminDB:
                 audit_content_storage_enabled,
                 metadata,
                 organization_id,
-            ) = params[:13]
+            ) = params[:15]
             row = self.organizations[organization_id]
             row.update(
                 {
                     "organization_name": organization_name,
                     "max_budget": max_budget,
                     "soft_budget": soft_budget,
+                    "budget_duration": budget_duration,
+                    "budget_reset_at": budget_reset_at,
                     "rpm_limit": rpm_limit,
                     "tpm_limit": tpm_limit,
                     "rph_limit": rph_limit,
@@ -78,7 +86,7 @@ class FakeAdminDB:
                     "model_rpm_limit": model_rpm_limit,
                     "model_tpm_limit": model_tpm_limit,
                     "audit_content_storage_enabled": bool(audit_content_storage_enabled),
-                    "metadata": metadata or row.get("metadata") or {},
+                    "metadata": metadata or {},
                     "updated_at": datetime.now(tz=UTC),
                 }
             )

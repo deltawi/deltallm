@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import UTC, datetime
 import json
 import secrets
 from time import perf_counter
@@ -45,6 +46,10 @@ from src.services.ui_authorization import build_organization_capabilities
 
 router = APIRouter(tags=["Admin Organizations"])
 
+_BUDGET_RESET_METADATA_KEY = "_budget_reset"
+_MONTHLY_ANCHOR_DAY_KEY = "monthly_anchor_day"
+_MAX_BUDGET_DURATION_AMOUNT = 10_000
+
 
 def _organization_response_payload(
     organization: dict[str, Any],
@@ -52,8 +57,10 @@ def _organization_response_payload(
     capabilities: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
     payload = to_json_value(dict(organization))
-    if isinstance(payload, dict) and capabilities is not None:
-        payload["capabilities"] = capabilities
+    if isinstance(payload, dict):
+        payload["budget_reset_at"] = _serialize_budget_reset_at(organization.get("budget_reset_at"))
+        if capabilities is not None:
+            payload["capabilities"] = capabilities
     return payload
 
 
@@ -77,6 +84,149 @@ def _optional_float(value: Any, field_name: str) -> float | None:
     if parsed < 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be >= 0")
     return parsed
+
+
+def _optional_budget_duration(value: Any, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be a string")
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if _parse_budget_duration(normalized) is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} must be a positive integer up to {_MAX_BUDGET_DURATION_AMOUNT} followed by h, d, or mo",
+        )
+    return normalized
+
+
+def _parse_budget_duration(value: str) -> tuple[int, str] | None:
+    if value.endswith("mo"):
+        amount_raw = value[:-2]
+        unit = "mo"
+    else:
+        amount_raw = value[:-1]
+        unit = value[-1:]
+    if not amount_raw.isdigit():
+        return None
+    amount = int(amount_raw)
+    if amount <= 0 or amount > _MAX_BUDGET_DURATION_AMOUNT or unit not in {"h", "d", "mo"}:
+        return None
+    return amount, unit
+
+
+def _budget_duration_unit(value: str | None) -> str | None:
+    if value is None:
+        return None
+    parsed = _parse_budget_duration(value)
+    return parsed[1] if parsed is not None else None
+
+
+def _optional_datetime(value: Any, field_name: str) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return _as_utc_datetime(value)
+    if not isinstance(value, str):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be an ISO 8601 datetime")
+    normalized = value.strip()
+    if not normalized:
+        return None
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be an ISO 8601 datetime") from exc
+    return _as_utc_datetime(parsed)
+
+
+def _resolve_budget_reset_fields(
+    payload: dict[str, Any],
+    *,
+    existing: dict[str, Any] | None = None,
+) -> tuple[str | None, datetime | None]:
+    existing = existing or {}
+    reset_fields_provided = "budget_duration" in payload or "budget_reset_at" in payload
+    if not reset_fields_provided and existing:
+        duration = _existing_budget_duration(existing.get("budget_duration"))
+        reset_at = _coerce_budget_reset_datetime(existing.get("budget_reset_at"))
+        return duration, reset_at
+
+    duration_raw = payload["budget_duration"] if "budget_duration" in payload else existing.get("budget_duration")
+    reset_at_raw = payload["budget_reset_at"] if "budget_reset_at" in payload else existing.get("budget_reset_at")
+    duration = _optional_budget_duration(duration_raw, "budget_duration")
+    reset_at = _optional_datetime(reset_at_raw, "budget_reset_at")
+
+    if duration is None and reset_at is None:
+        return None, None
+    if duration is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="budget_duration is required when budget_reset_at is set")
+    if reset_at is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="budget_reset_at is required when budget_duration is set")
+    return duration, reset_at
+
+
+def _existing_budget_duration(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _as_utc_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _budget_reset_storage_value(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return _as_utc_datetime(value).replace(tzinfo=None)
+
+
+def _serialize_budget_reset_at(value: Any) -> str | None:
+    parsed = _coerce_budget_reset_datetime(value)
+    if parsed is None:
+        return None
+    return _as_utc_datetime(parsed).isoformat().replace("+00:00", "Z")
+
+
+def _coerce_budget_reset_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return _as_utc_datetime(value)
+    if isinstance(value, str):
+        try:
+            return _as_utc_datetime(datetime.fromisoformat(value.replace("Z", "+00:00")))
+        except ValueError:
+            return None
+    return None
+
+
+def _apply_budget_reset_metadata(
+    metadata: dict[str, Any] | None,
+    *,
+    duration: str | None,
+    reset_at: datetime | None,
+    reset_fields_provided: bool,
+) -> dict[str, Any] | None:
+    if not reset_fields_provided:
+        return metadata
+
+    next_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    if _budget_duration_unit(duration) == "mo" and reset_at is not None:
+        raw_budget_reset_settings = next_metadata.get(_BUDGET_RESET_METADATA_KEY)
+        budget_reset_settings = dict(raw_budget_reset_settings) if isinstance(raw_budget_reset_settings, dict) else {}
+        budget_reset_settings[_MONTHLY_ANCHOR_DAY_KEY] = _as_utc_datetime(reset_at).day
+        next_metadata[_BUDGET_RESET_METADATA_KEY] = budget_reset_settings
+    else:
+        next_metadata.pop(_BUDGET_RESET_METADATA_KEY, None)
+    return next_metadata or None
 
 
 def _validate_model_limit_dict(value: Any, field_name: str) -> dict[str, int] | None:
@@ -449,7 +599,7 @@ async def list_organizations(
 
     where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 
-    select_cols = """o.organization_id, o.organization_name, o.max_budget, o.soft_budget, o.spend, o.rpm_limit, o.tpm_limit,
+    select_cols = """o.organization_id, o.organization_name, o.max_budget, o.soft_budget, o.spend, o.budget_duration, o.budget_reset_at, o.rpm_limit, o.tpm_limit,
                    o.rph_limit, o.rpd_limit, o.tpd_limit,
                    o.model_rpm_limit, o.model_tpm_limit,
                    o.audit_content_storage_enabled, o.metadata, o.created_at, o.updated_at,
@@ -497,7 +647,7 @@ async def get_organization(
     db = db_or_503(request)
     rows = await db.query_raw(
         """
-        SELECT organization_id, organization_name, max_budget, soft_budget, spend, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
+        SELECT organization_id, organization_name, max_budget, soft_budget, spend, budget_duration, budget_reset_at, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
         FROM deltallm_organizationtable
         WHERE organization_id = $1
         LIMIT 1
@@ -658,6 +808,9 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
     soft_budget = _optional_float(payload.get("soft_budget"), "soft_budget")
     if max_budget is not None and soft_budget is not None and soft_budget > max_budget:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="soft_budget must be less than or equal to max_budget")
+    reset_fields_provided = "budget_duration" in payload or "budget_reset_at" in payload
+    budget_duration, budget_reset_at = _resolve_budget_reset_fields(payload)
+    budget_reset_at_storage = _budget_reset_storage_value(budget_reset_at)
     rpm_limit = optional_int(payload.get("rpm_limit"), "rpm_limit")
     tpm_limit = optional_int(payload.get("tpm_limit"), "tpm_limit")
     rph_limit = optional_int(payload.get("rph_limit"), "rph_limit")
@@ -673,6 +826,12 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
         _audit_retention_metadata(payload),
         enabled=False,
     )
+    metadata = _apply_budget_reset_metadata(
+        metadata,
+        duration=budget_duration,
+        reset_at=budget_reset_at,
+        reset_fields_provided=True,
+    )
     route_group_bindings = _normalize_route_group_binding_payloads(payload.get("route_group_bindings"))
     callable_target_bindings = _normalize_callable_target_binding_payloads(payload.get("callable_target_bindings"))
     _validate_route_group_callable_target_overlap(route_group_bindings, callable_target_bindings)
@@ -685,7 +844,7 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
         catalog=catalog,
     )
 
-    async def _apply_create(db_client: Any, *, route_repository, callable_repository) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:  # noqa: ANN001
+    async def _apply_create(db_client: Any, *, route_repository, callable_repository) -> dict[str, Any]:  # noqa: ANN001
         await db_client.execute_raw(
             """
             INSERT INTO deltallm_organizationtable (
@@ -694,6 +853,8 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
                 organization_name,
                 max_budget,
                 soft_budget,
+                budget_duration,
+                budget_reset_at,
                 spend,
                 rpm_limit,
                 tpm_limit,
@@ -707,12 +868,20 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
                 created_at,
                 updated_at
             )
-            VALUES (gen_random_uuid(), $1, $2, $3, $4, 0, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13::jsonb, NOW(), NOW())
+            VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6::timestamp, 0, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, $14, $15::jsonb, NOW(), NOW())
             ON CONFLICT (organization_id)
             DO UPDATE SET
                 organization_name = EXCLUDED.organization_name,
                 max_budget = EXCLUDED.max_budget,
                 soft_budget = EXCLUDED.soft_budget,
+                budget_duration = CASE
+                    WHEN $16::boolean THEN EXCLUDED.budget_duration
+                    ELSE deltallm_organizationtable.budget_duration
+                END,
+                budget_reset_at = CASE
+                    WHEN $16::boolean THEN EXCLUDED.budget_reset_at
+                    ELSE deltallm_organizationtable.budget_reset_at
+                END,
                 rpm_limit = EXCLUDED.rpm_limit,
                 tpm_limit = EXCLUDED.tpm_limit,
                 rph_limit = EXCLUDED.rph_limit,
@@ -721,13 +890,21 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
                 model_rpm_limit = EXCLUDED.model_rpm_limit,
                 model_tpm_limit = EXCLUDED.model_tpm_limit,
                 audit_content_storage_enabled = EXCLUDED.audit_content_storage_enabled,
-                metadata = COALESCE(EXCLUDED.metadata, deltallm_organizationtable.metadata),
+                metadata = CASE
+                    WHEN NOT $16::boolean
+                    THEN NULLIF(COALESCE(deltallm_organizationtable.metadata, '{}'::jsonb) || COALESCE(EXCLUDED.metadata, '{}'::jsonb), '{}'::jsonb)
+                    WHEN EXCLUDED.budget_duration IS NULL OR EXCLUDED.budget_duration NOT LIKE '%mo'
+                    THEN NULLIF((COALESCE(deltallm_organizationtable.metadata, '{}'::jsonb) || COALESCE(EXCLUDED.metadata, '{}'::jsonb)) - '_budget_reset', '{}'::jsonb)
+                    ELSE NULLIF(COALESCE(deltallm_organizationtable.metadata, '{}'::jsonb) || COALESCE(EXCLUDED.metadata, '{}'::jsonb), '{}'::jsonb)
+                END,
                 updated_at = NOW()
             """,
             organization_id,
             organization_name,
             max_budget,
             soft_budget,
+            budget_duration,
+            budget_reset_at_storage,
             rpm_limit,
             tpm_limit,
             rph_limit,
@@ -737,7 +914,20 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
             json.dumps(model_tpm_limit) if model_tpm_limit else None,
             bool(audit_content_storage_enabled) if audit_content_storage_enabled is not None else False,
             metadata if metadata is not None else None,
+            reset_fields_provided,
         )
+        persisted_rows = await db_client.query_raw(
+            """
+            SELECT organization_id, organization_name, max_budget, soft_budget, spend, budget_duration, budget_reset_at, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
+            FROM deltallm_organizationtable
+            WHERE organization_id = $1
+            LIMIT 1
+            """,
+            organization_id,
+        )
+        if not persisted_rows:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+        response_payload = _organization_response_payload(dict(persisted_rows[0]))
         applied_route_group_bindings = (
             await _sync_org_route_group_bindings(
                 request,
@@ -762,40 +952,25 @@ async def create_organization(request: Request, payload: dict[str, Any]) -> dict
             if callable_target_bindings
             else []
         )
-        return applied_route_group_bindings, applied_callable_target_bindings
+        response_payload["route_group_bindings"] = applied_route_group_bindings
+        response_payload["callable_target_bindings"] = applied_callable_target_bindings
+        return response_payload
 
     if hasattr(db, "tx"):
         async with db.tx() as tx:
-            applied_route_group_bindings, applied_callable_target_bindings = await _apply_create(
+            response = await _apply_create(
                 tx,
                 route_repository=_route_group_repository_for_request(request, db_client=tx),
                 callable_repository=_callable_target_binding_repository_for_request(request, db_client=tx),
             )
     else:
-        applied_route_group_bindings, applied_callable_target_bindings = await _apply_create(
+        response = await _apply_create(
             db,
             route_repository=route_repo,
             callable_repository=callable_binding_repo,
         )
     if route_group_bindings or callable_target_bindings:
         await reload_callable_target_grants(request)
-    response = {
-        "organization_id": organization_id,
-        "organization_name": organization_name,
-        "max_budget": max_budget,
-        "soft_budget": soft_budget,
-        "rpm_limit": rpm_limit,
-        "tpm_limit": tpm_limit,
-        "rph_limit": rph_limit,
-        "rpd_limit": rpd_limit,
-        "tpd_limit": tpd_limit,
-        "model_rpm_limit": model_rpm_limit,
-        "model_tpm_limit": model_tpm_limit,
-        "audit_content_storage_enabled": bool(audit_content_storage_enabled) if audit_content_storage_enabled is not None else False,
-        "metadata": metadata or {},
-        "route_group_bindings": applied_route_group_bindings,
-        "callable_target_bindings": applied_callable_target_bindings,
-    }
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -821,7 +996,7 @@ async def update_organization(
     scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.ORG_UPDATE)
     rows = await db.query_raw(
         """
-        SELECT organization_id, organization_name, max_budget, soft_budget, spend, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
+        SELECT organization_id, organization_name, max_budget, soft_budget, spend, budget_duration, budget_reset_at, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
         FROM deltallm_organizationtable
         WHERE organization_id = $1
         LIMIT 1
@@ -837,6 +1012,9 @@ async def update_organization(
     soft_budget = _optional_float(payload.get("soft_budget", existing.get("soft_budget")), "soft_budget")
     if max_budget is not None and soft_budget is not None and soft_budget > max_budget:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="soft_budget must be less than or equal to max_budget")
+    reset_fields_provided = "budget_duration" in payload or "budget_reset_at" in payload
+    budget_duration, budget_reset_at = _resolve_budget_reset_fields(payload, existing=existing)
+    budget_reset_at_storage = _budget_reset_storage_value(budget_reset_at)
     rpm_limit = optional_int(payload.get("rpm_limit", existing.get("rpm_limit")), "rpm_limit")
     tpm_limit = optional_int(payload.get("tpm_limit", existing.get("tpm_limit")), "tpm_limit")
     rph_limit = optional_int(payload.get("rph_limit", existing.get("rph_limit")), "rph_limit")
@@ -888,6 +1066,12 @@ async def update_organization(
             and callable_target_bindings is None
         ),
     )
+    metadata = _apply_budget_reset_metadata(
+        metadata,
+        duration=budget_duration,
+        reset_at=budget_reset_at,
+        reset_fields_provided=reset_fields_provided,
+    )
 
     async def _apply_update(db_client: Any, *, route_repository, callable_repository):  # noqa: ANN001, ANN202
         await db_client.execute_raw(
@@ -896,21 +1080,25 @@ async def update_organization(
             SET organization_name = $1,
                 max_budget = $2,
                 soft_budget = $3,
-                rpm_limit = $4,
-                tpm_limit = $5,
-                rph_limit = $6,
-                rpd_limit = $7,
-                tpd_limit = $8,
-                model_rpm_limit = $9::jsonb,
-                model_tpm_limit = $10::jsonb,
-                audit_content_storage_enabled = $11,
-                metadata = $12::jsonb,
+                budget_duration = $4,
+                budget_reset_at = $5::timestamp,
+                rpm_limit = $6,
+                tpm_limit = $7,
+                rph_limit = $8,
+                rpd_limit = $9,
+                tpd_limit = $10,
+                model_rpm_limit = $11::jsonb,
+                model_tpm_limit = $12::jsonb,
+                audit_content_storage_enabled = $13,
+                metadata = $14::jsonb,
                 updated_at = NOW()
-            WHERE organization_id = $13
+            WHERE organization_id = $15
             """,
             organization_name,
             max_budget,
             soft_budget,
+            budget_duration,
+            budget_reset_at_storage,
             rpm_limit,
             tpm_limit,
             rph_limit,
@@ -924,7 +1112,7 @@ async def update_organization(
         )
         updated_rows = await db_client.query_raw(
             """
-            SELECT organization_id, organization_name, max_budget, soft_budget, spend, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
+            SELECT organization_id, organization_name, max_budget, soft_budget, spend, budget_duration, budget_reset_at, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, model_rpm_limit, model_tpm_limit, audit_content_storage_enabled, metadata, created_at, updated_at
             FROM deltallm_organizationtable
             WHERE organization_id = $1
             LIMIT 1

@@ -4,6 +4,7 @@ import { useApi } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
 import { callableTargets, organizations } from '../lib/api';
 import { buildCatalogAssetTargets } from '../lib/assetAccess';
+import { dateTimeLocalUtcInputToIso, defaultMonthlyResetUtcInputValue } from '../lib/format';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import {
   Building2, X, DollarSign, Gauge, TrendingUp, Info,
@@ -128,10 +129,12 @@ export default function OrganizationCreate() {
   const [name, setName] = useState('');
   const [nameError, setNameError] = useState(false);
   const [budgetEnabled, setBudgetEnabled] = useState(false);
+  const [monthlyResetEnabled, setMonthlyResetEnabled] = useState(false);
   const [rpmEnabled, setRpmEnabled] = useState(false);
   const [tpmEnabled, setTpmEnabled] = useState(false);
   const [budgetValue, setBudgetValue] = useState('');
   const [softBudgetValue, setSoftBudgetValue] = useState('');
+  const [budgetResetAt, setBudgetResetAt] = useState('');
   const [rpmValue, setRpmValue] = useState('');
   const [tpmValue, setTpmValue] = useState('');
   const [rphEnabled, setRphEnabled] = useState(false);
@@ -180,15 +183,31 @@ export default function OrganizationCreate() {
 
   const isReady = name.trim().length > 0;
 
+  const handleMonthlyResetToggle = (checked: boolean) => {
+    setMonthlyResetEnabled(checked);
+    if (checked && !budgetResetAt) {
+      setBudgetResetAt(defaultMonthlyResetUtcInputValue());
+    }
+  };
+
   const handleCreate = async () => {
     if (!name.trim()) { setNameError(true); return; }
     setError(null);
     setSaving(true);
     try {
+      const resetAtIso = budgetEnabled && monthlyResetEnabled
+        ? dateTimeLocalUtcInputToIso(budgetResetAt)
+        : null;
+      if (budgetEnabled && monthlyResetEnabled && !resetAtIso) {
+        setError('Choose a valid next reset date.');
+        return;
+      }
       const payload = {
         organization_name: name.trim(),
         max_budget: budgetEnabled && budgetValue ? Number(budgetValue) : undefined,
         soft_budget: budgetEnabled && softBudgetValue ? Number(softBudgetValue) : undefined,
+        budget_duration: budgetEnabled && monthlyResetEnabled ? '1mo' : undefined,
+        budget_reset_at: budgetEnabled && monthlyResetEnabled ? resetAtIso : undefined,
         rpm_limit: rpmEnabled && rpmValue ? Number(rpmValue) : undefined,
         tpm_limit: tpmEnabled && tpmValue ? Number(tpmValue) : undefined,
         rph_limit: rphEnabled && rphValue ? Number(rphValue) : undefined,
@@ -340,6 +359,30 @@ export default function OrganizationCreate() {
                         />
                       </div>
                       <p className="text-xs text-gray-400 mt-1">Optional notification threshold before the hard budget cap.</p>
+                    </div>
+                    <div className="mt-3 rounded-lg border border-gray-200 bg-white p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <CalendarDays className="h-4 w-4 text-blue-600" />
+                          <span className="text-sm font-medium text-gray-800">Monthly reset</span>
+                        </div>
+                        <ToggleSwitch
+                          checked={monthlyResetEnabled}
+                          onCheckedChange={handleMonthlyResetToggle}
+                          aria-label="Toggle monthly budget reset"
+                        />
+                      </div>
+                      {monthlyResetEnabled && (
+                        <div className="mt-3">
+                          <FieldLabel label="Next reset (UTC)" />
+                          <input
+                            value={budgetResetAt}
+                            onChange={(e) => setBudgetResetAt(e.target.value)}
+                            type="datetime-local"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
