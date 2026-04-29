@@ -260,14 +260,13 @@ async def _invalidate_route_group_runtime_cache(app: Any) -> None:
 
 
 async def _sync_auto_follow_org_bindings(app: Any) -> None:
-    changed = await sync_auto_follow_organization_bindings(
+    await sync_auto_follow_organization_bindings(
         db=getattr(getattr(app.state, "prisma_manager", None), "client", None),
         callable_target_binding_repository=getattr(app.state, "callable_target_binding_repository", None),
         route_group_repository=getattr(app.state, "route_group_repository", None),
         callable_target_catalog=getattr(app.state, "callable_target_catalog", None),
     )
-    if changed > 0:
-        await reload_callable_target_grants_for_app(app)
+    await reload_callable_target_grants_for_app(app)
 
 
 def _validate_model_config_or_400(model_config: dict[str, Any]) -> None:

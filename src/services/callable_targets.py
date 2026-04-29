@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
+
+from src.governance.access_groups import access_groups_from_metadata, normalize_access_groups
+
+logger = logging.getLogger(__name__)
 
 
 class DuplicateCallableTargetError(ValueError):
@@ -12,6 +18,7 @@ class DuplicateCallableTargetError(ValueError):
 class CallableTarget:
     key: str
     target_type: Literal["model", "route_group"]
+    access_groups: frozenset[str] = frozenset()
 
 
 def build_callable_target_catalog(
@@ -21,11 +28,15 @@ def build_callable_target_catalog(
     catalog: dict[str, CallableTarget] = {}
     deployment_ids = _collect_deployment_ids(model_registry)
 
-    for model_name in model_registry:
+    for model_name, entries in model_registry.items():
         key = str(model_name).strip()
         if not key:
             continue
-        catalog[key] = CallableTarget(key=key, target_type="model")
+        catalog[key] = CallableTarget(
+            key=key,
+            target_type="model",
+            access_groups=_model_access_groups(key, entries),
+        )
 
     if not route_groups:
         return catalog
@@ -41,7 +52,11 @@ def build_callable_target_catalog(
             raise DuplicateCallableTargetError(
                 f"Callable target key '{group_key}' is declared by both a {existing.target_type} and a route_group"
             )
-        catalog[group_key] = CallableTarget(key=group_key, target_type="route_group")
+        catalog[group_key] = CallableTarget(
+            key=group_key,
+            target_type="route_group",
+            access_groups=_route_group_access_groups(group),
+        )
 
     return catalog
 
@@ -61,6 +76,31 @@ def _collect_deployment_ids(model_registry: dict[str, list[dict[str, object]]]) 
             if deployment_id:
                 deployment_ids.add(deployment_id)
     return deployment_ids
+
+
+def _model_access_groups(model_name: str, entries: list[dict[str, object]]) -> frozenset[str]:
+    resolved: frozenset[str] | None = None
+    for entry in entries:
+        model_info = entry.get("model_info") if isinstance(entry, Mapping) else None
+        groups = access_groups_from_metadata(model_info)
+        if resolved is None:
+            resolved = groups
+            continue
+        if groups != resolved:
+            logger.warning(
+                "callable target access_groups conflict for model_name=%s; "
+                "group expansion disabled for this model",
+                model_name,
+            )
+            return frozenset()
+    return resolved or frozenset()
+
+
+def _route_group_access_groups(group: dict[str, object]) -> frozenset[str]:
+    if isinstance(group, Mapping) and "access_groups" in group:
+        return normalize_access_groups(group.get("access_groups"))
+    metadata = group.get("metadata") if isinstance(group, Mapping) else None
+    return access_groups_from_metadata(metadata)
 
 
 def _route_group_has_live_members(group: dict[str, object], deployment_ids: set[str]) -> bool:

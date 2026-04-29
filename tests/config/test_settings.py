@@ -5,6 +5,7 @@ import pytest
 from src.config import (
     AppConfig,
     ModelInfo,
+    RouteGroupConfig,
     Settings,
     resolve_app_config_with_secrets,
     resolve_database_settings,
@@ -158,3 +159,49 @@ def test_model_info_accepts_valid_upstream_max_batch_inputs():
 def test_model_info_rejects_non_positive_upstream_max_batch_inputs(value: int):
     with pytest.raises(ValueError, match="greater than or equal to 1"):
         ModelInfo.model_validate({"upstream_max_batch_inputs": value})
+
+
+def test_model_info_normalizes_access_groups():
+    info = ModelInfo.model_validate({"access_groups": ["Beta", "support", "beta"]})
+
+    assert info.access_groups == ["beta", "support"]
+    assert info.model_dump()["access_groups"] == ["beta", "support"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "beta",
+        [1],
+        ["bad group"],
+    ],
+)
+def test_model_info_rejects_invalid_access_groups(value: object):
+    with pytest.raises(ValueError, match="access"):
+        ModelInfo.model_validate({"access_groups": value})
+
+
+def test_route_group_config_normalizes_access_groups():
+    group = RouteGroupConfig.model_validate(
+        {
+            "key": "support-fast",
+            "access_groups": ["Support", "support", "beta"],
+            "members": [{"deployment_id": "dep-1"}],
+        }
+    )
+
+    assert group.access_groups == ["beta", "support"]
+    assert group.model_dump()["access_groups"] == ["beta", "support"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "support",
+        [object()],
+        ["bad group"],
+    ],
+)
+def test_route_group_config_rejects_invalid_access_groups(value: object):
+    with pytest.raises(ValueError, match="access"):
+        RouteGroupConfig.model_validate({"key": "support-fast", "access_groups": value})
