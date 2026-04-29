@@ -5,9 +5,14 @@ from datetime import UTC, datetime
 
 import pytest
 
+from src.db.callable_target_access_groups import (
+    CallableTargetAccessGroupBindingCount,
+    CallableTargetAccessGroupBindingRecord,
+)
 from src.db.callable_targets import CallableTargetBindingRecord
 from src.db.callable_target_policies import CallableTargetScopePolicyRecord
 from src.db.route_groups import RouteGroupBindingRecord, RouteGroupRecord
+from src.governance.access_groups import normalize_access_group_key
 from src.services.asset_scopes import normalize_scope_type
 from src.services.callable_targets import CallableTarget
 
@@ -217,6 +222,72 @@ class _FakeCallableTargetBindingRepository:
         return True
 
 
+class _FakeCallableTargetAccessGroupBindingRepository:
+    def __init__(self) -> None:
+        self.bindings: list[CallableTargetAccessGroupBindingRecord] = []
+        self._counter = 0
+        self.unfiltered_list_calls = 0
+        self.group_count_calls = 0
+
+    async def list_bindings(self, *, group_key=None, scope_type=None, scope_id=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+        if group_key is None and scope_type is None and scope_id is None:
+            self.unfiltered_list_calls += 1
+        items = list(self.bindings)
+        if group_key:
+            normalized_group_key = normalize_access_group_key(group_key)
+            items = [item for item in items if item.group_key == normalized_group_key]
+        if scope_type:
+            items = [item for item in items if item.scope_type == normalize_scope_type(scope_type)]
+        if scope_id:
+            items = [item for item in items if item.scope_id == scope_id]
+        sliced = items[offset : offset + limit]
+        return sliced, len(items)
+
+    async def list_group_binding_counts(self, *, search=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+        self.group_count_calls += 1
+        query = str(search or "").strip().lower()
+        counts: dict[str, int] = {}
+        for item in self.bindings:
+            if query and query not in item.group_key.lower():
+                continue
+            counts[item.group_key] = counts.get(item.group_key, 0) + 1
+        rows = [
+            CallableTargetAccessGroupBindingCount(group_key=group_key, binding_count=count)
+            for group_key, count in sorted(counts.items())
+        ]
+        return rows[offset : offset + limit], len(rows)
+
+    async def upsert_binding(self, *, group_key, scope_type, scope_id, enabled, metadata):  # noqa: ANN001, ANN201
+        normalized_group_key = normalize_access_group_key(group_key, strict=True)
+        normalized_scope_type = normalize_scope_type(scope_type)
+        for index, item in enumerate(self.bindings):
+            if item.group_key == normalized_group_key and item.scope_type == normalized_scope_type and item.scope_id == scope_id:
+                updated = replace(item, enabled=enabled, metadata=metadata)
+                self.bindings[index] = updated
+                return updated
+        self._counter += 1
+        record = CallableTargetAccessGroupBindingRecord(
+            callable_target_access_group_binding_id=f"ctagb-{self._counter}",
+            group_key=normalized_group_key,
+            scope_type=normalized_scope_type,
+            scope_id=scope_id,
+            enabled=enabled,
+            metadata=metadata,
+        )
+        self.bindings.append(record)
+        return record
+
+    async def get_binding(self, binding_id: str):  # noqa: ANN201
+        return next((item for item in self.bindings if item.callable_target_access_group_binding_id == binding_id), None)
+
+    async def delete_binding(self, binding_id: str) -> bool:
+        kept = [item for item in self.bindings if item.callable_target_access_group_binding_id != binding_id]
+        if len(kept) == len(self.bindings):
+            return False
+        self.bindings = kept
+        return True
+
+
 class _FakeCallableTargetScopePolicyRepository:
     def __init__(self) -> None:
         self.policies: list[CallableTargetScopePolicyRecord] = []
@@ -351,6 +422,134 @@ async def test_list_callable_targets_uses_runtime_catalog(client, test_app):
     payload = response.json()
     assert payload["pagination"]["total"] == 2
     assert {item["callable_key"] for item in payload["data"]} == {"gpt-4o-mini", "support-fast"}
+
+
+@pytest.mark.asyncio
+async def test_list_callable_target_access_groups_combines_catalog_and_bindings(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    access_group_repo = _FakeCallableTargetAccessGroupBindingRepository()
+    await access_group_repo.upsert_binding(
+        group_key="future",
+        scope_type="organization",
+        scope_id="org-1",
+        enabled=True,
+        metadata=None,
+    )
+    test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
+    test_app.state.callable_target_access_group_repository = access_group_repo
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.callable_target_catalog = {
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})),
+        "support-fast": CallableTarget(key="support-fast", target_type="route_group", access_groups=frozenset({"beta"})),
+    }
+
+    response = await client.get(
+        "/ui/api/callable-target-access-groups",
+        headers={"Authorization": "Bearer mk-test"},
+        params={"include_members": True},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["pagination"]["total"] == 2
+    groups = {item["group_key"]: item for item in payload["data"]}
+    assert groups["beta"]["member_count"] == 2
+    assert {item["callable_key"] for item in groups["beta"]["members"]} == {"gpt-4o-mini", "support-fast"}
+    assert groups["future"]["member_count"] == 0
+    assert groups["future"]["binding_count"] == 1
+    assert access_group_repo.group_count_calls == 1
+    assert access_group_repo.unfiltered_list_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_list_callable_target_access_groups_searches_and_pages_merged_groups(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    access_group_repo = _FakeCallableTargetAccessGroupBindingRepository()
+    await access_group_repo.upsert_binding(
+        group_key="delta",
+        scope_type="organization",
+        scope_id="org-1",
+        enabled=True,
+        metadata=None,
+    )
+    await access_group_repo.upsert_binding(
+        group_key="gamma",
+        scope_type="team",
+        scope_id="team-1",
+        enabled=True,
+        metadata=None,
+    )
+    test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
+    test_app.state.callable_target_access_group_repository = access_group_repo
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.callable_target_catalog = {
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model", access_groups=frozenset({"alpha"})),
+        "support-fast": CallableTarget(key="support-fast", target_type="route_group", access_groups=frozenset({"beta"})),
+    }
+
+    response = await client.get(
+        "/ui/api/callable-target-access-groups",
+        headers={"Authorization": "Bearer mk-test"},
+        params={"search": "a", "limit": 2, "offset": 1},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["pagination"] == {"total": 4, "limit": 2, "offset": 1, "has_more": True}
+    assert [item["group_key"] for item in payload["data"]] == ["beta", "delta"]
+    assert access_group_repo.group_count_calls == 1
+    assert access_group_repo.unfiltered_list_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_callable_target_access_group_binding_admin_lifecycle(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    repo = _FakeCallableTargetAccessGroupBindingRepository()
+    scope_db = _FakeScopeValidationDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": scope_db})()
+    test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
+    test_app.state.callable_target_access_group_repository = repo
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.callable_target_catalog = {
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})),
+    }
+    headers = {"Authorization": "Bearer mk-test"}
+
+    upsert = await client.post(
+        "/ui/api/callable-target-access-group-bindings",
+        headers=headers,
+        json={
+            "group_key": "Beta",
+            "scope_type": "org",
+            "scope_id": "org-1",
+            "enabled": True,
+            "metadata": {"source": "pilot"},
+        },
+    )
+    assert upsert.status_code == 200
+    payload = upsert.json()
+    assert payload["group_key"] == "beta"
+    assert payload["scope_type"] == "organization"
+    assert payload["scope_id"] == "org-1"
+    assert payload["metadata"] == {"source": "pilot"}
+    assert scope_db.organizations[0]["metadata"] is None
+
+    listing = await client.get(
+        "/ui/api/callable-target-access-group-bindings",
+        headers=headers,
+        params={"group_key": "beta", "scope_type": "organization", "scope_id": "org-1"},
+    )
+    assert listing.status_code == 200
+    assert listing.json()["pagination"]["total"] == 1
+
+    scope_db.organizations[0]["metadata"] = {"_callable_target_access": {"auto_follow_catalog": True}}
+    delete = await client.delete(
+        f"/ui/api/callable-target-access-group-bindings/{payload['callable_target_access_group_binding_id']}",
+        headers=headers,
+    )
+    assert delete.status_code == 200
+    assert delete.json()["deleted"] is True
+    assert scope_db.organizations[0]["metadata"] is None
 
 
 @pytest.mark.asyncio

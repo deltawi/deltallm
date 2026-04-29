@@ -13,6 +13,7 @@ from src.auth.roles import OrganizationRole, Permission, validate_organization_r
 from src.audit.actions import AuditAction
 from src.services.asset_binding_mirror import (
     callable_catalog,
+    callable_target_access_group_binding_repository,
     callable_target_binding_repository,
     list_all_callable_target_bindings,
     list_all_route_group_bindings,
@@ -27,6 +28,7 @@ from src.api.admin.endpoints.common import (
     to_json_value,
     validate_runtime_user_scope,
 )
+from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
 from src.db.callable_targets import CallableTargetBindingRepository
 from src.db.route_groups import RouteGroupRepository
 from src.db.repositories import AUDIT_METADATA_RETENTION_DAYS_KEY, AUDIT_PAYLOAD_RETENTION_DAYS_KEY
@@ -301,6 +303,19 @@ def _callable_target_binding_repository_for_request(
         return repository
     if isinstance(repository, CallableTargetBindingRepository):
         return CallableTargetBindingRepository(db_client)
+    return repository
+
+
+def _callable_target_access_group_repository_for_request(
+    request: Request,
+    *,
+    db_client: Any | None = None,
+) -> CallableTargetAccessGroupBindingRepository | Any | None:
+    repository = callable_target_access_group_binding_repository(request)
+    if repository is None or db_client is None:
+        return repository
+    if isinstance(repository, CallableTargetAccessGroupBindingRepository):
+        return CallableTargetAccessGroupBindingRepository(db_client)
     return repository
 
 
@@ -746,19 +761,28 @@ async def update_organization_asset_access(
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
     auto_follow_catalog = bool(payload.get("select_all_selectable", False))
-    async def _apply_asset_access(db_client: Any, *, callable_repository, route_repository) -> None:  # noqa: ANN001, ANN202
-        await sync_scope_asset_access_state(
-            request,
-            scope_type="organization",
-            scope_id=organization_id,
-            organization_id=organization_id,
-            mode=payload.get("mode"),
-            selected_callable_keys=payload.get("selected_callable_keys", []),
-            select_all_selectable=auto_follow_catalog,
-            binding_repository=callable_repository,
-            route_group_repository=route_repository,
-            reload_after_write=False,
-        )
+    async def _apply_asset_access(
+        db_client: Any,
+        *,
+        callable_repository,
+        access_group_repository,
+        route_repository,
+    ) -> None:  # noqa: ANN001, ANN202
+        asset_access_payload = {
+            "scope_type": "organization",
+            "scope_id": organization_id,
+            "organization_id": organization_id,
+            "mode": payload.get("mode"),
+            "selected_callable_keys": payload.get("selected_callable_keys", []),
+            "select_all_selectable": auto_follow_catalog,
+            "binding_repository": callable_repository,
+            "access_group_repository": access_group_repository,
+            "route_group_repository": route_repository,
+            "reload_after_write": False,
+        }
+        if "selected_access_group_keys" in payload:
+            asset_access_payload["selected_access_group_keys"] = payload["selected_access_group_keys"]
+        await sync_scope_asset_access_state(request, **asset_access_payload)
         await set_organization_auto_follow_catalog(
             db_client,
             organization_id,
@@ -770,12 +794,14 @@ async def update_organization_asset_access(
             await _apply_asset_access(
                 tx,
                 callable_repository=_callable_target_binding_repository_for_request(request, db_client=tx),
+                access_group_repository=_callable_target_access_group_repository_for_request(request, db_client=tx),
                 route_repository=_route_group_repository_for_request(request, db_client=tx),
             )
     else:
         await _apply_asset_access(
             db,
             callable_repository=_callable_target_binding_repository_for_request(request),
+            access_group_repository=_callable_target_access_group_repository_for_request(request),
             route_repository=_route_group_repository_for_request(request),
         )
     await reload_callable_target_grants(request)

@@ -245,17 +245,19 @@ async def update_user_asset_access(
     team_id = str(row.get("team_id") or "").strip() or None
     if not organization_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User organization is not configured")
-    response = await apply_scope_asset_access(
-        request,
-        scope_type="user",
-        scope_id=user_id,
-        organization_id=organization_id,
-        team_id=team_id,
-        user_id=user_id,
-        mode=payload.get("mode"),
-        selected_callable_keys=payload.get("selected_callable_keys", []),
-        select_all_selectable=bool(payload.get("select_all_selectable", False)),
-    )
+    asset_access_payload = {
+        "scope_type": "user",
+        "scope_id": user_id,
+        "organization_id": organization_id,
+        "team_id": team_id,
+        "user_id": user_id,
+        "mode": payload.get("mode"),
+        "selected_callable_keys": payload.get("selected_callable_keys", []),
+        "select_all_selectable": bool(payload.get("select_all_selectable", False)),
+    }
+    if "selected_access_group_keys" in payload:
+        asset_access_payload["selected_access_group_keys"] = payload["selected_access_group_keys"]
+    response = await apply_scope_asset_access(request, **asset_access_payload)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
