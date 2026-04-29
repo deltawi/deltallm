@@ -23,6 +23,8 @@ class _FakeAdminDB:
                 organization_name,
                 max_budget,
                 soft_budget,
+                budget_duration,
+                budget_reset_at,
                 rpm_limit,
                 tpm_limit,
                 rph_limit,
@@ -32,12 +34,44 @@ class _FakeAdminDB:
                 model_tpm_limit,
                 audit_content_storage_enabled,
                 metadata,
+                reset_fields_provided,
             ) = params
+            row = self.organizations.get(organization_id)
+            if row is not None:
+                next_metadata = _merge_upsert_metadata(
+                    row.get("metadata"),
+                    metadata,
+                    budget_duration=budget_duration,
+                    reset_fields_provided=bool(reset_fields_provided),
+                )
+                row.update(
+                    {
+                        "organization_name": organization_name,
+                        "max_budget": max_budget,
+                        "soft_budget": soft_budget,
+                        "budget_duration": budget_duration if reset_fields_provided else row.get("budget_duration"),
+                        "budget_reset_at": budget_reset_at if reset_fields_provided else row.get("budget_reset_at"),
+                        "rpm_limit": rpm_limit,
+                        "tpm_limit": tpm_limit,
+                        "rph_limit": rph_limit,
+                        "rpd_limit": rpd_limit,
+                        "tpd_limit": tpd_limit,
+                        "model_rpm_limit": model_rpm_limit,
+                        "model_tpm_limit": model_tpm_limit,
+                        "audit_content_storage_enabled": bool(audit_content_storage_enabled),
+                        "metadata": next_metadata or {},
+                        "updated_at": datetime.now(tz=UTC),
+                    }
+                )
+                return 1
+
             self.organizations[organization_id] = {
                 "organization_id": organization_id,
                 "organization_name": organization_name,
                 "max_budget": max_budget,
                 "soft_budget": soft_budget,
+                "budget_duration": budget_duration,
+                "budget_reset_at": budget_reset_at,
                 "spend": 0.0,
                 "rpm_limit": rpm_limit,
                 "tpm_limit": tpm_limit,
@@ -58,6 +92,8 @@ class _FakeAdminDB:
                 organization_name,
                 max_budget,
                 soft_budget,
+                budget_duration,
+                budget_reset_at,
                 rpm_limit,
                 tpm_limit,
                 rph_limit,
@@ -75,6 +111,8 @@ class _FakeAdminDB:
                     "organization_name": organization_name,
                     "max_budget": max_budget,
                     "soft_budget": soft_budget,
+                    "budget_duration": budget_duration,
+                    "budget_reset_at": budget_reset_at,
                     "rpm_limit": rpm_limit,
                     "tpm_limit": tpm_limit,
                     "rph_limit": rph_limit,
@@ -83,7 +121,7 @@ class _FakeAdminDB:
                     "model_rpm_limit": model_rpm_limit,
                     "model_tpm_limit": model_tpm_limit,
                     "audit_content_storage_enabled": bool(audit_content_storage_enabled),
-                    "metadata": metadata or row.get("metadata") or {},
+                    "metadata": metadata or {},
                     "updated_at": datetime.now(tz=UTC),
                 }
             )
@@ -92,11 +130,31 @@ class _FakeAdminDB:
         return 1
 
     async def query_raw(self, query: str, *params):
+        normalized = " ".join(query.lower().split())
+        if "count(*) as total" in normalized and "from deltallm_organizationtable" in normalized:
+            return [{"total": len(self.organizations)}]
+        if "from deltallm_organizationtable o" in normalized:
+            return list(self.organizations.values())
         if "FROM deltallm_organizationtable" in query:
             organization_id = str(params[0])
             row = self.organizations.get(organization_id)
             return [row] if row else []
         return []
+
+
+def _merge_upsert_metadata(
+    existing: Any,
+    incoming: Any,
+    *,
+    budget_duration: str | None,
+    reset_fields_provided: bool,
+) -> dict[str, Any]:
+    if not reset_fields_provided:
+        return {**dict(existing or {}), **dict(incoming or {})}
+    merged = {**dict(existing or {}), **dict(incoming or {})}
+    if budget_duration is None or not budget_duration.endswith("mo"):
+        merged.pop("_budget_reset", None)
+    return merged
 
 
 class _FakeRouteGroupRepository:
@@ -321,6 +379,160 @@ async def test_create_organization_persists_soft_budget(client, test_app):
 
 
 @pytest.mark.asyncio
+async def test_create_organization_persists_monthly_budget_reset(client, test_app):
+    fake_db = _FakeAdminDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
+    test_app.state.callable_target_catalog = {}
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    headers = {"Authorization": "Bearer mk-test"}
+
+    response = await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={
+            "organization_id": "org-reset",
+            "organization_name": "Org Reset",
+            "max_budget": 100.0,
+            "budget_duration": "1mo",
+            "budget_reset_at": "2099-05-01T00:00:00Z",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["budget_duration"] == "1mo"
+    assert payload["budget_reset_at"] == "2099-05-01T00:00:00Z"
+    assert fake_db.organizations["org-reset"]["budget_reset_at"] == datetime(2099, 5, 1)
+    assert fake_db.organizations["org-reset"]["metadata"]["_budget_reset"]["monthly_anchor_day"] == 1
+
+    detail = await client.get("/ui/api/organizations/org-reset", headers=headers)
+    assert detail.status_code == 200
+    detail_payload = detail.json()
+    assert detail_payload["budget_duration"] == "1mo"
+    assert detail_payload["budget_reset_at"] == "2099-05-01T00:00:00Z"
+
+    listed = await client.get("/ui/api/organizations", headers=headers)
+    assert listed.status_code == 200
+    listed_payload = listed.json()["data"][0]
+    assert listed_payload["budget_reset_at"] == "2099-05-01T00:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_create_organization_upsert_preserves_reset_when_fields_are_omitted(client, test_app):
+    fake_db = _FakeAdminDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
+    test_app.state.callable_target_catalog = {}
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    headers = {"Authorization": "Bearer mk-test"}
+
+    await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={
+            "organization_id": "org-reset",
+            "organization_name": "Org Reset",
+            "budget_duration": "1mo",
+            "budget_reset_at": "2099-01-30T00:00:00Z",
+        },
+    )
+
+    response = await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={
+            "organization_id": "org-reset",
+            "organization_name": "Renamed Org Reset",
+            "metadata": {"source": "upsert"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["organization_name"] == "Renamed Org Reset"
+    assert payload["budget_duration"] == "1mo"
+    assert payload["budget_reset_at"] == "2099-01-30T00:00:00Z"
+    assert payload["metadata"]["source"] == "upsert"
+    assert payload["metadata"]["_budget_reset"]["monthly_anchor_day"] == 30
+    stored = fake_db.organizations["org-reset"]
+    assert stored["organization_name"] == "Renamed Org Reset"
+    assert stored["budget_duration"] == "1mo"
+    assert stored["budget_reset_at"] == datetime(2099, 1, 30)
+    assert stored["metadata"]["source"] == "upsert"
+    assert stored["metadata"]["_budget_reset"]["monthly_anchor_day"] == 30
+
+
+@pytest.mark.asyncio
+async def test_create_organization_upsert_clears_reset_when_fields_are_null(client, test_app):
+    fake_db = _FakeAdminDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
+    test_app.state.callable_target_catalog = {}
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    headers = {"Authorization": "Bearer mk-test"}
+
+    await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={
+            "organization_id": "org-reset",
+            "budget_duration": "1mo",
+            "budget_reset_at": "2099-01-30T00:00:00Z",
+        },
+    )
+
+    response = await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={
+            "organization_id": "org-reset",
+            "budget_duration": None,
+            "budget_reset_at": None,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["budget_duration"] is None
+    assert payload["budget_reset_at"] is None
+    assert "_budget_reset" not in payload["metadata"]
+    stored = fake_db.organizations["org-reset"]
+    assert stored["budget_duration"] is None
+    assert stored["budget_reset_at"] is None
+    assert "_budget_reset" not in stored["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_create_organization_normalizes_budget_reset_to_utc(client, test_app):
+    fake_db = _FakeAdminDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
+    test_app.state.callable_target_catalog = {}
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    headers = {"Authorization": "Bearer mk-test"}
+
+    response = await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={
+            "organization_id": "org-reset",
+            "budget_duration": "1mo",
+            "budget_reset_at": "2099-05-01T01:30:00+03:00",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["budget_reset_at"] == "2099-04-30T22:30:00Z"
+    assert fake_db.organizations["org-reset"]["budget_reset_at"] == datetime(2099, 4, 30, 22, 30)
+    assert fake_db.organizations["org-reset"]["metadata"]["_budget_reset"]["monthly_anchor_day"] == 30
+
+
+@pytest.mark.asyncio
 async def test_update_organization_resyncs_route_group_bootstrap_bindings(client, test_app):
     fake_db = _FakeAdminDB()
     route_groups = _FakeRouteGroupRepository()
@@ -419,6 +631,154 @@ async def test_update_organization_persists_soft_budget(client, test_app):
 
 
 @pytest.mark.asyncio
+async def test_update_organization_persists_and_clears_monthly_budget_reset(client, test_app):
+    fake_db = _FakeAdminDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
+    test_app.state.callable_target_catalog = {}
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    headers = {"Authorization": "Bearer mk-test"}
+
+    await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={
+            "organization_id": "org-reset",
+            "budget_duration": "1mo",
+            "budget_reset_at": "2099-05-01T00:00:00Z",
+        },
+    )
+
+    update = await client.put(
+        "/ui/api/organizations/org-reset",
+        headers=headers,
+        json={
+            "budget_duration": "1mo",
+            "budget_reset_at": "2099-06-01T00:00:00Z",
+        },
+    )
+
+    assert update.status_code == 200
+    update_payload = update.json()
+    assert update_payload["budget_duration"] == "1mo"
+    assert update_payload["budget_reset_at"] == "2099-06-01T00:00:00Z"
+    assert fake_db.organizations["org-reset"]["metadata"]["_budget_reset"]["monthly_anchor_day"] == 1
+
+    cleared = await client.put(
+        "/ui/api/organizations/org-reset",
+        headers=headers,
+        json={"budget_duration": None, "budget_reset_at": None},
+    )
+
+    assert cleared.status_code == 200
+    cleared_payload = cleared.json()
+    assert cleared_payload["budget_duration"] is None
+    assert cleared_payload["budget_reset_at"] is None
+    assert "_budget_reset" not in fake_db.organizations["org-reset"]["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_update_organization_preserves_monthly_anchor_when_reset_fields_are_omitted(client, test_app):
+    fake_db = _FakeAdminDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
+    test_app.state.callable_target_catalog = {}
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    headers = {"Authorization": "Bearer mk-test"}
+
+    await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={
+            "organization_id": "org-reset",
+            "budget_duration": "1mo",
+            "budget_reset_at": "2099-01-30T00:00:00Z",
+        },
+    )
+
+    response = await client.put(
+        "/ui/api/organizations/org-reset",
+        headers=headers,
+        json={"organization_name": "Renamed Org Reset"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["budget_reset_at"] == "2099-01-30T00:00:00Z"
+    assert fake_db.organizations["org-reset"]["metadata"]["_budget_reset"]["monthly_anchor_day"] == 30
+
+
+@pytest.mark.asyncio
+async def test_update_organization_preserves_budget_reset_when_fields_are_omitted(client, test_app):
+    fake_db = _FakeAdminDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
+    test_app.state.callable_target_catalog = {}
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    headers = {"Authorization": "Bearer mk-test"}
+
+    await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={
+            "organization_id": "org-reset",
+            "organization_name": "Org Reset",
+            "budget_duration": "14d",
+            "budget_reset_at": "2099-05-01T00:00:00Z",
+        },
+    )
+
+    response = await client.put(
+        "/ui/api/organizations/org-reset",
+        headers=headers,
+        json={"organization_name": "Renamed Org Reset"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["organization_name"] == "Renamed Org Reset"
+    assert payload["budget_duration"] == "14d"
+    assert payload["budget_reset_at"].startswith("2099-05-01T00:00:00")
+
+
+@pytest.mark.asyncio
+async def test_update_organization_preserves_custom_month_reset_when_fields_are_omitted(client, test_app):
+    fake_db = _FakeAdminDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
+    test_app.state.callable_target_catalog = {}
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    headers = {"Authorization": "Bearer mk-test"}
+
+    await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={
+            "organization_id": "org-reset",
+            "organization_name": "Org Reset",
+            "budget_duration": "3mo",
+            "budget_reset_at": "2099-05-31T00:00:00Z",
+        },
+    )
+
+    response = await client.put(
+        "/ui/api/organizations/org-reset",
+        headers=headers,
+        json={"organization_name": "Renamed Org Reset"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["organization_name"] == "Renamed Org Reset"
+    assert payload["budget_duration"] == "3mo"
+    assert payload["budget_reset_at"].startswith("2099-05-31T00:00:00")
+    assert fake_db.organizations["org-reset"]["metadata"]["_budget_reset"]["monthly_anchor_day"] == 31
+
+
+@pytest.mark.asyncio
 async def test_create_organization_rejects_soft_budget_above_max_budget(client, test_app):
     fake_db = _FakeAdminDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
@@ -440,6 +800,55 @@ async def test_create_organization_rejects_soft_budget_above_max_budget(client, 
 
     assert response.status_code == 400
     assert response.json()["detail"] == "soft_budget must be less than or equal to max_budget"
+
+
+@pytest.mark.asyncio
+async def test_create_organization_rejects_invalid_budget_reset_fields(client, test_app):
+    fake_db = _FakeAdminDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
+    test_app.state.callable_target_catalog = {}
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    headers = {"Authorization": "Bearer mk-test"}
+
+    invalid_duration = await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={
+            "organization_id": "org-reset",
+            "budget_duration": "monthly",
+            "budget_reset_at": "2099-05-01T00:00:00Z",
+        },
+    )
+    out_of_range_duration = await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={
+            "organization_id": "org-reset",
+            "budget_duration": "10001d",
+            "budget_reset_at": "2099-05-01T00:00:00Z",
+        },
+    )
+    missing_reset_at = await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={"organization_id": "org-reset", "budget_duration": "1mo"},
+    )
+    missing_duration = await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={"organization_id": "org-reset", "budget_reset_at": "2099-05-01T00:00:00Z"},
+    )
+
+    assert invalid_duration.status_code == 400
+    assert invalid_duration.json()["detail"] == "budget_duration must be a positive integer up to 10000 followed by h, d, or mo"
+    assert out_of_range_duration.status_code == 400
+    assert out_of_range_duration.json()["detail"] == "budget_duration must be a positive integer up to 10000 followed by h, d, or mo"
+    assert missing_reset_at.status_code == 400
+    assert missing_reset_at.json()["detail"] == "budget_reset_at is required when budget_duration is set"
+    assert missing_duration.status_code == 400
+    assert missing_duration.json()["detail"] == "budget_duration is required when budget_reset_at is set"
 
 
 @pytest.mark.asyncio

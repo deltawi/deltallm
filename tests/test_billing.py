@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 
-from src.billing.budget import BudgetEnforcementService, BudgetExceeded
+from src.billing.budget import BudgetEnforcementService, BudgetExceeded, _next_reset_after
 from src.billing.spend import SpendTrackingService
 from src.billing.spend_events import build_spend_event
 
@@ -86,6 +86,50 @@ class OrgBudgetDB:
                 }
             ]
         return []
+
+
+class ResettingOrgBudgetDB:
+    def __init__(self, *, update_count: int = 1, conflict_row: dict | None = None, metadata: dict | None = None) -> None:
+        self.query_calls: list[tuple[str, tuple]] = []
+        self.execute_calls: list[tuple[str, tuple]] = []
+        self.update_count = update_count
+        self.conflict_row = conflict_row
+        self.organization = {
+            "entity_id": "org_1",
+            "max_budget": 10.0,
+            "soft_budget": None,
+            "spend": 12.0,
+            "budget_duration": "1d",
+            "budget_reset_at": datetime(2026, 1, 1, tzinfo=UTC),
+            "metadata": metadata or {},
+        }
+
+    async def query_raw(self, query: str, *args):
+        self.query_calls.append((query, args))
+        normalized = " ".join(query.lower().split())
+        if "from deltallm_organizationtable" in normalized:
+            return [dict(self.organization)]
+        return []
+
+    async def execute_raw(self, query: str, *args):
+        self.execute_calls.append((query, args))
+        normalized = " ".join(query.lower().split())
+        if "update deltallm_organizationtable" not in normalized:
+            return self.update_count
+        if self.update_count <= 0:
+            if self.conflict_row is not None:
+                self.organization.update(self.conflict_row)
+            return 0
+        self.organization["spend"] = 0.0
+        self.organization["budget_reset_at"] = args[0]
+        inferred_anchor_day = args[3] if len(args) > 3 else None
+        if inferred_anchor_day is not None:
+            metadata = dict(self.organization.get("metadata") or {})
+            settings = dict(metadata.get("_budget_reset") or {})
+            settings["monthly_anchor_day"] = inferred_anchor_day
+            metadata["_budget_reset"] = settings
+            self.organization["metadata"] = metadata
+        return self.update_count
 
 
 class RecordingAlertService:
@@ -476,6 +520,225 @@ async def test_budget_enforcement_sends_org_soft_budget_alerts() -> None:
             "hard_budget": 40.0,
         }
     ]
+
+
+def test_next_reset_after_preserves_hour_and_day_durations() -> None:
+    now = datetime(2026, 1, 1, 1, 30, tzinfo=UTC)
+
+    assert _next_reset_after(
+        duration="1h",
+        previous_reset_at=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+        now=now,
+    ) == datetime(2026, 1, 1, 2, 0, tzinfo=UTC)
+    assert _next_reset_after(
+        duration="30d",
+        previous_reset_at=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+        now=now,
+    ) == datetime(2026, 1, 31, 0, 0, tzinfo=UTC)
+
+
+def test_next_reset_after_advances_old_fixed_duration_without_iterating_windows() -> None:
+    assert _next_reset_after(
+        duration="1h",
+        previous_reset_at=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+        now=datetime(2026, 1, 3, 12, 30, tzinfo=UTC),
+    ) == datetime(2026, 1, 3, 13, 0, tzinfo=UTC)
+
+
+def test_next_reset_after_supports_custom_duration_values() -> None:
+    assert _next_reset_after(
+        duration="2h",
+        previous_reset_at=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+        now=datetime(2026, 1, 1, 1, 30, tzinfo=UTC),
+    ) == datetime(2026, 1, 1, 2, 0, tzinfo=UTC)
+    assert _next_reset_after(
+        duration="14d",
+        previous_reset_at=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+        now=datetime(2026, 1, 1, 0, 1, tzinfo=UTC),
+    ) == datetime(2026, 1, 15, 0, 0, tzinfo=UTC)
+    assert _next_reset_after(
+        duration="3mo",
+        previous_reset_at=datetime(2026, 1, 31, 0, 0, tzinfo=UTC),
+        now=datetime(2026, 2, 1, 0, 0, tzinfo=UTC),
+        monthly_anchor_day=31,
+    ) == datetime(2026, 4, 30, 0, 0, tzinfo=UTC)
+
+
+def test_next_reset_after_supports_calendar_months() -> None:
+    assert _next_reset_after(
+        duration="1mo",
+        previous_reset_at=datetime(2026, 1, 15, 0, 0, tzinfo=UTC),
+        now=datetime(2026, 1, 15, 0, 1, tzinfo=UTC),
+    ) == datetime(2026, 2, 15, 0, 0, tzinfo=UTC)
+    feb_reset = _next_reset_after(
+        duration="1mo",
+        previous_reset_at=datetime(2026, 1, 31, 0, 0, tzinfo=UTC),
+        now=datetime(2026, 1, 31, 0, 1, tzinfo=UTC),
+    )
+    assert feb_reset == datetime(2026, 2, 28, 0, 0, tzinfo=UTC)
+    assert _next_reset_after(
+        duration="1mo",
+        previous_reset_at=feb_reset,
+        now=datetime(2026, 2, 28, 0, 1, tzinfo=UTC),
+    ) == datetime(2026, 3, 31, 0, 0, tzinfo=UTC)
+    leap_feb_reset = _next_reset_after(
+        duration="1mo",
+        previous_reset_at=datetime(2028, 1, 31, 0, 0, tzinfo=UTC),
+        now=datetime(2028, 1, 31, 0, 1, tzinfo=UTC),
+    )
+    assert leap_feb_reset == datetime(2028, 2, 29, 0, 0, tzinfo=UTC)
+    assert _next_reset_after(
+        duration="1mo",
+        previous_reset_at=leap_feb_reset,
+        now=datetime(2028, 2, 29, 0, 1, tzinfo=UTC),
+    ) == datetime(2028, 3, 31, 0, 0, tzinfo=UTC)
+    assert _next_reset_after(
+        duration="1mo",
+        previous_reset_at=datetime(2026, 12, 31, 0, 0, tzinfo=UTC),
+        now=datetime(2026, 12, 31, 0, 1, tzinfo=UTC),
+    ) == datetime(2027, 1, 31, 0, 0, tzinfo=UTC)
+
+
+def test_next_reset_after_uses_monthly_anchor_day() -> None:
+    feb_reset = _next_reset_after(
+        duration="1mo",
+        previous_reset_at=datetime(2026, 1, 30, 0, 0, tzinfo=UTC),
+        now=datetime(2026, 1, 30, 0, 1, tzinfo=UTC),
+        monthly_anchor_day=30,
+    )
+
+    assert feb_reset == datetime(2026, 2, 28, 0, 0, tzinfo=UTC)
+    assert _next_reset_after(
+        duration="1mo",
+        previous_reset_at=feb_reset,
+        now=datetime(2026, 2, 28, 0, 1, tzinfo=UTC),
+        monthly_anchor_day=30,
+    ) == datetime(2026, 3, 30, 0, 0, tzinfo=UTC)
+
+
+def test_next_reset_after_advances_missed_monthly_windows() -> None:
+    assert _next_reset_after(
+        duration="1mo",
+        previous_reset_at=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+        now=datetime(2026, 4, 28, 9, 0, tzinfo=UTC),
+    ) == datetime(2026, 5, 1, 0, 0, tzinfo=UTC)
+
+
+def test_next_reset_after_advances_old_monthly_windows_without_iterating_windows() -> None:
+    assert _next_reset_after(
+        duration="1mo",
+        previous_reset_at=datetime(2020, 1, 31, 0, 0, tzinfo=UTC),
+        now=datetime(2026, 4, 29, 0, 0, tzinfo=UTC),
+        monthly_anchor_day=31,
+    ) == datetime(2026, 4, 30, 0, 0, tzinfo=UTC)
+
+
+def test_next_reset_after_rejects_unsupported_duration() -> None:
+    assert _next_reset_after(
+        duration="monthly",
+        previous_reset_at=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+        now=datetime(2026, 1, 2, 0, 0, tzinfo=UTC),
+    ) is None
+    assert _next_reset_after(
+        duration="10001d",
+        previous_reset_at=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+        now=datetime(2026, 1, 2, 0, 0, tzinfo=UTC),
+    ) is None
+
+
+def test_next_reset_after_returns_none_when_duration_overflows_datetime() -> None:
+    assert _next_reset_after(
+        duration="10000mo",
+        previous_reset_at=datetime(9990, 1, 1, 0, 0, tzinfo=UTC),
+        now=datetime(9990, 1, 2, 0, 0, tzinfo=UTC),
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_budget_enforcement_resets_due_budget_before_hard_budget_check() -> None:
+    db = ResettingOrgBudgetDB()
+    service = BudgetEnforcementService(db_client=db)
+
+    await service.check_budgets(
+        api_key=None,
+        user_id=None,
+        team_id=None,
+        organization_id="org_1",
+    )
+
+    assert db.organization["spend"] == 0.0
+    assert db.organization["budget_reset_at"].tzinfo is None
+    assert db.organization["budget_reset_at"].replace(tzinfo=UTC) > datetime.now(tz=UTC)
+    assert not any("update deltallm_organizationtable" in query.lower() for query, _ in db.query_calls)
+    assert any("update deltallm_organizationtable" in query.lower() for query, _ in db.execute_calls)
+    reset_query, reset_args = db.execute_calls[0]
+    assert "budget_reset_at is not distinct from $3::timestamp" in " ".join(reset_query.lower().split())
+    assert reset_args[2] == datetime(2026, 1, 1)
+    assert reset_args[3] is None
+
+
+@pytest.mark.asyncio
+async def test_budget_enforcement_infers_and_persists_missing_monthly_anchor() -> None:
+    db = ResettingOrgBudgetDB(metadata={})
+    db.organization["budget_duration"] = "1mo"
+    db.organization["budget_reset_at"] = datetime(2026, 1, 30, tzinfo=UTC)
+    service = BudgetEnforcementService(db_client=db)
+
+    await service.check_budgets(
+        api_key=None,
+        user_id=None,
+        team_id=None,
+        organization_id="org_1",
+    )
+
+    assert db.organization["spend"] == 0.0
+    assert db.organization["metadata"]["_budget_reset"]["monthly_anchor_day"] == 30
+    reset_query, reset_args = db.execute_calls[0]
+    assert "jsonb_set" in reset_query
+    assert reset_args[3] == 30
+
+
+@pytest.mark.asyncio
+async def test_budget_enforcement_ignores_out_of_range_legacy_duration() -> None:
+    db = ResettingOrgBudgetDB()
+    db.organization["spend"] = 3.0
+    db.organization["budget_duration"] = "10001d"
+    service = BudgetEnforcementService(db_client=db)
+
+    await service.check_budgets(
+        api_key=None,
+        user_id=None,
+        team_id=None,
+        organization_id="org_1",
+    )
+
+    assert db.organization["spend"] == 3.0
+    assert db.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_budget_enforcement_refetches_when_reset_guard_conflicts() -> None:
+    future_reset = datetime.now(tz=UTC) + timedelta(days=1)
+    db = ResettingOrgBudgetDB(
+        update_count=0,
+        conflict_row={
+            "spend": 3.0,
+            "budget_reset_at": future_reset,
+        },
+    )
+    service = BudgetEnforcementService(db_client=db)
+
+    await service.check_budgets(
+        api_key=None,
+        user_id=None,
+        team_id=None,
+        organization_id="org_1",
+    )
+
+    assert db.organization["spend"] == 3.0
+    assert db.organization["budget_reset_at"] == future_reset
+    assert len(db.execute_calls) == 1
+    assert len(db.query_calls) == 2
 
 
 @pytest.mark.asyncio

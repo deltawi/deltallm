@@ -4,6 +4,12 @@ import { useApi } from '../lib/hooks';
 import { callableTargets, organizations } from '../lib/api';
 import { buildCatalogAssetTargets } from '../lib/assetAccess';
 import { useAuth } from '../lib/auth';
+import {
+  dateTimeLocalUtcInputToIso,
+  defaultMonthlyResetUtcInputValue,
+  fmtUtcDateTime,
+  toUtcDateTimeLocalInputValue,
+} from '../lib/format';
 import Modal from '../components/Modal';
 import UserSearchSelect from '../components/UserSearchSelect';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
@@ -15,7 +21,7 @@ import {
 import {
   ArrowLeft, Building2, Users, DollarSign, Gauge, TrendingUp, Pencil, Plus,
   UserPlus, Trash2, ChevronRight, Shield, CheckCircle2, AlertTriangle,
-  MoreHorizontal, ExternalLink, Info,
+  MoreHorizontal, ExternalLink, Info, CalendarDays,
 } from 'lucide-react';
 
 /* ─────────────── helpers ─────────────── */
@@ -130,6 +136,10 @@ export default function OrganizationDetail() {
     rph_limit: '',
     rpd_limit: '',
     tpd_limit: '',
+    monthly_reset_enabled: false,
+    budget_reset_at: '',
+    existing_budget_duration: '',
+    existing_budget_reset_at: '',
     audit_content_storage_enabled: false,
     select_all_current_assets: false,
     selected_callable_keys: [] as string[],
@@ -183,9 +193,23 @@ export default function OrganizationDetail() {
       rph_limit: org.rph_limit != null ? String(org.rph_limit) : '',
       rpd_limit: org.rpd_limit != null ? String(org.rpd_limit) : '',
       tpd_limit: org.tpd_limit != null ? String(org.tpd_limit) : '',
+      monthly_reset_enabled: org.budget_duration === '1mo' && !!org.budget_reset_at,
+      budget_reset_at: toUtcDateTimeLocalInputValue(org.budget_reset_at),
+      existing_budget_duration: org.budget_duration || '',
+      existing_budget_reset_at: org.budget_reset_at || '',
       audit_content_storage_enabled: !!org.audit_content_storage_enabled,
     }));
     setIsEditingSettings(true);
+  };
+
+  const handleMonthlyResetToggle = (checked: boolean) => {
+    setForm((c) => ({
+      ...c,
+      monthly_reset_enabled: checked,
+      budget_reset_at: checked && (!c.budget_reset_at || c.existing_budget_duration !== '1mo')
+        ? defaultMonthlyResetUtcInputValue()
+        : c.budget_reset_at,
+    }));
   };
 
   const openEditAssets = () => {
@@ -207,7 +231,14 @@ export default function OrganizationDetail() {
     setSaving(true);
     setOrgError(null);
     try {
-      await organizations.update(orgId!, {
+      const resetAtIso = form.monthly_reset_enabled
+        ? dateTimeLocalUtcInputToIso(form.budget_reset_at)
+        : null;
+      if (form.monthly_reset_enabled && !resetAtIso) {
+        setOrgError('Choose a valid next reset date.');
+        return;
+      }
+      const payload: Record<string, unknown> = {
         organization_name: form.organization_name || undefined,
         max_budget: form.max_budget ? Number(form.max_budget) : undefined,
         soft_budget: form.soft_budget ? Number(form.soft_budget) : undefined,
@@ -217,7 +248,15 @@ export default function OrganizationDetail() {
         rpd_limit: form.rpd_limit ? Number(form.rpd_limit) : undefined,
         tpd_limit: form.tpd_limit ? Number(form.tpd_limit) : undefined,
         audit_content_storage_enabled: !!form.audit_content_storage_enabled,
-      });
+      };
+      if (form.monthly_reset_enabled) {
+        payload.budget_duration = '1mo';
+        payload.budget_reset_at = resetAtIso;
+      } else if (form.existing_budget_duration === '1mo') {
+        payload.budget_duration = null;
+        payload.budget_reset_at = null;
+      }
+      await organizations.update(orgId!, payload);
       setIsEditingSettings(false);
       refetchOrg();
     } catch (err: any) {
@@ -672,6 +711,30 @@ export default function OrganizationDetail() {
                         placeholder="Notify before cap"
                       />
                     </div>
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-2.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <CalendarDays className="h-3.5 w-3.5 text-blue-600" />
+                          <span className="text-xs font-medium text-gray-700">Monthly reset</span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={!!form.monthly_reset_enabled}
+                          onChange={(e) => handleMonthlyResetToggle(e.target.checked)}
+                        />
+                      </div>
+                      {form.monthly_reset_enabled && (
+                        <div className="mt-2">
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Next reset (UTC)</label>
+                          <input
+                            type="datetime-local"
+                            value={form.budget_reset_at}
+                            onChange={(e) => setForm({ ...form, budget_reset_at: e.target.value })}
+                            className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                      )}
+                    </div>
                     <div className="grid grid-cols-2 gap-2">
                       <div>
                         <label className="block text-xs font-medium text-gray-600 mb-1">RPM Limit</label>
@@ -770,6 +833,22 @@ export default function OrganizationDetail() {
                         <span className="text-xs text-gray-500">Soft budget alert</span>
                         <span className="text-xs font-semibold text-gray-800">${Number(org.soft_budget).toLocaleString()}</span>
                       </div>
+                    )}
+                    {org.budget_duration && org.budget_reset_at && (
+                      <>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-gray-500">Budget reset</span>
+                          <span className="text-xs font-semibold text-gray-800">
+                            {org.budget_duration === '1mo' ? 'Monthly' : org.budget_duration}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-xs text-gray-500">Next reset (UTC)</span>
+                          <span className="text-right text-xs font-semibold text-gray-800">
+                            {fmtUtcDateTime(org.budget_reset_at)}
+                          </span>
+                        </div>
+                      </>
                     )}
                     {org.rpm_limit != null && (
                       <div className="flex items-center justify-between">

@@ -99,7 +99,9 @@ general_settings:
 
 Budget notifications require email delivery to be configured first.
 
-If an entity has both `budget_duration` and `budget_reset_at`, the runtime can reset tracked spend automatically when the reset window is reached.
+If an entity has both `budget_duration` and `budget_reset_at`, the runtime can reset tracked spend automatically when the reset window is reached. Durations use a positive integer up to `10000` followed by `h`, `d`, or `mo`, for example `1h`, `7d`, `30d`, and `1mo`.
+
+Organization monthly reset is available from the organization create page, organization list edit modal, and organization detail settings. Monthly reset timestamps are UTC. Monthly reset is lazy: it runs when budget enforcement checks the organization after the configured reset time. It clears the tracked organization spend counter and advances the next reset by calendar month. The selected UTC day of month is preserved; if the next month is shorter, the reset clamps for that month only, for example January 30 -> February 28 -> March 30. It does not carry unused budget forward.
 
 ## Organization Soft Budgets
 

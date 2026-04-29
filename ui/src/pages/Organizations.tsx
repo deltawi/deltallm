@@ -5,6 +5,11 @@ import { useAuth } from '../lib/auth';
 import { resolveUiAccess } from '../lib/authorization';
 import { callableTargets, organizations } from '../lib/api';
 import { buildCatalogAssetTargets } from '../lib/assetAccess';
+import {
+  dateTimeLocalUtcInputToIso,
+  defaultMonthlyResetUtcInputValue,
+  toUtcDateTimeLocalInputValue,
+} from '../lib/format';
 import RateLimitSummary from '../components/admin/RateLimitSummary';
 import Modal from '../components/Modal';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
@@ -12,6 +17,7 @@ import { ContentCard, IndexShell } from '../components/admin/shells';
 import {
   Plus, Building2, Users, DollarSign,
   Shield, AlertCircle, Search, MoreHorizontal,
+  CalendarDays,
 } from 'lucide-react';
 
 /* ─────────────── sub-components ─────────────── */
@@ -134,6 +140,10 @@ export default function Organizations() {
     rph_limit: '',
     rpd_limit: '',
     tpd_limit: '',
+    monthly_reset_enabled: false,
+    budget_reset_at: '',
+    existing_budget_duration: '',
+    existing_budget_reset_at: '',
     audit_content_storage_enabled: false,
     select_all_current_assets: false,
     selected_callable_keys: [] as string[],
@@ -170,6 +180,10 @@ export default function Organizations() {
       rph_limit: '',
       rpd_limit: '',
       tpd_limit: '',
+      monthly_reset_enabled: false,
+      budget_reset_at: '',
+      existing_budget_duration: '',
+      existing_budget_reset_at: '',
       audit_content_storage_enabled: false,
       select_all_current_assets: false,
       selected_callable_keys: [],
@@ -190,12 +204,29 @@ export default function Organizations() {
     }));
   }, [editItem, editAssetAccess]);
 
+  const handleMonthlyResetToggle = (checked: boolean) => {
+    setForm((c) => ({
+      ...c,
+      monthly_reset_enabled: checked,
+      budget_reset_at: checked && (!c.budget_reset_at || c.existing_budget_duration !== '1mo')
+        ? defaultMonthlyResetUtcInputValue()
+        : c.budget_reset_at,
+    }));
+  };
+
   const handleSave = async () => {
     if (!editItem) return;
     setError(null);
     setSaving(true);
     try {
-      const payload = {
+      const resetAtIso = form.monthly_reset_enabled
+        ? dateTimeLocalUtcInputToIso(form.budget_reset_at)
+        : null;
+      if (form.monthly_reset_enabled && !resetAtIso) {
+        setError('Choose a valid next reset date.');
+        return;
+      }
+      const payload: Record<string, unknown> = {
         organization_name: form.organization_name || undefined,
         max_budget: form.max_budget ? Number(form.max_budget) : undefined,
         soft_budget: form.soft_budget ? Number(form.soft_budget) : undefined,
@@ -206,6 +237,13 @@ export default function Organizations() {
         tpd_limit: form.tpd_limit ? Number(form.tpd_limit) : undefined,
         audit_content_storage_enabled: !!form.audit_content_storage_enabled,
       };
+      if (form.monthly_reset_enabled) {
+        payload.budget_duration = '1mo';
+        payload.budget_reset_at = resetAtIso;
+      } else if (form.existing_budget_duration === '1mo') {
+        payload.budget_duration = null;
+        payload.budget_reset_at = null;
+      }
       await organizations.update(editItem.organization_id, payload);
       if (isPlatformAdmin) {
         await organizations.updateAssetAccess(editItem.organization_id, {
@@ -235,6 +273,10 @@ export default function Organizations() {
       rph_limit: row.rph_limit != null ? String(row.rph_limit) : '',
       rpd_limit: row.rpd_limit != null ? String(row.rpd_limit) : '',
       tpd_limit: row.tpd_limit != null ? String(row.tpd_limit) : '',
+      monthly_reset_enabled: row.budget_duration === '1mo' && !!row.budget_reset_at,
+      budget_reset_at: toUtcDateTimeLocalInputValue(row.budget_reset_at),
+      existing_budget_duration: row.budget_duration || '',
+      existing_budget_reset_at: row.budget_reset_at || '',
       audit_content_storage_enabled: !!row.audit_content_storage_enabled,
       select_all_current_assets: false,
       selected_callable_keys: [],
@@ -527,6 +569,30 @@ export default function Organizations() {
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
             <p className="text-xs text-gray-400 mt-1">Notification threshold. Must be less than or equal to max budget.</p>
+          </div>
+          <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <CalendarDays className="h-4 w-4 text-blue-600" />
+                <span className="text-sm font-medium text-gray-800">Monthly reset</span>
+              </div>
+              <input
+                type="checkbox"
+                checked={!!form.monthly_reset_enabled}
+                onChange={(e) => handleMonthlyResetToggle(e.target.checked)}
+              />
+            </div>
+            {form.monthly_reset_enabled && (
+              <div className="mt-3">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Next reset (UTC)</label>
+                <input
+                  type="datetime-local"
+                  value={form.budget_reset_at}
+                  onChange={(e) => setForm({ ...form, budget_reset_at: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            )}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
