@@ -4,6 +4,10 @@ from typing import Any
 
 from fastapi import Request
 
+from src.db.callable_target_access_groups import (
+    CallableTargetAccessGroupBindingRecord,
+    CallableTargetAccessGroupBindingRepository,
+)
 from src.db.callable_targets import CallableTargetBindingRecord, CallableTargetBindingRepository
 from src.db.route_groups import RouteGroupBindingRecord, RouteGroupRepository
 from src.services.callable_targets import CallableTarget
@@ -11,6 +15,13 @@ from src.services.callable_targets import CallableTarget
 
 def callable_target_binding_repository(request: Request) -> CallableTargetBindingRepository | None:
     repository = getattr(request.app.state, "callable_target_binding_repository", None)
+    if repository is not None and callable(getattr(repository, "list_bindings", None)):
+        return repository
+    return None
+
+
+def callable_target_access_group_binding_repository(request: Request) -> CallableTargetAccessGroupBindingRepository | None:
+    repository = getattr(request.app.state, "callable_target_access_group_repository", None)
     if repository is not None and callable(getattr(repository, "list_bindings", None)):
         return repository
     return None
@@ -63,6 +74,34 @@ async def list_all_callable_target_bindings(
     while True:
         page, total = await repository.list_bindings(
             callable_key=callable_key,
+            scope_type=scope_type,
+            scope_id=scope_id,
+            limit=page_size,
+            offset=offset,
+        )
+        items.extend(page)
+        offset += len(page)
+        if not page or offset >= total:
+            break
+    return items
+
+
+async def list_all_callable_target_access_group_bindings(
+    repository: CallableTargetAccessGroupBindingRepository | None,
+    *,
+    group_key: str | None = None,
+    scope_type: str | None = None,
+    scope_id: str | None = None,
+    page_size: int = 500,
+) -> list[CallableTargetAccessGroupBindingRecord]:
+    if repository is None:
+        return []
+
+    items: list[CallableTargetAccessGroupBindingRecord] = []
+    offset = 0
+    while True:
+        page, total = await repository.list_bindings(
+            group_key=group_key,
             scope_type=scope_type,
             scope_id=scope_id,
             limit=page_size,

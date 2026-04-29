@@ -12,6 +12,13 @@ class _FakePrisma:
 
     async def query_raw(self, sql: str, *params: object) -> list[dict[str, object]]:
         self.calls.append((sql, params))
+        if "SELECT COUNT(*)::int AS total" in sql and "GROUP BY group_key" in sql:
+            return [{"total": 2}]
+        if "SELECT group_key, COUNT(*)::int AS binding_count" in sql:
+            return [
+                {"group_key": "beta", "binding_count": 3},
+                {"group_key": "future", "binding_count": 1},
+            ]
         if "INSERT INTO deltallm_callabletargetaccessgroupbinding" not in sql:
             return []
         return [
@@ -60,3 +67,18 @@ async def test_access_group_binding_upsert_rejects_invalid_group_key() -> None:
             enabled=True,
             metadata=None,
         )
+
+
+@pytest.mark.asyncio
+async def test_access_group_binding_counts_use_grouped_query_and_search() -> None:
+    prisma = _FakePrisma()
+    repository = CallableTargetAccessGroupBindingRepository(prisma)
+
+    rows, total = await repository.list_group_binding_counts(search="be", limit=10, offset=5)
+
+    assert total == 2
+    assert [(row.group_key, row.binding_count) for row in rows] == [("beta", 3), ("future", 1)]
+    assert "GROUP BY group_key" in prisma.calls[0][0]
+    assert prisma.calls[0][1] == ("%be%",)
+    assert "GROUP BY group_key" in prisma.calls[1][0]
+    assert prisma.calls[1][1] == ("%be%", 10, 5)

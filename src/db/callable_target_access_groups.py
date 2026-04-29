@@ -43,6 +43,12 @@ class CallableTargetAccessGroupBindingRecord:
     updated_at: datetime | None = None
 
 
+@dataclass(frozen=True)
+class CallableTargetAccessGroupBindingCount:
+    group_key: str
+    binding_count: int
+
+
 class CallableTargetAccessGroupBindingRepository:
     def __init__(self, prisma_client: Any | None = None) -> None:
         self.prisma = prisma_client
@@ -101,6 +107,58 @@ class CallableTargetAccessGroupBindingRepository:
             *page_params,
         )
         return [self._to_binding_record(row) for row in rows], total
+
+    async def list_group_binding_counts(
+        self,
+        *,
+        search: str | None = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> tuple[list[CallableTargetAccessGroupBindingCount], int]:
+        if self.prisma is None:
+            return [], 0
+
+        clauses: list[str] = []
+        params: list[Any] = []
+        normalized_search = str(search or "").strip()
+        if normalized_search:
+            params.append(f"%{normalized_search}%")
+            clauses.append(f"group_key ILIKE ${len(params)}")
+
+        where_sql = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        count_rows = await self.prisma.query_raw(
+            f"""
+            SELECT COUNT(*)::int AS total
+            FROM (
+                SELECT group_key
+                FROM deltallm_callabletargetaccessgroupbinding
+                {where_sql}
+                GROUP BY group_key
+            ) grouped
+            """,
+            *params,
+        )
+        total = int((count_rows[0] if count_rows else {}).get("total") or 0)
+
+        page_params = [*params, limit, offset]
+        rows = await self.prisma.query_raw(
+            f"""
+            SELECT group_key, COUNT(*)::int AS binding_count
+            FROM deltallm_callabletargetaccessgroupbinding
+            {where_sql}
+            GROUP BY group_key
+            ORDER BY group_key ASC
+            LIMIT ${len(page_params) - 1} OFFSET ${len(page_params)}
+            """,
+            *page_params,
+        )
+        return [
+            CallableTargetAccessGroupBindingCount(
+                group_key=str(row.get("group_key") or ""),
+                binding_count=int(row.get("binding_count") or 0),
+            )
+            for row in rows
+        ], total
 
     async def upsert_binding(
         self,

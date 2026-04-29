@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from src.services.asset_binding_mirror import (
     callable_catalog,
+    callable_target_access_group_binding_repository,
     callable_target_binding_repository,
     delete_route_group_binding_mirror,
     mirror_callable_target_binding_to_route_group,
@@ -17,8 +18,14 @@ from src.services.asset_binding_mirror import (
 from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, resolve_runtime_scope_target, to_json_value
 from src.auth.roles import Permission
 from src.audit.actions import AuditAction
+from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
 from src.db.callable_targets import CallableTargetBindingRepository
 from src.db.callable_target_policies import CallableTargetScopePolicyRepository
+from src.governance.access_groups import (
+    InvalidAccessGroupError,
+    build_callable_keys_by_access_group,
+    normalize_access_group_key,
+)
 from src.middleware.admin import require_admin_permission
 from src.services.asset_scopes import strict_normalize_scope_type
 from src.services.callable_target_migration import (
@@ -41,6 +48,16 @@ def _repository_or_503(request: Request) -> CallableTargetBindingRepository:
     repository = callable_target_binding_repository(request)
     if repository is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Callable target binding repository unavailable")
+    return repository
+
+
+def _access_group_repository_or_503(request: Request) -> CallableTargetAccessGroupBindingRepository:
+    repository = callable_target_access_group_binding_repository(request)
+    if repository is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Callable target access group repository unavailable",
+        )
     return repository
 
 
@@ -82,6 +99,16 @@ def _validate_scope_id(value: Any, *, field_name: str = "scope_id") -> str:
     if not scope_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} is required")
     return scope_id
+
+
+def _validate_access_group_key(value: Any) -> str:
+    try:
+        group_key = normalize_access_group_key(value, strict=True)
+    except InvalidAccessGroupError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if group_key is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="group_key is required")
+    return group_key
 
 
 def _validated_metadata(value: Any) -> dict[str, Any] | None:
@@ -132,12 +159,64 @@ def _binding_payload(binding: Any) -> dict[str, Any]:
     return to_json_value(asdict(binding))
 
 
+def _access_group_binding_payload(binding: Any) -> dict[str, Any]:
+    return to_json_value(asdict(binding))
+
+
 def _scope_policy_payload(policy: Any) -> dict[str, Any]:
     return to_json_value(asdict(policy))
 
 
 def _callable_target_payload(target: CallableTarget, *, binding_count: int = 0) -> dict[str, Any]:
     return {"callable_key": target.key, "target_type": target.target_type, "binding_count": binding_count}
+
+
+def _access_group_payload(
+    *,
+    group_key: str,
+    member_keys: frozenset[str],
+    catalog: dict[str, CallableTarget],
+    binding_count: int,
+    include_members: bool,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "group_key": group_key,
+        "member_count": len(member_keys),
+        "binding_count": binding_count,
+    }
+    if include_members:
+        payload["members"] = [
+            {
+                "callable_key": callable_key,
+                "target_type": (catalog.get(callable_key) or CallableTarget(key=callable_key, target_type="model")).target_type,
+            }
+            for callable_key in sorted(member_keys)
+        ]
+    return payload
+
+
+async def _list_access_group_binding_counts(
+    repository: CallableTargetAccessGroupBindingRepository,
+    *,
+    search: str | None,
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    offset = 0
+    page_size = 500
+    while True:
+        page, total = await repository.list_group_binding_counts(
+            search=search,
+            limit=page_size,
+            offset=offset,
+        )
+        for item in page:
+            group_key = str(item.group_key or "").strip()
+            if group_key:
+                counts[group_key] = int(item.binding_count or 0)
+        offset += len(page)
+        if not page or offset >= total:
+            break
+    return counts
 
 
 @router.get("/ui/api/callable-targets", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
@@ -171,6 +250,109 @@ async def list_callable_targets(
         "data": [_callable_target_payload(item, binding_count=binding_counts.get(item.key, 0)) for item in page],
         "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
     }
+
+
+@router.get("/ui/api/callable-target-access-groups", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
+async def list_callable_target_access_groups(
+    request: Request,
+    search: str | None = Query(default=None),
+    include_members: bool = Query(default=False),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    repository = _access_group_repository_or_503(request)
+    catalog = callable_catalog(request)
+    callable_keys_by_group = build_callable_keys_by_access_group(catalog)
+    query = str(search or "").strip().lower() or None
+    catalog_group_keys = set(callable_keys_by_group)
+    if query:
+        catalog_group_keys = {group_key for group_key in catalog_group_keys if query in group_key.lower()}
+    binding_counts = await _list_access_group_binding_counts(repository, search=query)
+    group_keys = catalog_group_keys | set(binding_counts)
+
+    ordered = sorted(group_keys)
+    total = len(ordered)
+    page = ordered[offset : offset + limit]
+    return {
+        "data": [
+            _access_group_payload(
+                group_key=group_key,
+                member_keys=callable_keys_by_group.get(group_key, frozenset()),
+                catalog=catalog,
+                binding_count=binding_counts.get(group_key, 0),
+                include_members=include_members,
+            )
+            for group_key in page
+        ],
+        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+    }
+
+
+@router.get("/ui/api/callable-target-access-group-bindings", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
+async def list_callable_target_access_group_bindings(
+    request: Request,
+    group_key: str | None = Query(default=None),
+    scope_type: str | None = Query(default=None),
+    scope_id: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    repository = _access_group_repository_or_503(request)
+    normalized_group_key = _validate_access_group_key(group_key) if group_key is not None else None
+    normalized_scope_type = _validate_scope_type(scope_type) if scope_type is not None else None
+    bindings, total = await repository.list_bindings(
+        group_key=normalized_group_key,
+        scope_type=normalized_scope_type,
+        scope_id=scope_id,
+        limit=limit,
+        offset=offset,
+    )
+    return {
+        "data": [_access_group_binding_payload(binding) for binding in bindings],
+        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+    }
+
+
+@router.post("/ui/api/callable-target-access-group-bindings", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
+async def upsert_callable_target_access_group_binding(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    request_start = perf_counter()
+    repository = _access_group_repository_or_503(request)
+    group_key = _validate_access_group_key(payload.get("group_key"))
+    scope_type = _validate_scope_type(payload.get("scope_type"))
+    scope_id = _validate_scope_id(payload.get("scope_id"))
+    await resolve_runtime_scope_target(
+        db_or_503(request),
+        scope_type=scope_type,
+        scope_id=scope_id,
+    )
+
+    binding = await repository.upsert_binding(
+        group_key=group_key,
+        scope_type=scope_type,
+        scope_id=scope_id,
+        enabled=bool(payload.get("enabled", True)),
+        metadata=_validated_metadata(payload.get("metadata")),
+    )
+    if binding is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Callable target access group binding not found")
+
+    await maybe_disable_organization_auto_follow_for_scope_mutation(
+        db_or_503(request),
+        scope_type=binding.scope_type,
+        scope_id=binding.scope_id,
+    )
+    await reload_callable_target_grants(request)
+    response = _access_group_binding_payload(binding)
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_CALLABLE_TARGET_ACCESS_GROUP_BINDING_UPSERT,
+        resource_type="callable_target_access_group_binding",
+        resource_id=binding.callable_target_access_group_binding_id,
+        request_payload=payload,
+        response_payload=response,
+    )
+    return response
 
 
 @router.get("/ui/api/callable-targets/{callable_key:path}", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
@@ -336,6 +518,39 @@ async def delete_callable_target_scope_policy(request: Request, policy_id: str) 
         action=AuditAction.ADMIN_CALLABLE_TARGET_SCOPE_POLICY_DELETE,
         resource_type="callable_target_scope_policy",
         resource_id=policy_id,
+        response_payload=response,
+    )
+    return response
+
+
+@router.delete(
+    "/ui/api/callable-target-access-group-bindings/{binding_id}",
+    dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))],
+)
+async def delete_callable_target_access_group_binding(request: Request, binding_id: str) -> dict[str, Any]:
+    request_start = perf_counter()
+    repository = _access_group_repository_or_503(request)
+    binding = await repository.get_binding(binding_id)
+    if binding is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Callable target access group binding not found")
+
+    deleted = await repository.delete_binding(binding_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Callable target access group binding not found")
+
+    await maybe_disable_organization_auto_follow_for_scope_mutation(
+        db_or_503(request),
+        scope_type=binding.scope_type,
+        scope_id=binding.scope_id,
+    )
+    await reload_callable_target_grants(request)
+    response = {"deleted": True, "callable_target_access_group_binding_id": binding_id}
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_CALLABLE_TARGET_ACCESS_GROUP_BINDING_DELETE,
+        resource_type="callable_target_access_group_binding",
+        resource_id=binding_id,
         response_payload=response,
     )
     return response
