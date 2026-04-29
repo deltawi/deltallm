@@ -8,10 +8,18 @@ from src.metrics import (
     increment_batch_artifact_failure,
     increment_batch_finalization_retry,
     increment_batch_item_reclaim,
+    increment_batch_item_retry,
+    increment_batch_item_terminal_failure,
+    increment_batch_model_group_deferral,
+    increment_batch_model_group_deferred_items,
+    increment_batch_microbatch_requeue,
     increment_batch_repair_action,
     observe_batch_create_latency,
     observe_batch_finalize_latency,
     observe_batch_item_execution_latency,
+    observe_batch_item_retry_delay,
+    observe_batch_model_group_deferral_seconds,
+    observe_batch_microbatch_retry_delay,
     publish_batch_create_session_summary,
     set_batch_create_session_count,
     set_batch_item_count,
@@ -34,9 +42,17 @@ def test_batch_metrics_are_exported() -> None:
     increment_batch_artifact_failure(operation="delete", backend="s3")
     increment_batch_repair_action(action="retry_finalization", status="success")
     increment_batch_item_reclaim()
+    increment_batch_item_retry(category="rate_limit")
+    increment_batch_item_terminal_failure(category="budget", reason="not_retryable")
+    increment_batch_model_group_deferral(reason="no_healthy_deployments")
+    increment_batch_model_group_deferred_items(reason="no_healthy_deployments")
+    increment_batch_microbatch_requeue(category="upstream_5xx", result="scheduled")
     observe_batch_create_latency(status="success", latency_seconds=0.25)
     observe_batch_finalize_latency(status="error", latency_seconds=0.5)
     observe_batch_item_execution_latency(status="success", latency_seconds=0.1)
+    observe_batch_item_retry_delay(category="rate_limit", delay_seconds=5.0)
+    observe_batch_model_group_deferral_seconds(reason="no_healthy_deployments", delay_seconds=5.0)
+    observe_batch_microbatch_retry_delay(category="upstream_5xx", delay_seconds=5.0)
     publish_batch_create_session_summary({"completed": 2, "failed_retryable": 1})
 
     metrics_text = generate_latest(get_prometheus_registry()).decode("utf-8")
@@ -53,6 +69,17 @@ def test_batch_metrics_are_exported() -> None:
     assert "deltallm_batch_artifact_failures_total" in metrics_text
     assert "deltallm_batch_repair_actions_total" in metrics_text
     assert "deltallm_batch_item_reclaims_total" in metrics_text
+    assert "deltallm_batch_item_retries_total" in metrics_text
+    assert 'category="rate_limit"' in metrics_text
+    assert "deltallm_batch_item_terminal_failures_total" in metrics_text
+    assert 'reason="not_retryable"' in metrics_text
+    assert "deltallm_batch_model_group_deferrals_total" in metrics_text
+    assert "deltallm_batch_model_group_deferred_items_total" in metrics_text
+    assert "deltallm_batch_model_group_deferral_seconds" in metrics_text
+    assert "deltallm_batch_microbatch_requeues_total" in metrics_text
+    assert 'result="scheduled"' in metrics_text
     assert "deltallm_batch_create_latency_seconds" in metrics_text
     assert "deltallm_batch_finalize_latency_seconds" in metrics_text
     assert "deltallm_batch_item_execution_latency_seconds" in metrics_text
+    assert "deltallm_batch_item_retry_delay_seconds" in metrics_text
+    assert "deltallm_batch_microbatch_retry_delay_seconds" in metrics_text

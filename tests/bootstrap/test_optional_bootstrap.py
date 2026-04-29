@@ -74,6 +74,17 @@ def _batch_config(
             embeddings_batch_max_pending_batches_per_scope=20,
             embeddings_batch_item_claim_limit=10,
             embeddings_batch_max_attempts=3,
+            embeddings_batch_retry_initial_seconds=5,
+            embeddings_batch_retry_max_seconds=300,
+            embeddings_batch_retry_multiplier=2.0,
+            embeddings_batch_retry_jitter=True,
+            embeddings_batch_microbatch_retry_enabled=True,
+            embeddings_batch_microbatch_max_group_retries=2,
+            embeddings_batch_microbatch_min_reduced_size=1,
+            embeddings_batch_microbatch_reduce_factor=0.5,
+            embeddings_batch_model_group_backpressure_enabled=True,
+            embeddings_batch_model_group_backpressure_min_seconds=5,
+            embeddings_batch_model_group_backpressure_max_seconds=300,
             batch_completed_artifact_retention_days=7,
             batch_failed_artifact_retention_days=2,
             embeddings_batch_gc_interval_seconds=60,
@@ -175,6 +186,7 @@ async def test_init_batch_runtime_disabled_sets_batch_state_to_none() -> None:
     assert app.state.batch_create_session_service is None
     assert app.state.batch_create_session_admin_service is None
     assert app.state.batch_create_session_cleanup_worker is None
+    assert app.state.batch_backpressure is None
     assert runtime.worker is None
     assert runtime.gc_worker is None
     assert runtime.statuses == (BootstrapStatus("embeddings_batch", "disabled"),)
@@ -298,7 +310,7 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
     monkeypatch.setattr("src.bootstrap.batch.BatchCreateSessionPromoter", FakePromoter)
     monkeypatch.setattr("src.bootstrap.batch.BatchCreateSessionAdminService", FakeCreateSessionAdminService)
 
-    app = SimpleNamespace(state=SimpleNamespace())
+    app = SimpleNamespace(state=SimpleNamespace(redis="redis-client"))
     create_sessions = _FakeCreateSessionRepository()
     repository = SimpleNamespace(create_sessions=create_sessions)
 
@@ -317,6 +329,8 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
     assert app.state.batch_create_session_service is not None
     assert app.state.batch_create_session_admin_service is created["admin_service"]
     assert app.state.batch_create_session_cleanup_worker is None
+    assert app.state.batch_backpressure is runtime.backpressure
+    assert app.state.batch_backpressure.redis == "redis-client"
     assert isinstance(app.state.batch_service, FakeBatchService)
     assert created["service"].create_session_service is app.state.batch_create_session_service
     assert created["service"].repository is repository
@@ -337,6 +351,8 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
     assert created["worker"].config.worker_concurrency == 4
     assert created["worker"].config.item_buffer_multiplier == 2
     assert created["worker"].config.finalization_page_size == 500
+    assert created["worker"].config.microbatch_retry_enabled is True
+    assert created["worker"].config.microbatch_max_group_retries == 2
     assert runtime.statuses == (
         BootstrapStatus("embeddings_batch", "ready"),
         BootstrapStatus("embeddings_batch_worker", "ready"),

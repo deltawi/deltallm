@@ -7,7 +7,14 @@ from email.utils import format_datetime
 import httpx
 import pytest
 
-from src.models.errors import InvalidRequestError, RateLimitError, ServiceUnavailableError, TimeoutError, parse_retry_after_header
+from src.models.errors import (
+    InvalidRequestError,
+    NO_HEALTHY_DEPLOYMENTS_CODE,
+    RateLimitError,
+    ServiceUnavailableError,
+    TimeoutError,
+    parse_retry_after_header,
+)
 from src.router import CooldownManager, FallbackConfig, FailoverManager, PassiveHealthTracker, RedisStateBackend
 from src.router.health_policy import affects_deployment_health
 from src.router.router import Deployment
@@ -301,6 +308,32 @@ async def test_failover_transport_error_maps_to_health_affecting_service_unavail
 
     assert exc_info.value.affects_deployment_health is True
     assert await state.is_cooled_down(primary.deployment_id)
+
+
+@pytest.mark.asyncio
+async def test_failover_returns_structured_no_healthy_deployments_error_when_all_candidates_cooled_down():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    await state.set_cooldown(primary.deployment_id, 30, "manual")
+    manager = FailoverManager(
+        config=FallbackConfig(num_retries=0, timeout=1.0),
+        deployment_registry={"group-a": [primary]},
+        state_backend=state,
+        cooldown_manager=CooldownManager(state, allowed_fails=0),
+    )
+
+    async def run(_deployment: Deployment) -> str:
+        return "unreachable"
+
+    with pytest.raises(ServiceUnavailableError) as exc_info:
+        await manager.execute_with_failover(
+            primary_deployment=primary,
+            model_group="group-a",
+            execute=run,
+        )
+
+    assert exc_info.value.code == NO_HEALTHY_DEPLOYMENTS_CODE
+    assert exc_info.value.status_code == 503
 
 
 @pytest.mark.asyncio

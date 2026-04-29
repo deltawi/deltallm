@@ -292,6 +292,9 @@ class BatchItemRepository:
         *,
         item_ids: list[str],
         worker_id: str,
+        retry_delay_seconds: int = 0,
+        error_body: dict[str, Any] | None = None,
+        last_error: str | None = None,
     ) -> list[str]:
         if self.prisma is None or not item_ids:
             return []
@@ -305,7 +308,17 @@ class BatchItemRepository:
             param_index += 1
 
         worker_id_param = param_index
-        params.append(worker_id)
+        retry_delay_param = param_index + 1
+        error_body_param = param_index + 2
+        last_error_param = param_index + 3
+        params.extend(
+            [
+                worker_id,
+                max(0, int(retry_delay_seconds)),
+                json.dumps(error_body) if error_body is not None else None,
+                last_error,
+            ]
+        )
         rows = await self.prisma.query_raw(
             f"""
             WITH payload(item_id) AS (
@@ -314,12 +327,19 @@ class BatchItemRepository:
             updated AS (
                 UPDATE deltallm_batch_item i
                 SET status = 'pending',
-                    lease_expires_at = NULL,
-                    locked_by = NULL
-                FROM payload p
+                    lease_expires_at = CASE
+                        WHEN ${retry_delay_param} > 0 THEN NOW() + (${retry_delay_param} || ' seconds')::interval
+                        ELSE NULL
+                    END,
+                    locked_by = NULL,
+                    error_body = COALESCE(${error_body_param}::jsonb, i.error_body),
+                    last_error = COALESCE(${last_error_param}, i.last_error)
+                FROM payload p, deltallm_batch_job j
                 WHERE i.item_id = p.item_id
+                  AND j.batch_id = i.batch_id
                   AND i.locked_by = ${worker_id_param}
                   AND i.status = 'in_progress'
+                  AND (j.expires_at IS NULL OR NOW() + (${retry_delay_param} || ' seconds')::interval < j.expires_at)
                 RETURNING i.item_id
             )
             SELECT item_id FROM updated
@@ -344,15 +364,18 @@ class BatchItemRepository:
             if worker_id is None:
                 rows = await self.prisma.query_raw(
                     """
-                    UPDATE deltallm_batch_item
+                    UPDATE deltallm_batch_item i
                     SET status = 'pending',
                         error_body = $2::jsonb,
                         last_error = $3,
                         lease_expires_at = NOW() + ($4 || ' seconds')::interval,
                         locked_by = NULL
-                    WHERE item_id = $1
-                      AND status = 'in_progress'
-                    RETURNING item_id
+                    FROM deltallm_batch_job j
+                    WHERE i.item_id = $1
+                      AND i.status = 'in_progress'
+                      AND j.batch_id = i.batch_id
+                      AND (j.expires_at IS NULL OR NOW() + ($4 || ' seconds')::interval < j.expires_at)
+                    RETURNING i.item_id
                     """,
                     item_id,
                     json.dumps(error_body),
@@ -362,16 +385,19 @@ class BatchItemRepository:
                 return bool(rows)
             rows = await self.prisma.query_raw(
                 """
-                UPDATE deltallm_batch_item
+                UPDATE deltallm_batch_item i
                 SET status = 'pending',
                     error_body = $2::jsonb,
                     last_error = $3,
                     lease_expires_at = NOW() + ($4 || ' seconds')::interval,
                     locked_by = NULL
-                WHERE item_id = $1
-                  AND locked_by = $5
-                  AND status = 'in_progress'
-                RETURNING item_id
+                FROM deltallm_batch_job j
+                WHERE i.item_id = $1
+                  AND i.locked_by = $5
+                  AND i.status = 'in_progress'
+                  AND j.batch_id = i.batch_id
+                  AND (j.expires_at IS NULL OR NOW() + ($4 || ' seconds')::interval < j.expires_at)
+                RETURNING i.item_id
                 """,
                 item_id,
                 json.dumps(error_body),

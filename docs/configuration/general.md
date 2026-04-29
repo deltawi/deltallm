@@ -96,6 +96,13 @@ general_settings:
   embeddings_batch_poll_interval_seconds: 1.0
   embeddings_batch_item_claim_limit: 20
   embeddings_batch_max_attempts: 3
+  embeddings_batch_retry_initial_seconds: 5
+  embeddings_batch_retry_max_seconds: 300
+  embeddings_batch_retry_multiplier: 2.0
+  embeddings_batch_retry_jitter: true
+  embeddings_batch_model_group_backpressure_enabled: true
+  embeddings_batch_model_group_backpressure_min_seconds: 5
+  embeddings_batch_model_group_backpressure_max_seconds: 300
   batch_completed_artifact_retention_days: 7
   batch_failed_artifact_retention_days: 14
   batch_metadata_retention_days: 30
@@ -269,6 +276,13 @@ Governance notifications are opt-in and disabled by default.
 | `embeddings_batch_poll_interval_seconds` | `1.0` | Worker poll interval when queue is idle |
 | `embeddings_batch_item_claim_limit` | `20` | Max items claimed per worker iteration |
 | `embeddings_batch_max_attempts` | `3` | Max retry attempts per failed item |
+| `embeddings_batch_retry_initial_seconds` | `5` | Initial retry delay for retryable batch item failures |
+| `embeddings_batch_retry_max_seconds` | `300` | Maximum retry delay for retryable batch item failures, including capped `Retry-After` hints |
+| `embeddings_batch_retry_multiplier` | `2.0` | Exponential backoff multiplier applied between retry attempts |
+| `embeddings_batch_retry_jitter` | `true` | Add jitter to spread batch retries and avoid synchronized retry spikes |
+| `embeddings_batch_model_group_backpressure_enabled` | `true` | Temporarily defer model groups that have no healthy deployments |
+| `embeddings_batch_model_group_backpressure_min_seconds` | `5` | Minimum model-group deferral duration |
+| `embeddings_batch_model_group_backpressure_max_seconds` | `300` | Maximum model-group deferral duration |
 | `batch_completed_artifact_retention_days` | `7` | Retention for completed job artifacts |
 | `batch_failed_artifact_retention_days` | `14` | Retention for failed/cancelled job artifacts |
 | `batch_metadata_retention_days` | `30` | Retention horizon for batch metadata rows |

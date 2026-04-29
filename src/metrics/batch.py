@@ -70,6 +70,28 @@ deltallm_batch_item_reclaims_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_item_retries_metric = Counter(
+    "deltallm_batch_item_retries_total",
+    "Batch item retries scheduled by retry category",
+    ["category"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_item_terminal_failures_metric = Counter(
+    "deltallm_batch_item_terminal_failures_total",
+    "Terminal batch item failures by retry category and reason",
+    ["category", "reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_item_retry_delay_metric = Histogram(
+    "deltallm_batch_item_retry_delay_seconds",
+    "Batch item retry delay by retry category",
+    ["category"],
+    buckets=[1, 2, 5, 10, 30, 60, 120, 300, 600],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_batch_create_latency_metric = Histogram(
     "deltallm_batch_create_latency_seconds",
     "Batch create latency",
@@ -126,6 +148,43 @@ deltallm_batch_microbatch_ineligible_items_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_microbatch_requeues_metric = Counter(
+    "deltallm_batch_microbatch_requeues_total",
+    "Grouped embedding microbatch retry decisions by retry category and result",
+    ["category", "result"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_microbatch_retry_delay_metric = Histogram(
+    "deltallm_batch_microbatch_retry_delay_seconds",
+    "Grouped embedding microbatch retry delay by retry category",
+    ["category"],
+    buckets=[1, 2, 5, 10, 30, 60, 120, 300, 600],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_model_group_deferrals_metric = Counter(
+    "deltallm_batch_model_group_deferrals_total",
+    "Model-group backpressure deferrals created by reason",
+    ["reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_model_group_deferred_items_metric = Counter(
+    "deltallm_batch_model_group_deferred_items_total",
+    "Batch items deferred by model-group backpressure by reason",
+    ["reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_model_group_deferral_seconds_metric = Histogram(
+    "deltallm_batch_model_group_deferral_seconds",
+    "Model-group backpressure deferral duration by reason",
+    ["reason"],
+    buckets=[1, 2, 5, 10, 30, 60, 120, 300, 600],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_batch_microbatch_size_metric = Histogram(
     "deltallm_batch_microbatch_size",
     "Number of inputs in each grouped embedding microbatch request",
@@ -179,6 +238,23 @@ def increment_batch_item_reclaim() -> None:
     deltallm_batch_item_reclaims_metric.inc()
 
 
+def increment_batch_item_retry(*, category: str) -> None:
+    deltallm_batch_item_retries_metric.labels(category=sanitize_label(category)).inc()
+
+
+def increment_batch_item_terminal_failure(*, category: str, reason: str) -> None:
+    deltallm_batch_item_terminal_failures_metric.labels(
+        category=sanitize_label(category),
+        reason=sanitize_label(reason),
+    ).inc()
+
+
+def observe_batch_item_retry_delay(*, category: str, delay_seconds: float) -> None:
+    deltallm_batch_item_retry_delay_metric.labels(category=sanitize_label(category)).observe(
+        max(0.0, float(delay_seconds))
+    )
+
+
 def observe_batch_create_latency(*, status: str, latency_seconds: float) -> None:
     deltallm_batch_create_latency_metric.labels(status=sanitize_label(status)).observe(max(0.0, float(latency_seconds)))
 
@@ -212,6 +288,35 @@ def increment_batch_microbatch_isolation_fallback() -> None:
 
 def increment_batch_microbatch_ineligible_item(*, reason: str) -> None:
     deltallm_batch_microbatch_ineligible_items_metric.labels(reason=sanitize_label(reason)).inc()
+
+
+def increment_batch_microbatch_requeue(*, category: str, result: str) -> None:
+    deltallm_batch_microbatch_requeues_metric.labels(
+        category=sanitize_label(category),
+        result=sanitize_label(result),
+    ).inc()
+
+
+def observe_batch_microbatch_retry_delay(*, category: str, delay_seconds: float) -> None:
+    deltallm_batch_microbatch_retry_delay_metric.labels(category=sanitize_label(category)).observe(
+        max(0.0, float(delay_seconds))
+    )
+
+
+def increment_batch_model_group_deferral(*, reason: str) -> None:
+    deltallm_batch_model_group_deferrals_metric.labels(reason=sanitize_label(reason)).inc()
+
+
+def increment_batch_model_group_deferred_items(*, reason: str, count: int = 1) -> None:
+    deltallm_batch_model_group_deferred_items_metric.labels(reason=sanitize_label(reason)).inc(
+        max(0, int(count))
+    )
+
+
+def observe_batch_model_group_deferral_seconds(*, reason: str, delay_seconds: float) -> None:
+    deltallm_batch_model_group_deferral_seconds_metric.labels(reason=sanitize_label(reason)).observe(
+        max(0.0, float(delay_seconds))
+    )
 
 
 def observe_batch_microbatch_size(*, batch_size: int) -> None:
