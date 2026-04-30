@@ -9,7 +9,7 @@ Teams are the working unit for developers, applications, keys, and team-level bu
 - Team identity and parent organization
 - Team-level budgets and rate limits (RPM, TPM, RPH, RPD, TPD)
 - Team memberships
-- Team runtime access mode: inherit the organization set or restrict to selected callable targets
+- Team runtime access mode: inherit the organization set or restrict to selected callable targets and access groups
 
 ## Typical workflow
 
@@ -17,7 +17,7 @@ Teams are the working unit for developers, applications, keys, and team-level bu
 2. Confirm the self-service key policy for developers
 3. Set team-specific budgets and rate limits across all time windows
 4. Add team members with the correct role
-5. Choose whether the team inherits the organization asset set or narrows it to selected assets
+5. Choose whether the team inherits the organization asset set or narrows it to selected targets or access groups
 
 ## Rate limit fields
 
@@ -59,3 +59,15 @@ When a developer creates a key through self-service, the backend enforces all of
 Team scope is where most day-to-day ownership lives. API keys, usage, and user access are typically understood in team context.
 
 The team record itself no longer stores model allowlists. The create/edit UI writes callable-target bindings and scope policies so the team can inherit the organization set or narrow it for day-to-day ownership.
+
+## Team Asset Access
+
+Use **Inherit** when the team should receive the same callable-target universe as its parent organization. Use **Restrict** only when the team needs a smaller set.
+
+In restrict mode, the team can select direct callable targets and access groups that are already available through the organization. Selecting an access group grants the team's users and keys every callable target in that group that is also inside the organization boundary.
+
+This keeps lower scopes predictable:
+
+- Teams cannot expand beyond the organization access universe.
+- API keys and runtime users can inherit or narrow from the team.
+- Access groups should represent authorization intent, not routing labels.

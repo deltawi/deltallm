@@ -19,7 +19,7 @@ The API Keys page is where operators issue credentials for applications, teams, 
    `You` for a human-owned key, or `Service account` for automation.
 3. If you need a new service account, create it directly from the same dialog after selecting a team.
 4. Set optional limits such as budget, RPM, TPM, RPH, RPD, or TPD.
-5. Choose whether the key inherits the team asset set or narrows it to selected assets.
+5. Choose whether the key inherits the team asset set or narrows it to selected targets or access groups.
 6. Create the key and copy the raw secret immediately. It is only shown once.
 
 ## Self-Service Key Creation
@@ -60,11 +60,19 @@ Self-service users cannot see or manage keys owned by other users through the My
 - **RPH**: request throttle per hour
 - **RPD / TPD**: request and token throttles per day
 
+## Key Asset Access
+
+Keys normally inherit the callable-target universe from their team. Use key-level restriction when an integration needs a smaller model set than the team owns.
+
+In restrict mode, a key can select direct callable targets and access groups that are already visible through the team. Selecting an access group grants the key the callable targets currently in that group, and future matching targets after runtime reload, as long as the team and organization also allow them.
+
+Self-service keys follow the team's self-service policy and ownership rules. They still inherit the team asset boundary; admins can use the full key editor when a production integration needs explicit key-level narrowing.
+
 ## Important behavior
 
 - The raw key is shown once at creation time
 - The table keeps the hashed token, owner, status, and budget progress
 - Scoped access still applies: org users only see keys inside their organizations
 - Service accounts are non-login owners for shared services, jobs, or automations
-- Keys no longer carry model allowlists on the key record. The create/edit dialog writes callable-target bindings and scope policies so a key can inherit its team asset set or narrow it further.
+- Keys no longer carry model allowlists on the key record. The create/edit dialog writes callable-target bindings, access-group bindings, and scope policies so a key can inherit its team asset set or narrow it further.
 - When rate limits are updated via the admin API or UI, the key validation cache is automatically invalidated so new limits take effect immediately

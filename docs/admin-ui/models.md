@@ -26,6 +26,7 @@ Each deployment defines:
 - `deployment_id`: the stable internal identifier for this deployment
 - provider settings in `deltallm_params`
 - workload mode in `model_info.mode`
+- access groups in `model_info.access_groups`
 - pricing metadata for spend tracking
 - default request parameters
 
@@ -39,6 +40,14 @@ For a simple first deployment:
 4. Keep the default mode as `chat` unless this is an embeddings, image, audio, or rerank model
 
 If you do not set a `deployment_id`, DeltaLLM creates one automatically.
+
+## Access Groups
+
+The model form includes an **Access Groups** field for authorization grouping. Enter group keys such as `beta` or `support` when scopes should be able to grant access to a set of callable targets instead of selecting each model separately.
+
+Access groups are attached to the public model name, not a single provider deployment. If several deployments share the same `model_name`, keep their access group lists identical so group expansion remains deterministic.
+
+Do not use access groups for routing. Deployment tags remain routing metadata and can be matched by request `metadata.tags`; tags do not make a model visible to an organization, team, key, or user.
 
 ## What the Table Tells You
 
@@ -108,7 +117,7 @@ For shared gateway credentials, [Named Credentials](named-credentials.md) remain
 - Shared provider credentials are best managed through [Named Credentials](named-credentials.md)
 - Creating, updating, and deleting deployments requires admin access
 - Readable deployment IDs make later route-group work easier
-- Visibility to organizations, teams, keys, and users is governed through callable-target bindings and scope policies
+- Visibility to organizations, teams, keys, and users is governed through callable-target bindings, access-group bindings, and scope policies
 
 ## Related Pages
 
