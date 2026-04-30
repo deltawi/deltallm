@@ -828,6 +828,7 @@ class RouteGroupRepository:
         for row in groups:
             group_id = str(row.get("route_group_id") or "")
             policy_json = _parse_json_object(row.get("policy_json"))
+            metadata = _parse_json_object(row.get("metadata")) if row.get("metadata") is not None else None
             strategy = row.get("routing_strategy")
             if isinstance(policy_json.get("strategy"), str):
                 strategy = policy_json["strategy"]
@@ -848,8 +849,9 @@ class RouteGroupRepository:
                     "timeouts": timeouts if isinstance(timeouts, dict) else None,
                     "retry": retry if isinstance(retry, dict) else None,
                     "default_prompt": _extract_default_prompt(
-                        _parse_json_object(row.get("metadata")) if row.get("metadata") is not None else None
+                        metadata
                     ),
+                    "access_groups": metadata.get("access_groups") if isinstance(metadata, dict) else None,
                     "members": merged_members,
                 }
             )

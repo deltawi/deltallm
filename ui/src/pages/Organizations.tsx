@@ -4,7 +4,12 @@ import { useApi } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
 import { resolveUiAccess } from '../lib/authorization';
 import { callableTargets, organizations } from '../lib/api';
-import { buildCatalogAssetTargets } from '../lib/assetAccess';
+import {
+  assetAccessLoadErrorMessage,
+  buildCatalogAccessGroups,
+  buildCatalogAssetTargets,
+  isScopedAssetAccessFor,
+} from '../lib/assetAccess';
 import {
   dateTimeLocalUtcInputToIso,
   defaultMonthlyResetUtcInputValue,
@@ -121,11 +126,17 @@ export default function Organizations() {
   const [assetSearchInput, setAssetSearchInput] = useState('');
   const [assetSearch, setAssetSearch] = useState('');
   const [assetPageOffset, setAssetPageOffset] = useState(0);
+  const [accessGroupPageOffset, setAccessGroupPageOffset] = useState(0);
   const [assetTargetType, setAssetTargetType] = useState<'all' | 'model' | 'route_group'>('all');
   const assetPageSize = 50;
+  const accessGroupPageSize = 50;
 
   useEffect(() => {
-    const t = setTimeout(() => { setAssetSearch(assetSearchInput); setAssetPageOffset(0); }, 250);
+    const t = setTimeout(() => {
+      setAssetSearch(assetSearchInput);
+      setAssetPageOffset(0);
+      setAccessGroupPageOffset(0);
+    }, 250);
     return () => clearTimeout(t);
   }, [assetSearchInput]);
 
@@ -147,16 +158,25 @@ export default function Organizations() {
     audit_content_storage_enabled: false,
     select_all_current_assets: false,
     selected_callable_keys: [] as string[],
+    selected_access_group_keys: [] as string[],
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
 
-  const { data: editAssetAccess, loading: editAssetAccessLoading } = useApi(
+  const { data: editAssetAccess, error: editAssetAccessError, loading: editAssetAccessLoading } = useApi(
     () => (editItem ? organizations.assetAccess(editItem.organization_id, { include_targets: false }) : Promise.resolve(null)),
     [editItem?.organization_id],
   );
-  const { data: callableTargetPage, loading: callableTargetPageLoading } = useApi(
+  const currentEditAssetAccess = editItem && isScopedAssetAccessFor(editAssetAccess, {
+    scopeType: 'organization',
+    scopeId: editItem.organization_id,
+    organizationId: editItem.organization_id,
+  })
+    ? editAssetAccess
+    : null;
+  const editAssetAccessPending = isPlatformAdmin && !!editItem && (editAssetAccessLoading || !currentEditAssetAccess);
+  const { data: callableTargetPage, error: callableTargetPageError, loading: callableTargetPageLoading } = useApi(
     () => (
       isPlatformAdmin && !!editItem && !form.select_all_current_assets
         ? callableTargets.list({
@@ -168,6 +188,19 @@ export default function Organizations() {
         : Promise.resolve({ data: [], pagination: { total: 0, limit: assetPageSize, offset: 0, has_more: false } })
     ),
     [isPlatformAdmin, editItem?.organization_id, form.select_all_current_assets, assetSearch, assetTargetType, assetPageOffset],
+  );
+  const { data: callableTargetAccessGroups, error: accessGroupError, loading: accessGroupLoading } = useApi(
+    () => (
+      isPlatformAdmin && !!editItem && !form.select_all_current_assets
+        ? callableTargets.listAccessGroups({
+            search: assetSearch || undefined,
+            include_members: false,
+            limit: accessGroupPageSize,
+            offset: accessGroupPageOffset,
+          })
+        : Promise.resolve({ data: [], pagination: { total: 0, limit: accessGroupPageSize, offset: 0, has_more: false } })
+    ),
+    [isPlatformAdmin, editItem?.organization_id, form.select_all_current_assets, assetSearch, accessGroupPageOffset],
   );
 
   const resetForm = () => {
@@ -187,22 +220,25 @@ export default function Organizations() {
       audit_content_storage_enabled: false,
       select_all_current_assets: false,
       selected_callable_keys: [],
+      selected_access_group_keys: [],
     });
     setError(null);
     setAssetSearchInput('');
     setAssetSearch('');
     setAssetPageOffset(0);
+    setAccessGroupPageOffset(0);
     setAssetTargetType('all');
   };
 
   useEffect(() => {
-    if (!editItem || !editAssetAccess) return;
+    if (!editItem || !currentEditAssetAccess) return;
     setForm((c) => ({
       ...c,
-      select_all_current_assets: !!editAssetAccess.auto_follow_catalog,
-      selected_callable_keys: editAssetAccess.selected_callable_keys || [],
+      select_all_current_assets: !!currentEditAssetAccess.auto_follow_catalog,
+      selected_callable_keys: currentEditAssetAccess.selected_callable_keys || [],
+      selected_access_group_keys: currentEditAssetAccess.selected_access_group_keys || [],
     }));
-  }, [editItem, editAssetAccess]);
+  }, [editItem, currentEditAssetAccess]);
 
   const handleMonthlyResetToggle = (checked: boolean) => {
     setForm((c) => ({
@@ -216,6 +252,14 @@ export default function Organizations() {
 
   const handleSave = async () => {
     if (!editItem) return;
+    if (assetAccessLoadError) {
+      setError(assetAccessLoadError);
+      return;
+    }
+    if (editAssetAccessPending || assetAccessLoading) {
+      setError('Wait for asset access options to finish loading before saving the organization.');
+      return;
+    }
     setError(null);
     setSaving(true);
     try {
@@ -248,6 +292,7 @@ export default function Organizations() {
       if (isPlatformAdmin) {
         await organizations.updateAssetAccess(editItem.organization_id, {
           selected_callable_keys: form.select_all_current_assets ? [] : form.selected_callable_keys,
+          selected_access_group_keys: form.select_all_current_assets ? [] : form.selected_access_group_keys,
           select_all_selectable: form.select_all_current_assets,
         });
       }
@@ -280,16 +325,34 @@ export default function Organizations() {
       audit_content_storage_enabled: !!row.audit_content_storage_enabled,
       select_all_current_assets: false,
       selected_callable_keys: [],
+      selected_access_group_keys: [],
     });
     setAssetSearchInput('');
     setAssetSearch('');
     setAssetPageOffset(0);
+    setAccessGroupPageOffset(0);
     setAssetTargetType('all');
     setEditItem(row);
   };
 
-  const assetTargets = buildCatalogAssetTargets((callableTargetPage?.data || []) as any[], form.selected_callable_keys);
+  const assetTargets = buildCatalogAssetTargets(
+    (callableTargetPage?.data || []) as any[],
+    form.selected_callable_keys,
+    currentEditAssetAccess?.selected_callable_keys || [],
+  );
+  const assetAccessGroups = buildCatalogAccessGroups(
+    callableTargetAccessGroups?.data || [],
+    form.selected_access_group_keys,
+    currentEditAssetAccess?.selected_access_group_keys || [],
+  );
   const assetPagePagination = callableTargetPage?.pagination;
+  const accessGroupPagination = callableTargetAccessGroups?.pagination;
+  const assetAccessLoading = !form.select_all_current_assets && (callableTargetPageLoading || accessGroupLoading);
+  const assetAccessLoadError = isPlatformAdmin && !!editItem
+    ? assetAccessLoadErrorMessage(
+        editAssetAccessError || (!form.select_all_current_assets ? callableTargetPageError || accessGroupError : null),
+      )
+    : null;
 
   /* ── pagination helpers ── */
   const total = pagination?.total ?? 0;
@@ -537,8 +600,8 @@ export default function Organizations() {
         title="Edit Organization"
       >
         <div className="space-y-4">
-          {error && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>
+          {(error || assetAccessLoadError) && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error || assetAccessLoadError}</div>
           )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Organization Name</label>
@@ -671,7 +734,12 @@ export default function Organizations() {
                       type="radio"
                       name="organization-asset-strategy"
                       checked={form.select_all_current_assets}
-                      onChange={() => setForm((c) => ({ ...c, select_all_current_assets: true, selected_callable_keys: [] }))}
+                      onChange={() => setForm((c) => ({
+                        ...c,
+                        select_all_current_assets: true,
+                        selected_callable_keys: [],
+                        selected_access_group_keys: [],
+                      }))}
                       disabled={saving}
                       className="mt-0.5"
                     />
@@ -700,8 +768,8 @@ export default function Organizations() {
               </div>
               {form.select_all_current_assets ? (
                 <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-3 text-xs text-blue-800">
-                  {editItem && editAssetAccess
-                    ? `This organization currently has ${editAssetAccess.summary.selected_total} of ${editAssetAccess.summary.selectable_total} assets granted. Saving will align it to all current assets and automatically include future additions.`
+                  {editItem && currentEditAssetAccess
+                    ? `This organization currently has ${currentEditAssetAccess.summary.effective_total} of ${currentEditAssetAccess.summary.selectable_total} assets granted. Saving will align it to all current assets and automatically include future additions.`
                     : 'Saving will grant every currently available model and route group to this organization and automatically include future additions.'}
                 </div>
               ) : (
@@ -712,18 +780,33 @@ export default function Organizations() {
                   targets={assetTargets}
                   selectedKeys={form.selected_callable_keys}
                   onSelectedKeysChange={(selected_callable_keys) => setForm({ ...form, selected_callable_keys })}
-                  loading={callableTargetPageLoading || (!!editItem && editAssetAccessLoading)}
-                  disabled={saving}
+                  accessGroups={assetAccessGroups}
+                  selectedAccessGroupKeys={form.selected_access_group_keys}
+                  onSelectedAccessGroupKeysChange={(selected_access_group_keys) => setForm({ ...form, selected_access_group_keys })}
+                  targetsLoading={callableTargetPageLoading || editAssetAccessPending}
+                  accessGroupsLoading={accessGroupLoading || editAssetAccessPending}
+                  disabled={saving || editAssetAccessPending || Boolean(assetAccessLoadError)}
                   searchValue={assetSearchInput}
                   onSearchValueChange={setAssetSearchInput}
                   targetTypeFilter={assetTargetType}
                   onTargetTypeFilterChange={(next) => { setAssetTargetType(next); setAssetPageOffset(0); }}
                   pagination={assetPagePagination}
                   onPageChange={setAssetPageOffset}
+                  accessGroupPagination={accessGroupPagination}
+                  onAccessGroupPageChange={setAccessGroupPageOffset}
                   primaryActionLabel="Allow all assets"
-                  onPrimaryAction={() => setForm((c) => ({ ...c, select_all_current_assets: true, selected_callable_keys: [] }))}
-                  secondaryActionLabel={form.selected_callable_keys.length > 0 ? 'Clear selection' : undefined}
-                  onSecondaryAction={form.selected_callable_keys.length > 0 ? () => setForm((c) => ({ ...c, selected_callable_keys: [] })) : undefined}
+                  onPrimaryAction={() => setForm((c) => ({
+                    ...c,
+                    select_all_current_assets: true,
+                    selected_callable_keys: [],
+                    selected_access_group_keys: [],
+                  }))}
+                  secondaryActionLabel={form.selected_callable_keys.length > 0 || form.selected_access_group_keys.length > 0 ? 'Clear selection' : undefined}
+                  onSecondaryAction={
+                    form.selected_callable_keys.length > 0 || form.selected_access_group_keys.length > 0
+                      ? () => setForm((c) => ({ ...c, selected_callable_keys: [], selected_access_group_keys: [] }))
+                      : undefined
+                  }
                 />
               )}
             </div>
@@ -737,7 +820,7 @@ export default function Organizations() {
             </button>
             <button
               onClick={handleSave}
-              disabled={saving || (!!editItem && editAssetAccessLoading)}
+              disabled={saving || editAssetAccessPending || assetAccessLoading || Boolean(assetAccessLoadError)}
               className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
             >
               {saving ? 'Saving…' : editItem ? 'Save Changes' : 'Create'}

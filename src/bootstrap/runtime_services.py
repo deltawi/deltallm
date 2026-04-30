@@ -36,6 +36,8 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
     app.state.callable_target_grant_service = CallableTargetGrantService(
         repository=getattr(app.state, "callable_target_binding_repository", None),
         policy_repository=getattr(app.state, "callable_target_scope_policy_repository", None),
+        access_group_repository=getattr(app.state, "callable_target_access_group_repository", None),
+        callable_target_catalog_getter=lambda: getattr(app.state, "callable_target_catalog", None),
     )
     await app.state.callable_target_grant_service.reload()
     app.state.prompt_registry_service = PromptRegistryService(

@@ -1,7 +1,14 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useApi } from '../lib/hooks';
 import { keys, serviceAccounts, teams } from '../lib/api';
-import { buildParentScopedAssetTargets, buildScopedSelectableTargets } from '../lib/assetAccess';
+import {
+  assetAccessLoadErrorMessage,
+  buildParentScopedAssetTargets,
+  buildScopedSelectableAccessGroups,
+  buildScopedSelectableTargets,
+  isAssetVisibilityFor,
+  isScopedAssetAccessFor,
+} from '../lib/assetAccess';
 import type { ApiKey, ServiceAccount } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import DataTable from '../components/DataTable';
@@ -34,6 +41,7 @@ type KeyFormState = {
   expires: string;
   asset_access_mode: 'inherit' | 'restrict';
   selected_callable_keys: string[];
+  selected_access_group_keys: string[];
 };
 
 const EMPTY_PAGINATION = { total: 0, limit: 200, offset: 0, has_more: false };
@@ -53,6 +61,7 @@ function emptyForm(): KeyFormState {
     expires: '',
     asset_access_mode: 'inherit',
     selected_callable_keys: [],
+    selected_access_group_keys: [],
   };
 }
 
@@ -142,27 +151,48 @@ export default function ApiKeys() {
   const [saving, setSaving] = useState(false);
   const [newServiceAccountName, setNewServiceAccountName] = useState('');
   const [creatingServiceAccount, setCreatingServiceAccount] = useState(false);
+  const [assetSearchInput, setAssetSearchInput] = useState('');
+  const [assetSearch, setAssetSearch] = useState('');
+  const [accessGroupPageOffset, setAccessGroupPageOffset] = useState(0);
+  const accessGroupPageSize = 50;
   const selectedTeamId = form.team_id;
   const usesParentPreview = !editItem || selectedTeamId !== (editItem.team_id || '');
-  const { data: editAssetAccess, loading: editAssetAccessLoading } = useApi(
+  const { data: editAssetAccess, error: editAssetAccessError, loading: editAssetAccessLoading } = useApi(
     () => (editItem ? keys.assetAccess(editItem.token, { include_targets: false }) : Promise.resolve(null)),
     [editItem?.token],
   );
-  const { data: editAssetAccessTargets, loading: editAssetAccessTargetsLoading } = useApi(
+  const currentEditAssetAccess = editItem && isScopedAssetAccessFor(editAssetAccess, {
+    scopeType: 'api_key',
+    scopeId: editItem.token,
+  })
+    ? editAssetAccess
+    : null;
+  const editAssetAccessPending = !!editItem && (editAssetAccessLoading || !currentEditAssetAccess);
+  const { data: editAssetAccessTargets, error: editAssetAccessTargetsError, loading: editAssetAccessTargetsLoading } = useApi(
     () => (
       editItem && !usesParentPreview && form.asset_access_mode === 'restrict'
-        ? keys.assetAccess(editItem.token, { include_targets: true })
+        ? keys.assetAccess(editItem.token, {
+            include_targets: true,
+            access_group_search: assetSearch || undefined,
+            access_group_limit: accessGroupPageSize,
+            access_group_offset: accessGroupPageOffset,
+          })
         : Promise.resolve(null)
     ),
-    [editItem?.token, usesParentPreview, form.asset_access_mode],
+    [editItem?.token, usesParentPreview, form.asset_access_mode, assetSearch, accessGroupPageOffset],
   );
-  const { data: parentTeamAssetVisibility, loading: parentTeamAssetVisibilityLoading } = useApi(
+  const { data: parentTeamAssetVisibility, error: parentTeamAssetVisibilityError, loading: parentTeamAssetVisibilityLoading } = useApi(
     () => (
       (showCreate || !!editItem) && usesParentPreview && form.asset_access_mode === 'restrict' && selectedTeamId
-        ? teams.assetVisibility(selectedTeamId)
+        ? teams.assetVisibility(selectedTeamId, {
+            include_access_groups: true,
+            access_group_search: assetSearch || undefined,
+            access_group_limit: accessGroupPageSize,
+            access_group_offset: accessGroupPageOffset,
+          })
         : Promise.resolve(null)
     ),
-    [showCreate, editItem?.token, selectedTeamId, usesParentPreview, form.asset_access_mode],
+    [showCreate, editItem?.token, selectedTeamId, usesParentPreview, form.asset_access_mode, assetSearch, accessGroupPageOffset],
   );
   const { data: serviceAccountsResult, loading: serviceAccountsLoading, refetch: refetchServiceAccounts } = useApi(
     () => (
@@ -193,6 +223,14 @@ export default function ApiKeys() {
   }, [searchInput]);
 
   useEffect(() => {
+    const t = setTimeout(() => {
+      setAssetSearch(assetSearchInput);
+      setAccessGroupPageOffset(0);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [assetSearchInput]);
+
+  useEffect(() => {
     if (form.owner_mode !== 'service_account' && form.owner_service_account_id) {
       setForm((current) => ({ ...current, owner_service_account_id: '' }));
     }
@@ -207,13 +245,14 @@ export default function ApiKeys() {
   }, [availableServiceAccounts, form.owner_service_account_id]);
 
   useEffect(() => {
-    if (!editItem || !editAssetAccess) return;
+    if (!editItem || !currentEditAssetAccess) return;
     setForm((current) => ({
       ...current,
-      asset_access_mode: editAssetAccess.mode === 'restrict' ? 'restrict' : 'inherit',
-      selected_callable_keys: editAssetAccess.selected_callable_keys || [],
+      asset_access_mode: currentEditAssetAccess.mode === 'restrict' ? 'restrict' : 'inherit',
+      selected_callable_keys: currentEditAssetAccess.selected_callable_keys || [],
+      selected_access_group_keys: currentEditAssetAccess.selected_access_group_keys || [],
     }));
-  }, [editItem, editAssetAccess]);
+  }, [editItem, currentEditAssetAccess]);
 
   const closeEditor = () => {
     setShowCreate(false);
@@ -223,6 +262,9 @@ export default function ApiKeys() {
     setCreatingServiceAccount(false);
     setNewServiceAccountName('');
     setForm(emptyForm());
+    setAssetSearchInput('');
+    setAssetSearch('');
+    setAccessGroupPageOffset(0);
   };
 
   const openCreate = () => {
@@ -235,6 +277,9 @@ export default function ApiKeys() {
       initial.team_id = selfServiceTeams[0].team_id;
     }
     setForm(initial);
+    setAssetSearchInput('');
+    setAssetSearch('');
+    setAccessGroupPageOffset(0);
     setShowCreate(true);
   };
 
@@ -279,6 +324,14 @@ export default function ApiKeys() {
       }
       if (!form.team_id) {
         setError('Select a team before creating a key.');
+        return;
+      }
+      if (assetAccessLoadError) {
+        setError(assetAccessLoadError);
+        return;
+      }
+      if (assetAccessLoading) {
+        setError('Wait for asset access options to finish loading before creating the key.');
         return;
       }
       if (!isSelfServiceCreate && form.owner_mode === 'service_account' && !form.owner_service_account_id) {
@@ -330,6 +383,7 @@ export default function ApiKeys() {
           await keys.updateAssetAccess(result.token, {
             mode: 'restrict',
             selected_callable_keys: form.selected_callable_keys,
+            selected_access_group_keys: form.selected_access_group_keys,
           });
         } catch (err: unknown) {
           assetAccessError = getErrorMessage(
@@ -362,6 +416,14 @@ export default function ApiKeys() {
         setError('Select a team before saving changes.');
         return;
       }
+      if (assetAccessLoadError) {
+        setError(assetAccessLoadError);
+        return;
+      }
+      if (editAssetAccessPending || assetAccessLoading) {
+        setError('Wait for asset access options to finish loading before saving the key.');
+        return;
+      }
       if (form.owner_mode === 'service_account' && !form.owner_service_account_id) {
         setError('Select a service account or switch ownership to You.');
         return;
@@ -385,6 +447,7 @@ export default function ApiKeys() {
       await keys.updateAssetAccess(editItem.token, {
         mode: form.asset_access_mode,
         selected_callable_keys: form.asset_access_mode === 'restrict' ? form.selected_callable_keys : [],
+        selected_access_group_keys: form.asset_access_mode === 'restrict' ? form.selected_access_group_keys : [],
       });
       closeEditor();
       refetch();
@@ -411,9 +474,13 @@ export default function ApiKeys() {
       expires: row.expires ? row.expires.slice(0, 16) : '',
       asset_access_mode: 'inherit',
       selected_callable_keys: [],
+      selected_access_group_keys: [],
     });
     setEditItem(row);
     setError(null);
+    setAssetSearchInput('');
+    setAssetSearch('');
+    setAccessGroupPageOffset(0);
   };
 
   const handleTeamChange = (teamId: string) => {
@@ -424,8 +491,12 @@ export default function ApiKeys() {
         team_id: teamId,
         asset_access_mode: changed ? 'inherit' : current.asset_access_mode,
         selected_callable_keys: changed ? [] : current.selected_callable_keys,
+        selected_access_group_keys: changed ? [] : current.selected_access_group_keys,
       };
     });
+    setAssetSearchInput('');
+    setAssetSearch('');
+    setAccessGroupPageOffset(0);
   };
 
   const handleRevoke = async (hash: string) => {
@@ -487,22 +558,57 @@ export default function ApiKeys() {
       ),
     },
   ];
+  const currentEditAssetAccessTargets = editItem && isScopedAssetAccessFor(editAssetAccessTargets, {
+    scopeType: 'api_key',
+    scopeId: editItem.token,
+  })
+    ? editAssetAccessTargets
+    : null;
+  const currentParentTeamAssetVisibility = selectedTeamId && isAssetVisibilityFor(parentTeamAssetVisibility, {
+    teamId: selectedTeamId,
+  })
+    ? parentTeamAssetVisibility
+    : null;
   const assetTargets = usesParentPreview
     ? buildParentScopedAssetTargets(
-        parentTeamAssetVisibility?.callable_targets?.items || [],
+        currentParentTeamAssetVisibility?.callable_targets?.items || [],
         form.selected_callable_keys,
         form.asset_access_mode,
       )
     : buildScopedSelectableTargets(
-        editAssetAccessTargets?.selectable_targets || [],
+        currentEditAssetAccessTargets?.selectable_targets || [],
         form.selected_callable_keys,
         form.asset_access_mode,
       );
-  const assetAccessLoading = form.asset_access_mode !== 'restrict'
+  const assetAccessGroups = usesParentPreview
+    ? buildScopedSelectableAccessGroups(
+        currentParentTeamAssetVisibility?.access_groups?.items || [],
+        form.selected_access_group_keys,
+      )
+    : buildScopedSelectableAccessGroups(
+        currentEditAssetAccessTargets?.selectable_access_groups || [],
+        form.selected_access_group_keys,
+      );
+  const accessGroupPagination = usesParentPreview
+    ? currentParentTeamAssetVisibility?.access_groups?.pagination
+    : currentEditAssetAccessTargets?.access_group_pagination;
+  const assetTargetsLoading = form.asset_access_mode !== 'restrict'
+    ? false
+    : usesParentPreview
+      ? !currentParentTeamAssetVisibility && parentTeamAssetVisibilityLoading
+      : !currentEditAssetAccessTargets && (editAssetAccessTargetsLoading || editAssetAccessLoading);
+  const accessGroupsLoading = form.asset_access_mode !== 'restrict'
     ? false
     : usesParentPreview
       ? parentTeamAssetVisibilityLoading
       : editAssetAccessTargetsLoading || editAssetAccessLoading;
+  const assetAccessLoading = assetTargetsLoading || accessGroupsLoading;
+  const activeAssetAccessError = !isSelfServiceCreate && form.asset_access_mode === 'restrict'
+    ? usesParentPreview ? parentTeamAssetVisibilityError : editAssetAccessTargetsError
+    : null;
+  const assetAccessLoadError = !isSelfServiceCreate && (showCreate || !!editItem)
+    ? assetAccessLoadErrorMessage((editItem ? editAssetAccessError : null) || activeAssetAccessError)
+    : null;
 
   const createTeamOptions = isSelfServiceCreate ? selfServiceTeams : teamsList;
   const createFormTitle = isSelfServiceCreate
@@ -776,20 +882,30 @@ export default function ApiKeys() {
                   ...current,
                   asset_access_mode: asset_access_mode === 'restrict' ? 'restrict' : 'inherit',
                   selected_callable_keys: asset_access_mode === 'restrict' ? current.selected_callable_keys : [],
+                  selected_access_group_keys: asset_access_mode === 'restrict' ? current.selected_access_group_keys : [],
                 }))}
                 targets={assetTargets}
                 selectedKeys={form.selected_callable_keys}
                 onSelectedKeysChange={(selected_callable_keys) => setForm({ ...form, selected_callable_keys })}
-                loading={assetAccessLoading}
-                disabled={saving || !form.team_id}
+                accessGroups={assetAccessGroups}
+                selectedAccessGroupKeys={form.selected_access_group_keys}
+                onSelectedAccessGroupKeysChange={(selected_access_group_keys) => setForm({ ...form, selected_access_group_keys })}
+                targetsLoading={assetTargetsLoading}
+                accessGroupsLoading={accessGroupsLoading}
+                disabled={saving || !form.team_id || editAssetAccessPending || Boolean(assetAccessLoadError)}
+                modeControlsDisabled={saving || !form.team_id || editAssetAccessPending}
+                searchValue={assetSearchInput}
+                onSearchValueChange={setAssetSearchInput}
+                accessGroupPagination={accessGroupPagination}
+                onAccessGroupPageChange={setAccessGroupPageOffset}
               />
             </>
           )}
 
-          {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>}
+          {(error || assetAccessLoadError) && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error || assetAccessLoadError}</div>}
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={closeEditor} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-            <button onClick={editItem ? handleUpdate : handleCreate} disabled={saving || !form.team_id || assetAccessLoading} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">{saving ? 'Saving...' : editItem ? 'Save Changes' : 'Create Key'}</button>
+            <button onClick={editItem ? handleUpdate : handleCreate} disabled={saving || !form.team_id || editAssetAccessPending || assetAccessLoading || Boolean(assetAccessLoadError)} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">{saving ? 'Saving...' : editItem ? 'Save Changes' : 'Create Key'}</button>
           </div>
         </div>
       </Modal>

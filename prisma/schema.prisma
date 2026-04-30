@@ -590,6 +590,22 @@ model DeltaLLM_CallableTargetBinding {
   @@map("deltallm_callabletargetbinding")
 }
 
+model DeltaLLM_CallableTargetAccessGroupBinding {
+  callable_target_access_group_binding_id String   @id @default(uuid())
+  group_key                               String
+  scope_type                              String
+  scope_id                                String
+  enabled                                 Boolean  @default(true)
+  metadata                                Json?
+  created_at                              DateTime @default(now())
+  updated_at                              DateTime @updatedAt
+
+  @@unique([group_key, scope_type, scope_id], map: "deltallm_callabletargetaccessgroupbinding_scope_group_key")
+  @@index([scope_type, scope_id, enabled], map: "deltallm_callabletargetaccessgroupbinding_scope_idx")
+  @@index([group_key], map: "deltallm_callabletargetaccessgroupbinding_group_idx")
+  @@map("deltallm_callabletargetaccessgroupbinding")
+}
+
 model DeltaLLM_CallableTargetScopePolicy {
   callable_target_scope_policy_id String   @id @default(uuid())
   scope_type                      String

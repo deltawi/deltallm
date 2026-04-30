@@ -2,7 +2,12 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { callableTargets, organizations } from '../lib/api';
-import { buildCatalogAssetTargets } from '../lib/assetAccess';
+import {
+  assetAccessLoadErrorMessage,
+  buildCatalogAccessGroups,
+  buildCatalogAssetTargets,
+  isScopedAssetAccessFor,
+} from '../lib/assetAccess';
 import { useAuth } from '../lib/auth';
 import {
   dateTimeLocalUtcInputToIso,
@@ -107,7 +112,7 @@ export default function OrganizationDetail() {
   const { data: orgMembers, loading: membersLoading, refetch: refetchMembers } = useApi(
     () => organizations.members(orgId!), [orgId],
   );
-  const { data: orgAssetAccess, loading: orgAssetAccessLoading, refetch: refetchOrgAssetAccess } = useApi(
+  const { data: orgAssetAccess, error: orgAssetAccessError, loading: orgAssetAccessLoading, refetch: refetchOrgAssetAccess } = useApi(
     () => (isPlatformAdmin ? organizations.assetAccess(orgId!, { include_targets: false }) : Promise.resolve(null)),
     [orgId, isPlatformAdmin],
   );
@@ -118,6 +123,20 @@ export default function OrganizationDetail() {
       : Promise.resolve(null)),
     [orgId, isPlatformAdmin, tab],
   );
+  const currentOrgAssetAccess = orgId && isScopedAssetAccessFor(orgAssetAccess, {
+    scopeType: 'organization',
+    scopeId: orgId,
+    organizationId: orgId,
+  })
+    ? orgAssetAccess
+    : null;
+  const currentOrgAssetTargetsFull = orgId && isScopedAssetAccessFor(orgAssetTargetsFull, {
+    scopeType: 'organization',
+    scopeId: orgId,
+    organizationId: orgId,
+  })
+    ? orgAssetTargetsFull
+    : null;
 
   /* ── edit org modal ── */
   const [isEditingSettings, setIsEditingSettings] = useState(false);
@@ -125,8 +144,10 @@ export default function OrganizationDetail() {
   const [assetSearchInput, setAssetSearchInput] = useState('');
   const [assetSearch, setAssetSearch] = useState('');
   const [assetPageOffset, setAssetPageOffset] = useState(0);
+  const [accessGroupPageOffset, setAccessGroupPageOffset] = useState(0);
   const [assetTargetType, setAssetTargetType] = useState<'all' | 'model' | 'route_group'>('all');
   const assetPageSize = 50;
+  const accessGroupPageSize = 50;
   const [form, setForm] = useState({
     organization_name: '',
     max_budget: '',
@@ -143,6 +164,7 @@ export default function OrganizationDetail() {
     audit_content_storage_enabled: false,
     select_all_current_assets: false,
     selected_callable_keys: [] as string[],
+    selected_access_group_keys: [] as string[],
   });
   const [saving, setSaving] = useState(false);
   const [pageError, setPageError] = useState<string | null>(
@@ -153,20 +175,25 @@ export default function OrganizationDetail() {
   const [orgError, setOrgError] = useState<string | null>(null);
 
   useEffect(() => {
-    const t = setTimeout(() => { setAssetSearch(assetSearchInput); setAssetPageOffset(0); }, 250);
+    const t = setTimeout(() => {
+      setAssetSearch(assetSearchInput);
+      setAssetPageOffset(0);
+      setAccessGroupPageOffset(0);
+    }, 250);
     return () => clearTimeout(t);
   }, [assetSearchInput]);
 
   useEffect(() => {
-    if (!isEditingAssets || !orgAssetAccess) return;
+    if (!isEditingAssets || !currentOrgAssetAccess) return;
     setForm((c) => ({
       ...c,
-      select_all_current_assets: !!orgAssetAccess.auto_follow_catalog,
-      selected_callable_keys: orgAssetAccess.selected_callable_keys || [],
+      select_all_current_assets: !!currentOrgAssetAccess.auto_follow_catalog,
+      selected_callable_keys: currentOrgAssetAccess.selected_callable_keys || [],
+      selected_access_group_keys: currentOrgAssetAccess.selected_access_group_keys || [],
     }));
-  }, [isEditingAssets, orgAssetAccess]);
+  }, [isEditingAssets, currentOrgAssetAccess]);
 
-  const { data: callableTargetPage, loading: callableTargetPageLoading } = useApi(
+  const { data: callableTargetPage, error: callableTargetPageError, loading: callableTargetPageLoading } = useApi(
     () => (
       isPlatformAdmin && isEditingAssets && !form.select_all_current_assets
         ? callableTargets.list({
@@ -178,6 +205,19 @@ export default function OrganizationDetail() {
         : Promise.resolve({ data: [], pagination: { total: 0, limit: assetPageSize, offset: 0, has_more: false } })
     ),
     [isPlatformAdmin, isEditingAssets, form.select_all_current_assets, assetSearch, assetTargetType, assetPageOffset],
+  );
+  const { data: callableTargetAccessGroups, error: accessGroupError, loading: accessGroupLoading } = useApi(
+    () => (
+      isPlatformAdmin && isEditingAssets && !form.select_all_current_assets
+        ? callableTargets.listAccessGroups({
+            search: assetSearch || undefined,
+            include_members: false,
+            limit: accessGroupPageSize,
+            offset: accessGroupPageOffset,
+          })
+        : Promise.resolve({ data: [], pagination: { total: 0, limit: accessGroupPageSize, offset: 0, has_more: false } })
+    ),
+    [isPlatformAdmin, isEditingAssets, form.select_all_current_assets, assetSearch, accessGroupPageOffset],
   );
 
   const openEditSettings = () => {
@@ -218,11 +258,13 @@ export default function OrganizationDetail() {
     setForm((c) => ({
       ...c,
       select_all_current_assets: false,
-      selected_callable_keys: orgAssetAccess?.selected_callable_keys || [],
+      selected_callable_keys: currentOrgAssetAccess?.selected_callable_keys || [],
+      selected_access_group_keys: currentOrgAssetAccess?.selected_access_group_keys || [],
     }));
     setAssetSearchInput('');
     setAssetSearch('');
     setAssetPageOffset(0);
+    setAccessGroupPageOffset(0);
     setAssetTargetType('all');
     setIsEditingAssets(true);
   };
@@ -267,11 +309,20 @@ export default function OrganizationDetail() {
   };
 
   const handleSaveAssets = async () => {
+    if (assetAccessLoadError) {
+      setOrgError(assetAccessLoadError);
+      return;
+    }
+    if (orgAssetAccessPending || assetAccessLoading) {
+      setOrgError('Wait for asset access options to finish loading before saving.');
+      return;
+    }
     setSaving(true);
     setOrgError(null);
     try {
       await organizations.updateAssetAccess(orgId!, {
         selected_callable_keys: form.select_all_current_assets ? [] : form.selected_callable_keys,
+        selected_access_group_keys: form.select_all_current_assets ? [] : form.selected_access_group_keys,
         select_all_selectable: form.select_all_current_assets,
       });
       refetchOrgAssetAccess();
@@ -351,16 +402,31 @@ export default function OrganizationDetail() {
   const spend = org?.spend || 0;
   const budget = org?.max_budget ?? null;
   const spendPct = budget ? Math.min(100, Math.round((spend / budget) * 100)) : null;
-  const orgAssetSummary = orgAssetAccess?.summary;
+  const orgAssetSummary = currentOrgAssetAccess?.summary;
+  const orgAccessibleTargets = currentOrgAssetTargetsFull?.effective_targets ?? [];
   const assetPct = orgAssetSummary && orgAssetSummary.selectable_total > 0
-    ? Math.round((orgAssetSummary.selected_total / orgAssetSummary.selectable_total) * 100)
+    ? Math.round((orgAssetSummary.effective_total / orgAssetSummary.selectable_total) * 100)
     : null;
 
   const orgAssetTargets = buildCatalogAssetTargets(
     (callableTargetPage?.data || []) as any[],
     form.selected_callable_keys,
+    currentOrgAssetAccess?.selected_callable_keys || [],
+  );
+  const orgAssetAccessGroups = buildCatalogAccessGroups(
+    callableTargetAccessGroups?.data || [],
+    form.selected_access_group_keys,
+    currentOrgAssetAccess?.selected_access_group_keys || [],
   );
   const orgAssetPagination = callableTargetPage?.pagination;
+  const accessGroupPagination = callableTargetAccessGroups?.pagination;
+  const orgAssetAccessPending = isEditingAssets && isPlatformAdmin && (orgAssetAccessLoading || !currentOrgAssetAccess);
+  const assetAccessLoading = !form.select_all_current_assets && (callableTargetPageLoading || accessGroupLoading);
+  const assetAccessLoadError = isEditingAssets && isPlatformAdmin
+    ? assetAccessLoadErrorMessage(
+        orgAssetAccessError || (!form.select_all_current_assets ? callableTargetPageError || accessGroupError : null),
+      )
+    : null;
 
   /* teams over 80% of budget = "warning" for alert card */
   const warningTeam = teamList.find((t: any) => {
@@ -453,7 +519,7 @@ export default function OrganizationDetail() {
             label="Assets granted"
             value={
               orgAssetSummary
-                ? `${orgAssetSummary.selected_total}/${orgAssetSummary.selectable_total}`
+                ? `${orgAssetSummary.effective_total}/${orgAssetSummary.selectable_total}`
                 : isPlatformAdmin ? '—' : 'N/A'
             }
             sub={assetPct != null ? `${assetPct}% of catalog` : 'of catalog'}
@@ -894,7 +960,7 @@ export default function OrganizationDetail() {
                     <>
                       <div className="mb-3">
                         <div className="flex justify-between text-xs mb-1.5">
-                          <span className="text-gray-600">{orgAssetSummary.selected_total} models &amp; routes</span>
+                          <span className="text-gray-600">{orgAssetSummary.effective_total} models &amp; routes</span>
                           <span className="text-gray-400">of {orgAssetSummary.selectable_total}</span>
                         </div>
                         <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
@@ -904,6 +970,9 @@ export default function OrganizationDetail() {
                           />
                         </div>
                       </div>
+                      <p className="text-[10px] text-gray-400 leading-relaxed mb-1">
+                        Direct targets: {orgAssetSummary.selected_total} · Access groups: {orgAssetSummary.selected_access_group_total ?? 0}
+                      </p>
                       <p className="text-[10px] text-gray-400 leading-relaxed">
                         Teams and API keys within this org can only use assets from this allowed set.
                       </p>
@@ -1154,8 +1223,8 @@ export default function OrganizationDetail() {
               </div>
               {isEditingAssets ? (
                 <div className="space-y-4">
-                  {orgError && (
-                    <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{orgError}</div>
+                  {(orgError || assetAccessLoadError) && (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{orgError || assetAccessLoadError}</div>
                   )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <label className={`rounded-lg border px-3 py-2 text-sm cursor-pointer ${form.select_all_current_assets ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'}`}>
@@ -1164,7 +1233,12 @@ export default function OrganizationDetail() {
                           type="radio"
                           name="org-detail-asset-strategy"
                           checked={form.select_all_current_assets}
-                          onChange={() => setForm((c) => ({ ...c, select_all_current_assets: true, selected_callable_keys: [] }))}
+                          onChange={() => setForm((c) => ({
+                            ...c,
+                            select_all_current_assets: true,
+                            selected_callable_keys: [],
+                            selected_access_group_keys: [],
+                          }))}
                           disabled={saving}
                           className="mt-0.5"
                         />
@@ -1193,8 +1267,8 @@ export default function OrganizationDetail() {
                   </div>
                   {form.select_all_current_assets ? (
                     <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-3 text-xs text-blue-800">
-                      {orgAssetAccess
-                        ? `This organization currently has ${orgAssetAccess.summary.selected_total} of ${orgAssetAccess.summary.selectable_total} assets granted. Saving will align it to all current assets and automatically include future additions.`
+                      {currentOrgAssetAccess
+                        ? `This organization currently has ${currentOrgAssetAccess.summary.effective_total} of ${currentOrgAssetAccess.summary.selectable_total} assets granted. Saving will align it to all current assets and automatically include future additions.`
                         : 'Saving will grant every currently available model and route group to this organization and automatically include future additions.'}
                     </div>
                   ) : (
@@ -1205,18 +1279,33 @@ export default function OrganizationDetail() {
                       targets={orgAssetTargets}
                       selectedKeys={form.selected_callable_keys}
                       onSelectedKeysChange={(selected_callable_keys) => setForm({ ...form, selected_callable_keys })}
-                      loading={orgAssetAccessLoading || callableTargetPageLoading}
-                      disabled={saving}
+                      accessGroups={orgAssetAccessGroups}
+                      selectedAccessGroupKeys={form.selected_access_group_keys}
+                      onSelectedAccessGroupKeysChange={(selected_access_group_keys) => setForm({ ...form, selected_access_group_keys })}
+                      targetsLoading={orgAssetAccessPending || callableTargetPageLoading}
+                      accessGroupsLoading={orgAssetAccessPending || accessGroupLoading}
+                      disabled={saving || orgAssetAccessPending || Boolean(assetAccessLoadError)}
                       searchValue={assetSearchInput}
                       onSearchValueChange={setAssetSearchInput}
                       targetTypeFilter={assetTargetType}
                       onTargetTypeFilterChange={(next) => { setAssetTargetType(next); setAssetPageOffset(0); }}
                       pagination={orgAssetPagination}
                       onPageChange={setAssetPageOffset}
+                      accessGroupPagination={accessGroupPagination}
+                      onAccessGroupPageChange={setAccessGroupPageOffset}
                       primaryActionLabel="Allow all assets"
-                      onPrimaryAction={() => setForm((c) => ({ ...c, select_all_current_assets: true, selected_callable_keys: [] }))}
-                      secondaryActionLabel={form.selected_callable_keys.length > 0 ? 'Clear selection' : undefined}
-                      onSecondaryAction={form.selected_callable_keys.length > 0 ? () => setForm((c) => ({ ...c, selected_callable_keys: [] })) : undefined}
+                      onPrimaryAction={() => setForm((c) => ({
+                        ...c,
+                        select_all_current_assets: true,
+                        selected_callable_keys: [],
+                        selected_access_group_keys: [],
+                      }))}
+                      secondaryActionLabel={form.selected_callable_keys.length > 0 || form.selected_access_group_keys.length > 0 ? 'Clear selection' : undefined}
+                      onSecondaryAction={
+                        form.selected_callable_keys.length > 0 || form.selected_access_group_keys.length > 0
+                          ? () => setForm((c) => ({ ...c, selected_callable_keys: [], selected_access_group_keys: [] }))
+                          : undefined
+                      }
                     />
                   )}
                   <div className="flex justify-end gap-3 pt-2 border-t border-gray-100">
@@ -1228,42 +1317,45 @@ export default function OrganizationDetail() {
                     </button>
                     <button
                       onClick={handleSaveAssets}
-                      disabled={saving || (isPlatformAdmin && orgAssetAccessLoading)}
+                      disabled={saving || orgAssetAccessPending || assetAccessLoading || Boolean(assetAccessLoadError)}
                       className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
                     >
                       {saving ? 'Saving…' : 'Save Changes'}
                     </button>
                   </div>
                 </div>
-              ) : orgAssetTargetsFullLoading ? (
+              ) : !currentOrgAssetTargetsFull && orgAssetTargetsFullLoading ? (
                 <div className="py-12 flex items-center justify-center">
                   <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600" />
                 </div>
-              ) : (orgAssetTargetsFull?.selectable_targets || []).length === 0 ? (
-                <p className="text-sm text-gray-400 text-center py-8">No assets configured for this organization.</p>
+              ) : orgAccessibleTargets.length === 0 ? (
+                <p className="text-sm text-gray-400 text-center py-8">No assets granted for this organization.</p>
               ) : (
                 <div className="space-y-2">
-                  {(orgAssetTargetsFull?.selectable_targets || [])
-                    .filter((t: any) => t.selected)
-                    .map((t: any) => (
-                      <div key={t.callable_key} className="flex items-center justify-between px-3 py-2.5 rounded-lg bg-gray-50 border border-gray-200 hover:bg-blue-50/50 transition-colors">
-                        <div className="flex items-center gap-2.5">
-                          <Shield className="w-3.5 h-3.5 text-green-500 shrink-0" />
-                          <span className="text-sm font-medium text-gray-800">{t.callable_key}</span>
-                          <span className={`text-xs px-1.5 py-0.5 rounded ${
-                            t.target_type === 'model' ? 'bg-blue-50 text-blue-600' : 'bg-purple-50 text-purple-600'
-                          }`}>
-                            {t.target_type === 'route_group' ? 'route group' : t.target_type}
+                  {orgAccessibleTargets.map((t: any) => (
+                    <div key={t.callable_key} className="flex items-center justify-between px-3 py-2.5 rounded-lg bg-gray-50 border border-gray-200 hover:bg-blue-50/50 transition-colors">
+                      <div className="flex items-center gap-2.5">
+                        <Shield className="w-3.5 h-3.5 text-green-500 shrink-0" />
+                        <span className="text-sm font-medium text-gray-800">{t.callable_key}</span>
+                        <span className={`text-xs px-1.5 py-0.5 rounded ${
+                          t.target_type === 'model' ? 'bg-blue-50 text-blue-600' : 'bg-purple-50 text-purple-600'
+                        }`}>
+                          {t.target_type === 'route_group' ? 'route group' : t.target_type}
+                        </span>
+                        {Array.isArray(t.via_access_groups) && t.via_access_groups.length > 0 && (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">
+                            via {t.via_access_groups.join(', ')}
                           </span>
-                        </div>
-                        <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
+                        )}
                       </div>
-                    ))}
+                      <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
+                    </div>
+                  ))}
                 </div>
               )}
               {orgAssetSummary && (
                 <p className="text-xs text-gray-400 mt-3 text-center">
-                  Showing {orgAssetSummary.selected_total} of {orgAssetSummary.selectable_total} granted assets
+                  Showing {orgAssetSummary.effective_total} of {orgAssetSummary.selectable_total} granted assets
                 </p>
               )}
             </div>
@@ -1274,8 +1366,16 @@ export default function OrganizationDetail() {
                 <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">Access Summary</h4>
                 <div className="space-y-2.5 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-gray-500">Selected</span>
+                    <span className="text-gray-500">Accessible</span>
+                    <span className="font-medium text-gray-800">{orgAssetSummary?.effective_total ?? '—'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Direct targets</span>
                     <span className="font-medium text-gray-800">{orgAssetSummary?.selected_total ?? '—'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Access groups</span>
+                    <span className="font-medium text-gray-800">{orgAssetSummary?.selected_access_group_total ?? '—'}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-500">Available</span>

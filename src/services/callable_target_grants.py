@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from src.models.responses import UserAPIKeyAuth
+from src.governance.access_groups import build_callable_keys_by_access_group
 from src.services.runtime_scopes import resolve_runtime_scope_context
 
 if TYPE_CHECKING:
+    from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
     from src.db.callable_targets import CallableTargetBindingRepository
     from src.db.callable_target_policies import CallableTargetScopePolicyRepository
 
@@ -18,6 +20,9 @@ class CallableTargetGrantSnapshot:
     enabled_by_scope: dict[tuple[str, str], frozenset[str]]
     binding_counts_by_scope: dict[tuple[str, str], int]
     scope_modes_by_scope: dict[tuple[str, str], str]
+    enabled_groups_by_scope: dict[tuple[str, str], frozenset[str]]
+    group_binding_counts_by_scope: dict[tuple[str, str], int]
+    callable_keys_by_group: dict[str, frozenset[str]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,29 +38,31 @@ class CallableTargetGrantService:
         repository: CallableTargetBindingRepository | None,
         *,
         policy_repository: CallableTargetScopePolicyRepository | None = None,
+        access_group_repository: CallableTargetAccessGroupBindingRepository | None = None,
+        callable_target_catalog_getter: Callable[[], Mapping[str, Any] | None] | None = None,
     ) -> None:
         self.repository = repository
         self.policy_repository = policy_repository
+        self.access_group_repository = access_group_repository
+        self.callable_target_catalog_getter = callable_target_catalog_getter
         self._reload_lock = asyncio.Lock()
-        self._snapshot = CallableTargetGrantSnapshot(
-            enabled_by_scope={},
-            binding_counts_by_scope={},
-            scope_modes_by_scope={},
-        )
+        self._snapshot = self._empty_snapshot()
 
     async def reload(self) -> None:
-        if self.repository is None and self.policy_repository is None:
-            self._snapshot = CallableTargetGrantSnapshot(
-                enabled_by_scope={},
-                binding_counts_by_scope={},
-                scope_modes_by_scope={},
-            )
+        if (
+            self.repository is None
+            and self.policy_repository is None
+            and self.access_group_repository is None
+        ):
+            self._snapshot = self._empty_snapshot()
             return
 
         async with self._reload_lock:
             enabled_by_scope: dict[tuple[str, str], set[str]] = defaultdict(set)
             binding_counts_by_scope: dict[tuple[str, str], int] = defaultdict(int)
             scope_modes_by_scope: dict[tuple[str, str], str] = {}
+            enabled_groups_by_scope: dict[tuple[str, str], set[str]] = defaultdict(set)
+            group_binding_counts_by_scope: dict[tuple[str, str], int] = defaultdict(int)
             if self.repository is not None:
                 offset = 0
                 limit = 1000
@@ -71,6 +78,23 @@ class CallableTargetGrantService:
                     if not bindings or offset >= total:
                         break
 
+            if self.access_group_repository is not None:
+                offset = 0
+                limit = 1000
+                while True:
+                    group_bindings, total = await self.access_group_repository.list_bindings(
+                        limit=limit,
+                        offset=offset,
+                    )
+                    for binding in group_bindings:
+                        scope = (binding.scope_type, binding.scope_id)
+                        group_binding_counts_by_scope[scope] += 1
+                        if binding.enabled:
+                            enabled_groups_by_scope[scope].add(binding.group_key)
+                    offset += len(group_bindings)
+                    if not group_bindings or offset >= total:
+                        break
+
             if self.policy_repository is not None:
                 offset = 0
                 limit = 1000
@@ -82,10 +106,22 @@ class CallableTargetGrantService:
                     if not policies or offset >= total:
                         break
 
+            callable_keys_by_group = build_callable_keys_by_access_group(
+                self._callable_target_catalog()
+            )
+            for scope, group_keys in enabled_groups_by_scope.items():
+                for group_key in group_keys:
+                    enabled_by_scope[scope].update(callable_keys_by_group.get(group_key, ()))
+
             self._snapshot = CallableTargetGrantSnapshot(
                 enabled_by_scope={scope: frozenset(values) for scope, values in enabled_by_scope.items()},
                 binding_counts_by_scope=dict(binding_counts_by_scope),
                 scope_modes_by_scope=scope_modes_by_scope,
+                enabled_groups_by_scope={
+                    scope: frozenset(values) for scope, values in enabled_groups_by_scope.items()
+                },
+                group_binding_counts_by_scope=dict(group_binding_counts_by_scope),
+                callable_keys_by_group=callable_keys_by_group,
             )
 
     async def invalidate_all(self) -> None:
@@ -100,7 +136,7 @@ class CallableTargetGrantService:
         if not scopes:
             return None
 
-        any_matching_bindings = any(snapshot.binding_counts_by_scope.get(scope, 0) > 0 for scope in scopes)
+        any_matching_bindings = any(self._has_scope_access_configuration(snapshot, scope) for scope in scopes)
         if not any_matching_bindings:
             return None
 
@@ -121,7 +157,10 @@ class CallableTargetGrantService:
         normalized_scope_id = str(scope_id or "").strip() if scope_id is not None else ""
         if not normalized_scope_type or not normalized_scope_id:
             return False
-        return self._snapshot.binding_counts_by_scope.get((normalized_scope_type, normalized_scope_id), 0) > 0
+        return self._has_scope_access_configuration(
+            self._snapshot,
+            (normalized_scope_type, normalized_scope_id),
+        )
 
     def resolve_policy_allowlist(self, auth: UserAPIKeyAuth) -> CallableTargetPolicyResolution:
         scope_context = resolve_runtime_scope_context(auth)
@@ -159,7 +198,7 @@ class CallableTargetGrantService:
         scope_context = resolve_runtime_scope_context(auth)
         if scope_context.organization_id is not None:
             organization_scope = ("organization", scope_context.organization_id)
-            if snapshot.binding_counts_by_scope.get(organization_scope, 0) == 0:
+            if not self._has_scope_access_configuration(snapshot, organization_scope):
                 return set()
             return set(snapshot.enabled_by_scope.get(organization_scope, ()))
 
@@ -167,7 +206,7 @@ class CallableTargetGrantService:
         direct_allowlists = [
             set(snapshot.enabled_by_scope.get(scope, ()))
             for scope in direct_scopes
-            if snapshot.binding_counts_by_scope.get(scope, 0) > 0
+            if self._has_scope_access_configuration(snapshot, scope)
         ]
         if not direct_allowlists:
             return None
@@ -202,4 +241,33 @@ class CallableTargetGrantService:
         mode = snapshot.scope_modes_by_scope.get(user_scope)
         if mode == "restrict":
             return True
-        return mode is None and snapshot.binding_counts_by_scope.get(user_scope, 0) > 0
+        return mode is None and CallableTargetGrantService._has_scope_access_configuration(
+            snapshot,
+            user_scope,
+        )
+
+    @staticmethod
+    def _empty_snapshot() -> CallableTargetGrantSnapshot:
+        return CallableTargetGrantSnapshot(
+            enabled_by_scope={},
+            binding_counts_by_scope={},
+            scope_modes_by_scope={},
+            enabled_groups_by_scope={},
+            group_binding_counts_by_scope={},
+            callable_keys_by_group={},
+        )
+
+    def _callable_target_catalog(self) -> Mapping[str, Any] | None:
+        if self.callable_target_catalog_getter is None:
+            return None
+        return self.callable_target_catalog_getter()
+
+    @staticmethod
+    def _has_scope_access_configuration(
+        snapshot: CallableTargetGrantSnapshot,
+        scope: tuple[str, str],
+    ) -> bool:
+        return (
+            snapshot.binding_counts_by_scope.get(scope, 0)
+            + snapshot.group_binding_counts_by_scope.get(scope, 0)
+        ) > 0

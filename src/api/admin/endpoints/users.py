@@ -185,6 +185,10 @@ async def update_user(
 async def get_user_asset_visibility(
     request: Request,
     user_id: str,
+    include_access_groups: bool = Query(default=False),
+    access_group_search: str | None = Query(default=None),
+    access_group_limit: int = Query(default=50, ge=1, le=200),
+    access_group_offset: int = Query(default=0, ge=0),
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
@@ -200,6 +204,10 @@ async def get_user_asset_visibility(
         organization_id=organization_id,
         team_id=team_id,
         user_id=user_id,
+        include_access_groups=include_access_groups,
+        access_group_search=access_group_search,
+        access_group_limit=access_group_limit,
+        access_group_offset=access_group_offset,
     )
 
 
@@ -208,6 +216,9 @@ async def get_user_asset_access(
     request: Request,
     user_id: str,
     include_targets: bool = Query(default=True),
+    access_group_search: str | None = Query(default=None),
+    access_group_limit: int = Query(default=50, ge=1, le=200),
+    access_group_offset: int = Query(default=0, ge=0),
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
@@ -226,6 +237,9 @@ async def get_user_asset_access(
         team_id=team_id,
         user_id=user_id,
         include_targets=include_targets,
+        access_group_search=access_group_search,
+        access_group_limit=access_group_limit,
+        access_group_offset=access_group_offset,
     )
 
 
@@ -245,17 +259,19 @@ async def update_user_asset_access(
     team_id = str(row.get("team_id") or "").strip() or None
     if not organization_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User organization is not configured")
-    response = await apply_scope_asset_access(
-        request,
-        scope_type="user",
-        scope_id=user_id,
-        organization_id=organization_id,
-        team_id=team_id,
-        user_id=user_id,
-        mode=payload.get("mode"),
-        selected_callable_keys=payload.get("selected_callable_keys", []),
-        select_all_selectable=bool(payload.get("select_all_selectable", False)),
-    )
+    asset_access_payload = {
+        "scope_type": "user",
+        "scope_id": user_id,
+        "organization_id": organization_id,
+        "team_id": team_id,
+        "user_id": user_id,
+        "mode": payload.get("mode"),
+        "selected_callable_keys": payload.get("selected_callable_keys", []),
+        "select_all_selectable": bool(payload.get("select_all_selectable", False)),
+    }
+    if "selected_access_group_keys" in payload:
+        asset_access_payload["selected_access_group_keys"] = payload["selected_access_group_keys"]
+    response = await apply_scope_asset_access(request, **asset_access_payload)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,

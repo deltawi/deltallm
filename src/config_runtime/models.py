@@ -196,6 +196,7 @@ class ModelHotReloadManager:
             redis_client=getattr(app.state, "redis", None),
             salt_key=salt_key,
         )
+        await reload_callable_target_grants_for_app(app, notify=False)
 
     async def _reload_runtime(self) -> None:
         app_config = self.dynamic_config.get_app_config()

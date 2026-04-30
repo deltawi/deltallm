@@ -11,6 +11,7 @@ import yaml
 from pydantic import AliasChoices, BaseModel, Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src.governance.access_groups import normalize_access_group_list
 from src.batch.create.defaults import (
     DEFAULT_CREATE_SESSION_CLEANUP_INTERVAL_SECONDS,
     DEFAULT_CREATE_SESSION_CLEANUP_SCAN_LIMIT,
@@ -103,6 +104,7 @@ class ModelInfo(BaseModel):
     weight: int = 1
     priority: int = 0
     tags: list[str] = Field(default_factory=list)
+    access_groups: list[str] = Field(default_factory=list)
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
     input_cost_per_token_cache_hit: float | None = None
@@ -131,6 +133,11 @@ class ModelInfo(BaseModel):
     upstream_max_batch_inputs: int | None = Field(default=None, ge=1)
     default_params: dict[str, Any] | None = None
 
+    @field_validator("access_groups", mode="before")
+    @classmethod
+    def validate_access_groups(cls, value: object) -> list[str]:
+        return normalize_access_group_list(value, strict=True)
+
 
 class ModelDeployment(BaseModel):
     model_config = {"populate_by_name": True}
@@ -153,7 +160,13 @@ class RouteGroupConfig(BaseModel):
     key: str
     enabled: bool = True
     strategy: RoutingStrategyName | None = None
+    access_groups: list[str] = Field(default_factory=list)
     members: list[RouteGroupMember] = Field(default_factory=list)
+
+    @field_validator("access_groups", mode="before")
+    @classmethod
+    def validate_access_groups(cls, value: object) -> list[str]:
+        return normalize_access_group_list(value, strict=True)
 
 
 class RouterSettings(BaseModel):

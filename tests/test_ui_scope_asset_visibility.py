@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRecord
 from src.db.callable_targets import CallableTargetBindingRecord
 from src.db.callable_target_policies import CallableTargetScopePolicyRecord
 from src.db.route_groups import RouteGroupBindingRecord, RouteGroupRecord
@@ -172,6 +173,40 @@ class _FakeCallableTargetBindingRepository:
         return record
 
 
+class _FakeCallableTargetAccessGroupBindingRepository:
+    def __init__(self) -> None:
+        self.bindings: list[CallableTargetAccessGroupBindingRecord] = []
+        self._counter = 0
+
+    async def list_bindings(self, *, group_key=None, scope_type=None, scope_id=None, limit=500, offset=0):  # noqa: ANN001, ANN201
+        items = list(self.bindings)
+        if group_key:
+            items = [item for item in items if item.group_key == group_key]
+        if scope_type:
+            items = [item for item in items if item.scope_type == scope_type]
+        if scope_id:
+            items = [item for item in items if item.scope_id == scope_id]
+        return items[offset : offset + limit], len(items)
+
+    async def upsert_binding(self, *, group_key, scope_type, scope_id, enabled, metadata):  # noqa: ANN001, ANN201
+        for index, item in enumerate(self.bindings):
+            if item.group_key == group_key and item.scope_type == scope_type and item.scope_id == scope_id:
+                updated = replace(item, enabled=enabled, metadata=metadata)
+                self.bindings[index] = updated
+                return updated
+        self._counter += 1
+        record = CallableTargetAccessGroupBindingRecord(
+            callable_target_access_group_binding_id=f"ctagb-{self._counter}",
+            group_key=group_key,
+            scope_type=scope_type,
+            scope_id=scope_id,
+            enabled=enabled,
+            metadata=metadata,
+        )
+        self.bindings.append(record)
+        return record
+
+
 class _FakeCallableTargetScopePolicyRepository:
     def __init__(self) -> None:
         self.policies: list[CallableTargetScopePolicyRecord] = []
@@ -316,6 +351,54 @@ async def test_team_asset_visibility_includes_org_inherited_and_team_direct_sour
     assert callable_payload["gpt-4o-mini"]["effective_visible"] is True
     assert callable_payload["team-assistant"]["visibility_source"] == "granted"
     assert callable_payload["team-assistant"]["effective_visible"] is False
+
+
+@pytest.mark.asyncio
+async def test_parent_asset_visibility_returns_paged_selectable_access_groups(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeDB()})()
+    route_groups = _FakeRouteGroupRepository()
+    callable_targets = _FakeCallableTargetBindingRepository()
+    access_groups = _FakeCallableTargetAccessGroupBindingRepository()
+    policies = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.route_group_repository = route_groups
+    test_app.state.callable_target_binding_repository = callable_targets
+    test_app.state.callable_target_access_group_repository = access_groups
+    test_app.state.callable_target_scope_policy_repository = policies
+    test_app.state.callable_target_catalog = {
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})),
+        "support-chat": CallableTarget(key="support-chat", target_type="route_group", access_groups=frozenset({"support"})),
+    }
+    await access_groups.upsert_binding(
+        group_key="beta",
+        scope_type="organization",
+        scope_id="org-1",
+        enabled=True,
+        metadata=None,
+    )
+
+    response = await client.get(
+        "/ui/api/organizations/org-1/asset-visibility?include_access_groups=true&access_group_limit=1",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["access_groups"]["pagination"] == {
+        "total": 1,
+        "limit": 1,
+        "offset": 0,
+        "has_more": False,
+    }
+    assert payload["access_groups"]["items"] == [
+        {
+            "group_key": "beta",
+            "member_count": 1,
+            "selectable": True,
+            "selected": False,
+            "effective_visible": True,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -491,6 +574,52 @@ async def test_key_asset_visibility_applies_user_scope_narrowing(client, test_ap
     callable_payload = {item["callable_key"]: item for item in payload["callable_targets"]["items"]}
     assert callable_payload["gpt-4o-mini"]["effective_visible"] is True
     assert callable_payload["text-embedding-3-small"]["effective_visible"] is False
+
+
+@pytest.mark.asyncio
+async def test_user_asset_visibility_treats_disabled_access_group_binding_as_authoritative(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeDB()})()
+    callable_targets = _FakeCallableTargetBindingRepository()
+    access_groups = _FakeCallableTargetAccessGroupBindingRepository()
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.callable_target_binding_repository = callable_targets
+    test_app.state.callable_target_access_group_repository = access_groups
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.callable_target_catalog = {
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})),
+    }
+    await callable_targets.upsert_binding(
+        callable_key="gpt-4o-mini",
+        scope_type="organization",
+        scope_id="org-1",
+        enabled=True,
+        metadata={"source": "org"},
+    )
+    await access_groups.upsert_binding(
+        group_key="beta",
+        scope_type="user",
+        scope_id="user-1",
+        enabled=False,
+        metadata={"source": "user"},
+    )
+
+    response = await client.get(
+        "/ui/api/users/user-1/asset-visibility",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["scope_policies"]["user"] == "restrict"
+    callable_payload = {item["callable_key"]: item for item in payload["callable_targets"]["items"]}
+    assert callable_payload["gpt-4o-mini"]["effective_visible"] is False
+    assert any(
+        source.get("scope_type") == "user"
+        and source.get("access_group_key") == "beta"
+        and source.get("enabled") is False
+        for source in callable_payload["gpt-4o-mini"]["sources"]
+    )
 
 
 @pytest.mark.asyncio

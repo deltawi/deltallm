@@ -262,6 +262,28 @@ async def test_update_model_preserves_inline_api_key_when_omitted(client, test_a
 
 
 @pytest.mark.asyncio
+async def test_update_model_normalizes_access_groups(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.put(
+        "/ui/api/models/gpt-4o-mini-0",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "model_name": "gpt-4o-mini",
+            "deltallm_params": {
+                "provider": "openai",
+                "model": "openai/gpt-4o-mini",
+                "api_base": "https://api.openai.com/v1",
+            },
+            "model_info": {"mode": "chat", "access_groups": ["Beta", "support", "beta"]},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["model_info"]["access_groups"] == ["beta", "support"]
+
+
+@pytest.mark.asyncio
 async def test_update_model_clears_old_connection_fields_when_provider_changes(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
 
@@ -346,6 +368,29 @@ async def test_create_model_response_redacts_inline_api_key(client, test_app):
     payload = response.json()
     assert payload["credential_source"] == "inline"
     assert payload["deltallm_params"]["api_key"] == "***REDACTED***"
+
+
+@pytest.mark.asyncio
+async def test_create_model_rejects_invalid_access_groups(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.post(
+        "/ui/api/models",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "model_name": "invalid-access-groups-model",
+            "deltallm_params": {
+                "provider": "openai",
+                "model": "openai/gpt-4o-mini",
+                "api_base": "https://api.openai.com/v1",
+                "api_key": "provider-key",
+            },
+            "model_info": {"mode": "chat", "access_groups": [123]},
+        },
+    )
+
+    assert response.status_code == 400
+    assert "access group key must be a string" in response.text
 
 
 @pytest.mark.asyncio

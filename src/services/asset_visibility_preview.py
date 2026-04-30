@@ -8,12 +8,18 @@ from src.db.callable_target_policies import CallableTargetScopePolicyRepository
 from src.db.route_groups import RouteGroupRepository
 from src.services.asset_binding_mirror import (
     callable_catalog,
+    callable_target_access_group_binding_repository,
     callable_target_binding_repository,
+    list_all_callable_target_access_group_bindings,
     list_all_callable_target_bindings,
     list_all_route_group_bindings,
     route_group_repository,
 )
 from src.services.callable_targets import CallableTarget
+from src.governance.access_groups import build_callable_keys_by_access_group
+
+_DEFAULT_ACCESS_GROUP_PAGE_LIMIT = 50
+_MAX_ACCESS_GROUP_PAGE_LIMIT = 200
 
 
 def _callable_target_scope_policy_repository(request: Request) -> CallableTargetScopePolicyRepository | None:
@@ -55,6 +61,32 @@ async def list_scope_callable_target_bindings(request: Request, *, scope_type: s
     return [
         {
             "callable_key": binding.callable_key,
+            "scope_type": binding.scope_type,
+            "scope_id": binding.scope_id,
+            "enabled": binding.enabled,
+            "metadata": binding.metadata,
+        }
+        for binding in bindings
+    ]
+
+
+async def list_scope_callable_target_access_group_bindings(
+    request: Request,
+    *,
+    scope_type: str,
+    scope_id: str,
+) -> list[dict[str, Any]]:
+    repository = callable_target_access_group_binding_repository(request)
+    if repository is None:
+        return []
+    bindings = await list_all_callable_target_access_group_bindings(
+        repository,
+        scope_type=scope_type,
+        scope_id=scope_id,
+    )
+    return [
+        {
+            "group_key": binding.group_key,
             "scope_type": binding.scope_type,
             "scope_id": binding.scope_id,
             "enabled": binding.enabled,
@@ -180,6 +212,7 @@ def _add_callable_target_source(
     source_scope_id: str,
     enabled: bool,
     metadata: dict[str, Any] | None = None,
+    access_group_key: str | None = None,
 ) -> None:
     item = callable_items.setdefault(
         callable_key,
@@ -193,15 +226,16 @@ def _add_callable_target_source(
         },
     )
     item["effective_enabled"] = bool(item["effective_enabled"] or enabled)
-    item["sources"].append(
-        {
-            "scope_type": source_scope_type,
-            "scope_id": source_scope_id,
-            "kind": "grant",
-            "enabled": enabled,
-            "metadata": metadata,
-        }
-    )
+    source = {
+        "scope_type": source_scope_type,
+        "scope_id": source_scope_id,
+        "kind": "grant",
+        "enabled": enabled,
+        "metadata": metadata,
+    }
+    if access_group_key is not None:
+        source["access_group_key"] = access_group_key
+    item["sources"].append(source)
 
 
 def _summarize_route_group_visibility(item: dict[str, Any], *, direct_scope_type: str) -> None:
@@ -256,6 +290,54 @@ def _has_source(item: dict[str, Any], *, scope_type: str, kind: str | None = Non
     return False
 
 
+def _normalize_page_limit(value: int | None, *, default: int = _DEFAULT_ACCESS_GROUP_PAGE_LIMIT) -> int:
+    try:
+        limit = int(value if value is not None else default)
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(limit, _MAX_ACCESS_GROUP_PAGE_LIMIT))
+
+
+def _normalize_page_offset(value: int | None) -> int:
+    try:
+        offset = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, offset)
+
+
+def _page_access_group_keys(
+    keys: set[str],
+    *,
+    search: str | None,
+    limit: int,
+    offset: int,
+) -> tuple[list[str], dict[str, int | bool]]:
+    query = str(search or "").strip().lower()
+    ordered = sorted(key for key in keys if not query or query in key.lower())
+    return ordered[offset : offset + limit], {
+        "total": len(ordered),
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + limit < len(ordered),
+    }
+
+
+def _access_group_visibility_payload(
+    *,
+    group_key: str,
+    member_keys: frozenset[str],
+    effective_keys: set[str],
+) -> dict[str, Any]:
+    return {
+        "group_key": group_key,
+        "member_count": len(member_keys),
+        "selectable": bool(member_keys & effective_keys),
+        "selected": False,
+        "effective_visible": bool(member_keys & effective_keys),
+    }
+
+
 def _apply_effective_visibility(
     item: dict[str, Any],
     *,
@@ -289,10 +371,15 @@ async def build_asset_visibility_preview(
     team_id: str | None = None,
     api_key_id: str | None = None,
     user_id: str | None = None,
+    include_access_groups: bool = False,
+    access_group_search: str | None = None,
+    access_group_limit: int | None = None,
+    access_group_offset: int | None = None,
 ) -> dict[str, Any]:
     route_group_items: dict[str, dict[str, Any]] = {}
     callable_items: dict[str, dict[str, Any]] = {}
     callable_catalog_by_key = callable_catalog(request)
+    callable_keys_by_access_group = build_callable_keys_by_access_group(callable_catalog_by_key)
     route_group_repo = route_group_repository(request)
     all_route_groups = await _list_all_route_groups(route_group_repo)
     route_groups_by_key = {str(group.group_key): group for group in all_route_groups if str(group.group_key or "").strip()}
@@ -366,7 +453,50 @@ async def build_asset_visibility_preview(
             )
         return bindings
 
+    async def _apply_scope_access_group_bindings(scope_type: str, scope_id: str) -> list[dict[str, Any]]:
+        bindings = await list_scope_callable_target_access_group_bindings(
+            request,
+            scope_type=scope_type,
+            scope_id=scope_id,
+        )
+        for binding in bindings:
+            group_key = str(binding.get("group_key") or "")
+            if not group_key:
+                continue
+            for callable_key in callable_keys_by_access_group.get(group_key, ()):
+                target = _target_for_callable_key(
+                    callable_key=callable_key,
+                    callable_catalog_by_key=callable_catalog_by_key,
+                    route_group_keys=route_group_keys,
+                )
+                _add_callable_target_source(
+                    callable_items,
+                    callable_key=callable_key,
+                    target_type=target.target_type,
+                    source_scope_type=scope_type,
+                    source_scope_id=scope_id,
+                    enabled=bool(binding.get("enabled", True)),
+                    metadata=binding.get("metadata"),
+                    access_group_key=group_key,
+                )
+                if target.target_type != "route_group":
+                    continue
+                group = route_groups_by_key.get(callable_key)
+                _add_route_group_source(
+                    route_group_items,
+                    group_key=callable_key,
+                    source_scope_type=scope_type,
+                    source_scope_id=scope_id,
+                    kind="grant",
+                    enabled=bool(binding.get("enabled", True)),
+                    metadata=binding.get("metadata"),
+                    owner_scope_type=getattr(group, "owner_scope_type", None),
+                    owner_scope_id=getattr(group, "owner_scope_id", None),
+                )
+        return bindings
+
     await _apply_scope_callable_target_bindings("organization", organization_id)
+    await _apply_scope_access_group_bindings("organization", organization_id)
 
     direct_scope_type = "organization"
     direct_scope_id = organization_id
@@ -374,18 +504,22 @@ async def build_asset_visibility_preview(
         direct_scope_type = "team"
         direct_scope_id = team_id
         await _apply_scope_callable_target_bindings("team", team_id)
+        await _apply_scope_access_group_bindings("team", team_id)
 
     if api_key_id:
         direct_scope_type = "api_key"
         direct_scope_id = api_key_id
         await _apply_scope_callable_target_bindings("api_key", api_key_id)
+        await _apply_scope_access_group_bindings("api_key", api_key_id)
 
     user_route_group_bindings: list[dict[str, Any]] = []
     user_callable_target_bindings: list[dict[str, Any]] = []
+    user_access_group_bindings: list[dict[str, Any]] = []
     if user_id:
         direct_scope_type = "user"
         direct_scope_id = user_id
         user_callable_target_bindings = await _apply_scope_callable_target_bindings("user", user_id)
+        user_access_group_bindings = await _apply_scope_access_group_bindings("user", user_id)
         user_route_group_bindings = [
             binding
             for binding in user_callable_target_bindings
@@ -397,8 +531,12 @@ async def build_asset_visibility_preview(
             == "route_group"
         ]
 
-    user_route_group_mode = user_policy_mode or ("restrict" if user_route_group_bindings else None)
-    user_callable_target_mode = user_policy_mode or ("restrict" if user_callable_target_bindings else None)
+    user_route_group_mode = user_policy_mode or (
+        "restrict" if user_route_group_bindings or user_access_group_bindings else None
+    )
+    user_callable_target_mode = user_policy_mode or (
+        "restrict" if user_callable_target_bindings or user_access_group_bindings else None
+    )
 
     for item in route_group_items.values():
         _summarize_route_group_visibility(item, direct_scope_type=direct_scope_type)
@@ -426,7 +564,7 @@ async def build_asset_visibility_preview(
             key=lambda source: (str(source.get("scope_type") or ""), str(source.get("scope_id") or "")),
         )
 
-    return {
+    response: dict[str, Any] = {
         "organization_id": organization_id,
         "team_id": team_id,
         "api_key_id": api_key_id,
@@ -436,7 +574,9 @@ async def build_asset_visibility_preview(
         "scope_policies": {
             "team": team_policy_mode or "inherit",
             "api_key": api_key_policy_mode or "inherit",
-            "user": user_policy_mode or ("restrict" if user_id and user_callable_target_bindings else "inherit"),
+            "user": user_policy_mode or (
+                "restrict" if user_id and (user_callable_target_bindings or user_access_group_bindings) else "inherit"
+            ),
         },
         "route_groups": {
             "total": len(route_group_items),
@@ -447,3 +587,35 @@ async def build_asset_visibility_preview(
             "items": sorted(callable_items.values(), key=lambda item: item["callable_key"]),
         },
     }
+    if include_access_groups:
+        page_limit = _normalize_page_limit(access_group_limit)
+        page_offset = _normalize_page_offset(access_group_offset)
+        effective_callable_keys = {
+            callable_key
+            for callable_key, item in callable_items.items()
+            if bool(item.get("effective_visible", False))
+        }
+        selectable_group_keys = {
+            group_key
+            for group_key, member_keys in callable_keys_by_access_group.items()
+            if bool(member_keys & effective_callable_keys)
+        }
+        page, pagination = _page_access_group_keys(
+            selectable_group_keys,
+            search=access_group_search,
+            limit=page_limit,
+            offset=page_offset,
+        )
+        response["access_groups"] = {
+            "total": pagination["total"],
+            "items": [
+                _access_group_visibility_payload(
+                    group_key=group_key,
+                    member_keys=callable_keys_by_access_group.get(group_key, frozenset()),
+                    effective_keys=effective_callable_keys,
+                )
+                for group_key in page
+            ],
+            "pagination": pagination,
+        }
+    return response

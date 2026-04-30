@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { AssetAccessTarget } from '../../lib/api';
+import type { AssetAccessGroup, AssetAccessTarget } from '../../lib/api';
 
 type AssetAccessMode = 'grant' | 'inherit' | 'restrict';
 type TargetFilter = 'all' | 'model' | 'route_group';
@@ -13,8 +13,14 @@ type Props = {
   targets: AssetAccessTarget[];
   selectedKeys: string[];
   onSelectedKeysChange: (keys: string[]) => void;
+  accessGroups?: AssetAccessGroup[];
+  selectedAccessGroupKeys?: string[];
+  onSelectedAccessGroupKeysChange?: (keys: string[]) => void;
   loading?: boolean;
+  targetsLoading?: boolean;
+  accessGroupsLoading?: boolean;
   disabled?: boolean;
+  modeControlsDisabled?: boolean;
   searchValue?: string;
   onSearchValueChange?: (value: string) => void;
   targetTypeFilter?: TargetFilter;
@@ -26,6 +32,13 @@ type Props = {
     has_more: boolean;
   };
   onPageChange?: (offset: number) => void;
+  accessGroupPagination?: {
+    total: number;
+    limit: number;
+    offset: number;
+    has_more: boolean;
+  };
+  onAccessGroupPageChange?: (offset: number) => void;
   primaryActionLabel?: string;
   onPrimaryAction?: () => void;
   secondaryActionLabel?: string;
@@ -37,6 +50,28 @@ function badgeClasses(kind: 'model' | 'route_group') {
   return 'bg-blue-50 text-blue-700 border-blue-200';
 }
 
+function targetAccessDescription(target: AssetAccessTarget, checked: boolean): string {
+  if (checked) {
+    if (target.effective_visible) return 'Saved policy currently allows this target.';
+    if (target.selectable) return 'Selected for save; it will be allowed after saving.';
+    return 'Selected, but not currently selectable from the parent scope.';
+  }
+  if (target.effective_visible) return 'Allowed by saved policy.';
+  if (target.selectable) return 'Available to assign.';
+  return 'Not currently selectable from the parent scope.';
+}
+
+function accessGroupDescription(group: AssetAccessGroup, checked: boolean): string {
+  if (checked) {
+    if (group.effective_visible) return 'Saved policy currently grants visible targets.';
+    if (group.selectable) return 'Selected for save; visible members will be granted after saving.';
+    return 'Selected, but no current parent-visible members.';
+  }
+  if (group.effective_visible) return 'Granted by saved policy.';
+  if (group.selectable) return 'Available to assign.';
+  return 'Not currently selectable from the parent scope.';
+}
+
 export default function AssetAccessEditor({
   title = 'Asset Access',
   description,
@@ -46,14 +81,22 @@ export default function AssetAccessEditor({
   targets,
   selectedKeys,
   onSelectedKeysChange,
+  accessGroups = [],
+  selectedAccessGroupKeys = [],
+  onSelectedAccessGroupKeysChange,
   loading = false,
+  targetsLoading,
+  accessGroupsLoading,
   disabled = false,
+  modeControlsDisabled,
   searchValue,
   onSearchValueChange,
   targetTypeFilter,
   onTargetTypeFilterChange,
   pagination,
   onPageChange,
+  accessGroupPagination,
+  onAccessGroupPageChange,
   primaryActionLabel,
   onPrimaryAction,
   secondaryActionLabel,
@@ -63,19 +106,47 @@ export default function AssetAccessEditor({
   const [localTargetType, setLocalTargetType] = useState<TargetFilter>('all');
   const search = searchValue ?? localSearch;
   const targetType = targetTypeFilter ?? localTargetType;
-  const usesRemoteFiltering = !!onSearchValueChange || !!onTargetTypeFilterChange || !!pagination;
+  const targetLoading = targetsLoading ?? loading;
+  const groupLoading = accessGroupsLoading ?? loading;
+  const modeDisabled = modeControlsDisabled ?? disabled;
+  const usesRemoteTargetFiltering = !!pagination;
+  const usesRemoteAccessGroupFiltering = !!accessGroupPagination;
 
   const filteredTargets = useMemo(() => {
-    if (usesRemoteFiltering) return targets;
+    if (usesRemoteTargetFiltering) return targets;
     const query = search.trim().toLowerCase();
     return targets.filter((target) => {
       if (targetType !== 'all' && target.target_type !== targetType) return false;
       if (!query) return true;
       return target.callable_key.toLowerCase().includes(query);
     });
-  }, [search, targetType, targets]);
+  }, [search, targetType, targets, usesRemoteTargetFiltering]);
+
+  const filteredAccessGroups = useMemo(() => {
+    if (usesRemoteAccessGroupFiltering) return accessGroups;
+    const query = search.trim().toLowerCase();
+    if (!query) return accessGroups;
+    return accessGroups.filter((group) => group.group_key.toLowerCase().includes(query));
+  }, [accessGroups, search, usesRemoteAccessGroupFiltering]);
 
   const selectedSet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
+  const selectedAccessGroupSet = useMemo(() => new Set(selectedAccessGroupKeys), [selectedAccessGroupKeys]);
+  const visibleTargetSet = useMemo(
+    () => new Set(filteredTargets.map((target) => target.callable_key)),
+    [filteredTargets],
+  );
+  const hiddenSelectedTargetKeys = useMemo(
+    () => selectedKeys.filter((callableKey) => !visibleTargetSet.has(callableKey)).sort(),
+    [selectedKeys, visibleTargetSet],
+  );
+  const visibleAccessGroupSet = useMemo(
+    () => new Set(filteredAccessGroups.map((group) => group.group_key)),
+    [filteredAccessGroups],
+  );
+  const hiddenSelectedAccessGroupKeys = useMemo(
+    () => selectedAccessGroupKeys.filter((groupKey) => !visibleAccessGroupSet.has(groupKey)).sort(),
+    [selectedAccessGroupKeys, visibleAccessGroupSet],
+  );
 
   const toggleKey = (callableKey: string) => {
     if (disabled || mode === 'inherit') return;
@@ -86,6 +157,17 @@ export default function AssetAccessEditor({
       next.add(callableKey);
     }
     onSelectedKeysChange(Array.from(next).sort());
+  };
+
+  const toggleAccessGroup = (groupKey: string) => {
+    if (disabled || mode === 'inherit' || !onSelectedAccessGroupKeysChange) return;
+    const next = new Set(selectedAccessGroupSet);
+    if (next.has(groupKey)) {
+      next.delete(groupKey);
+    } else {
+      next.add(groupKey);
+    }
+    onSelectedAccessGroupKeysChange(Array.from(next).sort());
   };
 
   return (
@@ -104,7 +186,7 @@ export default function AssetAccessEditor({
                 name={`${title}-mode`}
                 checked={mode === 'inherit'}
                 onChange={() => onModeChange?.('inherit')}
-                disabled={disabled}
+                disabled={modeDisabled}
                 className="mt-0.5"
               />
               <span>
@@ -120,7 +202,7 @@ export default function AssetAccessEditor({
                 name={`${title}-mode`}
                 checked={mode === 'restrict'}
                 onChange={() => onModeChange?.('restrict')}
-                disabled={disabled}
+                disabled={modeDisabled}
                 className="mt-0.5"
               />
               <span>
@@ -198,14 +280,151 @@ export default function AssetAccessEditor({
       </div>
 
       <div className="flex items-center justify-between text-xs text-gray-500">
-        <span>{selectedKeys.length} selected</span>
+        <span>
+          {selectedKeys.length} target{selectedKeys.length === 1 ? '' : 's'} selected
+          {accessGroups.length > 0 || selectedAccessGroupKeys.length > 0
+            ? ` · ${selectedAccessGroupKeys.length} group${selectedAccessGroupKeys.length === 1 ? '' : 's'} selected`
+            : ''}
+        </span>
         <span>
           {pagination ? `${pagination.total} total` : `${targets.filter((target) => target.selectable).length} selectable`}
         </span>
       </div>
 
+      {(accessGroups.length > 0 || selectedAccessGroupKeys.length > 0 || groupLoading || (accessGroupPagination && accessGroupPagination.total > 0)) && (
+        <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
+          <div className="border-b border-gray-100 bg-gray-50 px-4 py-2">
+            <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Access Groups</div>
+          </div>
+          {hiddenSelectedAccessGroupKeys.length > 0 && (
+            <div className="border-b border-gray-100 bg-amber-50/50 px-4 py-3">
+              <div className="mb-2 text-xs font-medium text-amber-800">Selected outside current filter/page</div>
+              <div className="space-y-1.5">
+                {hiddenSelectedAccessGroupKeys.map((groupKey) => {
+                  const checkboxDisabled = disabled || mode === 'inherit' || !onSelectedAccessGroupKeysChange;
+                  return (
+                    <label
+                      key={groupKey}
+                      className={`flex items-center gap-3 rounded-lg border border-amber-100 bg-white px-3 py-2 text-sm ${checkboxDisabled ? 'cursor-not-allowed opacity-70' : 'cursor-pointer hover:bg-amber-50'}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked
+                        onChange={() => toggleAccessGroup(groupKey)}
+                        disabled={checkboxDisabled}
+                      />
+                      <span className="min-w-0 flex-1 break-all font-medium text-gray-900">{groupKey}</span>
+                      <span className="shrink-0 text-xs text-amber-700">Selected</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {groupLoading ? (
+            <div className="px-4 py-4 text-sm text-gray-500">Loading access groups...</div>
+          ) : filteredAccessGroups.length === 0 ? (
+            <div className="px-4 py-4 text-sm text-gray-500">No access groups match the current filter.</div>
+          ) : (
+            <div className="max-h-48 divide-y divide-gray-100 overflow-y-auto">
+              {filteredAccessGroups.map((group) => {
+                const checked = selectedAccessGroupSet.has(group.group_key);
+                const checkboxDisabled = disabled || mode === 'inherit' || !onSelectedAccessGroupKeysChange || (!group.selectable && !checked);
+                return (
+                  <label
+                    key={group.group_key}
+                    className={`flex items-start gap-3 px-4 py-3 text-sm ${checkboxDisabled ? 'cursor-not-allowed bg-gray-50/60' : 'cursor-pointer hover:bg-gray-50'}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleAccessGroup(group.group_key)}
+                      disabled={checkboxDisabled}
+                      className="mt-0.5"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium text-gray-900 break-all">{group.group_key}</span>
+                        <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                          {group.member_count} member{group.member_count === 1 ? '' : 's'}
+                        </span>
+                        {checked && group.selectable && (
+                          <span className="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-700">
+                            Selected
+                          </span>
+                        )}
+                        {!group.selectable && (
+                          <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                            Outside parent scope
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-1 text-xs text-gray-500">
+                        {accessGroupDescription(group, checked)}
+                      </p>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+          {accessGroupPagination && onAccessGroupPageChange && (
+            <div className="flex items-center justify-between border-t border-gray-100 px-4 py-2 text-xs text-gray-500">
+              <span>
+                {accessGroupPagination.total === 0
+                  ? 'No access groups'
+                  : `${accessGroupPagination.offset + 1}-${Math.min(accessGroupPagination.offset + accessGroupPagination.limit, accessGroupPagination.total)} of ${accessGroupPagination.total}`}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onAccessGroupPageChange(Math.max(0, accessGroupPagination.offset - accessGroupPagination.limit))}
+                  disabled={disabled || accessGroupPagination.offset <= 0 || groupLoading}
+                  className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Previous
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onAccessGroupPageChange(accessGroupPagination.offset + accessGroupPagination.limit)}
+                  disabled={disabled || !accessGroupPagination.has_more || groupLoading}
+                  className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="max-h-72 overflow-y-auto rounded-lg border border-gray-200 bg-white">
-        {loading ? (
+        {hiddenSelectedTargetKeys.length > 0 && (
+          <div className="border-b border-gray-100 bg-amber-50/50 px-4 py-3">
+            <div className="mb-2 text-xs font-medium text-amber-800">Selected outside current filter/page</div>
+            <div className="space-y-1.5">
+              {hiddenSelectedTargetKeys.map((callableKey) => {
+                const checkboxDisabled = disabled || mode === 'inherit';
+                return (
+                  <label
+                    key={callableKey}
+                    className={`flex items-center gap-3 rounded-lg border border-amber-100 bg-white px-3 py-2 text-sm ${checkboxDisabled ? 'cursor-not-allowed opacity-70' : 'cursor-pointer hover:bg-amber-50'}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked
+                      onChange={() => toggleKey(callableKey)}
+                      disabled={checkboxDisabled}
+                    />
+                    <span className="min-w-0 flex-1 break-all font-medium text-gray-900">{callableKey}</span>
+                    <span className="shrink-0 text-xs text-amber-700">Selected</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {targetLoading ? (
           <div className="px-4 py-6 text-sm text-gray-500">Loading assets...</div>
         ) : filteredTargets.length === 0 ? (
           <div className="px-4 py-6 text-sm text-gray-500">No assets match the current filter.</div>
@@ -237,6 +456,11 @@ export default function AssetAccessEditor({
                           Inherited
                         </span>
                       )}
+                      {target.via_access_groups && target.via_access_groups.length > 0 && (
+                        <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                          Via {target.via_access_groups.join(', ')}
+                        </span>
+                      )}
                       {checked && target.selectable && (
                         <span className="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-700">
                           Selected
@@ -249,11 +473,7 @@ export default function AssetAccessEditor({
                       )}
                     </div>
                     <p className="mt-1 text-xs text-gray-500">
-                      {target.effective_visible
-                        ? 'Currently visible at runtime.'
-                        : target.selectable
-                          ? 'Available to assign.'
-                          : 'Not currently selectable from the parent scope.'}
+                      {targetAccessDescription(target, checked)}
                     </p>
                   </div>
                 </label>

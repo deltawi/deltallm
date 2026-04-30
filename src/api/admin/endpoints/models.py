@@ -13,6 +13,7 @@ from src.audit.actions import AuditAction
 from src.config import ModelMode
 from src.config_runtime.models import ModelHotReloadManager
 from src.db.named_credentials import NamedCredentialRecord, NamedCredentialRepository
+from src.governance.access_groups import InvalidAccessGroupError, normalize_access_group_list
 from src.middleware.admin import require_authenticated, require_master_key
 from src.upstream_auth import (
     supports_custom_openai_compatible_auth,
@@ -260,14 +261,13 @@ async def _invalidate_route_group_runtime_cache(app: Any) -> None:
 
 
 async def _sync_auto_follow_org_bindings(app: Any) -> None:
-    changed = await sync_auto_follow_organization_bindings(
+    await sync_auto_follow_organization_bindings(
         db=getattr(getattr(app.state, "prisma_manager", None), "client", None),
         callable_target_binding_repository=getattr(app.state, "callable_target_binding_repository", None),
         route_group_repository=getattr(app.state, "route_group_repository", None),
         callable_target_catalog=getattr(app.state, "callable_target_catalog", None),
     )
-    if changed > 0:
-        await reload_callable_target_grants_for_app(app)
+    await reload_callable_target_grants_for_app(app)
 
 
 def _validate_model_config_or_400(model_config: dict[str, Any]) -> None:
@@ -277,6 +277,17 @@ def _validate_model_config_or_400(model_config: dict[str, Any]) -> None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+def _normalize_model_info_or_400(model_info: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(model_info)
+    if "access_groups" not in normalized:
+        return normalized
+    try:
+        normalized["access_groups"] = normalize_access_group_list(normalized.get("access_groups"), strict=True)
+    except InvalidAccessGroupError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return normalized
 
 
 def _normalized_model_payload_or_400(
@@ -334,9 +345,9 @@ def _normalized_model_payload_or_400(
     elif isinstance(raw_model_info, dict):
         model_info = dict(raw_model_info)
     else:
-        model_info = dict(existing_model_info or {})
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="model_info must be an object")
 
-    return model_name, named_credential_id, params, model_info
+    return model_name, named_credential_id, params, _normalize_model_info_or_400(model_info)
 
 
 def _merged_model_params(

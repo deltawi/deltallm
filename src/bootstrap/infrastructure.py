@@ -10,6 +10,7 @@ from src.bootstrap.status import BootstrapStatus
 from src.batch import BatchRepository
 from src.config import get_settings, resolve_database_settings, resolve_salt_key
 from src.config_runtime import DynamicConfigManager, SecretResolver, build_app_config, load_yaml_dict
+from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
 from src.db.callable_targets import CallableTargetBindingRepository
 from src.db.callable_target_policies import CallableTargetScopePolicyRepository
 from src.db.client import prisma_manager
@@ -88,6 +89,9 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
     app.state.model_deployment_repository = ModelDeploymentRepository(prisma_manager.client)
     app.state.named_credential_repository = NamedCredentialRepository(prisma_manager.client)
     app.state.callable_target_binding_repository = CallableTargetBindingRepository(prisma_manager.client)
+    app.state.callable_target_access_group_repository = CallableTargetAccessGroupBindingRepository(
+        prisma_manager.client
+    )
     app.state.callable_target_scope_policy_repository = CallableTargetScopePolicyRepository(prisma_manager.client)
     app.state.route_group_repository = RouteGroupRepository(prisma_manager.client)
     app.state.prompt_registry_repository = PromptRegistryRepository(prisma_manager.client)
