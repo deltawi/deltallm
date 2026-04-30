@@ -10,6 +10,7 @@ import ProviderBadge from '../components/ProviderBadge';
 import StatusBadge from '../components/StatusBadge';
 import { ContentCard, IndexShell } from '../components/admin/shells';
 import { MODE_OPTIONS, MODE_BADGE_COLORS } from '../components/modelFormShared';
+import ModelsMobileList from '../components/models/ModelsMobileList';
 import { Box, Plus, Pencil, Search, Trash2 } from 'lucide-react';
 
 export default function Models() {
@@ -87,7 +88,7 @@ export default function Models() {
         </button>
       ) : undefined}
       toolbar={(
-        <div className="relative w-full sm:w-72">
+        <div className="relative hidden w-full md:block sm:w-72">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
           <input
             value={searchInput}
@@ -98,17 +99,35 @@ export default function Models() {
         </div>
       )}
     >
-      <ContentCard>
-        <DataTable
-          columns={columns}
-          data={items}
+      <div className="hidden md:block">
+        <ContentCard>
+          <DataTable
+            columns={columns}
+            data={items}
+            loading={loading}
+            emptyMessage="No models configured"
+            onRowClick={(row) => navigate(modelDetailPath(row.deployment_id))}
+            pagination={pagination}
+            onPageChange={setPageOffset}
+          />
+        </ContentCard>
+      </div>
+      <div className="md:hidden">
+        <ModelsMobileList
+          items={items}
           loading={loading}
-          emptyMessage="No models configured"
-          onRowClick={(row) => navigate(modelDetailPath(row.deployment_id))}
           pagination={pagination}
+          pageSize={pageSize}
           onPageChange={setPageOffset}
+          searchValue={searchInput}
+          onSearchChange={setSearchInput}
+          emptyMessage="No models configured"
+          canManage={canManageModels}
+          onView={(id) => navigate(modelDetailPath(id))}
+          onEdit={(id) => navigate(modelEditPath(id))}
+          onDelete={handleDelete}
         />
-      </ContentCard>
+      </div>
     </IndexShell>
   );
 }
