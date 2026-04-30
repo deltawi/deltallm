@@ -354,6 +354,54 @@ async def test_team_asset_visibility_includes_org_inherited_and_team_direct_sour
 
 
 @pytest.mark.asyncio
+async def test_parent_asset_visibility_returns_paged_selectable_access_groups(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeDB()})()
+    route_groups = _FakeRouteGroupRepository()
+    callable_targets = _FakeCallableTargetBindingRepository()
+    access_groups = _FakeCallableTargetAccessGroupBindingRepository()
+    policies = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.route_group_repository = route_groups
+    test_app.state.callable_target_binding_repository = callable_targets
+    test_app.state.callable_target_access_group_repository = access_groups
+    test_app.state.callable_target_scope_policy_repository = policies
+    test_app.state.callable_target_catalog = {
+        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model", access_groups=frozenset({"beta"})),
+        "support-chat": CallableTarget(key="support-chat", target_type="route_group", access_groups=frozenset({"support"})),
+    }
+    await access_groups.upsert_binding(
+        group_key="beta",
+        scope_type="organization",
+        scope_id="org-1",
+        enabled=True,
+        metadata=None,
+    )
+
+    response = await client.get(
+        "/ui/api/organizations/org-1/asset-visibility?include_access_groups=true&access_group_limit=1",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["access_groups"]["pagination"] == {
+        "total": 1,
+        "limit": 1,
+        "offset": 0,
+        "has_more": False,
+    }
+    assert payload["access_groups"]["items"] == [
+        {
+            "group_key": "beta",
+            "member_count": 1,
+            "selectable": True,
+            "selected": False,
+            "effective_visible": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_key_asset_visibility_includes_org_team_and_key_sources(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeDB()})()

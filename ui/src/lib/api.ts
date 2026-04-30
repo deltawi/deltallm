@@ -437,6 +437,16 @@ export interface CallableTargetListItem {
   binding_count: number;
 }
 
+export interface CallableTargetAccessGroupListItem {
+  group_key: string;
+  member_count: number;
+  binding_count: number;
+  members?: Array<{
+    callable_key: string;
+    target_type: 'model' | 'route_group';
+  }>;
+}
+
 export interface AssetAccessTarget {
   callable_key: string;
   target_type: 'model' | 'route_group';
@@ -444,6 +454,16 @@ export interface AssetAccessTarget {
   selected: boolean;
   effective_visible: boolean;
   inherited_only: boolean;
+  via_access_groups?: string[];
+}
+
+export interface AssetAccessGroup {
+  group_key: string;
+  selectable: boolean;
+  selected: boolean;
+  member_count: number;
+  effective_visible: boolean;
+  callable_keys?: string[];
 }
 
 export interface AssetVisibilityTarget {
@@ -468,6 +488,11 @@ export interface AssetVisibilityResponse {
     total: number;
     items: AssetVisibilityTarget[];
   };
+  access_groups?: {
+    total: number;
+    items: AssetAccessGroup[];
+    pagination: Pagination;
+  };
 }
 
 export interface ScopedAssetAccess {
@@ -480,14 +505,34 @@ export interface ScopedAssetAccess {
   mode: 'grant' | 'inherit' | 'restrict';
   auto_follow_catalog?: boolean;
   selected_callable_keys: string[];
+  selected_access_group_keys: string[];
   selectable_targets: AssetAccessTarget[];
+  selectable_access_groups: AssetAccessGroup[];
+  access_group_pagination?: Pagination;
   effective_targets: AssetAccessTarget[];
   summary: {
     selected_total: number;
     selectable_total: number;
     effective_total: number;
+    selected_access_group_total?: number;
+    selectable_access_group_total?: number;
   };
 }
+
+type AssetAccessGroupPageParams = {
+  access_group_search?: string;
+  access_group_limit?: number;
+  access_group_offset?: number;
+};
+
+type AssetVisibilityParams = AssetAccessGroupPageParams & {
+  user_id?: string;
+  include_access_groups?: boolean;
+};
+
+type ScopedAssetAccessParams = AssetAccessGroupPageParams & {
+  include_targets?: boolean;
+};
 
 export interface ProviderPreset {
   provider: string;
@@ -578,6 +623,8 @@ export interface ModelDeploymentDetail {
 export const callableTargets = {
   list: (params?: { search?: string; target_type?: string; limit?: number; offset?: number }) =>
     apiFetch<Paginated<CallableTargetListItem>>(withQuery('/ui/api/callable-targets', params as any)),
+  listAccessGroups: (params?: { search?: string; include_members?: boolean; limit?: number; offset?: number }) =>
+    apiFetch<Paginated<CallableTargetAccessGroupListItem>>(withQuery('/ui/api/callable-target-access-groups', params as any)),
   listAll: async (params?: { search?: string; target_type?: string }) => {
     const limit = 500;
     let offset = 0;
@@ -962,11 +1009,11 @@ export const organizations = {
   removeMember: (orgId: string, membershipId: string) =>
     apiFetch<any>(`/ui/api/organizations/${encodeURIComponent(orgId)}/members/${encodeURIComponent(membershipId)}`, { method: 'DELETE' }),
   teams: (orgId: string) => apiFetch<any[]>(`/ui/api/organizations/${encodeURIComponent(orgId)}/teams`),
-  assetVisibility: (orgId: string, params?: { user_id?: string }) =>
+  assetVisibility: (orgId: string, params?: AssetVisibilityParams) =>
     apiFetch<AssetVisibilityResponse>(withQuery(`/ui/api/organizations/${encodeURIComponent(orgId)}/asset-visibility`, params as any)),
-  assetAccess: (orgId: string, params?: { include_targets?: boolean }) =>
+  assetAccess: (orgId: string, params?: ScopedAssetAccessParams) =>
     apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/organizations/${encodeURIComponent(orgId)}/asset-access`, params as any)),
-  updateAssetAccess: (orgId: string, payload: { mode?: string; selected_callable_keys: string[]; select_all_selectable?: boolean }) =>
+  updateAssetAccess: (orgId: string, payload: { mode?: string; selected_callable_keys: string[]; selected_access_group_keys?: string[]; select_all_selectable?: boolean }) =>
     apiFetch<ScopedAssetAccess>(`/ui/api/organizations/${encodeURIComponent(orgId)}/asset-access`, { method: 'PUT', json: payload }),
 };
 
@@ -1001,11 +1048,11 @@ export const teams = {
   addMember: (teamId: string, payload: any) => apiFetch<any>(`/ui/api/teams/${encodeURIComponent(teamId)}/members`, { method: 'POST', json: payload }),
   removeMember: (teamId: string, userId: string) =>
     apiFetch<any>(`/ui/api/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
-  assetVisibility: (teamId: string, params?: { user_id?: string }) =>
+  assetVisibility: (teamId: string, params?: AssetVisibilityParams) =>
     apiFetch<AssetVisibilityResponse>(withQuery(`/ui/api/teams/${encodeURIComponent(teamId)}/asset-visibility`, params as any)),
-  assetAccess: (teamId: string, params?: { include_targets?: boolean }) =>
+  assetAccess: (teamId: string, params?: ScopedAssetAccessParams) =>
     apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/teams/${encodeURIComponent(teamId)}/asset-access`, params as any)),
-  updateAssetAccess: (teamId: string, payload: { mode: 'inherit' | 'restrict'; selected_callable_keys: string[]; select_all_selectable?: boolean }) =>
+  updateAssetAccess: (teamId: string, payload: { mode: 'inherit' | 'restrict'; selected_callable_keys: string[]; selected_access_group_keys?: string[]; select_all_selectable?: boolean }) =>
     apiFetch<ScopedAssetAccess>(`/ui/api/teams/${encodeURIComponent(teamId)}/asset-access`, { method: 'PUT', json: payload }),
 };
 
@@ -1063,20 +1110,20 @@ export const keys = {
   regenerate: (tokenHash: string) => apiFetch<{ token: string; raw_key: string }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/regenerate`, { method: 'POST' }),
   revoke: (tokenHash: string) => apiFetch<{ revoked: boolean }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/revoke`, { method: 'POST' }),
   delete: (tokenHash: string) => apiFetch<{ deleted: boolean }>(`/ui/api/keys/${encodeURIComponent(tokenHash)}`, { method: 'DELETE' }),
-  assetVisibility: (tokenHash: string, params?: { user_id?: string }) =>
+  assetVisibility: (tokenHash: string, params?: AssetVisibilityParams) =>
     apiFetch<AssetVisibilityResponse>(withQuery(`/ui/api/keys/${encodeURIComponent(tokenHash)}/asset-visibility`, params as any)),
-  assetAccess: (tokenHash: string, params?: { include_targets?: boolean }) =>
+  assetAccess: (tokenHash: string, params?: ScopedAssetAccessParams) =>
     apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/keys/${encodeURIComponent(tokenHash)}/asset-access`, params as any)),
-  updateAssetAccess: (tokenHash: string, payload: { mode: 'inherit' | 'restrict'; selected_callable_keys: string[]; select_all_selectable?: boolean }) =>
+  updateAssetAccess: (tokenHash: string, payload: { mode: 'inherit' | 'restrict'; selected_callable_keys: string[]; selected_access_group_keys?: string[]; select_all_selectable?: boolean }) =>
     apiFetch<ScopedAssetAccess>(`/ui/api/keys/${encodeURIComponent(tokenHash)}/asset-access`, { method: 'PUT', json: payload }),
 };
 
 export const users = {
-  assetVisibility: (userId: string) =>
-    apiFetch<AssetVisibilityResponse>(`/ui/api/users/${encodeURIComponent(userId)}/asset-visibility`),
-  assetAccess: (userId: string, params?: { include_targets?: boolean }) =>
+  assetVisibility: (userId: string, params?: Omit<AssetVisibilityParams, 'user_id'>) =>
+    apiFetch<AssetVisibilityResponse>(withQuery(`/ui/api/users/${encodeURIComponent(userId)}/asset-visibility`, params as any)),
+  assetAccess: (userId: string, params?: ScopedAssetAccessParams) =>
     apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/users/${encodeURIComponent(userId)}/asset-access`, params as any)),
-  updateAssetAccess: (userId: string, payload: { mode: 'inherit' | 'restrict'; selected_callable_keys: string[]; select_all_selectable?: boolean }) =>
+  updateAssetAccess: (userId: string, payload: { mode: 'inherit' | 'restrict'; selected_callable_keys: string[]; selected_access_group_keys?: string[]; select_all_selectable?: boolean }) =>
     apiFetch<ScopedAssetAccess>(`/ui/api/users/${encodeURIComponent(userId)}/asset-access`, { method: 'PUT', json: payload }),
 };
 

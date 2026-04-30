@@ -4,7 +4,14 @@ import { useApi } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
 import { resolveUiAccess } from '../lib/authorization';
 import { organizations, teams } from '../lib/api';
-import { buildParentScopedAssetTargets, buildScopedSelectableTargets } from '../lib/assetAccess';
+import {
+  assetAccessLoadErrorMessage,
+  buildParentScopedAssetTargets,
+  buildScopedSelectableAccessGroups,
+  buildScopedSelectableTargets,
+  isAssetVisibilityFor,
+  isScopedAssetAccessFor,
+} from '../lib/assetAccess';
 import Modal from '../components/Modal';
 import UserSearchSelect from '../components/UserSearchSelect';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
@@ -73,7 +80,7 @@ export default function TeamDetail() {
     () => teams.members(teamId!),
     [teamId],
   );
-  const { data: teamAssetAccess, refetch: refetchTeamAssetAccess } = useApi(
+  const { data: teamAssetAccess, error: teamAssetAccessError, loading: teamAssetAccessLoading, refetch: refetchTeamAssetAccess } = useApi(
     () => teams.assetAccess(teamId!, { include_targets: false }),
     [teamId],
   );
@@ -102,6 +109,7 @@ export default function TeamDetail() {
     tpd_limit: '',
     asset_access_mode: 'inherit' as 'inherit' | 'restrict',
     selected_callable_keys: [] as string[],
+    selected_access_group_keys: [] as string[],
   });
   const [saving, setSaving] = useState(false);
   const [teamError, setTeamError] = useState<string | null>(
@@ -109,31 +117,61 @@ export default function TeamDetail() {
       ? String((location.state as { pageWarning?: string }).pageWarning || '') || null
       : null,
   );
+  const [assetSearchInput, setAssetSearchInput] = useState('');
+  const [assetSearch, setAssetSearch] = useState('');
+  const [accessGroupPageOffset, setAccessGroupPageOffset] = useState(0);
+  const accessGroupPageSize = 50;
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setAssetSearch(assetSearchInput);
+      setAccessGroupPageOffset(0);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [assetSearchInput]);
 
   const selectedOrganizationId = form.organization_id.trim();
   const usesParentPreview = selectedOrganizationId !== (team?.organization_id || '');
 
-  const { data: teamAssetAccessTargets, loading: teamAssetAccessTargetsLoading } = useApi(
+  const { data: teamAssetAccessTargets, error: teamAssetAccessTargetsError, loading: teamAssetAccessTargetsLoading } = useApi(
     () => (isEditingAssets && !usesParentPreview && form.asset_access_mode === 'restrict'
-      ? teams.assetAccess(teamId!, { include_targets: true })
+      ? teams.assetAccess(teamId!, {
+          include_targets: true,
+          access_group_search: assetSearch || undefined,
+          access_group_limit: accessGroupPageSize,
+          access_group_offset: accessGroupPageOffset,
+        })
       : Promise.resolve(null)),
-    [isEditingAssets, teamId, usesParentPreview, form.asset_access_mode],
+    [isEditingAssets, teamId, usesParentPreview, form.asset_access_mode, assetSearch, accessGroupPageOffset],
   );
-  const { data: parentOrgAssetVisibility, loading: parentOrgAssetVisibilityLoading } = useApi(
+  const { data: parentOrgAssetVisibility, error: parentOrgAssetVisibilityError, loading: parentOrgAssetVisibilityLoading } = useApi(
     () => (isEditingAssets && usesParentPreview && form.asset_access_mode === 'restrict' && selectedOrganizationId
-      ? organizations.assetVisibility(selectedOrganizationId)
+      ? organizations.assetVisibility(selectedOrganizationId, {
+          include_access_groups: true,
+          access_group_search: assetSearch || undefined,
+          access_group_limit: accessGroupPageSize,
+          access_group_offset: accessGroupPageOffset,
+        })
       : Promise.resolve(null)),
-    [isEditingAssets, selectedOrganizationId, usesParentPreview, form.asset_access_mode],
+    [isEditingAssets, selectedOrganizationId, usesParentPreview, form.asset_access_mode, assetSearch, accessGroupPageOffset],
   );
+  const currentTeamAssetAccess = isScopedAssetAccessFor(teamAssetAccess, {
+    scopeType: 'team',
+    scopeId: teamId,
+  })
+    ? teamAssetAccess
+    : null;
+  const teamAssetAccessPending = isEditingAssets && (teamAssetAccessLoading || !currentTeamAssetAccess);
 
   useEffect(() => {
-    if (!isEditingAssets || !teamAssetAccess) return;
+    if (!isEditingAssets || !currentTeamAssetAccess) return;
     setForm((c) => ({
       ...c,
-      asset_access_mode: teamAssetAccess.mode === 'restrict' ? 'restrict' : 'inherit',
-      selected_callable_keys: teamAssetAccess.selected_callable_keys || [],
+      asset_access_mode: currentTeamAssetAccess.mode === 'restrict' ? 'restrict' : 'inherit',
+      selected_callable_keys: currentTeamAssetAccess.selected_callable_keys || [],
+      selected_access_group_keys: currentTeamAssetAccess.selected_access_group_keys || [],
     }));
-  }, [isEditingAssets, teamAssetAccess]);
+  }, [isEditingAssets, currentTeamAssetAccess]);
 
   const openEditSettings = () => {
     if (!team) return;
@@ -158,18 +196,61 @@ export default function TeamDetail() {
     setForm((c) => ({
       ...c,
       organization_id: team.organization_id || '',
-      asset_access_mode: teamAssetAccess?.mode === 'restrict' ? 'restrict' : 'inherit',
-      selected_callable_keys: teamAssetAccess?.selected_callable_keys || [],
+      asset_access_mode: currentTeamAssetAccess?.mode === 'restrict' ? 'restrict' : 'inherit',
+      selected_callable_keys: currentTeamAssetAccess?.selected_callable_keys || [],
+      selected_access_group_keys: currentTeamAssetAccess?.selected_access_group_keys || [],
     }));
+    setAssetSearchInput('');
+    setAssetSearch('');
+    setAccessGroupPageOffset(0);
     setIsEditingAssets(true);
   };
 
+  const currentTeamAssetAccessTargets = isScopedAssetAccessFor(teamAssetAccessTargets, {
+    scopeType: 'team',
+    scopeId: teamId,
+  })
+    ? teamAssetAccessTargets
+    : null;
+  const currentTeamAssetTargetsFull = isScopedAssetAccessFor(teamAssetTargets, {
+    scopeType: 'team',
+    scopeId: teamId,
+  })
+    ? teamAssetTargets
+    : null;
+  const currentParentOrgAssetVisibility = selectedOrganizationId && isAssetVisibilityFor(parentOrgAssetVisibility, {
+    organizationId: selectedOrganizationId,
+  })
+    ? parentOrgAssetVisibility
+    : null;
   const assetTargets = usesParentPreview
-    ? buildParentScopedAssetTargets(parentOrgAssetVisibility?.callable_targets?.items || [], form.selected_callable_keys, form.asset_access_mode)
-    : buildScopedSelectableTargets(teamAssetAccessTargets?.selectable_targets || [], form.selected_callable_keys, form.asset_access_mode);
-  const assetAccessLoading = form.asset_access_mode !== 'restrict' ? false
+    ? buildParentScopedAssetTargets(currentParentOrgAssetVisibility?.callable_targets?.items || [], form.selected_callable_keys, form.asset_access_mode)
+    : buildScopedSelectableTargets(currentTeamAssetAccessTargets?.selectable_targets || [], form.selected_callable_keys, form.asset_access_mode);
+  const assetAccessGroups = usesParentPreview
+    ? buildScopedSelectableAccessGroups(
+        currentParentOrgAssetVisibility?.access_groups?.items || [],
+        form.selected_access_group_keys,
+      )
+    : buildScopedSelectableAccessGroups(
+        currentTeamAssetAccessTargets?.selectable_access_groups || [],
+        form.selected_access_group_keys,
+      );
+  const accessGroupPagination = usesParentPreview
+    ? currentParentOrgAssetVisibility?.access_groups?.pagination
+    : currentTeamAssetAccessTargets?.access_group_pagination;
+  const assetTargetsLoading = form.asset_access_mode !== 'restrict' ? false
+    : usesParentPreview ? !currentParentOrgAssetVisibility && parentOrgAssetVisibilityLoading
+    : !currentTeamAssetAccessTargets && teamAssetAccessTargetsLoading;
+  const accessGroupsLoading = form.asset_access_mode !== 'restrict' ? false
     : usesParentPreview ? parentOrgAssetVisibilityLoading
     : teamAssetAccessTargetsLoading;
+  const assetAccessLoading = assetTargetsLoading || accessGroupsLoading;
+  const activeAssetAccessError = form.asset_access_mode === 'restrict'
+    ? usesParentPreview ? parentOrgAssetVisibilityError : teamAssetAccessTargetsError
+    : null;
+  const assetAccessLoadError = isEditingAssets
+    ? assetAccessLoadErrorMessage(teamAssetAccessError || activeAssetAccessError)
+    : null;
 
   const handleSaveSettings = async () => {
     setSaving(true);
@@ -194,12 +275,21 @@ export default function TeamDetail() {
   };
 
   const handleSaveAssets = async () => {
+    if (assetAccessLoadError) {
+      setTeamError(assetAccessLoadError);
+      return;
+    }
+    if (teamAssetAccessPending || assetAccessLoading) {
+      setTeamError('Wait for asset access options to finish loading before saving.');
+      return;
+    }
     setSaving(true);
     setTeamError(null);
     try {
       await teams.updateAssetAccess(teamId!, {
         mode: form.asset_access_mode,
         selected_callable_keys: form.asset_access_mode === 'restrict' ? form.selected_callable_keys : [],
+        selected_access_group_keys: form.asset_access_mode === 'restrict' ? form.selected_access_group_keys : [],
       });
       setIsEditingAssets(false);
       refetchTeam();
@@ -293,11 +383,11 @@ export default function TeamDetail() {
   const spend = team?.spend || 0;
   const budget = team?.max_budget ?? null;
   const spendPct = budget ? Math.min(100, Math.round((spend / budget) * 100)) : null;
-  const assetMode = teamAssetAccess?.mode ?? 'inherit';
-  const assetSummary = teamAssetAccess?.summary;
+  const assetMode = currentTeamAssetAccess?.mode ?? 'inherit';
+  const assetSummary = currentTeamAssetAccess?.summary;
 
-  const grantedTargets = teamAssetTargets?.selectable_targets?.filter((t: any) => t.selected) ?? [];
-  const blockedTargets = teamAssetTargets?.selectable_targets?.filter((t: any) => !t.selected) ?? [];
+  const accessibleTargets = currentTeamAssetTargetsFull?.effective_targets ?? [];
+  const blockedTargets = currentTeamAssetTargetsFull?.selectable_targets?.filter((t: any) => t.selectable && !t.effective_visible) ?? [];
   const teamCapabilities = team?.capabilities || {};
   const canEditTeam = Boolean(teamCapabilities.edit);
   const canManageMembers = Boolean(teamCapabilities.manage_members);
@@ -411,10 +501,10 @@ export default function TeamDetail() {
             label="Asset access"
             value={
               assetMode === 'restrict' && assetSummary
-                ? `${assetSummary.selected_total}/${assetSummary.selectable_total}`
+                ? `${assetSummary.effective_total}/${assetSummary.selectable_total}`
                 : assetMode === 'restrict' ? 'Restricted' : 'Inherited'
             }
-            sub={assetMode === 'restrict' ? 'from org ceiling' : 'full org access'}
+            sub={assetMode === 'restrict' ? 'effective access' : 'full org access'}
             tone="indigo"
           />
         </>
@@ -757,15 +847,18 @@ export default function TeamDetail() {
                 {assetMode === 'restrict' && assetSummary && (
                   <>
                     <div className="flex justify-between text-xs mb-1.5 text-gray-600">
-                      <span>{assetSummary.selected_total} assets selected</span>
+                      <span>{assetSummary.effective_total} assets accessible</span>
                       <span className="text-gray-400">of {assetSummary.selectable_total}</span>
                     </div>
                     <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden mb-2">
                       <div
                         className="h-full bg-indigo-500 rounded-full"
-                        style={{ width: `${Math.min(100, (assetSummary.selected_total / Math.max(1, assetSummary.selectable_total)) * 100)}%` }}
+                        style={{ width: `${Math.min(100, (assetSummary.effective_total / Math.max(1, assetSummary.selectable_total)) * 100)}%` }}
                       />
                     </div>
+                    <p className="text-[10px] text-gray-400">
+                      Direct targets: {assetSummary.selected_total} · Access groups: {assetSummary.selected_access_group_total ?? 0}
+                    </p>
                   </>
                 )}
                 <button
@@ -1047,8 +1140,8 @@ export default function TeamDetail() {
                       ✕ Cancel
                     </button>
                   </div>
-                  {teamError && (
-                    <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{teamError}</div>
+                  {(teamError || assetAccessLoadError) && (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{teamError || assetAccessLoadError}</div>
                   )}
                   <AssetAccessEditor
                     title="Team Asset Access"
@@ -1059,12 +1152,22 @@ export default function TeamDetail() {
                       ...c,
                       asset_access_mode: mode === 'restrict' ? 'restrict' : 'inherit',
                       selected_callable_keys: mode === 'restrict' ? c.selected_callable_keys : [],
+                      selected_access_group_keys: mode === 'restrict' ? c.selected_access_group_keys : [],
                     }))}
                     targets={assetTargets}
                     selectedKeys={form.selected_callable_keys}
                     onSelectedKeysChange={(selected_callable_keys) => setForm({ ...form, selected_callable_keys })}
-                    loading={assetAccessLoading}
-                    disabled={saving || !form.organization_id}
+                    accessGroups={assetAccessGroups}
+                    selectedAccessGroupKeys={form.selected_access_group_keys}
+                    onSelectedAccessGroupKeysChange={(selected_access_group_keys) => setForm({ ...form, selected_access_group_keys })}
+                    targetsLoading={assetTargetsLoading}
+                    accessGroupsLoading={accessGroupsLoading}
+                    disabled={saving || !form.organization_id || teamAssetAccessPending || Boolean(assetAccessLoadError)}
+                    modeControlsDisabled={saving || !form.organization_id || teamAssetAccessPending}
+                    searchValue={assetSearchInput}
+                    onSearchValueChange={setAssetSearchInput}
+                    accessGroupPagination={accessGroupPagination}
+                    onAccessGroupPageChange={setAccessGroupPageOffset}
                   />
                   <div className="flex justify-end gap-3 pt-2 border-t border-gray-100">
                     <button
@@ -1075,14 +1178,14 @@ export default function TeamDetail() {
                     </button>
                     <button
                       onClick={handleSaveAssets}
-                      disabled={saving || !form.organization_id || assetAccessLoading}
+                      disabled={saving || !form.organization_id || teamAssetAccessPending || assetAccessLoading || Boolean(assetAccessLoadError)}
                       className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
                     >
                       {saving ? 'Saving…' : 'Save Changes'}
                     </button>
                   </div>
                 </div>
-              ) : teamAssetTargetsLoading ? (
+              ) : !currentTeamAssetTargetsFull && teamAssetTargetsLoading ? (
                 <div className="bg-white rounded-xl border border-gray-200 p-8 flex items-center justify-center">
                   <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600" />
                 </div>
@@ -1095,9 +1198,9 @@ export default function TeamDetail() {
                   <p className="text-sm text-gray-500 mb-4">
                     This team inherits the full asset set available to its organization. All models and routes accessible to the org are also accessible here.
                   </p>
-                  {teamAssetTargets?.effective_targets && teamAssetTargets.effective_targets.length > 0 && (
+                  {accessibleTargets.length > 0 && (
                     <div className="space-y-1.5">
-                      {teamAssetTargets.effective_targets.map((t: any) => (
+                      {accessibleTargets.map((t: any) => (
                         <div key={t.callable_key} className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-gray-50 border border-gray-200">
                           <CheckCircle2 className="w-4 h-4 text-gray-400 shrink-0" />
                           <span className="text-sm font-medium text-gray-700">{t.callable_key}</span>
@@ -1113,19 +1216,24 @@ export default function TeamDetail() {
                   <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
                     <div className="px-5 py-4 border-b border-gray-200 flex items-center gap-2">
                       <Lock className="w-4 h-4 text-indigo-600" />
-                      <h3 className="text-sm font-semibold text-gray-900">Granted to this team</h3>
+                      <h3 className="text-sm font-semibold text-gray-900">Accessible to this team</h3>
                       <span className="ml-auto inline-flex items-center justify-center min-w-[1.5rem] h-5 px-1.5 rounded-full bg-gray-100 text-xs font-semibold text-gray-600">
-                        {grantedTargets.length}
+                        {accessibleTargets.length}
                       </span>
                     </div>
                     <div className="p-3 space-y-1.5">
-                      {grantedTargets.length === 0
-                        ? <p className="text-sm text-gray-400 text-center py-4">No assets granted yet.</p>
-                        : grantedTargets.map((t: any) => (
+                      {accessibleTargets.length === 0
+                        ? <p className="text-sm text-gray-400 text-center py-4">No assets accessible yet.</p>
+                        : accessibleTargets.map((t: any) => (
                           <div key={t.callable_key} className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-indigo-50 border border-indigo-100">
                             <CheckCircle2 className="w-4 h-4 text-indigo-600 shrink-0" />
                             <span className="text-sm font-medium text-gray-800">{t.callable_key}</span>
                             <span className="text-xs px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-600">{t.target_type}</span>
+                            {Array.isArray(t.via_access_groups) && t.via_access_groups.length > 0 && (
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">
+                                via {t.via_access_groups.join(', ')}
+                              </span>
+                            )}
                           </div>
                         ))}
                     </div>
@@ -1174,7 +1282,7 @@ export default function TeamDetail() {
                       </p>
                       <p className={`text-[10px] mt-0.5 ${assetMode === 'restrict' ? 'text-indigo-700' : 'text-gray-500'}`}>
                         {assetMode === 'restrict'
-                          ? `Only ${assetSummary?.selected_total ?? '?'} selected assets are accessible. Org ceiling: ${assetSummary?.selectable_total ?? '?'} assets.`
+                          ? `${assetSummary?.effective_total ?? '?'} assets are accessible. Org ceiling: ${assetSummary?.selectable_total ?? '?'} assets.`
                           : 'All org assets are available to this team.'}
                       </p>
                     </div>

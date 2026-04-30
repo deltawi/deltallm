@@ -18,6 +18,9 @@ from src.services.asset_binding_mirror import (
 from src.services.callable_targets import CallableTarget
 from src.governance.access_groups import build_callable_keys_by_access_group
 
+_DEFAULT_ACCESS_GROUP_PAGE_LIMIT = 50
+_MAX_ACCESS_GROUP_PAGE_LIMIT = 200
+
 
 def _callable_target_scope_policy_repository(request: Request) -> CallableTargetScopePolicyRepository | None:
     repository = getattr(request.app.state, "callable_target_scope_policy_repository", None)
@@ -287,6 +290,54 @@ def _has_source(item: dict[str, Any], *, scope_type: str, kind: str | None = Non
     return False
 
 
+def _normalize_page_limit(value: int | None, *, default: int = _DEFAULT_ACCESS_GROUP_PAGE_LIMIT) -> int:
+    try:
+        limit = int(value if value is not None else default)
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(limit, _MAX_ACCESS_GROUP_PAGE_LIMIT))
+
+
+def _normalize_page_offset(value: int | None) -> int:
+    try:
+        offset = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, offset)
+
+
+def _page_access_group_keys(
+    keys: set[str],
+    *,
+    search: str | None,
+    limit: int,
+    offset: int,
+) -> tuple[list[str], dict[str, int | bool]]:
+    query = str(search or "").strip().lower()
+    ordered = sorted(key for key in keys if not query or query in key.lower())
+    return ordered[offset : offset + limit], {
+        "total": len(ordered),
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + limit < len(ordered),
+    }
+
+
+def _access_group_visibility_payload(
+    *,
+    group_key: str,
+    member_keys: frozenset[str],
+    effective_keys: set[str],
+) -> dict[str, Any]:
+    return {
+        "group_key": group_key,
+        "member_count": len(member_keys),
+        "selectable": bool(member_keys & effective_keys),
+        "selected": False,
+        "effective_visible": bool(member_keys & effective_keys),
+    }
+
+
 def _apply_effective_visibility(
     item: dict[str, Any],
     *,
@@ -320,6 +371,10 @@ async def build_asset_visibility_preview(
     team_id: str | None = None,
     api_key_id: str | None = None,
     user_id: str | None = None,
+    include_access_groups: bool = False,
+    access_group_search: str | None = None,
+    access_group_limit: int | None = None,
+    access_group_offset: int | None = None,
 ) -> dict[str, Any]:
     route_group_items: dict[str, dict[str, Any]] = {}
     callable_items: dict[str, dict[str, Any]] = {}
@@ -509,7 +564,7 @@ async def build_asset_visibility_preview(
             key=lambda source: (str(source.get("scope_type") or ""), str(source.get("scope_id") or "")),
         )
 
-    return {
+    response: dict[str, Any] = {
         "organization_id": organization_id,
         "team_id": team_id,
         "api_key_id": api_key_id,
@@ -532,3 +587,35 @@ async def build_asset_visibility_preview(
             "items": sorted(callable_items.values(), key=lambda item: item["callable_key"]),
         },
     }
+    if include_access_groups:
+        page_limit = _normalize_page_limit(access_group_limit)
+        page_offset = _normalize_page_offset(access_group_offset)
+        effective_callable_keys = {
+            callable_key
+            for callable_key, item in callable_items.items()
+            if bool(item.get("effective_visible", False))
+        }
+        selectable_group_keys = {
+            group_key
+            for group_key, member_keys in callable_keys_by_access_group.items()
+            if bool(member_keys & effective_callable_keys)
+        }
+        page, pagination = _page_access_group_keys(
+            selectable_group_keys,
+            search=access_group_search,
+            limit=page_limit,
+            offset=page_offset,
+        )
+        response["access_groups"] = {
+            "total": pagination["total"],
+            "items": [
+                _access_group_visibility_payload(
+                    group_key=group_key,
+                    member_keys=callable_keys_by_access_group.get(group_key, frozenset()),
+                    effective_keys=effective_callable_keys,
+                )
+                for group_key in page
+            ],
+            "pagination": pagination,
+        }
+    return response

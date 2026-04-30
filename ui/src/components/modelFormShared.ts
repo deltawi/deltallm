@@ -68,6 +68,7 @@ export interface ModelFormValues {
   weight: string;
   priority: string;
   tags: string;
+  access_groups: string;
   input_cost_per_token: string;
   output_cost_per_token: string;
   input_cost_per_token_cache_hit: string;
@@ -121,6 +122,7 @@ export const EMPTY_FORM: ModelFormValues = {
   weight: '',
   priority: '',
   tags: '',
+  access_groups: '',
   input_cost_per_token: '',
   output_cost_per_token: '',
   input_cost_per_token_cache_hit: '',
@@ -150,6 +152,11 @@ function positiveIntOrUndef(val: string): number | undefined {
   if (!val) return undefined;
   const parsed = Number(val);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function commaSeparatedListOrUndef(val: string): string[] | undefined {
+  const items = val.split(',').map((item) => item.trim()).filter(Boolean);
+  return items.length > 0 ? items : undefined;
 }
 
 export function strOrEmpty(val: unknown): string {
@@ -198,7 +205,8 @@ export function buildModelPayload(
   const model_info: Record<string, unknown> = {
     mode: form.mode,
     priority: numOrUndef(form.priority),
-    tags: form.tags ? form.tags.split(',').map((tag) => tag.trim()).filter(Boolean) : undefined,
+    tags: form.tags ? commaSeparatedListOrUndef(form.tags) : undefined,
+    access_groups: form.access_groups ? commaSeparatedListOrUndef(form.access_groups) : undefined,
     weight: numOrUndef(form.weight),
   };
 
@@ -299,6 +307,7 @@ export function formFromModel(
     weight: strOrEmpty(mi.weight ?? lp.weight),
     priority: strOrEmpty(mi.priority),
     tags: Array.isArray(mi.tags) ? mi.tags.join(', ') : '',
+    access_groups: Array.isArray(mi.access_groups) ? mi.access_groups.join(', ') : '',
     input_cost_per_token: strOrEmpty(mi.input_cost_per_token),
     output_cost_per_token: strOrEmpty(mi.output_cost_per_token),
     input_cost_per_token_cache_hit: strOrEmpty(mi.input_cost_per_token_cache_hit),
