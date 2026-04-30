@@ -52,6 +52,7 @@ These endpoints back browser login, invitation acceptance, password recovery, MF
 
 - Callable-target and MCP runtime checks are enforced from in-memory snapshots, not per-request database reads.
 - In multi-instance deployments, admin writes publish governance invalidation events so other instances reload their local snapshots asynchronously.
+- Callable-target access groups are authorization groups. They grant callable targets such as model names or route-group keys; they do not change deployment routing.
 - MCP binding and tool-policy listing endpoints return **enabled** rows by default. Platform admins can opt in to disabled rows with `include_disabled=true`.
 
 ## Runtime Configuration
@@ -90,6 +91,14 @@ Relevant fields:
 
 List, detail, create, and update responses continue to redact secrets such as `api_key`. When custom upstream auth is configured, `connection_summary` may include the effective `auth_header_name` plus a compact `custom_auth_label` such as `X-API-Key` or `Authorization (Token)`, but not the rendered header value.
 
+Model create and update payloads also accept these metadata fields:
+
+- `model_info.mode`: runtime workload type, such as `chat`, `embedding`, `image_generation`, `audio_speech`, `audio_transcription`, or `rerank`
+- `model_info.access_groups`: authorization groups attached to the public callable target
+- `model_info.tags`: routing tags for deployment selection; not authorization
+
+`model_info.access_groups` must be an array of valid group keys. Keys are normalized to lowercase, must start with a letter or digit, and may contain lowercase letters, digits, `.`, `_`, or `-`. Access groups expand to the public `model_name`, not to a single deployment. When several deployments share the same `model_name`, keep their access groups identical so group expansion remains deterministic.
+
 Example inline model create payload:
 
 ```json
@@ -104,7 +113,9 @@ Example inline model create payload:
     "auth_header_format": "{api_key}"
   },
   "model_info": {
-    "mode": "chat"
+    "mode": "chat",
+    "access_groups": ["support", "beta"],
+    "tags": ["low-latency"]
   }
 }
 ```
@@ -161,6 +172,10 @@ Callable targets are the public runtime names that callers can use, including bo
 |--------|----------|---------|
 | `GET` | `/ui/api/callable-targets` | List callable targets from the live catalog |
 | `GET` | `/ui/api/callable-targets/{callable_key}` | Get one callable target with current bindings |
+| `GET` | `/ui/api/callable-target-access-groups` | List access groups from the live catalog and existing bindings |
+| `GET` | `/ui/api/callable-target-access-group-bindings` | List access-group bindings |
+| `POST` | `/ui/api/callable-target-access-group-bindings` | Create or update an access-group binding |
+| `DELETE` | `/ui/api/callable-target-access-group-bindings/{binding_id}` | Delete an access-group binding |
 | `GET` | `/ui/api/callable-target-bindings` | List callable-target bindings |
 | `POST` | `/ui/api/callable-target-bindings` | Create or update a binding |
 | `DELETE` | `/ui/api/callable-target-bindings/{binding_id}` | Delete a binding |
@@ -169,6 +184,24 @@ Callable targets are the public runtime names that callers can use, including bo
 | `DELETE` | `/ui/api/callable-target-scope-policies/{policy_id}` | Delete a scope policy |
 | `GET` | `/ui/api/callable-target-migration/report` | Report rollout and migration readiness |
 | `POST` | `/ui/api/callable-target-migration/backfill` | Backfill explicit bindings from legacy data |
+
+`GET /ui/api/callable-target-access-groups` accepts `search`, `include_members`, `limit`, and `offset`. Groups can appear because current callable targets are labelled with `model_info.access_groups` or because a binding already references the group. This supports planned future grants before a group has current members.
+
+Access-group binding upserts use this payload:
+
+```json
+{
+  "group_key": "support",
+  "scope_type": "organization",
+  "scope_id": "org_acme",
+  "enabled": true,
+  "metadata": {
+    "reason": "support tenant baseline"
+  }
+}
+```
+
+`scope_type` supports `organization`, `team`, `api_key`, and `user`. Binding writes trigger governance snapshot reloads and emit `ADMIN_CALLABLE_TARGET_ACCESS_GROUP_BINDING_UPSERT` or `ADMIN_CALLABLE_TARGET_ACCESS_GROUP_BINDING_DELETE` audit events.
 
 ### Route Group Policy
 
@@ -312,6 +345,39 @@ Callable targets are the public runtime names that callers can use, including bo
 | `GET` | `/ui/api/rbac/team-memberships` | List team memberships |
 | `POST` | `/ui/api/rbac/team-memberships` | Create team membership |
 | `DELETE` | `/ui/api/rbac/team-memberships/{membership_id}` | Delete team membership |
+
+### Scoped Asset Access Payloads
+
+Asset-access endpoints for organizations, teams, API keys, and runtime users use the same response shape:
+
+- `mode`: `grant` for organizations, or `inherit` / `restrict` for teams, keys, and users
+- `selected_callable_keys`: direct model names or route-group keys selected for the scope
+- `selected_access_group_keys`: access groups selected for the scope
+- `selectable_targets`: callable targets that can be selected from the parent access universe
+- `selectable_access_groups`: access groups that can be selected from the parent access universe
+- `effective_targets`: callable targets visible after inheritance, direct bindings, and access-group expansion
+- `summary`: selected, selectable, effective, and access-group counts
+
+Update payloads accept direct targets and access groups:
+
+```json
+{
+  "mode": "restrict",
+  "selected_callable_keys": ["gpt-4o-mini"],
+  "selected_access_group_keys": ["support"]
+}
+```
+
+For organization updates, omit `mode` or set it to `grant`. For teams, keys, and users, `inherit` requires empty `selected_callable_keys` and `selected_access_group_keys`; use `restrict` only when narrowing access below the parent scope.
+
+Query parameters:
+
+| Endpoint kind | Parameters |
+|---------------|------------|
+| `GET .../asset-visibility` | `include_access_groups`, `access_group_search`, `access_group_limit`, `access_group_offset` |
+| `GET .../asset-access` | `include_targets`, `access_group_search`, `access_group_limit`, `access_group_offset` |
+
+Asset-access writes emit the matching scope audit action, such as `ADMIN_ORGANIZATION_ASSET_ACCESS_UPDATE`, `ADMIN_TEAM_ASSET_ACCESS_UPDATE`, or `ADMIN_KEY_ASSET_ACCESS_UPDATE`.
 
 ### Invitations
 

@@ -70,6 +70,9 @@ After the initial seed, set `model_deployment_bootstrap_from_config` back to `fa
 | `deltallm_params.auth_header_format` | No | Custom upstream auth header value template, must include `{api_key}` |
 | `deltallm_params.timeout` | No | Upstream timeout in seconds |
 | `deltallm_params.weight` | No | Relative weight when multiple deployments share one public model |
+| `model_info.mode` | No | Runtime workload type such as `chat`, `embedding`, or `rerank` |
+| `model_info.access_groups` | No | Authorization groups attached to the public callable target |
+| `model_info.tags` | No | Routing tags for deployment selection; not authorization |
 
 ## Custom Upstream Auth Headers
 
@@ -158,6 +161,45 @@ model_list:
     model_info:
       mode: audio_transcription
 ```
+
+## Access Groups and Routing Tags
+
+Use `model_info.access_groups` when you want to grant model access by group instead of binding every model name separately.
+
+```yaml
+model_list:
+  - model_name: gpt-4o-mini
+    deltallm_params:
+      provider: openai
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: chat
+      access_groups:
+        - beta
+        - support
+      tags:
+        - low-latency
+```
+
+In this example, granting the `beta` or `support` access group to an organization, team, key, or runtime user can make the `gpt-4o-mini` callable target visible to that scope. The `low-latency` tag is separate routing metadata: requests can use `metadata.tags` to prefer matching deployments, but tags do not grant access.
+
+Important behavior:
+
+- Access groups grant callable targets such as `gpt-4o-mini`, not individual deployments.
+- Access group keys are normalized to lowercase and may contain letters, digits, `.`, `_`, and `-`.
+- If multiple deployments share one `model_name`, give every deployment the same `model_info.access_groups`; conflicting values disable group expansion for that public model.
+- Route groups are callable targets too. Keep route-group keys and public model names unique so grants are unambiguous.
+- Newly added models become available to scopes already granted a matching access group after the runtime reloads its model and governance snapshots.
+- In Kubernetes, admin writes publish governance invalidation events so other replicas refresh their in-memory snapshots asynchronously.
+- Organization-level grants can reference an access group before any model currently belongs to it. This is useful when you want a tenant to receive future models as they are added to that group.
+
+Recommended rollout:
+
+1. Label models with access groups that describe authorization intent, such as `support`, `finance`, or `beta`.
+2. Grant access groups to organizations first; organizations define the parent access universe.
+3. Use team, key, or user `restrict` mode only when you need to narrow access below the organization.
+4. Do not migrate routing tags blindly into access groups. Tags describe routing preferences; access groups describe who can call a target.
 
 ## Embedding Batch Worker Micro-batching
 
