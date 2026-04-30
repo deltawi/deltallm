@@ -17,6 +17,7 @@ import Modal from '../components/Modal';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import { Plus, RefreshCw, Trash2, Copy, Check, Pencil, Key, List, Info } from 'lucide-react';
 import { ContentCard, IndexShell } from '../components/admin/shells';
+import ApiKeysMobileList from '../components/api-keys/ApiKeysMobileList';
 
 type OwnerMode = 'self' | 'service_account';
 type ViewTab = 'all' | 'my';
@@ -659,14 +660,35 @@ export default function ApiKeys() {
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             placeholder="Search keys..."
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 sm:w-72"
+            className="hidden md:block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 sm:w-72"
           />
         </div>
       )}
     >
-      <ContentCard>
-        <DataTable columns={columns} data={items} loading={loading} emptyMessage={myKeysMode ? 'You have no personal keys yet' : 'No API keys created yet'} pagination={pagination} onPageChange={setPageOffset} />
-      </ContentCard>
+      <div className="hidden md:block">
+        <ContentCard>
+          <DataTable columns={columns} data={items} loading={loading} emptyMessage={myKeysMode ? 'You have no personal keys yet' : 'No API keys created yet'} pagination={pagination} onPageChange={setPageOffset} />
+        </ContentCard>
+      </div>
+      <div className="md:hidden">
+        <ApiKeysMobileList
+          items={items}
+          loading={loading}
+          pagination={pagination}
+          pageSize={pageSize}
+          onPageChange={setPageOffset}
+          searchValue={searchInput}
+          onSearchChange={setSearchInput}
+          currentUserId={currentUserId}
+          emptyMessage={myKeysMode ? 'You have no personal keys yet' : 'No API keys created yet'}
+          canEdit={isAdmin}
+          canRegenerate={canRegenerate}
+          canRevoke={canRevoke}
+          onEdit={openEdit}
+          onRegenerate={handleRegenerate}
+          onRevoke={handleRevoke}
+        />
+      </div>
 
       <Modal open={showCreate || !!editItem} onClose={closeEditor} title={createFormTitle}>
         <div className="space-y-4">
