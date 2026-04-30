@@ -1,8 +1,13 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { teams, organizations } from '../lib/api';
-import { buildParentScopedAssetTargets } from '../lib/assetAccess';
+import {
+  assetAccessLoadErrorMessage,
+  buildParentScopedAssetTargets,
+  buildScopedSelectableAccessGroups,
+  isAssetVisibilityFor,
+} from '../lib/assetAccess';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import TeamSelfServicePolicySection from '../components/admin/TeamSelfServicePolicySection';
 import ToggleSwitch from '../components/ToggleSwitch';
@@ -120,16 +125,22 @@ export default function TeamCreate() {
   const { session, authMode } = useAuth();
   const uiAccess = resolveUiAccess(authMode, session);
 
-  if (!uiAccess.team_create) {
-    return <Navigate to="/teams" replace />;
-  }
-
   /* background teams list */
-  const { data: teamsResult } = useApi(() => teams.list({ limit: 8, offset: 0 }), []);
+  const { data: teamsResult } = useApi(
+    () => uiAccess.team_create
+      ? teams.list({ limit: 8, offset: 0 })
+      : Promise.resolve({ data: [], pagination: { total: 0, limit: 8, offset: 0, has_more: false } }),
+    [uiAccess.team_create],
+  );
   const bgItems: any[] = teamsResult?.data || [];
 
   /* org list for selector */
-  const { data: orgResult } = useApi(() => organizations.list({ limit: 500 }), []);
+  const { data: orgResult } = useApi(
+    () => uiAccess.team_create
+      ? organizations.list({ limit: 500 })
+      : Promise.resolve({ data: [], pagination: { total: 0, limit: 500, offset: 0, has_more: false } }),
+    [uiAccess.team_create],
+  );
   const orgList: any[] = orgResult?.data || [];
 
   /* form state */
@@ -150,6 +161,11 @@ export default function TeamCreate() {
   const [tpdValue, setTpdValue] = useState('');
   const [assetMode, setAssetMode] = useState<'inherit' | 'restrict'>('inherit');
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+  const [selectedAccessGroupKeys, setSelectedAccessGroupKeys] = useState<string[]>([]);
+  const [assetSearchInput, setAssetSearchInput] = useState('');
+  const [assetSearch, setAssetSearch] = useState('');
+  const [accessGroupPageOffset, setAccessGroupPageOffset] = useState(0);
+  const accessGroupPageSize = 50;
   const [selfServiceEnabled, setSelfServiceEnabled] = useState(true);
   const [selfServiceMaxKeysPerUser, setSelfServiceMaxKeysPerUser] = useState('');
   const [selfServiceBudgetCeiling, setSelfServiceBudgetCeiling] = useState('');
@@ -168,21 +184,53 @@ export default function TeamCreate() {
     setSelectedOrgId(orgId);
     setAssetMode('inherit');
     setSelectedKeys([]);
+    setSelectedAccessGroupKeys([]);
+    setAssetSearchInput('');
+    setAssetSearch('');
+    setAccessGroupPageOffset(0);
   };
 
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setAssetSearch(assetSearchInput);
+      setAccessGroupPageOffset(0);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [assetSearchInput]);
+
   /* org asset visibility for restrict mode */
-  const { data: orgAssetVisibility, loading: orgAssetVisibilityLoading } = useApi(
+  const { data: orgAssetVisibility, error: orgAssetVisibilityError, loading: orgAssetVisibilityLoading } = useApi(
     () => (assetMode === 'restrict' && selectedOrgId
-      ? organizations.assetVisibility(selectedOrgId)
+      ? organizations.assetVisibility(selectedOrgId, {
+          include_access_groups: true,
+          access_group_search: assetSearch || undefined,
+          access_group_limit: accessGroupPageSize,
+          access_group_offset: accessGroupPageOffset,
+        })
       : Promise.resolve(null)),
-    [assetMode, selectedOrgId],
+    [assetMode, selectedOrgId, assetSearch, accessGroupPageOffset],
   );
 
+  const currentOrgAssetVisibility = selectedOrgId && isAssetVisibilityFor(orgAssetVisibility, {
+    organizationId: selectedOrgId,
+  })
+    ? orgAssetVisibility
+    : null;
   const assetTargets = buildParentScopedAssetTargets(
-    orgAssetVisibility?.callable_targets?.items || [],
+    currentOrgAssetVisibility?.callable_targets?.items || [],
     selectedKeys,
     assetMode,
   );
+  const assetAccessGroups = buildScopedSelectableAccessGroups(
+    currentOrgAssetVisibility?.access_groups?.items || [],
+    selectedAccessGroupKeys,
+  );
+  const accessGroupPagination = currentOrgAssetVisibility?.access_groups?.pagination;
+  const assetTargetsLoading = !currentOrgAssetVisibility && orgAssetVisibilityLoading;
+  const assetAccessLoading = assetMode === 'restrict' && Boolean(selectedOrgId) && (assetTargetsLoading || orgAssetVisibilityLoading);
+  const assetAccessLoadError = assetMode === 'restrict' && Boolean(selectedOrgId)
+    ? assetAccessLoadErrorMessage(orgAssetVisibilityError)
+    : null;
 
   /* submit */
   const [saving, setSaving] = useState(false);
@@ -200,6 +248,14 @@ export default function TeamCreate() {
   const handleCreate = async () => {
     if (!teamName.trim()) { setNameError(true); return; }
     if (!selectedOrgId) { setError('Please select an organization.'); return; }
+    if (assetAccessLoading) {
+      setError('Wait for asset access options to finish loading before creating the team.');
+      return;
+    }
+    if (assetAccessLoadError) {
+      setError(assetAccessLoadError);
+      return;
+    }
     setError(null);
     setSaving(true);
     try {
@@ -238,6 +294,7 @@ export default function TeamCreate() {
           await teams.updateAssetAccess(created.team_id, {
             mode: 'restrict',
             selected_callable_keys: selectedKeys,
+            selected_access_group_keys: selectedAccessGroupKeys,
           });
         } catch (err: any) {
           pageWarning = err?.message || 'Team created, but restricted asset access could not be applied.';
@@ -257,6 +314,10 @@ export default function TeamCreate() {
   const handleCancel = () => navigate(returnTo || '/teams');
 
   /* ─────────────── render ─────────────── */
+  if (!uiAccess.team_create) {
+    return <Navigate to="/teams" replace />;
+  }
+
   return (
     <div className="flex h-screen overflow-hidden relative">
       {/* Faded background */}
@@ -294,9 +355,9 @@ export default function TeamCreate() {
         {/* Scrollable body */}
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
 
-          {error && (
+          {(error || assetAccessLoadError) && (
             <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0" /> {error}
+              <AlertCircle className="w-4 h-4 shrink-0" /> {error || assetAccessLoadError}
             </div>
           )}
 
@@ -647,7 +708,13 @@ export default function TeamCreate() {
                 <button
                   key={mode}
                   type="button"
-                  onClick={() => { setAssetMode(mode); if (mode === 'inherit') setSelectedKeys([]); }}
+                  onClick={() => {
+                    setAssetMode(mode);
+                    if (mode === 'inherit') {
+                      setSelectedKeys([]);
+                      setSelectedAccessGroupKeys([]);
+                    }
+                  }}
                   disabled={saving}
                   className={`flex flex-col items-start gap-1.5 p-3.5 rounded-xl border-2 text-left transition-all disabled:opacity-50 ${
                     assetMode === mode
@@ -707,10 +774,22 @@ export default function TeamCreate() {
                 targets={assetTargets}
                 selectedKeys={selectedKeys}
                 onSelectedKeysChange={setSelectedKeys}
-                loading={orgAssetVisibilityLoading}
-                disabled={saving}
-                secondaryActionLabel={selectedKeys.length > 0 ? 'Clear selection' : undefined}
-                onSecondaryAction={selectedKeys.length > 0 ? () => setSelectedKeys([]) : undefined}
+                accessGroups={assetAccessGroups}
+                selectedAccessGroupKeys={selectedAccessGroupKeys}
+                onSelectedAccessGroupKeysChange={setSelectedAccessGroupKeys}
+                targetsLoading={assetTargetsLoading}
+                accessGroupsLoading={orgAssetVisibilityLoading}
+                disabled={saving || Boolean(assetAccessLoadError)}
+                searchValue={assetSearchInput}
+                onSearchValueChange={setAssetSearchInput}
+                accessGroupPagination={accessGroupPagination}
+                onAccessGroupPageChange={setAccessGroupPageOffset}
+                secondaryActionLabel={selectedKeys.length > 0 || selectedAccessGroupKeys.length > 0 ? 'Clear selection' : undefined}
+                onSecondaryAction={
+                  selectedKeys.length > 0 || selectedAccessGroupKeys.length > 0
+                    ? () => { setSelectedKeys([]); setSelectedAccessGroupKeys([]); }
+                    : undefined
+                }
               />
             )}
           </div>
@@ -758,6 +837,14 @@ export default function TeamCreate() {
                   <AlertCircle className="w-3 h-3" />
                   {!selectedOrgId ? 'Select an organization to continue' : 'Fill in required fields to continue'}
                 </span>
+              ) : assetAccessLoading ? (
+                <span className="flex items-center gap-1 text-amber-600">
+                  <AlertCircle className="w-3 h-3" /> Loading asset access options
+                </span>
+              ) : assetAccessLoadError ? (
+                <span className="flex items-center gap-1 text-red-600">
+                  <AlertCircle className="w-3 h-3" /> Asset access options failed to load
+                </span>
               ) : (
                 <span className="flex items-center gap-1 text-green-600">
                   <Check className="w-3 h-3" /> Ready to create
@@ -774,7 +861,7 @@ export default function TeamCreate() {
               </button>
               <button
                 onClick={handleCreate}
-                disabled={saving || !isReady}
+                disabled={saving || !isReady || assetAccessLoading || Boolean(assetAccessLoadError)}
                 className="px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {saving ? 'Creating…' : 'Create Team'}

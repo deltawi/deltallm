@@ -687,6 +687,10 @@ async def get_organization_asset_visibility(
     request: Request,
     organization_id: str,
     user_id: str | None = Query(default=None),
+    include_access_groups: bool = Query(default=False),
+    access_group_search: str | None = Query(default=None),
+    access_group_limit: int = Query(default=50, ge=1, le=200),
+    access_group_offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
     db = db_or_503(request)
     rows = await db.query_raw(
@@ -709,6 +713,10 @@ async def get_organization_asset_visibility(
         request,
         organization_id=organization_id,
         user_id=str(user_row.get("user_id") or "").strip() or None if user_row else None,
+        include_access_groups=include_access_groups,
+        access_group_search=access_group_search,
+        access_group_limit=access_group_limit,
+        access_group_offset=access_group_offset,
     )
 
 
@@ -717,6 +725,9 @@ async def get_organization_asset_access(
     request: Request,
     organization_id: str,
     include_targets: bool = Query(default=True),
+    access_group_search: str | None = Query(default=None),
+    access_group_limit: int = Query(default=50, ge=1, le=200),
+    access_group_offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
     db = db_or_503(request)
     rows = await db.query_raw(
@@ -736,6 +747,9 @@ async def get_organization_asset_access(
         scope_id=organization_id,
         organization_id=organization_id,
         include_targets=include_targets,
+        access_group_search=access_group_search,
+        access_group_limit=access_group_limit,
+        access_group_offset=access_group_offset,
     )
     response["auto_follow_catalog"] = await get_organization_auto_follow_catalog(db, organization_id)
     return response

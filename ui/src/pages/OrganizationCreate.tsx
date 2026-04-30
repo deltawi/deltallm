@@ -3,7 +3,7 @@ import { Navigate, useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
 import { callableTargets, organizations } from '../lib/api';
-import { buildCatalogAssetTargets } from '../lib/assetAccess';
+import { assetAccessLoadErrorMessage, buildCatalogAccessGroups, buildCatalogAssetTargets } from '../lib/assetAccess';
 import { dateTimeLocalUtcInputToIso, defaultMonthlyResetUtcInputValue } from '../lib/format';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import {
@@ -114,14 +114,12 @@ export default function OrganizationCreate() {
   const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
   const isPlatformAdmin = userRole === 'platform_admin';
 
-  if (!isPlatformAdmin) {
-    return <Navigate to="/organizations" replace />;
-  }
-
   /* live list for background */
   const { data: listResult } = useApi(
-    () => organizations.list({ limit: 8, offset: 0 }),
-    [],
+    () => isPlatformAdmin
+      ? organizations.list({ limit: 8, offset: 0 })
+      : Promise.resolve({ data: [], pagination: { total: 0, limit: 8, offset: 0, has_more: false } }),
+    [isPlatformAdmin],
   );
   const bgItems: any[] = listResult?.data || [];
 
@@ -146,18 +144,25 @@ export default function OrganizationCreate() {
   const [auditStorage, setAuditStorage] = useState(false);
   const [selectAll, setSelectAll] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+  const [selectedAccessGroupKeys, setSelectedAccessGroupKeys] = useState<string[]>([]);
   const [assetSearchInput, setAssetSearchInput] = useState('');
   const [assetSearch, setAssetSearch] = useState('');
   const [assetPageOffset, setAssetPageOffset] = useState(0);
+  const [accessGroupPageOffset, setAccessGroupPageOffset] = useState(0);
   const [assetTargetType, setAssetTargetType] = useState<'all' | 'model' | 'route_group'>('all');
   const assetPageSize = 50;
+  const accessGroupPageSize = 50;
 
   useEffect(() => {
-    const t = setTimeout(() => { setAssetSearch(assetSearchInput); setAssetPageOffset(0); }, 250);
+    const t = setTimeout(() => {
+      setAssetSearch(assetSearchInput);
+      setAssetPageOffset(0);
+      setAccessGroupPageOffset(0);
+    }, 250);
     return () => clearTimeout(t);
   }, [assetSearchInput]);
 
-  const { data: callableTargetPage, loading: callableTargetPageLoading } = useApi(
+  const { data: callableTargetPage, error: callableTargetPageError, loading: callableTargetPageLoading } = useApi(
     () => (
       isPlatformAdmin && !selectAll
         ? callableTargets.list({
@@ -170,12 +175,34 @@ export default function OrganizationCreate() {
     ),
     [isPlatformAdmin, selectAll, assetSearch, assetTargetType, assetPageOffset],
   );
+  const { data: callableTargetAccessGroups, error: accessGroupError, loading: accessGroupLoading } = useApi(
+    () => (
+      isPlatformAdmin && !selectAll
+        ? callableTargets.listAccessGroups({
+            search: assetSearch || undefined,
+            include_members: false,
+            limit: accessGroupPageSize,
+            offset: accessGroupPageOffset,
+          })
+        : Promise.resolve({ data: [], pagination: { total: 0, limit: accessGroupPageSize, offset: 0, has_more: false } })
+    ),
+    [isPlatformAdmin, selectAll, assetSearch, accessGroupPageOffset],
+  );
 
   const assetTargets = buildCatalogAssetTargets(
     (callableTargetPage?.data || []) as any[],
     selectedKeys,
   );
+  const assetAccessGroups = buildCatalogAccessGroups(
+    callableTargetAccessGroups?.data || [],
+    selectedAccessGroupKeys,
+  );
   const assetPagePagination = callableTargetPage?.pagination;
+  const accessGroupPagination = callableTargetAccessGroups?.pagination;
+  const assetAccessLoading = !selectAll && (callableTargetPageLoading || accessGroupLoading);
+  const assetAccessLoadError = !selectAll && isPlatformAdmin
+    ? assetAccessLoadErrorMessage(callableTargetPageError || accessGroupError)
+    : null;
 
   /* submit */
   const [saving, setSaving] = useState(false);
@@ -192,6 +219,14 @@ export default function OrganizationCreate() {
 
   const handleCreate = async () => {
     if (!name.trim()) { setNameError(true); return; }
+    if (assetAccessLoading) {
+      setError('Wait for asset access options to finish loading before creating the organization.');
+      return;
+    }
+    if (assetAccessLoadError) {
+      setError(assetAccessLoadError);
+      return;
+    }
     setError(null);
     setSaving(true);
     try {
@@ -221,14 +256,15 @@ export default function OrganizationCreate() {
       const created = await organizations.create(payload);
 
       let pageWarning: string | null = null;
-      if (isPlatformAdmin && selectAll) {
+      if (isPlatformAdmin && (selectAll || selectedAccessGroupKeys.length > 0)) {
         try {
           await organizations.updateAssetAccess(created.organization_id, {
-            selected_callable_keys: [],
-            select_all_selectable: true,
+            selected_callable_keys: selectAll ? [] : selectedKeys,
+            selected_access_group_keys: selectAll ? [] : selectedAccessGroupKeys,
+            select_all_selectable: selectAll,
           });
         } catch (err: any) {
-          pageWarning = err?.message || 'Organization created, but all-asset access could not be applied.';
+          pageWarning = err?.message || 'Organization created, but asset access could not be applied.';
         }
       }
 
@@ -245,6 +281,10 @@ export default function OrganizationCreate() {
   const handleCancel = () => navigate('/organizations');
 
   /* ─────────────── render ─────────────── */
+  if (!isPlatformAdmin) {
+    return <Navigate to="/organizations" replace />;
+  }
+
   return (
     <div className="flex h-screen overflow-hidden relative">
       {/* Faded background list */}
@@ -281,9 +321,9 @@ export default function OrganizationCreate() {
         {/* Scrollable body */}
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
 
-          {error && (
+          {(error || assetAccessLoadError) && (
             <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0" /> {error}
+              <AlertCircle className="w-4 h-4 shrink-0" /> {error || assetAccessLoadError}
             </div>
           )}
 
@@ -568,7 +608,7 @@ export default function OrganizationCreate() {
                           type="radio"
                           name="org-create-asset-strategy"
                           checked={selectAll}
-                          onChange={() => { setSelectAll(true); setSelectedKeys([]); }}
+                          onChange={() => { setSelectAll(true); setSelectedKeys([]); setSelectedAccessGroupKeys([]); }}
                           disabled={saving}
                           className="mt-0.5"
                         />
@@ -610,18 +650,28 @@ export default function OrganizationCreate() {
                       targets={assetTargets}
                       selectedKeys={selectedKeys}
                       onSelectedKeysChange={setSelectedKeys}
-                      loading={callableTargetPageLoading}
-                      disabled={saving}
+                      accessGroups={assetAccessGroups}
+                      selectedAccessGroupKeys={selectedAccessGroupKeys}
+                      onSelectedAccessGroupKeysChange={setSelectedAccessGroupKeys}
+                      targetsLoading={callableTargetPageLoading}
+                      accessGroupsLoading={accessGroupLoading}
+                      disabled={saving || Boolean(assetAccessLoadError)}
                       searchValue={assetSearchInput}
                       onSearchValueChange={setAssetSearchInput}
                       targetTypeFilter={assetTargetType}
                       onTargetTypeFilterChange={(next) => { setAssetTargetType(next); setAssetPageOffset(0); }}
                       pagination={assetPagePagination}
                       onPageChange={setAssetPageOffset}
+                      accessGroupPagination={accessGroupPagination}
+                      onAccessGroupPageChange={setAccessGroupPageOffset}
                       primaryActionLabel="Allow all assets"
-                      onPrimaryAction={() => { setSelectAll(true); setSelectedKeys([]); }}
-                      secondaryActionLabel={selectedKeys.length > 0 ? 'Clear selection' : undefined}
-                      onSecondaryAction={selectedKeys.length > 0 ? () => setSelectedKeys([]) : undefined}
+                      onPrimaryAction={() => { setSelectAll(true); setSelectedKeys([]); setSelectedAccessGroupKeys([]); }}
+                      secondaryActionLabel={selectedKeys.length > 0 || selectedAccessGroupKeys.length > 0 ? 'Clear selection' : undefined}
+                      onSecondaryAction={
+                        selectedKeys.length > 0 || selectedAccessGroupKeys.length > 0
+                          ? () => { setSelectedKeys([]); setSelectedAccessGroupKeys([]); }
+                          : undefined
+                      }
                     />
                   )}
                 </div>
@@ -637,6 +687,14 @@ export default function OrganizationCreate() {
               {!isReady ? (
                 <span className="flex items-center gap-1 text-amber-600">
                   <AlertCircle className="w-3 h-3" /> Fill in required fields to continue
+                </span>
+              ) : assetAccessLoading ? (
+                <span className="flex items-center gap-1 text-amber-600">
+                  <AlertCircle className="w-3 h-3" /> Loading asset access options
+                </span>
+              ) : assetAccessLoadError ? (
+                <span className="flex items-center gap-1 text-red-600">
+                  <AlertCircle className="w-3 h-3" /> Asset access options failed to load
                 </span>
               ) : (
                 <span className="flex items-center gap-1 text-green-600">
@@ -654,7 +712,7 @@ export default function OrganizationCreate() {
               </button>
               <button
                 onClick={handleCreate}
-                disabled={saving || !isReady}
+                disabled={saving || !isReady || assetAccessLoading || Boolean(assetAccessLoadError)}
                 className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {saving ? 'Creating…' : 'Create Organization'}

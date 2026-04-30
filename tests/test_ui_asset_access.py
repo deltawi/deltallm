@@ -377,6 +377,38 @@ async def test_get_organization_asset_access_returns_selected_access_groups(clie
 
 
 @pytest.mark.asyncio
+async def test_get_organization_asset_access_pages_access_groups(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.prisma_manager = type("Prisma", (), {"client": _FakeScopeDB()})()
+    access_group_repository = _FakeCallableTargetAccessGroupBindingRepository()
+    test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
+    test_app.state.callable_target_access_group_repository = access_group_repository
+    test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
+    test_app.state.callable_target_grant_service = _FakeGrantService()
+    test_app.state.callable_target_catalog = {
+        "alpha-model": CallableTarget(key="alpha-model", target_type="model", access_groups=frozenset({"alpha"})),
+        "beta-model": CallableTarget(key="beta-model", target_type="model", access_groups=frozenset({"beta"})),
+        "gamma-model": CallableTarget(key="gamma-model", target_type="model", access_groups=frozenset({"gamma"})),
+    }
+
+    response = await client.get(
+        "/ui/api/organizations/org-1/asset-access?access_group_search=a&access_group_limit=1&access_group_offset=1",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["group_key"] for item in payload["selectable_access_groups"]] == ["beta"]
+    assert payload["access_group_pagination"] == {
+        "total": 3,
+        "limit": 1,
+        "offset": 1,
+        "has_more": True,
+    }
+    assert payload["summary"]["selectable_access_group_total"] == 3
+
+
+@pytest.mark.asyncio
 async def test_update_organization_asset_access_select_all_enables_auto_follow(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
     scope_db = _FakeScopeDB()

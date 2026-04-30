@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { invitations, organizations, rbac, teams, users, type Invitation, type Principal, type PrincipalSummary, type ScopedAssetAccess } from '../lib/api';
 import { Plus, UserCog, ShieldCheck, Search, Building2, UsersRound, Trash2, Mail } from 'lucide-react';
@@ -66,6 +66,7 @@ function MembershipCountBadge({ count, label }: { count: number; label: string }
 type PeopleAccessTab = 'users' | 'invitations';
 type InvitationStatusFilter = Invitation['status'] | 'active';
 const EMPTY_PAGINATION = { total: 0, limit: 20, offset: 0, has_more: false };
+const USER_ACCESS_GROUP_PAGE_SIZE = 50;
 const EMPTY_SUMMARY: PrincipalSummary = {
   total_accounts: 0,
   active_accounts: 0,
@@ -126,11 +127,20 @@ export default function RBACAccounts() {
   const [userAssetAccess, setUserAssetAccess] = useState<ScopedAssetAccess | null>(null);
   const [userAssetMode, setUserAssetMode] = useState<'inherit' | 'restrict'>('inherit');
   const [userAssetSelectedKeys, setUserAssetSelectedKeys] = useState<string[]>([]);
+  const [userAssetSelectedAccessGroupKeys, setUserAssetSelectedAccessGroupKeys] = useState<string[]>([]);
+  const [userAssetSearchInput, setUserAssetSearchInput] = useState('');
+  const [userAssetSearch, setUserAssetSearch] = useState('');
+  const [userAccessGroupPageOffset, setUserAccessGroupPageOffset] = useState(0);
   const [userAssetLoading, setUserAssetLoading] = useState(false);
   const [userAssetError, setUserAssetError] = useState('');
+  const userAssetSelectionInitializedRef = useRef(false);
+  const userAssetRequestIdRef = useRef(0);
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const userAssetAccessInitialized = userAssetSelectionInitializedRef.current;
+  const canSaveUserAssetAccess = Boolean(userAssetAccess) || (userAssetMode === 'inherit' && userAssetAccessInitialized);
+  const userAssetModeControlsDisabled = saving || userAssetLoading || (!userAssetAccess && !userAssetAccessInitialized);
 
   const loadReferenceData = useCallback(async () => {
     setReferenceLoading(true);
@@ -217,6 +227,61 @@ export default function RBACAccounts() {
     if (referenceLoading) return;
     setShowProvisionModal(true);
   }, [inviteOrganizationId, inviteTeamId, referenceLoading]);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setUserAssetSearch(userAssetSearchInput.trim());
+      setUserAccessGroupPageOffset(0);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [userAssetSearchInput]);
+
+  const loadUserAssetAccess = useCallback(async (
+    runtimeUserId: string,
+    options: { search?: string; offset?: number; preserveSelections?: boolean } = {},
+  ) => {
+    const requestId = userAssetRequestIdRef.current + 1;
+    userAssetRequestIdRef.current = requestId;
+    setUserAssetLoading(true);
+    setUserAssetError('');
+    try {
+      const access = await users.assetAccess(runtimeUserId, {
+        include_targets: true,
+        access_group_search: options.search || undefined,
+        access_group_limit: USER_ACCESS_GROUP_PAGE_SIZE,
+        access_group_offset: options.offset ?? 0,
+      });
+      if (requestId !== userAssetRequestIdRef.current) return;
+      setUserAssetAccess(access);
+      if (!options.preserveSelections) {
+        setUserAssetMode(access.mode === 'restrict' ? 'restrict' : 'inherit');
+        setUserAssetSelectedKeys(access.selected_callable_keys || []);
+        setUserAssetSelectedAccessGroupKeys(access.selected_access_group_keys || []);
+        userAssetSelectionInitializedRef.current = true;
+      }
+    } catch (err: unknown) {
+      if (requestId !== userAssetRequestIdRef.current) return;
+      setUserAssetAccess(null);
+      setUserAssetError(err instanceof Error ? err.message : 'Failed to load runtime user asset access');
+    } finally {
+      if (requestId === userAssetRequestIdRef.current) {
+        setUserAssetLoading(false);
+      }
+    }
+  }, []);
+  useEffect(() => {
+    if (!showUserAccessModal || !selectedRuntimeUser?.runtime_user_id) return;
+    void loadUserAssetAccess(selectedRuntimeUser.runtime_user_id, {
+      search: userAssetSearch,
+      offset: userAccessGroupPageOffset,
+      preserveSelections: userAssetSelectionInitializedRef.current,
+    });
+  }, [
+    loadUserAssetAccess,
+    selectedRuntimeUser?.runtime_user_id,
+    showUserAccessModal,
+    userAccessGroupPageOffset,
+    userAssetSearch,
+  ]);
 
   const clearInvitePrefill = useCallback(() => {
     if (!inviteOrganizationId && !inviteTeamId) return;
@@ -357,7 +422,15 @@ export default function RBACAccounts() {
     }
   };
 
-  const openUserAssetAccess = async (acct: Principal) => {
+  const openUserAssetAccess = (acct: Principal) => {
+    userAssetRequestIdRef.current += 1;
+    userAssetSelectionInitializedRef.current = false;
+    setUserAssetMode('inherit');
+    setUserAssetSelectedKeys([]);
+    setUserAssetSelectedAccessGroupKeys([]);
+    setUserAssetSearchInput('');
+    setUserAssetSearch('');
+    setUserAccessGroupPageOffset(0);
     if (!acct.runtime_user_id) {
       setSelectedRuntimeUser(acct);
       setShowUserAccessModal(true);
@@ -371,30 +444,28 @@ export default function RBACAccounts() {
     setUserAssetLoading(true);
     setUserAssetError('');
     setUserAssetAccess(null);
-    try {
-      const access = await users.assetAccess(acct.runtime_user_id, { include_targets: true });
-      setUserAssetAccess(access);
-      setUserAssetMode(access.mode === 'restrict' ? 'restrict' : 'inherit');
-      setUserAssetSelectedKeys(access.selected_callable_keys || []);
-    } catch (err: any) {
-      setUserAssetError(err?.message || 'Failed to load runtime user asset access');
-    } finally {
-      setUserAssetLoading(false);
-    }
   };
 
   const saveUserAssetAccess = async () => {
     if (!selectedRuntimeUser?.runtime_user_id) return;
+    if (userAssetLoading || !canSaveUserAssetAccess) {
+      setUserAssetError('Wait for runtime user asset access to finish loading before saving.');
+      return;
+    }
+    userAssetRequestIdRef.current += 1;
     setSaving(true);
     setUserAssetError('');
     try {
       const response = await users.updateAssetAccess(selectedRuntimeUser.runtime_user_id, {
         mode: userAssetMode,
         selected_callable_keys: userAssetMode === 'inherit' ? [] : userAssetSelectedKeys,
+        selected_access_group_keys: userAssetMode === 'inherit' ? [] : userAssetSelectedAccessGroupKeys,
       });
       setUserAssetAccess(response);
       setUserAssetMode(response.mode === 'restrict' ? 'restrict' : 'inherit');
       setUserAssetSelectedKeys(response.selected_callable_keys || []);
+      setUserAssetSelectedAccessGroupKeys(response.selected_access_group_keys || []);
+      userAssetSelectionInitializedRef.current = true;
       setShowUserAccessModal(false);
     } catch (err: any) {
       setUserAssetError(err?.message || 'Failed to update runtime user asset access');
@@ -448,6 +519,7 @@ export default function RBACAccounts() {
   const hasPrev = principalPageOffset > 0;
   const hasNext = principalPagination.has_more;
   const visibleCount = viewTab === 'users' ? principalPagination.total : invitationPagination.total;
+  const hasUserAssetSelections = userAssetSelectedKeys.length > 0 || userAssetSelectedAccessGroupKeys.length > 0;
   const showPageNotice =
     viewTab === 'users' &&
     !!principalError &&
@@ -959,12 +1031,28 @@ export default function RBACAccounts() {
             description="Restrict this runtime user below the inherited team and organization asset set when needed."
             mode={userAssetMode}
             allowModeSelection
-            onModeChange={(mode) => setUserAssetMode(mode === 'restrict' ? 'restrict' : 'inherit')}
+            onModeChange={(mode) => {
+              const nextMode = mode === 'restrict' ? 'restrict' : 'inherit';
+              setUserAssetMode(nextMode);
+              if (nextMode === 'inherit') {
+                setUserAssetSelectedKeys([]);
+                setUserAssetSelectedAccessGroupKeys([]);
+              }
+            }}
             targets={userAssetAccess?.selectable_targets || []}
             selectedKeys={userAssetSelectedKeys}
             onSelectedKeysChange={setUserAssetSelectedKeys}
-            loading={userAssetLoading}
-            disabled={saving || !userAssetAccess}
+            accessGroups={userAssetAccess?.selectable_access_groups || []}
+            selectedAccessGroupKeys={userAssetSelectedAccessGroupKeys}
+            onSelectedAccessGroupKeysChange={setUserAssetSelectedAccessGroupKeys}
+            targetsLoading={userAssetLoading}
+            accessGroupsLoading={userAssetLoading}
+            disabled={saving || userAssetLoading || !userAssetAccess}
+            modeControlsDisabled={userAssetModeControlsDisabled}
+            searchValue={userAssetSearchInput}
+            onSearchValueChange={setUserAssetSearchInput}
+            accessGroupPagination={userAssetAccess?.access_group_pagination}
+            onAccessGroupPageChange={setUserAccessGroupPageOffset}
             primaryActionLabel={userAssetMode === 'restrict' ? 'Select All Visible' : undefined}
             onPrimaryAction={userAssetMode === 'restrict' ? (() => {
               const next = (userAssetAccess?.selectable_targets || [])
@@ -973,12 +1061,15 @@ export default function RBACAccounts() {
                 .sort();
               setUserAssetSelectedKeys(next);
             }) : undefined}
-            secondaryActionLabel={userAssetMode === 'restrict' && userAssetSelectedKeys.length > 0 ? 'Clear Selection' : undefined}
-            onSecondaryAction={userAssetMode === 'restrict' && userAssetSelectedKeys.length > 0 ? (() => setUserAssetSelectedKeys([])) : undefined}
+            secondaryActionLabel={userAssetMode === 'restrict' && hasUserAssetSelections ? 'Clear Selection' : undefined}
+            onSecondaryAction={userAssetMode === 'restrict' && hasUserAssetSelections ? (() => {
+              setUserAssetSelectedKeys([]);
+              setUserAssetSelectedAccessGroupKeys([]);
+            }) : undefined}
           />
           {userAssetAccess && (
             <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
-              Effective visible assets: {userAssetAccess.summary.effective_total} · Direct selections: {userAssetSelectedKeys.length}
+              Effective visible assets: {userAssetAccess.summary.effective_total} · Direct selections: {userAssetSelectedKeys.length} · Access groups: {userAssetSelectedAccessGroupKeys.length}
             </div>
           )}
           <div className="flex gap-3 pt-2">
@@ -991,7 +1082,7 @@ export default function RBACAccounts() {
             </button>
             <button
               onClick={saveUserAssetAccess}
-              disabled={saving || !userAssetAccess}
+              disabled={saving || userAssetLoading || !canSaveUserAssetAccess}
               className="flex-1 bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50"
             >
               {saving ? 'Saving...' : 'Save Access'}

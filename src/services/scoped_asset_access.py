@@ -32,6 +32,8 @@ from src.services.callable_targets import CallableTarget
 _SCOPES_WITH_POLICY = {"team", "api_key", "user"}
 _ALLOWED_SCOPE_TYPES = {"organization", "team", "api_key", "user"}
 _MISSING = object()
+_DEFAULT_ACCESS_GROUP_PAGE_LIMIT = 50
+_MAX_ACCESS_GROUP_PAGE_LIMIT = 200
 
 
 def _policy_repository(request: Request) -> CallableTargetScopePolicyRepository | None:
@@ -155,6 +157,39 @@ def _normalize_selected_access_group_keys(value: Any) -> list[str]:
     return normalized
 
 
+def _normalize_page_limit(value: int | None, *, default: int = _DEFAULT_ACCESS_GROUP_PAGE_LIMIT) -> int:
+    try:
+        limit = int(value if value is not None else default)
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(limit, _MAX_ACCESS_GROUP_PAGE_LIMIT))
+
+
+def _normalize_page_offset(value: int | None) -> int:
+    try:
+        offset = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, offset)
+
+
+def _filter_page_keys(
+    keys: set[str],
+    *,
+    search: str | None,
+    limit: int,
+    offset: int,
+) -> tuple[list[str], dict[str, int | bool]]:
+    query = str(search or "").strip().lower()
+    ordered = sorted(key for key in keys if not query or query in key.lower())
+    return ordered[offset : offset + limit], {
+        "total": len(ordered),
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + limit < len(ordered),
+    }
+
+
 async def build_scope_asset_access(
     request: Request,
     *,
@@ -165,6 +200,9 @@ async def build_scope_asset_access(
     api_key_id: str | None = None,
     user_id: str | None = None,
     include_targets: bool = True,
+    access_group_search: str | None = None,
+    access_group_limit: int | None = None,
+    access_group_offset: int | None = None,
 ) -> dict[str, Any]:
     normalized_scope_type = _normalize_scope_type(scope_type)
     mode = await _resolved_mode(
@@ -231,6 +269,14 @@ async def build_scope_asset_access(
     selectable_targets: list[dict[str, Any]] = []
     effective_targets: list[dict[str, Any]] = []
     selectable_access_groups: list[dict[str, Any]] = []
+    access_group_page_limit = _normalize_page_limit(access_group_limit)
+    access_group_page_offset = _normalize_page_offset(access_group_offset)
+    access_group_pagination: dict[str, int | bool] = {
+        "total": 0,
+        "limit": access_group_page_limit,
+        "offset": access_group_page_offset,
+        "has_more": False,
+    }
     if include_targets:
         visible_keys = sorted(selectable_keys | direct_selected)
         selectable_targets = [
@@ -260,7 +306,13 @@ async def build_scope_asset_access(
             )
             for callable_key in sorted(effective_keys)
         ]
-        visible_group_keys = sorted(selectable_group_keys | direct_selected_groups)
+        visible_group_keys = selectable_group_keys | direct_selected_groups
+        access_group_page, access_group_pagination = _filter_page_keys(
+            visible_group_keys,
+            search=access_group_search,
+            limit=access_group_page_limit,
+            offset=access_group_page_offset,
+        )
         selectable_access_groups = [
             _access_group_payload(
                 group_key=group_key,
@@ -269,7 +321,7 @@ async def build_scope_asset_access(
                 selected=group_key in direct_selected_groups,
                 effective_visible=bool(callable_keys_by_group.get(group_key, frozenset()) & effective_keys),
             )
-            for group_key in visible_group_keys
+            for group_key in access_group_page
         ]
 
     return {
@@ -284,6 +336,7 @@ async def build_scope_asset_access(
         "selected_access_group_keys": sorted(direct_selected_groups),
         "selectable_targets": selectable_targets,
         "selectable_access_groups": selectable_access_groups,
+        "access_group_pagination": access_group_pagination,
         "effective_targets": effective_targets,
         "summary": {
             "selected_total": len(direct_selected),

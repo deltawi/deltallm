@@ -11,6 +11,7 @@ import {
   Pencil,
   RefreshCw,
   Route,
+  Shield,
   Tag,
   Terminal,
   Trash2,
@@ -288,6 +289,7 @@ function RoutingTab({ model }: { model: any }) {
   const tpmLimit = lp.tpm ?? mi.tpm_limit;
   const weight = mi.weight ?? lp.weight;
   const tags: string[] = Array.isArray(mi.tags) ? mi.tags : [];
+  const accessGroups: string[] = Array.isArray(mi.access_groups) ? mi.access_groups : [];
   const totalWeight = 10;
   const weightNum = Number(weight) || 0;
 
@@ -335,7 +337,24 @@ function RoutingTab({ model }: { model: any }) {
         </div>
       )}
 
-      {weight == null && rpmLimit == null && tpmLimit == null && (
+      {accessGroups.length > 0 && (
+        <div>
+          <h3 className="mb-3 text-sm font-semibold text-gray-700">Access Groups</h3>
+          <div className="flex flex-wrap gap-2">
+            {accessGroups.map((groupKey: string) => (
+              <span
+                key={groupKey}
+                className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700"
+              >
+                <Shield className="h-3 w-3 text-emerald-500" />
+                {groupKey}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {weight == null && rpmLimit == null && tpmLimit == null && tags.length === 0 && accessGroups.length === 0 && (
         <p className="text-sm text-gray-500">No routing configuration set.</p>
       )}
     </div>

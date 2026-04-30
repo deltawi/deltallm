@@ -724,6 +724,16 @@ export default function ModelForm({
             <input value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} placeholder="production, fast, us-east" className={inputClass} />
             <p className="text-xs text-gray-400 mt-1">Comma-separated, for tag-based routing</p>
           </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Access Groups</label>
+            <input
+              value={form.access_groups}
+              onChange={(e) => setForm({ ...form, access_groups: e.target.value })}
+              placeholder="premium, beta, internal"
+              className={inputClass}
+            />
+            <p className="text-xs text-gray-400 mt-1">Comma-separated authorization labels for model grants</p>
+          </div>
         </div>
       </CollapsibleCard>
 
