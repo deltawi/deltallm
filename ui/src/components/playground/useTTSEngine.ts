@@ -25,7 +25,7 @@ export interface TTSEngine {
   duration: number;
   error: string | null;
   stats: TTSStats | null;
-  audioRef: React.RefObject<HTMLAudioElement>;
+  audioRef: React.RefObject<HTMLAudioElement | null>;
   handleGenerate: () => Promise<void>;
   togglePlay: () => void;
   seekTo: (pct: number) => void;
