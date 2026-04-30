@@ -245,12 +245,12 @@ export default function BatchJobs() {
           <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             <div className="flex items-start gap-3">
               <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-              <div>
+              <div className="min-w-0 flex-1">
                 <p className="font-medium">Embeddings batch API is disabled.</p>
-                <p className="mt-1 text-amber-800">
-                  Enable <code className="rounded bg-amber-100 px-1 py-0.5 text-xs">general_settings.embeddings_batch_enabled: true</code>{' '}
-                  to allow <code className="rounded bg-amber-100 px-1 py-0.5 text-xs">/v1/files</code> and{' '}
-                  <code className="rounded bg-amber-100 px-1 py-0.5 text-xs">/v1/batches</code>. Existing batch records remain visible here.
+                <p className="mt-1 text-amber-800 break-words">
+                  Enable <code className="rounded bg-amber-100 px-1 py-0.5 text-xs break-all">general_settings.embeddings_batch_enabled: true</code>{' '}
+                  to allow <code className="rounded bg-amber-100 px-1 py-0.5 text-xs break-all">/v1/files</code> and{' '}
+                  <code className="rounded bg-amber-100 px-1 py-0.5 text-xs break-all">/v1/batches</code>. Existing batch records remain visible here.
                 </p>
               </div>
             </div>
