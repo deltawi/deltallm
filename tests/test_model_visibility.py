@@ -19,6 +19,12 @@ from src.services.model_visibility import (
 )
 from src.services.route_groups import route_groups_from_config
 
+_STRONG_TEST_MASTER_KEY = "StrongTestMasterKey2026SecureValue123"
+
+
+def _test_settings() -> Settings:
+    return Settings.model_validate({"master_key": _STRONG_TEST_MASTER_KEY})
+
 
 class _FakeCallableTargetBindingRepository:
     def __init__(self, bindings: list[CallableTargetBindingRecord]) -> None:
@@ -882,7 +888,7 @@ async def test_config_loaded_model_access_groups_expand_group_grants() -> None:
             ]
         }
     )
-    registry = await build_model_registry_from_config(cfg, Settings.model_validate({}))
+    registry = await build_model_registry_from_config(cfg, _test_settings())
     catalog = build_callable_target_catalog(registry)
     auth = UserAPIKeyAuth(api_key="sk-test", organization_id="org-1")
     service = CallableTargetGrantService(
@@ -934,7 +940,7 @@ async def test_config_loaded_route_group_access_groups_reach_callable_catalog() 
             },
         }
     )
-    registry = await build_model_registry_from_config(cfg, Settings.model_validate({}))
+    registry = await build_model_registry_from_config(cfg, _test_settings())
     catalog = build_callable_target_catalog(registry, route_groups=route_groups_from_config(cfg))
 
     assert catalog["support-fast"].access_groups == frozenset({"support"})
