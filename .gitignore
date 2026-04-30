@@ -202,6 +202,9 @@ config.yaml
 
 .worktrees/
 
+# Mockup / artifact preview workspaces (not versioned in main app)
+artifacts/
+
 # Replit-specific (not versioned)
 .replit
 replit.md
