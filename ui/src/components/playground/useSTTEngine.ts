@@ -48,6 +48,7 @@ export function useSTTEngine(opts: { apiKey: string; selectedModel: ModelOption 
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isStartingRecordingRef = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -76,9 +77,11 @@ export function useSTTEngine(opts: { apiKey: string; selectedModel: ModelOption 
   }, []);
 
   const startRecording = useCallback(async () => {
+    if (isStartingRecordingRef.current) return;
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       return;
     }
+    isStartingRecordingRef.current = true;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
@@ -111,6 +114,8 @@ export function useSTTEngine(opts: { apiKey: string; selectedModel: ModelOption 
       timerRef.current = setInterval(() => setRecordingTime((t) => t + 1), 1000);
     } catch {
       setError('Microphone access denied');
+    } finally {
+      isStartingRecordingRef.current = false;
     }
   }, [handleFile]);
 

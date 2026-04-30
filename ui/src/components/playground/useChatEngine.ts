@@ -61,6 +61,7 @@ export function useChatEngine(opts: { apiKey: string; selectedModel: ModelOption
 
   const handleSend = useCallback(async () => {
     if (!input.trim() || !apiKey || !selectedModel) return;
+    if (abortRef.current) return;
 
     const newUserMsg: Message = {
       id: Date.now().toString(),

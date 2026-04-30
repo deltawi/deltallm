@@ -651,6 +651,7 @@ export default function PlaygroundDesktop({
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      if (isStreaming) return;
       void handleSend();
     }
   };
