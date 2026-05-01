@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from src.models.errors import (
+    GatewayCapacityError,
     InvalidRequestError,
     NO_HEALTHY_DEPLOYMENTS_CODE,
     RateLimitError,
@@ -15,7 +16,16 @@ from src.models.errors import (
     TimeoutError,
     parse_retry_after_header,
 )
-from src.router import CooldownManager, FallbackConfig, FailoverManager, PassiveHealthTracker, RedisStateBackend
+from src.providers.healthcheck import HealthProbeResult, probe_provider_health
+from src.router import (
+    BackgroundHealthChecker,
+    CooldownManager,
+    FallbackConfig,
+    FailoverManager,
+    HealthCheckConfig,
+    PassiveHealthTracker,
+    RedisStateBackend,
+)
 from src.router.health_policy import affects_deployment_health
 from src.router.router import Deployment
 
@@ -86,6 +96,42 @@ async def test_failover_applies_timeout_override():
 
 
 @pytest.mark.asyncio
+async def test_failover_applies_timeout_resolver_per_deployment():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    fallback = _deployment("dep-b")
+    manager = FailoverManager(
+        config=FallbackConfig(num_retries=0, timeout=1.0),
+        deployment_registry={"group-a": [primary, fallback]},
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+    attempts: list[str] = []
+
+    async def run(deployment: Deployment) -> str:
+        attempts.append(deployment.deployment_id)
+        if deployment.deployment_id == "dep-a":
+            await asyncio.sleep(0.05)
+            return "late-primary"
+        return "fallback-ok"
+
+    def timeout_for_deployment(deployment: Deployment) -> float:
+        return 0.01 if deployment.deployment_id == "dep-a" else 1.0
+
+    data, served = await manager.execute_with_failover(
+        primary_deployment=primary,
+        model_group="group-a",
+        execute=run,
+        return_deployment=True,
+        timeout_for_deployment=timeout_for_deployment,
+    )
+
+    assert data == "fallback-ok"
+    assert served.deployment_id == "dep-b"
+    assert attempts == ["dep-a", "dep-b"]
+
+
+@pytest.mark.asyncio
 async def test_cooldown_manager_default_marks_unhealthy_on_third_failure():
     state = RedisStateBackend(redis=None)
     cooldown = CooldownManager(state)
@@ -142,6 +188,7 @@ async def test_cooldown_manager_default_marks_unhealthy_on_third_failure():
             True,
         ),
         (httpx.ReadError("connection reset"), True),
+        (httpx.PoolTimeout("connection pool exhausted"), False),
     ],
 )
 def test_affects_deployment_health_matrix(exc: Exception, expected: bool):
@@ -478,6 +525,49 @@ async def test_failover_classified_fallback_continues_after_upstream_service_una
 
 
 @pytest.mark.asyncio
+async def test_failover_applies_timeout_resolver_to_classified_fallbacks():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    fallback_a = _deployment("dep-b")
+    fallback_b = _deployment("dep-c")
+    manager = FailoverManager(
+        config=FallbackConfig(
+            num_retries=0,
+            timeout=1.0,
+            context_window_fallbacks={"group-a": ["ctx-fallbacks"]},
+        ),
+        deployment_registry={"group-a": [primary], "ctx-fallbacks": [fallback_a, fallback_b]},
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+    attempts: list[str] = []
+
+    async def run(deployment: Deployment) -> str:
+        attempts.append(deployment.deployment_id)
+        if deployment.deployment_id == "dep-a":
+            raise InvalidRequestError(message="maximum context length reached")
+        if deployment.deployment_id == "dep-b":
+            await asyncio.sleep(0.05)
+            return "late-fallback"
+        return "fallback-ok"
+
+    def timeout_for_deployment(deployment: Deployment) -> float:
+        return 0.01 if deployment.deployment_id == "dep-b" else 1.0
+
+    data, served = await manager.execute_with_failover(
+        primary_deployment=primary,
+        model_group="group-a",
+        execute=run,
+        return_deployment=True,
+        timeout_for_deployment=timeout_for_deployment,
+    )
+
+    assert data == "fallback-ok"
+    assert served.deployment_id == "dep-c"
+    assert attempts == ["dep-a", "dep-b", "dep-c"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("status_code", "headers"),
     [
@@ -570,6 +660,134 @@ async def test_passive_health_tracker_ignores_invalid_request_errors():
     )
 
     health = await state.get_health("dep-a")
+    assert health.get("healthy", "true") != "false"
+    assert int(health.get("consecutive_failures", 0) or 0) == 0
+    assert health.get("last_error") is None
+
+
+@pytest.mark.asyncio
+async def test_failover_treats_pool_timeout_as_gateway_capacity_error():
+    state = RedisStateBackend(redis=None)
+    primary = _deployment("dep-a")
+    manager = FailoverManager(
+        config=FallbackConfig(num_retries=0, timeout=1.0),
+        deployment_registry={"group-a": [primary]},
+        state_backend=state,
+        cooldown_manager=CooldownManager(state),
+    )
+
+    async def run(deployment: Deployment):  # noqa: ARG001, ANN202
+        raise httpx.PoolTimeout("connection pool exhausted")
+
+    with pytest.raises(GatewayCapacityError) as exc_info:
+        await manager.execute_with_failover(primary, "group-a", run)
+
+    assert exc_info.value.code == "upstream_pool_timeout"
+    assert exc_info.value.affects_deployment_health is False
+    health = await state.get_health(primary.deployment_id)
+    assert health.get("healthy", "true") != "false"
+    assert int(health.get("consecutive_failures", 0) or 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_provider_health_check_preserves_pool_timeout_and_marks_pool_timeout_local():
+    captured: dict[str, object] = {}
+
+    class FakeHTTPClient:
+        async def get(self, url, headers=None, timeout=None):  # noqa: ANN001, ANN201
+            del url, headers
+            captured["timeout"] = timeout
+            raise httpx.PoolTimeout("connection pool exhausted")
+
+    general_settings = type("GeneralSettings", (), {"upstream_http_pool_timeout_seconds": 2})()
+
+    result = await probe_provider_health(
+        FakeHTTPClient(),  # type: ignore[arg-type]
+        {"provider": "openai", "model": "openai/gpt-4o-mini", "api_key": "provider-key"},
+        default_openai_base_url="https://api.openai.com/v1",
+        general_settings=general_settings,
+    )
+
+    timeout = captured["timeout"]
+    assert getattr(timeout, "read") == 10.0
+    assert getattr(timeout, "pool") == 2.0
+    assert result.healthy is False
+    assert result.affects_deployment_health is False
+    assert result.error == "Gateway upstream connection pool exhausted"
+
+
+@pytest.mark.asyncio
+async def test_provider_health_check_caps_pool_timeout_below_health_wrapper_timeout():
+    captured: dict[str, object] = {}
+
+    class FakeHTTPClient:
+        async def get(self, url, headers=None, timeout=None):  # noqa: ANN001, ANN201
+            del url, headers
+            captured["timeout"] = timeout
+            raise httpx.PoolTimeout("connection pool exhausted")
+
+    general_settings = type("GeneralSettings", (), {"upstream_http_pool_timeout_seconds": 30})()
+
+    result = await probe_provider_health(
+        FakeHTTPClient(),  # type: ignore[arg-type]
+        {"provider": "openai", "model": "openai/gpt-4o-mini", "api_key": "provider-key"},
+        default_openai_base_url="https://api.openai.com/v1",
+        general_settings=general_settings,
+        health_check_timeout_seconds=5,
+    )
+
+    timeout = captured["timeout"]
+    assert getattr(timeout, "pool") == 4.0
+    assert result.healthy is False
+    assert result.affects_deployment_health is False
+
+
+@pytest.mark.asyncio
+async def test_provider_health_check_defaults_unresolved_provider_to_openai():
+    captured: dict[str, object] = {}
+
+    class FakeHTTPClient:
+        async def get(self, url, headers=None, timeout=None):  # noqa: ANN001, ANN201
+            captured["url"] = url
+            captured["headers"] = dict(headers or {})
+            captured["timeout"] = timeout
+            return httpx.Response(200, json={"data": []}, request=httpx.Request("GET", url))
+
+    result = await probe_provider_health(
+        FakeHTTPClient(),  # type: ignore[arg-type]
+        {"model": "gpt-4o-mini", "api_key": "provider-key"},
+        default_openai_base_url="https://api.openai.com/v1",
+    )
+
+    assert result.healthy is True
+    assert captured["url"] == "https://api.openai.com/v1/models"
+    assert captured["headers"] == {"Authorization": "Bearer provider-key"}
+    timeout = captured["timeout"]
+    assert getattr(timeout, "read") == 10.0
+
+
+@pytest.mark.asyncio
+async def test_background_health_checker_ignores_non_health_affecting_result():
+    state = RedisStateBackend(redis=None)
+    deployment = _deployment("dep-a")
+    checker = BackgroundHealthChecker(
+        config=HealthCheckConfig(enabled=False),
+        deployment_registry={"group-a": [deployment]},
+        state_backend=state,
+        checker=lambda _: asyncio.sleep(
+            0,
+            result=HealthProbeResult(
+                healthy=False,
+                error="Gateway upstream connection pool exhausted",
+                affects_deployment_health=False,
+            ),
+        ),
+    )
+
+    result = await checker.check_deployment_once(deployment)
+
+    assert result.affects_deployment_health is False
+    health = await state.get_health(deployment.deployment_id)
     assert health.get("healthy", "true") != "false"
     assert int(health.get("consecutive_failures", 0) or 0) == 0
     assert health.get("last_error") is None

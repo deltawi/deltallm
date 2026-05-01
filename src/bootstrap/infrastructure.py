@@ -29,6 +29,7 @@ from src.providers.azure import AzureOpenAIAdapter
 from src.providers.gemini import GeminiAdapter
 from src.providers.openai import OpenAIAdapter
 from src.services.route_groups import RouteGroupRuntimeCache
+from src.upstream_http import build_control_http_client, build_upstream_http_client
 
 
 @dataclass
@@ -36,6 +37,7 @@ class InfrastructureRuntime:
     redis_client: Redis | None
     dynamic_config_manager: DynamicConfigManager
     http_client: httpx.AsyncClient
+    control_http_client: httpx.AsyncClient
     statuses: tuple[BootstrapStatus, ...] = ()
 
 
@@ -78,8 +80,11 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
     app.state.app_config = cfg
     app.state.salt_key = resolve_salt_key(cfg, settings)
 
-    http_client = httpx.AsyncClient(timeout=60)
+    http_client = build_upstream_http_client(cfg.general_settings)
+    control_http_client = build_control_http_client()
+    app.state.upstream_http_settings = cfg.general_settings
     app.state.http_client = http_client
+    app.state.control_http_client = control_http_client
     app.state.openai_adapter = OpenAIAdapter(http_client)
     app.state.azure_openai_adapter = AzureOpenAIAdapter(http_client)
     app.state.anthropic_adapter = AnthropicAdapter(http_client)
@@ -106,12 +111,14 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
         redis_client=redis_client,
         dynamic_config_manager=dynamic_config_manager,
         http_client=http_client,
+        control_http_client=control_http_client,
         statuses=(
             BootstrapStatus("config", "ready"),
             BootstrapStatus("redis", "ready"),
             BootstrapStatus("database", "ready"),
             BootstrapStatus("dynamic_config", "ready"),
             BootstrapStatus("http_client", "ready"),
+            BootstrapStatus("control_http_client", "ready"),
             BootstrapStatus("provider_adapters", "ready"),
         ),
     )
@@ -120,6 +127,7 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
 async def shutdown_infrastructure_runtime(runtime: InfrastructureRuntime) -> None:
     await runtime.dynamic_config_manager.close()
     await runtime.http_client.aclose()
+    await runtime.control_http_client.aclose()
     if runtime.redis_client is not None:
         await runtime.redis_client.close()
     await prisma_manager.disconnect()

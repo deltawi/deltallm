@@ -9,6 +9,7 @@ from src.models.errors import InvalidRequestError
 from src.providers.base import ProviderAdapter
 from src.providers.resolution import is_openai_compatible_provider, resolve_provider, resolve_upstream_model
 from src.upstream_auth import build_openai_compatible_auth_headers
+from src.upstream_http import configured_timeout_seconds
 
 
 @dataclass
@@ -17,7 +18,7 @@ class ChatUpstream:
     api_base: str
     endpoint: str
     headers: dict[str, str]
-    timeout: int
+    timeout: float | None
 
 
 def resolve_chat_upstream(
@@ -27,7 +28,7 @@ def resolve_chat_upstream(
     is_stream: bool = False,
 ) -> ChatUpstream:
     provider = resolve_provider(params)
-    timeout = int(params.get("timeout") or 300)
+    timeout = configured_timeout_seconds(params.get("timeout"))
     if provider == "anthropic":
         api_key = params.get("api_key")
         if not api_key:

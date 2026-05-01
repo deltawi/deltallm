@@ -149,6 +149,13 @@ config:
     turn_off_message_logging: false
   general_settings:
     deltallm_key_header_name: Authorization
+    upstream_http_connect_timeout_seconds: 10
+    upstream_http_read_timeout_seconds: 300
+    upstream_http_write_timeout_seconds: 30
+    upstream_http_pool_timeout_seconds: 10
+    upstream_http_max_connections: 500
+    upstream_http_max_keepalive_connections: 100
+    upstream_http_keepalive_expiry_seconds: 60
     cache_enabled: false
     cache_backend: memory
     cache_ttl: 3600

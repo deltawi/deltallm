@@ -100,6 +100,7 @@ nav:
       - Docker: deployment/docker.md
       - Governance Rollout: deployment/governance.md
       - Kubernetes: deployment/kubernetes.md
+      - Upstream HTTP Tuning: deployment/upstream-http.md
 
 extra:
   social:

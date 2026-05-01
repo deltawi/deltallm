@@ -8,6 +8,7 @@ Use this section when you are moving from local evaluation to a repeatable envir
 |------|----------|------------|
 | Docker Compose | Single instance, demos, small teams, simple self-hosting | [Docker](docker.md) |
 | Kubernetes | Multi-instance production, autoscaling, managed infrastructure | [Kubernetes](kubernetes.md) |
+| Upstream HTTP tuning | Production provider concurrency, streaming, and egress capacity planning | [Upstream HTTP Tuning](upstream-http.md) |
 
 ## Quick Path to Success
 
@@ -23,6 +24,7 @@ All deployment methods rely on the same core services:
 
 - PostgreSQL for persistent runtime data such as keys, accounts, spend logs, and model records
 - Redis for distributed coordination, rate limiting, cache sharing, and runtime state
+- Explicit upstream HTTP connection limits for predictable provider concurrency
 - A master key for admin access
 - A salt key for API key hashing
 
@@ -52,4 +54,5 @@ The application runs Prisma schema setup automatically during container startup.
 
 - [Docker deployment guide](docker.md)
 - [Kubernetes deployment guide](kubernetes.md)
+- [Upstream HTTP tuning](upstream-http.md)
 - [Observability](../features/observability.md)

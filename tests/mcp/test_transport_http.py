@@ -14,7 +14,7 @@ class _FakeHTTPClient:
         self.exc = exc
         self.calls: list[dict[str, object]] = []
 
-    async def post(self, url: str, *, json: dict[str, object], headers: dict[str, str], timeout: float) -> httpx.Response:
+    async def post(self, url: str, *, json: dict[str, object], headers: dict[str, str], timeout: object) -> httpx.Response:
         self.calls.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
         if self.exc is not None:
             raise self.exc
@@ -50,7 +50,8 @@ async def test_initialize_sends_jsonrpc_request_and_returns_result() -> None:
     client = _FakeHTTPClient(
         _response(200, {"jsonrpc": "2.0", "id": 1, "result": {"serverInfo": {"name": "github"}}})
     )
-    transport = StreamableHTTPMCPClient(client)  # type: ignore[arg-type]
+    general_settings = type("GeneralSettings", (), {"upstream_http_pool_timeout_seconds": 2})()
+    transport = StreamableHTTPMCPClient(client, general_settings=general_settings)  # type: ignore[arg-type]
 
     payload = await transport.initialize(
         _server(),
@@ -61,7 +62,9 @@ async def test_initialize_sends_jsonrpc_request_and_returns_result() -> None:
     assert len(client.calls) == 1
     call = client.calls[0]
     assert call["url"] == "https://mcp.example.com"
-    assert call["timeout"] == 5.0
+    timeout = call["timeout"]
+    assert getattr(timeout, "read") == 5.0
+    assert getattr(timeout, "pool") == 2.0
     headers = call["headers"]
     assert isinstance(headers, dict)
     assert headers["Authorization"] == "Bearer secret-token"

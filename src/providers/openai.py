@@ -8,8 +8,8 @@ import httpx
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
 from src.providers.base import ProviderAdapter, map_standard_provider_error
+from src.providers.healthcheck import is_provider_healthy
 from src.providers.resolution import normalize_openai_chat_payload, resolve_provider, resolve_upstream_model
-from src.upstream_auth import build_openai_compatible_auth_headers
 
 
 class OpenAIAdapter(ProviderAdapter):
@@ -86,21 +86,9 @@ class OpenAIAdapter(ProviderAdapter):
         )
 
     async def health_check(self, provider_config: dict[str, Any]) -> bool:
-        api_base = provider_config.get("api_base", "https://api.openai.com/v1")
-        api_key = provider_config.get("api_key")
-        if not api_key:
-            return False
-        try:
-            response = await self.http_client.get(
-                f"{api_base}/models",
-                headers=build_openai_compatible_auth_headers(
-                    provider=resolve_provider(provider_config),
-                    api_key=str(api_key),
-                    auth_header_name=provider_config.get("auth_header_name"),
-                    auth_header_format=provider_config.get("auth_header_format"),
-                ),
-                timeout=10.0,
-            )
-            return response.status_code < 500
-        except Exception:
-            return False
+        return await is_provider_healthy(
+            self.http_client,
+            provider_config,
+            default_openai_base_url="https://api.openai.com/v1",
+            default_provider=self.provider_name,
+        )

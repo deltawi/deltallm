@@ -54,7 +54,10 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
         policy_repository=getattr(app.state, "mcp_scope_policy_repository", None),
     )
     await app.state.mcp_governance_service.reload()
-    app.state.mcp_transport_client = StreamableHTTPMCPClient(app.state.http_client)
+    app.state.mcp_transport_client = StreamableHTTPMCPClient(
+        app.state.http_client,
+        general_settings=getattr(app.state, "upstream_http_settings", cfg.general_settings),
+    )
     app.state.mcp_health_probe = MCPHealthProbe(
         registry=app.state.mcp_registry_service,
         client=app.state.mcp_transport_client,

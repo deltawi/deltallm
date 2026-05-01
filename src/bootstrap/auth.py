@@ -86,6 +86,7 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
                     ttl_seconds=getattr(cfg.general_settings, "sso_state_ttl_seconds", 600),
                 )
                 statuses.append(BootstrapStatus("sso_state_store", "ready"))
+                control_http_client = getattr(app.state, "control_http_client", app.state.http_client)
                 app.state.sso_auth_handler = SSOAuthHandler(
                     config=SSOConfig(
                         provider=SSOProvider(cfg.general_settings.sso_provider),
@@ -100,7 +101,7 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
                         default_team_id=cfg.general_settings.sso_default_team_id,
                     ),
                     user_repository=app.state.sso_user_repository,
-                    http_client=app.state.http_client,
+                    http_client=control_http_client,
                     rate_limiter=app.state.limit_counter,
                 )
                 statuses.append(BootstrapStatus("sso_auth", "ready"))
@@ -121,7 +122,7 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
             audience=cfg.general_settings.jwt_audience,
             issuer=cfg.general_settings.jwt_issuer,
             claims_mapping=cfg.general_settings.jwt_claims_mapping or None,
-            http_client=app.state.http_client,
+            http_client=getattr(app.state, "control_http_client", app.state.http_client),
         )
         statuses.append(BootstrapStatus("jwt_auth", "ready"))
     else:

@@ -148,6 +148,34 @@ async def test_resend_provider_returns_provider_message_id() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resend_provider_preserves_control_pool_timeout() -> None:
+    captured: dict[str, object] = {}
+
+    class FakeHTTPClient:
+        async def post(self, url, *, headers, json, timeout):  # noqa: ANN001, ANN201
+            del url, headers, json
+            captured["timeout"] = timeout
+            return httpx.Response(200, json={"id": "re_msg_123"})
+
+    provider = ResendEmailProvider(FakeHTTPClient(), {"api_key": "re_test"})  # type: ignore[arg-type]
+
+    await provider.send(
+        PreparedEmail(
+            kind="test",
+            provider="resend",
+            to_addresses=("user@example.com",),
+            from_address="DeltaLLM <noreply@example.com>",
+            subject="subject",
+            text_body="body",
+        )
+    )
+
+    timeout = captured["timeout"]
+    assert getattr(timeout, "read") == 20.0
+    assert getattr(timeout, "pool") == 5.0
+
+
+@pytest.mark.asyncio
 async def test_sendgrid_provider_splits_display_name_from_address() -> None:
     captured: dict[str, object] = {}
 
@@ -175,6 +203,34 @@ async def test_sendgrid_provider_splits_display_name_from_address() -> None:
     assert captured["headers"]["authorization"] == "Bearer sg_test"
     assert '"email":"noreply@example.com"' in str(captured["body"])
     assert '"name":"DeltaLLM"' in str(captured["body"])
+
+
+@pytest.mark.asyncio
+async def test_sendgrid_provider_preserves_control_pool_timeout() -> None:
+    captured: dict[str, object] = {}
+
+    class FakeHTTPClient:
+        async def post(self, url, *, headers, json, timeout):  # noqa: ANN001, ANN201
+            del url, headers, json
+            captured["timeout"] = timeout
+            return httpx.Response(202, headers={"X-Message-Id": "sg_msg_123"})
+
+    provider = SendGridEmailProvider(FakeHTTPClient(), {"api_key": "sg_test"})  # type: ignore[arg-type]
+
+    await provider.send(
+        PreparedEmail(
+            kind="test",
+            provider="sendgrid",
+            to_addresses=("user@example.com",),
+            from_address="DeltaLLM <noreply@example.com>",
+            subject="subject",
+            text_body="body",
+        )
+    )
+
+    timeout = captured["timeout"]
+    assert getattr(timeout, "read") == 20.0
+    assert getattr(timeout, "pool") == 5.0
 
 
 @pytest.mark.asyncio

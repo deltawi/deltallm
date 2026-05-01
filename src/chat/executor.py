@@ -13,6 +13,7 @@ from src.providers.registry import resolve_chat_upstream
 from src.providers.signing import apply_request_signing
 from src.router.router import Deployment
 from src.router.usage import record_router_usage
+from src.upstream_http import build_upstream_request_timeout_for_request
 
 
 @dataclass
@@ -62,19 +63,20 @@ async def execute_chat(
         headers=headers,
         json_body=upstream_payload,
     )
+    request_timeout = build_upstream_request_timeout_for_request(request, timeout)
     if body_override is not None:
         response = await request.app.state.http_client.post(
             request_url,
             headers=signed_headers,
             content=body_override,
-            timeout=timeout,
+            timeout=request_timeout,
         )
     else:
         response = await request.app.state.http_client.post(
             request_url,
             headers=signed_headers,
             json=upstream_payload,
-            timeout=timeout,
+            timeout=request_timeout,
         )
     if response.status_code >= 400:
         status_exc = httpx.HTTPStatusError(
@@ -125,13 +127,14 @@ async def open_stream_with_first_chunk(
         headers=headers,
         json_body=upstream_payload,
     )
+    request_timeout = build_upstream_request_timeout_for_request(request, timeout)
     if body_override is not None:
         context_manager = request.app.state.http_client.stream(
             "POST",
             request_url,
             headers=signed_headers,
             content=body_override,
-            timeout=timeout,
+            timeout=request_timeout,
         )
     else:
         context_manager = request.app.state.http_client.stream(
@@ -139,7 +142,7 @@ async def open_stream_with_first_chunk(
             request_url,
             headers=signed_headers,
             json=upstream_payload,
-            timeout=timeout,
+            timeout=request_timeout,
         )
     response = await context_manager.__aenter__()
     try:

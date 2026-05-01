@@ -33,6 +33,9 @@ def affects_deployment_health(exc: Exception) -> bool:
     if explicit is not None:
         return bool(explicit)
 
+    if isinstance(exc, httpx.PoolTimeout):
+        return False
+
     if isinstance(exc, (httpx.TimeoutException, TimeoutError)):
         return True
 

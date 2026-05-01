@@ -32,7 +32,7 @@ async def init_email_runtime(app: Any, cfg: Any) -> EmailRuntime:
 
     delivery_service = EmailDeliveryService(
         config_getter=lambda: getattr(app.state, "app_config", cfg),
-        http_client=app.state.http_client,
+        http_client=getattr(app.state, "control_http_client", app.state.http_client),
     )
     outbox_service = EmailOutboxService(
         repository=repository,

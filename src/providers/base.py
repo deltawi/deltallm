@@ -6,6 +6,7 @@ from typing import Any, AsyncIterator
 import httpx
 
 from src.models.errors import (
+    GatewayCapacityError,
     InvalidRequestError,
     RateLimitError,
     ServiceUnavailableError,
@@ -23,6 +24,9 @@ def map_standard_provider_error(
     unavailable_message: str | None = None,
     rate_limit_message: str | None = None,
 ) -> Exception:
+    if isinstance(provider_error, httpx.PoolTimeout):
+        return GatewayCapacityError()
+
     if isinstance(provider_error, httpx.TimeoutException):
         return TimeoutError(affects_deployment_health=True)
 

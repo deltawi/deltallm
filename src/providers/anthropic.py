@@ -9,6 +9,7 @@ import httpx
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
 from src.providers.base import ProviderAdapter, map_standard_provider_error
+from src.providers.healthcheck import is_provider_healthy
 from src.providers.resolution import resolve_upstream_model
 
 
@@ -186,20 +187,9 @@ class AnthropicAdapter(ProviderAdapter):
         )
 
     async def health_check(self, provider_config: dict[str, Any]) -> bool:
-        api_key = provider_config.get("api_key")
-        if not api_key:
-            return False
-        api_base = provider_config.get("api_base", "https://api.anthropic.com/v1").rstrip("/")
-        version = provider_config.get("api_version") or "2023-06-01"
-        try:
-            response = await self.http_client.get(
-                f"{api_base}/models",
-                headers={
-                    "x-api-key": str(api_key),
-                    "anthropic-version": str(version),
-                },
-                timeout=10.0,
-            )
-            return response.status_code < 500
-        except Exception:
-            return False
+        return await is_provider_healthy(
+            self.http_client,
+            provider_config,
+            default_openai_base_url="https://api.openai.com/v1",
+            default_provider=self.provider_name,
+        )

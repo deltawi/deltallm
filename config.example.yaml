@@ -46,6 +46,18 @@ general_settings:
   db_pool_size: 20
   db_pool_timeout: 30
 
+  # Upstream provider HTTP pool tuning. These are startup-time settings;
+  # restart the process or roll the Kubernetes deployment after changing them.
+  # For Kubernetes, multiply upstream_http_max_connections by workers per pod and pod count
+  # when checking provider, NAT gateway, and file descriptor limits.
+  upstream_http_connect_timeout_seconds: 10
+  upstream_http_read_timeout_seconds: 300
+  upstream_http_write_timeout_seconds: 30
+  upstream_http_pool_timeout_seconds: 10
+  upstream_http_max_connections: 500
+  upstream_http_max_keepalive_connections: 100
+  upstream_http_keepalive_expiry_seconds: 60
+
   # Admin session login
   # Set these only if you want an initial browser-login admin account created on boot.
   platform_bootstrap_admin_email: os.environ/PLATFORM_BOOTSTRAP_ADMIN_EMAIL

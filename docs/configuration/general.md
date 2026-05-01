@@ -39,6 +39,13 @@ general_settings:
   database_url: os.environ/DATABASE_URL
   db_pool_size: 20
   db_pool_timeout: 30
+  upstream_http_connect_timeout_seconds: 10
+  upstream_http_read_timeout_seconds: 300
+  upstream_http_write_timeout_seconds: 30
+  upstream_http_pool_timeout_seconds: 10
+  upstream_http_max_connections: 500
+  upstream_http_max_keepalive_connections: 100
+  upstream_http_keepalive_expiry_seconds: 60
   redis_url: os.environ/REDIS_URL
   redis_host: localhost
   redis_port: 6379
@@ -153,6 +160,24 @@ Environment overrides:
 - `DELTALLM_DB_POOL_TIMEOUT`
 
 If those overrides are unset, DeltaLLM falls back to `general_settings.database_url`, `general_settings.db_pool_size`, and `general_settings.db_pool_timeout`. If no application-level database URL is configured, it will still honor the raw `DATABASE_URL` environment variable used by Prisma.
+
+## Upstream HTTP Settings
+
+These settings control the shared outbound HTTP client used for upstream provider traffic. They are read into a startup snapshot; restart the process or roll the Kubernetes deployment after changing them. Runtime config reloads do not rebuild the HTTP client or change per-request upstream timeout behavior.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `upstream_http_connect_timeout_seconds` | `10` | Time allowed to establish a new upstream TCP/TLS connection |
+| `upstream_http_read_timeout_seconds` | `300` | Time allowed while waiting for upstream response bytes; higher values are useful for streaming |
+| `upstream_http_write_timeout_seconds` | `30` | Time allowed while sending request bytes to the upstream |
+| `upstream_http_pool_timeout_seconds` | `10` | Time a request can wait for an available upstream connection before failing locally |
+| `upstream_http_max_connections` | `500` | Maximum concurrent outbound connections per DeltaLLM process |
+| `upstream_http_max_keepalive_connections` | `100` | Maximum idle keep-alive connections retained per process |
+| `upstream_http_keepalive_expiry_seconds` | `60` | How long an idle keep-alive connection is retained |
+
+Per-deployment `deltallm_params.timeout` overrides the provider read timeout for that deployment. Without an explicit deployment timeout, DeltaLLM uses `upstream_http_read_timeout_seconds` so production operators can tune streaming and long-running provider calls globally. Connect, write, and pool timeouts remain explicit so slow connection establishment and local connection pool pressure fail predictably instead of looking like provider slowness. Background health checks cap their pool wait below the health-check wrapper timeout so local pool pressure is reported as gateway capacity instead of marking a provider deployment unhealthy.
+
+For production sizing, see [Upstream HTTP Tuning](../deployment/upstream-http.md).
 
 ## Redis Settings
 

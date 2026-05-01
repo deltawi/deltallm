@@ -510,6 +510,11 @@ async def discover_models_for_provider(request: Request, payload: ProviderModelD
         auth_header_name=merged_params.get("auth_header_name"),
         auth_header_format=merged_params.get("auth_header_format"),
         default_openai_base_url=getattr(request.app.state.settings, "openai_base_url", "https://api.openai.com/v1"),
+        general_settings=getattr(
+            request.app.state,
+            "upstream_http_settings",
+            getattr(getattr(request.app.state, "app_config", None), "general_settings", None),
+        ),
     )
 
 
@@ -539,6 +544,12 @@ async def check_model_health(request: Request, deployment_id: str) -> dict[str, 
             request.app.state.http_client,
             deployment.deltallm_params,
             default_openai_base_url=request.app.state.settings.openai_base_url,
+            general_settings=getattr(
+                request.app.state,
+                "upstream_http_settings",
+                getattr(getattr(request.app.state, "app_config", None), "general_settings", None),
+            ),
+            health_check_timeout_seconds=30,
         )
 
     health = await _serialize_deployment_health(request.app, deployment_id)
