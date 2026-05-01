@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -594,6 +594,8 @@ function STTMobileView({ apiKey, stt }: { apiKey: string; stt: STTEngine }) {
     setLanguage,
     responseFormat,
     setResponseFormat,
+    outputPrompt,
+    setOutputPrompt,
     isTranscribing,
     transcription,
     isRecording,
@@ -615,9 +617,22 @@ function STTMobileView({ apiKey, stt }: { apiKey: string; stt: STTEngine }) {
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
+  const handleFileInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    if (file) handleFile(file);
+    event.currentTarget.value = '';
+  };
 
   return (
     <div className="flex-1 overflow-y-auto p-3 space-y-4 bg-gray-50/60">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="audio/*,.mp3,.mp4,.mpeg,.m4a,.wav,.webm"
+        className="hidden"
+        onChange={handleFileInputChange}
+      />
+
       <div className="grid grid-cols-2 gap-2">
         <div>
           <label className="block text-xs font-medium text-gray-700 mb-1.5">Language</label>
@@ -658,25 +673,20 @@ function STTMobileView({ apiKey, stt }: { apiKey: string; stt: STTEngine }) {
         </div>
       </div>
 
-      <button
-        type="button"
-        onClick={() => fileInputRef.current?.click()}
-        className={`w-full border-2 border-dashed rounded-xl p-5 text-center active:bg-gray-100 ${
-          selectedFile ? 'border-green-300 bg-green-50/50' : 'border-gray-300 bg-gray-50'
-        }`}
-      >
+      <div>
+        <label className="block text-xs font-medium text-gray-700 mb-1.5">Prompt (optional)</label>
         <input
-          ref={fileInputRef}
-          type="file"
-          accept="audio/*,.mp3,.mp4,.mpeg,.m4a,.wav,.webm"
-          className="hidden"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) handleFile(f);
-          }}
+          type="text"
+          value={outputPrompt}
+          onChange={(e) => setOutputPrompt(e.target.value)}
+          placeholder="Guide the model style..."
+          className="w-full bg-white border border-gray-200 rounded-md py-2 px-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
-        {selectedFile ? (
-          <div className="space-y-1.5">
+      </div>
+
+      {selectedFile ? (
+        <div className="w-full border-2 border-dashed rounded-xl p-5 text-center border-green-300 bg-green-50/50">
+          <div className="space-y-2">
             <div className="w-10 h-10 bg-green-100 rounded-xl flex items-center justify-center mx-auto">
               <FileAudio className="w-5 h-5 text-green-600" />
             </div>
@@ -684,27 +694,37 @@ function STTMobileView({ apiKey, stt }: { apiKey: string; stt: STTEngine }) {
             <div className="text-[11px] text-gray-500">
               {formatSize(selectedFile.size)} · {selectedFile.type || 'audio'}
             </div>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                resetOutput();
-              }}
-              className="text-[11px] text-red-500 active:text-red-600"
-            >
-              Remove
-            </button>
-          </div>
-        ) : (
-          <>
-            <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center mx-auto mb-2 shadow-sm">
-              <Upload className="w-5 h-5 text-gray-400" />
+            <div className="flex items-center justify-center gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="text-[11px] font-medium text-blue-600 active:text-blue-700"
+              >
+                Change
+              </button>
+              <button
+                type="button"
+                onClick={resetOutput}
+                className="text-[11px] font-medium text-red-500 active:text-red-600"
+              >
+                Remove
+              </button>
             </div>
-            <div className="text-sm font-medium text-gray-700">Tap to upload audio</div>
-            <div className="text-[11px] text-gray-500 mt-0.5">MP3, M4A, WAV, WEBM · Max 25 MB</div>
-          </>
-        )}
-      </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          className="w-full border-2 border-dashed rounded-xl p-5 text-center active:bg-gray-100 border-gray-300 bg-gray-50"
+        >
+          <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center mx-auto mb-2 shadow-sm">
+            <Upload className="w-5 h-5 text-gray-400" />
+          </div>
+          <div className="text-sm font-medium text-gray-700">Tap to upload audio</div>
+          <div className="text-[11px] text-gray-500 mt-0.5">MP3, M4A, WAV, WEBM · Max 25 MB</div>
+        </button>
+      )}
 
       <div className="flex flex-col items-center text-center bg-white border border-gray-200 rounded-xl p-5">
         <button

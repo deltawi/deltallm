@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Search,
-  Copy,
-  Check,
   MoreHorizontal,
   ChevronDown,
   ChevronUp,
@@ -125,13 +123,10 @@ export default function ApiKeysMobileList({
 }: Props) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [actionSheetFor, setActionSheetFor] = useState<ApiKey | null>(null);
-  const [copiedToken, setCopiedToken] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
-  const toastTimer = useRef<number | null>(null);
-  const copiedTimer = useRef<number | null>(null);
   const sheetTitleId = 'apikey-action-sheet-title';
   const sheetReturnFocus = useRef<HTMLElement | null>(null);
   const sheetFirstActionRef = useRef<HTMLButtonElement | null>(null);
+  const hasActions = canEdit || canRegenerate || canRevoke;
 
   const total = pagination?.total ?? items.length;
   const offset = pagination?.offset ?? 0;
@@ -142,34 +137,8 @@ export default function ApiKeysMobileList({
   const rangeStart = total === 0 ? 0 : offset + 1;
   const rangeEnd = Math.min(offset + items.length, total);
 
-  const showToast = (msg: string) => {
-    setToast(msg);
-    if (toastTimer.current) window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToast(null), 1800);
-  };
-
-  useEffect(() => {
-    return () => {
-      if (toastTimer.current) window.clearTimeout(toastTimer.current);
-      if (copiedTimer.current) window.clearTimeout(copiedTimer.current);
-    };
-  }, []);
-
-  const handleCopy = async (token: string) => {
-    try {
-      await navigator.clipboard.writeText(token);
-      setCopiedToken(token);
-      showToast('Token copied');
-      if (copiedTimer.current) window.clearTimeout(copiedTimer.current);
-      copiedTimer.current = window.setTimeout(() => {
-        setCopiedToken((current) => (current === token ? null : current));
-      }, 1500);
-    } catch {
-      showToast('Copy failed');
-    }
-  };
-
   const openSheet = (row: ApiKey, trigger: HTMLElement | null) => {
+    if (!hasActions) return;
     sheetReturnFocus.current = trigger;
     setActionSheetFor(row);
   };
@@ -210,14 +179,6 @@ export default function ApiKeysMobileList({
     if (!actionSheetFor) return [] as { label: string; icon: typeof Pencil; tone?: 'danger'; onClick: () => void }[];
     const row = actionSheetFor;
     const list: { label: string; icon: typeof Pencil; tone?: 'danger'; onClick: () => void }[] = [];
-    list.push({
-      label: 'Copy token',
-      icon: Copy,
-      onClick: () => {
-        closeSheet();
-        handleCopy(row.token);
-      },
-    });
     if (canEdit) {
       list.push({
         label: 'Edit',
@@ -301,8 +262,6 @@ export default function ApiKeysMobileList({
             const teamLabel = key.team_alias || key.team_id || 'No team';
             const initials = ownerInitials(owner.name);
             const colorClass = ownerColor(owner.name);
-            const justCopied = copiedToken === key.token;
-
             const rateLimits: { label: string; value: string; iconColor: string }[] = [];
             if (key.rpm_limit != null) rateLimits.push({ label: 'RPM', value: Number(key.rpm_limit).toLocaleString(), iconColor: 'text-amber-500' });
             if (key.tpm_limit != null) rateLimits.push({ label: 'TPM', value: Number(key.tpm_limit).toLocaleString(), iconColor: 'text-blue-500' });
@@ -319,6 +278,7 @@ export default function ApiKeysMobileList({
                   className="p-4 cursor-pointer active:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset rounded-xl"
                   onClick={() => setExpandedId(isOpen ? null : key.token)}
                   onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget) return;
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
                       setExpandedId(isOpen ? null : key.token);
@@ -338,29 +298,23 @@ export default function ApiKeysMobileList({
                         {status}
                       </span>
                     </div>
-                    <button
-                      type="button"
-                      className="p-1 -mr-1 text-gray-400 hover:text-gray-600 active:bg-gray-100 rounded"
-                      onClick={(e) => { e.stopPropagation(); openSheet(key, e.currentTarget); }}
-                      aria-label="More actions"
-                      aria-haspopup="dialog"
-                    >
-                      <MoreHorizontal className="w-4 h-4" />
-                    </button>
+                    {hasActions && (
+                      <button
+                        type="button"
+                        className="p-1 -mr-1 text-gray-400 hover:text-gray-600 active:bg-gray-100 rounded"
+                        onClick={(e) => { e.stopPropagation(); openSheet(key, e.currentTarget); }}
+                        aria-label="More actions"
+                        aria-haspopup="dialog"
+                      >
+                        <MoreHorizontal className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-2 mb-3">
                     <code className="text-xs bg-gray-50 text-gray-700 px-2 py-1 rounded border border-gray-100 font-mono truncate max-w-[210px]">
                       {maskToken(key.token)}
                     </code>
-                    <button
-                      type="button"
-                      className="p-1.5 text-gray-400 hover:text-gray-700 active:bg-gray-100 rounded transition-colors"
-                      onClick={(e) => { e.stopPropagation(); handleCopy(key.token); }}
-                      aria-label="Copy token"
-                    >
-                      {justCopied ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
-                    </button>
                   </div>
 
                   <div className="flex items-center justify-between text-xs mb-3 gap-2">
@@ -559,15 +513,6 @@ export default function ApiKeysMobileList({
         </div>
       )}
 
-      {/* Toast */}
-      {toast && (
-        <div
-          className="fixed left-1/2 -translate-x-1/2 bottom-6 z-50 bg-gray-900 text-white text-xs font-medium px-3 py-2 rounded-lg shadow-lg pointer-events-none"
-          role="status"
-        >
-          {toast}
-        </div>
-      )}
     </div>
   );
 }

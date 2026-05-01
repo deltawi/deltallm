@@ -40,6 +40,8 @@ type ModelRow = {
   healthy?: boolean;
 };
 
+export type ModelFilterValue = 'all' | 'chat' | 'embedding' | 'image_generation' | 'audio_speech' | 'audio_transcription' | 'rerank';
+
 type Props = {
   items: ModelRow[];
   loading: boolean;
@@ -48,6 +50,8 @@ type Props = {
   onPageChange: (offset: number) => void;
   searchValue: string;
   onSearchChange: (value: string) => void;
+  activeFilter: ModelFilterValue;
+  onFilterChange: (value: ModelFilterValue) => void;
   emptyMessage: string;
   canManage: boolean;
   onView: (deploymentId: string) => void;
@@ -55,9 +59,7 @@ type Props = {
   onDelete: (deploymentId: string) => void;
 };
 
-type FilterValue = 'all' | 'chat' | 'embedding' | 'image_generation' | 'audio_speech' | 'audio_transcription' | 'rerank';
-
-const FILTERS: { value: FilterValue; label: string }[] = [
+const FILTERS: { value: ModelFilterValue; label: string }[] = [
   { value: 'all', label: 'All Types' },
   { value: 'chat', label: 'Chat' },
   { value: 'embedding', label: 'Embedding' },
@@ -143,13 +145,14 @@ export default function ModelsMobileList({
   onPageChange,
   searchValue,
   onSearchChange,
+  activeFilter,
+  onFilterChange,
   emptyMessage,
   canManage,
   onView,
   onEdit,
   onDelete,
 }: Props) {
-  const [activeFilter, setActiveFilter] = useState<FilterValue>('all');
   const [actionSheetFor, setActionSheetFor] = useState<ModelRow | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -168,11 +171,7 @@ export default function ModelsMobileList({
   const rangeStart = total === 0 ? 0 : offset + 1;
   const rangeEnd = Math.min(offset + items.length, total);
 
-  // Filter is client-side (only for the current page); search is debounced server-side via prop.
-  const filteredItems = useMemo(() => {
-    if (activeFilter === 'all') return items;
-    return items.filter((m) => rowMode(m) === activeFilter);
-  }, [items, activeFilter]);
+  const emptyResultsMessage = activeFilter === 'all' ? emptyMessage : 'No models match this filter';
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -302,7 +301,7 @@ export default function ModelsMobileList({
             <button
               key={f.value}
               type="button"
-              onClick={() => setActiveFilter(f.value)}
+              onClick={() => onFilterChange(f.value)}
               aria-pressed={selected}
               className={`whitespace-nowrap px-3 py-1.5 rounded-full text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                 selected
@@ -333,17 +332,15 @@ export default function ModelsMobileList({
               </div>
             ))}
           </div>
-        ) : filteredItems.length === 0 ? (
+        ) : items.length === 0 ? (
           <div className="text-center py-12 bg-white rounded-xl border border-gray-200">
             <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
               <Inbox className="w-6 h-6 text-gray-400" />
             </div>
-            <p className="text-gray-500 text-sm">
-              {items.length === 0 ? emptyMessage : 'No models match this filter'}
-            </p>
+            <p className="text-gray-500 text-sm">{emptyResultsMessage}</p>
           </div>
         ) : (
-          filteredItems.map((model) => {
+          items.map((model) => {
             const mode = rowMode(model);
             const typeConfig = getTypeConfig(mode);
             const TypeIcon = typeConfig.icon;
