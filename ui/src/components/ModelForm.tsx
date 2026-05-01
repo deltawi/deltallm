@@ -1,6 +1,7 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import Card from './Card';
 import { ChevronDown, Plus, X } from 'lucide-react';
+import AccessGroupTokenInput, { type AccessGroupTokenInputHandle } from './AccessGroupTokenInput';
 import ProviderBadge from './ProviderBadge';
 import { useApi } from '../lib/hooks';
 import { models, namedCredentials, type NamedCredential, type ProviderModelDiscoveryPayload, type ProviderModelOption } from '../lib/api';
@@ -173,6 +174,7 @@ export default function ModelForm({
   const [defaultParams, setDefaultParams] = useState<{ key: string; value: string }[]>(initialDefaultParams || []);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<RequiredField, string>>>({});
+  const accessGroupInputRef = useRef<AccessGroupTokenInputHandle | null>(null);
   const [liveDiscoveryState, setLiveDiscoveryState] = useState<{
     requestKey: string | null;
     data: ProviderModelOption[];
@@ -373,6 +375,11 @@ export default function ModelForm({
 
   const handleSubmit = async () => {
     setValidationError(null);
+    const accessGroupCommit = accessGroupInputRef.current?.validateAndCommit();
+    if (accessGroupCommit && !accessGroupCommit.valid) {
+      setValidationError(accessGroupCommit.message || 'Fix the invalid access group before saving.');
+      return;
+    }
     const nextFieldErrors: Partial<Record<RequiredField, string>> = {};
     const modelName = form.model_name.trim();
     const provider = form.provider.trim();
@@ -429,6 +436,7 @@ export default function ModelForm({
         model: upstreamModel,
         api_base: apiBase,
         named_credential_id: namedCredentialId,
+        access_groups: accessGroupCommit?.value ?? form.access_groups,
       },
       defaultParams,
     );
@@ -726,13 +734,13 @@ export default function ModelForm({
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Access Groups</label>
-            <input
+            <AccessGroupTokenInput
+              ref={accessGroupInputRef}
               value={form.access_groups}
-              onChange={(e) => setForm({ ...form, access_groups: e.target.value })}
+              onChange={(accessGroups) => setForm((current) => ({ ...current, access_groups: accessGroups }))}
               placeholder="premium, beta, internal"
-              className={inputClass}
             />
-            <p className="text-xs text-gray-400 mt-1">Comma-separated authorization labels for model grants</p>
+            <p className="text-xs text-gray-400 mt-1">Choose existing authorization labels or type a group key, then press comma or Enter</p>
           </div>
         </div>
       </CollapsibleCard>
