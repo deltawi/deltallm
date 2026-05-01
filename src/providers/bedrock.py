@@ -10,6 +10,7 @@ from src.models.errors import InvalidRequestError
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
 from src.providers.base import ProviderAdapter, map_standard_provider_error
+from src.providers.healthcheck import is_provider_healthy
 
 
 class BedrockAdapter(ProviderAdapter):
@@ -111,7 +112,9 @@ class BedrockAdapter(ProviderAdapter):
         )
 
     async def health_check(self, provider_config: dict[str, Any]) -> bool:
-        access_key = provider_config.get("aws_access_key_id")
-        secret_key = provider_config.get("aws_secret_access_key")
-        region = provider_config.get("region")
-        return bool(access_key and secret_key and region)
+        return await is_provider_healthy(
+            self.http_client,
+            provider_config,
+            default_openai_base_url="https://api.openai.com/v1",
+            default_provider=self.provider_name,
+        )

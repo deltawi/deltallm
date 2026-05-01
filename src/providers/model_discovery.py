@@ -8,6 +8,7 @@ from src.config import ModelMode
 from src.providers.model_catalog import canonical_catalog_provider, catalog_model_metadata, catalog_models_for_provider
 from src.providers.resolution import PROVIDER_PRESETS, is_openai_compatible_provider
 from src.upstream_auth import build_openai_compatible_auth_headers
+from src.upstream_http import build_upstream_request_timeout
 
 
 def _normalized_provider(provider: str | None) -> str:
@@ -114,8 +115,13 @@ async def _load_json(
     url: str,
     headers: dict[str, str] | None = None,
     timeout: float = 10.0,
+    general_settings: Any | None = None,
 ) -> Any:
-    response = await http_client.get(url, headers=headers or None, timeout=timeout)
+    response = await http_client.get(
+        url,
+        headers=headers or None,
+        timeout=build_upstream_request_timeout(general_settings, timeout),
+    )
     if response.status_code >= 400:
         raise httpx.HTTPStatusError(
             f"Provider model discovery returned {response.status_code}",
@@ -139,6 +145,7 @@ async def _discover_live_models(
     api_version: str | None,
     auth_header_name: str | None,
     auth_header_format: str | None,
+    general_settings: Any | None,
 ) -> list[dict[str, Any]]:
     if provider == "bedrock":
         raise NotImplementedError("Live discovery is not yet implemented for AWS Bedrock.")
@@ -153,6 +160,7 @@ async def _discover_live_models(
                 "x-api-key": api_key,
                 "anthropic-version": str(api_version or "2023-06-01").strip() or "2023-06-01",
             },
+            general_settings=general_settings,
         )
         return _extract_anthropic_models(payload, provider=response_provider)
 
@@ -163,6 +171,7 @@ async def _discover_live_models(
             http_client,
             url=f"{str(api_base).rstrip('/')}/models",
             headers={"api-key": api_key},
+            general_settings=general_settings,
         )
         return _extract_openai_style_models(payload, provider=response_provider)
 
@@ -172,6 +181,7 @@ async def _discover_live_models(
         payload = await _load_json(
             http_client,
             url=f"{str(api_base or '').rstrip('/')}/models?key={api_key}",
+            general_settings=general_settings,
         )
         return _extract_gemini_models(payload, provider=response_provider)
 
@@ -189,6 +199,7 @@ async def _discover_live_models(
             auth_header_name=auth_header_name,
             auth_header_format=auth_header_format,
         ),
+        general_settings=general_settings,
     )
     return _extract_openai_style_models(payload, provider=response_provider)
 
@@ -257,6 +268,7 @@ async def discover_provider_models(
     auth_header_name: str | None = None,
     auth_header_format: str | None = None,
     default_openai_base_url: str,
+    general_settings: Any | None = None,
 ) -> dict[str, Any]:
     normalized_provider = _normalized_provider(provider)
     response_provider = _response_provider(provider)
@@ -275,6 +287,7 @@ async def discover_provider_models(
             api_version=str(api_version or "").strip() or None,
             auth_header_name=str(auth_header_name or "").strip() or None,
             auth_header_format=str(auth_header_format or "").strip() or None,
+            general_settings=general_settings,
         )
     except NotImplementedError as exc:
         live_options = []

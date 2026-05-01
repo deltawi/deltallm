@@ -89,9 +89,12 @@ async def test_provider_model_discovery_catalog_matches_current_provider_models(
 @pytest.mark.asyncio
 async def test_provider_model_discovery_merges_catalog_and_live_results(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.app_config.general_settings.upstream_http_pool_timeout_seconds = 2
+    captured: dict[str, object] = {}
 
-    async def get(url: str, headers: dict[str, str] | None = None, timeout: float = 10.0):  # noqa: ANN201
-        del headers, timeout
+    async def get(url: str, headers: dict[str, str] | None = None, timeout=None):  # noqa: ANN001, ANN201
+        del headers
+        captured["timeout"] = timeout
         assert url == "https://api.openai.com/v1/models"
         return httpx.Response(
             200,
@@ -119,6 +122,9 @@ async def test_provider_model_discovery_merges_catalog_and_live_results(client, 
     assert models["gpt-4o"]["known_metadata"]["max_tokens"] == 128000
     assert models["gpt-5-custom"]["source"] == "provider_api"
     assert models["gpt-5-custom"]["known_metadata"] is None
+    timeout = captured["timeout"]
+    assert getattr(timeout, "read") == 10.0
+    assert getattr(timeout, "pool") == 2.0
 
 
 @pytest.mark.asyncio

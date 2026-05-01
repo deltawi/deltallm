@@ -9,6 +9,7 @@ import pytest
 from src.billing.budget import BudgetExceeded
 from src.services.limit_counter import LimitCounter, RateLimitCheck
 from src.models.errors import RateLimitError, ServiceUnavailableError
+from src.router.router import Deployment, RouteGroupPolicy
 
 
 class _AlwaysBudgetExceeded:
@@ -30,6 +31,26 @@ class _SpendRecorder:
             exc = kwargs.get("exc")
             error_type = getattr(exc, "error_type", None) or (exc.__class__.__name__ if exc is not None else None)
         self.events.append({"status": "error", "cost": 0.0, "error_type": error_type, **kwargs})
+
+
+class _CapturingFailoverManager:
+    def __init__(self, captured: dict[str, object]) -> None:
+        self.captured = captured
+
+    async def execute_with_failover(
+        self,
+        *,
+        primary_deployment,
+        model_group,
+        execute,
+        return_deployment=False,
+        **kwargs,
+    ):  # noqa: ANN001, ANN003, ANN201
+        del model_group
+        self.captured["failover_timeout_seconds"] = kwargs.get("timeout_seconds")
+        self.captured["timeout_for_deployment"] = kwargs.get("timeout_for_deployment")
+        data = await execute(primary_deployment)
+        return (data, primary_deployment) if return_deployment else data
 
 
 class _RecordingAuditService:
@@ -373,6 +394,115 @@ async def test_audio_transcription_spend_log_includes_billing_metadata(client, t
     assert billing["billing_unit"] == "second"
     assert billing["cost"] == 0.5
     assert billing["usage_snapshot"]["duration_seconds"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_audio_transcription_preserves_600_second_default_timeout(client, test_app):
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.deltallm_params.pop("timeout", None)
+    test_app.state.app_config.general_settings.upstream_http_read_timeout_seconds = 123
+    captured: dict[str, object] = {}
+
+    async def post(url, headers=None, json=None, timeout=None, files=None, data=None):  # noqa: ANN001, ANN201
+        del headers, json, files, data
+        captured["timeout"] = timeout
+        return httpx.Response(200, json={"text": "hello"}, request=httpx.Request("POST", url))
+
+    test_app.state.failover_manager = _CapturingFailoverManager(captured)
+    test_app.state.http_client.post = post
+
+    response = await client.post(
+        "/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        data={"model": "gpt-4o-mini", "response_format": "json"},
+        files={"file": ("sample.wav", b"RIFFDATA", "audio/wav")},
+    )
+
+    assert response.status_code == 200
+    timeout = captured["timeout"]
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.read == 600.0
+    assert captured["failover_timeout_seconds"] is None
+    timeout_for_deployment = captured["timeout_for_deployment"]
+    assert callable(timeout_for_deployment)
+    assert timeout_for_deployment(deployment) == 600.0
+
+
+@pytest.mark.asyncio
+async def test_audio_transcription_short_primary_timeout_uses_per_deployment_failover_timeout(client, test_app):
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.deltallm_params["timeout"] = 60
+    fallback = Deployment(
+        deployment_id="gpt-4o-mini-fallback",
+        model_name="gpt-4o-mini",
+        deltallm_params={
+            "model": "openai/gpt-4o-mini",
+            "api_key": "fallback-key",
+            "api_base": "https://fallback.example/v1",
+        },
+    )
+    test_app.state.router.deployment_registry["gpt-4o-mini"].append(fallback)
+    captured: dict[str, object] = {}
+
+    async def choose_primary(model_group, request_context):  # noqa: ANN001, ANN201
+        del model_group, request_context
+        return deployment
+
+    async def post(url, headers=None, json=None, timeout=None, files=None, data=None):  # noqa: ANN001, ANN201
+        del headers, json, files, data
+        captured["timeout"] = timeout
+        return httpx.Response(200, json={"text": "hello"}, request=httpx.Request("POST", url))
+
+    test_app.state.router.select_deployment = choose_primary
+    test_app.state.failover_manager = _CapturingFailoverManager(captured)
+    test_app.state.http_client.post = post
+
+    response = await client.post(
+        "/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        data={"model": "gpt-4o-mini", "response_format": "json"},
+        files={"file": ("sample.wav", b"RIFFDATA", "audio/wav")},
+    )
+
+    assert response.status_code == 200
+    timeout = captured["timeout"]
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.read == 60.0
+    assert captured["failover_timeout_seconds"] is None
+    timeout_for_deployment = captured["timeout_for_deployment"]
+    assert callable(timeout_for_deployment)
+    assert timeout_for_deployment(deployment) == 60.0
+    assert timeout_for_deployment(fallback) == 600.0
+
+
+@pytest.mark.asyncio
+async def test_audio_transcription_route_policy_timeout_overrides_default_failover_timeout(client, test_app):
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.deltallm_params.pop("timeout", None)
+    test_app.state.router.config.route_group_policies["gpt-4o-mini"] = RouteGroupPolicy(timeout_seconds=45)
+    captured: dict[str, object] = {}
+
+    async def post(url, headers=None, json=None, timeout=None, files=None, data=None):  # noqa: ANN001, ANN201
+        del headers, json, files, data
+        captured["timeout"] = timeout
+        return httpx.Response(200, json={"text": "hello"}, request=httpx.Request("POST", url))
+
+    test_app.state.failover_manager = _CapturingFailoverManager(captured)
+    test_app.state.http_client.post = post
+
+    response = await client.post(
+        "/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        data={"model": "gpt-4o-mini", "response_format": "json"},
+        files={"file": ("sample.wav", b"RIFFDATA", "audio/wav")},
+    )
+
+    assert response.status_code == 200
+    assert captured["failover_timeout_seconds"] == 45.0
+    assert captured["timeout_for_deployment"] is None
+    timeout = captured["timeout"]
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.read == 600.0
 
 
 @pytest.mark.asyncio

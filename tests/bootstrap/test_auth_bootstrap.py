@@ -77,6 +77,7 @@ async def test_init_auth_runtime_wires_enabled_handlers(monkeypatch: pytest.Monk
             salt_key="salt",
             settings=SimpleNamespace(redis_degraded_mode="fail_open"),
             http_client="http-client",
+            control_http_client="control-http-client",
         )
     )
 
@@ -88,7 +89,9 @@ async def test_init_auth_runtime_wires_enabled_handlers(monkeypatch: pytest.Monk
     assert app.state.sso_user_repository == "user-repo"
     assert app.state.sso_state_store[0] == "sso-state-store"
     assert app.state.sso_auth_handler[0] == "sso-handler"
+    assert app.state.sso_auth_handler[1]["http_client"] == "control-http-client"
     assert app.state.jwt_auth_handler[0] == "jwt-handler"
+    assert app.state.jwt_auth_handler[1]["http_client"] == "control-http-client"
     assert app.state.custom_auth_manager.registered == ["module.handler"]
     assert runtime.statuses == (
         BootstrapStatus("key_service", "ready"),

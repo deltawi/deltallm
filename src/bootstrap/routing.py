@@ -164,18 +164,22 @@ async def init_routing_runtime(
         salt_key=salt_key,
     )
 
+    health_check_timeout_seconds = 30
+
     async def _deployment_health_check(deployment):  # noqa: ANN001, ANN202
         return await probe_provider_health(
             app.state.http_client,
             deployment.deltallm_params,
             default_openai_base_url=app.state.settings.openai_base_url,
+            general_settings=getattr(app.state, "upstream_http_settings", cfg.general_settings),
+            health_check_timeout_seconds=health_check_timeout_seconds,
         )
 
     health_checker = BackgroundHealthChecker(
         config=HealthCheckConfig(
             enabled=cfg.general_settings.background_health_checks,
             interval_seconds=cfg.general_settings.health_check_interval,
-            timeout_seconds=30,
+            timeout_seconds=health_check_timeout_seconds,
         ),
         deployment_registry=deployment_registry,
         state_backend=state_backend,

@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from src.email.models import EmailDeliveryError, EmailDeliveryResult, PreparedEmail
+from src.upstream_http import build_control_request_timeout
 
 
 def _all_recipients(message: PreparedEmail) -> list[str]:
@@ -136,7 +137,7 @@ class ResendEmailProvider:
                     "text": message.text_body,
                     "html": message.html_body,
                 },
-                timeout=20,
+                timeout=build_control_request_timeout(20),
             )
         except httpx.TransportError as exc:
             raise EmailDeliveryError(str(exc) or "Resend transport error", retriable=True, provider="resend") from exc
@@ -177,7 +178,7 @@ class SendGridEmailProvider:
                         *([{"type": "text/html", "value": message.html_body}] if message.html_body else []),
                     ],
                 },
-                timeout=20,
+                timeout=build_control_request_timeout(20),
             )
         except httpx.TransportError as exc:
             raise EmailDeliveryError(str(exc) or "SendGrid transport error", retriable=True, provider="sendgrid") from exc

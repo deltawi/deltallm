@@ -185,7 +185,50 @@ async def test_openai_adapter_health_check_uses_custom_auth_headers() -> None:
         assert healthy is True
         assert captured["url"] == "https://vllm.example/v1/models"
         assert captured["headers"] == {"X-API-Key": "provider-key"}
-        assert captured["timeout"] == 10.0
+        timeout = captured["timeout"]
+        assert isinstance(timeout, httpx.Timeout)
+        assert timeout.read == 10.0
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_openai_adapter_health_check_defaults_provider_when_missing() -> None:
+    adapter = OpenAIAdapter(httpx.AsyncClient())
+    try:
+        captured: dict[str, object] = {}
+
+        async def fake_get(url, headers, timeout):  # noqa: ANN001, ANN201
+            captured["url"] = url
+            captured["headers"] = dict(headers)
+            captured["timeout"] = timeout
+            return httpx.Response(200, json={"data": []}, request=httpx.Request("GET", url))
+
+        adapter.http_client.get = fake_get  # type: ignore[method-assign]
+
+        healthy = await adapter.health_check({"api_key": "provider-key"})
+
+        assert healthy is True
+        assert captured["url"] == "https://api.openai.com/v1/models"
+        assert captured["headers"] == {"Authorization": "Bearer provider-key"}
+        timeout = captured["timeout"]
+        assert isinstance(timeout, httpx.Timeout)
+        assert timeout.read == 10.0
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_openai_adapter_health_check_returns_false_on_unexpected_error() -> None:
+    adapter = OpenAIAdapter(httpx.AsyncClient())
+    try:
+        async def fake_get(url, headers, timeout):  # noqa: ANN001, ANN201
+            del url, headers, timeout
+            raise RuntimeError("unexpected client failure")
+
+        adapter.http_client.get = fake_get  # type: ignore[method-assign]
+
+        assert await adapter.health_check({"api_key": "provider-key"}) is False
     finally:
         await adapter.http_client.aclose()
 

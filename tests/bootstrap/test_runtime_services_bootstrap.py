@@ -70,7 +70,10 @@ async def test_init_and_shutdown_runtime_services(monkeypatch: pytest.MonkeyPatc
             self.reloaded = True
 
     monkeypatch.setattr("src.bootstrap.runtime_services.MCPGovernanceService", FakeMCPGovernanceService)
-    monkeypatch.setattr("src.bootstrap.runtime_services.StreamableHTTPMCPClient", lambda client: ("mcp-client", client))
+    monkeypatch.setattr(
+        "src.bootstrap.runtime_services.StreamableHTTPMCPClient",
+        lambda client, **kwargs: ("mcp-client", client, kwargs),
+    )
     monkeypatch.setattr("src.bootstrap.runtime_services.MCPHealthProbe", lambda **kwargs: ("mcp-health", kwargs))
     monkeypatch.setattr("src.bootstrap.runtime_services.MCPToolPolicyEnforcer", lambda limit_counter: ("policy", limit_counter))
     monkeypatch.setattr("src.bootstrap.runtime_services.MCPToolResultCache", lambda cache_backend: ("result-cache", cache_backend))
@@ -93,15 +96,22 @@ async def test_init_and_shutdown_runtime_services(monkeypatch: pytest.MonkeyPatc
             mcp_scope_policy_repository="mcp-scope-policy-repo",
             redis="redis-client",
             http_client="http-client",
+            upstream_http_settings="startup-upstream-settings",
             limit_counter="limit-counter",
             cache_backend="cache-backend",
             prisma_manager=SimpleNamespace(client="db-client"),
         )
     )
 
-    runtime = await init_runtime_services(app, _runtime_config())
+    cfg = _runtime_config()
+    runtime = await init_runtime_services(app, cfg)
 
     assert app.state.prompt_registry_service[0] == "prompt-registry"
+    assert app.state.mcp_transport_client == (
+        "mcp-client",
+        "http-client",
+        {"general_settings": "startup-upstream-settings"},
+    )
     assert app.state.mcp_gateway_service[0] == "mcp-gateway"
     assert app.state.mcp_governance_service.reloaded is True
     assert app.state.governance_invalidation_service.started is True

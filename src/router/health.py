@@ -90,6 +90,9 @@ class BackgroundHealthChecker:
                 await self.state.clear_cooldown(deployment.deployment_id)
             return
 
+        if result.affects_deployment_health is False:
+            return
+
         await self.state.set_health(deployment.deployment_id, False)
         await self.state.record_failure(
             deployment.deployment_id,

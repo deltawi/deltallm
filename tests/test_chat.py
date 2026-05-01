@@ -176,6 +176,100 @@ async def test_chat_completion_success(client, test_app):
 
 
 @pytest.mark.asyncio
+async def test_chat_completion_uses_global_read_timeout_without_deployment_override(client, test_app):
+    test_app.state.app_config.general_settings.upstream_http_read_timeout_seconds = 123
+    test_app.state.app_config.general_settings.upstream_http_pool_timeout_seconds = 4
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.deltallm_params.pop("timeout", None)
+    captured: dict[str, object] = {}
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del headers
+        captured["timeout"] = timeout
+        assert url.endswith("/chat/completions")
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": json["model"],
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    test_app.state.http_client.post = post
+
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]},
+    )
+
+    assert response.status_code == 200
+    timeout = captured["timeout"]
+    assert getattr(timeout, "read") == 123.0
+    assert getattr(timeout, "pool") == 4.0
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_uses_startup_upstream_http_settings_snapshot(client, test_app):
+    test_app.state.app_config.general_settings.upstream_http_read_timeout_seconds = 123
+    test_app.state.upstream_http_settings = type(
+        "StartupUpstreamHTTPSettings",
+        (),
+        {
+            "upstream_http_read_timeout_seconds": 222,
+            "upstream_http_pool_timeout_seconds": 3,
+        },
+    )()
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.deltallm_params.pop("timeout", None)
+    captured: dict[str, object] = {}
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del url, headers
+        captured["timeout"] = timeout
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": json["model"],
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    test_app.state.http_client.post = post
+
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]},
+    )
+
+    assert response.status_code == 200
+    timeout = captured["timeout"]
+    assert getattr(timeout, "read") == 222.0
+    assert getattr(timeout, "pool") == 3.0
+
+
+@pytest.mark.asyncio
 async def test_chat_completion_success_ignores_router_usage_write_failure(client, test_app):
     async def fail_usage(*args, **kwargs):  # noqa: ANN001, ANN201
         del args, kwargs

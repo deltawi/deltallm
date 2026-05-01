@@ -63,7 +63,7 @@ class DeltaLLMParams(BaseModel):
     api_version: str | None = None
     auth_header_name: str | None = None
     auth_header_format: str | None = None
-    timeout: int | None = 300
+    timeout: int | None = None
     rpm: int | None = None
     tpm: int | None = None
     weight: int = 1
@@ -237,6 +237,13 @@ class GeneralSettings(BaseModel):
     database_url: str | None = None
     db_pool_size: int = Field(default=20, gt=0)
     db_pool_timeout: int = Field(default=30, ge=0)
+    upstream_http_connect_timeout_seconds: float = Field(default=10.0, gt=0)
+    upstream_http_read_timeout_seconds: float = Field(default=300.0, gt=0)
+    upstream_http_write_timeout_seconds: float = Field(default=30.0, gt=0)
+    upstream_http_pool_timeout_seconds: float = Field(default=10.0, gt=0)
+    upstream_http_max_connections: int = Field(default=500, gt=0)
+    upstream_http_max_keepalive_connections: int = Field(default=100, ge=0)
+    upstream_http_keepalive_expiry_seconds: float = Field(default=60.0, ge=0)
     redis_host: str = "localhost"
     redis_port: int = 6379
     redis_password: str | None = None
@@ -404,6 +411,15 @@ class GeneralSettings(BaseModel):
     @classmethod
     def validate_master_key(cls, value: str | None) -> str | None:
         return _validate_master_key_strength(value)
+
+    @model_validator(mode="after")
+    def validate_upstream_http_pool(self) -> "GeneralSettings":
+        if self.upstream_http_max_keepalive_connections > self.upstream_http_max_connections:
+            raise ValueError(
+                "upstream_http_max_keepalive_connections must be less than or equal to "
+                "upstream_http_max_connections"
+            )
+        return self
 
 
 class AppConfig(BaseModel):

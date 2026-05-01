@@ -27,6 +27,7 @@ from src.providers.resolution import (
     resolve_upstream_model,
 )
 from src.upstream_auth import build_openai_compatible_auth_headers
+from src.upstream_http import build_upstream_request_timeout_for_request, configured_timeout_seconds
 from src.router.router import Deployment
 from src.router.usage import record_router_usage
 from src.audit.actions import AuditAction
@@ -44,7 +45,13 @@ from src.routers.routing_decision import (
 from src.routers.utils import enforce_budget_if_configured, fire_and_forget
 from src.services.model_visibility import ensure_model_allowed, get_callable_target_policy_mode_from_app
 
+DEFAULT_AUDIO_TRANSCRIPTION_TIMEOUT_SECONDS = 600.0
+
 router = APIRouter(prefix="/v1", tags=["audio"])
+
+
+def _transcription_timeout_seconds(params: dict[str, Any]) -> float:
+    return configured_timeout_seconds(params.get("timeout")) or DEFAULT_AUDIO_TRANSCRIPTION_TIMEOUT_SECONDS
 
 
 async def _execute_stt(
@@ -97,12 +104,13 @@ async def _execute_stt(
         form_data[_fk] = str(_fv) if _fv is not None else ""
 
     upstream_start = perf_counter()
+    timeout_seconds = _transcription_timeout_seconds(params)
     response = await request.app.state.http_client.post(
         f"{api_base}/audio/transcriptions",
         headers=headers,
         files={"file": (filename, file_content, content_type)},
         data=form_data,
-        timeout=params.get("timeout") or 600,
+        timeout=build_upstream_request_timeout_for_request(request, timeout_seconds),
     )
     if response.status_code >= 400:
         try:
@@ -178,6 +186,11 @@ async def audio_transcriptions(
         deployment=await app_router.select_deployment(model_group, request_context),
     )
     failover_kwargs = route_failover_kwargs(request_context)
+    if "timeout_seconds" not in failover_kwargs:
+        def timeout_for_deployment(deployment: Deployment) -> float:
+            return _transcription_timeout_seconds(deployment.deltallm_params)
+
+        failover_kwargs["timeout_for_deployment"] = timeout_for_deployment
     capture_initial_route_decision(request, request_context)
     api_provider = resolve_provider(primary.deltallm_params)
     request_id = request.headers.get("x-request-id")

@@ -150,7 +150,19 @@
         "model_list": { "type": "array" },
         "router_settings": { "type": "object" },
         "deltallm_settings": { "type": "object" },
-        "general_settings": { "type": "object" }
+        "general_settings": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "upstream_http_connect_timeout_seconds": { "type": "number", "exclusiveMinimum": 0 },
+            "upstream_http_read_timeout_seconds": { "type": "number", "exclusiveMinimum": 0 },
+            "upstream_http_write_timeout_seconds": { "type": "number", "exclusiveMinimum": 0 },
+            "upstream_http_pool_timeout_seconds": { "type": "number", "exclusiveMinimum": 0 },
+            "upstream_http_max_connections": { "type": "integer", "minimum": 1 },
+            "upstream_http_max_keepalive_connections": { "type": "integer", "minimum": 0 },
+            "upstream_http_keepalive_expiry_seconds": { "type": "number", "minimum": 0 }
+          }
+        }
       }
     },
     "s3": {

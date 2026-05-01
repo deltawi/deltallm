@@ -10,6 +10,7 @@ from src.models.errors import InvalidRequestError
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
 from src.providers.base import ProviderAdapter, map_standard_provider_error
+from src.providers.healthcheck import is_provider_healthy
 
 
 class GeminiAdapter(ProviderAdapter):
@@ -112,15 +113,9 @@ class GeminiAdapter(ProviderAdapter):
         )
 
     async def health_check(self, provider_config: dict[str, Any]) -> bool:
-        api_base = str(provider_config.get("api_base") or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
-        api_key = provider_config.get("api_key")
-        if not api_key:
-            return False
-        try:
-            response = await self.http_client.get(
-                f"{api_base}/models?key={api_key}",
-                timeout=10.0,
-            )
-            return response.status_code < 500
-        except Exception:
-            return False
+        return await is_provider_healthy(
+            self.http_client,
+            provider_config,
+            default_openai_base_url="https://api.openai.com/v1",
+            default_provider=self.provider_name,
+        )

@@ -67,6 +67,22 @@ async def test_init_email_runtime_marks_invalid_config_degraded() -> None:
 
 
 @pytest.mark.asyncio
+async def test_init_email_runtime_uses_control_http_client_when_available() -> None:
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            email_outbox_repository=None,
+            prisma_manager=SimpleNamespace(client="db-client"),
+            http_client="provider-http-client",
+            control_http_client="control-http-client",
+        )
+    )
+
+    await init_email_runtime(app, _config(email_enabled=False))
+
+    assert app.state.email_delivery_service._http_client == "control-http-client"
+
+
+@pytest.mark.asyncio
 async def test_init_email_runtime_requires_absolute_email_base_url() -> None:
     app = SimpleNamespace(state=_app_state())
 

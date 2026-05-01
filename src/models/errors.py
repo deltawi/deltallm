@@ -113,3 +113,13 @@ class ServiceUnavailableError(ProxyError):
     status_code = 503
     error_type = "service_unavailable"
     message = "Service unavailable"
+
+
+class GatewayCapacityError(ServiceUnavailableError):
+    error_type = "gateway_capacity_error"
+    message = "Gateway upstream connection pool exhausted"
+
+    def __init__(self, message: str | None = None, **kwargs):
+        kwargs.setdefault("code", "upstream_pool_timeout")
+        kwargs.setdefault("affects_deployment_health", False)
+        super().__init__(message=message, **kwargs)

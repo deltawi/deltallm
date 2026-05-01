@@ -9,13 +9,15 @@ from .auth import build_forwarded_headers, build_server_headers
 from .exceptions import MCPAuthError, MCPInvalidResponseError, MCPTransportError
 from .models import MCPRequestEnvelope, MCPServerConfig, MCPToolCallResult, MCPToolSchema
 from .capabilities import extract_tool_schemas
+from src.upstream_http import build_upstream_request_timeout
 
 _request_ids = count(1)
 
 
 class StreamableHTTPMCPClient:
-    def __init__(self, http_client: httpx.AsyncClient) -> None:
+    def __init__(self, http_client: httpx.AsyncClient, *, general_settings: Any | None = None) -> None:
         self.http_client = http_client
+        self.general_settings = general_settings
 
     async def initialize(
         self,
@@ -100,7 +102,10 @@ class StreamableHTTPMCPClient:
                 server.base_url.rstrip("/"),
                 json=body,
                 headers=headers,
-                timeout=max(1.0, float(server.request_timeout_ms) / 1000.0),
+                timeout=build_upstream_request_timeout(
+                    self.general_settings,
+                    max(1.0, float(server.request_timeout_ms) / 1000.0),
+                ),
             )
         except httpx.HTTPError as exc:
             raise MCPTransportError(str(exc)) from exc

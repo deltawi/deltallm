@@ -11,6 +11,7 @@ from typing import Any, Awaitable, Callable
 import httpx
 
 from src.models.errors import (
+    GatewayCapacityError,
     InvalidRequestError,
     NO_HEALTHY_DEPLOYMENTS_CODE,
     ProxyError,
@@ -25,6 +26,8 @@ from src.router.router import Deployment
 from src.router.state import DeploymentStateBackend
 
 logger = logging.getLogger(__name__)
+
+TimeoutForDeployment = Callable[[Deployment], float | int | None]
 
 
 @dataclass
@@ -275,6 +278,8 @@ class FailoverManager:
         return str(error)
 
     def _normalize_http_error(self, error: httpx.HTTPError) -> ProxyError:
+        if isinstance(error, httpx.PoolTimeout):
+            return GatewayCapacityError()
         if isinstance(error, httpx.TimeoutException):
             return TimeoutError(
                 message=str(error) or None,
@@ -327,11 +332,11 @@ class FailoverManager:
         return_deployment: bool = False,
         on_attempt: Callable[[Deployment], None] | None = None,
         timeout_seconds: float | None = None,
+        timeout_for_deployment: TimeoutForDeployment | None = None,
         retry_max_attempts: int | None = None,
         retryable_error_classes: list[str] | set[str] | None = None,
     ) -> Any:
         chain = self._build_fallback_chain(primary_deployment, model_group, request_tokens)
-        effective_timeout = self._effective_timeout(timeout_seconds)
         effective_retries = self._effective_retry_count(retry_max_attempts)
         effective_retry_classes = self._normalize_retryable_error_classes(retryable_error_classes)
         last_error: Exception | None = None
@@ -349,9 +354,14 @@ class FailoverManager:
                 try:
                     self._notify_attempt(on_attempt, deployment)
                     await self.state.increment_active(deployment.deployment_id)
+                    attempt_timeout = self._effective_attempt_timeout(
+                        deployment,
+                        timeout_seconds,
+                        timeout_for_deployment,
+                    )
                     result = await asyncio.wait_for(
                         execute(deployment),
-                        timeout=effective_timeout,
+                        timeout=attempt_timeout,
                     )
                     latency_ms = (time.monotonic() - started) * 1000
                     await self.state.record_latency(deployment.deployment_id, latency_ms)
@@ -406,7 +416,8 @@ class FailoverManager:
                                 deployment.deployment_id,
                                 classification,
                                 on_attempt=on_attempt,
-                                timeout_seconds=effective_timeout,
+                                timeout_seconds=timeout_seconds,
+                                timeout_for_deployment=timeout_for_deployment,
                             )
                             if extra_result is not None:
                                 if return_deployment:
@@ -471,7 +482,8 @@ class FailoverManager:
         classification: str,
         *,
         on_attempt: Callable[[Deployment], None] | None = None,
-        timeout_seconds: float,
+        timeout_seconds: float | None,
+        timeout_for_deployment: TimeoutForDeployment | None = None,
     ) -> tuple[Any, Deployment] | None:
         for deployment in chain:
             if await self.state.is_cooled_down(deployment.deployment_id):
@@ -484,9 +496,14 @@ class FailoverManager:
                 self._notify_attempt(on_attempt, deployment)
                 await self.state.increment_active(deployment.deployment_id)
                 started = time.monotonic()
+                attempt_timeout = self._effective_attempt_timeout(
+                    deployment,
+                    timeout_seconds,
+                    timeout_for_deployment,
+                )
                 result = await asyncio.wait_for(
                     execute(deployment),
-                    timeout=timeout_seconds,
+                    timeout=attempt_timeout,
                 )
                 latency_ms = (time.monotonic() - started) * 1000
                 await self.state.record_latency(deployment.deployment_id, latency_ms)
@@ -539,14 +556,39 @@ class FailoverManager:
 
         return None
 
-    def _effective_timeout(self, timeout_seconds: float | None) -> float:
+    @staticmethod
+    def _coerce_positive_timeout(timeout_seconds: Any) -> float | None:
         if timeout_seconds is None:
-            return self.config.timeout
+            return None
         try:
             parsed = float(timeout_seconds)
         except (TypeError, ValueError):
-            return self.config.timeout
-        return parsed if parsed > 0 else self.config.timeout
+            return None
+        return parsed if parsed > 0 else None
+
+    def _effective_timeout(self, timeout_seconds: float | None) -> float:
+        return self._coerce_positive_timeout(timeout_seconds) or self.config.timeout
+
+    def _effective_attempt_timeout(
+        self,
+        deployment: Deployment,
+        timeout_seconds: float | None,
+        timeout_for_deployment: TimeoutForDeployment | None,
+    ) -> float:
+        if timeout_for_deployment is None:
+            return self._effective_timeout(timeout_seconds)
+        try:
+            deployment_timeout = timeout_for_deployment(deployment)
+        except Exception:
+            logger.debug(
+                "Failed to resolve timeout for deployment %s",
+                deployment.deployment_id,
+                exc_info=True,
+            )
+            return self._effective_timeout(timeout_seconds)
+        if deployment_timeout is None:
+            return self._effective_timeout(timeout_seconds)
+        return self._coerce_positive_timeout(deployment_timeout) or self._effective_timeout(timeout_seconds)
 
     def _effective_retry_count(self, retry_max_attempts: int | None) -> int:
         if retry_max_attempts is None:

@@ -22,15 +22,28 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
             created["dynamic_initialized"] = True
 
         def get_app_config(self):  # noqa: ANN201
-            return SimpleNamespace(general_settings=SimpleNamespace(), deltallm_settings=SimpleNamespace())
+            return SimpleNamespace(
+                general_settings=SimpleNamespace(
+                    upstream_http_connect_timeout_seconds=7,
+                    upstream_http_read_timeout_seconds=301,
+                    upstream_http_write_timeout_seconds=33,
+                    upstream_http_pool_timeout_seconds=4,
+                    upstream_http_max_connections=123,
+                    upstream_http_max_keepalive_connections=45,
+                    upstream_http_keepalive_expiry_seconds=12,
+                ),
+                deltallm_settings=SimpleNamespace(),
+            )
 
         async def close(self) -> None:
             self.closed = True
 
     class FakeHTTPClient:
-        def __init__(self, timeout) -> None:  # noqa: ANN001
+        def __init__(self, *, timeout, limits) -> None:  # noqa: ANN001
             self.timeout = timeout
+            self.limits = limits
             self.closed = False
+            created.setdefault("http_clients", []).append(self)
 
         async def aclose(self) -> None:
             self.closed = True
@@ -96,7 +109,7 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
     monkeypatch.setattr("src.bootstrap.infrastructure.Redis", FakeRedis)
     monkeypatch.setattr("src.bootstrap.infrastructure.prisma_manager", FakePrismaManager())
     monkeypatch.setattr("src.bootstrap.infrastructure.resolve_salt_key", lambda cfg, settings: "salt")  # noqa: ARG005
-    monkeypatch.setattr("src.bootstrap.infrastructure.httpx.AsyncClient", FakeHTTPClient)
+    monkeypatch.setattr("src.upstream_http.httpx.AsyncClient", FakeHTTPClient)
     monkeypatch.setattr("src.bootstrap.infrastructure.OpenAIAdapter", lambda client: ("openai", client))
     monkeypatch.setattr("src.bootstrap.infrastructure.AzureOpenAIAdapter", lambda client: ("azure", client))
     monkeypatch.setattr("src.bootstrap.infrastructure.AnthropicAdapter", lambda client: ("anthropic", client))
@@ -126,6 +139,22 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
     )
     assert app.state.dynamic_config_manager is runtime.dynamic_config_manager
     assert app.state.salt_key == "salt"
+    assert runtime.http_client.timeout.connect == 7
+    assert runtime.http_client.timeout.read == 301
+    assert runtime.http_client.timeout.write == 33
+    assert runtime.http_client.timeout.pool == 4
+    assert runtime.http_client.limits.max_connections == 123
+    assert runtime.http_client.limits.max_keepalive_connections == 45
+    assert runtime.http_client.limits.keepalive_expiry == 12
+    assert app.state.control_http_client is runtime.control_http_client
+    assert runtime.control_http_client is not runtime.http_client
+    assert runtime.control_http_client.timeout.connect == 5
+    assert runtime.control_http_client.timeout.read == 20
+    assert runtime.control_http_client.timeout.write == 10
+    assert runtime.control_http_client.timeout.pool == 5
+    assert runtime.control_http_client.limits.max_connections == 100
+    assert runtime.control_http_client.limits.max_keepalive_connections == 20
+    assert runtime.control_http_client.limits.keepalive_expiry == 30
     assert app.state.openai_adapter[0] == "openai"
     assert app.state.batch_repository == ("batch-repo", "db-client")
 
@@ -133,5 +162,6 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
 
     assert runtime.dynamic_config_manager.closed is True
     assert runtime.http_client.closed is True
+    assert runtime.control_http_client.closed is True
     assert runtime.redis_client.closed is True
     assert app.state.prisma_manager.disconnected is True
