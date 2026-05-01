@@ -10,6 +10,7 @@ import ProviderBadge from '../components/ProviderBadge';
 import StatusBadge from '../components/StatusBadge';
 import { ContentCard, IndexShell } from '../components/admin/shells';
 import { MODE_OPTIONS, MODE_BADGE_COLORS } from '../components/modelFormShared';
+import ModelsMobileList, { type ModelFilterValue } from '../components/models/ModelsMobileList';
 import { Box, Plus, Pencil, Search, Trash2 } from 'lucide-react';
 
 export default function Models() {
@@ -18,9 +19,18 @@ export default function Models() {
   const canManageModels = resolveUiAccess(authMode, session).model_admin;
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const [modeFilter, setModeFilter] = useState<ModelFilterValue>('all');
   const [pageOffset, setPageOffset] = useState(0);
   const pageSize = 10;
-  const { data: result, loading, refetch } = useApi(() => models.list({ search, limit: pageSize, offset: pageOffset }), [search, pageOffset]);
+  const { data: result, loading, refetch } = useApi(
+    () => models.list({
+      search,
+      mode: modeFilter === 'all' ? undefined : modeFilter,
+      limit: pageSize,
+      offset: pageOffset,
+    }),
+    [search, modeFilter, pageOffset],
+  );
   const items = result?.data || [];
   const pagination = result?.pagination;
 
@@ -37,6 +47,11 @@ export default function Models() {
     } catch (err: any) {
       alert(err?.message || 'Failed to delete model');
     }
+  };
+
+  const handleModeFilterChange = (value: ModelFilterValue) => {
+    setModeFilter(value);
+    setPageOffset(0);
   };
 
   const modeLabel = (mode: string) => {
@@ -87,28 +102,63 @@ export default function Models() {
         </button>
       ) : undefined}
       toolbar={(
-        <div className="relative w-full sm:w-72">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-          <input
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Search models..."
-            className="h-9 w-full rounded-lg border border-gray-300 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
+        <div className="hidden w-full flex-wrap items-center gap-3 md:flex">
+          <div className="relative w-full sm:w-72">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <input
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search models..."
+              className="h-9 w-full rounded-lg border border-gray-300 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <select
+            value={modeFilter}
+            onChange={(e) => handleModeFilterChange(e.target.value as ModelFilterValue)}
+            aria-label="Filter model type"
+            className="h-9 rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="all">All types</option>
+            {MODE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         </div>
       )}
     >
-      <ContentCard>
-        <DataTable
-          columns={columns}
-          data={items}
+      <div className="hidden md:block">
+        <ContentCard>
+          <DataTable
+            columns={columns}
+            data={items}
+            loading={loading}
+            emptyMessage="No models configured"
+            onRowClick={(row) => navigate(modelDetailPath(row.deployment_id))}
+            pagination={pagination}
+            onPageChange={setPageOffset}
+          />
+        </ContentCard>
+      </div>
+      <div className="md:hidden">
+        <ModelsMobileList
+          items={items}
           loading={loading}
-          emptyMessage="No models configured"
-          onRowClick={(row) => navigate(modelDetailPath(row.deployment_id))}
           pagination={pagination}
+          pageSize={pageSize}
           onPageChange={setPageOffset}
+          searchValue={searchInput}
+          onSearchChange={setSearchInput}
+          activeFilter={modeFilter}
+          onFilterChange={handleModeFilterChange}
+          emptyMessage="No models configured"
+          canManage={canManageModels}
+          onView={(id) => navigate(modelDetailPath(id))}
+          onEdit={(id) => navigate(modelEditPath(id))}
+          onDelete={handleDelete}
         />
-      </ContentCard>
+      </div>
     </IndexShell>
   );
 }

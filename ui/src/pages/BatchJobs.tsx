@@ -6,6 +6,7 @@ import DataTable from '../components/DataTable';
 import { Layers, Search, Clock, CheckCircle2, XCircle, Loader2, Info } from 'lucide-react';
 import clsx from 'clsx';
 import { ContentCard, IndexShell } from '../components/admin/shells';
+import BatchJobsMobileList from '../components/batch-jobs/BatchJobsMobileList';
 
 const STATUS_COLORS: Record<string, string> = {
   validating: 'bg-purple-100 text-purple-700',
@@ -98,14 +99,25 @@ export default function BatchJobs() {
   }, [searchInput]);
 
   const { data: featureStatus } = useApi<BatchFeatureStatus | null>(() => batches.featureStatus(), []);
-  const { data: summary } = useApi<BatchJobSummary | null>(() => batches.summary(), []);
-  const { data: result, loading } = useApi(
+  const { data: summary, refetch: refetchSummary } = useApi<BatchJobSummary | null>(() => batches.summary(), []);
+  const { data: result, loading, refetch } = useApi(
     () => batches.list({ search, status: statusFilter || undefined, limit: pageSize, offset: pageOffset }),
     [search, statusFilter, pageOffset],
   );
 
   const items: BatchJobListItem[] = result?.data || [];
   const pagination = result?.pagination;
+
+  const handleCancel = async (batchId: string) => {
+    if (!confirm('Cancel this batch job? In-flight requests will stop processing.')) return;
+    try {
+      await batches.cancel(batchId);
+      refetch();
+      refetchSummary();
+    } catch (err: any) {
+      alert(err?.message || 'Failed to cancel batch job');
+    }
+  };
 
   const summaryCards = [
     { label: 'Total Jobs', value: summary?.total ?? 0, icon: Layers, color: 'text-blue-600', bg: 'bg-blue-50' },
@@ -195,7 +207,7 @@ export default function BatchJobs() {
         </div>
       )}
       toolbar={(
-        <div className="space-y-3">
+        <div className="hidden md:block space-y-3">
           <div className="relative max-w-sm">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
             <input
@@ -233,28 +245,47 @@ export default function BatchJobs() {
           <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             <div className="flex items-start gap-3">
               <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-              <div>
+              <div className="min-w-0 flex-1">
                 <p className="font-medium">Embeddings batch API is disabled.</p>
-                <p className="mt-1 text-amber-800">
-                  Enable <code className="rounded bg-amber-100 px-1 py-0.5 text-xs">general_settings.embeddings_batch_enabled: true</code>{' '}
-                  to allow <code className="rounded bg-amber-100 px-1 py-0.5 text-xs">/v1/files</code> and{' '}
-                  <code className="rounded bg-amber-100 px-1 py-0.5 text-xs">/v1/batches</code>. Existing batch records remain visible here.
+                <p className="mt-1 text-amber-800 break-words">
+                  Enable <code className="rounded bg-amber-100 px-1 py-0.5 text-xs break-all">general_settings.embeddings_batch_enabled: true</code>{' '}
+                  to allow <code className="rounded bg-amber-100 px-1 py-0.5 text-xs break-all">/v1/files</code> and{' '}
+                  <code className="rounded bg-amber-100 px-1 py-0.5 text-xs break-all">/v1/batches</code>. Existing batch records remain visible here.
                 </p>
               </div>
             </div>
           </div>
         )}
-        <ContentCard>
-          <DataTable
-            columns={columns}
-            data={items}
+        <div className="hidden md:block">
+          <ContentCard>
+            <DataTable
+              columns={columns}
+              data={items}
+              loading={loading}
+              emptyMessage="No batch jobs found"
+              onRowClick={(row) => navigate(`/batches/${row.batch_id}`)}
+              pagination={pagination}
+              onPageChange={setPageOffset}
+            />
+          </ContentCard>
+        </div>
+        <div className="md:hidden">
+          <BatchJobsMobileList
+            items={items}
             loading={loading}
-            emptyMessage="No batch jobs found"
-            onRowClick={(row) => navigate(`/batches/${row.batch_id}`)}
             pagination={pagination}
+            pageSize={pageSize}
             onPageChange={setPageOffset}
+            searchValue={searchInput}
+            onSearchChange={setSearchInput}
+            statusFilter={statusFilter}
+            onStatusFilterChange={(v) => { setStatusFilter(v); setPageOffset(0); }}
+            statusTabs={STATUS_TABS}
+            emptyMessage="No batch jobs found"
+            onView={(id) => navigate(`/batches/${id}`)}
+            onCancel={handleCancel}
           />
-        </ContentCard>
+        </div>
       </div>
     </IndexShell>
   );
