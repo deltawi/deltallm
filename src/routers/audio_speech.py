@@ -258,6 +258,7 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
             deployment_model=deployment_model, request_payload=request_data, response_obj={"bytes": len(audio_bytes)},
             user_api_key_dict=auth.model_dump(mode="json"), start_time=callback_start, end_time=datetime.now(tz=UTC),
             api_base=api_base, response_cost=request_cost, api_latency_ms=api_latency_ms,
+            api_provider=api_provider,
             turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
         )
         callback_manager.dispatch_success_callbacks(callback_payload)

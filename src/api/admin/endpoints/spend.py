@@ -121,10 +121,10 @@ def _canonical_provider_expr(
     model_provider_expr = _provider_from_model_expr(f"{table_alias}.model")
     return f"""
         COALESCE(
-            {api_base_provider_expr},
             NULLIF(LOWER(TRIM(COALESCE({metadata_provider_column}, ''))), ''),
             NULLIF(LOWER(TRIM({provider_column})), ''),
             {legacy_cache_provider_expr},
+            {api_base_provider_expr},
             {deployment_model_provider_expr},
             {model_provider_expr},
             'unknown'

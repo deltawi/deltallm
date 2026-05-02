@@ -33,6 +33,7 @@ Spend is based on the pricing metadata attached to the served model deployment.
 model_list:
   - model_name: gpt-4o-mini
     deltallm_params:
+      provider: openai
       model: openai/gpt-4o-mini
       api_key: os.environ/OPENAI_API_KEY
     model_info:

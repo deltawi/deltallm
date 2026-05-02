@@ -32,14 +32,18 @@ class RecordingCallback(CustomLogger):
     def __init__(self):
         self.success = 0
         self.failure = 0
+        self.success_payloads: list[dict] = []
+        self.failure_payloads: list[dict] = []
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        del kwargs, response_obj, start_time, end_time
+        del response_obj, start_time, end_time
         self.success += 1
+        self.success_payloads.append(dict(kwargs))
 
     async def async_log_failure_event(self, kwargs, exception, start_time, end_time):
-        del kwargs, exception, start_time, end_time
+        del exception, start_time, end_time
         self.failure += 1
+        self.failure_payloads.append(dict(kwargs))
 
 
 class BlockingMCPToolGuardrail(CustomGuardrail):
@@ -730,11 +734,50 @@ async def test_chat_completion_runs_success_callback(client, test_app):
 
 
 @pytest.mark.asyncio
+async def test_chat_completion_uses_explicit_provider_for_callbacks_and_spend(client, test_app):
+    recorder = RecordingCallback()
+    manager = CallbackManager()
+    manager.register_callback(recorder, callback_type="success")
+    test_app.state.callback_manager = manager
+    test_app.state.spend_tracking_service = _SpendRecorder()
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.deltallm_params.update(
+        {
+            "provider": "groq",
+            "model": "openai/gpt-oss-120b",
+            "api_base": "https://api.groq.com/openai/v1",
+        }
+    )
+
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False}
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+    assert response.status_code == 200
+    await asyncio.sleep(0.05)
+
+    assert recorder.success == 1
+    assert recorder.success_payloads[-1]["api_provider"] == "groq"
+    assert recorder.success_payloads[-1]["deployment_model"] == "openai/gpt-oss-120b"
+    spend_event = test_app.state.spend_tracking_service.events[-1]
+    assert spend_event["metadata"]["provider"] == "groq"
+    assert spend_event["metadata"]["deployment_model"] == "openai/gpt-oss-120b"
+
+
+@pytest.mark.asyncio
 async def test_chat_completion_runs_failure_callback(client, test_app):
     recorder = RecordingCallback()
     manager = CallbackManager()
     manager.register_callback(recorder, callback_type="failure")
     test_app.state.callback_manager = manager
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.deltallm_params.update(
+        {
+            "provider": "groq",
+            "model": "openai/gpt-oss-120b",
+            "api_base": "https://api.groq.com/openai/v1",
+        }
+    )
 
     async def failing_post(url, headers, json, timeout):  # noqa: ANN001, ANN201
         import httpx
@@ -750,6 +793,8 @@ async def test_chat_completion_runs_failure_callback(client, test_app):
     assert response.status_code == 503
     await asyncio.sleep(0.05)
     assert recorder.failure == 1
+    assert recorder.failure_payloads[-1]["api_provider"] == "groq"
+    assert recorder.failure_payloads[-1]["deployment_model"] == "openai/gpt-oss-120b"
 
 
 @pytest.mark.asyncio

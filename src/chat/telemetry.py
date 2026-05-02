@@ -81,6 +81,7 @@ async def emit_stream_success(
         api_base=api_base,
         cache_hit=cache_hit,
         cache_key=cache_key,
+        api_provider=resolve_provider(params),
         turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
     )
     callback_manager.dispatch_success_callbacks(callback_payload)
@@ -195,6 +196,7 @@ async def emit_stream_failure(
         api_base=failure_fields["api_base"],
         cache_hit=cache_hit,
         cache_key=cache_key,
+        api_provider=failure_fields["provider"],
         error_info={
             "error_type": getattr(exc, "error_type", None) or exc.__class__.__name__,
             "message": str(exc),
@@ -346,6 +348,7 @@ async def emit_nonstream_success(
         cache_key=cache_key,
         response_cost=request_cost,
         api_latency_ms=api_latency_ms,
+        api_provider=api_provider,
         turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
     )
     callback_manager.dispatch_success_callbacks(callback_payload)
@@ -487,6 +490,7 @@ async def emit_nonstream_failure(
         api_base=failure_fields["api_base"],
         cache_hit=cache_hit,
         cache_key=cache_key,
+        api_provider=str(failure_fields["provider"] or api_provider),
         error_info={"error_type": exc.__class__.__name__, "message": str(exc)},
         turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
     )

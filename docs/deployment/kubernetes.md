@@ -325,6 +325,7 @@ config:
   model_list:
     - model_name: gpt-4o
       deltallm_params:
+        provider: openai
         model: openai/gpt-4o
         api_key: os.environ/OPENAI_API_KEY
         api_base: https://api.openai.com/v1

@@ -706,6 +706,38 @@ async def test_provider_health_summary_counts_models_beyond_paginated_limit(clie
 
 
 @pytest.mark.asyncio
+async def test_model_dashboard_uses_explicit_provider_over_model_prefix(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.model_registry = {
+        "oss-chat": [
+            {
+                "deployment_id": "dep-groq-oss",
+                "deltallm_params": {
+                    "provider": "groq",
+                    "model": "openai/gpt-oss-120b",
+                    "api_base": "https://api.groq.com/openai/v1",
+                    "api_key": "provider-key",
+                },
+            }
+        ]
+    }
+
+    models_response = await client.get("/ui/api/models", headers={"Authorization": "Bearer mk-test"})
+    health_response = await client.get("/ui/api/models/provider-health-summary", headers={"Authorization": "Bearer mk-test"})
+
+    assert models_response.status_code == 200
+    assert health_response.status_code == 200
+    model_payload = models_response.json()
+    assert model_payload["data"][0]["provider"] == "groq"
+    assert model_payload["data"][0]["deltallm_params"]["model"] == "openai/gpt-oss-120b"
+
+    health_payload = health_response.json()
+    assert health_payload["summary"]["total_providers"] == 1
+    assert health_payload["providers"][0]["provider"] == "groq"
+    assert health_payload["providers"][0]["models"] == 1
+
+
+@pytest.mark.asyncio
 async def test_create_model_syncs_auto_follow_org_bindings(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
     binding_repository = _MutableCallableTargetBindingRepository(

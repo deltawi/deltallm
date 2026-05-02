@@ -288,6 +288,11 @@ async def test_grouped_spend_report_for_provider_uses_canonical_provider_groupin
     assert "THEN 'groq'" in query
     assert "<> 'cache'" in query
     assert "COALESCE(s.api_base, 'unknown')" not in query
+    metadata_pos = query.index("metadata->>'provider'")
+    provider_pos = query.index("NULLIF(LOWER(TRIM(s.provider))")
+    cache_override_pos = query.index("<> 'cache'")
+    api_base_pos = query.index("openai.azure.com")
+    assert metadata_pos < provider_pos < cache_override_pos < api_base_pos
 
 
 @pytest.mark.asyncio
