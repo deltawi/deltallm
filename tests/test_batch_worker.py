@@ -235,6 +235,326 @@ async def test_batch_worker_logs_batch_pricing_and_spend(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_batch_worker_processes_chat_item_with_chat_batch_accounting(monkeypatch):
+    execute_calls: list[dict] = []
+    router_usage_calls: list[tuple[str, str, dict[str, int]]] = []
+    router_contexts: list[dict] = []
+
+    async def _fake_execute_chat(request, payload, deployment, *, record_usage: bool = True):
+        del request, deployment
+        execute_calls.append({"model": payload.model, "record_usage": record_usage})
+        return (
+            {
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 1,
+                "model": payload.model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "hello"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+            },
+            12.0,
+        )
+
+    async def _patched_record_router_usage(state_backend, deployment_id: str, *, mode: str, usage: dict):
+        del state_backend
+        router_usage_calls.append((deployment_id, mode, dict(usage)))
+
+    monkeypatch.setattr("src.batch.worker.execute_chat", _fake_execute_chat)
+    monkeypatch.setattr("src.batch.worker.record_router_usage", _patched_record_router_usage)
+
+    deployment = SimpleNamespace(
+        deployment_id="dep-chat",
+        deltallm_params={
+            "provider": "groq",
+            "model": "openai/gpt-oss-120b",
+            "api_base": "https://api.groq.com/openai/v1",
+        },
+        input_cost_per_token=0.001,
+        output_cost_per_token=0.002,
+        model_info={"batch_input_cost_per_token": 0.0005, "batch_output_cost_per_token": 0.001},
+    )
+
+    class _Router:
+        def resolve_model_group(self, model: str) -> str:
+            return model
+
+        async def select_deployment(self, model_group: str, request_context: dict) -> str:
+            del model_group
+            router_contexts.append(request_context)
+            return "dep-chat"
+
+        def require_deployment(self, model_group: str, deployment: str):
+            del model_group, deployment
+            return deployment_obj
+
+    class _Failover:
+        async def execute_with_failover(self, *, primary_deployment, model_group, execute, return_deployment=False, **kwargs):
+            del model_group, kwargs
+            data = await execute(primary_deployment)
+            if return_deployment:
+                return data, primary_deployment
+            return data
+
+    deployment_obj = deployment
+    repo = _FakeRepository()
+    passive_health = _PassiveHealthRecorder()
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            router=_Router(),
+            failover_manager=_Failover(),
+            spend_tracking_service=None,
+            passive_health_tracker=passive_health,
+            router_state_backend=SimpleNamespace(),
+        )
+    )
+    worker = BatchExecutorWorker(
+        app=app,
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+
+    now = datetime.now(tz=UTC)
+    job = BatchJobRecord(
+        batch_id="b-chat",
+        endpoint="/v1/chat/completions",
+        status=BatchJobStatus.IN_PROGRESS,
+        execution_mode="managed_internal",
+        input_file_id="f1",
+        output_file_id=None,
+        error_file_id=None,
+        model="gpt-oss",
+        metadata={},
+        provider_batch_id=None,
+        provider_status=None,
+        provider_error=None,
+        provider_last_sync_at=None,
+        total_items=1,
+        in_progress_items=1,
+        completed_items=0,
+        failed_items=0,
+        cancelled_items=0,
+        locked_by=None,
+        lease_expires_at=None,
+        cancel_requested_at=None,
+        status_last_updated_at=now,
+        created_by_api_key="tok-1",
+        created_by_user_id="u1",
+        created_by_team_id="t1",
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+        expires_at=None,
+        created_by_organization_id="org-1",
+    )
+    item = BatchItemRecord(
+        item_id="i-chat",
+        batch_id="b-chat",
+        line_number=1,
+        custom_id="chat-1",
+        status="in_progress",
+        request_body={
+            "model": "gpt-oss",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": False,
+            "metadata": {"tags": ["batch-blue"]},
+        },
+        response_body=None,
+        error_body=None,
+        usage=None,
+        provider_cost=0.0,
+        billed_cost=0.0,
+        attempts=0,
+        last_error=None,
+        locked_by="w1",
+        lease_expires_at=now,
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+    )
+
+    await worker._process_item(job, item)
+
+    assert router_contexts == [{"metadata": {"tags": ["batch-blue"]}, "user_id": "u1"}]
+    assert execute_calls == [{"model": "gpt-oss", "record_usage": False}]
+    assert passive_health.calls == [("dep-chat", True, None)]
+    assert router_usage_calls == [("dep-chat", "chat", {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10})]
+    assert len(repo.completed_calls) == 1
+    completed = repo.completed_calls[0]
+    assert completed["response_body"]["object"] == "chat.completion"
+    assert completed["usage"] == {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}
+    assert completed["billed_cost"] == pytest.approx(0.0065)
+    assert completed["provider_cost"] == pytest.approx(0.013)
+    assert len(repo.completion_outbox_calls) == 1
+    outbox_payload = repo.completion_outbox_calls[0]
+    assert outbox_payload["call_type"] == "chat_batch"
+    assert outbox_payload["api_provider"] == "groq"
+    assert outbox_payload["api_base"] == "https://api.groq.com/openai/v1"
+    assert outbox_payload["deployment_model"] == "openai/gpt-oss-120b"
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_logs_chat_request_failure_with_batch_metadata(monkeypatch):
+    async def _fake_execute_chat(request, payload, deployment, *, record_usage: bool = True):
+        del request, payload, deployment, record_usage
+        raise RuntimeError("chat provider down")
+
+    monkeypatch.setattr("src.batch.worker.execute_chat", _fake_execute_chat)
+
+    class _BudgetService:
+        async def check_budgets(self, **kwargs):  # noqa: ANN003, ANN201
+            return None
+
+    class _RouterStateBackend:
+        async def increment_usage_counters(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+            return None
+
+    class _Router:
+        def resolve_model_group(self, model: str) -> str:
+            return model
+
+        async def select_deployment(self, model_group: str, request_context: dict) -> str:
+            del model_group, request_context
+            return "dep-chat"
+
+        def require_deployment(self, model_group: str, deployment: str):
+            del model_group, deployment
+            return deployment_obj
+
+    class _Failover:
+        async def execute_with_failover(self, *, primary_deployment, model_group, execute, return_deployment=False, **kwargs):
+            del model_group, kwargs
+            data = await execute(primary_deployment)
+            if return_deployment:
+                return data, primary_deployment
+            return data
+
+    class _FailureRepo(_FakeRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failed_calls: list[dict] = []
+
+        async def mark_item_failed(self, **kwargs) -> bool:
+            self.failed_calls.append(kwargs)
+            return True
+
+        async def refresh_job_progress(self, batch_id: str):
+            assert batch_id == "b-chat"
+            return None
+
+    deployment_obj = SimpleNamespace(
+        deployment_id="dep-chat",
+        deltallm_params={
+            "provider": "groq",
+            "model": "openai/gpt-oss-120b",
+            "api_base": "https://api.groq.com/openai/v1",
+        },
+        input_cost_per_token=0.001,
+        output_cost_per_token=0.002,
+        model_info={},
+    )
+    repo = _FailureRepo()
+    spend = _SpendRecorder()
+    passive_health = _PassiveHealthRecorder()
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            router=_Router(),
+            failover_manager=_Failover(),
+            spend_tracking_service=spend,
+            budget_service=_BudgetService(),
+            passive_health_tracker=passive_health,
+            router_state_backend=_RouterStateBackend(),
+        )
+    )
+    worker = BatchExecutorWorker(
+        app=app,
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+
+    now = datetime.now(tz=UTC)
+    job = BatchJobRecord(
+        batch_id="b-chat",
+        endpoint="/v1/chat/completions",
+        status=BatchJobStatus.IN_PROGRESS,
+        execution_mode="managed_internal",
+        input_file_id="f1",
+        output_file_id=None,
+        error_file_id=None,
+        model="gpt-oss",
+        metadata={},
+        provider_batch_id=None,
+        provider_status=None,
+        provider_error=None,
+        provider_last_sync_at=None,
+        total_items=1,
+        in_progress_items=1,
+        completed_items=0,
+        failed_items=0,
+        cancelled_items=0,
+        locked_by=None,
+        lease_expires_at=None,
+        cancel_requested_at=None,
+        status_last_updated_at=now,
+        created_by_api_key="tok-1",
+        created_by_user_id="u1",
+        created_by_team_id="t1",
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+        expires_at=None,
+        created_by_organization_id="org-1",
+    )
+    item = BatchItemRecord(
+        item_id="i-chat",
+        batch_id="b-chat",
+        line_number=1,
+        custom_id="chat-1",
+        status="in_progress",
+        request_body={
+            "model": "gpt-oss",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": False,
+        },
+        response_body=None,
+        error_body=None,
+        usage=None,
+        provider_cost=0.0,
+        billed_cost=0.0,
+        attempts=0,
+        last_error=None,
+        locked_by="w1",
+        lease_expires_at=now,
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+    )
+
+    await worker._process_item(job, item)
+
+    assert len(repo.failed_calls) == 1
+    assert repo.failed_calls[0]["item_id"] == "i-chat"
+    assert passive_health.calls == [("dep-chat", False, "chat provider down")]
+    assert len(spend.events) == 1
+    assert spend.events[0]["status"] == "error"
+    assert spend.events[0]["request_id"] == "batch:b-chat:i-chat"
+    assert spend.events[0]["call_type"] == "chat_batch"
+    assert spend.events[0]["metadata"] == {
+        "batch_id": "b-chat",
+        "batch_item_id": "i-chat",
+        "custom_id": "chat-1",
+        "endpoint": "/v1/chat/completions",
+    }
+
+
+@pytest.mark.asyncio
 async def test_batch_worker_uses_post_construction_hook_patches(monkeypatch):
     execute_inputs: list[object] = []
     router_usage_calls: list[tuple[str, str, dict[str, int]]] = []
@@ -729,6 +1049,86 @@ async def test_batch_worker_iter_output_lines_emit_openai_batch_success_rows():
                     "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
                     "model": "provider-embedding-model",
                     "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+                },
+            },
+            "error": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_iter_output_lines_emit_chat_batch_success_rows():
+    now = datetime.now(tz=UTC)
+
+    class _ArtifactRepo:
+        async def list_items(self, batch_id: str):
+            assert batch_id == "b1"
+            return [
+                BatchItemRecord(
+                    item_id="i1",
+                    batch_id=batch_id,
+                    line_number=1,
+                    custom_id="chat-1",
+                    status="completed",
+                    request_body={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]},
+                    response_body={
+                        "id": "chatcmpl-1",
+                        "object": "chat.completion",
+                        "created": 1,
+                        "model": "gpt-4o-mini",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {"role": "assistant", "content": "hello"},
+                                "finish_reason": "stop",
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+                        "_provider": "openai",
+                    },
+                    error_body=None,
+                    usage=None,
+                    provider_cost=0.0,
+                    billed_cost=0.0,
+                    attempts=1,
+                    last_error=None,
+                    locked_by=None,
+                    lease_expires_at=None,
+                    created_at=now,
+                    started_at=now,
+                    completed_at=now,
+                )
+            ]
+
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=_ArtifactRepo(),  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+
+    rows = [json.loads(line) async for line in worker._iter_output_lines("b1", endpoint="/v1/chat/completions")]
+
+    assert rows == [
+        {
+            "id": "batch_req_i1",
+            "custom_id": "chat-1",
+            "response": {
+                "status_code": 200,
+                "request_id": "req_batch_i1",
+                "body": {
+                    "id": "chatcmpl-1",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-4o-mini",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "hello"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
                 },
             },
             "error": None,

@@ -291,7 +291,9 @@ Governance notifications are opt-in and disabled by default.
 | `prometheus_endpoint` | `/metrics` | Path for Prometheus metrics endpoint |
 | `metrics_retention_days` | `30` | Days to retain spend log data |
 
-## Embeddings Batch Settings
+## Batch Settings
+
+These settings retain the historical `embeddings_batch_*` names for compatibility. They now control the internal Batch API for supported endpoints, including `/v1/embeddings` and non-streaming `/v1/chat/completions`.
 
 | Setting | Default | Description |
 |---------|---------|-------------|

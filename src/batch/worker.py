@@ -14,9 +14,11 @@ from src.batch.worker_execution import BatchExecutionEngine
 from src.batch.worker_types import (
     BatchArtifactValidationError,
     BatchWorkerConfig,
+    _PreparedChatItem,
     _PreparedEmbeddingItem,
     _RequestShim,
 )
+from src.chat.executor import execute_chat
 from src.metrics import (
     observe_batch_item_execution_latency,
     publish_batch_runtime_summary,
@@ -32,6 +34,7 @@ __all__ = [
     "BatchExecutorWorker",
     "BatchWorkerConfig",
     "_PreparedEmbeddingItem",
+    "_PreparedChatItem",
     "_RequestShim",
 ]
 
@@ -61,6 +64,7 @@ class BatchExecutorWorker:
             config=config,
             normalize_persisted_embedding_response_body=self._artifact_finalizer.normalize_persisted_embedding_response_body,
             execute_embedding=self._call_execute_embedding,
+            execute_chat=self._call_execute_chat,
             record_router_usage=self._call_record_router_usage,
             observe_item_execution_latency=self._call_observe_item_execution_latency,
             start_heartbeat=self._call_start_heartbeat,
@@ -77,6 +81,9 @@ class BatchExecutorWorker:
 
     async def _call_execute_embedding(self, request, payload, deployment):  # noqa: ANN001, ANN201
         return await _execute_embedding(request, payload, deployment)
+
+    async def _call_execute_chat(self, request, payload, deployment, *, record_usage: bool = True):  # noqa: ANN001, ANN201
+        return await execute_chat(request, payload, deployment, record_usage=record_usage)
 
     async def _call_record_router_usage(self, router_state_backend, deployment_id: str, *, mode: str, usage: dict) -> None:
         await record_router_usage(
@@ -176,7 +183,7 @@ class BatchExecutorWorker:
             await self._stop_heartbeat(job_heartbeat)
             await self.repository.release_job_lease(batch_id=job.batch_id, worker_id=self.config.worker_id)
 
-    async def _prepare_item_for_execution(self, job, item) -> _PreparedEmbeddingItem:  # noqa: ANN001
+    async def _prepare_item_for_execution(self, job, item) -> _PreparedEmbeddingItem | _PreparedChatItem:  # noqa: ANN001
         self._sync_dependencies()
         return await self._execution_engine.prepare_item_for_execution(job, item)
 
@@ -201,9 +208,9 @@ class BatchExecutorWorker:
         self._sync_dependencies()
         await self._artifact_finalizer.finalize_with_retry(job, finalize_artifacts=self._finalize_artifacts)
 
-    async def _iter_output_lines(self, batch_id: str):  # noqa: ANN201
+    async def _iter_output_lines(self, batch_id: str, *, endpoint: str = "/v1/embeddings"):  # noqa: ANN201
         self._sync_dependencies()
-        async for line in self._artifact_finalizer.iter_output_lines(batch_id):
+        async for line in self._artifact_finalizer.iter_output_lines(batch_id, endpoint=endpoint):
             yield line
 
     async def _iter_error_lines(self, batch_id: str):  # noqa: ANN201

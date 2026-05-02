@@ -37,6 +37,8 @@ async def execute_chat(
     request: Request,
     payload: ChatCompletionRequest,
     deployment: Deployment,
+    *,
+    record_usage: bool = True,
 ) -> tuple[dict[str, Any], float]:
     params = deployment.deltallm_params
     upstream = resolve_chat_upstream(request, params, is_stream=bool(payload.stream))
@@ -89,12 +91,15 @@ async def execute_chat(
     canonical = await adapter.translate_response(data, payload.model)
     canonical_payload = canonical.model_dump(mode="json")
 
-    await record_router_usage(
-        request.app.state.router_state_backend,
-        deployment.deployment_id,
-        mode="chat",
-        usage=canonical_payload.get("usage"),
-    )
+    if record_usage:
+        router_state_backend = getattr(request.app.state, "router_state_backend", None)
+        if router_state_backend is not None:
+            await record_router_usage(
+                router_state_backend,
+                deployment.deployment_id,
+                mode="chat",
+                usage=canonical_payload.get("usage"),
+            )
     return canonical_payload, (perf_counter() - upstream_start) * 1000
 
 

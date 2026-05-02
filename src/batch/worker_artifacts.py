@@ -7,6 +7,7 @@ import logging
 from time import perf_counter
 from typing import Any, AsyncIterator, Awaitable, Callable
 
+from src.batch.endpoints import BATCH_ENDPOINT_CHAT_COMPLETIONS, BATCH_ENDPOINT_EMBEDDINGS
 from src.batch.models import BatchJobStatus, is_operator_failed_reason
 from src.batch.repository import BatchRepository
 from src.batch.storage import BatchArtifactStorage
@@ -113,6 +114,9 @@ class BatchArtifactFinalizer:
         normalized_model = request_model.strip()
         return normalized_model or None
 
+    def _public_chat_model_fallback(self, item) -> str | None:  # noqa: ANN001
+        return self._public_embedding_model_fallback(item)
+
     def _sanitize_public_embedding_body(self, item) -> dict[str, Any]:  # noqa: ANN001
         response_body = item.response_body
         if not isinstance(response_body, dict):
@@ -184,14 +188,98 @@ class BatchArtifactFinalizer:
 
         return sanitized
 
-    def _serialize_completed_artifact_row(self, item) -> dict[str, Any]:  # noqa: ANN001
+    def _normalized_chat_usage_or_none(self, value: Any) -> dict[str, Any] | None:
+        if not isinstance(value, dict):
+            return None
+        normalized_usage = dict(value)
+        for token_field in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            token_value = normalized_usage.get(token_field)
+            if token_value is None:
+                continue
+            if type(token_value) is not int or token_value < 0:
+                return None
+        return normalized_usage
+
+    def _validate_public_chat_usage(self, value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            raise BatchArtifactValidationError("completed batch item chat response usage is not an object")
+
+        normalized_usage = dict(value)
+        for token_field in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            token_value = normalized_usage.get(token_field)
+            if token_value is None:
+                continue
+            if type(token_value) is not int:
+                raise BatchArtifactValidationError(
+                    f"completed batch item chat response usage has invalid {token_field}={token_value!r}"
+                )
+            if token_value < 0:
+                raise BatchArtifactValidationError(
+                    f"completed batch item chat response usage has negative {token_field}={token_value!r}"
+                )
+        return normalized_usage
+
+    def _sanitize_public_chat_body(self, item) -> dict[str, Any]:  # noqa: ANN001
+        response_body = item.response_body
+        if not isinstance(response_body, dict):
+            raise BatchArtifactValidationError("completed batch item is missing a chat completion response body")
+
+        sanitized = {key: value for key, value in response_body.items() if not str(key).startswith("_")}
+        object_type = sanitized.get("object")
+        if object_type is None:
+            sanitized["object"] = "chat.completion"
+        elif object_type != "chat.completion":
+            raise BatchArtifactValidationError(
+                f"completed batch item has invalid chat response object={object_type!r}"
+            )
+
+        choices = sanitized.get("choices")
+        if not isinstance(choices, list):
+            raise BatchArtifactValidationError("completed batch item chat response choices is not a list")
+        sanitized["choices"] = [dict(choice) for choice in choices if isinstance(choice, dict)]
+        if len(sanitized["choices"]) != len(choices):
+            raise BatchArtifactValidationError("completed batch item chat response contains a non-object choice")
+
+        model_name = sanitized.get("model")
+        if not isinstance(model_name, str) or not model_name.strip():
+            fallback_model = self._public_chat_model_fallback(item)
+            if fallback_model is not None:
+                sanitized["model"] = fallback_model
+        model_name = sanitized.get("model")
+        if not isinstance(model_name, str) or not model_name.strip():
+            raise BatchArtifactValidationError("completed batch item chat response is missing a valid model")
+
+        usage_value = sanitized.get("usage")
+        if usage_value is None:
+            sanitized["usage"] = self._normalized_chat_usage_or_none(item.usage) or {}
+            return sanitized
+
+        try:
+            normalized_usage = self._validate_public_chat_usage(usage_value)
+        except BatchArtifactValidationError:
+            normalized_usage = self._normalized_chat_usage_or_none(item.usage)
+            if normalized_usage is None:
+                raise
+        sanitized["usage"] = normalized_usage
+        return sanitized
+
+    def _serialize_completed_artifact_row(
+        self,
+        item,
+        *,
+        endpoint: str = BATCH_ENDPOINT_EMBEDDINGS,
+    ) -> dict[str, Any]:  # noqa: ANN001
+        if endpoint == BATCH_ENDPOINT_CHAT_COMPLETIONS:
+            body = self._sanitize_public_chat_body(item)
+        else:
+            body = self._sanitize_public_embedding_body(item)
         return {
             "id": self._public_batch_row_id(item),
             "custom_id": item.custom_id,
             "response": {
                 "status_code": 200,
                 "request_id": self._public_batch_request_id(item),
-                "body": self._sanitize_public_embedding_body(item),
+                "body": body,
             },
             "error": None,
         }
@@ -331,10 +419,15 @@ class BatchArtifactFinalizer:
         for item in await self.repository.list_items(batch_id):
             yield item
 
-    async def iter_output_lines(self, batch_id: str) -> AsyncIterator[str]:
+    async def iter_output_lines(
+        self,
+        batch_id: str,
+        *,
+        endpoint: str = BATCH_ENDPOINT_EMBEDDINGS,
+    ) -> AsyncIterator[str]:
         async for item in self._iter_batch_items(batch_id):
             if item.status == "completed":
-                yield json.dumps(self._serialize_completed_artifact_row(item))
+                yield json.dumps(self._serialize_completed_artifact_row(item, endpoint=endpoint))
 
     async def iter_error_lines(self, batch_id: str) -> AsyncIterator[str]:
         async for item in self._iter_batch_items(batch_id):
@@ -352,7 +445,7 @@ class BatchArtifactFinalizer:
                 key, size, checksum = await self.storage.write_lines_stream(
                     purpose="batch_output",
                     filename=f"{job.batch_id}-output.jsonl",
-                    lines=self.iter_output_lines(job.batch_id),
+                    lines=self.iter_output_lines(job.batch_id, endpoint=job.endpoint),
                 )
                 file_record = await self.repository.create_file(
                     purpose="batch_output",
