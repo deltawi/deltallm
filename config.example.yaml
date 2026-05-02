@@ -18,6 +18,7 @@ model_list:
   # Keep this if you want to bootstrap one OpenAI-backed chat model on first start.
   - model_name: gpt-4o-mini
     deltallm_params:
+      provider: openai
       model: openai/gpt-4o-mini
       api_key: os.environ/OPENAI_API_KEY
       api_base: https://api.openai.com/v1

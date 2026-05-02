@@ -23,6 +23,7 @@ For most teams, use this model lifecycle:
 model_list:
   - model_name: gpt-4o-mini
     deltallm_params:
+      provider: openai
       model: openai/gpt-4o-mini
       api_key: os.environ/OPENAI_API_KEY
       api_base: https://api.openai.com/v1
@@ -60,18 +61,19 @@ After the initial seed, set `model_deployment_bootstrap_from_config` back to `fa
 
 ## Fields You Usually Need
 
-| Field | Required | What it means |
-|-------|----------|---------------|
-| `model_name` | Yes | Public model name clients send in API requests |
-| `deltallm_params.model` | Yes | Provider-prefixed upstream model ID, such as `openai/gpt-4o-mini` |
-| `deltallm_params.api_key` | Yes | Provider API key |
-| `deltallm_params.api_base` | No | Custom provider base URL |
-| `deltallm_params.auth_header_name` | No | Custom upstream auth header key for supported OpenAI-compatible providers |
-| `deltallm_params.auth_header_format` | No | Custom upstream auth header value template, must include `{api_key}` |
-| `deltallm_params.timeout` | No | Upstream timeout in seconds |
-| `deltallm_params.weight` | No | Relative weight when multiple deployments share one public model |
-| `model_info.mode` | No | Runtime workload type such as `chat`, `embedding`, or `rerank` |
-| `model_info.access_groups` | No | Authorization groups attached to the public callable target |
+| Field | Status | What it means |
+|-------|--------|---------------|
+| `model_name` | Required | Public model name clients send in API requests |
+| `deltallm_params.provider` | Recommended for new config; required by the admin UI/API | Authoritative provider identity for routing visibility, dashboards, spend, callbacks, and metrics |
+| `deltallm_params.model` | Required | Upstream model ID sent to the provider; provider prefixes remain supported as legacy/import fallback |
+| `deltallm_params.api_key` | Required | Provider API key |
+| `deltallm_params.api_base` | Optional | Custom provider base URL |
+| `deltallm_params.auth_header_name` | Optional | Custom upstream auth header key for supported OpenAI-compatible providers |
+| `deltallm_params.auth_header_format` | Optional | Custom upstream auth header value template, must include `{api_key}` |
+| `deltallm_params.timeout` | Optional | Upstream timeout in seconds |
+| `deltallm_params.weight` | Optional | Relative weight when multiple deployments share one public model |
+| `model_info.mode` | Optional | Runtime workload type such as `chat`, `embedding`, or `rerank` |
+| `model_info.access_groups` | Optional | Authorization groups attached to the public callable target |
 | `model_info.tags` | No | Routing tags for deployment selection; not authorization |
 
 ## Custom Upstream Auth Headers
@@ -102,6 +104,7 @@ Example config-file deployment for a vLLM gateway that expects `X-API-Key`:
 model_list:
   - model_name: support-vllm
     deltallm_params:
+      provider: vllm
       model: vllm/meta-llama/Llama-3.1-8B-Instruct
       api_key: os.environ/VLLM_GATEWAY_KEY
       api_base: https://vllm.example/v1
@@ -125,11 +128,13 @@ You can attach more than one deployment to the same public model name by repeati
 model_list:
   - model_name: gpt-4o
     deltallm_params:
+      provider: openai
       model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
   - model_name: gpt-4o
     deltallm_params:
+      provider: azure_openai
       model: azure/gpt-4o-deployment
       api_key: os.environ/AZURE_API_KEY
       api_base: https://your-resource.openai.azure.com
@@ -156,6 +161,7 @@ DeltaLLM supports several runtime modes. Use `model_info.mode` when the deployme
 model_list:
   - model_name: whisper-large
     deltallm_params:
+      provider: groq
       model: groq/whisper-large-v3-turbo
       api_key: os.environ/GROQ_API_KEY
     model_info:
@@ -211,6 +217,7 @@ processed by the async batch worker. It does not change synchronous
 model_list:
   - model_name: text-embedding-3-large
     deltallm_params:
+      provider: openai
       model: openai/text-embedding-3-large
       api_key: os.environ/OPENAI_API_KEY
     model_info:
@@ -239,6 +246,7 @@ Pricing metadata powers spend tracking.
 model_list:
   - model_name: gpt-4o-mini
     deltallm_params:
+      provider: openai
       model: openai/gpt-4o-mini
       api_key: os.environ/OPENAI_API_KEY
     model_info:
@@ -252,6 +260,7 @@ Default parameters let you inject request defaults for a deployment.
 model_list:
   - model_name: gpt-4o-mini
     deltallm_params:
+      provider: openai
       model: openai/gpt-4o-mini
       api_key: os.environ/OPENAI_API_KEY
     model_info:
@@ -262,9 +271,9 @@ model_list:
 
 User-supplied request values still take priority over these defaults.
 
-## Provider Prefixes
+## Provider Prefix Fallback
 
-Use a provider prefix in `deltallm_params.model`.
+For new deployments, set `deltallm_params.provider`. Provider prefixes in `deltallm_params.model` remain supported for legacy config/import fallback, but they are not the source of truth when `provider` is present. The admin UI/API requires an explicit provider for created or updated deployments.
 
 | Provider | Prefix | Example |
 |----------|--------|---------|

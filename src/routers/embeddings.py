@@ -328,6 +328,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             api_base=api_base,
             response_cost=request_cost,
             api_latency_ms=api_latency_ms,
+            api_provider=api_provider,
             turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
         )
         callback_manager.dispatch_success_callbacks(callback_payload)
@@ -387,6 +388,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             deployment_model=failure_deployment_model, request_payload=request_data, response_obj=None,
             user_api_key_dict=auth.model_dump(mode="json"), start_time=callback_start, end_time=datetime.now(tz=UTC),
             api_base=failure_api_base,
+            api_provider=failure_provider,
             error_info={"error_type": exc.__class__.__name__, "message": str(exc)},
             turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
         )
@@ -453,6 +455,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             deployment_model=failure_deployment_model, request_payload=request_data, response_obj=None,
             user_api_key_dict=auth.model_dump(mode="json"), start_time=callback_start, end_time=datetime.now(tz=UTC),
             api_base=failure_api_base,
+            api_provider=failure_provider,
             error_info={"error_type": exc.__class__.__name__, "message": str(exc)},
             turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
         )

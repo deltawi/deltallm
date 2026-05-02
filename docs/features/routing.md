@@ -18,6 +18,7 @@ model_list:
   - model_name: gpt-4o-mini
     deployment_id: openai-primary
     deltallm_params:
+      provider: openai
       model: openai/gpt-4o-mini
       api_key: os.environ/OPENAI_API_KEY
     model_info:
@@ -26,6 +27,7 @@ model_list:
   - model_name: gpt-4o-mini
     deployment_id: openai-secondary
     deltallm_params:
+      provider: openai
       model: openai/gpt-4o-mini
       api_key: os.environ/OPENAI_API_KEY_2
     model_info:
@@ -121,11 +123,11 @@ Setup:
 model_list:
   - model_name: gpt-4o-mini
     deployment_id: primary
-    deltallm_params: {model: openai/gpt-4o-mini}
+    deltallm_params: {provider: openai, model: openai/gpt-4o-mini}
     model_info: {weight: 9}
   - model_name: gpt-4o-mini
     deployment_id: canary
-    deltallm_params: {model: openai/gpt-4o-mini}
+    deltallm_params: {provider: openai, model: openai/gpt-4o-mini}
     model_info: {weight: 1}
 
 router_settings:
@@ -152,11 +154,11 @@ Setup:
 model_list:
   - model_name: gpt-4o-mini
     deployment_id: primary
-    deltallm_params: {model: openai/gpt-4o-mini}
+    deltallm_params: {provider: openai, model: openai/gpt-4o-mini}
     model_info: {priority: 0}
   - model_name: gpt-4o-mini
     deployment_id: standby
-    deltallm_params: {model: openai/gpt-4o-mini}
+    deltallm_params: {provider: openai, model: openai/gpt-4o-mini}
     model_info: {priority: 1}
 
 router_settings:
@@ -247,11 +249,11 @@ Setup:
 model_list:
   - model_name: gpt-4o-mini
     deployment_id: east
-    deltallm_params: {model: openai/gpt-4o-mini}
+    deltallm_params: {provider: openai, model: openai/gpt-4o-mini}
     model_info: {rpm_limit: 600, tpm_limit: 300000}
   - model_name: gpt-4o-mini
     deployment_id: west
-    deltallm_params: {model: openai/gpt-4o-mini}
+    deltallm_params: {provider: openai, model: openai/gpt-4o-mini}
     model_info: {rpm_limit: 600, tpm_limit: 300000}
 
 router_settings:
@@ -312,11 +314,11 @@ Setup:
 model_list:
   - model_name: gpt-4o-mini
     deployment_id: eu
-    deltallm_params: {model: openai/gpt-4o-mini}
+    deltallm_params: {provider: openai, model: openai/gpt-4o-mini}
     model_info: {tags: ["eu"]}
   - model_name: gpt-4o-mini
     deployment_id: us
-    deltallm_params: {model: openai/gpt-4o-mini}
+    deltallm_params: {provider: openai, model: openai/gpt-4o-mini}
     model_info: {tags: ["us"]}
 ```
 

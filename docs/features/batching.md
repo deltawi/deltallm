@@ -276,6 +276,7 @@ Micro-batching is configured per model deployment, not globally. Set `upstream_m
 model_list:
   - model_name: text-embedding-3-small
     deltallm_params:
+      provider: openai
       model: openai/text-embedding-3-small
       api_key: os.environ/OPENAI_API_KEY
     model_info:

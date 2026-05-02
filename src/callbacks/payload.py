@@ -62,9 +62,13 @@ def _usage_from_response(response_obj: dict[str, Any] | None) -> TokenUsage:
     )
 
 
-def _api_provider(deployment_model: str | None) -> str:
+def _api_provider(deployment_model: str | None, explicit_provider: str | None = None) -> str:
+    provider = str(explicit_provider or "").strip().lower()
+    if provider:
+        return provider
     if deployment_model and "/" in deployment_model:
-        return deployment_model.split("/", 1)[0]
+        provider = deployment_model.split("/", 1)[0].strip().lower()
+        return provider or "unknown"
     return "unknown"
 
 
@@ -84,6 +88,7 @@ def build_standard_logging_payload(
     cache_key: str | None = None,
     response_cost: float = 0.0,
     api_latency_ms: float | None = None,
+    api_provider: str | None = None,
     error_info: dict[str, Any] | None = None,
     turn_off_message_logging: bool = False,
 ) -> StandardLoggingPayload:
@@ -126,7 +131,7 @@ def build_standard_logging_payload(
         end_time=end_time,
         total_latency_ms=max(0.0, (end_time - start_time).total_seconds() * 1000),
         api_latency_ms=api_latency_ms,
-        api_provider=_api_provider(deployment_model),
+        api_provider=_api_provider(deployment_model, api_provider),
         api_base=api_base,
         error_info=error_info,
     )

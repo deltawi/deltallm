@@ -165,6 +165,7 @@ Deployment limits are declared in model configuration:
 model_list:
   - model_name: gpt-4
     litellm_params:
+      provider: openai
       model: openai/gpt-4
     model_info:
       rpm_limit: 500

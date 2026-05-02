@@ -27,3 +27,39 @@ def test_payload_builder_respects_turn_off_message_logging() -> None:
     assert payload.messages is None
     assert payload.tags == ["a", "b"]
     assert payload.usage.total_tokens == 5
+
+
+def test_payload_builder_prefers_explicit_provider_over_deployment_model_prefix() -> None:
+    payload = build_standard_logging_payload(
+        call_type="completion",
+        request_id="req-groq",
+        model="oss-chat",
+        deployment_model="openai/gpt-oss-120b",
+        request_payload={"messages": [{"role": "user", "content": "hello"}]},
+        response_obj={"usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}},
+        user_api_key_dict={"api_key": "hashed"},
+        start_time=datetime.now(tz=UTC),
+        end_time=datetime.now(tz=UTC),
+        api_base="https://api.groq.com/openai/v1",
+        api_provider="groq",
+    )
+
+    assert payload.api_provider == "groq"
+    assert payload.deployment_model == "openai/gpt-oss-120b"
+
+
+def test_payload_builder_keeps_deployment_model_prefix_fallback() -> None:
+    payload = build_standard_logging_payload(
+        call_type="completion",
+        request_id="req-legacy",
+        model="legacy-chat",
+        deployment_model="openai/gpt-4o-mini",
+        request_payload={"messages": [{"role": "user", "content": "hello"}]},
+        response_obj=None,
+        user_api_key_dict={"api_key": "hashed"},
+        start_time=datetime.now(tz=UTC),
+        end_time=datetime.now(tz=UTC),
+        api_base="https://api.openai.com/v1",
+    )
+
+    assert payload.api_provider == "openai"

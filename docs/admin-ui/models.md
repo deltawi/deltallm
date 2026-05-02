@@ -5,6 +5,7 @@ The Models page is where operators create and manage concrete provider-backed de
 Each deployment defines:
 
 - the public model name clients will call
+- the provider identity used for routing visibility, spend reports, callbacks, and dashboards
 - the upstream provider model ID
 - credentials and connection details, either inline or through a shared named credential
 - the workload type, such as chat or embeddings
@@ -35,9 +36,10 @@ Each deployment defines:
 For a simple first deployment:
 
 1. Set `model_name` to the public name you want clients to use
-2. Set `deltallm_params.model` to the provider-prefixed upstream model ID
-3. Add the provider API key inline, or select a shared named credential
-4. Keep the default mode as `chat` unless this is an embeddings, image, audio, or rerank model
+2. Choose the provider
+3. Set `deltallm_params.model` to the upstream model ID
+4. Add the provider API key inline, or select a shared named credential
+5. Keep the default mode as `chat` unless this is an embeddings, image, audio, or rerank model
 
 If you do not set a `deployment_id`, DeltaLLM creates one automatically.
 
@@ -52,7 +54,7 @@ Do not use access groups for routing. Deployment tags remain routing metadata an
 ## What the Table Tells You
 
 - **Model Name**: the public runtime model name
-- **Provider**: resolved provider type such as OpenAI or Groq
+- **Provider**: explicit deployment provider such as OpenAI or Groq
 - **Type**: runtime mode such as `chat` or `embedding`
 - **Deployment ID**: the internal ID used by route groups and policies
 - **Health**: whether the runtime currently sees the deployment as healthy
@@ -114,6 +116,7 @@ For shared gateway credentials, [Named Credentials](named-credentials.md) remain
 ## Operational Notes
 
 - DeltaLLM validates provider and mode compatibility when you create or update a deployment
+- The explicit provider is the source of truth for dashboards, spend reports, callbacks, and metrics
 - Shared provider credentials are best managed through [Named Credentials](named-credentials.md)
 - Creating, updating, and deleting deployments requires admin access
 - Readable deployment IDs make later route-group work easier

@@ -385,6 +385,31 @@ def test_build_spend_event_infers_groq_from_openai_compatible_api_base() -> None
     assert event["provider"] == "groq"
 
 
+def test_build_spend_event_prefers_explicit_provider_over_api_base_and_model_prefix() -> None:
+    event = build_spend_event(
+        request_id="req_explicit_groq",
+        api_key="key_hash",
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        end_user_id=None,
+        model="openai/gpt-oss-120b",
+        call_type="completion",
+        usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        cost=0.01,
+        metadata={
+            "provider": "groq",
+            "api_base": "https://api.openai.com/v1",
+            "deployment_model": "openai/gpt-oss-120b",
+        },
+        cache_hit=False,
+        start_time=datetime.now(tz=UTC),
+        end_time=datetime.now(tz=UTC),
+    )
+
+    assert event["provider"] == "groq"
+
+
 @pytest.mark.asyncio
 async def test_spend_tracking_preserves_explicit_provider_for_cache_rows():
     db = RecordingDB()
