@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
@@ -9,6 +8,7 @@ from uuid import uuid4
 from fastapi import HTTPException, status
 
 from src.batch.access import can_access_owned_resource
+from src.batch.endpoints import SUPPORTED_BATCH_ENDPOINT_SET, supported_batch_endpoints_display
 from src.batch.create.models import (
     BatchCreateSessionCreate,
     BatchCreateSessionRecord,
@@ -20,16 +20,16 @@ from src.batch.create.session_repository import BatchCreateSessionRepository
 from src.batch.create.session_stager import BatchCreateSessionStager
 from src.batch.models import BatchJobRecord
 from src.batch.repository import BatchRepository
+from src.batch.request_validation import parse_batch_input_line
 from src.batch.scopes import (
     batch_idempotency_scope_key,
     batch_pending_scope_key_for_auth,
     batch_pending_scope_target_for_auth,
 )
 from src.batch.storage import BatchArtifactLineTooLongError, BatchArtifactStorage
-from src.models.requests import EmbeddingRequest
 from src.models.responses import UserAPIKeyAuth
 from src.services.callable_target_grants import CallableTargetGrantService
-from src.services.model_visibility import CallableTargetPolicyMode, ensure_batch_model_allowed
+from src.services.model_visibility import CallableTargetPolicyMode
 from src.metrics import increment_batch_artifact_failure
 
 logger = logging.getLogger(__name__)
@@ -86,9 +86,32 @@ class BatchCreateSessionService:
         completion_window: str | None,
         idempotency_key: str | None = None,
     ) -> BatchCreateSessionServiceResult:
+        return await self.create_batch(
+            auth=auth,
+            input_file_id=input_file_id,
+            endpoint=endpoint,
+            metadata=metadata,
+            completion_window=completion_window,
+            idempotency_key=idempotency_key,
+        )
+
+    async def create_batch(
+        self,
+        *,
+        auth: UserAPIKeyAuth,
+        input_file_id: str,
+        endpoint: str,
+        metadata: dict[str, Any] | None,
+        completion_window: str | None,
+        idempotency_key: str | None = None,
+    ) -> BatchCreateSessionServiceResult:
         del completion_window
-        if endpoint != "/v1/embeddings":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only /v1/embeddings is supported")
+        endpoint = str(endpoint or "").strip()
+        if endpoint not in SUPPORTED_BATCH_ENDPOINT_SET:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unsupported batch endpoint '{endpoint}'. Supported endpoints: {supported_batch_endpoints_display()}",
+            )
 
         normalized_metadata = self._normalize_metadata(metadata)
         idem_scope_key, idem_key = self._idempotency_pair(auth=auth, idempotency_key=idempotency_key)
@@ -390,43 +413,23 @@ class BatchCreateSessionService:
         auth: UserAPIKeyAuth,
         seen_custom_ids: set[str],
     ):
-        line = raw_line.strip()
-        if not line:
-            return None, None
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid JSONL at line {line_number}: {exc.msg}",
-            ) from exc
-        if not isinstance(obj, dict):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Line {line_number} must be an object")
-        custom_id = str(obj.get("custom_id") or "").strip()
-        if not custom_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Line {line_number} missing custom_id")
-        if custom_id in seen_custom_ids:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Duplicate custom_id at line {line_number}")
-        seen_custom_ids.add(custom_id)
-        url = str(obj.get("url") or endpoint)
-        if url != endpoint:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Line {line_number} must target {endpoint}")
-        body = obj.get("body")
-        if not isinstance(body, dict):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Line {line_number} missing body")
-        validated = EmbeddingRequest.model_validate(body)
-        ensure_batch_model_allowed(
-            auth,
-            validated.model,
-            callable_target_grant_service=self.callable_target_grant_service,
-            policy_mode=self.callable_target_scope_policy_mode,
-        )
-        item = BatchCreateStagedRequest(
+        parsed = parse_batch_input_line(
+            raw_line,
             line_number=line_number,
-            custom_id=custom_id,
-            request_body=validated.model_dump(exclude_none=True),
+            endpoint=endpoint,
+            auth=auth,
+            seen_custom_ids=seen_custom_ids,
+            callable_target_grant_service=self.callable_target_grant_service,
+            callable_target_scope_policy_mode=self.callable_target_scope_policy_mode,
         )
-        return item, validated.model
+        if parsed is None:
+            return None, None
+        item = BatchCreateStagedRequest(
+            line_number=parsed.line_number,
+            custom_id=parsed.custom_id,
+            request_body=parsed.request_body,
+        )
+        return item, parsed.model
 
     def _idempotency_pair(
         self,

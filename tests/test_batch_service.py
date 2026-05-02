@@ -148,6 +148,71 @@ async def test_parse_input_jsonl_rejects_duplicate_custom_id() -> None:
 
 
 @pytest.mark.asyncio
+async def test_parse_input_jsonl_accepts_chat_completion_lines() -> None:
+    service = _service(callable_target_scope_policy_mode="shadow")
+    auth = UserAPIKeyAuth(api_key="sk-test", models=["gpt-4o-mini"])
+    payload = (
+        b'{"custom_id":"chat-1","method":"POST","url":"/v1/chat/completions",'
+        b'"body":{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}}\n'
+    )
+
+    items, model = service._parse_input_jsonl(payload, endpoint="/v1/chat/completions", auth=auth)
+
+    assert len(items) == 1
+    assert model == "gpt-4o-mini"
+    assert items[0].request_body["model"] == "gpt-4o-mini"
+    assert items[0].request_body["messages"] == [{"role": "user", "content": "hello"}]
+    assert items[0].request_body["stream"] is False
+
+
+@pytest.mark.asyncio
+async def test_parse_input_jsonl_rejects_streaming_chat_completion_lines() -> None:
+    service = _service()
+    auth = UserAPIKeyAuth(api_key="sk-test")
+    payload = (
+        b'{"custom_id":"chat-1","url":"/v1/chat/completions",'
+        b'"body":{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}],"stream":true}}\n'
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        service._parse_input_jsonl(payload, endpoint="/v1/chat/completions", auth=auth)
+
+    assert exc.value.status_code == 400
+    assert "non-streaming" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_parse_input_jsonl_rejects_mcp_tools_for_chat_completion_lines() -> None:
+    service = _service()
+    auth = UserAPIKeyAuth(api_key="sk-test")
+    payload = (
+        b'{"custom_id":"chat-1","url":"/v1/chat/completions",'
+        b'"body":{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}],'
+        b'"tools":[{"type":"mcp","server":"internal"}]}}\n'
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        service._parse_input_jsonl(payload, endpoint="/v1/chat/completions", auth=auth)
+
+    assert exc.value.status_code == 400
+    assert "MCP tools" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_parse_input_jsonl_rejects_unsupported_batch_endpoint() -> None:
+    service = _service()
+    auth = UserAPIKeyAuth(api_key="sk-test")
+    payload = b'{"custom_id":"item-1","url":"/v1/responses","body":{"model":"gpt-4o-mini","input":"hello"}}\n'
+
+    with pytest.raises(HTTPException) as exc:
+        service._parse_input_jsonl(payload, endpoint="/v1/responses", auth=auth)
+
+    assert exc.value.status_code == 400
+    assert "/v1/embeddings" in str(exc.value.detail)
+    assert "/v1/chat/completions" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_parse_input_jsonl_rejects_model_outside_effective_scope() -> None:
     grant_service = CallableTargetGrantService(
         repository=_FakeCallableTargetBindingRepository(

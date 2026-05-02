@@ -11,6 +11,12 @@ from time import perf_counter
 from typing import Any, Awaitable, Callable
 
 from src.batch.backpressure import BatchModelGroupDeferred
+from src.batch.endpoints import (
+    BATCH_ENDPOINT_CHAT_COMPLETIONS,
+    BATCH_ENDPOINT_EMBEDDINGS,
+    batch_call_type_for_endpoint,
+    router_usage_mode_for_batch_endpoint,
+)
 from src.batch.embedding_microbatch import (
     allocate_embedding_usage,
     build_embedding_execution_signature,
@@ -44,11 +50,12 @@ from src.metrics import (
     observe_batch_microbatch_size,
     set_batch_worker_saturation,
 )
-from src.models.requests import EmbeddingRequest
+from src.models.errors import InvalidRequestError
+from src.models.requests import ChatCompletionRequest, EmbeddingRequest, MCPToolDefinition
 from src.providers.resolution import resolve_provider
 from src.routers.routing_decision import route_failover_kwargs
 
-from src.batch.worker_types import _PreparedEmbeddingItem, _RequestShim, BatchWorkerConfig
+from src.batch.worker_types import _PreparedChatItem, _PreparedEmbeddingItem, _RequestShim, BatchWorkerConfig
 
 logger = logging.getLogger(__name__)
 _COMPLETION_OUTBOX_MAX_ATTEMPTS = 5
@@ -63,6 +70,7 @@ class BatchExecutionEngine:
         config: BatchWorkerConfig,
         normalize_persisted_embedding_response_body: Callable[..., dict[str, Any]],
         execute_embedding: Callable[..., Awaitable[dict[str, Any]]],
+        execute_chat: Callable[..., Awaitable[tuple[dict[str, Any], float]]],
         record_router_usage: Callable[..., Awaitable[None]],
         observe_item_execution_latency: Callable[..., None],
         start_heartbeat: Callable[..., asyncio.Task[None]],
@@ -73,13 +81,19 @@ class BatchExecutionEngine:
         self.config = config
         self._normalize_persisted_embedding_response_body = normalize_persisted_embedding_response_body
         self._execute_embedding = execute_embedding
+        self._execute_chat = execute_chat
         self._record_router_usage = record_router_usage
         self._observe_batch_item_execution_latency = observe_item_execution_latency
         self._start_heartbeat_fn = start_heartbeat
         self._stop_heartbeat_fn = stop_heartbeat
-        self._prepared_item_overrides: dict[str, _PreparedEmbeddingItem] = {}
+        self._prepared_item_overrides: dict[str, _PreparedEmbeddingItem | _PreparedChatItem] = {}
 
-    async def prepare_item_for_execution(self, job, item) -> _PreparedEmbeddingItem:  # noqa: ANN001
+    async def prepare_item_for_execution(self, job, item) -> _PreparedEmbeddingItem | _PreparedChatItem:  # noqa: ANN001
+        if job.endpoint == BATCH_ENDPOINT_CHAT_COMPLETIONS:
+            return await self.prepare_chat_item_for_execution(job, item)
+        if job.endpoint != BATCH_ENDPOINT_EMBEDDINGS:
+            raise InvalidRequestError(message=f"Unsupported batch endpoint '{job.endpoint}'")
+
         started_at_monotonic = perf_counter()
         embedding_request = EmbeddingRequest.model_validate(item.request_body)
         budget_service = getattr(self.app.state, "budget_service", None)
@@ -132,6 +146,50 @@ class BatchExecutionEngine:
                 input_kind=input_kind,
             ),
         )
+
+    async def prepare_chat_item_for_execution(self, job, item) -> _PreparedChatItem:  # noqa: ANN001
+        started_at_monotonic = perf_counter()
+        chat_request = ChatCompletionRequest.model_validate(item.request_body)
+        self._validate_batch_chat_request(chat_request)
+        budget_service = getattr(self.app.state, "budget_service", None)
+        if budget_service is not None:
+            await budget_service.check_budgets(
+                api_key=job.created_by_api_key,
+                user_id=job.created_by_user_id,
+                team_id=job.created_by_team_id,
+                organization_id=job.created_by_organization_id,
+                model=chat_request.model,
+            )
+
+        request_context: dict[str, Any] = {
+            "metadata": chat_request.metadata or {},
+            "user_id": job.created_by_user_id or job.created_by_api_key or "batch-worker",
+        }
+        app_router = self.app.state.router
+        model_group = app_router.resolve_model_group(chat_request.model)
+        await self._raise_if_model_group_deferred(model_group)
+
+        primary_deployment = app_router.require_deployment(
+            model_group=model_group,
+            deployment=await app_router.select_deployment(model_group, request_context),
+        )
+        return _PreparedChatItem(
+            item=item,
+            started_at_monotonic=started_at_monotonic,
+            payload=chat_request,
+            model_name=chat_request.model,
+            model_group=model_group,
+            primary_deployment=primary_deployment,
+            request_context=request_context,
+            failover_kwargs=route_failover_kwargs(request_context),
+            request_shim=_RequestShim(app=self.app),
+        )
+
+    def _validate_batch_chat_request(self, payload: ChatCompletionRequest) -> None:
+        if payload.stream is True:
+            raise InvalidRequestError(message="Chat batch requests support non-streaming requests only; stream must be false")
+        if any(isinstance(tool, MCPToolDefinition) for tool in payload.tools or []):
+            raise InvalidRequestError(message="MCP tools are not supported in batch chat yet")
 
     def _deployment_pricing(self, deployment) -> ModelPricing | None:  # noqa: ANN001
         if deployment.input_cost_per_token or deployment.output_cost_per_token:
@@ -704,7 +762,7 @@ class BatchExecutionEngine:
         self,
         *,
         job,
-        prepared: _PreparedEmbeddingItem,
+        prepared: _PreparedEmbeddingItem | _PreparedChatItem,
         usage: dict[str, Any],
         api_provider: str,
         billed_cost: float,
@@ -721,7 +779,7 @@ class BatchExecutionEngine:
             "team_id": job.created_by_team_id,
             "organization_id": job.created_by_organization_id,
             "model": prepared.payload.model,
-            "call_type": "embedding_batch",
+            "call_type": batch_call_type_for_endpoint(job.endpoint),
             "usage": dict(usage),
             "billed_cost": billed_cost,
             "provider_cost": provider_cost,
@@ -853,6 +911,7 @@ class BatchExecutionEngine:
             await self._record_upstream_success_runtime_hooks(
                 batch_id=job.batch_id,
                 deployment_id=served_deployment_id,
+                mode=router_usage_mode_for_batch_endpoint(job.endpoint),
                 usage=usage,
                 reference=prepared.item.item_id,
             )
@@ -904,10 +963,116 @@ class BatchExecutionEngine:
             if item_heartbeat is not None:
                 await self._stop_heartbeat_fn(item_heartbeat)
 
+    async def _execute_prepared_chat_item(self, job, prepared: _PreparedChatItem) -> None:  # noqa: ANN001
+        item_heartbeat: asyncio.Task[None] | None = None
+        try:
+            item_heartbeat = self._start_heartbeat_fn(
+                renew=lambda: self.repository.renew_item_lease(
+                    item_id=prepared.item.item_id,
+                    worker_id=self.config.worker_id,
+                    lease_seconds=self.config.item_lease_seconds,
+                ),
+                label=f"item:{prepared.item.item_id}",
+            )
+            (response_body, _api_latency_ms), served_deployment = await self.app.state.failover_manager.execute_with_failover(
+                primary_deployment=prepared.primary_deployment,
+                model_group=prepared.model_group,
+                execute=lambda dep: self._execute_chat(
+                    prepared.request_shim,
+                    prepared.payload,
+                    dep,
+                    record_usage=False,
+                ),
+                return_deployment=True,
+                **prepared.failover_kwargs,
+            )
+            response_body = dict(response_body)
+            usage = dict(response_body.get("usage") or {})
+            api_provider = resolve_provider(served_deployment.deltallm_params)
+            api_base = served_deployment.deltallm_params.get("api_base")
+            deployment_model = str(served_deployment.deltallm_params.get("model") or "") or None
+            deployment_pricing = self._deployment_pricing(served_deployment)
+            model_info = served_deployment.model_info or {}
+            billed_cost = completion_cost(
+                model=prepared.payload.model,
+                usage=usage,
+                cache_hit=False,
+                custom_pricing=deployment_pricing,
+                pricing_tier="batch",
+                model_info=model_info,
+            )
+            provider_cost = completion_cost(
+                model=prepared.payload.model,
+                usage=usage,
+                cache_hit=False,
+                custom_pricing=deployment_pricing,
+                pricing_tier="sync",
+                model_info=model_info,
+            )
+            served_deployment_id = str(
+                getattr(served_deployment, "deployment_id", None)
+                or getattr(prepared.primary_deployment, "deployment_id", None)
+                or ""
+            )
+            await self._record_upstream_success_runtime_hooks(
+                batch_id=job.batch_id,
+                deployment_id=served_deployment_id,
+                mode=router_usage_mode_for_batch_endpoint(job.endpoint),
+                usage=usage,
+                reference=prepared.item.item_id,
+            )
+            await self._renew_item_lease_once(prepared.item.item_id)
+            if item_heartbeat is not None:
+                await self._stop_heartbeat_fn(item_heartbeat)
+                item_heartbeat = None
+            persisted = await self._persist_completion_rows_with_outbox(
+                items=[
+                    {
+                        "item_id": prepared.item.item_id,
+                        "response_body": response_body,
+                        "usage": usage,
+                        "provider_cost": provider_cost,
+                        "billed_cost": billed_cost,
+                        "outbox_payload": self._build_completion_outbox_payload(
+                            job=job,
+                            prepared=prepared,
+                            usage=usage,
+                            api_provider=api_provider,
+                            billed_cost=billed_cost,
+                            provider_cost=provider_cost,
+                            api_base=api_base,
+                            deployment_model=deployment_model,
+                        ),
+                        "outbox_max_attempts": _COMPLETION_OUTBOX_MAX_ATTEMPTS,
+                    }
+                ],
+                item_ids=[prepared.item.item_id],
+                context_label="chat",
+            )
+            if persisted:
+                self._observe_item_execution_latency(
+                    status="success",
+                    latency_seconds=perf_counter() - prepared.started_at_monotonic,
+                    reference=prepared.item.item_id,
+                )
+        except Exception as exc:
+            await self._mark_item_failed(
+                job=job,
+                item=prepared.item,
+                model_name=prepared.model_name,
+                exc=exc,
+                deployment_id=str(getattr(prepared.primary_deployment, "deployment_id", None) or "") or None,
+                started_at_monotonic=prepared.started_at_monotonic,
+            )
+            return
+        finally:
+            if item_heartbeat is not None:
+                await self._stop_heartbeat_fn(item_heartbeat)
+
     async def _process_item_with_prepared_override(
         self,
         job,
-        prepared: _PreparedEmbeddingItem,
+        prepared: _PreparedEmbeddingItem | _PreparedChatItem,
         *,
         process_item: Callable[[Any, Any], Awaitable[None]],
     ) -> None:  # noqa: ANN001
@@ -1033,6 +1198,7 @@ class BatchExecutionEngine:
             await self._record_upstream_success_runtime_hooks(
                 batch_id=batch_id,
                 deployment_id=served_deployment_id,
+                mode=router_usage_mode_for_batch_endpoint(job.endpoint),
                 usage=dict(response_body.get("usage") or {}),
                 reference=",".join(item_ids),
             )
@@ -1128,7 +1294,7 @@ class BatchExecutionEngine:
         job,
         item,
         *,
-        prepare_item: Callable[[Any, Any], Awaitable[_PreparedEmbeddingItem]] | None = None,
+        prepare_item: Callable[[Any, Any], Awaitable[_PreparedEmbeddingItem | _PreparedChatItem]] | None = None,
     ) -> None:  # noqa: ANN001
         request_body = item.request_body if isinstance(item.request_body, dict) else {}
         model_name = str(request_body.get("model") or job.model or "")
@@ -1148,6 +1314,41 @@ class BatchExecutionEngine:
                 started_at_monotonic=started_at_monotonic,
             )
             return
+        if job.endpoint == BATCH_ENDPOINT_CHAT_COMPLETIONS:
+            if not isinstance(prepared, _PreparedChatItem):
+                await self._mark_item_failed(
+                    job=job,
+                    item=item,
+                    model_name=model_name,
+                    exc=InvalidRequestError(message="Prepared batch chat item has an invalid execution shape"),
+                    deployment_id=None,
+                    started_at_monotonic=started_at_monotonic,
+                )
+                return
+            await self._execute_prepared_chat_item(job, prepared)
+            return
+
+        if job.endpoint != BATCH_ENDPOINT_EMBEDDINGS:
+            await self._mark_item_failed(
+                job=job,
+                item=item,
+                model_name=model_name,
+                exc=InvalidRequestError(message=f"Unsupported batch endpoint '{job.endpoint}'"),
+                deployment_id=None,
+                started_at_monotonic=started_at_monotonic,
+            )
+            return
+
+        if not isinstance(prepared, _PreparedEmbeddingItem):
+            await self._mark_item_failed(
+                job=job,
+                item=item,
+                model_name=model_name,
+                exc=InvalidRequestError(message="Prepared embedding batch item has an invalid execution shape"),
+                deployment_id=None,
+                started_at_monotonic=started_at_monotonic,
+            )
+            return
         await self._execute_prepared_item(job, prepared)
 
     async def _stop_heartbeat_tasks(self, tasks) -> None:  # noqa: ANN001
@@ -1159,7 +1360,7 @@ class BatchExecutionEngine:
         job,
         items,
         *,
-        prepare_item: Callable[[Any, Any], Awaitable[_PreparedEmbeddingItem]] | None = None,
+        prepare_item: Callable[[Any, Any], Awaitable[_PreparedEmbeddingItem | _PreparedChatItem]] | None = None,
         process_item: Callable[[Any, Any], Awaitable[None]] | None = None,
     ) -> None:  # noqa: ANN001
         if not items:
@@ -1172,6 +1373,47 @@ class BatchExecutionEngine:
                 await self.process_item(job, item, prepare_item=prepare_item_fn)
         else:
             process_item_fn = process_item
+
+        if job.endpoint != BATCH_ENDPOINT_EMBEDDINGS:
+            raw_items: deque[Any] = deque(items)
+            queue_lock = asyncio.Lock()
+            active = 0
+            logger.info(
+                "batch non-microbatch item processing started batch_id=%s endpoint=%s claimed_items=%s",
+                job.batch_id,
+                job.endpoint,
+                len(items),
+            )
+
+            async def _runner() -> None:
+                nonlocal active
+                while True:
+                    async with queue_lock:
+                        if not raw_items:
+                            return
+                        item = raw_items.popleft()
+
+                    active += 1
+                    set_batch_worker_saturation(
+                        worker_id=self.config.worker_id,
+                        active=active,
+                        capacity=self.config.worker_concurrency,
+                    )
+                    try:
+                        await process_item_fn(job, item)
+                    finally:
+                        active -= 1
+                        set_batch_worker_saturation(
+                            worker_id=self.config.worker_id,
+                            active=active,
+                            capacity=self.config.worker_concurrency,
+                        )
+
+            runner_count = min(max(1, self.config.worker_concurrency), len(items))
+            async with asyncio.TaskGroup() as task_group:
+                for _ in range(runner_count):
+                    task_group.create_task(_runner())
+            return
 
         raw_items: deque[Any] = deque(items)
         deferred_grouped_raw_items: deque[Any] = deque()
@@ -1369,6 +1611,7 @@ class BatchExecutionEngine:
         *,
         batch_id: str,
         deployment_id: str,
+        mode: str,
         usage: dict[str, Any],
         reference: str,
     ) -> None:
@@ -1390,7 +1633,7 @@ class BatchExecutionEngine:
                 await self._record_router_usage(
                     router_state_backend,
                     deployment_id,
-                    mode="embedding",
+                    mode=mode,
                     usage=usage,
                 )
             except Exception as exc:
@@ -1467,8 +1710,13 @@ class BatchExecutionEngine:
                     organization_id=job.created_by_organization_id,
                     end_user_id=None,
                     model=model_name,
-                    call_type="embedding_batch",
-                    metadata={"batch_id": batch_id, "batch_item_id": item.item_id},
+                    call_type=batch_call_type_for_endpoint(job.endpoint),
+                    metadata={
+                        "batch_id": batch_id,
+                        "batch_item_id": item.item_id,
+                        "custom_id": item.custom_id,
+                        "endpoint": job.endpoint,
+                    },
                     cache_hit=False,
                     start_time=None,
                     end_time=datetime.now(tz=UTC),

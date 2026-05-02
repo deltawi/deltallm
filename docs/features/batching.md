@@ -1,6 +1,6 @@
-# Embeddings Batch API
+# Batch API
 
-Process large volumes of embedding requests asynchronously. Upload a JSONL file, create a batch, and download results when the job completes. This is ideal when you have thousands of texts to embed and don't need results in real time.
+Process large volumes of embedding or non-streaming chat completion requests asynchronously. Upload a JSONL file, create a batch, and download results when the job completes. This is ideal when you have thousands of requests to run and don't need results in real time.
 
 ## Quick Start
 
@@ -15,12 +15,21 @@ Restart DeltaLLM after changing this setting.
 
 ### 2. Upload an input file
 
-Create a JSONL file where each line is a batch request:
+Create a JSONL file where each line is a batch request.
+
+Embedding example:
 
 ```jsonl
 {"custom_id": "doc-1", "url": "/v1/embeddings", "body": {"model": "text-embedding-3-small", "input": "DeltaLLM is an LLM gateway"}}
 {"custom_id": "doc-2", "url": "/v1/embeddings", "body": {"model": "text-embedding-3-small", "input": "It supports async batch processing"}}
 {"custom_id": "doc-3", "url": "/v1/embeddings", "body": {"model": "text-embedding-3-small", "input": "Batching reduces cost for high-volume workloads"}}
+```
+
+Chat completion example:
+
+```jsonl
+{"custom_id": "chat-1", "url": "/v1/chat/completions", "body": {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "Summarize DeltaLLM in one sentence."}]}}
+{"custom_id": "chat-2", "url": "/v1/chat/completions", "body": {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "Write a short support reply."}]}}
 ```
 
 Upload it:
@@ -93,7 +102,7 @@ curl http://localhost:8000/v1/files/file_out456/content \
   -o output.jsonl
 ```
 
-Each output line contains the `custom_id` you provided and the embedding response.
+Each output line contains the `custom_id` you provided and the endpoint response.
 
 ## Input Format
 
@@ -102,10 +111,16 @@ Each line of the input JSONL file must be a JSON object with these fields:
 | Field | Required | Description |
 |-------|----------|-------------|
 | `custom_id` | Yes | Your unique identifier for this request. Used to match input to output. Must be unique within the file. |
-| `url` | No | Must be `/v1/embeddings` if provided. Defaults to the batch endpoint. |
-| `body` | Yes | The embedding request payload, same schema as a synchronous `POST /v1/embeddings` call. |
+| `method` | No | Defaults to `POST`. If provided, it must be `POST`. |
+| `url` | No | Must match the batch endpoint if provided. Defaults to the batch endpoint. |
+| `body` | Yes | The endpoint request payload. |
 
-The `body` object follows the standard embeddings request format:
+Supported batch endpoints:
+
+- `/v1/embeddings`
+- `/v1/chat/completions`
+
+For `/v1/embeddings`, the `body` object follows the standard embeddings request format:
 
 | Field | Required | Description |
 |-------|----------|-------------|
@@ -113,6 +128,16 @@ The `body` object follows the standard embeddings request format:
 | `input` | Yes | Text to embed. A string or an array of integers (token IDs). |
 | `encoding_format` | No | `float` or `base64` |
 | `dimensions` | No | Output dimensionality (if the model supports it) |
+
+For `/v1/chat/completions`, the `body` object follows the non-streaming chat completions request format:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `model` | Yes | The model name, e.g. `gpt-4o-mini` |
+| `messages` | Yes | Chat messages using the same shape as synchronous `POST /v1/chat/completions` |
+| `stream` | No | Must be omitted or `false`; streaming is not supported in batch |
+| `tools` | No | Function tools are accepted; MCP tools are rejected in batch chat for now |
+| `response_format` | No | Preserved and forwarded like the synchronous chat endpoint |
 
 > **Note:** All items in a batch should target the same model. The model is inferred from the first item and tracked on the batch record.
 
@@ -254,11 +279,13 @@ Completed batches and their artifacts are automatically cleaned up by a backgrou
 | `embeddings_batch_gc_interval_seconds` | `86400` | How often the cleanup loop runs (default: daily) |
 | `embeddings_batch_gc_scan_limit` | `200` | Maximum expired items processed per cleanup pass |
 
-For the full settings reference, see [Configuration > General](../configuration/general.md#embeddings-batch-settings).
+For the full settings reference, see [Configuration > General](../configuration/general.md#batch-settings).
 
 ## Upstream Micro-batching
 
-When the batch worker processes embedding items, it normally sends one upstream HTTP request per item. Micro-batching groups compatible items into a single upstream call, reducing HTTP round trips and improving throughput.
+When the batch worker processes embedding items, it normally sends one upstream HTTP request per item. Embedding micro-batching groups compatible items into a single upstream call, reducing HTTP round trips and improving throughput.
+
+Chat completion batch jobs use bounded per-item concurrency in this release. For vLLM, this is the preferred default because vLLM performs continuous batching inside the serving engine while DeltaLLM keeps one canonical response, usage record, and spend record per batch item.
 
 ### How it works
 
@@ -286,7 +313,7 @@ model_list:
 
 This tells the batch worker to group up to 8 compatible items per upstream request.
 
-> **Note:** Micro-batching only applies to the async batch worker. It does not change synchronous `/v1/embeddings` behavior.
+> **Note:** Micro-batching only applies to embedding items in the async batch worker. It does not change synchronous `/v1/embeddings` behavior and does not combine chat requests in this release.
 
 ### Eligible inputs
 
@@ -401,7 +428,10 @@ Provider `Retry-After` hints are honored for retryable rate-limit failures, but 
 
 ## Known Limitations
 
-- Only `/v1/embeddings` is supported as a batch endpoint
+- Chat batch supports non-streaming `/v1/chat/completions` requests only
+- MCP tools are not supported in chat batch requests yet
+- Provider-native async chat batch APIs are not used in this release
+- Chat requests are executed with bounded concurrency; synchronous upstream chat micro-batching is planned separately
 - `list[str]` and `list[list[int]]` inputs are not eligible for micro-batching (they are processed individually)
 - Local storage is not safe for multi-instance deployments; use S3
 - Batch creation is not fully transactional when the database does not support interactive transactions
@@ -411,5 +441,5 @@ Provider `Retry-After` hints are honored for retryable rate-limit failures, but 
 - [Proxy Endpoints](../api/proxy.md#batch-endpoints)
 - [Admin Endpoints](../api/admin.md#batches)
 - [Admin UI: Batch Jobs](../admin-ui/batch-jobs.md)
-- [Configuration Reference](../configuration/general.md#embeddings-batch-settings)
+- [Configuration Reference](../configuration/general.md#batch-settings)
 - [Model Deployments](../configuration/models.md#embedding-batch-worker-micro-batching)
