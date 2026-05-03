@@ -16,6 +16,7 @@ import {
   EMPTY_FORM,
   MODE_OPTIONS,
   buildModelPayload,
+  type ChatBatchingMode,
   type ModelFormValues,
   type ModelMode,
   type ModelPayload,
@@ -147,6 +148,12 @@ interface ModelFormProps {
 
 const inputClass = "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500";
 type RequiredField = 'model_name' | 'provider' | 'model' | 'api_base' | 'named_credential_id';
+const CHAT_BATCHING_MODES: { value: ChatBatchingMode; label: string }[] = [
+  { value: '', label: 'Default concurrent' },
+  { value: 'disabled', label: 'Disabled' },
+  { value: 'concurrent', label: 'Concurrent' },
+  { value: 'sync_microbatch', label: 'Sync microbatch' },
+];
 
 function inputClasses(hasError = false): string {
   return `${inputClass} ${hasError ? 'border-red-300 bg-red-50/40 focus:ring-red-500' : ''}`;
@@ -159,6 +166,15 @@ function FieldLabel({ label, required = false }: { label: string; required?: boo
       {required ? <span className="ml-1 text-red-500">*</span> : null}
     </label>
   );
+}
+
+function validatePositiveInteger(value: string, label: string, minimum = 1): string | null {
+  if (!value.trim()) return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < minimum) {
+    return `${label} must be a whole number greater than or equal to ${minimum}.`;
+  }
+  return null;
 }
 
 export default function ModelForm({
@@ -238,6 +254,8 @@ export default function ModelForm({
   const selectedProviderPreset = providerPresets.find((preset) => preset.provider === credentialProvider || preset.provider === form.provider);
   const selectedNamedCredential = availableNamedCredentials.find((credential) => credential.credential_id === form.named_credential_id) || null;
   const selectedModelOption = findProviderModelOption(modelOptions, form.model);
+  const chatBatchingDisabled = form.chat_batching_mode === 'disabled';
+  const chatBatchingSyncMicrobatch = form.chat_batching_mode === 'sync_microbatch';
 
   const clearValidation = (field?: RequiredField) => {
     if (validationError) setValidationError(null);
@@ -409,12 +427,37 @@ export default function ModelForm({
       return;
     }
     if (mode === 'embedding' && form.upstream_max_batch_inputs.trim()) {
-      const upstreamMaxBatchInputs = Number(form.upstream_max_batch_inputs);
-      if (!Number.isInteger(upstreamMaxBatchInputs) || upstreamMaxBatchInputs < 1) {
+      const upstreamMaxBatchInputsError = validatePositiveInteger(
+        form.upstream_max_batch_inputs,
+        'Batch Worker Upstream Max Inputs',
+      );
+      if (upstreamMaxBatchInputsError) {
         setValidationError(
-          'Batch Worker Upstream Max Inputs must be a whole number greater than or equal to 1. Leave it blank to keep batch-worker micro-batching disabled.',
+          `${upstreamMaxBatchInputsError} Leave it blank to keep batch-worker micro-batching disabled.`,
         );
         return;
+      }
+    }
+    if (mode === 'chat') {
+      const chatBatchingErrors = [
+        chatBatchingDisabled ? null : validatePositiveInteger(form.chat_batching_max_in_flight, 'Chat Batch Max In-Flight'),
+        chatBatchingSyncMicrobatch
+          ? validatePositiveInteger(form.chat_batching_upstream_max_batch_size, 'Chat Batch Upstream Max Size')
+          : null,
+        chatBatchingSyncMicrobatch
+          ? validatePositiveInteger(form.chat_batching_max_total_input_tokens, 'Chat Batch Max Total Input Tokens')
+          : null,
+      ].filter(Boolean);
+      if (chatBatchingErrors.length > 0) {
+        setValidationError(chatBatchingErrors[0] || 'Fix the chat batching settings before saving.');
+        return;
+      }
+      if (chatBatchingSyncMicrobatch) {
+        const upstreamMaxBatchSize = Number(form.chat_batching_upstream_max_batch_size);
+        if (!Number.isInteger(upstreamMaxBatchSize) || upstreamMaxBatchSize < 2) {
+          setValidationError('Sync microbatch mode requires Chat Batch Upstream Max Size of at least 2.');
+          return;
+        }
       }
     }
     setFieldErrors({});
@@ -770,6 +813,77 @@ export default function ModelForm({
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Max Output Tokens</label>
                 <input type="number" value={form.max_output_tokens} onChange={(e) => setForm({ ...form, max_output_tokens: e.target.value })} placeholder="e.g. 4096" className={inputClass} />
+              </div>
+            </div>
+            <div className="border-t border-gray-100 pt-4">
+              <h4 className="text-sm font-medium text-gray-700 mb-3">Batch Execution</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Mode</label>
+                  <select
+                    value={form.chat_batching_mode}
+                    onChange={(e) => {
+                      setForm({ ...form, chat_batching_mode: e.target.value as ChatBatchingMode });
+                      clearValidation();
+                    }}
+                    className={inputClass}
+                  >
+                    {CHAT_BATCHING_MODES.map((option) => (
+                      <option key={option.value || 'default'} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-400 mt-1">Default concurrent keeps one upstream request per batch item.</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Max In-Flight</label>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={form.chat_batching_max_in_flight}
+                    onChange={(e) => {
+                      setForm({ ...form, chat_batching_max_in_flight: e.target.value });
+                      clearValidation();
+                    }}
+                    disabled={chatBatchingDisabled}
+                    placeholder="Optional, e.g. 32"
+                    className={inputClass}
+                  />
+                  <p className="text-xs text-gray-400 mt-1">Per worker replica; total capacity scales with replicas.</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Upstream Max Size</label>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={form.chat_batching_upstream_max_batch_size}
+                    onChange={(e) => {
+                      setForm({ ...form, chat_batching_upstream_max_batch_size: e.target.value });
+                      clearValidation();
+                    }}
+                    disabled={!chatBatchingSyncMicrobatch}
+                    placeholder={chatBatchingSyncMicrobatch ? 'Required, e.g. 8' : 'Sync microbatch only'}
+                    className={inputClass}
+                  />
+                  <p className="text-xs text-gray-400 mt-1">Required for sync microbatch mode; use at least 2.</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Max Total Input Tokens</label>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={form.chat_batching_max_total_input_tokens}
+                    onChange={(e) => {
+                      setForm({ ...form, chat_batching_max_total_input_tokens: e.target.value });
+                      clearValidation();
+                    }}
+                    disabled={!chatBatchingSyncMicrobatch}
+                    placeholder="Optional, e.g. 32000"
+                    className={inputClass}
+                  />
+                </div>
               </div>
             </div>
           </div>

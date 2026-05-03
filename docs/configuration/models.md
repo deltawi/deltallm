@@ -238,6 +238,67 @@ Operational note:
 - DeltaLLM allocates per-item usage and cost from that aggregate usage so total usage and total cost stay consistent
 - per-item usage is therefore allocated from aggregate upstream usage, not exact provider-native attribution for each grouped item
 
+## Chat Batch Worker Execution
+
+Chat batch jobs default to `concurrent` execution when `deltallm_params.chat_batching`
+is omitted. That means the worker sends one ordinary upstream chat request per
+batch item, bounded by worker concurrency. This is the recommended default for
+vLLM because vLLM performs continuous batching inside the serving engine.
+
+```yaml
+model_list:
+  - model_name: llama-3.1-8b
+    deltallm_params:
+      provider: vllm
+      model: meta-llama/Llama-3.1-8B-Instruct
+      api_base: https://vllm.example/v1
+      api_key: os.environ/VLLM_API_KEY
+      chat_batching:
+        mode: concurrent
+        max_in_flight: 32
+```
+
+Supported modes:
+
+- `disabled`: execute each chat item as an ordinary upstream request; no microbatch grouping
+- `concurrent`: execute per-item upstream requests with worker and deployment concurrency limits
+- `sync_microbatch`: group compatible items into one upstream provider call when a microbatch executor is available
+
+`native_async_batch` is reserved for a future provider-managed async batch API and
+is not accepted by config validation.
+
+For providers with a proven sync chat microbatch API, opt in explicitly:
+
+```yaml
+model_list:
+  - model_name: provider-chat
+    deltallm_params:
+      provider: example_provider
+      model: example-chat-model
+      api_base: https://provider.example/v1
+      api_key: os.environ/PROVIDER_API_KEY
+      chat_batching:
+        mode: sync_microbatch
+        upstream_max_batch_size: 8
+        max_total_input_tokens: 32000
+        require_homogeneous_params: true
+```
+
+Sync chat microbatching is conservative:
+
+- grouping happens after routing, so only items resolved to the same deployment can be batched
+- non-message request parameters must match exactly; `require_homogeneous_params` must remain `true` when provided
+- streaming, MCP tools, function tools, complex response formats, and multiple choices fall back to per-item execution
+- whole microbatch calls use the normal failover path; each served deployment must have `mode: sync_microbatch`, support the chunk size and token cap, and expose a sync microbatch executor
+- if a served deployment does not satisfy sync microbatch requirements and there was no earlier retryable health-affecting microbatch failure, the worker degrades that chunk to bounded per-item execution without marking the unsupported deployment unhealthy
+- if the primary sync microbatch already failed with a retryable health-affecting error and failover then reaches an unsupported deployment, the worker preserves the primary failure and requeues the chunk instead of hiding that failure behind per-item fallback
+- successful provider results must include per-item usage; aggregate-only usage is rejected for chat billing
+- mixed provider results persist successful items and fail or retry only the affected failed items; structured per-item `429`, `408`, and `5xx` provider errors are retryable under the normal batch retry policy
+
+`max_in_flight` is enforced per worker replica. When running multiple Kubernetes
+replicas, multiply the configured value by the worker replica count when sizing
+provider limits and vLLM capacity.
+
 ## Add Pricing and Defaults
 
 Pricing metadata powers spend tracking.

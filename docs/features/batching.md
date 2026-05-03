@@ -285,7 +285,7 @@ For the full settings reference, see [Configuration > General](../configuration/
 
 When the batch worker processes embedding items, it normally sends one upstream HTTP request per item. Embedding micro-batching groups compatible items into a single upstream call, reducing HTTP round trips and improving throughput.
 
-Chat completion batch jobs use bounded per-item concurrency in this release. For vLLM, this is the preferred default because vLLM performs continuous batching inside the serving engine while DeltaLLM keeps one canonical response, usage record, and spend record per batch item.
+Chat completion batch jobs default to bounded per-item concurrency. For vLLM, this is usually the preferred mode because vLLM performs continuous batching inside the serving engine while DeltaLLM keeps one canonical response, usage record, and spend record per batch item.
 
 ### How it works
 
@@ -313,7 +313,7 @@ model_list:
 
 This tells the batch worker to group up to 8 compatible items per upstream request.
 
-> **Note:** Micro-batching only applies to embedding items in the async batch worker. It does not change synchronous `/v1/embeddings` behavior and does not combine chat requests in this release.
+> **Note:** Embedding micro-batching does not change synchronous `/v1/embeddings` behavior. Chat batching has its own deployment-level `deltallm_params.chat_batching` controls.
 
 ### Eligible inputs
 
@@ -344,6 +344,60 @@ When a model group has no healthy deployments, workers also create a short-lived
 ### Usage allocation
 
 When items are grouped, the upstream provider returns usage at the grouped-call level. DeltaLLM allocates per-item usage proportionally based on estimated token weight. Total usage and cost remain consistent; per-item values are approximations.
+
+### Chat batch execution modes
+
+Chat batch execution is configured per deployment in `deltallm_params.chat_batching`:
+
+```yaml
+model_list:
+  - model_name: support-chat
+    deltallm_params:
+      provider: vllm
+      model: meta-llama/Llama-3.1-8B-Instruct
+      api_base: https://vllm.example/v1
+      api_key: os.environ/VLLM_API_KEY
+      chat_batching:
+        mode: concurrent
+        max_in_flight: 32
+```
+
+Supported modes:
+
+| Mode | Behavior |
+|------|----------|
+| `disabled` | Execute each item as an ordinary upstream chat request; no microbatch grouping |
+| `concurrent` | Execute one upstream chat request per item with worker and deployment concurrency limits |
+| `sync_microbatch` | Group compatible chat items into an upstream provider microbatch when a microbatch executor is available |
+
+Missing `chat_batching` config is treated as `concurrent`. The reserved `native_async_batch` mode is not accepted yet.
+
+`max_in_flight` is enforced per worker replica. In Kubernetes, the effective maximum in-flight requests for one deployment is roughly `max_in_flight * worker replica count`, bounded by each replica's worker concurrency. Size these values with provider limits, pod count, and vLLM capacity in mind.
+
+### Sync chat microbatching
+
+Use `sync_microbatch` only for provider adapters that return a result for each input item and exact per-item usage:
+
+```yaml
+model_list:
+  - model_name: provider-chat
+    deltallm_params:
+      provider: example_provider
+      model: example-chat-model
+      api_base: https://provider.example/v1
+      api_key: os.environ/PROVIDER_API_KEY
+      chat_batching:
+        mode: sync_microbatch
+        upstream_max_batch_size: 8
+        max_total_input_tokens: 32000
+        require_homogeneous_params: true
+```
+
+The worker groups only after routing, and only when items share the same deployment, provider, API base, public model, deployment model, failover context, and non-message request parameters. If `require_homogeneous_params` is provided, it must remain `true`. Requests with streaming, MCP tools, function tools, complex response formats, multiple choices, or token pressure above the configured cap fall back to per-item execution.
+
+Sync microbatch calls use the same deployment failover path as ordinary chat requests. Before sending a grouped request to any served deployment, the worker checks that deployment's own `chat_batching.mode`, chunk-size limit, token cap, and sync microbatch executor. If the primary deployment fails and a fallback deployment also supports the requested sync microbatch, the fallback response is persisted with the fallback deployment's provider, API base, and pricing metadata. If the served deployment cannot run the requested sync microbatch and no earlier retryable health-affecting microbatch failure occurred, the worker degrades to bounded per-item execution without marking that deployment unhealthy. If the primary deployment already failed with a retryable health-affecting error before failover reaches an unsupported deployment, the worker requeues the chunk using the primary failure so health and retry semantics are preserved.
+
+Successful microbatch results are persisted and billed per item. If a provider result is missing per-item usage, that item fails instead of using aggregate usage. Mixed success and failure results persist successful items and fail or retry only the affected failed items. Structured per-item provider errors with retryable status codes such as `429`, `408`, or `5xx` are classified by the normal batch retry policy; unstructured provider item errors remain terminal invalid-request failures.
 
 ## Monitoring
 
@@ -389,12 +443,18 @@ DeltaLLM exposes Prometheus metrics for batch processing on the configured metri
 | `deltallm_batch_model_group_deferrals_total` | Counter | Model-group backpressure deferrals by reason |
 | `deltallm_batch_model_group_deferred_items_total` | Counter | Items deferred by model-group backpressure by reason |
 | `deltallm_batch_model_group_deferral_seconds` | Histogram | Model-group backpressure deferral duration by reason |
+| `deltallm_batch_chat_items_executed_total` | Counter | Chat batch items by execution mode and status |
+| `deltallm_batch_chat_microbatch_requests_total` | Counter | Sync chat microbatch requests by status |
+| `deltallm_batch_chat_microbatch_fallbacks_total` | Counter | Chat microbatch candidates executed per-item by reason |
+| `deltallm_batch_chat_microbatch_size` | Histogram | Number of chat items per sync microbatch request |
+| `deltallm_batch_chat_provider_latency_seconds` | Histogram | Upstream chat batch worker latency by execution mode and status |
 
 ### What to watch
 
 - **`deltallm_batch_oldest_item_age_seconds{status="pending"}`** growing indicates the worker can't keep up. Increase `worker_concurrency` or add instances.
 - **`deltallm_batch_artifact_failures_total`** indicates storage issues. Check disk space (local) or S3 credentials/connectivity.
 - **`deltallm_batch_microbatch_isolation_fallback_total`** increasing after enabling micro-batching may indicate the provider doesn't handle multi-input requests well. Consider reducing `upstream_max_batch_inputs`.
+- **`deltallm_batch_chat_microbatch_fallbacks_total`** increasing after enabling chat `sync_microbatch` means items are being protected by compatibility checks or no executor is available.
 - **`deltallm_batch_model_group_deferrals_total`** increasing means workers are seeing temporary model-group unavailability. Check deployment health and router cooldown state.
 
 ## Troubleshooting
