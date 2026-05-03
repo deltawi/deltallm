@@ -295,7 +295,7 @@ async def test_batch_retries_no_healthy_deployments_with_backoff(monkeypatch):
     worker, repo, _, _, _ = _build_worker()
     worker.config.max_attempts = 5
 
-    monkeypatch.setattr("src.batch.worker_execution.random.randint", lambda lower, upper: upper)
+    monkeypatch.setattr("src.batch.worker_failure_handling.random.randint", lambda lower, upper: upper)
 
     item = _build_item(item_id="i1", input_value="hello")
     item.attempts = 1
@@ -411,11 +411,11 @@ async def test_batch_model_group_deferral_metrics_use_effective_delay(monkeypatc
     monkeypatch.setattr("src.batch.worker._execute_embedding", _fake_execute_embedding)
     monkeypatch.setattr("src.batch.backpressure.time.time", lambda: 1000)
     monkeypatch.setattr(
-        "src.batch.worker_execution.increment_batch_model_group_deferral",
+        "src.batch.worker_backpressure.increment_batch_model_group_deferral",
         lambda *, reason: counted_reasons.append(reason),
     )
     monkeypatch.setattr(
-        "src.batch.worker_execution.observe_batch_model_group_deferral_seconds",
+        "src.batch.worker_backpressure.observe_batch_model_group_deferral_seconds",
         lambda *, reason, delay_seconds: observed_delays.append((reason, delay_seconds)),
     )
 
@@ -581,7 +581,7 @@ async def test_batch_retry_delay_caps_retry_after_header(monkeypatch):
     worker.config.max_attempts = 5
     worker.config.retry_max_seconds = 60
 
-    monkeypatch.setattr("src.batch.worker_execution.random.randint", lambda lower, upper: upper)
+    monkeypatch.setattr("src.batch.worker_failure_handling.random.randint", lambda lower, upper: upper)
 
     request = httpx.Request("POST", "http://localhost:9090/v1/embeddings")
     response = httpx.Response(429, headers={"Retry-After": "1200"}, request=request)
@@ -611,7 +611,7 @@ async def test_batch_retry_delay_caps_rate_limit_retry_after(monkeypatch):
     worker.config.max_attempts = 5
     worker.config.retry_max_seconds = 45
 
-    monkeypatch.setattr("src.batch.worker_execution.random.randint", lambda lower, upper: upper)
+    monkeypatch.setattr("src.batch.worker_failure_handling.random.randint", lambda lower, upper: upper)
 
     item = _build_item(item_id="i1", input_value="hello")
     item.attempts = 1
