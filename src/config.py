@@ -51,6 +51,27 @@ RoutingStrategyName = Literal[
 ]
 
 
+ChatBatchingMode = Literal["disabled", "concurrent", "sync_microbatch"]
+
+
+class ChatBatchingConfig(BaseModel):
+    mode: ChatBatchingMode = "concurrent"
+    max_in_flight: int | None = Field(default=None, ge=1)
+    upstream_max_batch_size: int | None = Field(default=None, ge=1)
+    max_total_input_tokens: int | None = Field(default=None, ge=1)
+    require_homogeneous_params: bool = True
+
+    @model_validator(mode="after")
+    def validate_sync_microbatch_limits(self) -> "ChatBatchingConfig":
+        if self.mode != "sync_microbatch":
+            return self
+        if (self.upstream_max_batch_size or 0) < 2:
+            raise ValueError("chat_batching.upstream_max_batch_size must be at least 2 when mode is sync_microbatch")
+        if self.require_homogeneous_params is not True:
+            raise ValueError("chat_batching.require_homogeneous_params=false is not supported for sync_microbatch")
+        return self
+
+
 class DeltaLLMParams(BaseModel):
     model: str
     provider: str | None = None
@@ -69,6 +90,7 @@ class DeltaLLMParams(BaseModel):
     weight: int = 1
     stream_timeout: int | None = None
     max_tokens: int | None = None
+    chat_batching: ChatBatchingConfig | None = None
 
     @field_validator("auth_header_name")
     @classmethod

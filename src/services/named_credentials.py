@@ -26,6 +26,13 @@ _NON_SECRET_CONNECTION_KEYS = {
     "provider",
     "endpoint",
     "base_url",
+    "max_tokens",
+    "max_input_tokens",
+    "max_output_tokens",
+    "max_total_input_tokens",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
 }
 
 _MASK = "***REDACTED***"

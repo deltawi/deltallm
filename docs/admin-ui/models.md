@@ -43,6 +43,29 @@ For a simple first deployment:
 
 If you do not set a `deployment_id`, DeltaLLM creates one automatically.
 
+## Chat Batch Execution
+
+For chat deployments, the model form includes **Batch Execution** controls in
+the Chat Settings section.
+
+- Leave **Mode** as **Default concurrent** for the standard behavior: one
+  upstream request per batch item, bounded by worker concurrency
+- Select **Concurrent** when you want to persist an explicit per-deployment
+  `max_in_flight` limit
+- Select **Sync microbatch** only for providers with a proven synchronous
+  microbatch API that returns one response and exact usage per input item
+- Select **Disabled** when the deployment should never use chat microbatch
+  grouping
+
+Blank numeric fields are treated as unset. For example, leaving **Max
+In-Flight** empty does not send `0`; it leaves that limit to the worker default.
+When **Mode** is **Default concurrent** and all chat batching numeric fields are
+empty, the UI clears any stored `deltallm_params.chat_batching` override. If
+**Max In-Flight** is set while Mode remains **Default concurrent**, the UI saves
+an explicit `mode: concurrent` override with that limit. **Disabled** ignores
+numeric batching fields. If **Sync microbatch** is selected, **Upstream Max
+Size** is required and must be at least `2`.
+
 ## Access Groups
 
 The model form includes an **Access Groups** field for authorization grouping. Enter group keys such as `beta` or `support` when scopes should be able to grant access to a set of callable targets instead of selecting each model separately.

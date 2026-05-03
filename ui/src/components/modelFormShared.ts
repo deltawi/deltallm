@@ -18,6 +18,8 @@ export type ModelMode =
   | 'audio_transcription'
   | 'rerank';
 
+export type ChatBatchingMode = '' | 'disabled' | 'concurrent' | 'sync_microbatch';
+
 export interface ModelModeOption {
   value: ModelMode;
   label: string;
@@ -65,6 +67,10 @@ export interface ModelFormValues {
   timeout: string;
   stream_timeout: string;
   max_tokens: string;
+  chat_batching_mode: ChatBatchingMode;
+  chat_batching_max_in_flight: string;
+  chat_batching_upstream_max_batch_size: string;
+  chat_batching_max_total_input_tokens: string;
   weight: string;
   priority: string;
   tags: string;
@@ -119,6 +125,10 @@ export const EMPTY_FORM: ModelFormValues = {
   timeout: '',
   stream_timeout: '',
   max_tokens: '',
+  chat_batching_mode: '',
+  chat_batching_max_in_flight: '',
+  chat_batching_upstream_max_batch_size: '',
+  chat_batching_max_total_input_tokens: '',
   weight: '',
   priority: '',
   tags: '',
@@ -152,6 +162,31 @@ function positiveIntOrUndef(val: string): number | undefined {
   if (!val) return undefined;
   const parsed = Number(val);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function buildChatBatchingPayload(form: ModelFormValues): Record<string, unknown> | null {
+  if (form.chat_batching_mode === 'disabled') {
+    return { mode: 'disabled' };
+  }
+
+  const maxInFlight = positiveIntOrUndef(form.chat_batching_max_in_flight);
+  if (form.chat_batching_mode === 'sync_microbatch') {
+    return {
+      mode: 'sync_microbatch',
+      max_in_flight: maxInFlight,
+      upstream_max_batch_size: positiveIntOrUndef(form.chat_batching_upstream_max_batch_size),
+      max_total_input_tokens: positiveIntOrUndef(form.chat_batching_max_total_input_tokens),
+    };
+  }
+
+  if (form.chat_batching_mode === 'concurrent' || maxInFlight !== undefined) {
+    return {
+      mode: 'concurrent',
+      max_in_flight: maxInFlight,
+    };
+  }
+
+  return null;
 }
 
 function commaSeparatedListOrUndef(val: string): string[] | undefined {
@@ -200,6 +235,9 @@ export function buildModelPayload(
   if (form.mode === 'chat') {
     deltallm_params.stream_timeout = numOrUndef(form.stream_timeout);
     deltallm_params.max_tokens = numOrUndef(form.max_tokens);
+    deltallm_params.chat_batching = buildChatBatchingPayload(form);
+  } else {
+    deltallm_params.chat_batching = null;
   }
 
   const model_info: Record<string, unknown> = {
@@ -272,6 +310,9 @@ export function formFromModel(
 ): { form: ModelFormValues; defaultParams: { key: string; value: string }[] } {
   const lp = (model.deltallm_params || {}) as Record<string, unknown>;
   const mi = (model.model_info || {}) as Record<string, unknown>;
+  const chatBatching = (lp.chat_batching && typeof lp.chat_batching === 'object'
+    ? lp.chat_batching
+    : {}) as Record<string, unknown>;
   const explicitProvider = strOrEmpty(lp.provider).trim();
   const inferredProvider = normalizeProvider(undefined, strOrEmpty(lp.model));
   const provider = explicitProvider || (inferredProvider !== 'unknown' ? inferredProvider : '');
@@ -304,6 +345,10 @@ export function formFromModel(
     timeout: strOrEmpty(lp.timeout),
     stream_timeout: strOrEmpty(lp.stream_timeout),
     max_tokens: strOrEmpty(lp.max_tokens),
+    chat_batching_mode: toChatBatchingMode(chatBatching.mode),
+    chat_batching_max_in_flight: strOrEmpty(chatBatching.max_in_flight),
+    chat_batching_upstream_max_batch_size: strOrEmpty(chatBatching.upstream_max_batch_size),
+    chat_batching_max_total_input_tokens: strOrEmpty(chatBatching.max_total_input_tokens),
     weight: strOrEmpty(mi.weight ?? lp.weight),
     priority: strOrEmpty(mi.priority),
     tags: Array.isArray(mi.tags) ? mi.tags.join(', ') : '',
@@ -336,4 +381,11 @@ export function formFromModel(
       : [];
 
   return { form, defaultParams };
+}
+
+function toChatBatchingMode(value: unknown): ChatBatchingMode {
+  if (value === 'disabled' || value === 'concurrent' || value === 'sync_microbatch') {
+    return value;
+  }
+  return '';
 }
