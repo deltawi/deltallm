@@ -400,6 +400,19 @@ class BatchArtifactFinalizer:
             with contextlib.suppress(Exception):
                 await self.repository.delete_file(file_id)
 
+    async def _cleanup_unrecorded_artifacts(self, storage_keys: set[str], *, backend: str) -> None:
+        for storage_key in storage_keys:
+            try:
+                await self.storage.delete(storage_key)
+            except Exception as exc:
+                increment_batch_artifact_failure(operation="delete_orphan", backend=backend)
+                logger.warning(
+                    "batch finalization orphan artifact cleanup failed backend=%s storage_key=%s error=%s",
+                    backend,
+                    storage_key,
+                    exc,
+                )
+
     async def _iter_batch_items(self, batch_id: str) -> AsyncIterator[Any]:
         if hasattr(self.repository, "list_items_page"):
             after_line_number: int | None = None
@@ -437,6 +450,7 @@ class BatchArtifactFinalizer:
     async def finalize_artifacts(self, job) -> None:  # noqa: ANN001
         storage_backend = getattr(self.storage, "backend_name", "local")
         created_artifacts: list[tuple[str, str]] = []
+        unrecorded_artifact_keys: set[str] = set()
         output_file_id: str | None = None
         error_file_id: str | None = None
         final_status = self.resolve_final_status(job)
@@ -447,6 +461,8 @@ class BatchArtifactFinalizer:
                     filename=f"{job.batch_id}-output.jsonl",
                     lines=self.iter_output_lines(job.batch_id, endpoint=job.endpoint),
                 )
+                if key:
+                    unrecorded_artifact_keys.add(key)
                 file_record = await self.repository.create_file(
                     purpose="batch_output",
                     filename=f"{job.batch_id}-output.jsonl",
@@ -463,6 +479,7 @@ class BatchArtifactFinalizer:
                 if file_record is None:
                     increment_batch_artifact_failure(operation="create_record", backend=storage_backend)
                     raise RuntimeError(f"Failed to create output artifact record for batch {job.batch_id}")
+                unrecorded_artifact_keys.discard(key)
                 created_artifacts.append((file_record.file_id, key))
                 output_file_id = file_record.file_id
 
@@ -472,6 +489,8 @@ class BatchArtifactFinalizer:
                     filename=f"{job.batch_id}-error.jsonl",
                     lines=self.iter_error_lines(job.batch_id),
                 )
+                if key:
+                    unrecorded_artifact_keys.add(key)
                 retention_days = (
                     self.config.failed_artifact_retention_days
                     if final_status in {BatchJobStatus.FAILED, BatchJobStatus.CANCELLED}
@@ -493,6 +512,7 @@ class BatchArtifactFinalizer:
                 if file_record is None:
                     increment_batch_artifact_failure(operation="create_record", backend=storage_backend)
                     raise RuntimeError(f"Failed to create error artifact record for batch {job.batch_id}")
+                unrecorded_artifact_keys.discard(key)
                 created_artifacts.append((file_record.file_id, key))
                 error_file_id = file_record.file_id
 
@@ -507,6 +527,7 @@ class BatchArtifactFinalizer:
                 raise RuntimeError(f"Failed to finalize batch {job.batch_id}")
         except Exception:
             increment_batch_artifact_failure(operation="write_or_finalize", backend=storage_backend)
+            await self._cleanup_unrecorded_artifacts(unrecorded_artifact_keys, backend=storage_backend)
             await self._cleanup_unattached_artifacts(created_artifacts)
             raise
         logger.info(

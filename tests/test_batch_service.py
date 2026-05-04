@@ -26,6 +26,7 @@ class _DummyStorage:
         self.reads: list[str] = []
         self.lines_by_key: dict[str, list[str]] = {}
         self.writes: list[bytes] = []
+        self.deleted: list[str] = []
 
     async def read_bytes(self, storage_key: str) -> bytes:
         self.reads.append(storage_key)
@@ -44,6 +45,9 @@ class _DummyStorage:
             payload.extend(chunk)
         self.writes.append(bytes(payload))
         return "batch/file.jsonl", len(payload), "checksum"
+
+    async def delete(self, storage_key: str) -> None:
+        self.deleted.append(storage_key)
 
 
 def _metric_counter_value(metric, **labels) -> float:  # noqa: ANN001
@@ -596,6 +600,39 @@ async def test_create_file_enforces_max_file_bytes() -> None:
         )
 
     assert exc.value.status_code == 413
+
+
+@pytest.mark.asyncio
+async def test_create_file_deletes_written_artifact_when_db_record_creation_fails() -> None:
+    class _Upload:
+        filename = "batch.jsonl"
+
+        def __init__(self) -> None:
+            self._chunks = [b'{"custom_id":"item-1"}\n', b""]
+
+        async def read(self, size: int = -1):  # noqa: ARG002
+            return self._chunks.pop(0)
+
+    class _Repo:
+        async def create_file(self, **kwargs):  # noqa: ANN003
+            del kwargs
+            return None
+
+    storage = _DummyStorage()
+    service = BatchService(
+        repository=_Repo(),  # type: ignore[arg-type]
+        storage=storage,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await service.create_file(
+            auth=UserAPIKeyAuth(api_key="key-a"),
+            upload=_Upload(),  # type: ignore[arg-type]
+            purpose="batch",
+        )
+
+    assert exc.value.status_code == 503
+    assert storage.deleted == ["batch/file.jsonl"]
 
 
 @pytest.mark.asyncio

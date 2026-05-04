@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 import logging
 
@@ -153,3 +154,31 @@ async def test_batch_cleanup_worker_refresh_runtime_metrics_logs_debug_on_publis
         await worker._refresh_batch_runtime_metrics(now=datetime.now(tz=UTC))
 
     assert "batch cleanup runtime metrics refresh failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_batch_cleanup_worker_run_survives_iteration_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    worker = BatchRetentionCleanupWorker(
+        repository=_RepoStub(),  # type: ignore[arg-type]
+        storage=_StorageStub(),  # type: ignore[arg-type]
+        config=BatchCleanupConfig(interval_seconds=999.0, failure_interval_seconds=0.01, scan_limit=10),
+    )
+    calls = 0
+
+    async def _process_once() -> tuple[int, int]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("db unavailable")
+        worker.stop()
+        return (0, 0)
+
+    worker.process_once = _process_once  # type: ignore[method-assign]
+
+    with caplog.at_level(logging.ERROR):
+        await asyncio.wait_for(worker.run(), timeout=0.5)
+
+    assert calls == 2
+    assert "batch cleanup iteration failed" in caplog.text

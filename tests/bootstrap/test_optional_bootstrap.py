@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.bootstrap import BootstrapStatus
+from src.bootstrap import batch as batch_bootstrap
 from src.bootstrap.audit import init_audit_runtime, shutdown_audit_runtime
 from src.bootstrap.batch import _drain_worker_task, init_batch_runtime, shutdown_batch_runtime
 
@@ -91,6 +92,16 @@ def _batch_config(
             embeddings_batch_gc_scan_limit=100,
         )
     )
+
+
+def test_batch_worker_id_is_cluster_unique_and_log_safe(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(batch_bootstrap.socket, "gethostname", lambda: "pod/name with spaces")
+    monkeypatch.setattr(batch_bootstrap.os, "getpid", lambda: 12345)
+    monkeypatch.setattr(batch_bootstrap, "_BATCH_WORKER_BOOT_ID", "abc123def456")
+
+    worker_id = batch_bootstrap._batch_worker_id("batch executor")
+
+    assert worker_id == "batch-executor-pod-name-with-spaces-12345-abc123def456"
 
 
 class _FakeCreateSessionRepository:
@@ -689,6 +700,8 @@ async def test_init_batch_runtime_selects_s3_storage(monkeypatch: pytest.MonkeyP
     assert runtime.worker is None
     assert runtime.gc_worker is None
 
+    await shutdown_batch_runtime(runtime)
+
 
 @pytest.mark.asyncio
 async def test_init_batch_runtime_allows_s3_when_local_storage_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -737,6 +750,8 @@ async def test_init_batch_runtime_allows_s3_when_local_storage_is_unavailable(mo
     assert app.state.batch_storage_registry["s3"]["backend"] == "s3"
     assert runtime.worker is None
     assert runtime.gc_worker is None
+
+    await shutdown_batch_runtime(runtime)
 
 
 @pytest.mark.asyncio

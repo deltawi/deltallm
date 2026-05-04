@@ -1,6 +1,7 @@
 from src.metrics.batch import (
     increment_batch_create_session_action,
     increment_batch_artifact_failure,
+    increment_batch_completion_outbox_failure,
     increment_batch_chat_item_executed,
     increment_batch_chat_microbatch_fallback,
     increment_batch_chat_microbatch_request,
@@ -80,6 +81,7 @@ __all__ = [
     "increment_batch_chat_microbatch_request",
     "increment_batch_finalization_retry",
     "increment_batch_artifact_failure",
+    "increment_batch_completion_outbox_failure",
     "increment_batch_repair_action",
     "increment_batch_item_reclaim",
     "increment_batch_item_retry",
