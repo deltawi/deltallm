@@ -100,6 +100,20 @@ class BatchService:
                 )
             yield chunk
 
+    async def _cleanup_unrecorded_artifact(self, *, storage_key: str, backend: str) -> None:
+        if not storage_key:
+            return
+        try:
+            await self.storage.delete(storage_key)
+        except Exception as exc:
+            increment_batch_artifact_failure(operation="delete_orphan", backend=backend)
+            logger.warning(
+                "batch artifact orphan cleanup failed backend=%s storage_key=%s error=%s",
+                backend,
+                storage_key,
+                exc,
+            )
+
     async def _iter_storage_lines(
         self,
         *,
@@ -161,30 +175,38 @@ class BatchService:
         )
 
     async def create_file(self, *, auth: UserAPIKeyAuth, upload: UploadFile, purpose: str) -> dict[str, Any]:
-        storage_key, bytes_size, checksum = await self.storage.write_chunks(
-            purpose=purpose,
-            filename=upload.filename or "batch.jsonl",
-            chunks=self._upload_chunks(upload),
-        )
-        if bytes_size <= 0:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
-        filename = upload.filename or "batch.jsonl"
-        record = await self.repository.create_file(
-            purpose=purpose,
-            filename=filename,
-            bytes_size=bytes_size,
-            storage_backend=getattr(self.storage, "backend_name", "local"),
-            storage_key=storage_key,
-            checksum=checksum,
-            created_by_api_key=auth.api_key,
-            created_by_user_id=auth.user_id,
-            created_by_team_id=auth.team_id,
-            created_by_organization_id=auth.organization_id,
-            expires_at=datetime.now(tz=UTC) + timedelta(days=self.metadata_retention_days),
-        )
-        if record is None:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable")
-        return self.file_to_response(record)
+        storage_key: str | None = None
+        record = None
+        backend = str(getattr(self.storage, "backend_name", "local") or "local")
+        try:
+            storage_key, bytes_size, checksum = await self.storage.write_chunks(
+                purpose=purpose,
+                filename=upload.filename or "batch.jsonl",
+                chunks=self._upload_chunks(upload),
+            )
+            if bytes_size <= 0:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
+            filename = upload.filename or "batch.jsonl"
+            record = await self.repository.create_file(
+                purpose=purpose,
+                filename=filename,
+                bytes_size=bytes_size,
+                storage_backend=backend,
+                storage_key=storage_key,
+                checksum=checksum,
+                created_by_api_key=auth.api_key,
+                created_by_user_id=auth.user_id,
+                created_by_team_id=auth.team_id,
+                created_by_organization_id=auth.organization_id,
+                expires_at=datetime.now(tz=UTC) + timedelta(days=self.metadata_retention_days),
+            )
+            if record is None:
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable")
+            return self.file_to_response(record)
+        except Exception:
+            if record is None and storage_key:
+                await self._cleanup_unrecorded_artifact(storage_key=storage_key, backend=backend)
+            raise
 
     async def get_file_content(self, *, file_id: str, auth: UserAPIKeyAuth) -> bytes:
         file_record = await self.repository.get_file(file_id)

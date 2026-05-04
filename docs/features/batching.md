@@ -187,6 +187,7 @@ general_settings:
 ```
 
 All other settings have sensible defaults that work for single-instance deployments with local storage.
+For Helm or Kubernetes deployments with more than one replica, configure S3-compatible storage before enabling batch.
 
 ### Storage Backend
 
@@ -278,6 +279,7 @@ Completed batches and their artifacts are automatically cleaned up by a backgrou
 | `embeddings_batch_gc_enabled` | `true` | Enable background cleanup |
 | `embeddings_batch_gc_interval_seconds` | `86400` | How often the cleanup loop runs (default: daily) |
 | `embeddings_batch_gc_scan_limit` | `200` | Maximum expired items processed per cleanup pass |
+| `embeddings_batch_create_session_cleanup_enabled` | `true` | Enable cleanup for internal staged batch-create artifacts |
 
 For the full settings reference, see [Configuration > General](../configuration/general.md#batch-settings).
 
@@ -426,6 +428,7 @@ DeltaLLM exposes Prometheus metrics for batch processing on the configured metri
 |--------|------|-------------|
 | `deltallm_batch_finalization_retries_total` | Counter | Finalization retries by result |
 | `deltallm_batch_artifact_failures_total` | Counter | Storage operation failures by operation and backend |
+| `deltallm_batch_completion_outbox_failures_total` | Counter | Completion outbox failures by bounded reason |
 | `deltallm_batch_item_reclaims_total` | Counter | Items reclaimed from expired leases |
 | `deltallm_batch_repair_actions_total` | Counter | Admin repair actions by type and status |
 

@@ -165,6 +165,13 @@ config:
     health_check_model: gpt-3.5-turbo
     model_deployment_source: hybrid
     model_deployment_bootstrap_from_config: true
+    # Batch API defaults are safe for local/single-replica deployments.
+    # If embeddings_batch_enabled is true and replicaCount > 1, configure
+    # embeddings_batch_storage_backend: s3 so every pod can read/write artifacts.
+    embeddings_batch_enabled: false
+    embeddings_batch_storage_backend: local
+    embeddings_batch_storage_dir: .deltallm/batch-artifacts
+    embeddings_batch_create_session_cleanup_enabled: true
 
 s3:
   enabled: false

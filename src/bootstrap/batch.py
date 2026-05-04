@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
+import socket
 from asyncio import Task, create_task
 from dataclasses import dataclass
 from typing import Any
+from uuid import uuid4
 
 from src.batch import BatchCleanupConfig, BatchRetentionCleanupWorker, BatchRepository
 from src.batch.backpressure import BatchBackpressureCoordinator
@@ -30,6 +33,26 @@ logger = logging.getLogger(__name__)
 # worker task. Kept conservative so k8s pod termination grace periods are
 # respected; the worker loop's own idle poll is sub-second.
 _WORKER_SHUTDOWN_DRAIN_TIMEOUT_SECONDS = 30.0
+_BATCH_WORKER_BOOT_ID = uuid4().hex[:12]
+
+
+def _safe_worker_id_part(value: object, *, fallback: str) -> str:
+    safe = "".join(
+        char if char.isascii() and (char.isalnum() or char in {"-", "_", "."}) else "-"
+        for char in str(value or "").strip()
+    ).strip("-._")
+    return safe or fallback
+
+
+def _batch_worker_id(role: str) -> str:
+    return "-".join(
+        (
+            _safe_worker_id_part(role, fallback="batch-worker"),
+            _safe_worker_id_part(socket.gethostname(), fallback="unknown-host"),
+            str(os.getpid()),
+            _BATCH_WORKER_BOOT_ID,
+        )
+    )
 
 
 @dataclass
@@ -223,7 +246,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
             repository=repository,
             storage=batch_storage,
             config=BatchWorkerConfig(
-                worker_id=f"worker-{id(app)}",
+                worker_id=_batch_worker_id("batch-executor"),
                 poll_interval_seconds=cfg.general_settings.embeddings_batch_poll_interval_seconds,
                 heartbeat_interval_seconds=cfg.general_settings.embeddings_batch_heartbeat_interval_seconds,
                 job_lease_seconds=cfg.general_settings.embeddings_batch_job_lease_seconds,
@@ -252,7 +275,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         app=app,
         repository=repository,
         config=BatchCompletionOutboxWorkerConfig(
-            worker_id=f"completion-outbox-{id(app)}",
+            worker_id=_batch_worker_id("batch-completion-outbox"),
             poll_interval_seconds=cfg.general_settings.embeddings_batch_poll_interval_seconds,
             max_batch_size=max(10, int(cfg.general_settings.embeddings_batch_item_claim_limit or 20)),
             max_concurrency=min(8, max(1, int(cfg.general_settings.embeddings_batch_worker_concurrency or 4))),

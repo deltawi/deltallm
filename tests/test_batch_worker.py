@@ -4637,6 +4637,99 @@ async def test_batch_worker_finalize_artifacts_writes_openai_compatible_rows():
 
 
 @pytest.mark.asyncio
+async def test_batch_worker_finalize_artifacts_deletes_unrecorded_artifact_when_file_record_creation_fails():
+    now = datetime.now(tz=UTC)
+
+    class _FinalizingRepo:
+        async def list_items(self, batch_id: str):
+            return [
+                BatchItemRecord(
+                    item_id="i1",
+                    batch_id=batch_id,
+                    line_number=1,
+                    custom_id="req-1",
+                    status="completed",
+                    request_body={},
+                    response_body=_valid_embedding_artifact_response_body(),
+                    error_body=None,
+                    usage=None,
+                    provider_cost=0.0,
+                    billed_cost=0.0,
+                    attempts=1,
+                    last_error=None,
+                    locked_by=None,
+                    lease_expires_at=None,
+                    created_at=now,
+                    started_at=now,
+                    completed_at=now,
+                )
+            ]
+
+        async def create_file(self, **kwargs):  # noqa: ANN003
+            del kwargs
+            return None
+
+    class _Storage:
+        backend_name = "local"
+
+        def __init__(self) -> None:
+            self.deleted: list[str] = []
+
+        async def write_lines_stream(self, *, purpose: str, filename: str, lines):  # noqa: ANN001
+            async for _line in lines:
+                pass
+            return f"{purpose}/{filename}", 10, "checksum"
+
+        async def delete(self, storage_key: str) -> None:
+            self.deleted.append(storage_key)
+
+    storage = _Storage()
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=_FinalizingRepo(),  # type: ignore[arg-type]
+        storage=storage,  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+    job = BatchJobRecord(
+        batch_id="b-finalize",
+        endpoint="/v1/embeddings",
+        status=BatchJobStatus.FINALIZING,
+        execution_mode="managed_internal",
+        input_file_id="f-1",
+        output_file_id=None,
+        error_file_id=None,
+        model="m-1",
+        metadata={},
+        provider_batch_id=None,
+        provider_status=None,
+        provider_error=None,
+        provider_last_sync_at=None,
+        total_items=1,
+        in_progress_items=0,
+        completed_items=1,
+        failed_items=0,
+        cancelled_items=0,
+        locked_by="w1",
+        lease_expires_at=now,
+        cancel_requested_at=None,
+        status_last_updated_at=now,
+        created_by_api_key="tok-1",
+        created_by_user_id="u1",
+        created_by_team_id="t1",
+        created_by_organization_id="org-1",
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+        expires_at=None,
+    )
+
+    with pytest.raises(RuntimeError, match="Failed to create output artifact record"):
+        await worker._finalize_artifacts(job)
+
+    assert storage.deleted == ["batch_output/b-finalize-output.jsonl"]
+
+
+@pytest.mark.asyncio
 async def test_batch_worker_renews_job_and_item_leases_during_long_execution(monkeypatch):
     async def _slow_execute_embedding(request, payload, deployment):
         del request, payload, deployment

@@ -106,6 +106,7 @@ def test_batch_create_session_cleanup_defaults_match_general_settings() -> None:
     assert cleanup.completed_retention_seconds == DEFAULT_CREATE_SESSION_COMPLETED_RETENTION_SECONDS
     assert cleanup.retryable_retention_seconds == DEFAULT_CREATE_SESSION_RETRYABLE_RETENTION_SECONDS
     assert cleanup.failed_retention_seconds == DEFAULT_CREATE_SESSION_FAILED_RETENTION_SECONDS
+    assert settings.embeddings_batch_create_session_cleanup_enabled is True
     assert settings.embeddings_batch_create_session_cleanup_interval_seconds == cleanup.interval_seconds
     assert settings.embeddings_batch_create_session_cleanup_scan_limit == cleanup.scan_limit
     assert settings.embeddings_batch_create_stage_orphan_grace_seconds == cleanup.orphan_grace_seconds

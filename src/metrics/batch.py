@@ -57,6 +57,13 @@ deltallm_batch_artifact_failures_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_completion_outbox_failures_metric = Counter(
+    "deltallm_batch_completion_outbox_failures_total",
+    "Batch completion outbox failures by bounded reason",
+    ["reason"],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_batch_repair_actions_metric = Counter(
     "deltallm_batch_repair_actions_total",
     "Batch repair actions by action and status",
@@ -261,6 +268,10 @@ def increment_batch_artifact_failure(*, operation: str, backend: str) -> None:
         operation=sanitize_label(operation),
         backend=sanitize_label(backend),
     ).inc()
+
+
+def increment_batch_completion_outbox_failure(*, reason: str) -> None:
+    deltallm_batch_completion_outbox_failures_metric.labels(reason=sanitize_label(reason)).inc()
 
 
 def increment_batch_repair_action(*, action: str, status: str) -> None:
