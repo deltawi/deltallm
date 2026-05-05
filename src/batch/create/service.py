@@ -29,7 +29,7 @@ from src.batch.scopes import (
 from src.batch.storage import BatchArtifactLineTooLongError, BatchArtifactStorage
 from src.models.responses import UserAPIKeyAuth
 from src.services.callable_target_grants import CallableTargetGrantService
-from src.services.model_visibility import CallableTargetPolicyMode
+from src.services.model_visibility import CallableTargetPolicyMode, ensure_batch_model_allowed
 from src.metrics import increment_batch_artifact_failure
 
 logger = logging.getLogger(__name__)
@@ -421,6 +421,7 @@ class BatchCreateSessionService:
             seen_custom_ids=seen_custom_ids,
             callable_target_grant_service=self.callable_target_grant_service,
             callable_target_scope_policy_mode=self.callable_target_scope_policy_mode,
+            model_access_validator=ensure_batch_model_allowed,
         )
         if parsed is None:
             return None, None

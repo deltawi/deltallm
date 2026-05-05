@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,6 +37,7 @@ def parse_batch_input_line(
     seen_custom_ids: set[str],
     callable_target_grant_service: CallableTargetGrantService | None,
     callable_target_scope_policy_mode: CallableTargetPolicyMode | str,
+    model_access_validator: Callable[..., None] = ensure_batch_model_allowed,
 ) -> ParsedBatchInputLine | None:
     endpoint = str(endpoint or "").strip()
     if endpoint not in SUPPORTED_BATCH_ENDPOINT_SET:
@@ -77,7 +79,7 @@ def parse_batch_input_line(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Line {line_number} missing body")
 
     request_body, model = _validate_batch_request_body(body, endpoint=endpoint, line_number=line_number)
-    ensure_batch_model_allowed(
+    model_access_validator(
         auth,
         model,
         callable_target_grant_service=callable_target_grant_service,
