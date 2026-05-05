@@ -51,53 +51,7 @@ class KeyService:
             logger.warning("expired api key", extra={"token_hash": token_hash})
             raise AuthenticationError(message="API key expired", code="invalid_api_key")
 
-        auth = UserAPIKeyAuth(
-            api_key=record.token,
-            user_id=record.user_id,
-            team_id=record.team_id,
-            organization_id=record.organization_id,
-            models=record.models or [],
-            team_models=record.team_models or [],
-            max_budget=record.max_budget,
-            spend=record.spend,
-            tpm_limit=record.tpm_limit,
-            rpm_limit=record.rpm_limit,
-            key_tpm_limit=record.tpm_limit,
-            key_rpm_limit=record.rpm_limit,
-            user_tpm_limit=record.user_tpm_limit,
-            user_rpm_limit=record.user_rpm_limit,
-            team_tpm_limit=record.team_tpm_limit,
-            team_rpm_limit=record.team_rpm_limit,
-            org_tpm_limit=record.org_tpm_limit,
-            org_rpm_limit=record.org_rpm_limit,
-            team_model_rpm_limit=record.team_model_rpm_limit,
-            team_model_tpm_limit=record.team_model_tpm_limit,
-            org_model_rpm_limit=record.org_model_rpm_limit,
-            org_model_tpm_limit=record.org_model_tpm_limit,
-            max_parallel_requests=record.max_parallel_requests,
-            key_rph_limit=record.key_rph_limit,
-            key_rpd_limit=record.key_rpd_limit,
-            key_tpd_limit=record.key_tpd_limit,
-            user_rph_limit=record.user_rph_limit,
-            user_rpd_limit=record.user_rpd_limit,
-            user_tpd_limit=record.user_tpd_limit,
-            team_rph_limit=record.team_rph_limit,
-            team_rpd_limit=record.team_rpd_limit,
-            team_tpd_limit=record.team_tpd_limit,
-            org_rph_limit=record.org_rph_limit,
-            org_rpd_limit=record.org_rpd_limit,
-            org_tpd_limit=record.org_tpd_limit,
-            guardrails=self._extract_guardrails(record),
-            metadata=record.metadata,
-            team_metadata=record.team_metadata,
-            org_metadata=record.org_metadata,
-            expires=record.expires.isoformat() if record.expires else None,
-        )
-        annotate_auth_metadata(
-            auth,
-            auth_source="api_key",
-            api_key_scope_id=record.token,
-        )
+        auth = self._auth_from_record(record)
 
         if self.redis is not None:
             ttl = self.auth_cache_ttl_seconds
@@ -105,6 +59,36 @@ class KeyService:
                 ttl = max(1, min(ttl, int((record.expires - now).total_seconds())))
             await self.redis.setex(cache_key, ttl, auth.model_dump_json())
 
+        return auth
+
+    async def get_auth_by_token_hash(self, token_hash: str) -> UserAPIKeyAuth:
+        normalized_hash = str(token_hash or "").strip()
+        if not normalized_hash:
+            raise AuthenticationError(message="Invalid API key", code="invalid_api_key")
+
+        cache_key = self._cache_key(normalized_hash)
+        now = datetime.now(tz=UTC)
+
+        if self.redis is not None:
+            cached = await self.redis.get(cache_key)
+            if cached:
+                payload = json.loads(cached if isinstance(cached, str) else cached.decode("utf-8"))
+                return UserAPIKeyAuth.model_validate(payload)
+
+        record = await self.repository.get_by_token(normalized_hash)
+        if record is None:
+            logger.warning("missing api key for stored token hash", extra={"token_hash": normalized_hash})
+            raise AuthenticationError(message="Invalid API key", code="invalid_api_key")
+        if record.expires and record.expires < now:
+            logger.warning("expired api key for stored token hash", extra={"token_hash": normalized_hash})
+            raise AuthenticationError(message="API key expired", code="invalid_api_key")
+
+        auth = self._auth_from_record(record)
+        if self.redis is not None:
+            ttl = self.auth_cache_ttl_seconds
+            if record.expires is not None:
+                ttl = max(1, min(ttl, int((record.expires - now).total_seconds())))
+            await self.redis.setex(cache_key, ttl, auth.model_dump_json())
         return auth
 
     async def invalidate_key_cache_by_hash(self, token_hash: str) -> None:
@@ -160,6 +144,55 @@ class KeyService:
     @staticmethod
     def _cache_key(token_hash: str) -> str:
         return f"key:{token_hash}"
+
+    def _auth_from_record(self, record: Any) -> UserAPIKeyAuth:
+        auth = UserAPIKeyAuth(
+            api_key=record.token,
+            user_id=record.user_id,
+            team_id=record.team_id,
+            organization_id=record.organization_id,
+            models=record.models or [],
+            team_models=record.team_models or [],
+            max_budget=record.max_budget,
+            spend=record.spend,
+            tpm_limit=record.tpm_limit,
+            rpm_limit=record.rpm_limit,
+            key_tpm_limit=record.tpm_limit,
+            key_rpm_limit=record.rpm_limit,
+            user_tpm_limit=record.user_tpm_limit,
+            user_rpm_limit=record.user_rpm_limit,
+            team_tpm_limit=record.team_tpm_limit,
+            team_rpm_limit=record.team_rpm_limit,
+            org_tpm_limit=record.org_tpm_limit,
+            org_rpm_limit=record.org_rpm_limit,
+            team_model_rpm_limit=record.team_model_rpm_limit,
+            team_model_tpm_limit=record.team_model_tpm_limit,
+            org_model_rpm_limit=record.org_model_rpm_limit,
+            org_model_tpm_limit=record.org_model_tpm_limit,
+            max_parallel_requests=record.max_parallel_requests,
+            key_rph_limit=record.key_rph_limit,
+            key_rpd_limit=record.key_rpd_limit,
+            key_tpd_limit=record.key_tpd_limit,
+            user_rph_limit=record.user_rph_limit,
+            user_rpd_limit=record.user_rpd_limit,
+            user_tpd_limit=record.user_tpd_limit,
+            team_rph_limit=record.team_rph_limit,
+            team_rpd_limit=record.team_rpd_limit,
+            team_tpd_limit=record.team_tpd_limit,
+            org_rph_limit=record.org_rph_limit,
+            org_rpd_limit=record.org_rpd_limit,
+            org_tpd_limit=record.org_tpd_limit,
+            guardrails=self._extract_guardrails(record),
+            metadata=record.metadata,
+            team_metadata=record.team_metadata,
+            org_metadata=record.org_metadata,
+            expires=record.expires.isoformat() if record.expires else None,
+        )
+        return annotate_auth_metadata(
+            auth,
+            auth_source="api_key",
+            api_key_scope_id=record.token,
+        )
 
     @staticmethod
     def _extract_guardrails(record: Any) -> list[str]:

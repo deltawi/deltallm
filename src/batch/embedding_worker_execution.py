@@ -16,7 +16,8 @@ from src.batch.embedding_microbatch import (
     estimate_embedding_microbatch_weight,
     resolve_effective_upstream_max_batch_inputs,
 )
-from src.batch.endpoints import router_usage_mode_for_batch_endpoint
+from src.batch.endpoints import batch_call_type_for_endpoint, router_usage_mode_for_batch_endpoint
+from src.batch.policy import record_batch_policy_failure, run_batch_request_preflight
 from src.batch.retry import BatchResponseShapeError, BatchRetryCategory, BatchRetryDecision, classify_batch_retry
 from src.batch.worker_constants import COMPLETION_OUTBOX_MAX_ATTEMPTS
 from src.batch.worker_types import _PreparedEmbeddingItem, _RequestShim
@@ -42,17 +43,16 @@ class EmbeddingWorkerExecutionMixin:
     async def prepare_embedding_item_for_execution(self, job, item) -> _PreparedEmbeddingItem:  # noqa: ANN001
         started_at_monotonic = perf_counter()
         embedding_request = EmbeddingRequest.model_validate(item.request_body)
-        budget_service = getattr(self.app.state, "budget_service", None)
-        if budget_service is not None:
-            await budget_service.check_budgets(
-                api_key=job.created_by_api_key,
-                user_id=job.created_by_user_id,
-                team_id=job.created_by_team_id,
-                organization_id=job.created_by_organization_id,
-                model=embedding_request.model,
-            )
+        preflight = await run_batch_request_preflight(
+            app=self.app,
+            job=job,
+            payload=embedding_request,
+            request_data=embedding_request.model_dump(exclude_none=True),
+            call_type="embedding",
+        )
+        embedding_request = preflight.payload
 
-        request_context: dict[str, Any] = {"metadata": {}, "user_id": "batch-worker"}
+        request_context: dict[str, Any] = {"metadata": {}, "user_id": preflight.auth.user_id or preflight.auth.api_key}
         app_router = self.app.state.router
         model_group = app_router.resolve_model_group(embedding_request.model)
         await self._raise_if_model_group_deferred(model_group)
@@ -91,6 +91,7 @@ class EmbeddingWorkerExecutionMixin:
                 primary_deployment_id=primary_deployment_id,
                 input_kind=input_kind,
             ),
+            policy_auth=preflight.auth,
         )
 
     def _sanitize_embedding_response(self, data: dict[str, Any]) -> tuple[dict[str, Any], str | None, str | None]:
@@ -395,6 +396,20 @@ class EmbeddingWorkerExecutionMixin:
     async def _execute_prepared_item(self, job, prepared: _PreparedEmbeddingItem) -> None:  # noqa: ANN001
         item_heartbeat: asyncio.Task[None] | None = None
         try:
+            await self._acquire_prepared_policy_lease(prepared=prepared)
+        except Exception as exc:
+            record_batch_policy_failure(endpoint=batch_call_type_for_endpoint(job.endpoint), exc=exc)
+            await self._mark_item_failed(
+                job=job,
+                item=prepared.item,
+                model_name=prepared.model_name,
+                exc=exc,
+                deployment_id=None,
+                started_at_monotonic=prepared.started_at_monotonic,
+            )
+            return
+
+        try:
             item_heartbeat = self._start_heartbeat_fn(
                 renew=lambda: self.repository.renew_item_lease(
                     item_id=prepared.item.item_id,
@@ -499,6 +514,7 @@ class EmbeddingWorkerExecutionMixin:
         finally:
             if item_heartbeat is not None:
                 await self._stop_heartbeat_fn(item_heartbeat)
+            await self._release_prepared_policy_lease(prepared)
 
     async def _execute_prepared_microbatch_chunk(
         self,
@@ -507,6 +523,9 @@ class EmbeddingWorkerExecutionMixin:
         *,
         process_item: Callable[[Any, Any], Awaitable[None]],
     ) -> None:
+        prepared_items = await self._acquire_embedding_policy_leases_for_chunk(job=job, prepared_items=prepared_items)
+        if not prepared_items:
+            return
         if len(prepared_items) <= 1:
             await self._execute_prepared_item(job, prepared_items[0])
             return
@@ -585,6 +604,7 @@ class EmbeddingWorkerExecutionMixin:
                     decision=retry_decision,
                 )
                 if requeued:
+                    await self._release_prepared_policy_leases(prepared_items)
                     return
             increment_batch_microbatch_isolation_fallback()
             logger.warning(
@@ -599,6 +619,7 @@ class EmbeddingWorkerExecutionMixin:
                 item_heartbeat = item_heartbeats.pop(prepared.item.item_id, None)
                 if item_heartbeat is not None:
                     await self._stop_heartbeat_fn(item_heartbeat)
+                await self._release_prepared_policy_lease(prepared)
                 await process_item(job, prepared.item)
             return
 
@@ -706,6 +727,31 @@ class EmbeddingWorkerExecutionMixin:
             )
         finally:
             await self._stop_heartbeat_tasks(item_heartbeats.values())
+            await self._release_prepared_policy_leases(prepared_items)
+
+    async def _acquire_embedding_policy_leases_for_chunk(
+        self,
+        *,
+        job,
+        prepared_items: list[_PreparedEmbeddingItem],
+    ) -> list[_PreparedEmbeddingItem]:
+        allowed: list[_PreparedEmbeddingItem] = []
+        for prepared in prepared_items:
+            try:
+                await self._acquire_prepared_policy_lease(prepared=prepared)
+            except Exception as exc:
+                record_batch_policy_failure(endpoint=batch_call_type_for_endpoint(job.endpoint), exc=exc)
+                await self._mark_item_failed(
+                    job=job,
+                    item=prepared.item,
+                    model_name=prepared.model_name,
+                    exc=exc,
+                    deployment_id=None,
+                    started_at_monotonic=prepared.started_at_monotonic,
+                )
+                continue
+            allowed.append(prepared)
+        return allowed
 
     async def _process_embedding_items(
         self,

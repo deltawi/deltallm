@@ -141,6 +141,20 @@ For `/v1/chat/completions`, the `body` object follows the non-streaming chat com
 
 > **Note:** All items in a batch should target the same model. The model is inferred from the first item and tracked on the batch record.
 
+## Gateway Policy Enforcement
+
+Batch items are executed with the same gateway policy surface as synchronous traffic. When a batch is created with an API key, the worker reloads the current key context before each executable item and applies:
+
+- model access checks
+- hard budget checks for the key, user, team, and organization
+- pre-call callbacks, including request transformations
+- configured guardrails
+- rate limits and max-parallel request controls
+
+Policy failures are isolated to the affected item. Terminal failures, such as model denial, budget exhaustion, guardrail rejection, deleted keys, or expired keys, are written as item failures. Retryable throttling failures, such as rate-limit or max-parallel contention, are requeued using the normal batch retry schedule.
+
+Rate-limit and max-parallel slots are acquired immediately before provider execution and released after the provider attempt finishes. In multi-replica deployments, configure Redis so counters and parallel slots are shared across workers.
+
 ## Batch Lifecycle
 
 ```
@@ -432,6 +446,15 @@ DeltaLLM exposes Prometheus metrics for batch processing on the configured metri
 | `deltallm_batch_item_reclaims_total` | Counter | Items reclaimed from expired leases |
 | `deltallm_batch_repair_actions_total` | Counter | Admin repair actions by type and status |
 
+### Gateway policy
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `deltallm_batch_policy_allowed_total` | Counter | Batch items that passed gateway policy preflight by endpoint |
+| `deltallm_batch_policy_rejected_total` | Counter | Terminal policy rejections by endpoint and reason |
+| `deltallm_batch_policy_retryable_failures_total` | Counter | Retryable policy failures by endpoint and reason |
+| `deltallm_batch_preflight_latency_seconds` | Histogram | Time spent in batch policy preflight by endpoint and status |
+
 ### Micro-batching
 
 | Metric | Type | Description |
@@ -456,6 +479,8 @@ DeltaLLM exposes Prometheus metrics for batch processing on the configured metri
 
 - **`deltallm_batch_oldest_item_age_seconds{status="pending"}`** growing indicates the worker can't keep up. Increase `worker_concurrency` or add instances.
 - **`deltallm_batch_artifact_failures_total`** indicates storage issues. Check disk space (local) or S3 credentials/connectivity.
+- **`deltallm_batch_policy_rejected_total`** increasing usually means current auth, model access, budget, callback, or guardrail policy is rejecting batch items.
+- **`deltallm_batch_policy_retryable_failures_total`** increasing usually means batch workers are hitting distributed rate-limit or max-parallel pressure.
 - **`deltallm_batch_microbatch_isolation_fallback_total`** increasing after enabling micro-batching may indicate the provider doesn't handle multi-input requests well. Consider reducing `upstream_max_batch_inputs`.
 - **`deltallm_batch_chat_microbatch_fallbacks_total`** increasing after enabling chat `sync_microbatch` means items are being protected by compatibility checks or no executor is available.
 - **`deltallm_batch_model_group_deferrals_total`** increasing means workers are seeing temporary model-group unavailability. Check deployment health and router cooldown state.
@@ -486,7 +511,8 @@ Provider `Retry-After` hints are honored for retryable rate-limit failures, but 
 
 - Open the batch detail in the admin UI to see per-item error messages
 - Common causes: invalid model name, provider rate limits, upstream timeouts
-- Budget exhaustion is treated as terminal and is not retried
+- Budget exhaustion, model access denial, guardrail rejection, deleted keys, and expired keys are terminal and are not retried
+- Rate-limit and max-parallel contention are retried until the item reaches `embeddings_batch_max_attempts`
 - Check that the model deployment is healthy and reachable
 
 ## Known Limitations
