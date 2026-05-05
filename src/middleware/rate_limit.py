@@ -13,6 +13,7 @@ from fastapi import Request
 from src.models.errors import InvalidRequestError, RateLimitError
 from src.rate_limit_policy import (
     RateLimitState,
+    _model_limit as _model_limit,
     acquire_rate_limit_controls,
     build_rate_limit_checks,
     compute_rate_limit_state,
