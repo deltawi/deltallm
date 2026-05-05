@@ -26,6 +26,7 @@ class _DummyStorage:
         self.reads: list[str] = []
         self.lines_by_key: dict[str, list[str]] = {}
         self.writes: list[bytes] = []
+        self.deleted: list[str] = []
 
     async def read_bytes(self, storage_key: str) -> bytes:
         self.reads.append(storage_key)
@@ -44,6 +45,9 @@ class _DummyStorage:
             payload.extend(chunk)
         self.writes.append(bytes(payload))
         return "batch/file.jsonl", len(payload), "checksum"
+
+    async def delete(self, storage_key: str) -> None:
+        self.deleted.append(storage_key)
 
 
 def _metric_counter_value(metric, **labels) -> float:  # noqa: ANN001
@@ -145,6 +149,71 @@ async def test_parse_input_jsonl_rejects_duplicate_custom_id() -> None:
     with pytest.raises(HTTPException) as exc:
         service._parse_input_jsonl(payload, endpoint="/v1/embeddings", auth=auth)
     assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_parse_input_jsonl_accepts_chat_completion_lines() -> None:
+    service = _service(callable_target_scope_policy_mode="shadow")
+    auth = UserAPIKeyAuth(api_key="sk-test", models=["gpt-4o-mini"])
+    payload = (
+        b'{"custom_id":"chat-1","method":"POST","url":"/v1/chat/completions",'
+        b'"body":{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}}\n'
+    )
+
+    items, model = service._parse_input_jsonl(payload, endpoint="/v1/chat/completions", auth=auth)
+
+    assert len(items) == 1
+    assert model == "gpt-4o-mini"
+    assert items[0].request_body["model"] == "gpt-4o-mini"
+    assert items[0].request_body["messages"] == [{"role": "user", "content": "hello"}]
+    assert items[0].request_body["stream"] is False
+
+
+@pytest.mark.asyncio
+async def test_parse_input_jsonl_rejects_streaming_chat_completion_lines() -> None:
+    service = _service()
+    auth = UserAPIKeyAuth(api_key="sk-test")
+    payload = (
+        b'{"custom_id":"chat-1","url":"/v1/chat/completions",'
+        b'"body":{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}],"stream":true}}\n'
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        service._parse_input_jsonl(payload, endpoint="/v1/chat/completions", auth=auth)
+
+    assert exc.value.status_code == 400
+    assert "non-streaming" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_parse_input_jsonl_rejects_mcp_tools_for_chat_completion_lines() -> None:
+    service = _service()
+    auth = UserAPIKeyAuth(api_key="sk-test")
+    payload = (
+        b'{"custom_id":"chat-1","url":"/v1/chat/completions",'
+        b'"body":{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}],'
+        b'"tools":[{"type":"mcp","server":"internal"}]}}\n'
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        service._parse_input_jsonl(payload, endpoint="/v1/chat/completions", auth=auth)
+
+    assert exc.value.status_code == 400
+    assert "MCP tools" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_parse_input_jsonl_rejects_unsupported_batch_endpoint() -> None:
+    service = _service()
+    auth = UserAPIKeyAuth(api_key="sk-test")
+    payload = b'{"custom_id":"item-1","url":"/v1/responses","body":{"model":"gpt-4o-mini","input":"hello"}}\n'
+
+    with pytest.raises(HTTPException) as exc:
+        service._parse_input_jsonl(payload, endpoint="/v1/responses", auth=auth)
+
+    assert exc.value.status_code == 400
+    assert "/v1/embeddings" in str(exc.value.detail)
+    assert "/v1/chat/completions" in str(exc.value.detail)
 
 
 @pytest.mark.asyncio
@@ -531,6 +600,39 @@ async def test_create_file_enforces_max_file_bytes() -> None:
         )
 
     assert exc.value.status_code == 413
+
+
+@pytest.mark.asyncio
+async def test_create_file_deletes_written_artifact_when_db_record_creation_fails() -> None:
+    class _Upload:
+        filename = "batch.jsonl"
+
+        def __init__(self) -> None:
+            self._chunks = [b'{"custom_id":"item-1"}\n', b""]
+
+        async def read(self, size: int = -1):  # noqa: ARG002
+            return self._chunks.pop(0)
+
+    class _Repo:
+        async def create_file(self, **kwargs):  # noqa: ANN003
+            del kwargs
+            return None
+
+    storage = _DummyStorage()
+    service = BatchService(
+        repository=_Repo(),  # type: ignore[arg-type]
+        storage=storage,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await service.create_file(
+            auth=UserAPIKeyAuth(api_key="key-a"),
+            upload=_Upload(),  # type: ignore[arg-type]
+            purpose="batch",
+        )
+
+    assert exc.value.status_code == 503
+    assert storage.deleted == ["batch/file.jsonl"]
 
 
 @pytest.mark.asyncio

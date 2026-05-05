@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BatchCleanupConfig:
     interval_seconds: float = 86_400.0
+    failure_interval_seconds: float = 60.0
     scan_limit: int = 200
 
 
@@ -40,6 +41,7 @@ class BatchRetentionCleanupWorker:
         self.storage_registry.setdefault(active_backend, storage)
         self.config = config
         self._running = False
+        self._stop_event = asyncio.Event()
 
     def _storage_for_backend(self, backend: str | None) -> BatchArtifactStorage:
         normalized = str(backend or getattr(self.storage, "backend_name", "local") or "local").strip().lower()
@@ -60,12 +62,35 @@ class BatchRetentionCleanupWorker:
 
     async def run(self) -> None:
         self._running = True
-        while self._running:
-            await self.process_once()
-            await asyncio.sleep(self.config.interval_seconds)
+        while self._running and not self._stop_event.is_set():
+            iteration_failed = False
+            try:
+                await self.process_once()
+            except Exception:
+                iteration_failed = True
+                logger.exception("batch cleanup iteration failed")
+                if not self._running:
+                    break
+            if not self._running or self._stop_event.is_set():
+                break
+            try:
+                await asyncio.wait_for(
+                    self._stop_event.wait(),
+                    timeout=max(
+                        0.0,
+                        float(
+                            self.config.failure_interval_seconds
+                            if iteration_failed
+                            else self.config.interval_seconds
+                        ),
+                    ),
+                )
+            except asyncio.TimeoutError:
+                continue
 
     def stop(self) -> None:
         self._running = False
+        self._stop_event.set()
 
     async def process_once(self) -> tuple[int, int]:
         now = datetime.now(tz=UTC)

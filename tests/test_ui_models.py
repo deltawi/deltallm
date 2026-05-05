@@ -371,6 +371,98 @@ async def test_create_model_response_redacts_inline_api_key(client, test_app):
 
 
 @pytest.mark.asyncio
+async def test_create_model_accepts_chat_batching_params(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.post(
+        "/ui/api/models",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "model_name": "chat-batching-model",
+            "deltallm_params": {
+                "provider": "vllm",
+                "model": "meta-llama/Llama-3.1-8B-Instruct",
+                "api_base": "https://vllm.example/v1",
+                "api_key": "provider-key",
+                "chat_batching": {
+                    "mode": "sync_microbatch",
+                    "max_in_flight": 16,
+                    "upstream_max_batch_size": 4,
+                    "max_total_input_tokens": 32000,
+                    "require_homogeneous_params": True,
+                },
+            },
+            "model_info": {"mode": "chat"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["deltallm_params"]["chat_batching"] == {
+        "mode": "sync_microbatch",
+        "max_in_flight": 16,
+        "upstream_max_batch_size": 4,
+        "max_total_input_tokens": 32000,
+        "require_homogeneous_params": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_model_rejects_invalid_chat_batching_params(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.post(
+        "/ui/api/models",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "model_name": "invalid-chat-batching-model",
+            "deltallm_params": {
+                "provider": "vllm",
+                "model": "meta-llama/Llama-3.1-8B-Instruct",
+                "api_base": "https://vllm.example/v1",
+                "api_key": "provider-key",
+                "chat_batching": {
+                    "mode": "sync_microbatch",
+                    "upstream_max_batch_size": 1,
+                },
+            },
+            "model_info": {"mode": "chat"},
+        },
+    )
+
+    assert response.status_code == 400
+    assert "chat_batching.upstream_max_batch_size" in response.text
+
+
+@pytest.mark.asyncio
+async def test_update_model_clears_chat_batching_when_null(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.model_registry["gpt-4o-mini"][0]["deltallm_params"]["chat_batching"] = {
+        "mode": "concurrent",
+        "max_in_flight": 16,
+    }
+
+    response = await client.put(
+        "/ui/api/models/gpt-4o-mini-0",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "model_name": "gpt-4o-mini",
+            "deltallm_params": {
+                "provider": "openai",
+                "model": "openai/gpt-4o-mini",
+                "api_base": "https://api.openai.com/v1",
+                "chat_batching": None,
+            },
+            "model_info": {"mode": "chat"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert "chat_batching" not in response.json()["deltallm_params"]
+    assert "chat_batching" not in test_app.state.model_registry["gpt-4o-mini"][0]["deltallm_params"]
+
+
+@pytest.mark.asyncio
 async def test_create_model_rejects_invalid_access_groups(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
 

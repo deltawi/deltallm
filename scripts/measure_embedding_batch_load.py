@@ -18,7 +18,7 @@ from uuid import uuid4
 
 from prisma import Prisma
 
-import src.batch.service as batch_service_module
+import src.batch.request_validation as batch_request_validation_module
 from src.batch.models import BatchJobRecord
 from src.batch.repository import BatchRepository
 from src.batch.service import BatchService
@@ -244,12 +244,12 @@ async def run_measurement(args: argparse.Namespace) -> BatchLoadMeasurement:
     await db.connect()
     run_api_key = f"load-script-{uuid4().hex}"
     schema_ready = False
-    original_batch_model_allowed = batch_service_module.ensure_batch_model_allowed
+    original_batch_model_allowed = batch_request_validation_module.ensure_batch_model_allowed
     import src.batch.worker as batch_worker_module
 
     original_execute_embedding = batch_worker_module._execute_embedding
     try:
-        batch_service_module.ensure_batch_model_allowed = lambda *args, **kwargs: None
+        batch_request_validation_module.ensure_batch_model_allowed = lambda *args, **kwargs: None
         await ensure_batch_schema(db)
         schema_ready = True
 
@@ -336,7 +336,7 @@ async def run_measurement(args: argparse.Namespace) -> BatchLoadMeasurement:
             )
     finally:
         active_error = sys.exc_info()[1]
-        batch_service_module.ensure_batch_model_allowed = original_batch_model_allowed
+        batch_request_validation_module.ensure_batch_model_allowed = original_batch_model_allowed
         batch_worker_module._execute_embedding = original_execute_embedding
         cleanup_error: Exception | None = None
         if schema_ready:

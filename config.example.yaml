@@ -23,6 +23,19 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
       api_base: https://api.openai.com/v1
       timeout: 60
+      # Optional async Batch API chat execution control.
+      # Missing chat_batching behaves like mode: concurrent.
+      # For vLLM, concurrent is usually preferred because vLLM batches inside the engine.
+      # chat_batching:
+      #   mode: concurrent
+      #   max_in_flight: 32
+      # Use sync_microbatch only with a provider adapter that returns per-item results and usage.
+      # chat_batching:
+      #   mode: sync_microbatch
+      #   upstream_max_batch_size: 8
+      #   max_total_input_tokens: 32000
+      #   # false is not supported until a provider adapter defines safe heterogeneous grouping.
+      #   require_homogeneous_params: true
 
 router_settings:
   # Simple defaults are best for a first setup.

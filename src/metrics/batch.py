@@ -57,6 +57,13 @@ deltallm_batch_artifact_failures_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_completion_outbox_failures_metric = Counter(
+    "deltallm_batch_completion_outbox_failures_total",
+    "Batch completion outbox failures by bounded reason",
+    ["reason"],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_batch_repair_actions_metric = Counter(
     "deltallm_batch_repair_actions_total",
     "Batch repair actions by action and status",
@@ -192,6 +199,71 @@ deltallm_batch_microbatch_size_metric = Histogram(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_chat_items_executed_metric = Counter(
+    "deltallm_batch_chat_items_executed_total",
+    "Chat batch items executed by worker execution mode and status",
+    ["mode", "status"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_chat_microbatch_requests_metric = Counter(
+    "deltallm_batch_chat_microbatch_requests_total",
+    "Upstream sync chat microbatch requests executed by the batch worker",
+    ["status"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_chat_microbatch_fallbacks_metric = Counter(
+    "deltallm_batch_chat_microbatch_fallbacks_total",
+    "Chat microbatch candidates executed per-item by fallback reason",
+    ["reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_chat_microbatch_size_metric = Histogram(
+    "deltallm_batch_chat_microbatch_size",
+    "Number of chat requests in each upstream sync chat microbatch request",
+    buckets=[1, 2, 4, 8, 16, 32],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_chat_provider_latency_metric = Histogram(
+    "deltallm_batch_chat_provider_latency_seconds",
+    "Upstream chat batch worker provider latency by execution mode and status",
+    ["mode", "status"],
+    buckets=BATCH_LATENCY_BUCKETS,
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_policy_allowed_metric = Counter(
+    "deltallm_batch_policy_allowed_total",
+    "Batch items allowed by gateway policy preflight",
+    ["endpoint"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_policy_rejected_metric = Counter(
+    "deltallm_batch_policy_rejected_total",
+    "Batch items rejected by gateway policy preflight",
+    ["endpoint", "reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_policy_retryable_failures_metric = Counter(
+    "deltallm_batch_policy_retryable_failures_total",
+    "Batch policy preflight failures that are eligible for normal item retry",
+    ["endpoint", "reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_preflight_latency_metric = Histogram(
+    "deltallm_batch_preflight_latency_seconds",
+    "Batch policy preflight latency by endpoint and status",
+    ["endpoint", "status"],
+    buckets=BATCH_LATENCY_BUCKETS,
+    registry=get_prometheus_registry(),
+)
+
 
 def set_batch_job_count(*, status: str, count: int) -> None:
     deltallm_batch_jobs_metric.labels(status=sanitize_label(status)).set(max(0, int(count)))
@@ -225,6 +297,10 @@ def increment_batch_artifact_failure(*, operation: str, backend: str) -> None:
         operation=sanitize_label(operation),
         backend=sanitize_label(backend),
     ).inc()
+
+
+def increment_batch_completion_outbox_failure(*, reason: str) -> None:
+    deltallm_batch_completion_outbox_failures_metric.labels(reason=sanitize_label(reason)).inc()
 
 
 def increment_batch_repair_action(*, action: str, status: str) -> None:
@@ -321,6 +397,57 @@ def observe_batch_model_group_deferral_seconds(*, reason: str, delay_seconds: fl
 
 def observe_batch_microbatch_size(*, batch_size: int) -> None:
     deltallm_batch_microbatch_size_metric.observe(max(0, int(batch_size)))
+
+
+def increment_batch_chat_item_executed(*, mode: str, status: str, count: int = 1) -> None:
+    deltallm_batch_chat_items_executed_metric.labels(
+        mode=sanitize_label(mode),
+        status=sanitize_label(status),
+    ).inc(max(0, int(count)))
+
+
+def increment_batch_chat_microbatch_request(*, status: str) -> None:
+    deltallm_batch_chat_microbatch_requests_metric.labels(status=sanitize_label(status)).inc()
+
+
+def increment_batch_chat_microbatch_fallback(*, reason: str, count: int = 1) -> None:
+    deltallm_batch_chat_microbatch_fallbacks_metric.labels(reason=sanitize_label(reason)).inc(max(0, int(count)))
+
+
+def observe_batch_chat_microbatch_size(*, batch_size: int) -> None:
+    deltallm_batch_chat_microbatch_size_metric.observe(max(0, int(batch_size)))
+
+
+def observe_batch_chat_provider_latency(*, mode: str, status: str, latency_seconds: float) -> None:
+    deltallm_batch_chat_provider_latency_metric.labels(
+        mode=sanitize_label(mode),
+        status=sanitize_label(status),
+    ).observe(max(0.0, float(latency_seconds)))
+
+
+def increment_batch_policy_allowed(*, endpoint: str) -> None:
+    deltallm_batch_policy_allowed_metric.labels(endpoint=sanitize_label(endpoint)).inc()
+
+
+def increment_batch_policy_rejected(*, endpoint: str, reason: str) -> None:
+    deltallm_batch_policy_rejected_metric.labels(
+        endpoint=sanitize_label(endpoint),
+        reason=sanitize_label(reason),
+    ).inc()
+
+
+def increment_batch_policy_retryable_failure(*, endpoint: str, reason: str) -> None:
+    deltallm_batch_policy_retryable_failures_metric.labels(
+        endpoint=sanitize_label(endpoint),
+        reason=sanitize_label(reason),
+    ).inc()
+
+
+def observe_batch_preflight_latency(*, endpoint: str, status: str, latency_seconds: float) -> None:
+    deltallm_batch_preflight_latency_metric.labels(
+        endpoint=sanitize_label(endpoint),
+        status=sanitize_label(status),
+    ).observe(max(0.0, float(latency_seconds)))
 
 
 def publish_batch_runtime_summary(summary: Mapping[str, Any]) -> None:

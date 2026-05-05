@@ -9,7 +9,12 @@ from typing import Any
 from src.batch.models import BatchCompletionOutboxRecord
 from src.batch.repository import BatchRepository
 from src.billing.spend import SpendTrackingService
-from src.metrics import increment_request, increment_spend, increment_usage
+from src.metrics import (
+    increment_batch_completion_outbox_failure,
+    increment_request,
+    increment_spend,
+    increment_usage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,15 +51,33 @@ class BatchCompletionOutboxWorker:
         self.repository = repository
         self.config = config or BatchCompletionOutboxWorkerConfig()
         self._stopped = False
+        self._stop_event = asyncio.Event()
 
     def stop(self) -> None:
         self._stopped = True
+        self._stop_event.set()
 
     async def run(self) -> None:
-        while not self._stopped:
-            processed = await self.process_once()
+        while not self._stopped and not self._stop_event.is_set():
+            try:
+                processed = await self.process_once()
+            except Exception:
+                increment_batch_completion_outbox_failure(reason="iteration")
+                logger.exception(
+                    "batch completion outbox iteration failed worker_id=%s",
+                    self.config.worker_id,
+                )
+                processed = 0
             if processed == 0:
-                await asyncio.sleep(self.config.poll_interval_seconds)
+                if self._stopped or self._stop_event.is_set():
+                    break
+                try:
+                    await asyncio.wait_for(
+                        self._stop_event.wait(),
+                        timeout=max(0.0, float(self.config.poll_interval_seconds)),
+                    )
+                except asyncio.TimeoutError:
+                    continue
 
     async def process_once(self) -> int:
         claimed = await self.repository.claim_completion_outbox_due(
@@ -69,7 +92,16 @@ class BatchCompletionOutboxWorker:
 
         async def _run(record: BatchCompletionOutboxRecord) -> None:
             async with semaphore:
-                await self._process_record(record)
+                try:
+                    await self._process_record(record)
+                except Exception:
+                    increment_batch_completion_outbox_failure(reason="record_unhandled")
+                    logger.exception(
+                        "batch completion outbox record processing failed completion_id=%s item_id=%s worker_id=%s",
+                        record.completion_id,
+                        record.item_id,
+                        self.config.worker_id,
+                    )
 
         await asyncio.gather(*[_run(record) for record in claimed])
         return len(claimed)
@@ -98,6 +130,14 @@ class BatchCompletionOutboxWorker:
                         "batch completion outbox failed finalize skipped after lease loss completion_id=%s",
                         record.completion_id,
                     )
+                    return
+                increment_batch_completion_outbox_failure(reason="max_attempts")
+                logger.error(
+                    "batch completion outbox marked failed after max attempts completion_id=%s item_id=%s attempts=%s",
+                    record.completion_id,
+                    record.item_id,
+                    record.attempt_count,
+                )
                 return
             retry_seconds = min(
                 self.config.retry_max_seconds,

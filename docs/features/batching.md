@@ -1,6 +1,6 @@
-# Embeddings Batch API
+# Batch API
 
-Process large volumes of embedding requests asynchronously. Upload a JSONL file, create a batch, and download results when the job completes. This is ideal when you have thousands of texts to embed and don't need results in real time.
+Process large volumes of embedding or non-streaming chat completion requests asynchronously. Upload a JSONL file, create a batch, and download results when the job completes. This is ideal when you have thousands of requests to run and don't need results in real time.
 
 ## Quick Start
 
@@ -15,12 +15,21 @@ Restart DeltaLLM after changing this setting.
 
 ### 2. Upload an input file
 
-Create a JSONL file where each line is a batch request:
+Create a JSONL file where each line is a batch request.
+
+Embedding example:
 
 ```jsonl
 {"custom_id": "doc-1", "url": "/v1/embeddings", "body": {"model": "text-embedding-3-small", "input": "DeltaLLM is an LLM gateway"}}
 {"custom_id": "doc-2", "url": "/v1/embeddings", "body": {"model": "text-embedding-3-small", "input": "It supports async batch processing"}}
 {"custom_id": "doc-3", "url": "/v1/embeddings", "body": {"model": "text-embedding-3-small", "input": "Batching reduces cost for high-volume workloads"}}
+```
+
+Chat completion example:
+
+```jsonl
+{"custom_id": "chat-1", "url": "/v1/chat/completions", "body": {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "Summarize DeltaLLM in one sentence."}]}}
+{"custom_id": "chat-2", "url": "/v1/chat/completions", "body": {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "Write a short support reply."}]}}
 ```
 
 Upload it:
@@ -93,7 +102,7 @@ curl http://localhost:8000/v1/files/file_out456/content \
   -o output.jsonl
 ```
 
-Each output line contains the `custom_id` you provided and the embedding response.
+Each output line contains the `custom_id` you provided and the endpoint response.
 
 ## Input Format
 
@@ -102,10 +111,16 @@ Each line of the input JSONL file must be a JSON object with these fields:
 | Field | Required | Description |
 |-------|----------|-------------|
 | `custom_id` | Yes | Your unique identifier for this request. Used to match input to output. Must be unique within the file. |
-| `url` | No | Must be `/v1/embeddings` if provided. Defaults to the batch endpoint. |
-| `body` | Yes | The embedding request payload, same schema as a synchronous `POST /v1/embeddings` call. |
+| `method` | No | Defaults to `POST`. If provided, it must be `POST`. |
+| `url` | No | Must match the batch endpoint if provided. Defaults to the batch endpoint. |
+| `body` | Yes | The endpoint request payload. |
 
-The `body` object follows the standard embeddings request format:
+Supported batch endpoints:
+
+- `/v1/embeddings`
+- `/v1/chat/completions`
+
+For `/v1/embeddings`, the `body` object follows the standard embeddings request format:
 
 | Field | Required | Description |
 |-------|----------|-------------|
@@ -114,7 +129,31 @@ The `body` object follows the standard embeddings request format:
 | `encoding_format` | No | `float` or `base64` |
 | `dimensions` | No | Output dimensionality (if the model supports it) |
 
+For `/v1/chat/completions`, the `body` object follows the non-streaming chat completions request format:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `model` | Yes | The model name, e.g. `gpt-4o-mini` |
+| `messages` | Yes | Chat messages using the same shape as synchronous `POST /v1/chat/completions` |
+| `stream` | No | Must be omitted or `false`; streaming is not supported in batch |
+| `tools` | No | Function tools are accepted; MCP tools are rejected in batch chat for now |
+| `response_format` | No | Preserved and forwarded like the synchronous chat endpoint |
+
 > **Note:** All items in a batch should target the same model. The model is inferred from the first item and tracked on the batch record.
+
+## Gateway Policy Enforcement
+
+Batch items are executed with the same gateway policy surface as synchronous traffic. When a batch is created with an API key, the worker reloads the current key context before each executable item and applies:
+
+- model access checks
+- hard budget checks for the key, user, team, and organization
+- pre-call callbacks, including request transformations
+- configured guardrails
+- rate limits and max-parallel request controls
+
+Policy failures are isolated to the affected item. Terminal failures, such as model denial, budget exhaustion, guardrail rejection, deleted keys, or expired keys, are written as item failures. Retryable throttling failures, such as rate-limit or max-parallel contention, are requeued using the normal batch retry schedule.
+
+Rate-limit and max-parallel slots are acquired immediately before provider execution and released after the provider attempt finishes. In multi-replica deployments, configure Redis so counters and parallel slots are shared across workers.
 
 ## Batch Lifecycle
 
@@ -162,6 +201,7 @@ general_settings:
 ```
 
 All other settings have sensible defaults that work for single-instance deployments with local storage.
+For Helm or Kubernetes deployments with more than one replica, configure S3-compatible storage before enabling batch.
 
 ### Storage Backend
 
@@ -253,12 +293,15 @@ Completed batches and their artifacts are automatically cleaned up by a backgrou
 | `embeddings_batch_gc_enabled` | `true` | Enable background cleanup |
 | `embeddings_batch_gc_interval_seconds` | `86400` | How often the cleanup loop runs (default: daily) |
 | `embeddings_batch_gc_scan_limit` | `200` | Maximum expired items processed per cleanup pass |
+| `embeddings_batch_create_session_cleanup_enabled` | `true` | Enable cleanup for internal staged batch-create artifacts |
 
-For the full settings reference, see [Configuration > General](../configuration/general.md#embeddings-batch-settings).
+For the full settings reference, see [Configuration > General](../configuration/general.md#batch-settings).
 
 ## Upstream Micro-batching
 
-When the batch worker processes embedding items, it normally sends one upstream HTTP request per item. Micro-batching groups compatible items into a single upstream call, reducing HTTP round trips and improving throughput.
+When the batch worker processes embedding items, it normally sends one upstream HTTP request per item. Embedding micro-batching groups compatible items into a single upstream call, reducing HTTP round trips and improving throughput.
+
+Chat completion batch jobs default to bounded per-item concurrency. For vLLM, this is usually the preferred mode because vLLM performs continuous batching inside the serving engine while DeltaLLM keeps one canonical response, usage record, and spend record per batch item.
 
 ### How it works
 
@@ -286,7 +329,7 @@ model_list:
 
 This tells the batch worker to group up to 8 compatible items per upstream request.
 
-> **Note:** Micro-batching only applies to the async batch worker. It does not change synchronous `/v1/embeddings` behavior.
+> **Note:** Embedding micro-batching does not change synchronous `/v1/embeddings` behavior. Chat batching has its own deployment-level `deltallm_params.chat_batching` controls.
 
 ### Eligible inputs
 
@@ -318,6 +361,60 @@ When a model group has no healthy deployments, workers also create a short-lived
 
 When items are grouped, the upstream provider returns usage at the grouped-call level. DeltaLLM allocates per-item usage proportionally based on estimated token weight. Total usage and cost remain consistent; per-item values are approximations.
 
+### Chat batch execution modes
+
+Chat batch execution is configured per deployment in `deltallm_params.chat_batching`:
+
+```yaml
+model_list:
+  - model_name: support-chat
+    deltallm_params:
+      provider: vllm
+      model: meta-llama/Llama-3.1-8B-Instruct
+      api_base: https://vllm.example/v1
+      api_key: os.environ/VLLM_API_KEY
+      chat_batching:
+        mode: concurrent
+        max_in_flight: 32
+```
+
+Supported modes:
+
+| Mode | Behavior |
+|------|----------|
+| `disabled` | Execute each item as an ordinary upstream chat request; no microbatch grouping |
+| `concurrent` | Execute one upstream chat request per item with worker and deployment concurrency limits |
+| `sync_microbatch` | Group compatible chat items into an upstream provider microbatch when a microbatch executor is available |
+
+Missing `chat_batching` config is treated as `concurrent`. The reserved `native_async_batch` mode is not accepted yet.
+
+`max_in_flight` is enforced per worker replica. In Kubernetes, the effective maximum in-flight requests for one deployment is roughly `max_in_flight * worker replica count`, bounded by each replica's worker concurrency. Size these values with provider limits, pod count, and vLLM capacity in mind.
+
+### Sync chat microbatching
+
+Use `sync_microbatch` only for provider adapters that return a result for each input item and exact per-item usage:
+
+```yaml
+model_list:
+  - model_name: provider-chat
+    deltallm_params:
+      provider: example_provider
+      model: example-chat-model
+      api_base: https://provider.example/v1
+      api_key: os.environ/PROVIDER_API_KEY
+      chat_batching:
+        mode: sync_microbatch
+        upstream_max_batch_size: 8
+        max_total_input_tokens: 32000
+        require_homogeneous_params: true
+```
+
+The worker groups only after routing, and only when items share the same deployment, provider, API base, public model, deployment model, failover context, and non-message request parameters. If `require_homogeneous_params` is provided, it must remain `true`. Requests with streaming, MCP tools, function tools, complex response formats, multiple choices, or token pressure above the configured cap fall back to per-item execution.
+
+Sync microbatch calls use the same deployment failover path as ordinary chat requests. Before sending a grouped request to any served deployment, the worker checks that deployment's own `chat_batching.mode`, chunk-size limit, token cap, and sync microbatch executor. If the primary deployment fails and a fallback deployment also supports the requested sync microbatch, the fallback response is persisted with the fallback deployment's provider, API base, and pricing metadata. If the served deployment cannot run the requested sync microbatch and no earlier retryable health-affecting microbatch failure occurred, the worker degrades to bounded per-item execution without marking that deployment unhealthy. If the primary deployment already failed with a retryable health-affecting error before failover reaches an unsupported deployment, the worker requeues the chunk using the primary failure so health and retry semantics are preserved.
+
+Successful microbatch results are persisted and billed per item. If a provider result is missing per-item usage, that item fails instead of using aggregate usage. Mixed success and failure results persist successful items and fail or retry only the affected failed items. Structured per-item provider errors with retryable status codes such as `429`, `408`, or `5xx` are classified by the normal batch retry policy; unstructured provider item errors remain terminal invalid-request failures.
+
 ## Monitoring
 
 DeltaLLM exposes Prometheus metrics for batch processing on the configured metrics endpoint.
@@ -345,8 +442,18 @@ DeltaLLM exposes Prometheus metrics for batch processing on the configured metri
 |--------|------|-------------|
 | `deltallm_batch_finalization_retries_total` | Counter | Finalization retries by result |
 | `deltallm_batch_artifact_failures_total` | Counter | Storage operation failures by operation and backend |
+| `deltallm_batch_completion_outbox_failures_total` | Counter | Completion outbox failures by bounded reason |
 | `deltallm_batch_item_reclaims_total` | Counter | Items reclaimed from expired leases |
 | `deltallm_batch_repair_actions_total` | Counter | Admin repair actions by type and status |
+
+### Gateway policy
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `deltallm_batch_policy_allowed_total` | Counter | Batch items that passed gateway policy preflight by endpoint |
+| `deltallm_batch_policy_rejected_total` | Counter | Terminal policy rejections by endpoint and reason |
+| `deltallm_batch_policy_retryable_failures_total` | Counter | Retryable policy failures by endpoint and reason |
+| `deltallm_batch_preflight_latency_seconds` | Histogram | Time spent in batch policy preflight by endpoint and status |
 
 ### Micro-batching
 
@@ -362,12 +469,20 @@ DeltaLLM exposes Prometheus metrics for batch processing on the configured metri
 | `deltallm_batch_model_group_deferrals_total` | Counter | Model-group backpressure deferrals by reason |
 | `deltallm_batch_model_group_deferred_items_total` | Counter | Items deferred by model-group backpressure by reason |
 | `deltallm_batch_model_group_deferral_seconds` | Histogram | Model-group backpressure deferral duration by reason |
+| `deltallm_batch_chat_items_executed_total` | Counter | Chat batch items by execution mode and status |
+| `deltallm_batch_chat_microbatch_requests_total` | Counter | Sync chat microbatch requests by status |
+| `deltallm_batch_chat_microbatch_fallbacks_total` | Counter | Chat microbatch candidates executed per-item by reason |
+| `deltallm_batch_chat_microbatch_size` | Histogram | Number of chat items per sync microbatch request |
+| `deltallm_batch_chat_provider_latency_seconds` | Histogram | Upstream chat batch worker latency by execution mode and status |
 
 ### What to watch
 
 - **`deltallm_batch_oldest_item_age_seconds{status="pending"}`** growing indicates the worker can't keep up. Increase `worker_concurrency` or add instances.
 - **`deltallm_batch_artifact_failures_total`** indicates storage issues. Check disk space (local) or S3 credentials/connectivity.
+- **`deltallm_batch_policy_rejected_total`** increasing usually means current auth, model access, budget, callback, or guardrail policy is rejecting batch items.
+- **`deltallm_batch_policy_retryable_failures_total`** increasing usually means batch workers are hitting distributed rate-limit or max-parallel pressure.
 - **`deltallm_batch_microbatch_isolation_fallback_total`** increasing after enabling micro-batching may indicate the provider doesn't handle multi-input requests well. Consider reducing `upstream_max_batch_inputs`.
+- **`deltallm_batch_chat_microbatch_fallbacks_total`** increasing after enabling chat `sync_microbatch` means items are being protected by compatibility checks or no executor is available.
 - **`deltallm_batch_model_group_deferrals_total`** increasing means workers are seeing temporary model-group unavailability. Check deployment health and router cooldown state.
 
 ## Troubleshooting
@@ -396,12 +511,16 @@ Provider `Retry-After` hints are honored for retryable rate-limit failures, but 
 
 - Open the batch detail in the admin UI to see per-item error messages
 - Common causes: invalid model name, provider rate limits, upstream timeouts
-- Budget exhaustion is treated as terminal and is not retried
+- Budget exhaustion, model access denial, guardrail rejection, deleted keys, and expired keys are terminal and are not retried
+- Rate-limit and max-parallel contention are retried until the item reaches `embeddings_batch_max_attempts`
 - Check that the model deployment is healthy and reachable
 
 ## Known Limitations
 
-- Only `/v1/embeddings` is supported as a batch endpoint
+- Chat batch supports non-streaming `/v1/chat/completions` requests only
+- MCP tools are not supported in chat batch requests yet
+- Provider-native async chat batch APIs are not used in this release
+- Chat requests are executed with bounded concurrency; synchronous upstream chat micro-batching is planned separately
 - `list[str]` and `list[list[int]]` inputs are not eligible for micro-batching (they are processed individually)
 - Local storage is not safe for multi-instance deployments; use S3
 - Batch creation is not fully transactional when the database does not support interactive transactions
@@ -411,5 +530,5 @@ Provider `Retry-After` hints are honored for retryable rate-limit failures, but 
 - [Proxy Endpoints](../api/proxy.md#batch-endpoints)
 - [Admin Endpoints](../api/admin.md#batches)
 - [Admin UI: Batch Jobs](../admin-ui/batch-jobs.md)
-- [Configuration Reference](../configuration/general.md#embeddings-batch-settings)
+- [Configuration Reference](../configuration/general.md#batch-settings)
 - [Model Deployments](../configuration/models.md#embedding-batch-worker-micro-batching)

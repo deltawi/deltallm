@@ -43,7 +43,7 @@ curl http://localhost:8000/v1/chat/completions \
 | `POST /v1/files` | Upload batch input files |
 | `GET /v1/files/{file_id}` | Inspect batch files |
 | `GET /v1/files/{file_id}/content` | Download batch file content |
-| `POST /v1/batches` | Create embeddings batches |
+| `POST /v1/batches` | Create embedding or non-streaming chat completion batches |
 | `GET /v1/batches` | List batches |
 | `GET /v1/batches/{batch_id}` | Inspect one batch |
 | `POST /v1/batches/{batch_id}/cancel` | Cancel a batch |
@@ -241,7 +241,9 @@ curl http://localhost:8000/v1/batches/batch_123 \
 Current behavior:
 
 - batch endpoints are available only when `general_settings.embeddings_batch_enabled: true`
-- the current implementation supports `endpoint: "/v1/embeddings"` only
+- supported endpoints are `"/v1/embeddings"` and `"/v1/chat/completions"`
+- chat batch requests must be non-streaming; `stream: true` is rejected
+- MCP tools are not supported in chat batch requests yet
 
 ## Model Discovery
 

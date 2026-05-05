@@ -4,6 +4,8 @@ import pytest
 
 from src.config import (
     AppConfig,
+    ChatBatchingConfig,
+    DeltaLLMParams,
     GeneralSettings,
     ModelDeployment,
     ModelInfo,
@@ -318,6 +320,80 @@ def test_model_info_accepts_valid_upstream_max_batch_inputs():
 def test_model_info_rejects_non_positive_upstream_max_batch_inputs(value: int):
     with pytest.raises(ValueError, match="greater than or equal to 1"):
         ModelInfo.model_validate({"upstream_max_batch_inputs": value})
+
+
+def test_delta_llm_params_accepts_chat_batching_config():
+    params = DeltaLLMParams.model_validate(
+        {
+            "provider": "vllm",
+            "model": "vllm/llama-3.1-8b",
+            "chat_batching": {
+                "mode": "concurrent",
+                "max_in_flight": 32,
+            },
+        }
+    )
+
+    assert params.chat_batching is not None
+    assert params.chat_batching.mode == "concurrent"
+    assert params.chat_batching.max_in_flight == 32
+    assert params.model_dump(exclude_none=True)["chat_batching"] == {
+        "mode": "concurrent",
+        "max_in_flight": 32,
+        "require_homogeneous_params": True,
+    }
+
+
+def test_chat_batching_config_accepts_sync_microbatch_with_limits():
+    config = ChatBatchingConfig.model_validate(
+        {
+            "mode": "sync_microbatch",
+            "upstream_max_batch_size": 8,
+            "max_total_input_tokens": 32000,
+            "require_homogeneous_params": True,
+        }
+    )
+
+    assert config.mode == "sync_microbatch"
+    assert config.upstream_max_batch_size == 8
+    assert config.max_total_input_tokens == 32000
+
+
+@pytest.mark.parametrize("mode", ["native_async_batch", "provider_native", "unknown"])
+def test_chat_batching_config_rejects_unknown_modes(mode: str):
+    with pytest.raises(ValueError):
+        ChatBatchingConfig.model_validate({"mode": mode})
+
+
+@pytest.mark.parametrize("upstream_max_batch_size", [None, 1])
+def test_chat_batching_config_rejects_sync_microbatch_without_batch_size(upstream_max_batch_size: int | None):
+    with pytest.raises(ValueError, match="upstream_max_batch_size"):
+        ChatBatchingConfig.model_validate(
+            {
+                "mode": "sync_microbatch",
+                "upstream_max_batch_size": upstream_max_batch_size,
+            }
+        )
+
+
+def test_chat_batching_config_rejects_sync_microbatch_without_homogeneous_params():
+    with pytest.raises(ValueError, match="require_homogeneous_params"):
+        ChatBatchingConfig.model_validate(
+            {
+                "mode": "sync_microbatch",
+                "upstream_max_batch_size": 8,
+                "require_homogeneous_params": False,
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["max_in_flight", "upstream_max_batch_size", "max_total_input_tokens"],
+)
+def test_chat_batching_config_rejects_non_positive_limits(field: str):
+    with pytest.raises(ValueError):
+        ChatBatchingConfig.model_validate({field: 0})
 
 
 def test_model_info_normalizes_access_groups():

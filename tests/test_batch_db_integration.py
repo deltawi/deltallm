@@ -127,6 +127,12 @@ class _NoopRouterStateBackend:
         del args, kwargs
 
 
+class _AllowAllCallableTargetGrantService:
+    def resolve_policy_allowlist(self, auth):  # noqa: ANN001
+        del auth
+        return SimpleNamespace(allowlist=None, authoritative=True, fallback_reason=None)
+
+
 async def _connect_prisma() -> Any:
     if Prisma is None or not DATABASE_URL:  # pragma: no cover
         pytest.skip("DATABASE_URL and prisma client are required for DB-backed batch tests")
@@ -2812,6 +2818,7 @@ async def test_db_backed_shared_storage_flow_uses_recorded_backends_end_to_end(
                 budget_service=_NoopBudgetService(),
                 passive_health_tracker=_NoopPassiveHealthTracker(),
                 router_state_backend=_NoopRouterStateBackend(),
+                callable_target_grant_service=_AllowAllCallableTargetGrantService(),
             )
         ),
         repository=repository,
@@ -2985,6 +2992,7 @@ async def test_db_backed_grouped_embedding_execution_preserves_item_and_batch_to
                 budget_service=_NoopBudgetService(),
                 passive_health_tracker=_NoopPassiveHealthTracker(),
                 router_state_backend=_NoopRouterStateBackend(),
+                callable_target_grant_service=_AllowAllCallableTargetGrantService(),
             )
         ),
         repository=repository,

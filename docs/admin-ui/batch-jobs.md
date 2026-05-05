@@ -2,7 +2,7 @@
 
 Batch Jobs is the operations view for long-running asynchronous work.
 
-Today, the public batch API is focused on embeddings batches, and this page helps operators inspect job progress, failures, and cost after submission.
+The public batch API supports embeddings and non-streaming chat completion batches. This page helps operators inspect job progress, failures, and cost after submission.
 
 ![Batch Jobs](images/batch-jobs.png)
 

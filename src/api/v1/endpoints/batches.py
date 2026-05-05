@@ -31,7 +31,8 @@ async def create_batch(request: Request, payload: dict[str, Any]):
     try:
         service = _batch_service_or_404(request)
         audit_metadata = {"route": request.url.path, "idempotency_key_present": bool(idempotency_key)}
-        result = await service.create_embeddings_batch_result(
+        create_batch_result = getattr(service, "create_batch_result", None) or service.create_embeddings_batch_result
+        result = await create_batch_result(
             auth=auth,
             input_file_id=input_file_id,
             endpoint=endpoint,

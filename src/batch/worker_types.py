@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.batch.embedding_microbatch import _ExecutionSignature
-from src.models.requests import EmbeddingRequest
+from src.models.requests import ChatCompletionRequest, EmbeddingRequest
 
 
 class BatchArtifactValidationError(ValueError):
@@ -57,3 +57,20 @@ class _PreparedEmbeddingItem:
     microbatch_ineligible_reason: str | None
     microbatch_weight: int | None
     execution_signature: _ExecutionSignature
+    policy_auth: Any | None = None
+    policy_lease: Any | None = None
+
+
+@dataclass(slots=True)
+class _PreparedChatItem:
+    item: Any
+    started_at_monotonic: float
+    payload: ChatCompletionRequest
+    model_name: str
+    model_group: str
+    primary_deployment: Any
+    request_context: dict[str, Any]
+    failover_kwargs: dict[str, Any]
+    request_shim: _RequestShim
+    policy_auth: Any | None = None
+    policy_lease: Any | None = None

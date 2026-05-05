@@ -99,7 +99,9 @@ general_settings:
   sso_state_ttl_seconds: 600
   embeddings_batch_enabled: false
   embeddings_batch_worker_enabled: true
+  embeddings_batch_storage_backend: local
   embeddings_batch_storage_dir: .deltallm/batch-artifacts
+  embeddings_batch_create_session_cleanup_enabled: true
   embeddings_batch_poll_interval_seconds: 1.0
   embeddings_batch_item_claim_limit: 20
   embeddings_batch_max_attempts: 3
@@ -291,13 +293,17 @@ Governance notifications are opt-in and disabled by default.
 | `prometheus_endpoint` | `/metrics` | Path for Prometheus metrics endpoint |
 | `metrics_retention_days` | `30` | Days to retain spend log data |
 
-## Embeddings Batch Settings
+## Batch Settings
+
+These settings retain the historical `embeddings_batch_*` names for compatibility. They now control the internal Batch API for supported endpoints, including `/v1/embeddings` and non-streaming `/v1/chat/completions`.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `embeddings_batch_enabled` | `false` | Enable `/v1/files` and `/v1/batches` endpoints |
 | `embeddings_batch_worker_enabled` | `true` | Run internal batch executor worker loop |
+| `embeddings_batch_storage_backend` | `local` | Artifact storage backend. Use `s3` for multi-replica production deployments |
 | `embeddings_batch_storage_dir` | `.deltallm/batch-artifacts` | Local artifact storage base directory |
+| `embeddings_batch_create_session_cleanup_enabled` | `true` | Enable cleanup for internal staged batch-create artifacts |
 | `embeddings_batch_poll_interval_seconds` | `1.0` | Worker poll interval when queue is idle |
 | `embeddings_batch_item_claim_limit` | `20` | Max items claimed per worker iteration |
 | `embeddings_batch_max_attempts` | `3` | Max retry attempts per failed item |
@@ -314,6 +320,10 @@ Governance notifications are opt-in and disabled by default.
 | `embeddings_batch_gc_enabled` | `true` | Enable background retention cleanup for expired batch metadata/artifacts |
 | `embeddings_batch_gc_interval_seconds` | `86400` | Cleanup loop interval in seconds |
 | `embeddings_batch_gc_scan_limit` | `200` | Max expired jobs/files processed per cleanup pass |
+
+For Helm deployments with more than one replica, configure `embeddings_batch_storage_backend: s3` and the matching S3 bucket settings before enabling batch. Local batch storage is intended for development and single-replica deployments only.
+
+Batch execution honors the same model access, budget, callback, guardrail, rate-limit, and max-parallel policies as synchronous gateway requests. For multi-replica deployments, run Redis and configure `redis_url` so rate-limit counters, max-parallel slots, and model-group backpressure are shared across workers. Without Redis, persistent Postgres state still prevents duplicate item ownership, but in-memory counters and backpressure are local to each replica.
 
 ## Audit Settings
 

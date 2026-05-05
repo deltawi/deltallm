@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from src.batch.backpressure import BatchModelGroupDeferred
+from src.batch.chat_batching import normalize_chat_microbatch_results
 from src.batch.retry import BatchResponseShapeError, BatchRetryCategory, classify_batch_retry
 from src.models.errors import (
     BudgetExceededError,
@@ -98,3 +99,113 @@ def test_classify_batch_retry_does_not_treat_plain_value_error_as_response_shape
     assert decision.retryable is False
     assert decision.category is BatchRetryCategory.UNKNOWN
     assert decision.terminal_reason == "not_retryable"
+
+
+@pytest.mark.parametrize(
+    ("raw_error", "category", "retryable", "retry_after"),
+    [
+        ({"status_code": 429, "message": "limited", "retry_after": 3}, BatchRetryCategory.RATE_LIMIT, True, 3),
+        ({"status": 503, "message": "provider unavailable"}, BatchRetryCategory.SERVICE_UNAVAILABLE, True, None),
+        ({"status_code": 400, "message": "bad request"}, BatchRetryCategory.INVALID_REQUEST, False, None),
+        (
+            {"error": {"status_code": 429, "message": "nested limited", "retry_after": 5}},
+            BatchRetryCategory.RATE_LIMIT,
+            True,
+            5,
+        ),
+        (
+            {"error": {"status": 503, "message": "nested unavailable"}},
+            BatchRetryCategory.SERVICE_UNAVAILABLE,
+            True,
+            None,
+        ),
+    ],
+)
+def test_chat_microbatch_provider_item_errors_preserve_retry_classification(
+    raw_error: dict[str, object],
+    category: BatchRetryCategory,
+    retryable: bool,
+    retry_after: int | None,
+) -> None:
+    result = normalize_chat_microbatch_results(
+        [{"index": 0, "error": raw_error}],
+        expected_count=1,
+        custom_ids=["item-1"],
+    )[0]
+
+    assert result.error is not None
+    decision = classify_batch_retry(result.error)
+    assert decision.category is category
+    assert decision.retryable is retryable
+    assert decision.retry_after_seconds == retry_after
+
+
+def _chat_microbatch_success_result(**identity: object) -> dict[str, object]:
+    return {
+        **identity,
+        "response_body": {
+            "id": f"chatcmpl-{identity.get('custom_id', identity.get('index', 'unknown'))}",
+            "object": "chat.completion",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}}],
+        },
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+
+def test_chat_microbatch_results_accept_matching_index_and_custom_id() -> None:
+    result = normalize_chat_microbatch_results(
+        [
+            _chat_microbatch_success_result(index=1, custom_id="item-2"),
+            _chat_microbatch_success_result(index=0, custom_id="item-1"),
+        ],
+        expected_count=2,
+        custom_ids=["item-1", "item-2"],
+    )
+
+    assert [row.index for row in result] == [0, 1]
+    assert result[0].response_body is not None
+    assert result[0].response_body["id"] == "chatcmpl-item-1"
+    assert result[1].response_body is not None
+    assert result[1].response_body["id"] == "chatcmpl-item-2"
+
+
+@pytest.mark.parametrize(
+    ("raw_results", "expected_count", "custom_ids", "match"),
+    [
+        (
+            [
+                _chat_microbatch_success_result(index=0, custom_id="item-2"),
+                _chat_microbatch_success_result(index=1, custom_id="item-1"),
+            ],
+            2,
+            ["item-1", "item-2"],
+            "mismatched index and custom_id",
+        ),
+        (
+            [_chat_microbatch_success_result(custom_id="missing")],
+            1,
+            ["item-1"],
+            "unknown custom_id",
+        ),
+        (
+            [_chat_microbatch_success_result(index=True)],
+            1,
+            ["item-1"],
+            "invalid index",
+        ),
+        (
+            [_chat_microbatch_success_result(item_index=0, index=1)],
+            1,
+            ["item-1"],
+            "mismatched item_index and index",
+        ),
+    ],
+)
+def test_chat_microbatch_results_reject_ambiguous_or_invalid_identity(
+    raw_results: list[dict[str, object]],
+    expected_count: int,
+    custom_ids: list[str],
+    match: str,
+) -> None:
+    with pytest.raises(BatchResponseShapeError, match=match):
+        normalize_chat_microbatch_results(raw_results, expected_count=expected_count, custom_ids=custom_ids)

@@ -7,6 +7,7 @@ import logging
 from time import perf_counter
 from typing import Any, AsyncIterator, Awaitable, Callable
 
+from src.batch.endpoints import BATCH_ENDPOINT_CHAT_COMPLETIONS, BATCH_ENDPOINT_EMBEDDINGS
 from src.batch.models import BatchJobStatus, is_operator_failed_reason
 from src.batch.repository import BatchRepository
 from src.batch.storage import BatchArtifactStorage
@@ -113,6 +114,9 @@ class BatchArtifactFinalizer:
         normalized_model = request_model.strip()
         return normalized_model or None
 
+    def _public_chat_model_fallback(self, item) -> str | None:  # noqa: ANN001
+        return self._public_embedding_model_fallback(item)
+
     def _sanitize_public_embedding_body(self, item) -> dict[str, Any]:  # noqa: ANN001
         response_body = item.response_body
         if not isinstance(response_body, dict):
@@ -184,14 +188,98 @@ class BatchArtifactFinalizer:
 
         return sanitized
 
-    def _serialize_completed_artifact_row(self, item) -> dict[str, Any]:  # noqa: ANN001
+    def _normalized_chat_usage_or_none(self, value: Any) -> dict[str, Any] | None:
+        if not isinstance(value, dict):
+            return None
+        normalized_usage = dict(value)
+        for token_field in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            token_value = normalized_usage.get(token_field)
+            if token_value is None:
+                continue
+            if type(token_value) is not int or token_value < 0:
+                return None
+        return normalized_usage
+
+    def _validate_public_chat_usage(self, value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            raise BatchArtifactValidationError("completed batch item chat response usage is not an object")
+
+        normalized_usage = dict(value)
+        for token_field in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            token_value = normalized_usage.get(token_field)
+            if token_value is None:
+                continue
+            if type(token_value) is not int:
+                raise BatchArtifactValidationError(
+                    f"completed batch item chat response usage has invalid {token_field}={token_value!r}"
+                )
+            if token_value < 0:
+                raise BatchArtifactValidationError(
+                    f"completed batch item chat response usage has negative {token_field}={token_value!r}"
+                )
+        return normalized_usage
+
+    def _sanitize_public_chat_body(self, item) -> dict[str, Any]:  # noqa: ANN001
+        response_body = item.response_body
+        if not isinstance(response_body, dict):
+            raise BatchArtifactValidationError("completed batch item is missing a chat completion response body")
+
+        sanitized = {key: value for key, value in response_body.items() if not str(key).startswith("_")}
+        object_type = sanitized.get("object")
+        if object_type is None:
+            sanitized["object"] = "chat.completion"
+        elif object_type != "chat.completion":
+            raise BatchArtifactValidationError(
+                f"completed batch item has invalid chat response object={object_type!r}"
+            )
+
+        choices = sanitized.get("choices")
+        if not isinstance(choices, list):
+            raise BatchArtifactValidationError("completed batch item chat response choices is not a list")
+        sanitized["choices"] = [dict(choice) for choice in choices if isinstance(choice, dict)]
+        if len(sanitized["choices"]) != len(choices):
+            raise BatchArtifactValidationError("completed batch item chat response contains a non-object choice")
+
+        model_name = sanitized.get("model")
+        if not isinstance(model_name, str) or not model_name.strip():
+            fallback_model = self._public_chat_model_fallback(item)
+            if fallback_model is not None:
+                sanitized["model"] = fallback_model
+        model_name = sanitized.get("model")
+        if not isinstance(model_name, str) or not model_name.strip():
+            raise BatchArtifactValidationError("completed batch item chat response is missing a valid model")
+
+        usage_value = sanitized.get("usage")
+        if usage_value is None:
+            sanitized["usage"] = self._normalized_chat_usage_or_none(item.usage) or {}
+            return sanitized
+
+        try:
+            normalized_usage = self._validate_public_chat_usage(usage_value)
+        except BatchArtifactValidationError:
+            normalized_usage = self._normalized_chat_usage_or_none(item.usage)
+            if normalized_usage is None:
+                raise
+        sanitized["usage"] = normalized_usage
+        return sanitized
+
+    def _serialize_completed_artifact_row(
+        self,
+        item,
+        *,
+        endpoint: str = BATCH_ENDPOINT_EMBEDDINGS,
+    ) -> dict[str, Any]:  # noqa: ANN001
+        if endpoint == BATCH_ENDPOINT_CHAT_COMPLETIONS:
+            body = self._sanitize_public_chat_body(item)
+        else:
+            body = self._sanitize_public_embedding_body(item)
         return {
             "id": self._public_batch_row_id(item),
             "custom_id": item.custom_id,
             "response": {
                 "status_code": 200,
                 "request_id": self._public_batch_request_id(item),
-                "body": self._sanitize_public_embedding_body(item),
+                "body": body,
             },
             "error": None,
         }
@@ -312,6 +400,19 @@ class BatchArtifactFinalizer:
             with contextlib.suppress(Exception):
                 await self.repository.delete_file(file_id)
 
+    async def _cleanup_unrecorded_artifacts(self, storage_keys: set[str], *, backend: str) -> None:
+        for storage_key in storage_keys:
+            try:
+                await self.storage.delete(storage_key)
+            except Exception as exc:
+                increment_batch_artifact_failure(operation="delete_orphan", backend=backend)
+                logger.warning(
+                    "batch finalization orphan artifact cleanup failed backend=%s storage_key=%s error=%s",
+                    backend,
+                    storage_key,
+                    exc,
+                )
+
     async def _iter_batch_items(self, batch_id: str) -> AsyncIterator[Any]:
         if hasattr(self.repository, "list_items_page"):
             after_line_number: int | None = None
@@ -331,10 +432,15 @@ class BatchArtifactFinalizer:
         for item in await self.repository.list_items(batch_id):
             yield item
 
-    async def iter_output_lines(self, batch_id: str) -> AsyncIterator[str]:
+    async def iter_output_lines(
+        self,
+        batch_id: str,
+        *,
+        endpoint: str = BATCH_ENDPOINT_EMBEDDINGS,
+    ) -> AsyncIterator[str]:
         async for item in self._iter_batch_items(batch_id):
             if item.status == "completed":
-                yield json.dumps(self._serialize_completed_artifact_row(item))
+                yield json.dumps(self._serialize_completed_artifact_row(item, endpoint=endpoint))
 
     async def iter_error_lines(self, batch_id: str) -> AsyncIterator[str]:
         async for item in self._iter_batch_items(batch_id):
@@ -344,6 +450,7 @@ class BatchArtifactFinalizer:
     async def finalize_artifacts(self, job) -> None:  # noqa: ANN001
         storage_backend = getattr(self.storage, "backend_name", "local")
         created_artifacts: list[tuple[str, str]] = []
+        unrecorded_artifact_keys: set[str] = set()
         output_file_id: str | None = None
         error_file_id: str | None = None
         final_status = self.resolve_final_status(job)
@@ -352,8 +459,10 @@ class BatchArtifactFinalizer:
                 key, size, checksum = await self.storage.write_lines_stream(
                     purpose="batch_output",
                     filename=f"{job.batch_id}-output.jsonl",
-                    lines=self.iter_output_lines(job.batch_id),
+                    lines=self.iter_output_lines(job.batch_id, endpoint=job.endpoint),
                 )
+                if key:
+                    unrecorded_artifact_keys.add(key)
                 file_record = await self.repository.create_file(
                     purpose="batch_output",
                     filename=f"{job.batch_id}-output.jsonl",
@@ -370,6 +479,7 @@ class BatchArtifactFinalizer:
                 if file_record is None:
                     increment_batch_artifact_failure(operation="create_record", backend=storage_backend)
                     raise RuntimeError(f"Failed to create output artifact record for batch {job.batch_id}")
+                unrecorded_artifact_keys.discard(key)
                 created_artifacts.append((file_record.file_id, key))
                 output_file_id = file_record.file_id
 
@@ -379,6 +489,8 @@ class BatchArtifactFinalizer:
                     filename=f"{job.batch_id}-error.jsonl",
                     lines=self.iter_error_lines(job.batch_id),
                 )
+                if key:
+                    unrecorded_artifact_keys.add(key)
                 retention_days = (
                     self.config.failed_artifact_retention_days
                     if final_status in {BatchJobStatus.FAILED, BatchJobStatus.CANCELLED}
@@ -400,6 +512,7 @@ class BatchArtifactFinalizer:
                 if file_record is None:
                     increment_batch_artifact_failure(operation="create_record", backend=storage_backend)
                     raise RuntimeError(f"Failed to create error artifact record for batch {job.batch_id}")
+                unrecorded_artifact_keys.discard(key)
                 created_artifacts.append((file_record.file_id, key))
                 error_file_id = file_record.file_id
 
@@ -414,6 +527,7 @@ class BatchArtifactFinalizer:
                 raise RuntimeError(f"Failed to finalize batch {job.batch_id}")
         except Exception:
             increment_batch_artifact_failure(operation="write_or_finalize", backend=storage_backend)
+            await self._cleanup_unrecorded_artifacts(unrecorded_artifact_keys, backend=storage_backend)
             await self._cleanup_unattached_artifacts(created_artifacts)
             raise
         logger.info(

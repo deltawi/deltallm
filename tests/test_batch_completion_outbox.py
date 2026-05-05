@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -341,6 +342,90 @@ async def test_completion_outbox_worker_marks_failed_after_max_attempts() -> Non
     assert stored.last_error == "spend log unavailable"
     assert repository.retry_calls == []
     assert repository.failed_calls == [{"completion_id": record.completion_id, "error": "spend log unavailable"}]
+
+
+@pytest.mark.asyncio
+async def test_completion_outbox_worker_isolates_unhandled_record_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _SelectiveSpendTrackingService:
+        async def log_spend_once(self, **kwargs) -> str:
+            if kwargs["event_id"] == "completion-fail":
+                raise RuntimeError("spend log unavailable")
+            return "inserted"
+
+    class _RetryFailingRepository(_FakeRepository):
+        async def mark_completion_outbox_retry(self, completion_id: str, **kwargs) -> bool:  # noqa: ANN003
+            if completion_id == "completion-fail":
+                raise RuntimeError("retry db unavailable")
+            return await super().mark_completion_outbox_retry(completion_id, **kwargs)
+
+    metric_calls: list[dict] = []
+    monkeypatch.setattr(
+        "src.batch.completion_outbox.increment_batch_completion_outbox_failure",
+        lambda **kwargs: metric_calls.append(kwargs),
+    )
+    monkeypatch.setattr("src.batch.completion_outbox.increment_request", lambda **kwargs: None)
+    monkeypatch.setattr("src.batch.completion_outbox.increment_usage", lambda **kwargs: None)
+    monkeypatch.setattr("src.batch.completion_outbox.increment_spend", lambda **kwargs: None)
+
+    failed = _build_record(completion_id="completion-fail", payload_overrides={"item_id": "i-fail"})
+    succeeds = _build_record(completion_id="completion-ok", payload_overrides={"item_id": "i-ok"})
+    repository = _RetryFailingRepository({failed.completion_id: failed, succeeds.completion_id: succeeds})
+    worker = BatchCompletionOutboxWorker(
+        app=SimpleNamespace(state=SimpleNamespace(spend_tracking_service=_SelectiveSpendTrackingService())),
+        repository=repository,  # type: ignore[arg-type]
+        config=BatchCompletionOutboxWorkerConfig(worker_id="worker-1", max_batch_size=10, max_concurrency=2),
+    )
+
+    with caplog.at_level("ERROR"):
+        processed = await worker.process_once()
+
+    assert processed == 2
+    assert repository.records["completion-ok"].status == BatchCompletionOutboxStatus.SENT
+    assert repository.records["completion-fail"].status == BatchCompletionOutboxStatus.PROCESSING
+    assert repository.sent_calls == ["completion-ok"]
+    assert repository.retry_calls == []
+    assert metric_calls == [{"reason": "record_unhandled"}]
+    assert "batch completion outbox record processing failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_completion_outbox_worker_run_survives_iteration_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    metric_calls: list[dict] = []
+    monkeypatch.setattr(
+        "src.batch.completion_outbox.increment_batch_completion_outbox_failure",
+        lambda **kwargs: metric_calls.append(kwargs),
+    )
+
+    repository = _FakeRepository()
+    worker = BatchCompletionOutboxWorker(
+        app=SimpleNamespace(state=SimpleNamespace(spend_tracking_service=None)),
+        repository=repository,  # type: ignore[arg-type]
+        config=BatchCompletionOutboxWorkerConfig(poll_interval_seconds=0.01),
+    )
+    calls = 0
+
+    async def _process_once() -> int:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("database unavailable")
+        worker.stop()
+        return 0
+
+    worker.process_once = _process_once  # type: ignore[method-assign]
+
+    with caplog.at_level("ERROR"):
+        await asyncio.wait_for(worker.run(), timeout=0.5)
+
+    assert calls == 2
+    assert metric_calls == [{"reason": "iteration"}]
+    assert "batch completion outbox iteration failed" in caplog.text
 
 
 @pytest.mark.asyncio
