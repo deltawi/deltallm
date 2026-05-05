@@ -5,6 +5,7 @@ import logging
 from typing import Any
 
 from src.batch.endpoints import batch_call_type_for_endpoint
+from src.batch.policy import acquire_batch_policy_lease, release_batch_policy_lease
 from src.batch.worker_types import _PreparedChatItem, _PreparedEmbeddingItem
 from src.billing.cost import ModelPricing
 
@@ -34,6 +35,26 @@ class WorkerPersistenceMixin:
                 status,
                 exc,
             )
+
+    async def _acquire_prepared_policy_lease(self, *, prepared: _PreparedEmbeddingItem | _PreparedChatItem) -> None:
+        if prepared.policy_lease is not None:
+            return
+        if prepared.policy_auth is None:
+            return
+        prepared.policy_lease = await acquire_batch_policy_lease(
+            app=self.app,
+            payload=prepared.payload,
+            auth=prepared.policy_auth,
+        )
+
+    async def _release_prepared_policy_lease(self, prepared: _PreparedEmbeddingItem | _PreparedChatItem) -> None:
+        lease = prepared.policy_lease
+        prepared.policy_lease = None
+        await release_batch_policy_lease(app=self.app, lease=lease)
+
+    async def _release_prepared_policy_leases(self, prepared_items: list[_PreparedEmbeddingItem] | list[_PreparedChatItem]) -> None:
+        for prepared in prepared_items:
+            await self._release_prepared_policy_lease(prepared)
 
     async def _renew_item_lease_once(self, item_id: str) -> bool:
         try:

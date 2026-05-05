@@ -10,11 +10,36 @@ import pytest
 
 from fastapi import HTTPException
 
+from src.callbacks import CallbackManager, CustomLogger
 from src.batch.models import BatchItemRecord, BatchJobRecord, BatchJobStatus, encode_operator_failed_reason
 from src.batch.service import BatchService
 from src.batch.worker import BatchArtifactValidationError, BatchExecutorWorker, BatchWorkerConfig
+from src.db.repositories import KeyRecord
+from src.guardrails.exceptions import GuardrailViolationError
+from src.services.key_service import KeyService
+from src.services.limit_counter import LimitCounter
 from src.models.errors import ServiceUnavailableError
 from src.models.responses import UserAPIKeyAuth
+
+
+class _AllowAllCallableTargetGrantService:
+    def resolve_policy_allowlist(self, auth):  # noqa: ANN001
+        del auth
+        return SimpleNamespace(allowlist=None, authoritative=True, fallback_reason=None)
+
+
+@pytest.fixture(autouse=True)
+def _default_batch_policy_grants(monkeypatch):
+    original_init = BatchExecutorWorker.__init__
+
+    def _init_with_default_policy(self, *args, **kwargs):  # noqa: ANN001
+        app = kwargs.get("app")
+        state = getattr(app, "state", None)
+        if state is not None and not hasattr(state, "callable_target_grant_service"):
+            state.callable_target_grant_service = _AllowAllCallableTargetGrantService()
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(BatchExecutorWorker, "__init__", _init_with_default_policy)
 
 
 class _SpendRecorder:
@@ -642,7 +667,12 @@ def _build_chat_batch_item(item_id: str, content: str, *, request_overrides: dic
     )
 
 
-def _build_chat_batch_worker(*, deployment_params: dict, repository: _FakeRepository | None = None):
+def _build_chat_batch_worker(
+    *,
+    deployment_params: dict,
+    repository: _FakeRepository | None = None,
+    state_overrides: dict[str, object] | None = None,
+):
     deployment = SimpleNamespace(
         deployment_id="dep-chat",
         deltallm_params=deployment_params,
@@ -672,16 +702,17 @@ def _build_chat_batch_worker(*, deployment_params: dict, repository: _FakeReposi
             return data
 
     repo = repository or _FakeRepository()
-    app = SimpleNamespace(
-        state=SimpleNamespace(
-            router=_Router(),
-            failover_manager=_Failover(),
-            spend_tracking_service=None,
-            passive_health_tracker=None,
-            router_state_backend=None,
-            settings=SimpleNamespace(openai_base_url="https://api.openai.com/v1"),
-        )
+    app_state = SimpleNamespace(
+        router=_Router(),
+        failover_manager=_Failover(),
+        spend_tracking_service=None,
+        passive_health_tracker=None,
+        router_state_backend=None,
+        settings=SimpleNamespace(openai_base_url="https://api.openai.com/v1"),
     )
+    for key, value in (state_overrides or {}).items():
+        setattr(app_state, key, value)
+    app = SimpleNamespace(state=app_state)
     worker = BatchExecutorWorker(
         app=app,
         repository=repo,  # type: ignore[arg-type]
@@ -714,6 +745,161 @@ def _patch_fake_chat_execute(monkeypatch, execute_calls: list[str]) -> None:
         )
 
     monkeypatch.setattr("src.batch.worker.execute_chat", _fake_execute_chat)
+
+
+@pytest.mark.asyncio
+async def test_batch_chat_pre_call_callback_transforms_provider_payload(monkeypatch):
+    class _RewriteCallback(CustomLogger):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):  # noqa: ANN001
+            del user_api_key_dict, cache
+            assert call_type == "completion"
+            updated = dict(data)
+            updated["messages"] = [{"role": "user", "content": "rewritten"}]
+            return updated
+
+    manager = CallbackManager()
+    manager.register_callback(_RewriteCallback(), callback_type="success")
+    execute_calls: list[str] = []
+    _patch_fake_chat_execute(monkeypatch, execute_calls)
+
+    worker, repo = _build_chat_batch_worker(
+        deployment_params={"provider": "vllm", "model": "gpt-oss", "api_base": "http://localhost:9090/v1"},
+        state_overrides={"callback_manager": manager},
+    )
+
+    await worker._process_item(_build_chat_batch_job(), _build_chat_batch_item("chat-1", "original"))
+
+    assert execute_calls == ["rewritten"]
+    assert len(repo.completed_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_chat_guardrail_rejection_is_terminal_item_failure(monkeypatch):
+    class _BlockingGuardrailMiddleware:
+        async def run_pre_call(self, *, request_data, user_api_key_dict, call_type, override_guardrails=None):  # noqa: ANN001
+            del request_data, user_api_key_dict, call_type, override_guardrails
+            raise GuardrailViolationError(
+                guardrail_name="blocker",
+                message="blocked by policy",
+                violation_type="blocked",
+            )
+
+    execute_calls: list[str] = []
+    _patch_fake_chat_execute(monkeypatch, execute_calls)
+    repo = _FailureRepository()
+    worker, _ = _build_chat_batch_worker(
+        deployment_params={"provider": "vllm", "model": "gpt-oss", "api_base": "http://localhost:9090/v1"},
+        repository=repo,
+        state_overrides={"guardrail_middleware": _BlockingGuardrailMiddleware()},
+    )
+
+    await worker._process_item(_build_chat_batch_job(), _build_chat_batch_item("chat-1", "blocked"))
+
+    assert execute_calls == []
+    assert len(repo.failed_calls) == 1
+    error_body = repo.failed_calls[0]["error_body"]
+    assert error_body["retryable"] is False
+    assert error_body["retry_category"] == "invalid_request"
+    assert error_body["terminal_reason"] == "not_retryable"
+
+
+@pytest.mark.asyncio
+async def test_batch_chat_releases_max_parallel_slot_after_provider_failure(monkeypatch):
+    token_hash = "a" * 64
+
+    class _KeyRepository:
+        async def get_by_token(self, token_hash_arg: str) -> KeyRecord | None:
+            assert token_hash_arg == token_hash
+            return KeyRecord(token=token_hash, max_parallel_requests=1)
+
+    async def _failing_execute_chat(request, payload, deployment, *, record_usage: bool = True):  # noqa: ANN001
+        del request, payload, deployment, record_usage
+        raise RuntimeError("provider failed")
+
+    monkeypatch.setattr("src.batch.worker.execute_chat", _failing_execute_chat)
+
+    limit_counter = LimitCounter()
+    repo = _FailureRepository()
+    worker, _ = _build_chat_batch_worker(
+        deployment_params={"provider": "vllm", "model": "gpt-oss", "api_base": "http://localhost:9090/v1"},
+        repository=repo,
+        state_overrides={
+            "key_service": KeyService(repository=_KeyRepository(), redis_client=None),
+            "limit_counter": limit_counter,
+        },
+    )
+    job = _build_chat_batch_job()
+    job.created_by_api_key = token_hash
+
+    await worker._process_item(job, _build_chat_batch_item("chat-1", "hello"))
+
+    assert len(repo.failed_calls) == 1
+    assert limit_counter._fallback_parallel == {}
+
+
+@pytest.mark.asyncio
+async def test_batch_chat_max_parallel_policy_failure_does_not_mark_passive_health(monkeypatch):
+    token_hash = "b" * 64
+
+    class _KeyRepository:
+        async def get_by_token(self, token_hash_arg: str) -> KeyRecord | None:
+            assert token_hash_arg == token_hash
+            return KeyRecord(token=token_hash, max_parallel_requests=1)
+
+    execute_calls: list[str] = []
+    _patch_fake_chat_execute(monkeypatch, execute_calls)
+    metric_calls: list[dict] = []
+    monkeypatch.setattr(
+        "src.batch.policy.increment_batch_policy_retryable_failure",
+        lambda **kwargs: metric_calls.append(kwargs),
+    )
+
+    limit_counter = LimitCounter()
+    await limit_counter.acquire_parallel("key", token_hash, 1)
+    passive_health = _PassiveHealthRecorder()
+    repo = _FailureRepository()
+    worker, _ = _build_chat_batch_worker(
+        deployment_params={"provider": "vllm", "model": "gpt-oss", "api_base": "http://localhost:9090/v1"},
+        repository=repo,
+        state_overrides={
+            "key_service": KeyService(repository=_KeyRepository(), redis_client=None),
+            "limit_counter": limit_counter,
+            "passive_health_tracker": passive_health,
+        },
+    )
+    job = _build_chat_batch_job()
+    job.created_by_api_key = token_hash
+
+    await worker._process_item(job, _build_chat_batch_item("chat-1", "hello"))
+
+    assert execute_calls == []
+    assert passive_health.calls == []
+    assert len(repo.failed_calls) == 1
+    error_body = repo.failed_calls[0]["error_body"]
+    assert error_body["retryable"] is True
+    assert error_body["retry_category"] == "rate_limit"
+    assert metric_calls == [{"endpoint": "chat_batch", "reason": "rate_limit"}]
+    assert limit_counter._fallback_parallel == {f"key:{token_hash}": 1}
+
+
+@pytest.mark.asyncio
+async def test_batch_chat_model_access_fails_closed_when_grant_service_missing(monkeypatch):
+    execute_calls: list[str] = []
+    _patch_fake_chat_execute(monkeypatch, execute_calls)
+    repo = _FailureRepository()
+    worker, _ = _build_chat_batch_worker(
+        deployment_params={"provider": "vllm", "model": "gpt-oss", "api_base": "http://localhost:9090/v1"},
+        repository=repo,
+        state_overrides={"callable_target_grant_service": None},
+    )
+
+    await worker._process_item(_build_chat_batch_job(), _build_chat_batch_item("chat-1", "hello"))
+
+    assert execute_calls == []
+    assert len(repo.failed_calls) == 1
+    error_body = repo.failed_calls[0]["error_body"]
+    assert error_body["retryable"] is False
+    assert error_body["retry_category"] == "permission"
 
 
 @pytest.mark.asyncio

@@ -323,6 +323,8 @@ These settings retain the historical `embeddings_batch_*` names for compatibilit
 
 For Helm deployments with more than one replica, configure `embeddings_batch_storage_backend: s3` and the matching S3 bucket settings before enabling batch. Local batch storage is intended for development and single-replica deployments only.
 
+Batch execution honors the same model access, budget, callback, guardrail, rate-limit, and max-parallel policies as synchronous gateway requests. For multi-replica deployments, run Redis and configure `redis_url` so rate-limit counters, max-parallel slots, and model-group backpressure are shared across workers. Without Redis, persistent Postgres state still prevents duplicate item ownership, but in-memory counters and backpressure are local to each replica.
+
 ## Audit Settings
 
 Audit events are written to Postgres and can be queried via the Admin Audit API.

@@ -17,6 +17,7 @@ from src.batch.embedding_microbatch import (
 )
 from src.batch.models import BatchItemRecord, BatchJobRecord, BatchJobStatus
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
+from src.db.repositories import KeyRecord
 from src.models.errors import (
     BudgetExceededError,
     InvalidRequestError,
@@ -26,6 +27,44 @@ from src.models.errors import (
     ServiceUnavailableError,
 )
 from src.models.requests import EmbeddingRequest
+from src.services.key_service import KeyService
+from src.services.limit_counter import LimitCounter
+
+
+class _AllowAllCallableTargetGrantService:
+    def resolve_policy_allowlist(self, auth):  # noqa: ANN001
+        del auth
+        return SimpleNamespace(allowlist=None, authoritative=True, fallback_reason=None)
+
+
+@pytest.fixture(autouse=True)
+def _default_batch_policy_grants(monkeypatch):
+    original_init = BatchExecutorWorker.__init__
+
+    def _init_with_default_policy(self, *args, **kwargs):  # noqa: ANN001
+        app = kwargs.get("app")
+        state = getattr(app, "state", None)
+        if state is not None and not hasattr(state, "callable_target_grant_service"):
+            state.callable_target_grant_service = _AllowAllCallableTargetGrantService()
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(BatchExecutorWorker, "__init__", _init_with_default_policy)
+
+
+class _PassiveHealthRecorder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, bool, str | None]] = []
+
+    async def record_request_outcome(
+        self,
+        deployment_id: str,
+        success: bool,
+        error: str | None = None,
+        *,
+        exc: Exception | None = None,
+    ) -> None:
+        del exc
+        self.calls.append((deployment_id, success, error))
 
 
 class _Repo:
@@ -879,7 +918,7 @@ async def test_prepare_item_for_execution_returns_reusable_metadata_without_exec
         "retry_max_attempts": 3,
         "retryable_error_classes": ["timeout", "rate_limit"],
     }
-    assert prepared.request_context["user_id"] == "batch-worker"
+    assert prepared.request_context["user_id"] == "user-1"
     assert budget.calls == [
         {
             "api_key": None,
@@ -893,6 +932,45 @@ async def test_prepare_item_for_execution_returns_reusable_metadata_without_exec
     assert repo.completed_calls == []
     assert repo.failed_calls == []
     assert failover.calls == []
+
+
+@pytest.mark.asyncio
+async def test_embedding_max_parallel_policy_failure_does_not_mark_passive_health(monkeypatch):
+    token_hash = "c" * 64
+
+    class _KeyRepository:
+        async def get_by_token(self, token_hash_arg: str) -> KeyRecord | None:
+            assert token_hash_arg == token_hash
+            return KeyRecord(token=token_hash, max_parallel_requests=1)
+
+    execute_calls: list[str] = []
+
+    async def _unexpected_execute_embedding(request, payload, deployment):  # noqa: ANN001
+        del request, payload, deployment
+        execute_calls.append("called")
+        return {}
+
+    monkeypatch.setattr("src.batch.worker._execute_embedding", _unexpected_execute_embedding)
+
+    worker, repo, _, _, _ = _build_worker(deployment_model_info={"upstream_max_batch_inputs": 1})
+    limit_counter = LimitCounter()
+    await limit_counter.acquire_parallel("key", token_hash, 1)
+    passive_health = _PassiveHealthRecorder()
+    worker.app.state.key_service = KeyService(repository=_KeyRepository(), redis_client=None)
+    worker.app.state.limit_counter = limit_counter
+    worker.app.state.passive_health_tracker = passive_health
+    job = _build_job()
+    job.created_by_api_key = token_hash
+
+    await worker._process_item(job, _build_item(item_id="i1", input_value="hello"))
+
+    assert execute_calls == []
+    assert passive_health.calls == []
+    assert len(repo.failed_calls) == 1
+    error_body = repo.failed_calls[0]["error_body"]
+    assert error_body["retryable"] is True
+    assert error_body["retry_category"] == "rate_limit"
+    assert limit_counter._fallback_parallel == {f"key:{token_hash}": 1}
 
 
 @pytest.mark.asyncio

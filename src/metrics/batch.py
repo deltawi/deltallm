@@ -235,6 +235,35 @@ deltallm_batch_chat_provider_latency_metric = Histogram(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_policy_allowed_metric = Counter(
+    "deltallm_batch_policy_allowed_total",
+    "Batch items allowed by gateway policy preflight",
+    ["endpoint"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_policy_rejected_metric = Counter(
+    "deltallm_batch_policy_rejected_total",
+    "Batch items rejected by gateway policy preflight",
+    ["endpoint", "reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_policy_retryable_failures_metric = Counter(
+    "deltallm_batch_policy_retryable_failures_total",
+    "Batch policy preflight failures that are eligible for normal item retry",
+    ["endpoint", "reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_preflight_latency_metric = Histogram(
+    "deltallm_batch_preflight_latency_seconds",
+    "Batch policy preflight latency by endpoint and status",
+    ["endpoint", "status"],
+    buckets=BATCH_LATENCY_BUCKETS,
+    registry=get_prometheus_registry(),
+)
+
 
 def set_batch_job_count(*, status: str, count: int) -> None:
     deltallm_batch_jobs_metric.labels(status=sanitize_label(status)).set(max(0, int(count)))
@@ -392,6 +421,31 @@ def observe_batch_chat_microbatch_size(*, batch_size: int) -> None:
 def observe_batch_chat_provider_latency(*, mode: str, status: str, latency_seconds: float) -> None:
     deltallm_batch_chat_provider_latency_metric.labels(
         mode=sanitize_label(mode),
+        status=sanitize_label(status),
+    ).observe(max(0.0, float(latency_seconds)))
+
+
+def increment_batch_policy_allowed(*, endpoint: str) -> None:
+    deltallm_batch_policy_allowed_metric.labels(endpoint=sanitize_label(endpoint)).inc()
+
+
+def increment_batch_policy_rejected(*, endpoint: str, reason: str) -> None:
+    deltallm_batch_policy_rejected_metric.labels(
+        endpoint=sanitize_label(endpoint),
+        reason=sanitize_label(reason),
+    ).inc()
+
+
+def increment_batch_policy_retryable_failure(*, endpoint: str, reason: str) -> None:
+    deltallm_batch_policy_retryable_failures_metric.labels(
+        endpoint=sanitize_label(endpoint),
+        reason=sanitize_label(reason),
+    ).inc()
+
+
+def observe_batch_preflight_latency(*, endpoint: str, status: str, latency_seconds: float) -> None:
+    deltallm_batch_preflight_latency_metric.labels(
+        endpoint=sanitize_label(endpoint),
         status=sanitize_label(status),
     ).observe(max(0.0, float(latency_seconds)))
 

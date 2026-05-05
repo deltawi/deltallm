@@ -7,6 +7,7 @@ import httpx
 
 from src.batch.backpressure import BatchModelGroupDeferred
 from src.models.errors import (
+    AuthenticationError,
     BudgetExceededError,
     InvalidRequestError,
     ModelNotFoundError,
@@ -17,6 +18,7 @@ from src.models.errors import (
     TimeoutError,
     parse_retry_after_header,
 )
+from src.guardrails.exceptions import GuardrailViolationError
 
 _NO_HEALTHY_DEPLOYMENTS_MARKER = "no healthy deployments available"
 
@@ -26,6 +28,7 @@ class BatchResponseShapeError(ValueError):
 
 
 class BatchRetryCategory(StrEnum):
+    AUTHENTICATION = "authentication"
     RATE_LIMIT = "rate_limit"
     TIMEOUT = "timeout"
     TRANSPORT = "transport"
@@ -87,6 +90,20 @@ def classify_batch_retry(exc: Exception) -> BatchRetryDecision:
         return BatchRetryDecision(
             retryable=False,
             category=BatchRetryCategory.BUDGET,
+            terminal_reason=BatchRetryTerminalReason.NOT_RETRYABLE,
+        )
+
+    if isinstance(exc, AuthenticationError):
+        return BatchRetryDecision(
+            retryable=False,
+            category=BatchRetryCategory.AUTHENTICATION,
+            terminal_reason=BatchRetryTerminalReason.NOT_RETRYABLE,
+        )
+
+    if isinstance(exc, GuardrailViolationError):
+        return BatchRetryDecision(
+            retryable=False,
+            category=BatchRetryCategory.INVALID_REQUEST,
             terminal_reason=BatchRetryTerminalReason.NOT_RETRYABLE,
         )
 

@@ -57,6 +57,8 @@ class _PreparedEmbeddingItem:
     microbatch_ineligible_reason: str | None
     microbatch_weight: int | None
     execution_signature: _ExecutionSignature
+    policy_auth: Any | None = None
+    policy_lease: Any | None = None
 
 
 @dataclass(slots=True)
@@ -70,3 +72,5 @@ class _PreparedChatItem:
     request_context: dict[str, Any]
     failover_kwargs: dict[str, Any]
     request_shim: _RequestShim
+    policy_auth: Any | None = None
+    policy_lease: Any | None = None
