@@ -157,6 +157,8 @@ Rate-limit and max-parallel slots are acquired immediately before provider execu
 
 ## Batch Lifecycle
 
+The worker and admin APIs use the internal lifecycle below:
+
 ```
 queued --> in_progress --> finalizing --> completed
    |            |                             |
@@ -174,6 +176,8 @@ queued --> in_progress --> finalizing --> completed
 | `failed` | The batch could not be completed (see `error_file_id` for details) |
 | `cancelled` | Cancelled by the user or an admin; pending items are skipped |
 | `expired` | The batch exceeded its retention window |
+
+Public `/v1/batches` responses use OpenAI-compatible status values so OpenAI-compatible clients can parse them. Internal `queued` jobs are returned as `validating`, and an `in_progress` job with a pending cancel request is returned as `cancelling`. Other compatible statuses are returned unchanged.
 
 ## API Endpoints
 

@@ -233,7 +233,7 @@ async def test_batch_service_create_result_delegates_to_bound_create_session_ser
     )
 
     assert result.response["id"] == "batch-delegated"
-    assert result.response["status"] == "queued"
+    assert result.response["status"] == "validating"
     assert result.audit_metadata["create_path"] == "create_session"
     assert create_session_service.calls[0]["idempotency_key"] == "idem-1"
 

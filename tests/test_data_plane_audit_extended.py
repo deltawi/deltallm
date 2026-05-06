@@ -60,12 +60,12 @@ class _FakeBatchService:
 
     async def create_embeddings_batch(self, **kwargs):  # noqa: ANN003, ANN201
         del kwargs
-        return {"id": "batch-1", "status": "queued"}
+        return {"id": "batch-1", "status": "validating"}
 
     async def create_embeddings_batch_result(self, **kwargs):  # noqa: ANN003, ANN201
         idempotency_key = kwargs.get("idempotency_key")
         return self._CreateResult(
-            response={"id": "batch-1", "status": "queued"},
+            response={"id": "batch-1", "status": "validating"},
             audit_metadata={
                 "create_path": "create_session",
                 "idempotency_key_present": bool(idempotency_key),
