@@ -121,6 +121,34 @@ class _NeverCalledStager:
         raise AssertionError("stage_session should not be called")
 
 
+def _create_session_service_for_validation() -> BatchCreateSessionService:
+    return BatchCreateSessionService(
+        repository=SimpleNamespace(),  # type: ignore[arg-type]
+        create_session_repository=SimpleNamespace(),  # type: ignore[arg-type]
+        stager=SimpleNamespace(),  # type: ignore[arg-type]
+        promoter=SimpleNamespace(),  # type: ignore[arg-type]
+        storage_registry={},
+        max_file_bytes=1024,
+        max_items_per_batch=100,
+        max_line_bytes=1024,
+        storage_chunk_size=128,
+    )
+
+
+@pytest.mark.parametrize("completion_window", [None, "", "  ", "24h"])
+def test_create_session_service_accepts_default_openai_completion_window(completion_window: object) -> None:
+    _create_session_service_for_validation()._validate_completion_window(completion_window)  # noqa: SLF001
+
+
+@pytest.mark.parametrize("completion_window", ["12h", "24H", 24])
+def test_create_session_service_rejects_unsupported_completion_window(completion_window: object) -> None:
+    with pytest.raises(HTTPException) as exc:
+        _create_session_service_for_validation()._validate_completion_window(completion_window)  # noqa: SLF001
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "completion_window must be '24h'"
+
+
 @pytest.mark.asyncio
 async def test_create_session_service_resolves_matching_existing_session_before_loading_input_file() -> None:
     existing_session = _session(status=BatchCreateSessionStatus.COMPLETED)
@@ -234,6 +262,8 @@ async def test_batch_service_create_result_delegates_to_bound_create_session_ser
 
     assert result.response["id"] == "batch-delegated"
     assert result.response["status"] == "validating"
+    assert result.response["completion_window"] == "24h"
+    assert result.response["errors"] is None
     assert result.audit_metadata["create_path"] == "create_session"
     assert create_session_service.calls[0]["idempotency_key"] == "idem-1"
 

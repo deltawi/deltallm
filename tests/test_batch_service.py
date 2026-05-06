@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import logging
 
 import pytest
 from fastapi import HTTPException
 
-from src.batch.models import BatchFileRecord, BatchJobRecord, BatchJobStatus
+from src.batch.models import BatchFileRecord, BatchJobRecord, BatchJobStatus, OPENAI_BATCH_COMPLETION_WINDOW
 from src.batch.service import OPENAI_BATCH_STATUS_VALUES, BatchService
 from src.metrics.batch import deltallm_batch_artifact_failures_metric
 from src.db.callable_targets import CallableTargetBindingRecord
@@ -58,6 +58,8 @@ def _batch_job(
     *,
     status: BatchJobStatus = BatchJobStatus.QUEUED,
     cancel_requested_at: datetime | None = None,
+    status_last_updated_at: datetime | None = None,
+    expires_at: datetime | None = None,
 ) -> BatchJobRecord:
     now = datetime.now(tz=UTC)
     return BatchJobRecord(
@@ -82,14 +84,14 @@ def _batch_job(
         locked_by=None,
         lease_expires_at=None,
         cancel_requested_at=cancel_requested_at,
-        status_last_updated_at=now,
+        status_last_updated_at=status_last_updated_at or now,
         created_by_api_key="key-a",
         created_by_user_id=None,
         created_by_team_id=None,
         created_at=now,
         started_at=None,
         completed_at=None,
-        expires_at=None,
+        expires_at=expires_at,
     )
 
 
@@ -125,6 +127,37 @@ def test_job_to_response_preserves_openai_compatible_batch_statuses(status: Batc
 
     assert response["status"] == status.value
     assert response["status"] in OPENAI_BATCH_STATUS_VALUES
+
+
+def test_job_to_response_includes_openai_compatible_batch_fields() -> None:
+    now = datetime.now(tz=UTC).replace(microsecond=0)
+    expires_at = now + timedelta(days=1)
+    response = _service().job_to_response(
+        _batch_job(
+            status=BatchJobStatus.FAILED,
+            status_last_updated_at=now,
+            expires_at=expires_at,
+        )
+    )
+
+    assert response["completion_window"] == OPENAI_BATCH_COMPLETION_WINDOW
+    assert response["errors"] is None
+    assert response["expires_at"] == int(expires_at.timestamp())
+    assert response["failed_at"] == int(now.timestamp())
+    assert response["expired_at"] is None
+
+
+def test_job_to_response_sets_expired_at_for_expired_batches() -> None:
+    now = datetime.now(tz=UTC).replace(microsecond=0)
+    response = _service().job_to_response(
+        _batch_job(
+            status=BatchJobStatus.EXPIRED,
+            status_last_updated_at=now,
+        )
+    )
+
+    assert response["expired_at"] == int(now.timestamp())
+    assert response["failed_at"] is None
 
 
 class _FakeCallableTargetBindingRepository:

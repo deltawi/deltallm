@@ -231,6 +231,8 @@ curl http://localhost:8000/v1/batches \
   }'
 ```
 
+DeltaLLM supports the OpenAI-compatible `24h` batch completion window. Missing or null `completion_window` values default to `24h`; unsupported values return HTTP 400.
+
 Inspect a batch:
 
 ```bash
@@ -242,6 +244,7 @@ Current behavior:
 
 - batch endpoints are available only when `general_settings.embeddings_batch_enabled: true`
 - supported endpoints are `"/v1/embeddings"` and `"/v1/chat/completions"`
+- public batch responses include OpenAI-compatible `completion_window`, `errors`, `expires_at`, `failed_at`, and `expired_at` fields
 - chat batch requests must be non-streaming; `stream: true` is rejected
 - MCP tools are not supported in chat batch requests yet
 

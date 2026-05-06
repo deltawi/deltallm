@@ -19,6 +19,8 @@ class BatchJobStatus(StrEnum):
 BATCH_JOB_STATUSES = tuple(BatchJobStatus)
 BATCH_JOB_STATUS_VALUES = tuple(status.value for status in BatchJobStatus)
 BATCH_JOB_STATUS_SET = frozenset(BATCH_JOB_STATUS_VALUES)
+OPENAI_BATCH_COMPLETION_WINDOW = "24h"
+SUPPORTED_BATCH_COMPLETION_WINDOWS = frozenset({OPENAI_BATCH_COMPLETION_WINDOW})
 
 
 def normalize_batch_job_status(status: str | BatchJobStatus) -> BatchJobStatus:
@@ -29,6 +31,19 @@ def normalize_batch_job_status(status: str | BatchJobStatus) -> BatchJobStatus:
         return BatchJobStatus(normalized)
     except ValueError as exc:
         raise ValueError("batch job status must be one of: " + ", ".join(BATCH_JOB_STATUS_VALUES)) from exc
+
+
+def normalize_batch_completion_window(completion_window: object) -> str:
+    if completion_window is None:
+        return OPENAI_BATCH_COMPLETION_WINDOW
+    if not isinstance(completion_window, str):
+        raise ValueError("completion_window must be '24h'")
+    normalized = completion_window.strip()
+    if not normalized:
+        return OPENAI_BATCH_COMPLETION_WINDOW
+    if normalized not in SUPPORTED_BATCH_COMPLETION_WINDOWS:
+        raise ValueError("completion_window must be '24h'")
+    return normalized
 
 
 class BatchItemStatus:

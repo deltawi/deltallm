@@ -60,12 +60,12 @@ class _FakeBatchService:
 
     async def create_embeddings_batch(self, **kwargs):  # noqa: ANN003, ANN201
         del kwargs
-        return {"id": "batch-1", "status": "validating"}
+        return self._batch_response("validating")
 
     async def create_embeddings_batch_result(self, **kwargs):  # noqa: ANN003, ANN201
         idempotency_key = kwargs.get("idempotency_key")
         return self._CreateResult(
-            response={"id": "batch-1", "status": "validating"},
+            response=self._batch_response("validating"),
             audit_metadata={
                 "create_path": "create_session",
                 "idempotency_key_present": bool(idempotency_key),
@@ -75,15 +75,36 @@ class _FakeBatchService:
 
     async def get_batch(self, **kwargs):  # noqa: ANN003, ANN201
         del kwargs
-        return {"id": "batch-1", "status": "in_progress"}
+        return self._batch_response("in_progress")
 
     async def list_batches(self, **kwargs):  # noqa: ANN003, ANN201
         del kwargs
-        return [{"id": "batch-1", "status": "in_progress"}]
+        return [self._batch_response("in_progress")]
 
     async def cancel_batch(self, **kwargs):  # noqa: ANN003, ANN201
         del kwargs
-        return {"id": "batch-1", "status": "cancelled"}
+        return self._batch_response("cancelled")
+
+    def _batch_response(self, status: str) -> dict:
+        return {
+            "id": "batch-1",
+            "object": "batch",
+            "endpoint": "/v1/embeddings",
+            "completion_window": "24h",
+            "status": status,
+            "input_file_id": "file-1",
+            "output_file_id": None,
+            "error_file_id": None,
+            "created_at": 1,
+            "expires_at": None,
+            "in_progress_at": None,
+            "completed_at": None,
+            "failed_at": None,
+            "expired_at": None,
+            "errors": None,
+            "request_counts": {"total": 1, "completed": 0, "failed": 0, "cancelled": 0, "in_progress": 0},
+            "metadata": {},
+        }
 
 
 class _SpendQueryDB:

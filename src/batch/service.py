@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator
 from fastapi import HTTPException, UploadFile, status
 
 from src.batch.access import can_access_owned_resource
-from src.batch.models import BatchItemCreate, BatchJobStatus
+from src.batch.models import BatchItemCreate, BatchJobStatus, OPENAI_BATCH_COMPLETION_WINDOW
 from src.batch.request_validation import parse_batch_input_line
 from src.batch.repository import BatchRepository
 from src.batch.storage import BatchArtifactLineTooLongError, BatchArtifactStorage
@@ -396,13 +396,18 @@ class BatchService:
             "id": job.batch_id,
             "object": "batch",
             "endpoint": job.endpoint,
+            "completion_window": OPENAI_BATCH_COMPLETION_WINDOW,
             "status": self._public_batch_status(job),
             "input_file_id": job.input_file_id,
             "output_file_id": job.output_file_id,
             "error_file_id": job.error_file_id,
             "created_at": int(job.created_at.timestamp()),
+            "expires_at": self._timestamp_or_none(getattr(job, "expires_at", None)),
             "in_progress_at": int(job.started_at.timestamp()) if job.started_at else None,
             "completed_at": int(job.completed_at.timestamp()) if job.completed_at else None,
+            "failed_at": self._terminal_status_timestamp(job, BatchJobStatus.FAILED),
+            "expired_at": self._terminal_status_timestamp(job, BatchJobStatus.EXPIRED),
+            "errors": None,
             "request_counts": {
                 "total": job.total_items,
                 "completed": job.completed_items,
@@ -423,6 +428,14 @@ class BatchService:
         ):
             return "cancelling"
         return status_value
+
+    def _terminal_status_timestamp(self, job, terminal_status: BatchJobStatus) -> int | None:
+        if str(getattr(job, "status", "") or "") != terminal_status.value:
+            return None
+        return self._timestamp_or_none(getattr(job, "status_last_updated_at", None))
+
+    def _timestamp_or_none(self, value: datetime | None) -> int | None:
+        return int(value.timestamp()) if value else None
 
     def _parse_input_jsonl(
         self,
