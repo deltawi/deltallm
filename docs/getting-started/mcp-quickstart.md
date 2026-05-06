@@ -58,7 +58,7 @@ curl -X POST "$BASE/ui/api/mcp-servers" \
 Important fields:
 
 - `server_key`: stable identifier that clients will later reference in chat requests
-- `transport`: currently must be `streamable_http`
+- `transport`: use `streamable_http`; `http` is accepted as a compatibility alias and normalized to `streamable_http`
 - `auth_mode`: one of `none`, `bearer`, `basic`, or `header_map`
 
 Save the returned `mcp_server_id`.

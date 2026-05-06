@@ -7,7 +7,7 @@ from typing import Any
 
 from src.cache import CacheBackend, CacheEntry
 
-from .auth import build_forwarded_headers
+from .auth import build_effective_mcp_forwarded_headers
 from .models import MCPServerConfig, MCPToolCallResult
 
 
@@ -91,7 +91,7 @@ class MCPToolResultCache:
         request_headers: dict[str, str] | None,
         auth_api_key: str | None,
     ) -> str:
-        forwarded_headers = build_forwarded_headers(
+        forwarded_headers = build_effective_mcp_forwarded_headers(
             request_headers=request_headers,
             server_key=server.server_key,
             allowlist=server.forwarded_headers_allowlist,

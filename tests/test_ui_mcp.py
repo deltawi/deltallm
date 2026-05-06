@@ -8,7 +8,13 @@ from prometheus_client import generate_latest
 
 from src.audit.actions import AuditAction
 from src.auth.roles import OrganizationRole, TeamRole
-from src.db.mcp import MCPApprovalRequestRecord, MCPRepository, MCPServerBindingRecord, MCPServerRecord, MCPToolPolicyRecord
+from src.db.mcp import (
+    MCPApprovalRequestRecord,
+    MCPRepository,
+    MCPServerBindingRecord,
+    MCPServerRecord,
+    MCPToolPolicyRecord,
+)
 from src.db.mcp_scope_policies import MCPScopePolicyRecord
 from src.metrics import get_prometheus_registry
 from src.mcp.capabilities import extract_tool_schemas, namespace_tools
@@ -37,7 +43,11 @@ class _FakeMCPRepository(MCPRepository):
         items = list(self.servers.values())
         if search:
             query = str(search).lower()
-            items = [item for item in items if query in item.server_key.lower() or query in item.name.lower()]
+            items = [
+                item
+                for item in items
+                if query in item.server_key.lower() or query in item.name.lower()
+            ]
         if enabled is not None:
             items = [item for item in items if item.enabled is enabled]
         items.sort(key=lambda item: ((item.created_at or _utcnow()), item.server_key), reverse=True)
@@ -99,12 +109,20 @@ class _FakeMCPRepository(MCPRepository):
         removed = self.servers.pop(server_id, None)
         if removed is None:
             return False
-        self.bindings = {key: value for key, value in self.bindings.items() if value.mcp_server_id != server_id}
-        self.policies = {key: value for key, value in self.policies.items() if value.mcp_server_id != server_id}
-        self.approvals = {key: value for key, value in self.approvals.items() if value.mcp_server_id != server_id}
+        self.bindings = {
+            key: value for key, value in self.bindings.items() if value.mcp_server_id != server_id
+        }
+        self.policies = {
+            key: value for key, value in self.policies.items() if value.mcp_server_id != server_id
+        }
+        self.approvals = {
+            key: value for key, value in self.approvals.items() if value.mcp_server_id != server_id
+        }
         return True
 
-    async def update_server_capabilities(self, server_id: str, *, capabilities_json, capabilities_etag=None):  # noqa: ANN001, ANN201
+    async def update_server_capabilities(
+        self, server_id: str, *, capabilities_json, capabilities_etag=None
+    ):  # noqa: ANN001, ANN201
         existing = self.servers.get(server_id)
         if existing is None:
             return None
@@ -133,7 +151,9 @@ class _FakeMCPRepository(MCPRepository):
         self.servers[server_id] = updated
         return updated
 
-    async def list_bindings(self, *, server_id=None, scope_type=None, scope_id=None, enabled=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+    async def list_bindings(
+        self, *, server_id=None, scope_type=None, scope_id=None, enabled=None, limit=200, offset=0
+    ):  # noqa: ANN001, ANN201
         items = list(self.bindings.values())
         if server_id:
             items = [item for item in items if item.mcp_server_id == server_id]
@@ -143,15 +163,21 @@ class _FakeMCPRepository(MCPRepository):
             items = [item for item in items if item.scope_id == scope_id]
         if enabled is not None:
             items = [item for item in items if item.enabled is enabled]
-        items.sort(key=lambda item: ((item.created_at or _utcnow()), item.mcp_binding_id), reverse=True)
+        items.sort(
+            key=lambda item: ((item.created_at or _utcnow()), item.mcp_binding_id), reverse=True
+        )
         return items[offset : offset + limit], len(items)
 
-    async def upsert_binding(self, *, server_id, scope_type, scope_id, enabled, tool_allowlist, metadata):  # noqa: ANN001, ANN201
+    async def upsert_binding(
+        self, *, server_id, scope_type, scope_id, enabled, tool_allowlist, metadata
+    ):  # noqa: ANN001, ANN201
         existing = next(
             (
                 item
                 for item in self.bindings.values()
-                if item.mcp_server_id == server_id and item.scope_type == scope_type and item.scope_id == scope_id
+                if item.mcp_server_id == server_id
+                and item.scope_type == scope_type
+                and item.scope_id == scope_id
             ),
             None,
         )
@@ -186,7 +212,9 @@ class _FakeMCPRepository(MCPRepository):
     async def get_binding(self, binding_id: str):  # noqa: ANN201
         return self.bindings.get(binding_id)
 
-    async def list_tool_policies(self, *, server_id=None, scope_type=None, scope_id=None, enabled=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+    async def list_tool_policies(
+        self, *, server_id=None, scope_type=None, scope_id=None, enabled=None, limit=200, offset=0
+    ):  # noqa: ANN001, ANN201
         items = list(self.policies.values())
         if server_id:
             items = [item for item in items if item.mcp_server_id == server_id]
@@ -196,7 +224,9 @@ class _FakeMCPRepository(MCPRepository):
             items = [item for item in items if item.scope_id == scope_id]
         if enabled is not None:
             items = [item for item in items if item.enabled is enabled]
-        items.sort(key=lambda item: ((item.created_at or _utcnow()), item.mcp_tool_policy_id), reverse=True)
+        items.sort(
+            key=lambda item: ((item.created_at or _utcnow()), item.mcp_tool_policy_id), reverse=True
+        )
         return items[offset : offset + limit], len(items)
 
     async def upsert_tool_policy(  # noqa: ANN201
@@ -268,13 +298,24 @@ class _FakeMCPRepository(MCPRepository):
             items = [item for item in items if item.mcp_server_id == server_id]
         if status:
             items = [item for item in items if item.status == status]
-        items.sort(key=lambda item: ((item.created_at or _utcnow()), item.mcp_approval_request_id), reverse=True)
+        items.sort(
+            key=lambda item: ((item.created_at or _utcnow()), item.mcp_approval_request_id),
+            reverse=True,
+        )
         return items[offset : offset + limit], len(items)
 
     async def get_approval_request(self, approval_request_id: str):  # noqa: ANN201
         return self.approvals.get(approval_request_id)
 
-    async def decide_approval_request(self, approval_request_id: str, *, status, decided_by_account_id, decision_comment, expires_at):  # noqa: ANN001, ANN201
+    async def decide_approval_request(
+        self,
+        approval_request_id: str,
+        *,
+        status,
+        decided_by_account_id,
+        decision_comment,
+        expires_at,
+    ):  # noqa: ANN001, ANN201
         existing = self.approvals.get(approval_request_id)
         if existing is None or existing.status != "pending":
             return None
@@ -302,17 +343,27 @@ class _FakeMCPScopePolicyRepository:
             items = [item for item in items if item.scope_type == scope_type]
         if scope_id is not None:
             items = [item for item in items if item.scope_id == scope_id]
-        items.sort(key=lambda item: ((item.created_at or _utcnow()), item.mcp_scope_policy_id), reverse=True)
+        items.sort(
+            key=lambda item: ((item.created_at or _utcnow()), item.mcp_scope_policy_id),
+            reverse=True,
+        )
         return items[offset : offset + limit], len(items)
 
     async def upsert_policy(self, *, scope_type, scope_id, mode, metadata):  # noqa: ANN001, ANN201
         existing = next(
-            (item for item in self.policies if item.scope_type == scope_type and item.scope_id == scope_id),
+            (
+                item
+                for item in self.policies
+                if item.scope_type == scope_type and item.scope_id == scope_id
+            ),
             None,
         )
         if existing is not None:
             updated = replace(existing, mode=mode, metadata=metadata, updated_at=_utcnow())
-            self.policies = [updated if item.mcp_scope_policy_id == updated.mcp_scope_policy_id else item for item in self.policies]
+            self.policies = [
+                updated if item.mcp_scope_policy_id == updated.mcp_scope_policy_id else item
+                for item in self.policies
+            ]
             return updated
         self._counter += 1
         record = MCPScopePolicyRecord(
@@ -345,16 +396,24 @@ class _FakeMCPRegistryService:
         self.invalidate_all_calls = 0
 
     async def list_servers(self, *, search=None, enabled=None, limit=100, offset=0):  # noqa: ANN001, ANN201
-        return await self.repository.list_servers(search=search, enabled=enabled, limit=limit, offset=offset)
+        return await self.repository.list_servers(
+            search=search, enabled=enabled, limit=limit, offset=offset
+        )
 
     async def store_server_capabilities(self, server_id: str, *, capabilities, etag=None):  # noqa: ANN001, ANN201
-        return await self.repository.update_server_capabilities(server_id, capabilities_json=capabilities, capabilities_etag=etag)
+        return await self.repository.update_server_capabilities(
+            server_id, capabilities_json=capabilities, capabilities_etag=etag
+        )
 
     async def list_namespaced_tools(self, server: MCPServerRecord):  # noqa: ANN201
-        return namespace_tools(server.server_key, extract_tool_schemas(server.capabilities_json or {}))
+        return namespace_tools(
+            server.server_key, extract_tool_schemas(server.capabilities_json or {})
+        )
 
     async def record_health(self, server_id: str, *, status, error, latency_ms):  # noqa: ANN001, ANN201
-        return await self.repository.record_health_check(server_id, status=status, error=error, latency_ms=latency_ms)
+        return await self.repository.record_health_check(
+            server_id, status=status, error=error, latency_ms=latency_ms
+        )
 
     async def invalidate_server(self, server_key: str) -> None:
         self.invalidated_server_keys.append(server_key)
@@ -404,8 +463,18 @@ class _FakeAuditQueryClient:
         normalized = " ".join(str(query).split())
         if "GROUP BY resource_id" in normalized:
             return [
-                {"tool_name": "docs.search", "total_calls": 6, "failed_calls": 1, "avg_latency_ms": 120.0},
-                {"tool_name": "docs.fetch", "total_calls": 3, "failed_calls": 1, "avg_latency_ms": 187.0},
+                {
+                    "tool_name": "docs.search",
+                    "total_calls": 6,
+                    "failed_calls": 1,
+                    "avg_latency_ms": 120.0,
+                },
+                {
+                    "tool_name": "docs.fetch",
+                    "total_calls": 3,
+                    "failed_calls": 1,
+                    "avg_latency_ms": 187.0,
+                },
             ]
         if "status = 'error'" in normalized and "ORDER BY occurred_at DESC" in normalized:
             return [
@@ -420,7 +489,14 @@ class _FakeAuditQueryClient:
                 }
             ]
         if "FROM deltallm_mcpapprovalrequest" in normalized:
-            return [{"total_requests": 4, "pending_requests": 1, "approved_requests": 2, "rejected_requests": 1}]
+            return [
+                {
+                    "total_requests": 4,
+                    "pending_requests": 1,
+                    "approved_requests": 2,
+                    "rejected_requests": 1,
+                }
+            ]
         if "COUNT(*)::int AS total_calls" in normalized:
             return [{"total_calls": 9, "failed_calls": 2, "avg_latency_ms": 142.4}]
         raise AssertionError(f"Unexpected query: {normalized} params={params}")
@@ -452,13 +528,25 @@ class _FakeMCPScopeQueryClient:
             key = self.keys.get(token)
             if key is None:
                 return []
-            return [{"token": token, "team_id": key["team_id"], "organization_id": key["organization_id"]}]
+            return [
+                {
+                    "token": token,
+                    "team_id": key["team_id"],
+                    "organization_id": key["organization_id"],
+                }
+            ]
         if "FROM deltallm_usertable u" in normalized:
             user_id = str(params[0] or "")
             user = self.users.get(user_id)
             if user is None:
                 return []
-            return [{"user_id": user_id, "team_id": user["team_id"], "organization_id": user["organization_id"]}]
+            return [
+                {
+                    "user_id": user_id,
+                    "team_id": user["team_id"],
+                    "organization_id": user["organization_id"],
+                }
+            ]
         raise AssertionError(f"Unexpected query: {normalized} params={params}")
 
 
@@ -466,33 +554,71 @@ class _FakeMCPMigrationQueryClient:
     def __init__(self) -> None:
         self.organizations = {"org-main": {"organization_name": "Main Org"}}
         self.teams = {"team-ops": {"organization_id": "org-main", "team_alias": "Ops"}}
-        self.keys = {"sk-key-1": {"team_id": "team-ops", "organization_id": "org-main", "key_name": "Ops Key"}}
-        self.users = {"user-1": {"team_id": "team-ops", "organization_id": "org-main", "user_email": "user-1@example.com"}}
+        self.keys = {
+            "sk-key-1": {
+                "team_id": "team-ops",
+                "organization_id": "org-main",
+                "key_name": "Ops Key",
+            }
+        }
+        self.users = {
+            "user-1": {
+                "team_id": "team-ops",
+                "organization_id": "org-main",
+                "user_email": "user-1@example.com",
+            }
+        }
 
     async def query_raw(self, query: str, *params):  # noqa: ANN201
         normalized = " ".join(str(query).split())
-        if "SELECT organization_id, organization_name FROM deltallm_organizationtable" in normalized:
+        if (
+            "SELECT organization_id, organization_name FROM deltallm_organizationtable"
+            in normalized
+        ):
             if "WHERE organization_id = $1" in normalized:
                 organization_id = str(params[0] or "")
                 organization = self.organizations.get(organization_id)
-                return [{"organization_id": organization_id, "organization_name": organization["organization_name"]}] if organization else []
+                return (
+                    [
+                        {
+                            "organization_id": organization_id,
+                            "organization_name": organization["organization_name"],
+                        }
+                    ]
+                    if organization
+                    else []
+                )
             return [
-                {"organization_id": organization_id, "organization_name": organization["organization_name"]}
+                {
+                    "organization_id": organization_id,
+                    "organization_name": organization["organization_name"],
+                }
                 for organization_id, organization in sorted(self.organizations.items())
             ]
         if "SELECT team_id, team_alias, organization_id FROM deltallm_teamtable" in normalized:
             if "WHERE organization_id = $1" in normalized:
                 organization_id = str(params[0] or "")
                 return [
-                    {"team_id": team_id, "team_alias": team["team_alias"], "organization_id": team["organization_id"]}
+                    {
+                        "team_id": team_id,
+                        "team_alias": team["team_alias"],
+                        "organization_id": team["organization_id"],
+                    }
                     for team_id, team in sorted(self.teams.items())
                     if team["organization_id"] == organization_id
                 ]
             return [
-                {"team_id": team_id, "team_alias": team["team_alias"], "organization_id": team["organization_id"]}
+                {
+                    "team_id": team_id,
+                    "team_alias": team["team_alias"],
+                    "organization_id": team["organization_id"],
+                }
                 for team_id, team in sorted(self.teams.items())
             ]
-        if "SELECT vt.token, vt.key_name, vt.team_id, t.organization_id FROM deltallm_verificationtoken vt" in normalized:
+        if (
+            "SELECT vt.token, vt.key_name, vt.team_id, t.organization_id FROM deltallm_verificationtoken vt"
+            in normalized
+        ):
             if "WHERE t.organization_id = $1" in normalized:
                 organization_id = str(params[0] or "")
                 return [
@@ -550,7 +676,10 @@ class _FakeApprovalScopeQueryClient:
         normalized = " ".join(str(query).split())
         if "SELECT COUNT(*)::int AS total FROM deltallm_mcpapprovalrequest r" in normalized:
             return [{"total": len(self.approvals)}]
-        if "FROM deltallm_mcpapprovalrequest r" in normalized and "ORDER BY r.created_at DESC" in normalized:
+        if (
+            "FROM deltallm_mcpapprovalrequest r" in normalized
+            and "ORDER BY r.created_at DESC" in normalized
+        ):
             return list(self.approvals)
         if "FROM deltallm_teamtable" in normalized:
             team_id = str(params[0] or "")
@@ -574,7 +703,12 @@ class _FakeApprovalScopeQueryClient:
 
 
 class _FakeBindingPolicyListQueryClient:
-    def __init__(self, *, bindings: list[dict[str, object]] | None = None, policies: list[dict[str, object]] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        bindings: list[dict[str, object]] | None = None,
+        policies: list[dict[str, object]] | None = None,
+    ) -> None:
         now = _utcnow()
         self.bindings = bindings or [
             {
@@ -665,11 +799,17 @@ class _FakeBindingPolicyListQueryClient:
         self.calls.append((normalized, params))
         if "COUNT(*)::int AS total FROM deltallm_mcpbinding b" in normalized:
             return [{"total": len(self.bindings)}]
-        if "FROM deltallm_mcpbinding b" in normalized and "ORDER BY b.created_at DESC" in normalized:
+        if (
+            "FROM deltallm_mcpbinding b" in normalized
+            and "ORDER BY b.created_at DESC" in normalized
+        ):
             return list(self.bindings)
         if "COUNT(*)::int AS total FROM deltallm_mcptoolpolicy p" in normalized:
             return [{"total": len(self.policies)}]
-        if "FROM deltallm_mcptoolpolicy p" in normalized and "ORDER BY p.created_at DESC" in normalized:
+        if (
+            "FROM deltallm_mcptoolpolicy p" in normalized
+            and "ORDER BY p.created_at DESC" in normalized
+        ):
             return list(self.policies)
         raise AssertionError(f"Unexpected query: {normalized} params={params}")
 
@@ -751,11 +891,17 @@ class _FakeScopedServerQueryClient:
             return list(self.servers)
         if "COUNT(*)::int AS total FROM deltallm_mcpbinding b" in normalized:
             return [{"total": len(self.bindings)}]
-        if "FROM deltallm_mcpbinding b" in normalized and "ORDER BY b.created_at DESC" in normalized:
+        if (
+            "FROM deltallm_mcpbinding b" in normalized
+            and "ORDER BY b.created_at DESC" in normalized
+        ):
             return list(self.bindings)
         if "COUNT(*)::int AS total FROM deltallm_mcptoolpolicy p" in normalized:
             return [{"total": len(self.policies)}]
-        if "FROM deltallm_mcptoolpolicy p" in normalized and "ORDER BY p.created_at DESC" in normalized:
+        if (
+            "FROM deltallm_mcptoolpolicy p" in normalized
+            and "ORDER BY p.created_at DESC" in normalized
+        ):
             return list(self.policies)
         if "COUNT(*)::int AS total_calls" in normalized:
             assert "metadata->>'scope_type'" in normalized
@@ -764,22 +910,53 @@ class _FakeScopedServerQueryClient:
         if "GROUP BY resource_id" in normalized:
             assert "metadata->>'scope_type'" in normalized
             assert "metadata->>'scope_id'" in normalized
-            return [{"tool_name": "docs.search", "total_calls": 4, "failed_calls": 1, "avg_latency_ms": 110.0}]
+            return [
+                {
+                    "tool_name": "docs.search",
+                    "total_calls": 4,
+                    "failed_calls": 1,
+                    "avg_latency_ms": 110.0,
+                }
+            ]
         if "status = 'error'" in normalized and "ORDER BY occurred_at DESC" in normalized:
             assert "metadata->>'scope_type'" in normalized
             assert "metadata->>'scope_id'" in normalized
-            return [{"event_id": "evt-1", "occurred_at": _utcnow(), "tool_name": "docs.search", "error_type": "TimeoutError", "error_code": None, "latency_ms": 180, "request_id": "req-1"}]
+            return [
+                {
+                    "event_id": "evt-1",
+                    "occurred_at": _utcnow(),
+                    "tool_name": "docs.search",
+                    "error_type": "TimeoutError",
+                    "error_code": None,
+                    "latency_ms": 180,
+                    "request_id": "req-1",
+                }
+            ]
         if "FROM deltallm_mcpapprovalrequest" in normalized:
-            return [{"total_requests": 2, "pending_requests": 1, "approved_requests": 1, "rejected_requests": 0}]
+            return [
+                {
+                    "total_requests": 2,
+                    "pending_requests": 1,
+                    "approved_requests": 1,
+                    "rejected_requests": 0,
+                }
+            ]
         raise AssertionError(f"Unexpected query: {normalized} params={params}")
 
 
 def _set_auth_context(monkeypatch: pytest.MonkeyPatch, context: PlatformAuthContext | None) -> None:
-    monkeypatch.setattr("src.middleware.platform_auth.get_platform_auth_context", lambda request: context)
+    monkeypatch.setattr(
+        "src.middleware.platform_auth.get_platform_auth_context", lambda request: context
+    )
     monkeypatch.setattr("src.middleware.admin.get_platform_auth_context", lambda request: context)
 
 
-def _make_context(*, platform_role: str = "platform_user", org_role: str | None = None, team_role: str | None = None) -> PlatformAuthContext:
+def _make_context(
+    *,
+    platform_role: str = "platform_user",
+    org_role: str | None = None,
+    team_role: str | None = None,
+) -> PlatformAuthContext:
     org_memberships = [{"organization_id": "org-main", "role": org_role}] if org_role else []
     team_memberships = [{"team_id": "team-ops", "role": team_role}] if team_role else []
     return PlatformAuthContext(
@@ -811,6 +988,7 @@ async def test_mcp_server_admin_crud_refresh_and_health(client, test_app):
         json={
             "server_key": "docs",
             "name": "Docs MCP",
+            "transport": "http",
             "base_url": "https://mcp.example.com",
             "auth_mode": "bearer",
             "auth_config": {"token": "secret-token"},
@@ -820,6 +998,7 @@ async def test_mcp_server_admin_crud_refresh_and_health(client, test_app):
     assert create.status_code == 200
     created = create.json()
     assert created["server_key"] == "docs"
+    assert created["transport"] == "streamable_http"
     assert created["tool_count"] == 0
     assert created["auth_credentials_present"] is True
     assert "auth_config" not in created
@@ -830,7 +1009,9 @@ async def test_mcp_server_admin_crud_refresh_and_health(client, test_app):
     assert list_response.json()["data"][0]["auth_credentials_present"] is True
     assert "auth_config" not in list_response.json()["data"][0]
 
-    refresh = await client.post(f"/ui/api/mcp-servers/{created['mcp_server_id']}/refresh-capabilities", headers=headers)
+    refresh = await client.post(
+        f"/ui/api/mcp-servers/{created['mcp_server_id']}/refresh-capabilities", headers=headers
+    )
     assert refresh.status_code == 200
     assert refresh.json()["server"]["tool_count"] == 1
     assert refresh.json()["tools"][0]["namespaced_name"] == "docs.search"
@@ -841,7 +1022,9 @@ async def test_mcp_server_admin_crud_refresh_and_health(client, test_app):
     assert detail.json()["server"]["auth_credentials_present"] is True
     assert "auth_config" not in detail.json()["server"]
 
-    health = await client.post(f"/ui/api/mcp-servers/{created['mcp_server_id']}/health-check", headers=headers)
+    health = await client.post(
+        f"/ui/api/mcp-servers/{created['mcp_server_id']}/health-check", headers=headers
+    )
     assert health.status_code == 200
     assert health.json()["health"]["status"] == "healthy"
     assert health.json()["server"]["last_health_status"] == "healthy"
@@ -869,9 +1052,9 @@ async def test_mcp_server_admin_crud_refresh_and_health(client, test_app):
     assert AuditAction.ADMIN_MCP_SERVER_DELETE in actions
 
     metrics_text = generate_latest(get_prometheus_registry()).decode("utf-8")
-    assert 'deltallm_mcp_capability_refresh_total' in metrics_text
-    assert 'deltallm_mcp_health_check_total' in metrics_text
-    assert 'deltallm_mcp_server_health_status' in metrics_text
+    assert "deltallm_mcp_capability_refresh_total" in metrics_text
+    assert "deltallm_mcp_health_check_total" in metrics_text
+    assert "deltallm_mcp_server_health_status" in metrics_text
     assert 'server_key="docs"' in metrics_text
 
 
@@ -898,7 +1081,9 @@ async def test_mcp_binding_and_tool_policy_admin_lifecycle(client, test_app):
     registry = _FakeMCPRegistryService(repository)
     test_app.state.mcp_repository = repository
     test_app.state.mcp_registry_service = registry
-    test_app.state.prisma_manager = type("PrismaManager", (), {"client": _FakeMCPScopeQueryClient()})()
+    test_app.state.prisma_manager = type(
+        "PrismaManager", (), {"client": _FakeMCPScopeQueryClient()}
+    )()
     headers = {"Authorization": "Bearer mk-test"}
 
     binding = await client.post(
@@ -914,7 +1099,9 @@ async def test_mcp_binding_and_tool_policy_admin_lifecycle(client, test_app):
     assert binding.status_code == 200
     assert binding.json()["scope_type"] == "team"
 
-    binding_list = await client.get("/ui/api/mcp-bindings?server_id=" + server.mcp_server_id, headers=headers)
+    binding_list = await client.get(
+        "/ui/api/mcp-bindings?server_id=" + server.mcp_server_id, headers=headers
+    )
     assert binding_list.status_code == 200
     assert binding_list.json()["data"][0]["scope_id"] == "team-ops"
 
@@ -936,14 +1123,20 @@ async def test_mcp_binding_and_tool_policy_admin_lifecycle(client, test_app):
     assert policy.json()["max_total_execution_time_ms"] == 1500
     assert policy.json()["metadata"]["max_total_mcp_execution_time_ms"] == 1500
 
-    policy_list = await client.get("/ui/api/mcp-tool-policies?server_id=" + server.mcp_server_id, headers=headers)
+    policy_list = await client.get(
+        "/ui/api/mcp-tool-policies?server_id=" + server.mcp_server_id, headers=headers
+    )
     assert policy_list.status_code == 200
     assert policy_list.json()["data"][0]["tool_name"] == "search"
     assert policy_list.json()["data"][0]["max_total_execution_time_ms"] == 1500
 
-    delete_policy = await client.delete(f"/ui/api/mcp-tool-policies/{policy.json()['mcp_tool_policy_id']}", headers=headers)
+    delete_policy = await client.delete(
+        f"/ui/api/mcp-tool-policies/{policy.json()['mcp_tool_policy_id']}", headers=headers
+    )
     assert delete_policy.status_code == 200
-    delete_binding = await client.delete(f"/ui/api/mcp-bindings/{binding.json()['mcp_binding_id']}", headers=headers)
+    delete_binding = await client.delete(
+        f"/ui/api/mcp-bindings/{binding.json()['mcp_binding_id']}", headers=headers
+    )
     assert delete_binding.status_code == 200
     assert registry.invalidate_all_calls == 4
 
@@ -971,7 +1164,9 @@ async def test_mcp_binding_and_tool_policy_admin_lifecycle_accepts_user_scope(cl
     registry = _FakeMCPRegistryService(repository)
     test_app.state.mcp_repository = repository
     test_app.state.mcp_registry_service = registry
-    test_app.state.prisma_manager = type("PrismaManager", (), {"client": _FakeMCPScopeQueryClient()})()
+    test_app.state.prisma_manager = type(
+        "PrismaManager", (), {"client": _FakeMCPScopeQueryClient()}
+    )()
     headers = {"Authorization": "Bearer mk-test"}
 
     binding = await client.post(
@@ -1008,7 +1203,9 @@ async def test_mcp_scope_policy_admin_lifecycle_accepts_user_scope(client, test_
     setattr(test_app.state.settings, "master_key", "mk-test")
     test_app.state.mcp_scope_policy_repository = _FakeMCPScopePolicyRepository()
     test_app.state.mcp_registry_service = _FakeMCPRegistryService(_FakeMCPRepository())
-    test_app.state.prisma_manager = type("PrismaManager", (), {"client": _FakeMCPScopeQueryClient()})()
+    test_app.state.prisma_manager = type(
+        "PrismaManager", (), {"client": _FakeMCPScopeQueryClient()}
+    )()
     headers = {"Authorization": "Bearer mk-test"}
 
     create = await client.post(
@@ -1030,7 +1227,9 @@ async def test_mcp_scope_policy_admin_lifecycle_accepts_user_scope(client, test_
     assert listing.status_code == 200
     assert listing.json()["data"][0]["scope_id"] == "user-1"
 
-    delete = await client.delete(f"/ui/api/mcp-scope-policies/{payload['mcp_scope_policy_id']}", headers=headers)
+    delete = await client.delete(
+        f"/ui/api/mcp-scope-policies/{payload['mcp_scope_policy_id']}", headers=headers
+    )
     assert delete.status_code == 200
     assert delete.json()["deleted"] is True
 
@@ -1074,9 +1273,13 @@ async def test_mcp_migration_report_identifies_org_bootstrap_and_scope_backfill(
     )
     test_app.state.mcp_repository = repository
     test_app.state.mcp_scope_policy_repository = policy_repository
-    test_app.state.prisma_manager = type("PrismaManager", (), {"client": _FakeMCPMigrationQueryClient()})()
+    test_app.state.prisma_manager = type(
+        "PrismaManager", (), {"client": _FakeMCPMigrationQueryClient()}
+    )()
 
-    response = await client.get("/ui/api/mcp-migration/report", headers={"Authorization": "Bearer mk-test"})
+    response = await client.get(
+        "/ui/api/mcp-migration/report", headers={"Authorization": "Bearer mk-test"}
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -1128,7 +1331,9 @@ async def test_mcp_migration_backfill_bootstraps_org_ceiling_and_scope_policies(
     test_app.state.mcp_repository = repository
     test_app.state.mcp_scope_policy_repository = policy_repository
     test_app.state.mcp_registry_service = registry
-    test_app.state.prisma_manager = type("PrismaManager", (), {"client": _FakeMCPMigrationQueryClient()})()
+    test_app.state.prisma_manager = type(
+        "PrismaManager", (), {"client": _FakeMCPMigrationQueryClient()}
+    )()
 
     response = await client.post(
         "/ui/api/mcp-migration/backfill",
@@ -1171,7 +1376,9 @@ async def test_mcp_binding_and_policy_validation_reject_unknown_scope_targets(cl
     )
     test_app.state.mcp_repository = repository
     test_app.state.mcp_registry_service = _FakeMCPRegistryService(repository)
-    test_app.state.prisma_manager = type("PrismaManager", (), {"client": _FakeMCPScopeQueryClient()})()
+    test_app.state.prisma_manager = type(
+        "PrismaManager", (), {"client": _FakeMCPScopeQueryClient()}
+    )()
     headers = {"Authorization": "Bearer mk-test"}
 
     missing_team = await client.post(
@@ -1247,7 +1454,9 @@ async def test_mcp_server_validation_rejects_invalid_phase1_config(client, test_
     )
     test_app.state.mcp_repository = repository
     test_app.state.mcp_registry_service = _FakeMCPRegistryService(test_app.state.mcp_repository)
-    test_app.state.prisma_manager = type("PrismaManager", (), {"client": _FakeMCPScopeQueryClient()})()
+    test_app.state.prisma_manager = type(
+        "PrismaManager", (), {"client": _FakeMCPScopeQueryClient()}
+    )()
     headers = {"Authorization": "Bearer mk-test"}
 
     create = await client.post(
@@ -1382,7 +1591,9 @@ async def test_mcp_approval_request_list_and_decision(client, test_app):
 
 
 @pytest.mark.asyncio
-async def test_scoped_org_admin_can_list_and_decide_visible_approval_requests(client, test_app, monkeypatch):
+async def test_scoped_org_admin_can_list_and_decide_visible_approval_requests(
+    client, test_app, monkeypatch
+):
     repository = _FakeMCPRepository()
     server = await repository.create_server(
         server_key="docs",
@@ -1416,7 +1627,9 @@ async def test_scoped_org_admin_can_list_and_decide_visible_approval_requests(cl
     )
     repository.approvals[approval.mcp_approval_request_id] = approval
     test_app.state.mcp_repository = repository
-    test_app.state.prisma_manager = type("PrismaManager", (), {"client": _FakeApprovalScopeQueryClient([approval.__dict__])})()
+    test_app.state.prisma_manager = type(
+        "PrismaManager", (), {"client": _FakeApprovalScopeQueryClient([approval.__dict__])}
+    )()
     audit = _RecordingAuditService()
     test_app.state.audit_service = audit
     _set_auth_context(monkeypatch, _make_context(org_role=OrganizationRole.ADMIN))
@@ -1438,7 +1651,9 @@ async def test_scoped_org_admin_can_list_and_decide_visible_approval_requests(cl
 
 
 @pytest.mark.asyncio
-async def test_scoped_org_admin_can_list_and_decide_user_scoped_approval_requests(client, test_app, monkeypatch):
+async def test_scoped_org_admin_can_list_and_decide_user_scoped_approval_requests(
+    client, test_app, monkeypatch
+):
     repository = _FakeMCPRepository()
     server = await repository.create_server(
         server_key="docs",
@@ -1473,7 +1688,9 @@ async def test_scoped_org_admin_can_list_and_decide_user_scoped_approval_request
     )
     repository.approvals[approval.mcp_approval_request_id] = approval
     test_app.state.mcp_repository = repository
-    test_app.state.prisma_manager = type("PrismaManager", (), {"client": _FakeApprovalScopeQueryClient([approval.__dict__])})()
+    test_app.state.prisma_manager = type(
+        "PrismaManager", (), {"client": _FakeApprovalScopeQueryClient([approval.__dict__])}
+    )()
     _set_auth_context(monkeypatch, _make_context(org_role=OrganizationRole.ADMIN))
 
     list_response = await client.get("/ui/api/mcp-approval-requests")
@@ -1489,7 +1706,9 @@ async def test_scoped_org_admin_can_list_and_decide_user_scoped_approval_request
 
 
 @pytest.mark.asyncio
-async def test_mcp_admin_lists_enabled_rows_by_default_and_include_disabled_for_platform_admin(client, test_app):
+async def test_mcp_admin_lists_enabled_rows_by_default_and_include_disabled_for_platform_admin(
+    client, test_app
+):
     setattr(test_app.state.settings, "master_key", "mk-test")
     repository = _FakeMCPRepository()
     server = await repository.create_server(
@@ -1551,9 +1770,13 @@ async def test_mcp_admin_lists_enabled_rows_by_default_and_include_disabled_for_
     test_app.state.mcp_repository = repository
     test_app.state.mcp_registry_service = _FakeMCPRegistryService(repository)
 
-    bindings_default = await client.get("/ui/api/mcp-bindings", headers={"Authorization": "Bearer mk-test"})
+    bindings_default = await client.get(
+        "/ui/api/mcp-bindings", headers={"Authorization": "Bearer mk-test"}
+    )
     assert bindings_default.status_code == 200
-    assert [item["mcp_binding_id"] for item in bindings_default.json()["data"]] == [enabled_binding.mcp_binding_id]
+    assert [item["mcp_binding_id"] for item in bindings_default.json()["data"]] == [
+        enabled_binding.mcp_binding_id
+    ]
 
     bindings_all = await client.get(
         "/ui/api/mcp-bindings?include_disabled=true",
@@ -1562,9 +1785,13 @@ async def test_mcp_admin_lists_enabled_rows_by_default_and_include_disabled_for_
     assert bindings_all.status_code == 200
     assert len(bindings_all.json()["data"]) == 2
 
-    policies_default = await client.get("/ui/api/mcp-tool-policies", headers={"Authorization": "Bearer mk-test"})
+    policies_default = await client.get(
+        "/ui/api/mcp-tool-policies", headers={"Authorization": "Bearer mk-test"}
+    )
     assert policies_default.status_code == 200
-    assert [item["mcp_tool_policy_id"] for item in policies_default.json()["data"]] == [enabled_policy.mcp_tool_policy_id]
+    assert [item["mcp_tool_policy_id"] for item in policies_default.json()["data"]] == [
+        enabled_policy.mcp_tool_policy_id
+    ]
 
     policies_all = await client.get(
         "/ui/api/mcp-tool-policies?include_disabled=true",
@@ -1573,7 +1800,9 @@ async def test_mcp_admin_lists_enabled_rows_by_default_and_include_disabled_for_
     assert policies_all.status_code == 200
     assert len(policies_all.json()["data"]) == 2
 
-    server_detail = await client.get(f"/ui/api/mcp-servers/{server.mcp_server_id}", headers={"Authorization": "Bearer mk-test"})
+    server_detail = await client.get(
+        f"/ui/api/mcp-servers/{server.mcp_server_id}", headers={"Authorization": "Bearer mk-test"}
+    )
     assert server_detail.status_code == 200
     assert len(server_detail.json()["bindings"]) == 1
     assert len(server_detail.json()["tool_policies"]) == 1
@@ -1622,7 +1851,9 @@ async def test_scoped_team_developer_cannot_decide_approval_requests(client, tes
     )
     repository.approvals[approval.mcp_approval_request_id] = approval
     test_app.state.mcp_repository = repository
-    test_app.state.prisma_manager = type("PrismaManager", (), {"client": _FakeApprovalScopeQueryClient([approval.__dict__])})()
+    test_app.state.prisma_manager = type(
+        "PrismaManager", (), {"client": _FakeApprovalScopeQueryClient([approval.__dict__])}
+    )()
     _set_auth_context(monkeypatch, _make_context(team_role=TeamRole.DEVELOPER))
 
     response = await client.post(
@@ -1633,7 +1864,9 @@ async def test_scoped_team_developer_cannot_decide_approval_requests(client, tes
 
 
 @pytest.mark.asyncio
-async def test_scoped_org_admin_can_list_visible_bindings_and_policies(client, test_app, monkeypatch):
+async def test_scoped_org_admin_can_list_visible_bindings_and_policies(
+    client, test_app, monkeypatch
+):
     test_app.state.mcp_repository = _FakeMCPRepository()
     fake_db = _FakeBindingPolicyListQueryClient()
     test_app.state.prisma_manager = type("PrismaManager", (), {"client": fake_db})()
@@ -1647,8 +1880,12 @@ async def test_scoped_org_admin_can_list_visible_bindings_and_policies(client, t
     assert policies_response.status_code == 200
     assert len(policies_response.json()["data"]) == 3
 
-    binding_query = next(query for query, _ in fake_db.calls if "FROM deltallm_mcpbinding b" in query)
-    policy_query = next(query for query, _ in fake_db.calls if "FROM deltallm_mcptoolpolicy p" in query)
+    binding_query = next(
+        query for query, _ in fake_db.calls if "FROM deltallm_mcpbinding b" in query
+    )
+    policy_query = next(
+        query for query, _ in fake_db.calls if "FROM deltallm_mcptoolpolicy p" in query
+    )
     assert "deltallm_teamtable" in binding_query
     assert "deltallm_verificationtoken" in binding_query
     assert "deltallm_usertable" in binding_query
@@ -1658,7 +1895,9 @@ async def test_scoped_org_admin_can_list_visible_bindings_and_policies(client, t
 
 
 @pytest.mark.asyncio
-async def test_scoped_team_developer_reads_team_and_key_bound_rows_only(client, test_app, monkeypatch):
+async def test_scoped_team_developer_reads_team_and_key_bound_rows_only(
+    client, test_app, monkeypatch
+):
     now = _utcnow()
     test_app.state.mcp_repository = _FakeMCPRepository()
     fake_db = _FakeBindingPolicyListQueryClient(
@@ -1732,7 +1971,9 @@ async def test_scoped_team_developer_reads_team_and_key_bound_rows_only(client, 
 
 
 @pytest.mark.asyncio
-async def test_scoped_org_admin_can_access_mcp_server_read_surfaces_and_health_check(client, test_app, monkeypatch):
+async def test_scoped_org_admin_can_access_mcp_server_read_surfaces_and_health_check(
+    client, test_app, monkeypatch
+):
     repository = _FakeMCPRepository()
     server = await repository.create_server(
         server_key="docs",
@@ -1764,7 +2005,9 @@ async def test_scoped_org_admin_can_access_mcp_server_read_surfaces_and_health_c
     test_app.state.mcp_registry_service = registry
     test_app.state.mcp_transport_client = transport
     test_app.state.mcp_health_probe = MCPHealthProbe(registry, transport)
-    test_app.state.prisma_manager = type("PrismaManager", (), {"client": _FakeScopedServerQueryClient()})()
+    test_app.state.prisma_manager = type(
+        "PrismaManager", (), {"client": _FakeScopedServerQueryClient()}
+    )()
     _set_auth_context(monkeypatch, _make_context(org_role=OrganizationRole.ADMIN))
 
     list_response = await client.get("/ui/api/mcp-servers")
@@ -1801,11 +2044,15 @@ async def test_scoped_org_admin_can_access_mcp_server_read_surfaces_and_health_c
 
 
 @pytest.mark.asyncio
-async def test_scoped_org_admin_can_create_org_owned_server_but_not_global_server(client, test_app, monkeypatch):
+async def test_scoped_org_admin_can_create_org_owned_server_but_not_global_server(
+    client, test_app, monkeypatch
+):
     repository = _FakeMCPRepository()
     test_app.state.mcp_repository = repository
     test_app.state.mcp_registry_service = _FakeMCPRegistryService(repository)
-    test_app.state.prisma_manager = type("PrismaManager", (), {"client": _FakeMCPScopeQueryClient()})()
+    test_app.state.prisma_manager = type(
+        "PrismaManager", (), {"client": _FakeMCPScopeQueryClient()}
+    )()
     _set_auth_context(monkeypatch, _make_context(org_role=OrganizationRole.ADMIN))
 
     create_owned = await client.post(
@@ -1833,7 +2080,9 @@ async def test_scoped_org_admin_can_create_org_owned_server_but_not_global_serve
 
 
 @pytest.mark.asyncio
-async def test_scoped_org_admin_can_update_owned_server_and_scope_global_server_bindings(client, test_app, monkeypatch):
+async def test_scoped_org_admin_can_update_owned_server_and_scope_global_server_bindings(
+    client, test_app, monkeypatch
+):
     repository = _FakeMCPRepository()
     owned_server = await repository.create_server(
         server_key="org-docs",
@@ -1870,7 +2119,9 @@ async def test_scoped_org_admin_can_update_owned_server_and_scope_global_server_
     test_app.state.mcp_repository = repository
     registry = _FakeMCPRegistryService(repository)
     test_app.state.mcp_registry_service = registry
-    test_app.state.prisma_manager = type("PrismaManager", (), {"client": _FakeMCPScopeQueryClient()})()
+    test_app.state.prisma_manager = type(
+        "PrismaManager", (), {"client": _FakeMCPScopeQueryClient()}
+    )()
     _set_auth_context(monkeypatch, _make_context(org_role=OrganizationRole.ADMIN))
 
     update_owned = await client.patch(
@@ -1938,8 +2189,12 @@ async def test_scoped_team_developer_cannot_run_mcp_health_check(client, test_ap
     test_app.state.mcp_repository = repository
     test_app.state.mcp_registry_service = _FakeMCPRegistryService(repository)
     test_app.state.mcp_transport_client = _FakeTransportClient()
-    test_app.state.mcp_health_probe = MCPHealthProbe(test_app.state.mcp_registry_service, test_app.state.mcp_transport_client)
-    test_app.state.prisma_manager = type("PrismaManager", (), {"client": _FakeScopedServerQueryClient()})()
+    test_app.state.mcp_health_probe = MCPHealthProbe(
+        test_app.state.mcp_registry_service, test_app.state.mcp_transport_client
+    )
+    test_app.state.prisma_manager = type(
+        "PrismaManager", (), {"client": _FakeScopedServerQueryClient()}
+    )()
     _set_auth_context(monkeypatch, _make_context(team_role=TeamRole.DEVELOPER))
 
     response = await client.post(f"/ui/api/mcp-servers/{server.mcp_server_id}/health-check")

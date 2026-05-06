@@ -260,6 +260,9 @@ Policy fields include:
 }
 ```
 
+`transport: "http"` is accepted as a compatibility alias and normalized to `streamable_http`.
+Streamable HTTP servers may return either JSON or `text/event-stream` JSON-RPC responses; DeltaLLM also reuses upstream `MCP-Session-Id` values when a server establishes a stateful session.
+
 ### Create a Binding
 
 ```json

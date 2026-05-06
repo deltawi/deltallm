@@ -9,7 +9,7 @@ from typing import Any
 from src.db.mcp import MCPApprovalRequestRecord, MCPRepository, MCPToolPolicyRecord
 from src.models.responses import UserAPIKeyAuth
 
-from .auth import build_forwarded_headers
+from .auth import build_effective_mcp_forwarded_headers
 from .metrics import record_mcp_approval_request
 from .models import MCPServerConfig
 
@@ -60,7 +60,9 @@ class MCPApprovalService:
         active = await self.repository.find_active_approval_request(request_fingerprint=fingerprint)
         if active is not None:
             if active.status == "pending":
-                record_mcp_approval_request(server_key=server.server_key, tool_name=tool_name, created=False)
+                record_mcp_approval_request(
+                    server_key=server.server_key, tool_name=tool_name, created=False
+                )
             return MCPApprovalAuthorization(status=active.status, approval_request=active)
         created = await self.repository.create_approval_request(
             server_id=server.server_id,
@@ -82,7 +84,9 @@ class MCPApprovalService:
             },
         )
         if created is not None:
-            record_mcp_approval_request(server_key=server.server_key, tool_name=tool_name, created=True)
+            record_mcp_approval_request(
+                server_key=server.server_key, tool_name=tool_name, created=True
+            )
             return MCPApprovalAuthorization(status=created.status, approval_request=created)
         return None
 
@@ -111,7 +115,7 @@ class MCPApprovalService:
             "scope_type": policy.scope_type,
             "scope_id": policy.scope_id,
             "api_key": getattr(auth, "api_key", None),
-            "forwarded_headers": build_forwarded_headers(
+            "forwarded_headers": build_effective_mcp_forwarded_headers(
                 request_headers=request_headers,
                 server_key=server.server_key,
                 allowlist=server.forwarded_headers_allowlist,
