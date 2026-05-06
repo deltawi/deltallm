@@ -9,13 +9,26 @@ from src.batch.models import (
     BATCH_JOB_STATUS_VALUES,
     BatchJobRecord,
     BatchJobStatus,
+    OPENAI_BATCH_COMPLETION_WINDOW,
     normalize_batch_job_status,
+    normalize_batch_completion_window,
 )
 
 
 def test_batch_job_status_values_follow_enum_definition() -> None:
     assert BATCH_JOB_STATUSES == tuple(BatchJobStatus)
     assert BATCH_JOB_STATUS_VALUES == tuple(status.value for status in BatchJobStatus)
+
+
+@pytest.mark.parametrize("completion_window", [None, "", "  ", "24h"])
+def test_normalize_batch_completion_window_defaults_to_openai_window(completion_window: object) -> None:
+    assert normalize_batch_completion_window(completion_window) == OPENAI_BATCH_COMPLETION_WINDOW
+
+
+@pytest.mark.parametrize("completion_window", ["12h", "24H", 24])
+def test_normalize_batch_completion_window_rejects_unsupported_values(completion_window: object) -> None:
+    with pytest.raises(ValueError):
+        normalize_batch_completion_window(completion_window)
 
 
 @pytest.mark.parametrize("status", ["queued", BatchJobStatus.QUEUED])

@@ -67,6 +67,8 @@ curl http://localhost:8000/v1/batches \
   }'
 ```
 
+DeltaLLM currently supports the OpenAI-compatible `24h` completion window. Missing or null values default to `24h`; other values are rejected.
+
 ### 4. Poll for completion
 
 ```bash
@@ -81,9 +83,18 @@ Watch the `status` field and `request_counts` to track progress:
   "id": "batch_xyz789",
   "object": "batch",
   "endpoint": "/v1/embeddings",
+  "completion_window": "24h",
   "status": "completed",
   "input_file_id": "file_abc123",
   "output_file_id": "file_out456",
+  "error_file_id": null,
+  "created_at": 1778064000,
+  "expires_at": 1780656000,
+  "in_progress_at": 1778064060,
+  "completed_at": 1778064300,
+  "failed_at": null,
+  "expired_at": null,
+  "errors": null,
   "request_counts": {
     "total": 3,
     "completed": 3,
@@ -177,7 +188,7 @@ queued --> in_progress --> finalizing --> completed
 | `cancelled` | Cancelled by the user or an admin; pending items are skipped |
 | `expired` | The batch exceeded its retention window |
 
-Public `/v1/batches` responses use OpenAI-compatible status values so OpenAI-compatible clients can parse them. Internal `queued` jobs are returned as `validating`, and an `in_progress` job with a pending cancel request is returned as `cancelling`. Other compatible statuses are returned unchanged.
+Public `/v1/batches` responses use OpenAI-compatible status values and response fields so OpenAI-compatible clients can parse them. Internal `queued` jobs are returned as `validating`, and an `in_progress` job with a pending cancel request is returned as `cancelling`. Other compatible statuses are returned unchanged. The public response also includes `completion_window`, `errors`, `expires_at`, `failed_at`, and `expired_at` fields.
 
 ## API Endpoints
 

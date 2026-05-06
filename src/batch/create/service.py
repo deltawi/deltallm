@@ -18,7 +18,7 @@ from src.batch.create.models import (
 from src.batch.create.promoter import BatchCreatePromotionError, BatchCreateSessionPromoter
 from src.batch.create.session_repository import BatchCreateSessionRepository
 from src.batch.create.session_stager import BatchCreateSessionStager
-from src.batch.models import BatchJobRecord
+from src.batch.models import BatchJobRecord, normalize_batch_completion_window
 from src.batch.repository import BatchRepository
 from src.batch.request_validation import parse_batch_input_line
 from src.batch.scopes import (
@@ -105,13 +105,13 @@ class BatchCreateSessionService:
         completion_window: str | None,
         idempotency_key: str | None = None,
     ) -> BatchCreateSessionServiceResult:
-        del completion_window
         endpoint = str(endpoint or "").strip()
         if endpoint not in SUPPORTED_BATCH_ENDPOINT_SET:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unsupported batch endpoint '{endpoint}'. Supported endpoints: {supported_batch_endpoints_display()}",
             )
+        self._validate_completion_window(completion_window)
 
         normalized_metadata = self._normalize_metadata(metadata)
         idem_scope_key, idem_key = self._idempotency_pair(auth=auth, idempotency_key=idempotency_key)
@@ -372,6 +372,12 @@ class BatchCreateSessionService:
                 detail=f"Storage backend '{normalized}' is unavailable; keep create-session artifact storage configured until sessions expire",
             )
         return storage
+
+    def _validate_completion_window(self, completion_window: object) -> None:
+        try:
+            normalize_batch_completion_window(completion_window)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     async def _iter_storage_lines(
         self,
