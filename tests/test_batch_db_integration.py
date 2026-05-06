@@ -652,7 +652,7 @@ async def test_db_backed_concurrent_batch_create_enforces_pending_cap(
     successes = [result for result in results if isinstance(result, dict)]
     failures = [result for result in results if isinstance(result, Exception)]
     assert len(successes) == 1
-    assert successes[0]["status"] == "queued"
+    assert successes[0]["status"] == "validating"
     assert len(failures) == 1
     assert isinstance(failures[0], HTTPException)
     assert failures[0].status_code == 429
@@ -798,7 +798,7 @@ async def test_db_backed_batch_create_cutover_returns_normal_batch_object_and_qu
     )
 
     assert result.response["id"]
-    assert result.response["status"] == "queued"
+    assert result.response["status"] == "validating"
     assert result.audit_metadata["create_path"] == "create_session"
     assert result.audit_metadata["idempotency_resolution"] == "not_requested"
 

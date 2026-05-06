@@ -7,7 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.batch.models import BatchFileRecord, BatchJobRecord, BatchJobStatus
-from src.batch.service import BatchService
+from src.batch.service import OPENAI_BATCH_STATUS_VALUES, BatchService
 from src.metrics.batch import deltallm_batch_artifact_failures_metric
 from src.db.callable_targets import CallableTargetBindingRecord
 from src.db.callable_target_policies import CallableTargetScopePolicyRecord
@@ -52,6 +52,79 @@ class _DummyStorage:
 
 def _metric_counter_value(metric, **labels) -> float:  # noqa: ANN001
     return float(metric.labels(**labels)._value.get())
+
+
+def _batch_job(
+    *,
+    status: BatchJobStatus = BatchJobStatus.QUEUED,
+    cancel_requested_at: datetime | None = None,
+) -> BatchJobRecord:
+    now = datetime.now(tz=UTC)
+    return BatchJobRecord(
+        batch_id="batch-1",
+        endpoint="/v1/embeddings",
+        status=status,
+        execution_mode="managed_internal",
+        input_file_id="file-1",
+        output_file_id=None,
+        error_file_id=None,
+        model="m1",
+        metadata={"region": "eu"},
+        provider_batch_id=None,
+        provider_status=None,
+        provider_error=None,
+        provider_last_sync_at=None,
+        total_items=2,
+        in_progress_items=0,
+        completed_items=0,
+        failed_items=0,
+        cancelled_items=0,
+        locked_by=None,
+        lease_expires_at=None,
+        cancel_requested_at=cancel_requested_at,
+        status_last_updated_at=now,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        created_at=now,
+        started_at=None,
+        completed_at=None,
+        expires_at=None,
+    )
+
+
+def test_job_to_response_maps_internal_queued_to_openai_validating_status() -> None:
+    response = _service().job_to_response(_batch_job(status=BatchJobStatus.QUEUED))
+
+    assert response["status"] == "validating"
+    assert response["status"] in OPENAI_BATCH_STATUS_VALUES
+
+
+def test_job_to_response_maps_cancel_requested_in_progress_to_openai_cancelling_status() -> None:
+    response = _service().job_to_response(
+        _batch_job(status=BatchJobStatus.IN_PROGRESS, cancel_requested_at=datetime.now(tz=UTC))
+    )
+
+    assert response["status"] == "cancelling"
+    assert response["status"] in OPENAI_BATCH_STATUS_VALUES
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        BatchJobStatus.IN_PROGRESS,
+        BatchJobStatus.FINALIZING,
+        BatchJobStatus.COMPLETED,
+        BatchJobStatus.FAILED,
+        BatchJobStatus.CANCELLED,
+        BatchJobStatus.EXPIRED,
+    ],
+)
+def test_job_to_response_preserves_openai_compatible_batch_statuses(status: BatchJobStatus) -> None:
+    response = _service().job_to_response(_batch_job(status=status))
+
+    assert response["status"] == status.value
+    assert response["status"] in OPENAI_BATCH_STATUS_VALUES
 
 
 class _FakeCallableTargetBindingRepository:

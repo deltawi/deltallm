@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator
 from fastapi import HTTPException, UploadFile, status
 
 from src.batch.access import can_access_owned_resource
-from src.batch.models import BatchItemCreate
+from src.batch.models import BatchItemCreate, BatchJobStatus
 from src.batch.request_validation import parse_batch_input_line
 from src.batch.repository import BatchRepository
 from src.batch.storage import BatchArtifactLineTooLongError, BatchArtifactStorage
@@ -24,6 +24,19 @@ if TYPE_CHECKING:
     from src.batch.create import BatchCreateSessionService
 
 logger = logging.getLogger(__name__)
+
+OPENAI_BATCH_STATUS_VALUES = frozenset(
+    {
+        "validating",
+        "failed",
+        "in_progress",
+        "finalizing",
+        "completed",
+        "expired",
+        "cancelling",
+        "cancelled",
+    }
+)
 
 
 @dataclass
@@ -383,7 +396,7 @@ class BatchService:
             "id": job.batch_id,
             "object": "batch",
             "endpoint": job.endpoint,
-            "status": job.status,
+            "status": self._public_batch_status(job),
             "input_file_id": job.input_file_id,
             "output_file_id": job.output_file_id,
             "error_file_id": job.error_file_id,
@@ -399,6 +412,17 @@ class BatchService:
             },
             "metadata": job.metadata or {},
         }
+
+    def _public_batch_status(self, job) -> str:
+        status_value = str(getattr(job, "status", "") or "")
+        if status_value == BatchJobStatus.QUEUED.value:
+            return "validating"
+        if (
+            status_value == BatchJobStatus.IN_PROGRESS.value
+            and getattr(job, "cancel_requested_at", None) is not None
+        ):
+            return "cancelling"
+        return status_value
 
     def _parse_input_jsonl(
         self,
