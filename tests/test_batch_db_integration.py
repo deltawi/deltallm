@@ -652,7 +652,7 @@ async def test_db_backed_concurrent_batch_create_enforces_pending_cap(
     successes = [result for result in results if isinstance(result, dict)]
     failures = [result for result in results if isinstance(result, Exception)]
     assert len(successes) == 1
-    assert successes[0]["status"] == "queued"
+    assert successes[0]["status"] == "validating"
     assert len(failures) == 1
     assert isinstance(failures[0], HTTPException)
     assert failures[0].status_code == 429
