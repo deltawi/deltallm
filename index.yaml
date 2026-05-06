@@ -2,8 +2,28 @@ apiVersion: v1
 entries:
   deltallm:
   - apiVersion: v2
+    appVersion: v0.1.24
+    created: "2026-05-06T07:17:54.27623078Z"
+    dependencies:
+    - condition: postgresql.enabled
+      name: postgresql
+      repository: https://charts.bitnami.com/bitnami
+      version: 16.x.x
+    - condition: redis.enabled
+      name: redis
+      repository: https://charts.bitnami.com/bitnami
+      version: 20.x.x
+    description: DeltaLLM - OpenAI-compatible LLM gateway
+    digest: 211ed862cfa6c19036e5c72a7e9c7be178c08e25c894d91a674dd29e51c8c584
+    kubeVersion: '>=1.24.0-0'
+    name: deltallm
+    type: application
+    urls:
+    - https://deltawi.github.io/deltallm/deltallm-0.1.24.tgz
+    version: 0.1.24
+  - apiVersion: v2
     appVersion: v0.1.23
-    created: "2026-04-25T07:59:13.670283872Z"
+    created: "2026-05-06T07:17:54.264474098Z"
     dependencies:
     - condition: postgresql.enabled
       name: postgresql
@@ -23,7 +43,7 @@ entries:
     version: 0.1.23
   - apiVersion: v2
     appVersion: v0.1.22
-    created: "2026-04-25T07:59:13.65268693Z"
+    created: "2026-05-06T07:17:54.252005315Z"
     dependencies:
     - condition: postgresql.enabled
       name: postgresql
@@ -43,7 +63,7 @@ entries:
     version: 0.1.22
   - apiVersion: v2
     appVersion: v0.1.21-rc2
-    created: "2026-04-25T07:59:13.636230424Z"
+    created: "2026-05-06T07:17:54.24069297Z"
     dependencies:
     - condition: postgresql.enabled
       name: postgresql
@@ -63,7 +83,7 @@ entries:
     version: 0.1.21-rc2
   - apiVersion: v2
     appVersion: v0.1.21-rc1
-    created: "2026-04-25T07:59:13.620753876Z"
+    created: "2026-05-06T07:17:54.227912022Z"
     dependencies:
     - condition: postgresql.enabled
       name: postgresql
@@ -83,7 +103,7 @@ entries:
     version: 0.1.21-rc1
   - apiVersion: v2
     appVersion: v0.1.20-rc3
-    created: "2026-04-25T07:59:13.608140064Z"
+    created: "2026-05-06T07:17:54.215996626Z"
     dependencies:
     - condition: postgresql.enabled
       name: postgresql
@@ -103,7 +123,7 @@ entries:
     version: 0.1.20-rc3
   - apiVersion: v2
     appVersion: v0.1.20-rc2
-    created: "2026-04-25T07:59:13.595285178Z"
+    created: "2026-05-06T07:17:54.202736532Z"
     dependencies:
     - condition: postgresql.enabled
       name: postgresql
@@ -123,7 +143,7 @@ entries:
     version: 0.1.20-rc2
   - apiVersion: v2
     appVersion: v0.1.20-rc1
-    created: "2026-04-25T07:59:13.583425017Z"
+    created: "2026-05-06T07:17:54.191430071Z"
     dependencies:
     - condition: postgresql.enabled
       name: postgresql
@@ -143,7 +163,7 @@ entries:
     version: 0.1.20-rc1
   - apiVersion: v2
     appVersion: v0.1.19
-    created: "2026-04-25T07:59:13.570219165Z"
+    created: "2026-05-06T07:17:54.179015368Z"
     dependencies:
     - condition: postgresql.enabled
       name: postgresql
@@ -163,7 +183,7 @@ entries:
     version: 0.1.19
   - apiVersion: v2
     appVersion: v0.1.18
-    created: "2026-04-25T07:59:13.557816672Z"
+    created: "2026-05-06T07:17:54.166432247Z"
     dependencies:
     - condition: postgresql.enabled
       name: postgresql
@@ -183,7 +203,7 @@ entries:
     version: 0.1.18
   - apiVersion: v2
     appVersion: v0.1.17
-    created: "2026-04-25T07:59:13.545780194Z"
+    created: "2026-05-06T07:17:54.1534073Z"
     dependencies:
     - condition: postgresql.enabled
       name: postgresql
@@ -203,7 +223,7 @@ entries:
     version: 0.1.17
   - apiVersion: v2
     appVersion: v0.1.15
-    created: "2026-04-25T07:59:13.533570744Z"
+    created: "2026-05-06T07:17:54.140896216Z"
     dependencies:
     - condition: postgresql.enabled
       name: postgresql
@@ -221,4 +241,4 @@ entries:
     urls:
     - https://deltawi.github.io/deltallm/deltallm-0.1.15.tgz
     version: 0.1.15
-generated: "2026-04-25T07:59:13.521413415Z"
+generated: "2026-05-06T07:17:54.127675408Z"
