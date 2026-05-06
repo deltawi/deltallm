@@ -155,7 +155,10 @@ DeltaLLM currently supports:
 
 - transport: `streamable_http`
 - request format: JSON-RPC `2.0`
-- response content type: JSON, not SSE event streams
+- response content type: JSON or `text/event-stream` for Streamable HTTP POST responses
+- stateful HTTP sessions through upstream `MCP-Session-Id` headers
+
+For compatibility with common client config names, the admin API also accepts `transport: "http"` and stores it as `streamable_http`.
 
 Supported upstream auth modes:
 

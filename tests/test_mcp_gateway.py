@@ -13,7 +13,12 @@ from src.db.mcp_scope_policies import MCPScopePolicyRecord
 from src.metrics import get_prometheus_registry
 from src.mcp.approvals import MCPApprovalService
 from src.mcp.capabilities import namespace_tools
-from src.mcp.exceptions import MCPApprovalDeniedError, MCPApprovalRequiredError, MCPRateLimitError, MCPToolTimeoutError
+from src.mcp.exceptions import (
+    MCPApprovalDeniedError,
+    MCPApprovalRequiredError,
+    MCPRateLimitError,
+    MCPToolTimeoutError,
+)
 from src.mcp.gateway import MCPGatewayService
 from src.mcp.governance import MCPGovernanceService
 from src.mcp.models import MCPToolCallResult, MCPToolSchema
@@ -56,7 +61,12 @@ def _server(
 
 
 class _FakeRegistry:
-    def __init__(self, servers: list[MCPServerRecord], bindings: list[MCPServerBindingRecord], policies: list[MCPToolPolicyRecord]) -> None:
+    def __init__(
+        self,
+        servers: list[MCPServerRecord],
+        bindings: list[MCPServerBindingRecord],
+        policies: list[MCPToolPolicyRecord],
+    ) -> None:
         self.servers = {server.mcp_server_id: server for server in servers}
         self.bindings = list(bindings)
         self.policies = list(policies)
@@ -65,7 +75,11 @@ class _FakeRegistry:
         items = list(self.servers.values())
         if search:
             query = str(search).lower()
-            items = [item for item in items if query in item.server_key.lower() or query in item.name.lower()]
+            items = [
+                item
+                for item in items
+                if query in item.server_key.lower() or query in item.name.lower()
+            ]
         if enabled is not None:
             items = [item for item in items if item.enabled is enabled]
         return items[offset : offset + limit], len(items)
@@ -75,11 +89,17 @@ class _FakeRegistry:
 
     async def list_effective_bindings(self, *, scopes):  # noqa: ANN001, ANN201
         scope_set = {(scope_type, scope_id) for scope_type, scope_id in scopes}
-        return [binding for binding in self.bindings if binding.enabled and (binding.scope_type, binding.scope_id) in scope_set]
+        return [
+            binding
+            for binding in self.bindings
+            if binding.enabled and (binding.scope_type, binding.scope_id) in scope_set
+        ]
 
     async def list_effective_tool_policies(self, *, scopes, server_id=None):  # noqa: ANN001, ANN201
         scope_set = {(scope_type, scope_id) for scope_type, scope_id in scopes}
-        policies = [policy for policy in self.policies if (policy.scope_type, policy.scope_id) in scope_set]
+        policies = [
+            policy for policy in self.policies if (policy.scope_type, policy.scope_id) in scope_set
+        ]
         if server_id:
             policies = [policy for policy in policies if policy.mcp_server_id == server_id]
         return policies
@@ -88,9 +108,15 @@ class _FakeRegistry:
         schemas = [
             MCPToolSchema(
                 name=str(item.get("name") or ""),
-                description=str(item.get("description")) if item.get("description") is not None else None,
-                input_schema=item.get("inputSchema") if isinstance(item.get("inputSchema"), dict) else {},
-                annotations=item.get("annotations") if isinstance(item.get("annotations"), dict) else {},
+                description=str(item.get("description"))
+                if item.get("description") is not None
+                else None,
+                input_schema=item.get("inputSchema")
+                if isinstance(item.get("inputSchema"), dict)
+                else {},
+                annotations=item.get("annotations")
+                if isinstance(item.get("annotations"), dict)
+                else {},
             )
             for item in (server.capabilities_json or {}).get("tools", [])
             if isinstance(item, dict)
@@ -117,7 +143,9 @@ class _FakeGovernanceRepository:
             items = [item for item in items if item.enabled is enabled]
         return items[offset : offset + limit], len(items)
 
-    async def list_bindings(self, *, server_id=None, scope_type=None, scope_id=None, enabled=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+    async def list_bindings(
+        self, *, server_id=None, scope_type=None, scope_id=None, enabled=None, limit=200, offset=0
+    ):  # noqa: ANN001, ANN201
         items = list(self.bindings)
         if server_id is not None:
             items = [item for item in items if item.mcp_server_id == server_id]
@@ -129,7 +157,9 @@ class _FakeGovernanceRepository:
             items = [item for item in items if item.enabled is enabled]
         return items[offset : offset + limit], len(items)
 
-    async def list_tool_policies(self, *, server_id=None, scope_type=None, scope_id=None, enabled=None, limit=200, offset=0):  # noqa: ANN001, ANN201
+    async def list_tool_policies(
+        self, *, server_id=None, scope_type=None, scope_id=None, enabled=None, limit=200, offset=0
+    ):  # noqa: ANN001, ANN201
         items = list(self.policies)
         if server_id is not None:
             items = [item for item in items if item.mcp_server_id == server_id]
@@ -158,7 +188,11 @@ class _FakeTransport:
         self.calls.append((server.server_key, tool_name, request_headers, arguments or {}))
         return MCPToolCallResult(
             content=[{"type": "text", "text": f"{server.server_key}:{tool_name}"}],
-            structured_content={"server": server.server_key, "tool": tool_name, "arguments": arguments or {}},
+            structured_content={
+                "server": server.server_key,
+                "tool": tool_name,
+                "arguments": arguments or {},
+            },
             is_error=False,
         )
 
@@ -179,7 +213,11 @@ class _FakeApprovalRepository:
         now = datetime.now(tz=UTC)
         updated = 0
         for record in self.records_by_fingerprint.get(request_fingerprint, []):
-            if record.status in {"pending", "approved", "rejected"} and record.expires_at is not None and record.expires_at <= now:
+            if (
+                record.status in {"pending", "approved", "rejected"}
+                and record.expires_at is not None
+                and record.expires_at <= now
+            ):
                 record.status = "expired"
                 updated += 1
         return updated
@@ -226,7 +264,11 @@ class _BlockingTransport(_FakeTransport):
         await self.release.wait()
         return MCPToolCallResult(
             content=[{"type": "text", "text": f"{server.server_key}:{tool_name}"}],
-            structured_content={"server": server.server_key, "tool": tool_name, "arguments": arguments or {}},
+            structured_content={
+                "server": server.server_key,
+                "tool": tool_name,
+                "arguments": arguments or {},
+            },
             is_error=False,
         )
 
@@ -241,7 +283,11 @@ class _SleepingTransport(_FakeTransport):
         await asyncio.sleep(self.delay_seconds)
         return MCPToolCallResult(
             content=[{"type": "text", "text": f"{server.server_key}:{tool_name}"}],
-            structured_content={"server": server.server_key, "tool": tool_name, "arguments": arguments or {}},
+            structured_content={
+                "server": server.server_key,
+                "tool": tool_name,
+                "arguments": arguments or {},
+            },
             is_error=False,
         )
 
@@ -258,17 +304,23 @@ async def test_mcp_gateway_initialize_and_tools_list(client, test_app):
     docs_server = _server(
         "srv-docs",
         "docs",
-        capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+        capabilities=[
+            MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})
+        ],
     )
     github_server = _server(
         "srv-github",
         "github",
-        capabilities=[MCPToolSchema(name="search", description="Search code", input_schema={"type": "object"})],
+        capabilities=[
+            MCPToolSchema(name="search", description="Search code", input_schema={"type": "object"})
+        ],
     )
     hidden_server = _server(
         "srv-hidden",
         "hidden",
-        capabilities=[MCPToolSchema(name="secret", description="Secret tool", input_schema={"type": "object"})],
+        capabilities=[
+            MCPToolSchema(name="secret", description="Secret tool", input_schema={"type": "object"})
+        ],
     )
     registry = _FakeRegistry(
         servers=[docs_server, github_server, hidden_server],
@@ -284,11 +336,19 @@ async def test_mcp_gateway_initialize_and_tools_list(client, test_app):
 
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
 
-    initialize = await client.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+    initialize = await client.post(
+        "/mcp",
+        headers=headers,
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+    )
     assert initialize.status_code == 200
     assert initialize.json()["result"]["serverInfo"]["name"] == "DeltaLLM MCP Gateway"
 
-    tool_list = await client.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+    tool_list = await client.post(
+        "/mcp",
+        headers=headers,
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+    )
     assert tool_list.status_code == 200
     names = [tool["name"] for tool in tool_list.json()["result"]["tools"]]
     assert names == ["docs.search", "github.search"]
@@ -307,10 +367,16 @@ async def test_mcp_gateway_tools_call_routes_to_namespaced_upstream_tool(client,
             _server(
                 "srv-docs",
                 "docs",
-                capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+                capabilities=[
+                    MCPToolSchema(
+                        name="search", description="Search docs", input_schema={"type": "object"}
+                    )
+                ],
             )
         ],
-        bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, ["search"])],
+        bindings=[
+            MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, ["search"])
+        ],
         policies=[],
     )
     transport = _FakeTransport()
@@ -351,24 +417,41 @@ async def test_mcp_gateway_denies_policy_disabled_tool(client, test_app):
             _server(
                 "srv-docs",
                 "docs",
-                capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+                capabilities=[
+                    MCPToolSchema(
+                        name="search", description="Search docs", input_schema={"type": "object"}
+                    )
+                ],
             )
         ],
         bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
-        policies=[MCPToolPolicyRecord("policy-1", "srv-docs", "search", "team", "team-ops", False, None, None, None, None)],
+        policies=[
+            MCPToolPolicyRecord(
+                "policy-1", "srv-docs", "search", "team", "team-ops", False, None, None, None, None
+            )
+        ],
     )
     transport = _FakeTransport()
     test_app.state.mcp_gateway_service = MCPGatewayService(registry, transport)  # type: ignore[arg-type]
 
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    tool_list = await client.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {}})
+    tool_list = await client.post(
+        "/mcp",
+        headers=headers,
+        json={"jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {}},
+    )
     assert tool_list.status_code == 200
     assert tool_list.json()["result"]["tools"] == []
 
     response = await client.post(
         "/mcp",
         headers=headers,
-        json={"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "docs.search", "arguments": {}}},
+        json={
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {"name": "docs.search", "arguments": {}},
+        },
     )
     assert response.status_code == 200
     assert response.json()["error"]["code"] == -32004
@@ -376,16 +459,31 @@ async def test_mcp_gateway_denies_policy_disabled_tool(client, test_app):
 
 @pytest.mark.asyncio
 async def test_gateway_service_enforces_policy_execution_timeout() -> None:
-    auth = type("Auth", (), {"api_key": "sk-test", "team_id": "team-ops", "organization_id": "org-acme", "metadata": {}})()
+    auth = type(
+        "Auth",
+        (),
+        {
+            "api_key": "sk-test",
+            "team_id": "team-ops",
+            "organization_id": "org-acme",
+            "metadata": {},
+        },
+    )()
     registry = _FakeRegistry(
         servers=[
             _server(
                 "srv-docs",
                 "docs",
-                capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+                capabilities=[
+                    MCPToolSchema(
+                        name="search", description="Search docs", input_schema={"type": "object"}
+                    )
+                ],
             )
         ],
-        bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, ["search"])],
+        bindings=[
+            MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, ["search"])
+        ],
         policies=[
             MCPToolPolicyRecord(
                 "policy-timeout",
@@ -401,7 +499,9 @@ async def test_gateway_service_enforces_policy_execution_timeout() -> None:
     gateway = MCPGatewayService(registry, _SleepingTransport(0.05))  # type: ignore[arg-type]
 
     with pytest.raises(MCPToolTimeoutError):
-        await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "delta"})
+        await gateway.call_tool(
+            auth, namespaced_tool_name="docs.search", arguments={"query": "delta"}
+        )
 
 
 @pytest.mark.asyncio
@@ -420,12 +520,22 @@ async def test_gateway_service_jwt_auth_does_not_use_pseudo_api_key_scope() -> N
             _server(
                 "srv-docs",
                 "docs",
-                capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+                capabilities=[
+                    MCPToolSchema(
+                        name="search", description="Search docs", input_schema={"type": "object"}
+                    )
+                ],
             ),
             _server(
                 "srv-team",
                 "teamdocs",
-                capabilities=[MCPToolSchema(name="search", description="Search team docs", input_schema={"type": "object"})],
+                capabilities=[
+                    MCPToolSchema(
+                        name="search",
+                        description="Search team docs",
+                        input_schema={"type": "object"},
+                    )
+                ],
             ),
         ],
         bindings=[
@@ -458,12 +568,24 @@ async def test_gateway_service_user_scope_affects_mcp_visibility_and_policy_reso
             _server(
                 "srv-user",
                 "userdocs",
-                capabilities=[MCPToolSchema(name="search", description="Search user docs", input_schema={"type": "object"})],
+                capabilities=[
+                    MCPToolSchema(
+                        name="search",
+                        description="Search user docs",
+                        input_schema={"type": "object"},
+                    )
+                ],
             ),
             _server(
                 "srv-team",
                 "teamdocs",
-                capabilities=[MCPToolSchema(name="search", description="Search team docs", input_schema={"type": "object"})],
+                capabilities=[
+                    MCPToolSchema(
+                        name="search",
+                        description="Search team docs",
+                        input_schema={"type": "object"},
+                    )
+                ],
             ),
         ],
         bindings=[
@@ -471,8 +593,32 @@ async def test_gateway_service_user_scope_affects_mcp_visibility_and_policy_reso
             MCPServerBindingRecord("bind-team", "srv-team", "team", "team-ops", True, None),
         ],
         policies=[
-            MCPToolPolicyRecord("policy-team", "srv-team", "search", "team", "team-ops", True, "never", None, None, None, None),
-            MCPToolPolicyRecord("policy-user", "srv-team", "search", "user", "user-1", False, "never", None, None, None, None),
+            MCPToolPolicyRecord(
+                "policy-team",
+                "srv-team",
+                "search",
+                "team",
+                "team-ops",
+                True,
+                "never",
+                None,
+                None,
+                None,
+                None,
+            ),
+            MCPToolPolicyRecord(
+                "policy-user",
+                "srv-team",
+                "search",
+                "user",
+                "user-1",
+                False,
+                "never",
+                None,
+                None,
+                None,
+                None,
+            ),
         ],
     )
 
@@ -483,7 +629,9 @@ async def test_gateway_service_user_scope_affects_mcp_visibility_and_policy_reso
 
 
 @pytest.mark.asyncio
-async def test_gateway_service_uses_governance_snapshot_instead_of_registry_binding_queries() -> None:
+async def test_gateway_service_uses_governance_snapshot_instead_of_registry_binding_queries() -> (
+    None
+):
     auth = annotate_auth_metadata(
         UserAPIKeyAuth(
             api_key="hashed-key",
@@ -497,14 +645,22 @@ async def test_gateway_service_uses_governance_snapshot_instead_of_registry_bind
         _server(
             "srv-docs",
             "docs",
-            capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+            capabilities=[
+                MCPToolSchema(
+                    name="search", description="Search docs", input_schema={"type": "object"}
+                )
+            ],
         )
     ]
     bindings = [
         MCPServerBindingRecord("bind-org", "srv-docs", "organization", "org-acme", True, None),
         MCPServerBindingRecord("bind-team", "srv-docs", "team", "team-ops", True, ["search"]),
     ]
-    policies = [MCPToolPolicyRecord("policy-team", "srv-docs", "search", "team", "team-ops", True, None, 1, None, None, None)]
+    policies = [
+        MCPToolPolicyRecord(
+            "policy-team", "srv-docs", "search", "team", "team-ops", True, None, 1, None, None, None
+        )
+    ]
     governance = MCPGovernanceService(_FakeGovernanceRepository(servers, bindings, policies))  # type: ignore[arg-type]
     await governance.reload()
 
@@ -530,7 +686,9 @@ async def test_gateway_service_uses_governance_snapshot_instead_of_registry_bind
 
     await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "hello"})
     with pytest.raises(MCPRateLimitError):
-        await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "again"})
+        await gateway.call_tool(
+            auth, namespaced_tool_name="docs.search", arguments={"query": "again"}
+        )
 
 
 @pytest.mark.asyncio
@@ -548,17 +706,27 @@ async def test_gateway_service_governance_respects_org_ceiling_and_team_restrict
         _server(
             "srv-docs",
             "docs",
-            capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+            capabilities=[
+                MCPToolSchema(
+                    name="search", description="Search docs", input_schema={"type": "object"}
+                )
+            ],
         ),
         _server(
             "srv-github",
             "github",
-            capabilities=[MCPToolSchema(name="search", description="Search code", input_schema={"type": "object"})],
+            capabilities=[
+                MCPToolSchema(
+                    name="search", description="Search code", input_schema={"type": "object"}
+                )
+            ],
         ),
     ]
     bindings = [
         MCPServerBindingRecord("bind-org-docs", "srv-docs", "organization", "org-acme", True, None),
-        MCPServerBindingRecord("bind-org-github", "srv-github", "organization", "org-acme", True, None),
+        MCPServerBindingRecord(
+            "bind-org-github", "srv-github", "organization", "org-acme", True, None
+        ),
         MCPServerBindingRecord("bind-team-docs", "srv-docs", "team", "team-ops", True, ["search"]),
     ]
     scope_policies = [
@@ -570,7 +738,9 @@ async def test_gateway_service_governance_respects_org_ceiling_and_team_restrict
         )
     ]
     governance_repository = _FakeGovernanceRepository(servers, bindings, [], scope_policies)
-    governance = MCPGovernanceService(governance_repository, policy_repository=governance_repository)  # type: ignore[arg-type]
+    governance = MCPGovernanceService(
+        governance_repository, policy_repository=governance_repository
+    )  # type: ignore[arg-type]
     await governance.reload()
 
     gateway = MCPGatewayService(
@@ -581,7 +751,9 @@ async def test_gateway_service_governance_respects_org_ceiling_and_team_restrict
 
     visible = await gateway.list_visible_servers(auth)
 
-    assert [(item.server.server_key, item.binding.scope_type, item.tool_names) for item in visible] == [
+    assert [
+        (item.server.server_key, item.binding.scope_type, item.tool_names) for item in visible
+    ] == [
         ("docs", "team", ("search",)),
     ]
 
@@ -599,7 +771,11 @@ async def test_mcp_gateway_emits_metrics(client, test_app):
             _server(
                 "srv-docs",
                 "docs",
-                capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+                capabilities=[
+                    MCPToolSchema(
+                        name="search", description="Search docs", input_schema={"type": "object"}
+                    )
+                ],
             )
         ],
         bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
@@ -609,19 +785,28 @@ async def test_mcp_gateway_emits_metrics(client, test_app):
     test_app.state.mcp_gateway_service = MCPGatewayService(registry, transport)  # type: ignore[arg-type]
 
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
-    list_response = await client.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "id": 6, "method": "tools/list", "params": {}})
+    list_response = await client.post(
+        "/mcp",
+        headers=headers,
+        json={"jsonrpc": "2.0", "id": 6, "method": "tools/list", "params": {}},
+    )
     assert list_response.status_code == 200
 
     call_response = await client.post(
         "/mcp",
         headers=headers,
-        json={"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "docs.search", "arguments": {"query": "hello"}}},
+        json={
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {"name": "docs.search", "arguments": {"query": "hello"}},
+        },
     )
     assert call_response.status_code == 200
 
     metrics_text = generate_latest(get_prometheus_registry()).decode("utf-8")
-    assert 'deltallm_mcp_tools_list_total' in metrics_text
-    assert 'deltallm_mcp_tool_call_total' in metrics_text
+    assert "deltallm_mcp_tools_list_total" in metrics_text
+    assert "deltallm_mcp_tool_call_total" in metrics_text
     assert 'server_key="docs"' in metrics_text
 
 
@@ -632,24 +817,50 @@ async def test_mcp_gateway_enforces_tool_rpm_limit() -> None:
             _server(
                 "srv-docs",
                 "docs",
-                capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+                capabilities=[
+                    MCPToolSchema(
+                        name="search", description="Search docs", input_schema={"type": "object"}
+                    )
+                ],
             )
         ],
         bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
-        policies=[MCPToolPolicyRecord("policy-1", "srv-docs", "search", "team", "team-ops", True, None, 1, None, None, None)],
+        policies=[
+            MCPToolPolicyRecord(
+                "policy-1",
+                "srv-docs",
+                "search",
+                "team",
+                "team-ops",
+                True,
+                None,
+                1,
+                None,
+                None,
+                None,
+            )
+        ],
     )
     gateway = MCPGatewayService(
         registry,
         _FakeTransport(),
         MCPToolPolicyEnforcer(LimitCounter(redis_client=None)),
     )  # type: ignore[arg-type]
-    auth = type("Auth", (), {"api_key": "sk-test", "team_id": "team-ops", "organization_id": None, "metadata": None})()
+    auth = type(
+        "Auth",
+        (),
+        {"api_key": "sk-test", "team_id": "team-ops", "organization_id": None, "metadata": None},
+    )()
 
-    first = await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "hello"})
+    first = await gateway.call_tool(
+        auth, namespaced_tool_name="docs.search", arguments={"query": "hello"}
+    )
     assert first.structured_content["tool"] == "search"
 
     with pytest.raises(MCPRateLimitError, match="Rate limit exceeded"):
-        await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "hello"})
+        await gateway.call_tool(
+            auth, namespaced_tool_name="docs.search", arguments={"query": "hello"}
+        )
 
 
 @pytest.mark.asyncio
@@ -660,12 +871,28 @@ async def test_mcp_gateway_enforces_tool_concurrency_limit() -> None:
             _server(
                 "srv-docs",
                 "docs",
-                capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+                capabilities=[
+                    MCPToolSchema(
+                        name="search", description="Search docs", input_schema={"type": "object"}
+                    )
+                ],
             )
         ],
         bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
         policies=[
-            MCPToolPolicyRecord("policy-1", "srv-docs", "search", "team", "team-ops", True, None, None, 1, None, None)
+            MCPToolPolicyRecord(
+                "policy-1",
+                "srv-docs",
+                "search",
+                "team",
+                "team-ops",
+                True,
+                None,
+                None,
+                1,
+                None,
+                None,
+            )
         ],
     )
     gateway = MCPGatewayService(
@@ -673,9 +900,15 @@ async def test_mcp_gateway_enforces_tool_concurrency_limit() -> None:
         transport,
         MCPToolPolicyEnforcer(LimitCounter(redis_client=None)),
     )  # type: ignore[arg-type]
-    auth = type("Auth", (), {"api_key": "sk-test", "team_id": "team-ops", "organization_id": None, "metadata": None})()
+    auth = type(
+        "Auth",
+        (),
+        {"api_key": "sk-test", "team_id": "team-ops", "organization_id": None, "metadata": None},
+    )()
 
-    first_task = asyncio.create_task(gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "a"}))
+    first_task = asyncio.create_task(
+        gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "a"})
+    )
     await transport.started.wait()
 
     with pytest.raises(MCPRateLimitError, match="Parallel request limit exceeded"):
@@ -693,13 +926,41 @@ async def test_mcp_gateway_uses_most_specific_policy() -> None:
             _server(
                 "srv-docs",
                 "docs",
-                capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+                capabilities=[
+                    MCPToolSchema(
+                        name="search", description="Search docs", input_schema={"type": "object"}
+                    )
+                ],
             )
         ],
         bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
         policies=[
-            MCPToolPolicyRecord("policy-org", "srv-docs", "search", "organization", "org-acme", True, None, 100, None, None, None),
-            MCPToolPolicyRecord("policy-team", "srv-docs", "search", "team", "team-ops", True, None, 1, None, None, None),
+            MCPToolPolicyRecord(
+                "policy-org",
+                "srv-docs",
+                "search",
+                "organization",
+                "org-acme",
+                True,
+                None,
+                100,
+                None,
+                None,
+                None,
+            ),
+            MCPToolPolicyRecord(
+                "policy-team",
+                "srv-docs",
+                "search",
+                "team",
+                "team-ops",
+                True,
+                None,
+                1,
+                None,
+                None,
+                None,
+            ),
         ],
     )
     gateway = MCPGatewayService(
@@ -707,11 +968,22 @@ async def test_mcp_gateway_uses_most_specific_policy() -> None:
         _FakeTransport(),
         MCPToolPolicyEnforcer(LimitCounter(redis_client=None)),
     )  # type: ignore[arg-type]
-    auth = type("Auth", (), {"api_key": "sk-test", "team_id": "team-ops", "organization_id": "org-acme", "metadata": None})()
+    auth = type(
+        "Auth",
+        (),
+        {
+            "api_key": "sk-test",
+            "team_id": "team-ops",
+            "organization_id": "org-acme",
+            "metadata": None,
+        },
+    )()
 
     await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "hello"})
     with pytest.raises(MCPRateLimitError):
-        await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "again"})
+        await gateway.call_tool(
+            auth, namespaced_tool_name="docs.search", arguments={"query": "again"}
+        )
 
 
 @pytest.mark.asyncio
@@ -722,12 +994,28 @@ async def test_mcp_gateway_caches_tool_result_when_policy_ttl_is_set() -> None:
             _server(
                 "srv-docs",
                 "docs",
-                capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+                capabilities=[
+                    MCPToolSchema(
+                        name="search", description="Search docs", input_schema={"type": "object"}
+                    )
+                ],
             )
         ],
         bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
         policies=[
-            MCPToolPolicyRecord("policy-1", "srv-docs", "search", "team", "team-ops", True, None, None, None, 60, None)
+            MCPToolPolicyRecord(
+                "policy-1",
+                "srv-docs",
+                "search",
+                "team",
+                "team-ops",
+                True,
+                None,
+                None,
+                None,
+                60,
+                None,
+            )
         ],
     )
     gateway = MCPGatewayService(
@@ -736,10 +1024,18 @@ async def test_mcp_gateway_caches_tool_result_when_policy_ttl_is_set() -> None:
         MCPToolPolicyEnforcer(LimitCounter(redis_client=None)),
         MCPToolResultCache(InMemoryBackend()),
     )  # type: ignore[arg-type]
-    auth = type("Auth", (), {"api_key": "sk-test", "team_id": "team-ops", "organization_id": None, "metadata": None})()
+    auth = type(
+        "Auth",
+        (),
+        {"api_key": "sk-test", "team_id": "team-ops", "organization_id": None, "metadata": None},
+    )()
 
-    first = await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "hello"})
-    second = await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "hello"})
+    first = await gateway.call_tool(
+        auth, namespaced_tool_name="docs.search", arguments={"query": "hello"}
+    )
+    second = await gateway.call_tool(
+        auth, namespaced_tool_name="docs.search", arguments={"query": "hello"}
+    )
 
     assert first.structured_content["tool"] == "search"
     assert second.structured_content["tool"] == "search"
@@ -754,13 +1050,29 @@ async def test_mcp_gateway_cache_key_includes_forwarded_headers() -> None:
             _server(
                 "srv-docs",
                 "docs",
-                capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+                capabilities=[
+                    MCPToolSchema(
+                        name="search", description="Search docs", input_schema={"type": "object"}
+                    )
+                ],
                 forwarded_headers_allowlist=["authorization"],
             )
         ],
         bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
         policies=[
-            MCPToolPolicyRecord("policy-1", "srv-docs", "search", "team", "team-ops", True, None, None, None, 60, None)
+            MCPToolPolicyRecord(
+                "policy-1",
+                "srv-docs",
+                "search",
+                "team",
+                "team-ops",
+                True,
+                None,
+                None,
+                None,
+                60,
+                None,
+            )
         ],
     )
     gateway = MCPGatewayService(
@@ -769,7 +1081,11 @@ async def test_mcp_gateway_cache_key_includes_forwarded_headers() -> None:
         MCPToolPolicyEnforcer(LimitCounter(redis_client=None)),
         MCPToolResultCache(InMemoryBackend()),
     )  # type: ignore[arg-type]
-    auth = type("Auth", (), {"api_key": "sk-test", "team_id": "team-ops", "organization_id": None, "metadata": None})()
+    auth = type(
+        "Auth",
+        (),
+        {"api_key": "sk-test", "team_id": "team-ops", "organization_id": None, "metadata": None},
+    )()
 
     await gateway.call_tool(
         auth,
@@ -788,18 +1104,113 @@ async def test_mcp_gateway_cache_key_includes_forwarded_headers() -> None:
 
 
 @pytest.mark.asyncio
+async def test_mcp_gateway_cache_key_ignores_protected_forwarded_mcp_headers() -> None:
+    transport = _FakeTransport()
+    registry = _FakeRegistry(
+        servers=[
+            _server(
+                "srv-docs",
+                "docs",
+                capabilities=[
+                    MCPToolSchema(
+                        name="search", description="Search docs", input_schema={"type": "object"}
+                    )
+                ],
+                forwarded_headers_allowlist=[
+                    "accept",
+                    "authorization",
+                    "content-type",
+                    "mcp-protocol-version",
+                    "mcp-session-id",
+                ],
+            )
+        ],
+        bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
+        policies=[
+            MCPToolPolicyRecord(
+                "policy-1",
+                "srv-docs",
+                "search",
+                "team",
+                "team-ops",
+                True,
+                None,
+                None,
+                None,
+                60,
+                None,
+            )
+        ],
+    )
+    gateway = MCPGatewayService(
+        registry,
+        transport,
+        MCPToolPolicyEnforcer(LimitCounter(redis_client=None)),
+        MCPToolResultCache(InMemoryBackend()),
+    )  # type: ignore[arg-type]
+    auth = type(
+        "Auth",
+        (),
+        {"api_key": "sk-test", "team_id": "team-ops", "organization_id": None, "metadata": None},
+    )()
+
+    await gateway.call_tool(
+        auth,
+        namespaced_tool_name="docs.search",
+        arguments={"query": "hello"},
+        request_headers={
+            "x-deltallm-mcp-docs-accept": "application/json",
+            "x-deltallm-mcp-docs-authorization": "Bearer same",
+            "x-deltallm-mcp-docs-content-type": "text/plain",
+            "x-deltallm-mcp-docs-mcp-protocol-version": "1900-01-01",
+            "x-deltallm-mcp-docs-mcp-session-id": "bad-session-1",
+        },
+    )
+    await gateway.call_tool(
+        auth,
+        namespaced_tool_name="docs.search",
+        arguments={"query": "hello"},
+        request_headers={
+            "x-deltallm-mcp-docs-accept": "text/event-stream",
+            "x-deltallm-mcp-docs-authorization": "Bearer same",
+            "x-deltallm-mcp-docs-content-type": "application/xml",
+            "x-deltallm-mcp-docs-mcp-protocol-version": "2000-01-01",
+            "x-deltallm-mcp-docs-mcp-session-id": "bad-session-2",
+        },
+    )
+
+    assert len(transport.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_mcp_gateway_manual_approval_creates_pending_request() -> None:
     registry = _FakeRegistry(
         servers=[
             _server(
                 "srv-docs",
                 "docs",
-                capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+                capabilities=[
+                    MCPToolSchema(
+                        name="search", description="Search docs", input_schema={"type": "object"}
+                    )
+                ],
             )
         ],
         bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
         policies=[
-            MCPToolPolicyRecord("policy-1", "srv-docs", "search", "team", "team-ops", True, "manual", None, None, None, None)
+            MCPToolPolicyRecord(
+                "policy-1",
+                "srv-docs",
+                "search",
+                "team",
+                "team-ops",
+                True,
+                "manual",
+                None,
+                None,
+                None,
+                None,
+            )
         ],
     )
     approval_repo = _FakeApprovalRepository()
@@ -809,7 +1220,11 @@ async def test_mcp_gateway_manual_approval_creates_pending_request() -> None:
         MCPToolPolicyEnforcer(LimitCounter(redis_client=None)),
         approval_service=MCPApprovalService(approval_repo),  # type: ignore[arg-type]
     )  # type: ignore[arg-type]
-    auth = type("Auth", (), {"api_key": "sk-test", "team_id": "team-ops", "organization_id": None, "metadata": None})()
+    auth = type(
+        "Auth",
+        (),
+        {"api_key": "sk-test", "team_id": "team-ops", "organization_id": None, "metadata": None},
+    )()
 
     with pytest.raises(MCPApprovalRequiredError) as exc:
         await gateway.call_tool(
@@ -827,18 +1242,180 @@ async def test_mcp_gateway_manual_approval_creates_pending_request() -> None:
 
 
 @pytest.mark.asyncio
+async def test_mcp_gateway_approval_fingerprint_ignores_protected_forwarded_mcp_headers() -> None:
+    registry = _FakeRegistry(
+        servers=[
+            _server(
+                "srv-docs",
+                "docs",
+                capabilities=[
+                    MCPToolSchema(
+                        name="search", description="Search docs", input_schema={"type": "object"}
+                    )
+                ],
+                forwarded_headers_allowlist=[
+                    "accept",
+                    "authorization",
+                    "content-type",
+                    "mcp-protocol-version",
+                    "mcp-session-id",
+                ],
+            )
+        ],
+        bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
+        policies=[
+            MCPToolPolicyRecord(
+                "policy-1",
+                "srv-docs",
+                "search",
+                "team",
+                "team-ops",
+                True,
+                "manual",
+                None,
+                None,
+                None,
+                None,
+            )
+        ],
+    )
+    approval_repo = _FakeApprovalRepository()
+    gateway = MCPGatewayService(
+        registry,
+        _FakeTransport(),
+        MCPToolPolicyEnforcer(LimitCounter(redis_client=None)),
+        approval_service=MCPApprovalService(approval_repo),  # type: ignore[arg-type]
+    )  # type: ignore[arg-type]
+    auth = type(
+        "Auth",
+        (),
+        {"api_key": "sk-test", "team_id": "team-ops", "organization_id": None, "metadata": None},
+    )()
+
+    with pytest.raises(MCPApprovalRequiredError):
+        await gateway.call_tool(
+            auth,
+            namespaced_tool_name="docs.search",
+            arguments={"query": "hello"},
+            request_headers={
+                "x-deltallm-mcp-docs-accept": "application/json",
+                "x-deltallm-mcp-docs-authorization": "Bearer same",
+                "x-deltallm-mcp-docs-content-type": "text/plain",
+                "x-deltallm-mcp-docs-mcp-protocol-version": "1900-01-01",
+                "x-deltallm-mcp-docs-mcp-session-id": "bad-session-1",
+            },
+        )
+    with pytest.raises(MCPApprovalRequiredError):
+        await gateway.call_tool(
+            auth,
+            namespaced_tool_name="docs.search",
+            arguments={"query": "hello"},
+            request_headers={
+                "x-deltallm-mcp-docs-accept": "text/event-stream",
+                "x-deltallm-mcp-docs-authorization": "Bearer same",
+                "x-deltallm-mcp-docs-content-type": "application/xml",
+                "x-deltallm-mcp-docs-mcp-protocol-version": "2000-01-01",
+                "x-deltallm-mcp-docs-mcp-session-id": "bad-session-2",
+            },
+        )
+
+    assert approval_repo.create_calls == 1
+    assert len(approval_repo.records_by_fingerprint) == 1
+
+
+@pytest.mark.asyncio
+async def test_mcp_gateway_approval_fingerprint_includes_effective_forwarded_headers() -> None:
+    registry = _FakeRegistry(
+        servers=[
+            _server(
+                "srv-docs",
+                "docs",
+                capabilities=[
+                    MCPToolSchema(
+                        name="search", description="Search docs", input_schema={"type": "object"}
+                    )
+                ],
+                forwarded_headers_allowlist=["authorization"],
+            )
+        ],
+        bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
+        policies=[
+            MCPToolPolicyRecord(
+                "policy-1",
+                "srv-docs",
+                "search",
+                "team",
+                "team-ops",
+                True,
+                "manual",
+                None,
+                None,
+                None,
+                None,
+            )
+        ],
+    )
+    approval_repo = _FakeApprovalRepository()
+    gateway = MCPGatewayService(
+        registry,
+        _FakeTransport(),
+        MCPToolPolicyEnforcer(LimitCounter(redis_client=None)),
+        approval_service=MCPApprovalService(approval_repo),  # type: ignore[arg-type]
+    )  # type: ignore[arg-type]
+    auth = type(
+        "Auth",
+        (),
+        {"api_key": "sk-test", "team_id": "team-ops", "organization_id": None, "metadata": None},
+    )()
+
+    with pytest.raises(MCPApprovalRequiredError):
+        await gateway.call_tool(
+            auth,
+            namespaced_tool_name="docs.search",
+            arguments={"query": "hello"},
+            request_headers={"x-deltallm-mcp-docs-authorization": "Bearer one"},
+        )
+    with pytest.raises(MCPApprovalRequiredError):
+        await gateway.call_tool(
+            auth,
+            namespaced_tool_name="docs.search",
+            arguments={"query": "hello"},
+            request_headers={"x-deltallm-mcp-docs-authorization": "Bearer two"},
+        )
+
+    assert approval_repo.create_calls == 2
+    assert len(approval_repo.records_by_fingerprint) == 2
+
+
+@pytest.mark.asyncio
 async def test_mcp_gateway_manual_approval_approved_retry_executes() -> None:
     registry = _FakeRegistry(
         servers=[
             _server(
                 "srv-docs",
                 "docs",
-                capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+                capabilities=[
+                    MCPToolSchema(
+                        name="search", description="Search docs", input_schema={"type": "object"}
+                    )
+                ],
             )
         ],
         bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
         policies=[
-            MCPToolPolicyRecord("policy-1", "srv-docs", "search", "team", "team-ops", True, "manual", None, None, None, None)
+            MCPToolPolicyRecord(
+                "policy-1",
+                "srv-docs",
+                "search",
+                "team",
+                "team-ops",
+                True,
+                "manual",
+                None,
+                None,
+                None,
+                None,
+            )
         ],
     )
     approval_repo = _FakeApprovalRepository()
@@ -850,16 +1427,31 @@ async def test_mcp_gateway_manual_approval_approved_retry_executes() -> None:
         MCPToolPolicyEnforcer(LimitCounter(redis_client=None)),
         approval_service=approval_service,  # type: ignore[arg-type]
     )  # type: ignore[arg-type]
-    auth = type("Auth", (), {"api_key": "sk-test", "team_id": "team-ops", "organization_id": "org-acme", "metadata": None})()
+    auth = type(
+        "Auth",
+        (),
+        {
+            "api_key": "sk-test",
+            "team_id": "team-ops",
+            "organization_id": "org-acme",
+            "metadata": None,
+        },
+    )()
 
     with pytest.raises(MCPApprovalRequiredError):
-        await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "hello"})
+        await gateway.call_tool(
+            auth, namespaced_tool_name="docs.search", arguments={"query": "hello"}
+        )
 
     fingerprint = next(iter(approval_repo.records_by_fingerprint))
     approval_repo.records_by_fingerprint[fingerprint][-1].status = "approved"
-    approval_repo.records_by_fingerprint[fingerprint][-1].expires_at = datetime.now(tz=UTC) + timedelta(minutes=5)
+    approval_repo.records_by_fingerprint[fingerprint][-1].expires_at = datetime.now(
+        tz=UTC
+    ) + timedelta(minutes=5)
 
-    result = await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "hello"})
+    result = await gateway.call_tool(
+        auth, namespaced_tool_name="docs.search", arguments={"query": "hello"}
+    )
 
     assert result.structured_content["tool"] == "search"
     assert transport.calls == [("docs", "search", None, {"query": "hello"})]
@@ -872,12 +1464,28 @@ async def test_mcp_gateway_manual_approval_rejected_retry_denies() -> None:
             _server(
                 "srv-docs",
                 "docs",
-                capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+                capabilities=[
+                    MCPToolSchema(
+                        name="search", description="Search docs", input_schema={"type": "object"}
+                    )
+                ],
             )
         ],
         bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
         policies=[
-            MCPToolPolicyRecord("policy-1", "srv-docs", "search", "team", "team-ops", True, "manual", None, None, None, None)
+            MCPToolPolicyRecord(
+                "policy-1",
+                "srv-docs",
+                "search",
+                "team",
+                "team-ops",
+                True,
+                "manual",
+                None,
+                None,
+                None,
+                None,
+            )
         ],
     )
     approval_repo = _FakeApprovalRepository()
@@ -887,17 +1495,32 @@ async def test_mcp_gateway_manual_approval_rejected_retry_denies() -> None:
         MCPToolPolicyEnforcer(LimitCounter(redis_client=None)),
         approval_service=MCPApprovalService(approval_repo),  # type: ignore[arg-type]
     )  # type: ignore[arg-type]
-    auth = type("Auth", (), {"api_key": "sk-test", "team_id": "team-ops", "organization_id": "org-acme", "metadata": None})()
+    auth = type(
+        "Auth",
+        (),
+        {
+            "api_key": "sk-test",
+            "team_id": "team-ops",
+            "organization_id": "org-acme",
+            "metadata": None,
+        },
+    )()
 
     with pytest.raises(MCPApprovalRequiredError):
-        await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "hello"})
+        await gateway.call_tool(
+            auth, namespaced_tool_name="docs.search", arguments={"query": "hello"}
+        )
 
     fingerprint = next(iter(approval_repo.records_by_fingerprint))
     approval_repo.records_by_fingerprint[fingerprint][-1].status = "rejected"
-    approval_repo.records_by_fingerprint[fingerprint][-1].expires_at = datetime.now(tz=UTC) + timedelta(minutes=5)
+    approval_repo.records_by_fingerprint[fingerprint][-1].expires_at = datetime.now(
+        tz=UTC
+    ) + timedelta(minutes=5)
 
     with pytest.raises(MCPApprovalDeniedError):
-        await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "hello"})
+        await gateway.call_tool(
+            auth, namespaced_tool_name="docs.search", arguments={"query": "hello"}
+        )
 
 
 @pytest.mark.asyncio
@@ -907,12 +1530,28 @@ async def test_mcp_gateway_manual_approval_expired_creates_new_request() -> None
             _server(
                 "srv-docs",
                 "docs",
-                capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+                capabilities=[
+                    MCPToolSchema(
+                        name="search", description="Search docs", input_schema={"type": "object"}
+                    )
+                ],
             )
         ],
         bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
         policies=[
-            MCPToolPolicyRecord("policy-1", "srv-docs", "search", "team", "team-ops", True, "manual", None, None, None, None)
+            MCPToolPolicyRecord(
+                "policy-1",
+                "srv-docs",
+                "search",
+                "team",
+                "team-ops",
+                True,
+                "manual",
+                None,
+                None,
+                None,
+                None,
+            )
         ],
     )
     approval_repo = _FakeApprovalRepository()
@@ -923,17 +1562,32 @@ async def test_mcp_gateway_manual_approval_expired_creates_new_request() -> None
         MCPToolPolicyEnforcer(LimitCounter(redis_client=None)),
         approval_service=approval_service,  # type: ignore[arg-type]
     )  # type: ignore[arg-type]
-    auth = type("Auth", (), {"api_key": "sk-test", "team_id": "team-ops", "organization_id": "org-acme", "metadata": None})()
+    auth = type(
+        "Auth",
+        (),
+        {
+            "api_key": "sk-test",
+            "team_id": "team-ops",
+            "organization_id": "org-acme",
+            "metadata": None,
+        },
+    )()
 
     with pytest.raises(MCPApprovalRequiredError):
-        await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "hello"})
+        await gateway.call_tool(
+            auth, namespaced_tool_name="docs.search", arguments={"query": "hello"}
+        )
 
     fingerprint = next(iter(approval_repo.records_by_fingerprint))
     approval_repo.records_by_fingerprint[fingerprint][-1].status = "expired"
-    approval_repo.records_by_fingerprint[fingerprint][-1].expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+    approval_repo.records_by_fingerprint[fingerprint][-1].expires_at = datetime.now(
+        tz=UTC
+    ) - timedelta(seconds=1)
 
     with pytest.raises(MCPApprovalRequiredError) as exc:
-        await gateway.call_tool(auth, namespaced_tool_name="docs.search", arguments={"query": "hello"})
+        await gateway.call_tool(
+            auth, namespaced_tool_name="docs.search", arguments={"query": "hello"}
+        )
 
     assert exc.value.approval_request_id == "approval-2"
     assert approval_repo.create_calls == 2
@@ -952,12 +1606,28 @@ async def test_mcp_jsonrpc_manual_approval_returns_request_id(client, test_app):
             _server(
                 "srv-docs",
                 "docs",
-                capabilities=[MCPToolSchema(name="search", description="Search docs", input_schema={"type": "object"})],
+                capabilities=[
+                    MCPToolSchema(
+                        name="search", description="Search docs", input_schema={"type": "object"}
+                    )
+                ],
             )
         ],
         bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
         policies=[
-            MCPToolPolicyRecord("policy-1", "srv-docs", "search", "team", "team-ops", True, "manual", None, None, None, None)
+            MCPToolPolicyRecord(
+                "policy-1",
+                "srv-docs",
+                "search",
+                "team",
+                "team-ops",
+                True,
+                "manual",
+                None,
+                None,
+                None,
+                None,
+            )
         ],
     )
     test_app.state.mcp_gateway_service = MCPGatewayService(
