@@ -131,6 +131,7 @@ class ModelHotReloadManager:
         if not self._has_runtime_changes(changes):
             return
 
+        await self._invalidate_route_group_cache()
         await self._apply_runtime_config(new_config)
 
     async def _apply_runtime_config(self, app_config: AppConfig) -> None:

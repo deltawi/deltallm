@@ -121,11 +121,29 @@ class InMemoryModelRepository:
 
 
 class FakeRouteGroupCache:
-    def __init__(self) -> None:
+    def __init__(self, stale_groups: list[dict[str, Any]] | None = None) -> None:
         self.invalidate_calls = 0
+        self.get_calls = 0
+        self.stale_groups = stale_groups
 
     async def invalidate(self) -> None:
         self.invalidate_calls += 1
+
+    async def get_groups(self, repository: Any) -> tuple[list[dict[str, Any]], str]:
+        self.get_calls += 1
+        if self.invalidate_calls == 0 and self.stale_groups is not None:
+            return self.stale_groups, "l1_cache"
+        return await repository.list_runtime_groups(), "db"
+
+
+class FakeRouteGroupRepository:
+    def __init__(self, groups: list[dict[str, Any]]) -> None:
+        self.groups = groups
+        self.calls = 0
+
+    async def list_runtime_groups(self) -> list[dict[str, Any]]:
+        self.calls += 1
+        return self.groups
 
 
 @pytest.mark.asyncio
@@ -524,6 +542,115 @@ async def test_model_hot_reload_manager_reloads_runtime_on_model_updated_event()
 
     assert "gpt-4.1-mini" in app.state.model_registry
     assert app.state.router.deployment_registry["gpt-4.1-mini"][0].deployment_id == "new-dep"
+
+    await dynamic.close()
+
+
+@pytest.mark.asyncio
+async def test_model_hot_reload_manager_invalidates_route_group_l1_cache_on_model_updated_event():
+    settings = SimpleNamespace(
+        openai_api_key="provider-key",
+        openai_base_url="https://api.openai.com/v1",
+        salt_key="test-salt",
+    )
+    initial_model_registry = {
+        "gpt-4o-mini": [
+            {
+                "deployment_id": "dep-a",
+                "deltallm_params": {"model": "openai/gpt-4o-mini", "api_key": "provider-key"},
+                "model_info": {},
+            }
+        ]
+    }
+    deployment_registry = build_deployment_registry(initial_model_registry)
+    state_backend = RedisStateBackend(None)
+    router = Router(
+        strategy=RoutingStrategy.SIMPLE_SHUFFLE,
+        state_backend=state_backend,
+        config=RouterConfig(),
+        deployment_registry=deployment_registry,
+    )
+    cooldown_manager = CooldownManager(state_backend=state_backend)
+    failover_manager = FailoverManager(
+        config=FallbackConfig(),
+        deployment_registry=deployment_registry,
+        state_backend=state_backend,
+        cooldown_manager=cooldown_manager,
+    )
+    health_handler = HealthEndpointHandler(deployment_registry=deployment_registry, state_backend=state_backend)
+    health_checker = BackgroundHealthChecker(
+        config=HealthCheckConfig(enabled=False),
+        deployment_registry=deployment_registry,
+        state_backend=state_backend,
+        checker=lambda _: asyncio.sleep(0, result=True),
+    )
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            settings=settings,
+            app_config=AppConfig.model_validate({}),
+            model_registry=initial_model_registry,
+            router=router,
+            failover_manager=failover_manager,
+            router_health_handler=health_handler,
+            background_health_checker=health_checker,
+            cooldown_manager=cooldown_manager,
+            guardrail_registry=SimpleNamespace(load_from_config=lambda _: None),
+            callback_manager=SimpleNamespace(load_from_settings=lambda **_: None),
+            turn_off_message_logging=False,
+        )
+    )
+    redis = FakeRedis()
+    dynamic = DynamicConfigManager(db_client=FakeDB(), redis_client=redis, file_config={})
+    await dynamic.initialize()
+    model_repo = InMemoryModelRepository(
+        records=[
+            ModelDeploymentRecord(
+                deployment_id="dep-a",
+                model_name="gpt-4o-mini",
+                deltallm_params={"model": "openai/gpt-4o-mini"},
+                model_info={},
+            )
+        ]
+    )
+    route_group_repo = FakeRouteGroupRepository(
+        groups=[
+            {
+                "key": "support-route",
+                "enabled": True,
+                "members": [{"deployment_id": "dep-a", "enabled": True}],
+            }
+        ]
+    )
+    route_group_cache = FakeRouteGroupCache(
+        stale_groups=[
+            {
+                "key": "support-route",
+                "enabled": True,
+                "members": [],
+            }
+        ]
+    )
+    ModelHotReloadManager(
+        app=app,
+        dynamic_config=dynamic,
+        model_repository=model_repo,
+        route_group_repository=route_group_repo,
+        route_group_cache=route_group_cache,
+    )
+
+    await redis.pubsub_obj.queue.put(
+        {
+            "type": "message",
+            "data": json.dumps({"type": "model_updated"}),
+        }
+    )
+    await asyncio.sleep(0.05)
+
+    assert route_group_cache.invalidate_calls == 1
+    assert route_group_repo.calls == 1
+    assert app.state.route_groups[0]["members"][0]["deployment_id"] == "dep-a"
+    assert app.state.router.deployment_registry["support-route"][0].deployment_id == "dep-a"
+    assert app.state.callable_target_catalog["support-route"].target_type == "route_group"
 
     await dynamic.close()
 
