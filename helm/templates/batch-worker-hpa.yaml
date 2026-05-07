@@ -1,0 +1,28 @@
+{{- if and .Values.batchWorker.enabled .Values.batchWorker.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "deltallm.batchWorkerFullname" . }}
+  labels:
+    {{- include "deltallm.batchWorkerLabels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "deltallm.batchWorkerFullname" . }}
+  minReplicas: {{ .Values.batchWorker.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.batchWorker.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.batchWorker.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.batchWorker.autoscaling.targetMemoryUtilizationPercentage }}
+{{- end }}
