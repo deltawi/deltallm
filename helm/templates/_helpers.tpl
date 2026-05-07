@@ -31,6 +31,30 @@ app.kubernetes.io/name: {{ include "deltallm.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
+{{- define "deltallm.batchWorkerName" -}}
+{{- $base := include "deltallm.name" . | trunc 50 | trimSuffix "-" -}}
+{{- printf "%s-batch-worker" $base -}}
+{{- end -}}
+
+{{- define "deltallm.batchWorkerFullname" -}}
+{{- $base := include "deltallm.fullname" . | trunc 50 | trimSuffix "-" -}}
+{{- printf "%s-batch-worker" $base -}}
+{{- end -}}
+
+{{- define "deltallm.batchWorkerSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "deltallm.batchWorkerName" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: batch-worker
+{{- end -}}
+
+{{- define "deltallm.batchWorkerLabels" -}}
+helm.sh/chart: {{ include "deltallm.chart" . }}
+{{ include "deltallm.batchWorkerSelectorLabels" . }}
+app.kubernetes.io/part-of: {{ include "deltallm.name" . }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end -}}
+
 {{- define "deltallm.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
 {{- default (include "deltallm.fullname" .) .Values.serviceAccount.name -}}

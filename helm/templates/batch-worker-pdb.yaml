@@ -1,0 +1,13 @@
+{{- if and .Values.batchWorker.enabled .Values.batchWorker.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "deltallm.batchWorkerFullname" . }}
+  labels:
+    {{- include "deltallm.batchWorkerLabels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.batchWorker.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "deltallm.batchWorkerSelectorLabels" . | nindent 6 }}
+{{- end }}

@@ -99,6 +99,7 @@ general_settings:
   sso_state_ttl_seconds: 600
   embeddings_batch_enabled: false
   embeddings_batch_worker_enabled: true
+  embeddings_batch_completion_outbox_worker_enabled: true
   embeddings_batch_storage_backend: local
   embeddings_batch_storage_dir: .deltallm/batch-artifacts
   embeddings_batch_create_session_cleanup_enabled: true
@@ -301,6 +302,7 @@ These settings retain the historical `embeddings_batch_*` names for compatibilit
 |---------|---------|-------------|
 | `embeddings_batch_enabled` | `false` | Enable `/v1/files` and `/v1/batches` endpoints |
 | `embeddings_batch_worker_enabled` | `true` | Run internal batch executor worker loop |
+| `embeddings_batch_completion_outbox_worker_enabled` | `true` | Run the batch completion outbox worker loop that finalizes item accounting and spend records |
 | `embeddings_batch_storage_backend` | `local` | Artifact storage backend. Use `s3` for multi-replica production deployments |
 | `embeddings_batch_storage_dir` | `.deltallm/batch-artifacts` | Local artifact storage base directory |
 | `embeddings_batch_create_session_cleanup_enabled` | `true` | Enable cleanup for internal staged batch-create artifacts |

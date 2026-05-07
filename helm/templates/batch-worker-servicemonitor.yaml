@@ -1,0 +1,32 @@
+{{- if and .Values.batchWorker.enabled .Values.batchWorker.service.enabled .Values.prometheus.serviceMonitor.enabled .Values.batchWorker.serviceMonitor.enabled }}
+{{- $monitorNamespace := default .Values.prometheus.serviceMonitor.namespace .Values.batchWorker.serviceMonitor.namespace -}}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "deltallm.batchWorkerFullname" . }}
+  labels:
+    {{- include "deltallm.batchWorkerLabels" . | nindent 4 }}
+    {{- with .Values.prometheus.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.batchWorker.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- if $monitorNamespace }}
+  namespace: {{ $monitorNamespace }}
+  {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "deltallm.batchWorkerSelectorLabels" . | nindent 6 }}
+  {{- if and $monitorNamespace (ne $monitorNamespace .Release.Namespace) }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  {{- end }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ default .Values.prometheus.serviceMonitor.interval .Values.batchWorker.serviceMonitor.interval }}
+      scrapeTimeout: {{ default .Values.prometheus.serviceMonitor.scrapeTimeout .Values.batchWorker.serviceMonitor.scrapeTimeout }}
+{{- end }}

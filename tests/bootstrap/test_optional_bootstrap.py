@@ -29,6 +29,7 @@ def _batch_config(
     enabled: bool,
     worker_enabled: bool,
     gc_enabled: bool,
+    completion_outbox_worker_enabled: bool = True,
     create_session_cleanup_enabled: bool = False,
     storage_backend: str = "local",
     s3_bucket: str | None = None,
@@ -37,6 +38,7 @@ def _batch_config(
         general_settings=SimpleNamespace(
             embeddings_batch_enabled=enabled,
             embeddings_batch_worker_enabled=worker_enabled,
+            embeddings_batch_completion_outbox_worker_enabled=completion_outbox_worker_enabled,
             embeddings_batch_gc_enabled=gc_enabled,
             embeddings_batch_storage_backend=storage_backend,
             embeddings_batch_storage_dir="/tmp/batch-artifacts",
@@ -378,6 +380,70 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
     assert created["worker"].stopped is True
     assert created["completion_outbox_worker"].stopped is True
     assert created["gc_worker"].stopped is True
+
+
+@pytest.mark.asyncio
+async def test_init_batch_runtime_can_disable_completion_outbox_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeBatchService:
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            del args, kwargs
+
+        def bind_create_session_service(self, create_session_service) -> None:  # noqa: ANN001
+            del create_session_service
+
+    class FakeStagingBackend:
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            del args, kwargs
+
+    class FakePromoter:
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            del args, kwargs
+
+    class FakeCreateSessionAdminService:
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            del args, kwargs
+
+    def _unexpected_outbox_worker(*args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        del args, kwargs
+        raise AssertionError("completion outbox worker should not start")
+
+    monkeypatch.setattr("src.bootstrap.batch.LocalBatchArtifactStorage", lambda path: {"path": path})
+    monkeypatch.setattr("src.bootstrap.batch.BatchService", FakeBatchService)
+    monkeypatch.setattr("src.bootstrap.batch.BatchCompletionOutboxWorker", _unexpected_outbox_worker)
+    monkeypatch.setattr("src.bootstrap.batch.BatchCreateArtifactStorageBackend", FakeStagingBackend)
+    monkeypatch.setattr("src.bootstrap.batch.BatchCreateSessionPromoter", FakePromoter)
+    monkeypatch.setattr("src.bootstrap.batch.BatchCreateSessionAdminService", FakeCreateSessionAdminService)
+
+    app = SimpleNamespace(state=SimpleNamespace())
+    repository = SimpleNamespace(create_sessions=_FakeCreateSessionRepository())
+
+    runtime = await init_batch_runtime(
+        app,
+        _batch_config(
+            enabled=True,
+            worker_enabled=False,
+            gc_enabled=False,
+            completion_outbox_worker_enabled=False,
+        ),
+        repository=repository,
+    )
+
+    assert runtime.worker is None
+    assert runtime.worker_task is None
+    assert runtime.completion_outbox_worker is None
+    assert runtime.completion_outbox_task is None
+    assert runtime.statuses == (
+        BootstrapStatus("embeddings_batch", "ready"),
+        BootstrapStatus("embeddings_batch_worker", "disabled"),
+        BootstrapStatus("embeddings_batch_completion_outbox", "disabled"),
+        BootstrapStatus("embeddings_batch_gc", "disabled"),
+        BootstrapStatus("embeddings_batch_create_session_admin", "ready"),
+        BootstrapStatus("embeddings_batch_create_session_cleanup", "disabled"),
+    )
+
+    await shutdown_batch_runtime(runtime)
 
 
 @pytest.mark.asyncio

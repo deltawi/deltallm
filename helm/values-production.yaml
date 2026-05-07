@@ -46,6 +46,28 @@ prometheus:
     interval: 15s
     scrapeTimeout: 10s
 
+batchWorker:
+  # Enable this when production batch processing is required. Keep API pods
+  # worker-free so UI/gateway traffic can scale independently from batch load.
+  enabled: false
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
 config:
   general_settings:
     cache_backend: redis

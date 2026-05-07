@@ -337,6 +337,7 @@ class GeneralSettings(BaseModel):
     model_deployment_bootstrap_from_config: bool = True
     embeddings_batch_enabled: bool = False
     embeddings_batch_worker_enabled: bool = True
+    embeddings_batch_completion_outbox_worker_enabled: bool = True
     embeddings_batch_storage_backend: Literal["local", "s3"] = "local"
     embeddings_batch_storage_dir: str = ".deltallm/batch-artifacts"
     embeddings_batch_s3_bucket: str | None = None

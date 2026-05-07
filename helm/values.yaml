@@ -100,6 +100,64 @@ envFrom: []
 extraVolumes: []
 extraVolumeMounts: []
 
+api:
+  # Per-role config overrides for the API/UI/gateway Deployment.
+  # When batchWorker.enabled=true, Helm automatically disables batch
+  # background loops for API pods unless explicitly overridden here.
+  config: {}
+
+batchWorker:
+  enabled: false
+  # Local batch artifact storage is unsafe when API and worker run in separate pods.
+  # Set only for single-node/dev split-mode experiments.
+  allowUnsafeLocalStorage: false
+  replicaCount: 1
+  podAnnotations: {}
+  podLabels: {}
+  priorityClassName: ""
+  command: []
+  args: []
+  env: []
+  envFrom: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  service:
+    enabled: true
+    type: ClusterIP
+    port: 4000
+    annotations: {}
+    labels: {}
+  serviceMonitor:
+    enabled: true
+    namespace: ""
+    interval: ""
+    scrapeTimeout: ""
+    labels: {}
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  # Per-role config overrides for the batch worker Deployment.
+  # Shared config.general_settings is used first, then worker-safe defaults
+  # are filled for missing keys, then this map is applied last.
+  config: {}
+
 dependencyWait:
   enabled: true
   timeoutSeconds: 180
@@ -169,9 +227,12 @@ config:
     # If embeddings_batch_enabled is true and replicaCount > 1, configure
     # embeddings_batch_storage_backend: s3 so every pod can read/write artifacts.
     embeddings_batch_enabled: false
+    embeddings_batch_worker_enabled: true
+    embeddings_batch_completion_outbox_worker_enabled: true
     embeddings_batch_storage_backend: local
     embeddings_batch_storage_dir: .deltallm/batch-artifacts
     embeddings_batch_create_session_cleanup_enabled: true
+    embeddings_batch_gc_enabled: true
 
 s3:
   enabled: false

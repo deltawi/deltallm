@@ -13,6 +13,8 @@ The rewritten chart supports three concrete deployment shapes:
 - standard production with external PostgreSQL and Redis
 - high-availability production with multiple replicas, HPA, PDB, topology spread, ingress, and monitoring
 
+Production batch workloads can additionally split batch workers into a dedicated Deployment so UI/API/gateway pods do not execute batch work.
+
 ## Prerequisites
 
 - Kubernetes 1.24+
@@ -296,7 +298,46 @@ envFrom:
       name: deltallm-runtime-secrets
 ```
 
-### 3. Provider credentials and platform settings
+### 3. Split batch workers from API/UI pods
+
+For production batch workloads, keep the API/UI/gateway Deployment latency-focused and run batch execution in a dedicated worker Deployment. The chart uses the same image for both roles, but renders separate ConfigMaps so each role can run different `general_settings`.
+
+```yaml
+config:
+  general_settings:
+    embeddings_batch_enabled: true
+    embeddings_batch_storage_backend: s3
+    embeddings_batch_s3_bucket: deltallm-batch-artifacts
+    embeddings_batch_s3_region: us-east-1
+
+batchWorker:
+  enabled: true
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  config:
+    general_settings:
+      embeddings_batch_worker_concurrency: 2
+      embeddings_batch_item_claim_limit: 10
+```
+
+When `batchWorker.enabled=true`, the chart automatically disables batch executor, completion outbox, and cleanup loops in the API ConfigMap and enables them in the worker ConfigMap. `config` remains the shared base config, `api.config` overrides only API/UI/gateway pods, and `batchWorker.config` overrides only worker pods.
+
+The Service keeps the legacy API selector for upgrade safety. Worker pods use a distinct `app.kubernetes.io/name`, so they are not routed by the public Service. When `prometheus.serviceMonitor.enabled=true`, split mode also renders a worker-only metrics Service and ServiceMonitor so API and worker metrics can be scraped separately.
+
+Shared mode is acceptable for evaluation and small single-replica deployments. For platform workloads that serve UI navigation, synchronous gateway traffic, and batches at the same time, split mode gives each workload its own scaling envelope:
+
+- shared mode upper bound: `api replicas * embeddings_batch_worker_concurrency`
+- split mode upper bound: `batchWorker replicas * embeddings_batch_worker_concurrency`
+
+Use S3 batch artifact storage for split mode. The chart rejects enabled batching with local artifact storage in split mode because API pods and worker pods cannot safely share local files. For single-node development only, set `batchWorker.allowUnsafeLocalStorage=true` to bypass the guard.
+
+### 4. Provider credentials and platform settings
 
 Use `env` and `envFrom` directly:
 
@@ -312,7 +353,7 @@ env:
 
 This covers provider API keys, bootstrap admin credentials, SSO client credentials, JWT settings, and any other runtime env.
 
-### 4. Model deployment lifecycle
+### 5. Model deployment lifecycle
 
 DeltaLLM stores model deployments in the database at runtime. On first install you can seed them from `config.model_list` using the bootstrap mechanism.
 

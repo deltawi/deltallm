@@ -272,6 +272,7 @@ The batch worker runs as a background loop that claims jobs and executes items.
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `embeddings_batch_worker_enabled` | `true` | Run the batch worker in this instance |
+| `embeddings_batch_completion_outbox_worker_enabled` | `true` | Run the completion outbox worker in this instance |
 | `embeddings_batch_poll_interval_seconds` | `1.0` | How often the worker checks for new work when idle |
 | `embeddings_batch_worker_concurrency` | `4` | Maximum concurrent item executions per worker iteration |
 | `embeddings_batch_item_claim_limit` | `20` | Maximum items claimed per worker iteration |
@@ -309,6 +310,8 @@ Completed batches and their artifacts are automatically cleaned up by a backgrou
 | `embeddings_batch_gc_interval_seconds` | `86400` | How often the cleanup loop runs (default: daily) |
 | `embeddings_batch_gc_scan_limit` | `200` | Maximum expired items processed per cleanup pass |
 | `embeddings_batch_create_session_cleanup_enabled` | `true` | Enable cleanup for internal staged batch-create artifacts |
+
+In Kubernetes production deployments, prefer a split worker deployment over running these worker loops inside every API/UI pod. In shared mode, upper-bound executor pressure is roughly `api replicas * embeddings_batch_worker_concurrency`. In split mode, it becomes `batchWorker replicas * embeddings_batch_worker_concurrency`, so gateway and UI traffic can scale independently from batch throughput.
 
 For the full settings reference, see [Configuration > General](../configuration/general.md#batch-settings).
 

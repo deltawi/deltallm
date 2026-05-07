@@ -271,22 +271,23 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         )
         runtime.worker_task = create_task(runtime.worker.run())
 
-    runtime.completion_outbox_worker = BatchCompletionOutboxWorker(
-        app=app,
-        repository=repository,
-        config=BatchCompletionOutboxWorkerConfig(
-            worker_id=_batch_worker_id("batch-completion-outbox"),
-            poll_interval_seconds=cfg.general_settings.embeddings_batch_poll_interval_seconds,
-            max_batch_size=max(10, int(cfg.general_settings.embeddings_batch_item_claim_limit or 20)),
-            max_concurrency=min(8, max(1, int(cfg.general_settings.embeddings_batch_worker_concurrency or 4))),
-            lease_seconds=max(15, int(cfg.general_settings.embeddings_batch_item_lease_seconds or 60)),
-            heartbeat_interval_seconds=max(
-                1.0,
-                float(cfg.general_settings.embeddings_batch_heartbeat_interval_seconds or 10.0),
+    if cfg.general_settings.embeddings_batch_completion_outbox_worker_enabled:
+        runtime.completion_outbox_worker = BatchCompletionOutboxWorker(
+            app=app,
+            repository=repository,
+            config=BatchCompletionOutboxWorkerConfig(
+                worker_id=_batch_worker_id("batch-completion-outbox"),
+                poll_interval_seconds=cfg.general_settings.embeddings_batch_poll_interval_seconds,
+                max_batch_size=max(10, int(cfg.general_settings.embeddings_batch_item_claim_limit or 20)),
+                max_concurrency=min(8, max(1, int(cfg.general_settings.embeddings_batch_worker_concurrency or 4))),
+                lease_seconds=max(15, int(cfg.general_settings.embeddings_batch_item_lease_seconds or 60)),
+                heartbeat_interval_seconds=max(
+                    1.0,
+                    float(cfg.general_settings.embeddings_batch_heartbeat_interval_seconds or 10.0),
+                ),
             ),
-        ),
-    )
-    runtime.completion_outbox_task = create_task(runtime.completion_outbox_worker.run())
+        )
+        runtime.completion_outbox_task = create_task(runtime.completion_outbox_worker.run())
 
     if cfg.general_settings.embeddings_batch_gc_enabled:
         runtime.gc_worker = BatchRetentionCleanupWorker(
