@@ -25,17 +25,17 @@ ADD COLUMN "last_scheduled_at" TIMESTAMP(3);
 -- Existing rows are backfilled in bounded batches by BatchMaintenanceRepository.
 -- Keeping this migration additive avoids long table rewrites on gateway databases.
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "deltallm_batch_job_sched_model_status_idx"
+CREATE INDEX IF NOT EXISTS "deltallm_batch_job_sched_model_status_idx"
 ON "deltallm_batch_job"("status", "scheduling_model_group", "service_tier", "queue_entered_at");
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "deltallm_batch_job_sched_tenant_status_idx"
+CREATE INDEX IF NOT EXISTS "deltallm_batch_job_sched_tenant_status_idx"
 ON "deltallm_batch_job"("status", "tenant_scope_type", "tenant_scope_id", "queue_entered_at");
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "deltallm_batch_job_sched_size_status_idx"
+CREATE INDEX IF NOT EXISTS "deltallm_batch_job_sched_size_status_idx"
 ON "deltallm_batch_job"("status", "size_class", "queue_entered_at");
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "deltallm_batch_item_sched_batch_status_idx"
+CREATE INDEX IF NOT EXISTS "deltallm_batch_item_sched_batch_status_idx"
 ON "deltallm_batch_item"("batch_id", "status", "not_before_at", "line_number");
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "deltallm_batch_item_sched_model_status_idx"
+CREATE INDEX IF NOT EXISTS "deltallm_batch_item_sched_model_status_idx"
 ON "deltallm_batch_item"("scheduling_model_group", "status", "not_before_at");
