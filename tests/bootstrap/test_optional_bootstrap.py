@@ -31,6 +31,7 @@ def _batch_config(
     gc_enabled: bool,
     completion_outbox_worker_enabled: bool = True,
     create_session_cleanup_enabled: bool = False,
+    scheduler_backfill_enabled: bool = False,
     storage_backend: str = "local",
     s3_bucket: str | None = None,
 ) -> SimpleNamespace:
@@ -88,6 +89,13 @@ def _batch_config(
             embeddings_batch_model_group_backpressure_enabled=True,
             embeddings_batch_model_group_backpressure_min_seconds=5,
             embeddings_batch_model_group_backpressure_max_seconds=300,
+            embeddings_batch_scheduler_enabled=False,
+            embeddings_batch_scheduler_shadow_enabled=False,
+            embeddings_batch_scheduler_strict_model_homogeneity_enabled=False,
+            embeddings_batch_scheduler_default_service_tier="standard",
+            embeddings_batch_scheduler_backfill_enabled=scheduler_backfill_enabled,
+            embeddings_batch_scheduler_backfill_interval_seconds=60.0,
+            embeddings_batch_scheduler_backfill_scan_limit=500,
             batch_completed_artifact_retention_days=7,
             batch_failed_artifact_retention_days=2,
             embeddings_batch_gc_interval_seconds=60,
@@ -199,6 +207,7 @@ async def test_init_batch_runtime_disabled_sets_batch_state_to_none() -> None:
     assert app.state.batch_create_session_service is None
     assert app.state.batch_create_session_admin_service is None
     assert app.state.batch_create_session_cleanup_worker is None
+    assert app.state.batch_scheduler_backfill_worker is None
     assert app.state.batch_backpressure is None
     assert runtime.worker is None
     assert runtime.gc_worker is None
@@ -222,7 +231,9 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
             max_line_bytes=1_048_576,  # noqa: ANN001
             callable_target_grant_service=None,  # noqa: ANN001
             callable_target_scope_policy_mode="enforce",  # noqa: ANN001
+            model_group_resolver=None,  # noqa: ANN001
         ) -> None:
+            del model_group_resolver
             self.repository = repository
             self.storage = storage
             self.storage_registry = storage_registry
@@ -271,6 +282,20 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
         def stop(self) -> None:
             self.stopped = True
 
+    class FakeSchedulerBackfillWorker:
+        def __init__(self, repository, config=None) -> None:  # noqa: ANN001
+            self.repository = repository
+            self.config = config
+            self.stopped = False
+            created["scheduler_backfill_worker"] = self
+
+        async def run(self) -> None:
+            while not self.stopped:
+                await asyncio.sleep(0.01)
+
+        def stop(self) -> None:
+            self.stopped = True
+
     class FakeStagingBackend:
         def __init__(self, *, storage, storage_registry=None, stage_purpose="batch-create-stage", chunk_size=65_536, max_line_bytes=1_048_576) -> None:  # noqa: ANN001,E501
             self.storage = storage
@@ -281,7 +306,8 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
             created["staging_backend"] = self
 
     class FakePromoter:
-        def __init__(self, *, repository, staging, metadata_retention_days, max_pending_batches_per_scope, insert_chunk_size, soft_precheck_enabled, tx_max_wait_seconds, tx_timeout_seconds) -> None:  # noqa: ANN001,E501
+        def __init__(self, *, repository, staging, metadata_retention_days, max_pending_batches_per_scope, insert_chunk_size, soft_precheck_enabled, tx_max_wait_seconds, tx_timeout_seconds, **kwargs) -> None:  # noqa: ANN001,E501
+            del kwargs
             self.repository = repository
             self.staging = staging
             self.metadata_retention_days = metadata_retention_days
@@ -319,6 +345,7 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
     monkeypatch.setattr("src.bootstrap.batch.BatchExecutorWorker", FakeBatchWorker)
     monkeypatch.setattr("src.bootstrap.batch.BatchCompletionOutboxWorker", FakeCompletionOutboxWorker)
     monkeypatch.setattr("src.bootstrap.batch.BatchRetentionCleanupWorker", FakeGCWorker)
+    monkeypatch.setattr("src.bootstrap.batch.BatchSchedulerBackfillWorker", FakeSchedulerBackfillWorker)
     monkeypatch.setattr("src.bootstrap.batch.BatchCreateArtifactStorageBackend", FakeStagingBackend)
     monkeypatch.setattr("src.bootstrap.batch.BatchCreateSessionPromoter", FakePromoter)
     monkeypatch.setattr("src.bootstrap.batch.BatchCreateSessionAdminService", FakeCreateSessionAdminService)
@@ -329,7 +356,12 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
 
     runtime = await init_batch_runtime(
         app,
-        _batch_config(enabled=True, worker_enabled=True, gc_enabled=True),
+        _batch_config(
+            enabled=True,
+            worker_enabled=True,
+            gc_enabled=True,
+            scheduler_backfill_enabled=True,
+        ),
         repository=repository,
     )
 
@@ -355,12 +387,18 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
     assert runtime.completion_outbox_task is not None
     assert runtime.gc_worker is created["gc_worker"]
     assert runtime.gc_task is not None
+    assert runtime.scheduler_backfill_worker is created["scheduler_backfill_worker"]
+    assert runtime.scheduler_backfill_task is not None
     assert runtime.create_session_staging_backend is created["staging_backend"]
     assert runtime.create_session_promoter is created["promoter"]
     assert runtime.create_session_admin_service is created["admin_service"]
     assert runtime.create_session_cleanup_worker is None
     assert runtime.create_session_cleanup_task is None
     assert created["gc_worker"].storage_registry == {"local": {"path": "/tmp/batch-artifacts"}}
+    assert app.state.batch_scheduler_backfill_worker is created["scheduler_backfill_worker"]
+    assert created["scheduler_backfill_worker"].repository is repository
+    assert created["scheduler_backfill_worker"].config.interval_seconds == 60.0
+    assert created["scheduler_backfill_worker"].config.scan_limit == 500
     assert created["worker"].config.worker_concurrency == 4
     assert created["worker"].config.item_buffer_multiplier == 2
     assert created["worker"].config.finalization_page_size == 500
@@ -371,6 +409,7 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
         BootstrapStatus("embeddings_batch_worker", "ready"),
         BootstrapStatus("embeddings_batch_completion_outbox", "ready"),
         BootstrapStatus("embeddings_batch_gc", "ready"),
+        BootstrapStatus("embeddings_batch_scheduler_backfill", "ready"),
         BootstrapStatus("embeddings_batch_create_session_admin", "ready"),
         BootstrapStatus("embeddings_batch_create_session_cleanup", "disabled"),
     )
@@ -380,6 +419,7 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
     assert created["worker"].stopped is True
     assert created["completion_outbox_worker"].stopped is True
     assert created["gc_worker"].stopped is True
+    assert created["scheduler_backfill_worker"].stopped is True
 
 
 @pytest.mark.asyncio
@@ -439,6 +479,7 @@ async def test_init_batch_runtime_can_disable_completion_outbox_worker(
         BootstrapStatus("embeddings_batch_worker", "disabled"),
         BootstrapStatus("embeddings_batch_completion_outbox", "disabled"),
         BootstrapStatus("embeddings_batch_gc", "disabled"),
+        BootstrapStatus("embeddings_batch_scheduler_backfill", "disabled"),
         BootstrapStatus("embeddings_batch_create_session_admin", "ready"),
         BootstrapStatus("embeddings_batch_create_session_cleanup", "disabled"),
     )
@@ -481,7 +522,8 @@ async def test_init_and_shutdown_batch_runtime_with_create_session_cleanup_worke
             created["staging_backend"] = self
 
     class FakePromoter:
-        def __init__(self, *, repository, staging, metadata_retention_days, max_pending_batches_per_scope, insert_chunk_size, soft_precheck_enabled, tx_max_wait_seconds, tx_timeout_seconds) -> None:  # noqa: ANN001,E501
+        def __init__(self, *, repository, staging, metadata_retention_days, max_pending_batches_per_scope, insert_chunk_size, soft_precheck_enabled, tx_max_wait_seconds, tx_timeout_seconds, **kwargs) -> None:  # noqa: ANN001,E501
+            del kwargs
             self.repository = repository
             self.staging = staging
             self.metadata_retention_days = metadata_retention_days
@@ -574,6 +616,7 @@ async def test_init_and_shutdown_batch_runtime_with_create_session_cleanup_worke
         BootstrapStatus("embeddings_batch_worker", "disabled"),
         BootstrapStatus("embeddings_batch_completion_outbox", "ready"),
         BootstrapStatus("embeddings_batch_gc", "disabled"),
+        BootstrapStatus("embeddings_batch_scheduler_backfill", "disabled"),
         BootstrapStatus("embeddings_batch_create_session_admin", "ready"),
         BootstrapStatus("embeddings_batch_create_session_cleanup", "ready"),
     )
@@ -618,7 +661,8 @@ async def test_init_batch_runtime_builds_create_session_public_service(
             created["staging_backend"] = self
 
     class FakePromoter:
-        def __init__(self, *, repository, staging, metadata_retention_days, max_pending_batches_per_scope, insert_chunk_size, soft_precheck_enabled, tx_max_wait_seconds, tx_timeout_seconds) -> None:  # noqa: ANN001,E501
+        def __init__(self, *, repository, staging, metadata_retention_days, max_pending_batches_per_scope, insert_chunk_size, soft_precheck_enabled, tx_max_wait_seconds, tx_timeout_seconds, **kwargs) -> None:  # noqa: ANN001,E501
+            del kwargs
             self.repository = repository
             self.staging = staging
             self.metadata_retention_days = metadata_retention_days
@@ -690,6 +734,7 @@ async def test_init_batch_runtime_builds_create_session_public_service(
         BootstrapStatus("embeddings_batch_worker", "disabled"),
         BootstrapStatus("embeddings_batch_completion_outbox", "ready"),
         BootstrapStatus("embeddings_batch_gc", "disabled"),
+        BootstrapStatus("embeddings_batch_scheduler_backfill", "disabled"),
         BootstrapStatus("embeddings_batch_create_session_admin", "ready"),
         BootstrapStatus("embeddings_batch_create_session_cleanup", "disabled"),
     )
@@ -714,7 +759,9 @@ async def test_init_batch_runtime_selects_s3_storage(monkeypatch: pytest.MonkeyP
             max_line_bytes=1_048_576,
             callable_target_grant_service=None,
             callable_target_scope_policy_mode="enforce",
+            model_group_resolver=None,
         ) -> None:  # noqa: ANN001
+            del model_group_resolver
             del metadata_retention_days, storage_chunk_size, max_file_bytes
             del max_items_per_batch, max_line_bytes
             del callable_target_grant_service, callable_target_scope_policy_mode

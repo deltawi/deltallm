@@ -10,7 +10,13 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
-from src.batch import BatchCleanupConfig, BatchRetentionCleanupWorker, BatchRepository
+from src.batch import (
+    BatchCleanupConfig,
+    BatchRetentionCleanupWorker,
+    BatchRepository,
+    BatchSchedulerBackfillConfig,
+    BatchSchedulerBackfillWorker,
+)
 from src.batch.backpressure import BatchBackpressureCoordinator
 from src.batch.create.admin_service import BatchCreateSessionAdminService
 from src.batch.create.cleanup import BatchCreateSessionCleanupConfig, BatchCreateSessionCleanupWorker
@@ -69,6 +75,8 @@ class BatchRuntime:
     create_session_admin_service: BatchCreateSessionAdminService | None = None
     create_session_cleanup_worker: BatchCreateSessionCleanupWorker | None = None
     create_session_cleanup_task: Task[None] | None = None
+    scheduler_backfill_worker: BatchSchedulerBackfillWorker | None = None
+    scheduler_backfill_task: Task[None] | None = None
     statuses: tuple[BootstrapStatus, ...] = ()
 
 
@@ -169,6 +177,7 @@ def _build_create_session_promoter(
     *,
     repository: BatchRepository,
     staging_backend: BatchCreateArtifactStorageBackend,
+    model_group_resolver: Any | None = None,
 ) -> BatchCreateSessionPromoter:
     general = cfg.general_settings
     return BatchCreateSessionPromoter(
@@ -180,6 +189,15 @@ def _build_create_session_promoter(
         soft_precheck_enabled=general.embeddings_batch_create_soft_precheck_enabled,
         tx_max_wait_seconds=general.embeddings_batch_create_promotion_tx_max_wait_seconds,
         tx_timeout_seconds=general.embeddings_batch_create_promotion_tx_timeout_seconds,
+        model_group_resolver=model_group_resolver,
+        scheduler_enabled=getattr(general, "embeddings_batch_scheduler_enabled", False),
+        scheduler_shadow_enabled=getattr(general, "embeddings_batch_scheduler_shadow_enabled", False),
+        strict_model_homogeneity_enabled=getattr(
+            general,
+            "embeddings_batch_scheduler_strict_model_homogeneity_enabled",
+            False,
+        ),
+        default_service_tier=getattr(general, "embeddings_batch_scheduler_default_service_tier", "standard"),
     )
 
 
@@ -196,6 +214,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         app.state.batch_create_session_service = None
         app.state.batch_create_session_admin_service = None
         app.state.batch_create_session_cleanup_worker = None
+        app.state.batch_scheduler_backfill_worker = None
         app.state.batch_backpressure = None
         runtime.statuses = (BootstrapStatus("embeddings_batch", "disabled"),)
         return runtime
@@ -210,6 +229,11 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
     app.state.batch_create_session_service = None
     app.state.batch_create_session_admin_service = None
     app.state.batch_create_session_cleanup_worker = None
+    app.state.batch_scheduler_backfill_worker = None
+    model_group_resolver = getattr(app.state, "router", None)
+    set_repository_resolver = getattr(repository, "set_model_group_resolver", None)
+    if callable(set_repository_resolver):
+        set_repository_resolver(model_group_resolver)
     runtime.backpressure = BatchBackpressureCoordinator(
         redis_client=getattr(app.state, "redis", None),
         enabled=cfg.general_settings.embeddings_batch_model_group_backpressure_enabled,
@@ -230,6 +254,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         callable_target_scope_policy_mode=normalize_callable_target_policy_mode(
             getattr(cfg.general_settings, "callable_target_scope_policy_mode", "enforce")
         ),
+        model_group_resolver=model_group_resolver,
     )
 
     session_repository = app.state.batch_create_session_repository
@@ -301,6 +326,25 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         )
         runtime.gc_task = create_task(runtime.gc_worker.run())
 
+    if getattr(cfg.general_settings, "embeddings_batch_scheduler_backfill_enabled", False):
+        runtime.scheduler_backfill_worker = BatchSchedulerBackfillWorker(
+            repository=repository,
+            config=BatchSchedulerBackfillConfig(
+                interval_seconds=getattr(
+                    cfg.general_settings,
+                    "embeddings_batch_scheduler_backfill_interval_seconds",
+                    60.0,
+                ),
+                scan_limit=getattr(
+                    cfg.general_settings,
+                    "embeddings_batch_scheduler_backfill_scan_limit",
+                    500,
+                ),
+            ),
+        )
+        app.state.batch_scheduler_backfill_worker = runtime.scheduler_backfill_worker
+        runtime.scheduler_backfill_task = create_task(runtime.scheduler_backfill_worker.run())
+
     runtime.create_session_staging_backend = _build_create_session_staging_backend(
         cfg,
         storage=batch_storage,
@@ -311,6 +355,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         cfg,
         repository=repository,
         staging_backend=runtime.create_session_staging_backend,
+        model_group_resolver=model_group_resolver,
     )
     app.state.batch_create_promoter = runtime.create_session_promoter
     runtime.create_session_admin_service = BatchCreateSessionAdminService(
@@ -339,6 +384,15 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
             getattr(cfg.general_settings, "callable_target_scope_policy_mode", "enforce")
         ),
         idempotency_enabled=cfg.general_settings.embeddings_batch_create_idempotency_enabled,
+        model_group_resolver=model_group_resolver,
+        scheduler_enabled=getattr(cfg.general_settings, "embeddings_batch_scheduler_enabled", False),
+        scheduler_shadow_enabled=getattr(cfg.general_settings, "embeddings_batch_scheduler_shadow_enabled", False),
+        strict_model_homogeneity_enabled=getattr(
+            cfg.general_settings,
+            "embeddings_batch_scheduler_strict_model_homogeneity_enabled",
+            False,
+        ),
+        default_service_tier=getattr(cfg.general_settings, "embeddings_batch_scheduler_default_service_tier", "standard"),
     )
     app.state.batch_service.bind_create_session_service(app.state.batch_create_session_service)
 
@@ -357,6 +411,10 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         BootstrapStatus("embeddings_batch_worker", "ready" if runtime.worker is not None else "disabled"),
         BootstrapStatus("embeddings_batch_completion_outbox", "ready" if runtime.completion_outbox_worker is not None else "disabled"),
         BootstrapStatus("embeddings_batch_gc", "ready" if runtime.gc_worker is not None else "disabled"),
+        BootstrapStatus(
+            "embeddings_batch_scheduler_backfill",
+            "ready" if runtime.scheduler_backfill_worker is not None else "disabled",
+        ),
         BootstrapStatus(
             "embeddings_batch_create_session_admin",
             "ready" if runtime.create_session_admin_service is not None else "disabled",
@@ -424,6 +482,15 @@ async def shutdown_batch_runtime(runtime: BatchRuntime) -> None:
         await _drain_worker_task(
             runtime.gc_task,
             label="batch gc worker",
+            timeout=5.0,
+        )
+
+    if runtime.scheduler_backfill_worker is not None:
+        runtime.scheduler_backfill_worker.stop()
+    if runtime.scheduler_backfill_task is not None:
+        await _drain_worker_task(
+            runtime.scheduler_backfill_task,
+            label="batch scheduler backfill worker",
             timeout=5.0,
         )
 

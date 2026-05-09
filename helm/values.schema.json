@@ -237,7 +237,18 @@
             "upstream_http_pool_timeout_seconds": { "type": "number", "exclusiveMinimum": 0 },
             "upstream_http_max_connections": { "type": "integer", "minimum": 1 },
             "upstream_http_max_keepalive_connections": { "type": "integer", "minimum": 0 },
-            "upstream_http_keepalive_expiry_seconds": { "type": "number", "minimum": 0 }
+            "upstream_http_keepalive_expiry_seconds": { "type": "number", "minimum": 0 },
+            "embeddings_batch_scheduler_enabled": { "type": "boolean", "const": false },
+            "embeddings_batch_scheduler_shadow_enabled": { "type": "boolean" },
+            "embeddings_batch_scheduler_strict_model_homogeneity_enabled": { "type": "boolean" },
+            "embeddings_batch_scheduler_default_service_tier": { "type": "string" },
+            "embeddings_batch_scheduler_estimator_version": {
+              "type": "string",
+              "enum": ["v1"]
+            },
+            "embeddings_batch_scheduler_backfill_enabled": { "type": "boolean" },
+            "embeddings_batch_scheduler_backfill_interval_seconds": { "type": "number", "exclusiveMinimum": 0 },
+            "embeddings_batch_scheduler_backfill_scan_limit": { "type": "integer", "minimum": 1, "maximum": 5000 }
           }
         }
       }

@@ -21,6 +21,7 @@ from src.batch.create.session_stager import BatchCreateSessionStager
 from src.batch.models import BatchJobRecord, normalize_batch_completion_window
 from src.batch.repository import BatchRepository
 from src.batch.request_validation import parse_batch_input_line
+from src.batch.scheduling import estimate_request_work_units, resolve_model_group
 from src.batch.scopes import (
     batch_idempotency_scope_key,
     batch_pending_scope_key_for_auth,
@@ -30,7 +31,7 @@ from src.batch.storage import BatchArtifactLineTooLongError, BatchArtifactStorag
 from src.models.responses import UserAPIKeyAuth
 from src.services.callable_target_grants import CallableTargetGrantService
 from src.services.model_visibility import CallableTargetPolicyMode, ensure_batch_model_allowed
-from src.metrics import increment_batch_artifact_failure
+from src.metrics import increment_batch_artifact_failure, increment_batch_mixed_model_job
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,11 @@ class BatchCreateSessionService:
         callable_target_grant_service: CallableTargetGrantService | None = None,
         callable_target_scope_policy_mode: CallableTargetPolicyMode | str = "enforce",
         idempotency_enabled: bool = False,
+        model_group_resolver: Any | None = None,
+        scheduler_enabled: bool = False,
+        scheduler_shadow_enabled: bool = False,
+        strict_model_homogeneity_enabled: bool = False,
+        default_service_tier: str = "standard",
     ) -> None:
         self.repository = repository
         self.create_sessions = create_session_repository
@@ -75,6 +81,11 @@ class BatchCreateSessionService:
         self.callable_target_grant_service = callable_target_grant_service
         self.callable_target_scope_policy_mode = callable_target_scope_policy_mode
         self.idempotency_enabled = bool(idempotency_enabled)
+        self.model_group_resolver = model_group_resolver
+        self.scheduler_enabled = bool(scheduler_enabled)
+        self.scheduler_shadow_enabled = bool(scheduler_shadow_enabled)
+        self.strict_model_homogeneity_enabled = bool(strict_model_homogeneity_enabled)
+        self.default_service_tier = str(default_service_tier or "standard").strip() or "standard"
 
     async def create_embeddings_batch(
         self,
@@ -181,10 +192,11 @@ class BatchCreateSessionService:
         storage = self._storage_for_backend(file_record.storage_backend)
         seen_custom_ids: set[str] = set()
         inferred_model: str | None = None
+        inferred_model_group: str | None = None
         expected_item_count = 0
 
         async def _records() -> AsyncIterator[BatchCreateStagedRequest]:
-            nonlocal expected_item_count, inferred_model
+            nonlocal expected_item_count, inferred_model, inferred_model_group
             async for line_number, raw_line in self._iter_storage_lines(storage=storage, storage_key=file_record.storage_key):
                 item, model = self._parse_input_line(
                     raw_line,
@@ -201,11 +213,28 @@ class BatchCreateSessionService:
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail=f"Batch exceeds embeddings_batch_max_items_per_batch ({self.max_items_per_batch})",
                     )
-                inferred_model = inferred_model or model
+                scheduling_model_group = resolve_model_group(model, self.model_group_resolver)
+                if inferred_model is None:
+                    inferred_model = model
+                    inferred_model_group = scheduling_model_group
+                elif model != inferred_model or scheduling_model_group != inferred_model_group:
+                    if self.strict_model_homogeneity_enabled:
+                        increment_batch_mixed_model_job(mode="reject")
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=(
+                                "Batch items must target one model while "
+                                "embeddings_batch_scheduler_strict_model_homogeneity_enabled=true"
+                            ),
+                        )
+                item_work_units = estimate_request_work_units(endpoint, item.request_body)
                 yield BatchCreateStagedRequest(
                     line_number=item.line_number,
                     custom_id=item.custom_id,
                     request_body=item.request_body,
+                    scheduling_model=model,
+                    scheduling_model_group=scheduling_model_group,
+                    estimated_work_units=item_work_units,
                 )
 
         def _build_session(artifact) -> BatchCreateSessionCreate:  # noqa: ANN001
@@ -222,6 +251,7 @@ class BatchCreateSessionService:
                 expected_item_count=expected_item_count,
                 inferred_model=inferred_model,
                 metadata=metadata,
+                effective_service_tier=self.default_service_tier,
                 scheduling_scope_key=self._session_scope_key(auth),
                 priority_quota_scope_key=self._session_scope_key(auth),
                 idempotency_scope_key=idempotency_scope_key,

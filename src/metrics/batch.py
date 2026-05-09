@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from typing import Any, Mapping
 
 from prometheus_client import Counter, Gauge, Histogram
@@ -264,6 +265,84 @@ deltallm_batch_preflight_latency_metric = Histogram(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_queue_jobs_metric = Gauge(
+    "deltallm_batch_queue_jobs",
+    "Current batch queue jobs by scheduler dimensions",
+    ["status", "model_group", "tenant_scope_type", "service_tier", "size_class"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_queue_work_units_metric = Gauge(
+    "deltallm_batch_queue_work_units",
+    "Current batch queue remaining work units by scheduler dimensions",
+    ["status", "model_group", "tenant_scope_type", "service_tier", "size_class"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_oldest_job_age_metric = Gauge(
+    "deltallm_batch_oldest_job_age_seconds",
+    "Age in seconds of the oldest batch job by scheduler dimensions",
+    ["status", "model_group", "service_tier", "size_class"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_missing_dimensions_metric = Gauge(
+    "deltallm_batch_scheduler_missing_dimensions_total",
+    "Current nonterminal batch jobs missing scheduler dimensions",
+    ["dimension"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_estimated_work_units_metric = Histogram(
+    "deltallm_batch_estimated_work_units",
+    "Estimated scheduler work units per batch job",
+    buckets=[1, 2, 5, 10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_queue_wait_metric = Histogram(
+    "deltallm_batch_queue_wait_seconds",
+    "Batch queue wait seconds before worker claim by scheduler dimensions",
+    ["model_group", "service_tier", "size_class"],
+    buckets=[1, 5, 10, 30, 60, 120, 300, 600, 1_800, 3_600, 7_200, 21_600],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_mixed_model_jobs_metric = Counter(
+    "deltallm_batch_mixed_model_jobs_total",
+    "Batch jobs with mixed scheduler model dimensions by handling mode",
+    ["mode"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_shadow_decisions_metric = Counter(
+    "deltallm_batch_scheduler_shadow_decisions_total",
+    "Batch scheduler shadow decisions by result",
+    ["result"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_backfill_runs_metric = Counter(
+    "deltallm_batch_scheduler_backfill_runs_total",
+    "Batch scheduler dimension backfill runs by status",
+    ["status"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_backfill_rows_metric = Counter(
+    "deltallm_batch_scheduler_backfill_rows_total",
+    "Batch scheduler dimension rows repaired by kind",
+    ["kind"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_backfill_duration_metric = Histogram(
+    "deltallm_batch_scheduler_backfill_duration_seconds",
+    "Batch scheduler dimension backfill duration",
+    buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0],
+    registry=get_prometheus_registry(),
+)
+
 
 def set_batch_job_count(*, status: str, count: int) -> None:
     deltallm_batch_jobs_metric.labels(status=sanitize_label(status)).set(max(0, int(count)))
@@ -450,6 +529,104 @@ def observe_batch_preflight_latency(*, endpoint: str, status: str, latency_secon
     ).observe(max(0.0, float(latency_seconds)))
 
 
+def set_batch_queue_jobs(
+    *,
+    status: str,
+    model_group: str,
+    tenant_scope_type: str,
+    service_tier: str,
+    size_class: str,
+    count: int,
+) -> None:
+    deltallm_batch_queue_jobs_metric.labels(
+        status=sanitize_label(status),
+        model_group=sanitize_label(model_group),
+        tenant_scope_type=sanitize_label(tenant_scope_type),
+        service_tier=sanitize_label(service_tier),
+        size_class=sanitize_label(size_class),
+    ).set(max(0, int(count)))
+
+
+def set_batch_queue_work_units(
+    *,
+    status: str,
+    model_group: str,
+    tenant_scope_type: str,
+    service_tier: str,
+    size_class: str,
+    work_units: int,
+) -> None:
+    deltallm_batch_queue_work_units_metric.labels(
+        status=sanitize_label(status),
+        model_group=sanitize_label(model_group),
+        tenant_scope_type=sanitize_label(tenant_scope_type),
+        service_tier=sanitize_label(service_tier),
+        size_class=sanitize_label(size_class),
+    ).set(max(0, int(work_units)))
+
+
+def set_batch_oldest_job_age(
+    *,
+    status: str,
+    model_group: str,
+    service_tier: str,
+    size_class: str,
+    age_seconds: float,
+) -> None:
+    deltallm_batch_oldest_job_age_metric.labels(
+        status=sanitize_label(status),
+        model_group=sanitize_label(model_group),
+        service_tier=sanitize_label(service_tier),
+        size_class=sanitize_label(size_class),
+    ).set(max(0.0, float(age_seconds)))
+
+
+def set_batch_scheduler_missing_dimension(*, dimension: str, count: int) -> None:
+    deltallm_batch_scheduler_missing_dimensions_metric.labels(
+        dimension=sanitize_label(dimension),
+    ).set(max(0, int(count)))
+
+
+def observe_batch_estimated_work_units(*, work_units: int) -> None:
+    deltallm_batch_estimated_work_units_metric.observe(max(0, int(work_units)))
+
+
+def observe_batch_queue_wait(
+    *,
+    model_group: str,
+    service_tier: str,
+    size_class: str,
+    wait_seconds: float,
+) -> None:
+    deltallm_batch_queue_wait_metric.labels(
+        model_group=sanitize_label(model_group),
+        service_tier=sanitize_label(service_tier),
+        size_class=sanitize_label(size_class),
+    ).observe(max(0.0, float(wait_seconds)))
+
+
+def increment_batch_mixed_model_job(*, mode: str) -> None:
+    deltallm_batch_mixed_model_jobs_metric.labels(mode=sanitize_label(mode)).inc()
+
+
+def increment_batch_scheduler_shadow_decision(*, result: str) -> None:
+    deltallm_batch_scheduler_shadow_decisions_metric.labels(result=sanitize_label(result)).inc()
+
+
+def increment_batch_scheduler_backfill_run(*, status: str) -> None:
+    deltallm_batch_scheduler_backfill_runs_metric.labels(status=sanitize_label(status)).inc()
+
+
+def increment_batch_scheduler_backfill_rows(*, kind: str, count: int) -> None:
+    deltallm_batch_scheduler_backfill_rows_metric.labels(kind=sanitize_label(kind)).inc(
+        max(0, int(count))
+    )
+
+
+def observe_batch_scheduler_backfill_duration(*, duration_seconds: float) -> None:
+    deltallm_batch_scheduler_backfill_duration_metric.observe(max(0.0, float(duration_seconds)))
+
+
 def publish_batch_runtime_summary(summary: Mapping[str, Any]) -> None:
     """Publish gauges from a summarize_runtime_statuses() result dict.
 
@@ -471,6 +648,54 @@ def publish_batch_runtime_summary(summary: Mapping[str, Any]) -> None:
         status="in_progress",
         age_seconds=float(summary.get("oldest_in_progress_item_age_seconds", 0.0)),
     )
+    for metric in (
+        deltallm_batch_queue_jobs_metric,
+        deltallm_batch_queue_work_units_metric,
+        deltallm_batch_oldest_job_age_metric,
+        deltallm_batch_scheduler_missing_dimensions_metric,
+    ):
+        with contextlib.suppress(AttributeError):
+            metric.clear()
+    oldest_job_age_by_label: dict[tuple[str, str, str, str], float] = {}
+    for row in summary.get("scheduler_queue_rows", []) or []:
+        if not isinstance(row, Mapping):
+            continue
+        status = str(row.get("status") or "unknown")
+        model_group = str(row.get("model_group") or "unknown")
+        tenant_scope_type = str(row.get("tenant_scope_type") or "unknown")
+        service_tier = str(row.get("service_tier") or "standard")
+        size_class = str(row.get("size_class") or "unknown")
+        set_batch_queue_jobs(
+            status=status,
+            model_group=model_group,
+            tenant_scope_type=tenant_scope_type,
+            service_tier=service_tier,
+            size_class=size_class,
+            count=int(row.get("jobs") or 0),
+        )
+        set_batch_queue_work_units(
+            status=status,
+            model_group=model_group,
+            tenant_scope_type=tenant_scope_type,
+            service_tier=service_tier,
+            size_class=size_class,
+            work_units=int(row.get("work_units") or 0),
+        )
+        oldest_job_age_key = (status, model_group, service_tier, size_class)
+        oldest_job_age_by_label[oldest_job_age_key] = max(
+            oldest_job_age_by_label.get(oldest_job_age_key, 0.0),
+            float(row.get("oldest_job_age_seconds") or 0.0),
+        )
+    for (status, model_group, service_tier, size_class), age_seconds in oldest_job_age_by_label.items():
+        set_batch_oldest_job_age(
+            status=status,
+            model_group=model_group,
+            service_tier=service_tier,
+            size_class=size_class,
+            age_seconds=age_seconds,
+        )
+    for dimension, count in (summary.get("scheduler_missing_dimensions") or {}).items():
+        set_batch_scheduler_missing_dimension(dimension=str(dimension), count=int(count or 0))
 
 
 def publish_batch_create_session_summary(summary: Mapping[str, Any]) -> None:

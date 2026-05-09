@@ -987,6 +987,21 @@ model DeltaLLM_BatchJob {
   lease_expires_at         DateTime?
   cancel_requested_at      DateTime?
   status_last_updated_at   DateTime @default(now())
+  scheduler_version        String?
+  scheduling_model         String?
+  scheduling_model_group   String?
+  scheduling_endpoint      String?
+  tenant_scope_type        String?
+  tenant_scope_id          String?
+  service_tier             String   @default("standard")
+  estimated_work_units     Int      @default(0)
+  remaining_work_units     Int      @default(0)
+  size_class               String   @default("xs")
+  queue_entered_at         DateTime?
+  first_claimed_at         DateTime?
+  last_claimed_at          DateTime?
+  last_scheduled_at        DateTime?
+  scheduler_debug          Json?
   created_by_api_key       String?
   created_by_user_id       String?
   created_by_team_id       String?
@@ -1006,6 +1021,9 @@ model DeltaLLM_BatchJob {
   @@index([created_by_api_key, created_at])
   @@index([created_by_team_id, created_at])
   @@index([created_by_organization_id, created_at])
+  @@index([status, scheduling_model_group, service_tier, queue_entered_at], map: "deltallm_batch_job_sched_model_status_idx")
+  @@index([status, tenant_scope_type, tenant_scope_id, queue_entered_at], map: "deltallm_batch_job_sched_tenant_status_idx")
+  @@index([status, size_class, queue_entered_at], map: "deltallm_batch_job_sched_size_status_idx")
   @@index([expires_at])
   @@map("deltallm_batch_job")
 }
@@ -1026,6 +1044,11 @@ model DeltaLLM_BatchItem {
   last_error         String?
   locked_by          String?
   lease_expires_at   DateTime?
+  scheduling_model   String?
+  scheduling_model_group String?
+  estimated_work_units Int      @default(1)
+  not_before_at      DateTime?
+  last_scheduled_at  DateTime?
   created_at         DateTime @default(now())
   started_at         DateTime?
   completed_at       DateTime?
@@ -1035,6 +1058,8 @@ model DeltaLLM_BatchItem {
   @@unique([batch_id, line_number])
   @@unique([batch_id, custom_id])
   @@index([batch_id, status])
+  @@index([batch_id, status, not_before_at, line_number], map: "deltallm_batch_item_sched_batch_status_idx")
+  @@index([scheduling_model_group, status, not_before_at], map: "deltallm_batch_item_sched_model_status_idx")
   @@index([lease_expires_at])
   @@map("deltallm_batch_item")
 }

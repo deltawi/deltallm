@@ -42,6 +42,7 @@ class _FakeBatchRepairRepository:
         self.requeue_calls: list[str] = []
         self.fail_calls: list[tuple[str, str]] = []
         self.provider_errors: list[tuple[str, str | None]] = []
+        self.scheduler_backfill_limits: list[int] = []
 
     async def summarize_runtime_statuses(self, *, now):  # noqa: ANN001
         del now
@@ -133,6 +134,10 @@ class _FakeBatchRepairRepository:
     async def set_provider_error(self, *, batch_id: str, provider_error: str | None):
         self.provider_errors.append((batch_id, provider_error))
         return None
+
+    async def backfill_scheduler_dimensions(self, *, limit: int) -> dict[str, int]:
+        self.scheduler_backfill_limits.append(limit)
+        return {"jobs": 4, "items": 9}
 
 
 @pytest.mark.asyncio
@@ -226,6 +231,83 @@ async def test_mark_batch_failed_endpoint(client, test_app, monkeypatch):
         "reason": "manual stop",
     }
     assert repository.provider_errors == [("batch-1", encode_operator_failed_reason("manual stop"))]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_dimensions_backfill_endpoint(client, test_app, monkeypatch):
+    repository = _FakeBatchRepairRepository()
+    test_app.state.batch_repository = repository
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=True,
+            account_id="acct-1",
+        ),
+    )
+
+    response = await client.post(
+        "/ui/api/batches/scheduler-dimensions/backfill",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"limit": 123},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"jobs": 4, "items": 9}
+    assert repository.scheduler_backfill_limits == [123]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_dimensions_backfill_endpoint_reports_lock_skip(client, test_app, monkeypatch):
+    class _LockedBackfillRepository(_FakeBatchRepairRepository):
+        async def backfill_scheduler_dimensions(self, *, limit: int) -> dict[str, int]:
+            self.scheduler_backfill_limits.append(limit)
+            return {"jobs": 0, "items": 0, "skipped": 1}
+
+    repository = _LockedBackfillRepository()
+    test_app.state.batch_repository = repository
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=True,
+            account_id="acct-1",
+        ),
+    )
+
+    response = await client.post(
+        "/ui/api/batches/scheduler-dimensions/backfill",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"limit": 123},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"jobs": 0, "items": 0, "skipped": 1}
+    assert repository.scheduler_backfill_limits == [123]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_dimensions_backfill_endpoint_rejects_oversized_limit(
+    client,
+    test_app,
+    monkeypatch,
+):
+    test_app.state.batch_repository = _FakeBatchRepairRepository()
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=True,
+            account_id="acct-1",
+        ),
+    )
+
+    response = await client.post(
+        "/ui/api/batches/scheduler-dimensions/backfill",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"limit": 5001},
+    )
+
+    assert response.status_code == 422
 
 
 class _FailingBatchRepairRepository(_FakeBatchRepairRepository):

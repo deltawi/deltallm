@@ -62,7 +62,7 @@ general_settings:
 {{- define "deltallm.apiConfigYaml" -}}
 {{- $apiConfig := deepCopy .Values.config -}}
 {{- if .Values.batchWorker.enabled -}}
-{{- $apiDefaults := dict "general_settings" (dict "embeddings_batch_worker_enabled" false "embeddings_batch_completion_outbox_worker_enabled" false "embeddings_batch_gc_enabled" false "embeddings_batch_create_session_cleanup_enabled" false) -}}
+{{- $apiDefaults := dict "general_settings" (dict "embeddings_batch_worker_enabled" false "embeddings_batch_completion_outbox_worker_enabled" false "embeddings_batch_gc_enabled" false "embeddings_batch_create_session_cleanup_enabled" false "embeddings_batch_scheduler_backfill_enabled" false) -}}
 {{- $apiConfig = mergeOverwrite $apiConfig $apiDefaults -}}
 {{- end -}}
 {{- $apiValues := default (dict) (get .Values "api") -}}
@@ -75,14 +75,19 @@ general_settings:
 {{- if not (hasKey $workerConfig "general_settings") -}}
 {{- $_ := set $workerConfig "general_settings" $workerGeneral -}}
 {{- end -}}
-{{- $workerDefaults := dict "embeddings_batch_worker_enabled" true "embeddings_batch_completion_outbox_worker_enabled" true "embeddings_batch_gc_enabled" true "embeddings_batch_create_session_cleanup_enabled" true "embeddings_batch_worker_concurrency" 2 "embeddings_batch_item_claim_limit" 10 -}}
+{{- $workerDefaults := dict "embeddings_batch_worker_enabled" true "embeddings_batch_completion_outbox_worker_enabled" true "embeddings_batch_gc_enabled" true "embeddings_batch_create_session_cleanup_enabled" true "embeddings_batch_scheduler_backfill_enabled" true "embeddings_batch_worker_concurrency" 2 "embeddings_batch_item_claim_limit" 10 -}}
 {{- range $key, $value := $workerDefaults -}}
 {{- if not (hasKey $workerGeneral $key) -}}
 {{- $_ := set $workerGeneral $key $value -}}
 {{- end -}}
 {{- end -}}
 {{- $batchWorkerValues := default (dict) (get .Values "batchWorker") -}}
-{{- $workerConfig = mergeOverwrite $workerConfig (default (dict) (get $batchWorkerValues "config")) -}}
+{{- $workerOverrides := default (dict) (get $batchWorkerValues "config") -}}
+{{- $workerOverrideGeneral := default (dict) (get $workerOverrides "general_settings") -}}
+{{- if not (hasKey $workerOverrideGeneral "embeddings_batch_scheduler_backfill_enabled") -}}
+{{- $_ := set $workerGeneral "embeddings_batch_scheduler_backfill_enabled" true -}}
+{{- end -}}
+{{- $workerConfig = mergeOverwrite $workerConfig $workerOverrides -}}
 {{ include "deltallm.configYaml" (dict "root" . "config" $workerConfig) }}
 {{- end -}}
 {{- define "deltallm.validateBatchConfig" -}}

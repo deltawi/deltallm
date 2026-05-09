@@ -8,7 +8,7 @@ from src.batch.create.promoter import BatchCreatePromotionError, BatchCreateSess
 from src.batch.models import BatchJobRecord
 
 
-def _session(*, status: str) -> BatchCreateSessionRecord:
+def _session(*, status: str, expected_item_count: int = 1) -> BatchCreateSessionRecord:
     now = datetime.now(tz=UTC)
     return BatchCreateSessionRecord(
         session_id="session-1",
@@ -20,7 +20,7 @@ def _session(*, status: str) -> BatchCreateSessionRecord:
         staged_storage_key="batch-create-stage/2026/04/13/session-1.jsonl",
         staged_checksum="checksum-1",
         staged_bytes=128,
-        expected_item_count=1,
+        expected_item_count=expected_item_count,
         inferred_model="m1",
         metadata={"source": "test"},
         requested_service_tier=None,
@@ -199,6 +199,10 @@ class _SuccessfulTxRepository(_FakeRepository):
                 line_number=int(item.line_number),
                 custom_id=str(item.custom_id),
                 request_body=dict(item.request_body),
+                scheduling_model=item.scheduling_model,
+                scheduling_model_group=item.scheduling_model_group,
+                estimated_work_units=item.estimated_work_units,
+                not_before_at=item.not_before_at,
             )
             for item in items
         ]
@@ -326,6 +330,152 @@ async def test_promote_session_uses_configured_tx_timings_and_locked_recheck() -
         }
     ]
     assert tx_repository.created_jobs[0]["status"] == "queued"
+    assert tx_repository.created_jobs[0]["scheduler_version"] == "fifo_v1"
+    assert tx_repository.created_jobs[0]["scheduling_model"] == "m1"
+    assert tx_repository.created_jobs[0]["scheduling_model_group"] == "m1"
+    assert tx_repository.created_jobs[0]["estimated_work_units"] == 1
+    assert tx_repository.created_jobs[0]["remaining_work_units"] == 1
+    assert tx_repository.created_jobs[0]["size_class"] == "xs"
+
+
+@pytest.mark.asyncio
+async def test_promote_session_estimates_legacy_work_units_and_preserves_not_before_at() -> None:
+    not_before_at = datetime(2026, 5, 9, 12, 30, tzinfo=UTC)
+    session = _session(status=BatchCreateSessionStatus.STAGED)
+    tx_repository = _SuccessfulTxRepository(session_repo=_TxSessionRepo(session), active_jobs=0)
+    repository = _FakeRepository(
+        session_repo=_SessionRepo(session),
+        tx_repository=tx_repository,
+        active_jobs=0,
+    )
+    staging = _FakeStaging(
+        records=[
+            BatchCreateStagedRequest.from_jsonable(
+                {
+                    "line_number": 1,
+                    "custom_id": "req-1",
+                    "request_body": {"model": "m1", "input": "x" * 1025},
+                    "not_before_at": not_before_at.isoformat(),
+                }
+            )
+        ]
+    )
+    promoter = BatchCreateSessionPromoter(repository=repository, staging=staging)
+
+    await promoter.promote_session("session-1")
+
+    assert tx_repository.created_jobs[0]["estimated_work_units"] == 5
+    assert tx_repository.created_jobs[0]["remaining_work_units"] == 5
+    _, inserted_items = tx_repository.created_items[0]
+    assert inserted_items[0].estimated_work_units == 5
+    assert inserted_items[0].not_before_at == not_before_at
+
+
+@pytest.mark.asyncio
+async def test_promote_session_records_shadow_scheduler_decision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.batch.create import promoter as promoter_module
+
+    metric_results: list[str] = []
+    monkeypatch.setattr(
+        promoter_module,
+        "increment_batch_scheduler_shadow_decision",
+        lambda *, result: metric_results.append(result),
+    )
+    session = _session(status=BatchCreateSessionStatus.STAGED)
+    tx_repository = _SuccessfulTxRepository(session_repo=_TxSessionRepo(session), active_jobs=0)
+    repository = _FakeRepository(
+        session_repo=_SessionRepo(session),
+        tx_repository=tx_repository,
+        active_jobs=0,
+    )
+    staging = _FakeStaging(
+        records=[
+            BatchCreateStagedRequest(
+                line_number=1,
+                custom_id="req-1",
+                request_body={"model": "m1", "input": "hello"},
+            )
+        ]
+    )
+    promoter = BatchCreateSessionPromoter(
+        repository=repository,
+        staging=staging,
+        scheduler_shadow_enabled=True,
+    )
+
+    await promoter.promote_session("session-1")
+
+    assert tx_repository.created_jobs[0]["scheduler_version"] == "scheduler_v2_shadow"
+    assert metric_results == ["recorded"]
+
+
+@pytest.mark.asyncio
+async def test_promote_session_marks_mixed_model_jobs_with_sentinel_group() -> None:
+    session = _session(status=BatchCreateSessionStatus.STAGED, expected_item_count=2)
+    tx_repository = _SuccessfulTxRepository(session_repo=_TxSessionRepo(session))
+    repository = _FakeRepository(
+        session_repo=_SessionRepo(session),
+        tx_repository=tx_repository,
+    )
+    staging = _FakeStaging(
+        records=[
+            BatchCreateStagedRequest(
+                line_number=1,
+                custom_id="req-1",
+                request_body={"model": "m1", "input": "hello"},
+            ),
+            BatchCreateStagedRequest(
+                line_number=2,
+                custom_id="req-2",
+                request_body={"model": "m2", "input": "world"},
+            ),
+        ]
+    )
+    promoter = BatchCreateSessionPromoter(repository=repository, staging=staging)
+
+    await promoter.promote_session("session-1")
+
+    assert tx_repository.created_jobs[0]["scheduling_model"] == "mixed"
+    assert tx_repository.created_jobs[0]["scheduling_model_group"] == "mixed"
+    assert tx_repository.created_jobs[0]["scheduler_debug"]["mixed_model"] is True
+    _, inserted_items = tx_repository.created_items[0]
+    assert [item.scheduling_model_group for item in inserted_items] == ["m1", "m2"]
+
+
+@pytest.mark.asyncio
+async def test_promote_session_rejects_mixed_model_jobs_when_strict_enabled() -> None:
+    session = _session(status=BatchCreateSessionStatus.STAGED, expected_item_count=2)
+    repository = _FakeRepository(
+        session_repo=_SessionRepo(session),
+        tx_repository=_SuccessfulTxRepository(session_repo=_TxSessionRepo(session)),
+    )
+    staging = _FakeStaging(
+        records=[
+            BatchCreateStagedRequest(
+                line_number=1,
+                custom_id="req-1",
+                request_body={"model": "m1", "input": "hello"},
+            ),
+            BatchCreateStagedRequest(
+                line_number=2,
+                custom_id="req-2",
+                request_body={"model": "m2", "input": "world"},
+            ),
+        ]
+    )
+    promoter = BatchCreateSessionPromoter(
+        repository=repository,
+        staging=staging,
+        strict_model_homogeneity_enabled=True,
+    )
+
+    with pytest.raises(BatchCreatePromotionError, match="multiple scheduler model dimensions") as exc:
+        await promoter.promote_session("session-1")
+
+    assert exc.value.retryable is False
+    assert exc.value.code == "mixed_model_batch"
 
 
 @pytest.mark.asyncio

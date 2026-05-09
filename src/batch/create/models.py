@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -44,11 +44,48 @@ def normalize_idempotency_pair(
     return normalized_scope_key, normalized_key
 
 
+def _parse_optional_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return None
+        try:
+            parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("not_before_at must be an ISO datetime") from exc
+    else:
+        raise ValueError("not_before_at must be an ISO datetime")
+
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _parse_optional_work_units(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("estimated_work_units must be an integer") from exc
+    return max(1, parsed)
+
+
 @dataclass
 class BatchCreateStagedRequest:
     line_number: int
     custom_id: str
     request_body: dict[str, Any]
+    scheduling_model: str | None = None
+    scheduling_model_group: str | None = None
+    estimated_work_units: int | None = None
+    not_before_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if int(self.line_number) <= 0:
@@ -60,13 +97,26 @@ class BatchCreateStagedRequest:
         if not isinstance(self.request_body, dict):
             raise ValueError("request_body must be an object")
         self.request_body = dict(self.request_body)
+        self.scheduling_model = str(self.scheduling_model or "").strip() or None
+        self.scheduling_model_group = str(self.scheduling_model_group or "").strip() or None
+        self.estimated_work_units = _parse_optional_work_units(self.estimated_work_units)
+        self.not_before_at = _parse_optional_datetime(self.not_before_at)
 
     def to_jsonable(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "line_number": self.line_number,
             "custom_id": self.custom_id,
             "request_body": self.request_body,
         }
+        if self.scheduling_model is not None:
+            payload["scheduling_model"] = self.scheduling_model
+        if self.scheduling_model_group is not None:
+            payload["scheduling_model_group"] = self.scheduling_model_group
+        if self.estimated_work_units is not None:
+            payload["estimated_work_units"] = self.estimated_work_units
+        if self.not_before_at is not None:
+            payload["not_before_at"] = self.not_before_at.isoformat()
+        return payload
 
     @classmethod
     def from_jsonable(cls, payload: dict[str, Any]) -> "BatchCreateStagedRequest":
@@ -76,6 +126,10 @@ class BatchCreateStagedRequest:
             line_number=int(payload.get("line_number") or 0),
             custom_id=str(payload.get("custom_id") or ""),
             request_body=payload.get("request_body"),
+            scheduling_model=payload.get("scheduling_model"),
+            scheduling_model_group=payload.get("scheduling_model_group"),
+            estimated_work_units=payload.get("estimated_work_units"),
+            not_before_at=payload.get("not_before_at"),
         )
 
 

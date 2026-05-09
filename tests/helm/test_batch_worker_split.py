@@ -115,12 +115,14 @@ def test_split_mode_separates_api_and_worker_configs() -> None:
     assert api_general["embeddings_batch_completion_outbox_worker_enabled"] is False
     assert api_general["embeddings_batch_gc_enabled"] is False
     assert api_general["embeddings_batch_create_session_cleanup_enabled"] is False
+    assert api_general["embeddings_batch_scheduler_backfill_enabled"] is False
 
     worker_general = worker_config["general_settings"]
     assert worker_general["embeddings_batch_worker_enabled"] is True
     assert worker_general["embeddings_batch_completion_outbox_worker_enabled"] is True
     assert worker_general["embeddings_batch_gc_enabled"] is True
     assert worker_general["embeddings_batch_create_session_cleanup_enabled"] is True
+    assert worker_general["embeddings_batch_scheduler_backfill_enabled"] is True
     assert worker_general["embeddings_batch_worker_concurrency"] == 2
     assert worker_general["embeddings_batch_item_claim_limit"] == 10
 
@@ -328,6 +330,8 @@ def test_split_mode_worker_tuning_uses_shared_config_unless_role_overridden() ->
         "config.general_settings.embeddings_batch_worker_concurrency=8",
         "--set",
         "batchWorker.config.general_settings.embeddings_batch_worker_concurrency=3",
+        "--set",
+        "batchWorker.config.general_settings.embeddings_batch_scheduler_backfill_enabled=false",
         "--show-only",
         "templates/configmap.yaml",
     )
@@ -342,6 +346,7 @@ def test_split_mode_worker_tuning_uses_shared_config_unless_role_overridden() ->
     assert shared_worker_general["embeddings_batch_worker_concurrency"] == 8
     assert shared_worker_general["embeddings_batch_item_claim_limit"] == 40
     assert role_worker_general["embeddings_batch_worker_concurrency"] == 3
+    assert role_worker_general["embeddings_batch_scheduler_backfill_enabled"] is False
 
 
 def test_production_default_does_not_disable_batch_workers_without_worker_deployment() -> None:
@@ -421,6 +426,22 @@ def test_split_mode_renders_worker_metrics_service_monitor() -> None:
             "scrapeTimeout": "5s",
         }
     ]
+
+
+def test_migration_job_default_uses_prisma_migrate_without_db_push_fallback() -> None:
+    docs = _render(
+        "--set",
+        "migrationJob.enabled=true",
+        "--show-only",
+        "templates/migration-job.yaml",
+    )
+
+    job = _by_kind_and_name(docs, "Job", "deltallm-migrate")
+    migrate_args = "\n".join(job["spec"]["template"]["spec"]["containers"][0]["args"])
+
+    assert "prisma migrate deploy --schema=./prisma/schema.prisma" in migrate_args
+    assert "prisma db push" not in migrate_args
+    assert "--accept-data-loss" not in migrate_args
 
 
 def test_split_mode_worker_service_monitor_selects_release_namespace_when_centralized() -> None:

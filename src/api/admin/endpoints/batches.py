@@ -7,13 +7,14 @@ from typing import Any, Iterator
 from time import perf_counter
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.auth.roles import Permission
 from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, to_json_value, get_auth_scope
 from src.audit.actions import AuditAction
 from src.batch.repository import BatchRepository
 from src.batch.models import BATCH_JOB_STATUS_SET, decode_operator_failed_reason, encode_operator_failed_reason
+from src.batch.scheduling import API_KEY_TENANT_SCOPE_PREFIX
 from src.metrics import (
     increment_batch_repair_action,
     publish_batch_runtime_summary,
@@ -27,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 class MarkBatchFailedRequest(BaseModel):
     reason: str | None = None
+
+
+class SchedulerBackfillRequest(BaseModel):
+    limit: int = Field(default=500, ge=1, le=5_000)
 
 
 async def _refresh_batch_runtime_metrics(repository: BatchRepository) -> None:
@@ -60,6 +65,24 @@ def _batch_repository_or_503(request: Request) -> BatchRepository:
     if repository is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Batch repository unavailable")
     return repository
+
+
+def _mask_api_key(raw_api_key: str | None) -> str:
+    api_key = raw_api_key or ""
+    return f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else api_key
+
+
+def _display_tenant_scope_id(*, scope_type: str | None, scope_id: str | None) -> str | None:
+    normalized_scope_type = str(scope_type or "").strip()
+    normalized_scope_id = str(scope_id or "").strip()
+    if not normalized_scope_id:
+        return None
+    if normalized_scope_type != "api_key":
+        return normalized_scope_id
+    if normalized_scope_id.startswith(API_KEY_TENANT_SCOPE_PREFIX):
+        digest = normalized_scope_id[len(API_KEY_TENANT_SCOPE_PREFIX) :]
+        return f"api_key:{digest[:12]}" if digest else "api_key"
+    return "api_key"
 
 
 async def _load_batch_scope_row(db: Any, batch_id: str) -> dict[str, Any]:
@@ -166,6 +189,10 @@ async def list_batches(
         f"""
         SELECT j.batch_id, j.endpoint, j.status, j.model, j.execution_mode,
                j.total_items, j.completed_items, j.failed_items, j.cancelled_items, j.in_progress_items,
+               j.scheduler_version, j.scheduling_model, j.scheduling_model_group, j.scheduling_endpoint,
+               j.tenant_scope_type, j.tenant_scope_id, j.service_tier, j.estimated_work_units,
+               j.remaining_work_units, j.size_class, j.queue_entered_at, j.first_claimed_at,
+               j.last_claimed_at, j.last_scheduled_at,
                j.created_by_api_key, j.created_by_team_id, j.created_by_organization_id,
                j.created_at, j.started_at, j.completed_at,
                t.team_alias, COALESCE(j.created_by_organization_id, t.organization_id) AS organization_id,
@@ -185,8 +212,7 @@ async def list_batches(
         total_items = int(r.get("total_items") or 0)
         completed = int(r.get("completed_items") or 0)
         failed = int(r.get("failed_items") or 0)
-        api_key = r.get("created_by_api_key") or ""
-        masked_key = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else api_key
+        masked_key = _mask_api_key(r.get("created_by_api_key"))
         data.append({
             "batch_id": r.get("batch_id"),
             "endpoint": r.get("endpoint"),
@@ -197,6 +223,23 @@ async def list_batches(
             "failed_items": failed,
             "cancelled_items": int(r.get("cancelled_items") or 0),
             "in_progress_items": int(r.get("in_progress_items") or 0),
+            "scheduler_version": r.get("scheduler_version"),
+            "scheduling_model": r.get("scheduling_model"),
+            "scheduling_model_group": r.get("scheduling_model_group"),
+            "scheduling_endpoint": r.get("scheduling_endpoint"),
+            "tenant_scope_type": r.get("tenant_scope_type"),
+            "tenant_scope_id": _display_tenant_scope_id(
+                scope_type=r.get("tenant_scope_type"),
+                scope_id=r.get("tenant_scope_id"),
+            ),
+            "service_tier": r.get("service_tier"),
+            "estimated_work_units": int(r.get("estimated_work_units") or 0),
+            "remaining_work_units": int(r.get("remaining_work_units") or 0),
+            "size_class": r.get("size_class"),
+            "queue_entered_at": to_json_value(r.get("queue_entered_at")),
+            "first_claimed_at": to_json_value(r.get("first_claimed_at")),
+            "last_claimed_at": to_json_value(r.get("last_claimed_at")),
+            "last_scheduled_at": to_json_value(r.get("last_scheduled_at")),
             "total_cost": float(r.get("total_cost") or 0),
             "created_by_api_key": masked_key,
             "created_by_team_id": r.get("created_by_team_id"),
@@ -266,6 +309,50 @@ async def batch_feature_status(
     }
 
 
+@router.post("/ui/api/batches/scheduler-dimensions/backfill")
+async def backfill_scheduler_dimensions(
+    request: Request,
+    payload: SchedulerBackfillRequest | None = None,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, int]:
+    request_start = perf_counter()
+    scope = get_auth_scope(
+        request,
+        authorization,
+        x_master_key,
+        required_permission=Permission.PLATFORM_ADMIN,
+    )
+    repository = _batch_repository_or_503(request)
+    bounded_payload = payload or SchedulerBackfillRequest()
+    with _repair_action_metric("scheduler_backfill"):
+        result = await repository.backfill_scheduler_dimensions(limit=bounded_payload.limit)
+    await _refresh_batch_runtime_metrics(repository)
+    response = {
+        "jobs": int(result.get("jobs") or 0),
+        "items": int(result.get("items") or 0),
+    }
+    if result.get("skipped"):
+        response["skipped"] = int(result.get("skipped") or 0)
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_BATCH_SCHEDULER_BACKFILL,
+        scope=scope,
+        resource_type="batch_scheduler",
+        resource_id="scheduler_dimensions",
+        request_payload={"limit": bounded_payload.limit},
+        response_payload=response,
+    )
+    logger.info(
+        "batch repair scheduler-backfill jobs=%s items=%s actor=%s",
+        response["jobs"],
+        response["items"],
+        scope.account_id,
+    )
+    return response
+
+
 @router.get("/ui/api/batches/{batch_id}")
 async def get_batch(
     request: Request,
@@ -316,6 +403,8 @@ async def get_batch(
         """
         SELECT item_id, line_number, custom_id, status, attempts, provider_cost, billed_cost,
                last_error, request_body, response_body, error_body, usage,
+               scheduling_model, scheduling_model_group, estimated_work_units, not_before_at,
+               last_scheduled_at,
                created_at, started_at, completed_at
         FROM deltallm_batch_item
         WHERE batch_id = $1
@@ -327,8 +416,7 @@ async def get_batch(
         items_offset,
     )
 
-    api_key = job.get("created_by_api_key") or ""
-    masked_key = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else api_key
+    masked_key = _mask_api_key(job.get("created_by_api_key"))
 
     return {
         "batch_id": job.get("batch_id"),
@@ -343,6 +431,24 @@ async def get_batch(
         "failed_items": int(job.get("failed_items") or 0),
         "cancelled_items": int(job.get("cancelled_items") or 0),
         "in_progress_items": int(job.get("in_progress_items") or 0),
+        "scheduler_version": job.get("scheduler_version"),
+        "scheduling_model": job.get("scheduling_model"),
+        "scheduling_model_group": job.get("scheduling_model_group"),
+        "scheduling_endpoint": job.get("scheduling_endpoint"),
+        "tenant_scope_type": job.get("tenant_scope_type"),
+        "tenant_scope_id": _display_tenant_scope_id(
+            scope_type=job.get("tenant_scope_type"),
+            scope_id=job.get("tenant_scope_id"),
+        ),
+        "service_tier": job.get("service_tier"),
+        "estimated_work_units": int(job.get("estimated_work_units") or 0),
+        "remaining_work_units": int(job.get("remaining_work_units") or 0),
+        "size_class": job.get("size_class"),
+        "queue_entered_at": to_json_value(job.get("queue_entered_at")),
+        "first_claimed_at": to_json_value(job.get("first_claimed_at")),
+        "last_claimed_at": to_json_value(job.get("last_claimed_at")),
+        "last_scheduled_at": to_json_value(job.get("last_scheduled_at")),
+        "scheduler_debug": to_json_value(job.get("scheduler_debug")),
         "total_provider_cost": float(cost_row.get("total_provider_cost") or 0),
         "total_billed_cost": float(cost_row.get("total_billed_cost") or 0),
         "created_by_api_key": masked_key,
