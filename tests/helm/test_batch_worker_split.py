@@ -116,6 +116,7 @@ def test_split_mode_separates_api_and_worker_configs() -> None:
     assert api_general["embeddings_batch_gc_enabled"] is False
     assert api_general["embeddings_batch_create_session_cleanup_enabled"] is False
     assert api_general["embeddings_batch_scheduler_backfill_enabled"] is False
+    assert api_general["embeddings_batch_scheduler_claim_mode"] == "job_fifo"
 
     worker_general = worker_config["general_settings"]
     assert worker_general["embeddings_batch_worker_enabled"] is True
@@ -123,6 +124,7 @@ def test_split_mode_separates_api_and_worker_configs() -> None:
     assert worker_general["embeddings_batch_gc_enabled"] is True
     assert worker_general["embeddings_batch_create_session_cleanup_enabled"] is True
     assert worker_general["embeddings_batch_scheduler_backfill_enabled"] is True
+    assert worker_general["embeddings_batch_scheduler_claim_mode"] == "job_fifo"
     assert worker_general["embeddings_batch_worker_concurrency"] == 2
     assert worker_general["embeddings_batch_item_claim_limit"] == 10
 

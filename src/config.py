@@ -418,6 +418,11 @@ class GeneralSettings(BaseModel):
     embeddings_batch_scheduler_backfill_enabled: bool = False
     embeddings_batch_scheduler_backfill_interval_seconds: float = Field(default=60.0, gt=0.0)
     embeddings_batch_scheduler_backfill_scan_limit: int = Field(default=500, ge=1, le=5_000)
+    embeddings_batch_scheduler_claim_mode: Literal["job_fifo", "work_slice"] = "job_fifo"
+    embeddings_batch_work_claim_max_items: int = Field(default=0, ge=0, le=200)
+    embeddings_batch_work_claim_max_work_units: int = Field(default=0, ge=0)
+    embeddings_batch_work_claim_min_items_for_microbatch: int = Field(default=4, ge=1, le=200)
+    embeddings_batch_finalization_first: bool = True
     batch_completed_artifact_retention_days: int = 7
     batch_failed_artifact_retention_days: int = 14
     batch_metadata_retention_days: int = 30

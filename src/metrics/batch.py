@@ -308,6 +308,51 @@ deltallm_batch_queue_wait_metric = Histogram(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_work_claims_metric = Counter(
+    "deltallm_batch_work_claims_total",
+    "Batch work-slice claims by result and claim mode",
+    ["result", "claim_mode"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_work_claim_items_metric = Histogram(
+    "deltallm_batch_work_claim_items",
+    "Number of batch items returned by each work claim",
+    ["claim_mode"],
+    buckets=[1, 2, 4, 8, 16, 32, 64, 128, 200],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_work_claim_units_metric = Histogram(
+    "deltallm_batch_work_claim_units",
+    "Estimated work units returned by each work claim",
+    ["claim_mode"],
+    buckets=[1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1_024],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_work_claim_latency_metric = Histogram(
+    "deltallm_batch_work_claim_latency_seconds",
+    "Batch work claim latency by claim mode",
+    ["claim_mode"],
+    buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_finalization_claims_metric = Counter(
+    "deltallm_batch_finalization_claims_total",
+    "Batch finalization job claims by result",
+    ["result"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_claim_empty_jobs_metric = Counter(
+    "deltallm_batch_claim_empty_jobs_total",
+    "Batch work-slice claim attempts that found no executable item by bounded reason",
+    ["reason"],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_batch_mixed_model_jobs_metric = Counter(
     "deltallm_batch_mixed_model_jobs_total",
     "Batch jobs with mixed scheduler model dimensions by handling mode",
@@ -603,6 +648,39 @@ def observe_batch_queue_wait(
         service_tier=sanitize_label(service_tier),
         size_class=sanitize_label(size_class),
     ).observe(max(0.0, float(wait_seconds)))
+
+
+def increment_batch_work_claim(*, result: str, claim_mode: str) -> None:
+    deltallm_batch_work_claims_metric.labels(
+        result=sanitize_label(result),
+        claim_mode=sanitize_label(claim_mode),
+    ).inc()
+
+
+def observe_batch_work_claim_items(*, claim_mode: str, count: int) -> None:
+    deltallm_batch_work_claim_items_metric.labels(claim_mode=sanitize_label(claim_mode)).observe(
+        max(0, int(count))
+    )
+
+
+def observe_batch_work_claim_units(*, claim_mode: str, work_units: int) -> None:
+    deltallm_batch_work_claim_units_metric.labels(claim_mode=sanitize_label(claim_mode)).observe(
+        max(0, int(work_units))
+    )
+
+
+def observe_batch_work_claim_latency(*, claim_mode: str, latency_seconds: float) -> None:
+    deltallm_batch_work_claim_latency_metric.labels(claim_mode=sanitize_label(claim_mode)).observe(
+        max(0.0, float(latency_seconds))
+    )
+
+
+def increment_batch_finalization_claim(*, result: str) -> None:
+    deltallm_batch_finalization_claims_metric.labels(result=sanitize_label(result)).inc()
+
+
+def increment_batch_claim_empty_job(*, reason: str) -> None:
+    deltallm_batch_claim_empty_jobs_metric.labels(reason=sanitize_label(reason)).inc()
 
 
 def increment_batch_mixed_model_job(*, mode: str) -> None:

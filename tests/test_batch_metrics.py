@@ -6,6 +6,8 @@ from src.metrics import (
     increment_batch_create_session_action,
     get_prometheus_registry,
     increment_batch_artifact_failure,
+    increment_batch_claim_empty_job,
+    increment_batch_finalization_claim,
     increment_batch_finalization_retry,
     increment_batch_item_reclaim,
     increment_batch_item_retry,
@@ -14,12 +16,16 @@ from src.metrics import (
     increment_batch_model_group_deferred_items,
     increment_batch_microbatch_requeue,
     increment_batch_repair_action,
+    increment_batch_work_claim,
     observe_batch_create_latency,
     observe_batch_finalize_latency,
     observe_batch_item_execution_latency,
     observe_batch_item_retry_delay,
     observe_batch_model_group_deferral_seconds,
     observe_batch_microbatch_retry_delay,
+    observe_batch_work_claim_items,
+    observe_batch_work_claim_latency,
+    observe_batch_work_claim_units,
     publish_batch_create_session_summary,
     publish_batch_runtime_summary,
     set_batch_create_session_count,
@@ -57,12 +63,18 @@ def test_batch_metrics_are_exported() -> None:
     increment_batch_model_group_deferral(reason="no_healthy_deployments")
     increment_batch_model_group_deferred_items(reason="no_healthy_deployments")
     increment_batch_microbatch_requeue(category="upstream_5xx", result="scheduled")
+    increment_batch_work_claim(result="claimed", claim_mode="work_slice")
+    increment_batch_finalization_claim(result="claimed")
+    increment_batch_claim_empty_job(reason="no_available_work")
     observe_batch_create_latency(status="success", latency_seconds=0.25)
     observe_batch_finalize_latency(status="error", latency_seconds=0.5)
     observe_batch_item_execution_latency(status="success", latency_seconds=0.1)
     observe_batch_item_retry_delay(category="rate_limit", delay_seconds=5.0)
     observe_batch_model_group_deferral_seconds(reason="no_healthy_deployments", delay_seconds=5.0)
     observe_batch_microbatch_retry_delay(category="upstream_5xx", delay_seconds=5.0)
+    observe_batch_work_claim_items(claim_mode="work_slice", count=10)
+    observe_batch_work_claim_units(claim_mode="work_slice", work_units=40)
+    observe_batch_work_claim_latency(claim_mode="work_slice", latency_seconds=0.01)
     publish_batch_create_session_summary({"completed": 2, "failed_retryable": 1})
 
     metrics_text = generate_latest(get_prometheus_registry()).decode("utf-8")
@@ -87,6 +99,12 @@ def test_batch_metrics_are_exported() -> None:
     assert "deltallm_batch_model_group_deferred_items_total" in metrics_text
     assert "deltallm_batch_model_group_deferral_seconds" in metrics_text
     assert "deltallm_batch_microbatch_requeues_total" in metrics_text
+    assert "deltallm_batch_work_claims_total" in metrics_text
+    assert "deltallm_batch_work_claim_items" in metrics_text
+    assert "deltallm_batch_work_claim_units" in metrics_text
+    assert "deltallm_batch_work_claim_latency_seconds" in metrics_text
+    assert "deltallm_batch_finalization_claims_total" in metrics_text
+    assert "deltallm_batch_claim_empty_jobs_total" in metrics_text
     assert 'result="scheduled"' in metrics_text
     assert "deltallm_batch_create_latency_seconds" in metrics_text
     assert "deltallm_batch_finalize_latency_seconds" in metrics_text

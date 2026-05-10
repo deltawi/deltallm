@@ -281,6 +281,13 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
                 item_buffer_multiplier=cfg.general_settings.embeddings_batch_item_buffer_multiplier,
                 finalization_page_size=cfg.general_settings.embeddings_batch_finalization_page_size,
                 item_claim_limit=cfg.general_settings.embeddings_batch_item_claim_limit,
+                scheduler_claim_mode=cfg.general_settings.embeddings_batch_scheduler_claim_mode,
+                work_claim_max_items=cfg.general_settings.embeddings_batch_work_claim_max_items,
+                work_claim_max_work_units=cfg.general_settings.embeddings_batch_work_claim_max_work_units,
+                work_claim_min_items_for_microbatch=(
+                    cfg.general_settings.embeddings_batch_work_claim_min_items_for_microbatch
+                ),
+                finalization_first=cfg.general_settings.embeddings_batch_finalization_first,
                 max_attempts=cfg.general_settings.embeddings_batch_max_attempts,
                 retry_initial_seconds=cfg.general_settings.embeddings_batch_retry_initial_seconds,
                 retry_max_seconds=cfg.general_settings.embeddings_batch_retry_max_seconds,

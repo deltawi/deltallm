@@ -129,6 +129,178 @@ async def test_claim_items_honors_not_before_at_for_pending_rows() -> None:
 
 
 @pytest.mark.asyncio
+async def test_claim_next_work_uses_item_slice_claim_shape() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    claim = await repository.claim_next_work(
+        worker_id="worker-1",
+        max_items=10,
+        max_work_units=25,
+        lease_seconds=120,
+    )
+
+    assert claim is None
+    assert "j.status IN ('queued', 'in_progress')" in prisma.sql
+    assert "j.locked_by IS NULL OR j.lease_expires_at IS NULL OR j.lease_expires_at < NOW()" in prisma.sql
+    assert "ORDER BY j.last_scheduled_at ASC NULLS FIRST" in prisma.sql
+    assert "WITH selected_job AS" in prisma.sql
+    assert "FOR KEY SHARE SKIP LOCKED" in prisma.sql
+    # Single-job selection: no candidate_jobs CTE and no per-candidate seed lock.
+    assert "WITH candidate_jobs AS" not in prisma.sql
+    assert "claimable_jobs" not in prisma.sql
+    assert "LIMIT GREATEST($2 - 1, 0)" not in prisma.sql
+    # locked_items operates on the single selected_job.
+    assert "i.status = 'pending'" in prisma.sql
+    assert "i.not_before_at IS NULL OR i.not_before_at <= NOW()" in prisma.sql
+    assert "FOR UPDATE SKIP LOCKED" in prisma.sql
+    assert "LIMIT $2" in prisma.sql
+    assert "SUM(estimated_work_units) OVER" in prisma.sql
+    # locked_items LIMIT $2 enforces the max-items cap, eligible_items only
+    # enforces the work-unit cap with claim_rank = 1 as the at-least-one fallback.
+    assert "claim_rank <= $2" not in prisma.sql
+    assert "cumulative_work_units <= $3 OR claim_rank = 1" in prisma.sql
+    # updated_items must depend on updated_job for finalize-race symmetry.
+    assert "FROM eligible_items s, updated_job uj" in prisma.sql
+    assert "locked_by = $1" in prisma.sql
+    assert "locked_by = NULL" in prisma.sql
+    assert "first_claimed_at = COALESCE" in prisma.sql
+    assert "queue_wait_observed" in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_claim_next_work_returns_none_when_lease_unparseable(caplog: pytest.LogCaptureFixture) -> None:
+    class _BadLeasePrisma:
+        async def query_raw(self, sql, *params):
+            del sql, params
+            return [
+                {
+                    "batch_id": "b-bad-lease",
+                    "endpoint": "/v1/embeddings",
+                    "model_group": "m1",
+                    "tenant_scope_type": "api_key",
+                    "tenant_scope_id": "tok",
+                    "service_tier": "standard",
+                    "size_class": "xs",
+                    "queue_entered_at": None,
+                    "previous_status": "queued",
+                    "previous_first_claimed_at": None,
+                    "queue_wait_observed": False,
+                    "item_ids": ["item-1"],
+                    "claimed_work_units": 1,
+                    "lease_expires_at": "not-a-timestamp",
+                    "reclaimed_items": 0,
+                }
+            ]
+
+    repository = BatchRepository(prisma_client=_BadLeasePrisma())
+    with caplog.at_level(logging.ERROR, logger="src.batch.repositories.job_repository"):
+        claim = await repository.claim_next_work(
+            worker_id="w1",
+            max_items=4,
+            max_work_units=8,
+            lease_seconds=60,
+        )
+
+    assert claim is None
+    assert "missing lease_expires_at" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_claim_next_finalization_uses_job_lease_only_for_finalizing_jobs() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    job = await repository.claim_next_finalization(worker_id="worker-1", lease_seconds=120)
+
+    assert job is None
+    assert "WHERE status = 'finalizing'" in prisma.sql
+    assert "locked_by = $1" in prisma.sql
+    assert "FOR UPDATE SKIP LOCKED" in prisma.sql
+    assert "RETURNING j.*" in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_diagnose_empty_work_claim_uses_bounded_queue_state_probe() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    reason = await repository.diagnose_empty_work_claim()
+
+    assert reason == "no_available_work"
+    assert "WITH candidate_jobs AS" in prisma.sql
+    assert "WHERE j.status IN ('queued', 'in_progress')" in prisma.sql
+    assert "LIMIT 100" in prisma.sql
+    assert "unleased_jobs AS" in prisma.sql
+    assert "claimable_probe AS" in prisma.sql
+    assert "FOR UPDATE SKIP LOCKED" in prisma.sql
+    assert "EXISTS (" in prisma.sql
+    assert "COUNT(*) FILTER" not in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_diagnose_empty_work_claim_classifies_future_retry_delay() -> None:
+    class _DiagnosticPrisma:
+        async def query_raw(self, sql: str, *params):
+            del sql, params
+            return [
+                {
+                    "active_jobs": 1,
+                    "unleased_jobs": 1,
+                    "pending_or_in_progress_items": 1,
+                    "pending_items": 2,
+                    "in_progress_items": 0,
+                    "due_pending_items": 0,
+                    "future_pending_items": 2,
+                    "runnable_items": 0,
+                    "claimable_items": 0,
+                }
+            ]
+
+    repository = BatchRepository(prisma_client=_DiagnosticPrisma())
+
+    assert await repository.diagnose_empty_work_claim() == "not_before_future"
+
+
+@pytest.mark.asyncio
+async def test_diagnose_empty_work_claim_prefers_lock_contention_for_mixed_due_and_future() -> None:
+    class _DiagnosticPrisma:
+        async def query_raw(self, sql: str, *params):
+            del sql, params
+            return [
+                {
+                    "active_jobs": 1,
+                    "unleased_jobs": 1,
+                    "pending_or_in_progress_items": 1,
+                    "pending_items": 2,
+                    "in_progress_items": 0,
+                    "due_pending_items": 1,
+                    "future_pending_items": 1,
+                    "runnable_items": 0,
+                    "claimable_items": 0,
+                }
+            ]
+
+    repository = BatchRepository(prisma_client=_DiagnosticPrisma())
+
+    assert await repository.diagnose_empty_work_claim() == "all_items_locked"
+
+
+@pytest.mark.asyncio
+async def test_release_claim_items_releases_only_owned_in_progress_rows() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    released = await repository.release_claim_items(item_ids=["item-1", "item-2"], worker_id="worker-1")
+
+    assert released == 0
+    assert "status = 'pending'" in prisma.sql
+    assert "i.locked_by = $3" in prisma.sql
+    assert "i.status = 'in_progress'" in prisma.sql
+    assert "lease_expires_at = NULL" in prisma.sql
+
+
+@pytest.mark.asyncio
 async def test_claim_items_logs_reclaimed_expired_rows(caplog: pytest.LogCaptureFixture):
     class _ReclaimPrisma:
         async def query_raw(self, sql: str, *params):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -20,7 +21,13 @@ from src.batch.worker_types import (
 )
 from src.chat.executor import execute_chat
 from src.metrics import (
+    increment_batch_claim_empty_job,
+    increment_batch_finalization_claim,
+    increment_batch_work_claim,
     observe_batch_item_execution_latency,
+    observe_batch_work_claim_items,
+    observe_batch_work_claim_latency,
+    observe_batch_work_claim_units,
     publish_batch_runtime_summary,
     set_batch_worker_saturation,
 )
@@ -123,6 +130,19 @@ class BatchExecutorWorker:
             self.config.worker_concurrency * self.config.item_buffer_multiplier,
         )
 
+    def _work_claim_max_items(self) -> int:
+        configured = int(self.config.work_claim_max_items or 0)
+        if configured > 0:
+            return max(1, min(configured, 200))
+        microbatch_floor = max(1, min(int(self.config.work_claim_min_items_for_microbatch or 1), 200))
+        return max(microbatch_floor, min(self._claim_limit(), 200))
+
+    def _work_claim_max_work_units(self) -> int:
+        configured = int(self.config.work_claim_max_work_units or 0)
+        if configured > 0:
+            return configured
+        return self._work_claim_max_items() * 4
+
     async def _refresh_batch_runtime_metrics(self) -> None:
         try:
             summary = await self.repository.summarize_runtime_statuses(now=datetime.now(tz=UTC))
@@ -132,6 +152,11 @@ class BatchExecutorWorker:
             return
 
     async def process_once(self) -> bool:
+        if self.config.scheduler_claim_mode == "work_slice":
+            return await self._process_once_work_slice()
+        return await self._process_once_job_fifo()
+
+    async def _process_once_job_fifo(self) -> bool:
         job = await self.repository.claim_next_job(
             worker_id=self.config.worker_id,
             lease_seconds=self.config.job_lease_seconds,
@@ -182,6 +207,149 @@ class BatchExecutorWorker:
             )
             await self._stop_heartbeat(job_heartbeat)
             await self.repository.release_job_lease(batch_id=job.batch_id, worker_id=self.config.worker_id)
+
+    async def _process_finalization_job(self, job) -> None:  # noqa: ANN001
+        logger.info("batch finalization claimed id=%s", job.batch_id)
+        job_heartbeat = self._start_heartbeat(
+            renew=lambda: self.repository.renew_job_lease(
+                batch_id=job.batch_id,
+                worker_id=self.config.worker_id,
+                lease_seconds=self.config.job_lease_seconds,
+            ),
+            label=f"finalization:{job.batch_id}",
+        )
+        try:
+            await self._finalize_with_retry(job)
+            await self._refresh_batch_runtime_metrics()
+        finally:
+            set_batch_worker_saturation(
+                worker_id=self.config.worker_id,
+                active=0,
+                capacity=self.config.worker_concurrency,
+            )
+            await self._stop_heartbeat(job_heartbeat)
+            await self.repository.release_job_lease(batch_id=job.batch_id, worker_id=self.config.worker_id)
+
+    async def _try_process_finalization_claim(self) -> bool:
+        job = await self.repository.claim_next_finalization(
+            worker_id=self.config.worker_id,
+            lease_seconds=self.config.job_lease_seconds,
+        )
+        if job is None:
+            increment_batch_finalization_claim(result="empty")
+            return False
+        increment_batch_finalization_claim(result="claimed")
+        await self._process_finalization_job(job)
+        return True
+
+    async def _process_once_work_slice(self) -> bool:
+        if self.config.finalization_first and await self._try_process_finalization_claim():
+            return True
+
+        claim_started = time.perf_counter()
+        claim = await self.repository.claim_next_work(
+            worker_id=self.config.worker_id,
+            max_items=self._work_claim_max_items(),
+            max_work_units=self._work_claim_max_work_units(),
+            lease_seconds=self.config.item_lease_seconds,
+        )
+        observe_batch_work_claim_latency(
+            claim_mode=self.config.scheduler_claim_mode,
+            latency_seconds=time.perf_counter() - claim_started,
+        )
+        if claim is None:
+            increment_batch_work_claim(result="empty", claim_mode=self.config.scheduler_claim_mode)
+            set_batch_worker_saturation(
+                worker_id=self.config.worker_id,
+                active=0,
+                capacity=self.config.worker_concurrency,
+            )
+            # Try finalization fallback first to avoid running the empty-claim
+            # diagnostic when there's actually work to do; the diagnostic is a
+            # multi-EXISTS query worth saving on every successful fallback.
+            if not self.config.finalization_first and await self._try_process_finalization_claim():
+                return True
+            increment_batch_claim_empty_job(reason=await self._empty_work_claim_reason())
+            return False
+
+        increment_batch_work_claim(result="claimed", claim_mode=self.config.scheduler_claim_mode)
+        observe_batch_work_claim_items(
+            claim_mode=self.config.scheduler_claim_mode,
+            count=len(claim.item_ids),
+        )
+        observe_batch_work_claim_units(
+            claim_mode=self.config.scheduler_claim_mode,
+            work_units=claim.claimed_work_units,
+        )
+        logger.info(
+            "batch work slice claimed id=%s claim_id=%s count=%s work_units=%s",
+            claim.batch_id,
+            claim.claim_id,
+            len(claim.item_ids),
+            claim.claimed_work_units,
+        )
+
+        # Cancel branch already releases items explicitly; skip the redundant
+        # finally release in that case to save one DB round trip per cancel.
+        needs_finally_release = True
+        try:
+            job = await self.repository.get_job(claim.batch_id)
+            if job is None:
+                logger.warning("batch work slice skipped after missing job id=%s", claim.batch_id)
+                increment_batch_work_claim(result="missing_job", claim_mode=self.config.scheduler_claim_mode)
+                return True
+
+            if job.cancel_requested_at is not None:
+                await self.repository.release_claim_items(
+                    item_ids=claim.item_ids,
+                    worker_id=self.config.worker_id,
+                )
+                await self.repository.mark_pending_items_cancelled(job.batch_id)
+                needs_finally_release = False
+            else:
+                items = await self.repository.load_claim_items(claim.item_ids)
+                if not items:
+                    logger.warning("batch work slice skipped after missing claimed items id=%s", claim.batch_id)
+                    increment_batch_work_claim(result="missing_items", claim_mode=self.config.scheduler_claim_mode)
+                else:
+                    await self._process_items(job, items)
+        finally:
+            if needs_finally_release:
+                released = await self.repository.release_claim_items(
+                    item_ids=claim.item_ids,
+                    worker_id=self.config.worker_id,
+                )
+                if released:
+                    logger.info(
+                        "batch work slice released unfinished items id=%s claim_id=%s count=%s",
+                        claim.batch_id,
+                        claim.claim_id,
+                        released,
+                    )
+            set_batch_worker_saturation(
+                worker_id=self.config.worker_id,
+                active=0,
+                capacity=self.config.worker_concurrency,
+            )
+
+        refreshed_jobs = await self.repository.refresh_jobs_after_claim([claim.batch_id])
+        for refreshed in refreshed_jobs:
+            if refreshed.status == BatchJobStatus.FINALIZING:
+                await self._try_process_finalization_claim()
+                break
+        await self._refresh_batch_runtime_metrics()
+        return True
+
+    async def _empty_work_claim_reason(self) -> str:
+        diagnose_empty_work_claim = getattr(self.repository, "diagnose_empty_work_claim", None)
+        if not callable(diagnose_empty_work_claim):
+            return "no_available_work"
+        try:
+            reason = await diagnose_empty_work_claim()
+        except Exception:
+            logger.warning("batch work claim empty diagnostic failed", exc_info=True)
+            return "no_available_work"
+        return str(reason or "no_available_work")
 
     async def _prepare_item_for_execution(self, job, item) -> _PreparedEmbeddingItem | _PreparedChatItem:  # noqa: ANN001
         self._sync_dependencies()

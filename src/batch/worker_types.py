@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from src.batch.embedding_microbatch import _ExecutionSignature
 from src.models.requests import ChatCompletionRequest, EmbeddingRequest
@@ -23,6 +23,11 @@ class BatchWorkerConfig:
     item_buffer_multiplier: int = 2
     finalization_page_size: int = 500
     item_claim_limit: int = 20
+    scheduler_claim_mode: Literal["job_fifo", "work_slice"] = "job_fifo"
+    work_claim_max_items: int = 0
+    work_claim_max_work_units: int = 0
+    work_claim_min_items_for_microbatch: int = 4
+    finalization_first: bool = True
     max_attempts: int = 3
     retry_initial_seconds: int = 5
     retry_max_seconds: int = 300

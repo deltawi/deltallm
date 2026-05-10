@@ -586,6 +586,46 @@ class BatchItemRepository:
         )
         return [item_from_row(row) for row in rows]
 
+    async def release_claim_items(
+        self,
+        *,
+        item_ids: list[str],
+        worker_id: str,
+    ) -> int:
+        if self.prisma is None or not item_ids:
+            return 0
+
+        values_sql: list[str] = []
+        params: list[Any] = []
+        for index, item_id in enumerate(item_ids, start=1):
+            values_sql.append(f"(${index})")
+            params.append(item_id)
+
+        worker_id_param = len(params) + 1
+        params.append(worker_id)
+        rows = await self.prisma.query_raw(
+            f"""
+            WITH payload(item_id) AS (
+                VALUES {", ".join(values_sql)}
+            ),
+            updated AS (
+                UPDATE deltallm_batch_item i
+                SET status = 'pending',
+                    locked_by = NULL,
+                    lease_expires_at = NULL,
+                    not_before_at = NULL
+                FROM payload p
+                WHERE i.item_id = p.item_id
+                  AND i.locked_by = ${worker_id_param}
+                  AND i.status = 'in_progress'
+                RETURNING i.item_id
+            )
+            SELECT item_id FROM updated
+            """,
+            *params,
+        )
+        return len(rows)
+
     async def list_items_page(
         self,
         *,
