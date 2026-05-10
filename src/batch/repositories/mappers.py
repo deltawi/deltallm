@@ -17,7 +17,9 @@ def parse_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
-        return value
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
     if isinstance(value, str):
         try:
             return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
@@ -92,6 +94,21 @@ def job_from_row(row: dict[str, Any]) -> BatchJobRecord:
         completed_at=parse_datetime(row.get("completed_at")),
         expires_at=parse_datetime(row.get("expires_at")),
         created_by_organization_id=row.get("created_by_organization_id"),
+        scheduler_version=row.get("scheduler_version"),
+        scheduling_model=row.get("scheduling_model"),
+        scheduling_model_group=row.get("scheduling_model_group"),
+        scheduling_endpoint=row.get("scheduling_endpoint"),
+        tenant_scope_type=row.get("tenant_scope_type"),
+        tenant_scope_id=row.get("tenant_scope_id"),
+        service_tier=str(row.get("service_tier") or "standard"),
+        estimated_work_units=int(row.get("estimated_work_units") or 0),
+        remaining_work_units=int(row.get("remaining_work_units") or 0),
+        size_class=str(row.get("size_class") or "xs"),
+        queue_entered_at=parse_datetime(row.get("queue_entered_at")),
+        first_claimed_at=parse_datetime(row.get("first_claimed_at")),
+        last_claimed_at=parse_datetime(row.get("last_claimed_at")),
+        last_scheduled_at=parse_datetime(row.get("last_scheduled_at")),
+        scheduler_debug=parse_json_dict(row.get("scheduler_debug")),
     )
 
 
@@ -115,4 +132,9 @@ def item_from_row(row: dict[str, Any]) -> BatchItemRecord:
         created_at=parse_datetime(row.get("created_at")) or datetime.now(tz=UTC),
         started_at=parse_datetime(row.get("started_at")),
         completed_at=parse_datetime(row.get("completed_at")),
+        scheduling_model=row.get("scheduling_model"),
+        scheduling_model_group=row.get("scheduling_model_group"),
+        estimated_work_units=int(row.get("estimated_work_units") or 1),
+        not_before_at=parse_datetime(row.get("not_before_at")),
+        last_scheduled_at=parse_datetime(row.get("last_scheduled_at")),
     )

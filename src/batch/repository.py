@@ -26,17 +26,26 @@ from src.batch.repositories import (
 class BatchRepository:
     """Compatibility facade delegating batch persistence by concern."""
 
-    def __init__(self, prisma_client: Any | None = None) -> None:
+    def __init__(self, prisma_client: Any | None = None, *, model_group_resolver: Any | None = None) -> None:
         self.prisma = prisma_client
+        self.model_group_resolver = model_group_resolver
         self.create_sessions = BatchCreateSessionRepository(prisma_client)
         self.files = BatchFileRepository(prisma_client)
-        self.jobs = BatchJobRepository(prisma_client)
+        self.jobs = BatchJobRepository(prisma_client, model_group_resolver=model_group_resolver)
         self.items = BatchItemRepository(prisma_client)
         self.completion_outbox = BatchCompletionOutboxRepository(prisma_client)
-        self.maintenance = BatchMaintenanceRepository(prisma_client)
+        self.maintenance = BatchMaintenanceRepository(
+            prisma_client,
+            model_group_resolver=model_group_resolver,
+        )
 
     def with_prisma(self, prisma_client: Any | None) -> BatchRepository:
-        return BatchRepository(prisma_client)
+        return BatchRepository(prisma_client, model_group_resolver=self.model_group_resolver)
+
+    def set_model_group_resolver(self, model_group_resolver: Any | None) -> None:
+        self.model_group_resolver = model_group_resolver
+        self.jobs.model_group_resolver = model_group_resolver
+        self.maintenance.model_group_resolver = model_group_resolver
 
     async def create_file(
         self,
@@ -86,6 +95,18 @@ class BatchRepository:
         execution_mode: str = "managed_internal",
         status: str | BatchJobStatus = BatchJobStatus.QUEUED,
         total_items: int = 0,
+        scheduler_version: str | None = None,
+        scheduling_model: str | None = None,
+        scheduling_model_group: str | None = None,
+        scheduling_endpoint: str | None = None,
+        tenant_scope_type: str | None = None,
+        tenant_scope_id: str | None = None,
+        service_tier: str | None = None,
+        estimated_work_units: int | None = None,
+        remaining_work_units: int | None = None,
+        size_class: str | None = None,
+        queue_entered_at: datetime | None = None,
+        scheduler_debug: dict[str, Any] | None = None,
     ) -> BatchJobRecord | None:
         return await self.jobs.create_job(
             batch_id=batch_id,
@@ -101,6 +122,18 @@ class BatchRepository:
             execution_mode=execution_mode,
             status=status,
             total_items=total_items,
+            scheduler_version=scheduler_version,
+            scheduling_model=scheduling_model,
+            scheduling_model_group=scheduling_model_group,
+            scheduling_endpoint=scheduling_endpoint,
+            tenant_scope_type=tenant_scope_type,
+            tenant_scope_id=tenant_scope_id,
+            service_tier=service_tier,
+            estimated_work_units=estimated_work_units,
+            remaining_work_units=remaining_work_units,
+            size_class=size_class,
+            queue_entered_at=queue_entered_at,
+            scheduler_debug=scheduler_debug,
         )
 
     async def get_job(self, batch_id: str) -> BatchJobRecord | None:
@@ -139,10 +172,12 @@ class BatchRepository:
 
     async def summarize_runtime_statuses(self, *, now: datetime) -> dict[str, float]:
         job_summary = await self.jobs.summarize_runtime_statuses()
+        scheduler_summary = await self.jobs.summarize_scheduler_queues(now=now)
         item_summary = await self.items.summarize_runtime_statuses(now=now)
         return {
             **job_summary,
             **item_summary,
+            **scheduler_summary,
         }
 
     async def set_job_queued(self, batch_id: str, total_items: int) -> BatchJobRecord | None:
@@ -450,6 +485,9 @@ class BatchRepository:
 
     async def delete_job_metadata(self, batch_id: str) -> None:
         await self.maintenance.delete_job_metadata(batch_id)
+
+    async def backfill_scheduler_dimensions(self, *, limit: int = 500) -> dict[str, int]:
+        return await self.maintenance.backfill_scheduler_dimensions(limit=limit)
 
     async def list_expired_unreferenced_files(self, *, now: datetime, limit: int = 100) -> list[BatchFileRecord]:
         return await self.files.list_expired_unreferenced_files(now=now, limit=limit)

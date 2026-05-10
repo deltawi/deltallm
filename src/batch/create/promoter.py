@@ -12,12 +12,28 @@ from src.batch.create.defaults import (
     DEFAULT_CREATE_SESSION_PROMOTION_TX_MAX_WAIT_SECONDS,
     DEFAULT_CREATE_SESSION_PROMOTION_TX_TIMEOUT_SECONDS,
 )
-from src.batch.create.models import BatchCreateSessionRecord, BatchCreateSessionStatus
+from src.batch.create.models import (
+    BatchCreateSessionRecord,
+    BatchCreateSessionStatus,
+    BatchCreateStagedRequest,
+)
 from src.batch.scopes import batch_pending_scope_target_for_session
 from src.batch.create.staging import BatchCreateStagingBackend, staged_artifact_from_session
 from src.batch.models import BatchItemCreate, BatchJobRecord, BatchJobStatus
+from src.batch.scheduling import (
+    ESTIMATOR_VERSION,
+    MIXED_MODEL_GROUP,
+    estimate_request_work_units,
+    resolve_model_group,
+    resolve_scheduler_version,
+    size_class_for_work_units,
+)
 from src.batch.storage import BatchArtifactLineTooLongError
-from src.metrics import increment_batch_create_session_action
+from src.metrics import (
+    increment_batch_create_session_action,
+    increment_batch_mixed_model_job,
+    increment_batch_scheduler_shadow_decision,
+)
 
 if TYPE_CHECKING:
     from src.batch.repository import BatchRepository
@@ -40,6 +56,16 @@ class BatchCreatePromotionResult:
     job: BatchJobRecord | None = None
 
 
+@dataclass
+class BatchCreatePromotionSchedulingSummary:
+    scheduling_model: str | None
+    scheduling_model_group: str | None
+    estimated_work_units: int
+    remaining_work_units: int
+    size_class: str
+    mixed_model: bool = False
+
+
 class BatchCreatePromotionError(RuntimeError):
     def __init__(self, message: str, *, code: str, retryable: bool) -> None:
         super().__init__(message)
@@ -59,6 +85,11 @@ class BatchCreateSessionPromoter:
         soft_precheck_enabled: bool = True,
         tx_max_wait_seconds: float = DEFAULT_CREATE_SESSION_PROMOTION_TX_MAX_WAIT_SECONDS,
         tx_timeout_seconds: float = DEFAULT_CREATE_SESSION_PROMOTION_TX_TIMEOUT_SECONDS,
+        model_group_resolver: Any | None = None,
+        scheduler_enabled: bool = False,
+        scheduler_shadow_enabled: bool = False,
+        strict_model_homogeneity_enabled: bool = False,
+        default_service_tier: str = "standard",
     ) -> None:
         self.repository = repository
         self.staging = staging
@@ -68,6 +99,11 @@ class BatchCreateSessionPromoter:
         self.soft_precheck_enabled = bool(soft_precheck_enabled)
         self.tx_max_wait = timedelta(seconds=max(float(tx_max_wait_seconds), 0.001))
         self.tx_timeout = timedelta(seconds=max(float(tx_timeout_seconds), 0.001))
+        self.model_group_resolver = model_group_resolver
+        self.scheduler_enabled = bool(scheduler_enabled)
+        self.scheduler_shadow_enabled = bool(scheduler_shadow_enabled)
+        self.strict_model_homogeneity_enabled = bool(strict_model_homogeneity_enabled)
+        self.default_service_tier = str(default_service_tier or "standard").strip() or "standard"
 
     async def promote_session(self, session_id: str) -> BatchCreatePromotionResult:
         session = await self.repository.create_sessions.get_session(session_id)
@@ -94,7 +130,7 @@ class BatchCreateSessionPromoter:
             raise
 
         try:
-            spool, item_count = await self._spool_staged_items(session)
+            spool, item_count, scheduling_summary = await self._spool_staged_items(session)
         except BatchCreatePromotionError as exc:
             await self._record_failure(session=session, error=exc)
             increment_batch_create_session_action(action="promotion", status="error")
@@ -105,6 +141,7 @@ class BatchCreateSessionPromoter:
                 session_id=session_id,
                 spool=spool,
                 item_count=item_count,
+                scheduling_summary=scheduling_summary,
             )
         except BatchCreatePromotionError as exc:
             await self._record_failure(session=session, error=exc)
@@ -140,7 +177,10 @@ class BatchCreateSessionPromoter:
             job=job,
         )
 
-    async def _spool_staged_items(self, session: BatchCreateSessionRecord) -> tuple[Any, int]:
+    async def _spool_staged_items(
+        self,
+        session: BatchCreateSessionRecord,
+    ) -> tuple[Any, int, BatchCreatePromotionSchedulingSummary]:
         artifact = staged_artifact_from_session(session)
         spool = tempfile.SpooledTemporaryFile(
             max_size=max(1_048_576, self.insert_chunk_size * 2_048),
@@ -149,13 +189,52 @@ class BatchCreateSessionPromoter:
             newline="\n",
         )
         count = 0
+        first_model: str | None = None
+        first_model_group: str | None = None
+        estimated_work_units = 0
+        mixed_model = False
         try:
             async for record in self.staging.read_records(artifact):
                 count += 1
+                scheduling_model = record.scheduling_model or str((record.request_body or {}).get("model") or "").strip() or None
+                scheduling_model_group = record.scheduling_model_group or resolve_model_group(
+                    scheduling_model,
+                    self.model_group_resolver,
+                )
+                item_work_units = max(
+                    1,
+                    int(
+                        record.estimated_work_units
+                        if record.estimated_work_units is not None
+                        else estimate_request_work_units(session.endpoint, record.request_body)
+                    ),
+                )
+                if first_model is None:
+                    first_model = scheduling_model
+                    first_model_group = scheduling_model_group
+                elif scheduling_model != first_model or scheduling_model_group != first_model_group:
+                    mixed_model = True
+                    if self.strict_model_homogeneity_enabled:
+                        increment_batch_mixed_model_job(mode="reject")
+                        raise BatchCreatePromotionError(
+                            "Staged batch create artifact contains multiple scheduler model dimensions",
+                            code="mixed_model_batch",
+                            retryable=False,
+                        )
                 await asyncio.to_thread(
                     spool.write,
-                    json.dumps(record.to_jsonable(), separators=(",", ":"), ensure_ascii=True) + "\n",
+                    json.dumps(
+                        {
+                            **record.to_jsonable(),
+                            "scheduling_model": scheduling_model,
+                            "scheduling_model_group": scheduling_model_group,
+                            "estimated_work_units": item_work_units,
+                        },
+                        separators=(",", ":"),
+                        ensure_ascii=True,
+                    ) + "\n",
                 )
+                estimated_work_units += item_work_units
             await asyncio.to_thread(spool.flush)
             await asyncio.to_thread(spool.seek, 0)
         except BatchArtifactLineTooLongError as exc:
@@ -172,6 +251,9 @@ class BatchCreateSessionPromoter:
                 code="staged_artifact_invalid",
                 retryable=False,
             ) from exc
+        except BatchCreatePromotionError:
+            await asyncio.to_thread(spool.close)
+            raise
         except Exception as exc:
             await asyncio.to_thread(spool.close)
             raise BatchCreatePromotionError(
@@ -190,7 +272,26 @@ class BatchCreateSessionPromoter:
                 code="item_count_mismatch",
                 retryable=False,
             )
-        return spool, count
+        if mixed_model:
+            increment_batch_mixed_model_job(mode="warn")
+        summary_model = MIXED_MODEL_GROUP if mixed_model else first_model or session.inferred_model
+        summary_model_group = (
+            MIXED_MODEL_GROUP
+            if mixed_model
+            else first_model_group or resolve_model_group(session.inferred_model, self.model_group_resolver)
+        )
+        return (
+            spool,
+            count,
+            BatchCreatePromotionSchedulingSummary(
+                scheduling_model=summary_model,
+                scheduling_model_group=summary_model_group,
+                estimated_work_units=max(1, estimated_work_units),
+                remaining_work_units=max(1, estimated_work_units),
+                size_class=size_class_for_work_units(estimated_work_units),
+                mixed_model=mixed_model,
+            ),
+        )
 
     async def _promote_spooled_session(
         self,
@@ -198,6 +299,7 @@ class BatchCreateSessionPromoter:
         session_id: str,
         spool: Any,
         item_count: int,
+        scheduling_summary: BatchCreatePromotionSchedulingSummary,
     ) -> BatchCreatePromotionResult:
         db = getattr(self.repository, "prisma", None)
         if db is None or not hasattr(db, "tx") or not hasattr(self.repository, "with_prisma"):
@@ -263,6 +365,10 @@ class BatchCreateSessionPromoter:
             await self._enforce_pending_capacity(session=session, repository=tx_repository)
 
             await asyncio.to_thread(spool.seek, 0)
+            scheduler_version = resolve_scheduler_version(
+                active_enabled=self.scheduler_enabled,
+                shadow_enabled=self.scheduler_shadow_enabled,
+            )
             job = await tx_repository.create_job(
                 batch_id=session.target_batch_id,
                 endpoint=session.endpoint,
@@ -277,6 +383,19 @@ class BatchCreateSessionPromoter:
                 execution_mode="managed_internal",
                 status=BatchJobStatus.QUEUED,
                 total_items=item_count,
+                scheduler_version=scheduler_version,
+                scheduling_model=scheduling_summary.scheduling_model,
+                scheduling_model_group=scheduling_summary.scheduling_model_group,
+                scheduling_endpoint=session.endpoint,
+                service_tier=session.effective_service_tier or self.default_service_tier,
+                estimated_work_units=scheduling_summary.estimated_work_units,
+                remaining_work_units=scheduling_summary.remaining_work_units,
+                size_class=scheduling_summary.size_class,
+                scheduler_debug={
+                    "estimator_version": ESTIMATOR_VERSION,
+                    "mixed_model": scheduling_summary.mixed_model,
+                    "strict_model_homogeneity_enabled": self.strict_model_homogeneity_enabled,
+                },
             )
             if job is None:
                 raise BatchCreatePromotionError(
@@ -310,6 +429,8 @@ class BatchCreateSessionPromoter:
                     code="session_update_failed",
                     retryable=True,
                 )
+            if self.scheduler_shadow_enabled and scheduler_version == "scheduler_v2_shadow":
+                increment_batch_scheduler_shadow_decision(result="recorded")
 
             return BatchCreatePromotionResult(
                 session_id=completed.session_id,
@@ -380,11 +501,16 @@ class BatchCreateSessionPromoter:
             if not line:
                 continue
             payload = json.loads(line)
+            record = BatchCreateStagedRequest.from_jsonable(payload)
             buffer.append(
                 BatchItemCreate(
-                    line_number=int(payload["line_number"]),
-                    custom_id=str(payload["custom_id"]),
-                    request_body=dict(payload["request_body"]),
+                    line_number=record.line_number,
+                    custom_id=record.custom_id,
+                    request_body=record.request_body,
+                    scheduling_model=record.scheduling_model,
+                    scheduling_model_group=record.scheduling_model_group,
+                    estimated_work_units=int(record.estimated_work_units or 1),
+                    not_before_at=record.not_before_at,
                 )
             )
             if len(buffer) >= self.insert_chunk_size:

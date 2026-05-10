@@ -11,6 +11,7 @@ from src.batch.access import can_access_owned_resource
 from src.batch.models import BatchItemCreate, BatchJobStatus, OPENAI_BATCH_COMPLETION_WINDOW
 from src.batch.request_validation import parse_batch_input_line
 from src.batch.repository import BatchRepository
+from src.batch.scheduling import estimate_request_work_units, resolve_model_group
 from src.batch.storage import BatchArtifactLineTooLongError, BatchArtifactStorage
 from src.metrics import (
     increment_batch_artifact_failure,
@@ -60,6 +61,7 @@ class BatchService:
         callable_target_grant_service: CallableTargetGrantService | None = None,
         callable_target_scope_policy_mode: CallableTargetPolicyMode | str = "enforce",
         create_session_service: "BatchCreateSessionService" | None = None,
+        model_group_resolver: Any | None = None,
     ) -> None:
         self.repository = repository
         self.storage = storage
@@ -77,6 +79,7 @@ class BatchService:
         self.callable_target_grant_service = callable_target_grant_service
         self.callable_target_scope_policy_mode = callable_target_scope_policy_mode
         self.create_session_service = create_session_service
+        self.model_group_resolver = model_group_resolver
 
     def bind_create_session_service(self, create_session_service: "BatchCreateSessionService" | None) -> None:
         self.create_session_service = create_session_service
@@ -183,6 +186,9 @@ class BatchService:
                 line_number=parsed.line_number,
                 custom_id=parsed.custom_id,
                 request_body=parsed.request_body,
+                scheduling_model=parsed.model,
+                scheduling_model_group=resolve_model_group(parsed.model, self.model_group_resolver),
+                estimated_work_units=estimate_request_work_units(endpoint, parsed.request_body),
             ),
             parsed.model,
         )

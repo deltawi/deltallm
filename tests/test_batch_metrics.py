@@ -21,12 +21,22 @@ from src.metrics import (
     observe_batch_model_group_deferral_seconds,
     observe_batch_microbatch_retry_delay,
     publish_batch_create_session_summary,
+    publish_batch_runtime_summary,
     set_batch_create_session_count,
     set_batch_item_count,
     set_batch_job_count,
     set_batch_oldest_item_age,
     set_batch_worker_saturation,
 )
+
+
+def _metric_value(metrics_text: str, metric_name: str, labels: dict[str, str]) -> float | None:
+    for line in metrics_text.splitlines():
+        if not line.startswith(f"{metric_name}{{"):
+            continue
+        if all(f'{key}="{value}"' in line for key, value in labels.items()):
+            return float(line.rsplit(" ", 1)[1])
+    return None
 
 
 def test_batch_metrics_are_exported() -> None:
@@ -83,3 +93,58 @@ def test_batch_metrics_are_exported() -> None:
     assert "deltallm_batch_item_execution_latency_seconds" in metrics_text
     assert "deltallm_batch_item_retry_delay_seconds" in metrics_text
     assert "deltallm_batch_microbatch_retry_delay_seconds" in metrics_text
+
+
+def test_batch_runtime_summary_oldest_job_age_uses_max_across_tenant_scopes() -> None:
+    publish_batch_runtime_summary(
+        {
+            "scheduler_queue_rows": [
+                {
+                    "status": "queued",
+                    "model_group": "embeddings-small",
+                    "tenant_scope_type": "team",
+                    "service_tier": "standard",
+                    "size_class": "s",
+                    "jobs": 1,
+                    "work_units": 12,
+                    "oldest_job_age_seconds": 10.0,
+                },
+                {
+                    "status": "queued",
+                    "model_group": "embeddings-small",
+                    "tenant_scope_type": "api_key",
+                    "service_tier": "standard",
+                    "size_class": "s",
+                    "jobs": 1,
+                    "work_units": 8,
+                    "oldest_job_age_seconds": 45.0,
+                },
+                {
+                    "status": "queued",
+                    "model_group": "embeddings-small",
+                    "tenant_scope_type": "user",
+                    "service_tier": "standard",
+                    "size_class": "s",
+                    "jobs": 1,
+                    "work_units": 3,
+                    "oldest_job_age_seconds": 20.0,
+                },
+            ]
+        }
+    )
+
+    metrics_text = generate_latest(get_prometheus_registry()).decode("utf-8")
+
+    assert (
+        _metric_value(
+            metrics_text,
+            "deltallm_batch_oldest_job_age_seconds",
+            {
+                "status": "queued",
+                "model_group": "embeddings-small",
+                "service_tier": "standard",
+                "size_class": "s",
+            },
+        )
+        == 45.0
+    )

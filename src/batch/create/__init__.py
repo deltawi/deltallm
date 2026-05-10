@@ -13,6 +13,7 @@ from src.batch.create.models import (
 from src.batch.create.promoter import (
     BatchCreatePromotionError,
     BatchCreatePromotionResult,
+    BatchCreatePromotionSchedulingSummary,
     BatchCreateSessionPromoter,
 )
 from src.batch.create.session_repository import BatchCreateSessionRepository
@@ -29,6 +30,7 @@ __all__ = [
     "BatchCreateSessionAdminService",
     "BatchCreatePromotionError",
     "BatchCreatePromotionResult",
+    "BatchCreatePromotionSchedulingSummary",
     "BatchCreateSessionCleanupConfig",
     "BatchCreateSessionCleanupWorker",
     "BatchCreateSessionCreate",

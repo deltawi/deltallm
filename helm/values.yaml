@@ -233,6 +233,14 @@ config:
     embeddings_batch_storage_dir: .deltallm/batch-artifacts
     embeddings_batch_create_session_cleanup_enabled: true
     embeddings_batch_gc_enabled: true
+    embeddings_batch_scheduler_enabled: false
+    embeddings_batch_scheduler_shadow_enabled: false
+    embeddings_batch_scheduler_strict_model_homogeneity_enabled: false
+    embeddings_batch_scheduler_default_service_tier: standard
+    embeddings_batch_scheduler_estimator_version: v1
+    embeddings_batch_scheduler_backfill_enabled: false
+    embeddings_batch_scheduler_backfill_interval_seconds: 60
+    embeddings_batch_scheduler_backfill_scan_limit: 500
 
 s3:
   enabled: false
@@ -272,7 +280,7 @@ migrationJob:
     - -c
   args:
     - |
-      prisma migrate deploy --schema=./prisma/schema.prisma || prisma db push --schema=./prisma/schema.prisma --accept-data-loss
+      prisma migrate deploy --schema=./prisma/schema.prisma
 
 postgresql:
   enabled: false

@@ -515,6 +515,90 @@ async def _seed_batch_file(repository: BatchRepository) -> str:
     return file_record.file_id
 
 
+@pytest.mark.asyncio
+async def test_db_backed_backfill_repairs_complete_scheduler_aggregate_drift(batch_db) -> None:
+    scheduler_column_rows = await batch_db.query_raw(
+        """
+        SELECT COUNT(*)::int AS scheduler_columns
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'deltallm_batch_job'
+          AND column_name IN (
+              'scheduler_version',
+              'scheduling_model',
+              'scheduling_model_group',
+              'estimated_work_units',
+              'remaining_work_units'
+          )
+        """
+    )
+    scheduler_columns = int(dict(scheduler_column_rows[0]).get("scheduler_columns") or 0)
+    if scheduler_columns < 5:
+        pytest.skip("Phase 1 scheduler columns are missing; run prisma migrate deploy first")
+
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key=None,
+        created_by_user_id=None,
+        created_by_team_id="team-a",
+        expires_at=None,
+        status="queued",
+        total_items=2,
+        scheduler_version="fifo_v1",
+        scheduling_model="m1",
+        scheduling_model_group="m1",
+        scheduling_endpoint="/v1/embeddings",
+        tenant_scope_type="team",
+        tenant_scope_id="team-a",
+        service_tier="standard",
+        estimated_work_units=1_000,
+        remaining_work_units=1_000,
+        size_class="m",
+        scheduler_debug={"estimator_version": "v1"},
+    )
+    assert job is not None
+    inserted = await repository.create_items(
+        job.batch_id,
+        [
+            BatchItemCreate(
+                line_number=1,
+                custom_id="c1",
+                request_body={"model": "m1", "input": "a"},
+                scheduling_model="m1",
+                scheduling_model_group="m1",
+                estimated_work_units=5,
+            ),
+            BatchItemCreate(
+                line_number=2,
+                custom_id="c2",
+                request_body={"model": "m1", "input": "b"},
+                scheduling_model="m1",
+                scheduling_model_group="m1",
+                estimated_work_units=5,
+            ),
+        ],
+    )
+    assert inserted == 2
+
+    result = await repository.backfill_scheduler_dimensions(limit=10)
+
+    rows = await batch_db.query_raw(
+        """
+        SELECT estimated_work_units, remaining_work_units, size_class
+        FROM deltallm_batch_job
+        WHERE batch_id = $1
+        """,
+        job.batch_id,
+    )
+    assert result == {"jobs": 1, "items": 0}
+    assert rows == [{"estimated_work_units": 10, "remaining_work_units": 10, "size_class": "xs"}]
+
+
 async def _seed_create_session_input_file(repository: BatchRepository) -> str:
     file_record = await repository.create_file(
         purpose="batch",

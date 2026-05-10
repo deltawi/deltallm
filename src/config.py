@@ -410,6 +410,14 @@ class GeneralSettings(BaseModel):
     embeddings_batch_model_group_backpressure_enabled: bool = True
     embeddings_batch_model_group_backpressure_min_seconds: int = Field(default=5, ge=1)
     embeddings_batch_model_group_backpressure_max_seconds: int = Field(default=300, ge=1)
+    embeddings_batch_scheduler_enabled: bool = False
+    embeddings_batch_scheduler_shadow_enabled: bool = False
+    embeddings_batch_scheduler_strict_model_homogeneity_enabled: bool = False
+    embeddings_batch_scheduler_default_service_tier: str = "standard"
+    embeddings_batch_scheduler_estimator_version: Literal["v1"] = "v1"
+    embeddings_batch_scheduler_backfill_enabled: bool = False
+    embeddings_batch_scheduler_backfill_interval_seconds: float = Field(default=60.0, gt=0.0)
+    embeddings_batch_scheduler_backfill_scan_limit: int = Field(default=500, ge=1, le=5_000)
     batch_completed_artifact_retention_days: int = 7
     batch_failed_artifact_retention_days: int = 14
     batch_metadata_retention_days: int = 30
@@ -441,6 +449,11 @@ class GeneralSettings(BaseModel):
             raise ValueError(
                 "upstream_http_max_keepalive_connections must be less than or equal to "
                 "upstream_http_max_connections"
+            )
+        if self.embeddings_batch_scheduler_enabled:
+            raise ValueError(
+                "embeddings_batch_scheduler_enabled is reserved until active scheduler v2 "
+                "claiming is implemented; use embeddings_batch_scheduler_shadow_enabled for Phase 1"
             )
         return self
 

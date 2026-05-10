@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import aclosing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -44,10 +46,16 @@ async def test_batch_create_staging_round_trip_local(tmp_path: Path) -> None:
     backend = BatchCreateArtifactStorageBackend(
         storage=LocalBatchArtifactStorage(str(tmp_path / "batch-artifacts")),
     )
+    not_before_at = datetime(2026, 5, 9, 12, 30, tzinfo=UTC)
 
     artifact = await backend.write_records(
         [
-            BatchCreateStagedRequest(line_number=1, custom_id="req-1", request_body={"model": "m1", "input": "a"}),
+            BatchCreateStagedRequest(
+                line_number=1,
+                custom_id="req-1",
+                request_body={"model": "m1", "input": "a"},
+                not_before_at=not_before_at,
+            ),
             BatchCreateStagedRequest(line_number=2, custom_id="req-2", request_body={"model": "m1", "input": "b"}),
         ],
         filename="session-1.jsonl",
@@ -60,6 +68,8 @@ async def test_batch_create_staging_round_trip_local(tmp_path: Path) -> None:
     assert len(Path(artifact.storage_key).parts) == 5
     assert [record.custom_id for record in records] == ["req-1", "req-2"]
     assert records[0].request_body["input"] == "a"
+    assert records[0].not_before_at == not_before_at
+    assert records[1].not_before_at is None
 
     await backend.delete(artifact)
 
@@ -118,15 +128,57 @@ async def test_batch_create_staging_rejects_invalid_json_line(tmp_path: Path) ->
     backend = BatchCreateArtifactStorageBackend(storage=storage)
 
     with pytest.raises(ValueError, match="Invalid staged batch-create JSONL"):
-        async for _record in backend.read_records(
-            StagedBatchCreateArtifact(
-                storage_backend="local",
-                storage_key=storage_key,
-                bytes_size=bytes_size,
-                checksum=checksum,
+        async with aclosing(
+            backend.read_records(
+                StagedBatchCreateArtifact(
+                    storage_backend="local",
+                    storage_key=storage_key,
+                    bytes_size=bytes_size,
+                    checksum=checksum,
+                )
             )
-        ):
-            pass
+        ) as records:
+            await anext(records)
+    await asyncio.sleep(0)
+
+
+def test_batch_create_staging_rejects_invalid_not_before_at() -> None:
+    with pytest.raises(ValueError, match="not_before_at must be an ISO datetime"):
+        BatchCreateStagedRequest.from_jsonable(
+            {
+                "line_number": 1,
+                "custom_id": "req-1",
+                "request_body": {"model": "m1"},
+                "not_before_at": "not-a-date",
+            }
+        )
+
+
+def test_batch_create_staging_preserves_missing_legacy_work_units() -> None:
+    record = BatchCreateStagedRequest.from_jsonable(
+        {
+            "line_number": 1,
+            "custom_id": "req-1",
+            "request_body": {"model": "m1", "input": "a"},
+        }
+    )
+
+    assert record.estimated_work_units is None
+    assert "estimated_work_units" not in record.to_jsonable()
+
+
+def test_batch_create_staging_normalizes_explicit_work_units() -> None:
+    record = BatchCreateStagedRequest.from_jsonable(
+        {
+            "line_number": 1,
+            "custom_id": "req-1",
+            "request_body": {"model": "m1", "input": "a"},
+            "estimated_work_units": 0,
+        }
+    )
+
+    assert record.estimated_work_units == 1
+    assert record.to_jsonable()["estimated_work_units"] == 1
 
 
 @pytest.mark.asyncio

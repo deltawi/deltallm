@@ -131,6 +131,21 @@ class BatchJobRecord:
     completed_at: datetime | None
     expires_at: datetime | None
     created_by_organization_id: str | None = None
+    scheduler_version: str | None = None
+    scheduling_model: str | None = None
+    scheduling_model_group: str | None = None
+    scheduling_endpoint: str | None = None
+    tenant_scope_type: str | None = None
+    tenant_scope_id: str | None = None
+    service_tier: str = "standard"
+    estimated_work_units: int = 0
+    remaining_work_units: int = 0
+    size_class: str = "xs"
+    queue_entered_at: datetime | None = None
+    first_claimed_at: datetime | None = None
+    last_claimed_at: datetime | None = None
+    last_scheduled_at: datetime | None = None
+    scheduler_debug: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         self.status = normalize_batch_job_status(self.status)
@@ -156,6 +171,11 @@ class BatchItemRecord:
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
+    scheduling_model: str | None = None
+    scheduling_model_group: str | None = None
+    estimated_work_units: int = 1
+    not_before_at: datetime | None = None
+    last_scheduled_at: datetime | None = None
 
 
 @dataclass
@@ -193,3 +213,7 @@ class BatchItemCreate:
     line_number: int
     custom_id: str
     request_body: dict[str, Any]
+    scheduling_model: str | None = None
+    scheduling_model_group: str | None = None
+    estimated_work_units: int = 1
+    not_before_at: datetime | None = None

@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from src.batch.models import BatchItemCreate, BatchItemRecord, BatchItemStatus
 from src.batch.repositories.mappers import item_from_row
+from src.batch.scheduling import estimate_request_work_units
 from src.metrics import increment_batch_item_reclaim
 
 logger = logging.getLogger(__name__)
@@ -34,9 +35,27 @@ class BatchItemRepository:
         inserted = 0
         for item in items:
             item_id = str(uuid4())
+            scheduling_model = str(
+                getattr(item, "scheduling_model", None)
+                or (item.request_body or {}).get("model")
+                or ""
+            ).strip() or None
+            scheduling_model_group = str(
+                getattr(item, "scheduling_model_group", None)
+                or scheduling_model
+                or ""
+            ).strip() or None
+            estimated_work_units = max(
+                1,
+                int(
+                    getattr(item, "estimated_work_units", None)
+                    or estimate_request_work_units(None, item.request_body)
+                ),
+            )
             values_sql.append(
                 f"(${param_index}, ${param_index + 1}, ${param_index + 2}, ${param_index + 3}, "
-                f"${param_index + 4}, ${param_index + 5}::jsonb)"
+                f"${param_index + 4}, ${param_index + 5}::jsonb, ${param_index + 6}, "
+                f"${param_index + 7}, ${param_index + 8}, ${param_index + 9}::timestamp)"
             )
             params.extend(
                 [
@@ -46,12 +65,19 @@ class BatchItemRepository:
                     item.custom_id,
                     BatchItemStatus.PENDING,
                     json.dumps(item.request_body),
+                    scheduling_model,
+                    scheduling_model_group,
+                    estimated_work_units,
+                    getattr(item, "not_before_at", None),
                 ]
             )
-            param_index += 6
+            param_index += 10
         rows = await self.prisma.query_raw(
             f"""
-            INSERT INTO deltallm_batch_item (item_id, batch_id, line_number, custom_id, status, request_body)
+            INSERT INTO deltallm_batch_item (
+                item_id, batch_id, line_number, custom_id, status, request_body,
+                scheduling_model, scheduling_model_group, estimated_work_units, not_before_at
+            )
             VALUES {", ".join(values_sql)}
             ON CONFLICT (batch_id, line_number) DO NOTHING
             RETURNING item_id
@@ -78,7 +104,11 @@ class BatchItemRepository:
                 FROM deltallm_batch_item
                 WHERE batch_id = $1
                   AND (
-                        (status = 'pending' AND (lease_expires_at IS NULL OR lease_expires_at < NOW()))
+                        (
+                            status = 'pending'
+                            AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
+                            AND (not_before_at IS NULL OR not_before_at <= NOW())
+                        )
                      OR (status = 'in_progress' AND lease_expires_at < NOW())
                   )
                 ORDER BY line_number ASC
@@ -90,7 +120,9 @@ class BatchItemRepository:
                 locked_by = $3,
                 lease_expires_at = NOW() + ($4 || ' seconds')::interval,
                 attempts = attempts + 1,
-                started_at = COALESCE(i.started_at, NOW())
+                started_at = COALESCE(i.started_at, NOW()),
+                not_before_at = NULL,
+                last_scheduled_at = NOW()
             FROM candidate
             WHERE i.item_id = candidate.item_id
             RETURNING i.*, candidate.previous_status
@@ -134,6 +166,7 @@ class BatchItemRepository:
                     provider_cost = $4,
                     billed_cost = $5,
                     lease_expires_at = NULL,
+                    not_before_at = NULL,
                     locked_by = NULL,
                     completed_at = NOW()
                 WHERE item_id = $1
@@ -156,6 +189,7 @@ class BatchItemRepository:
                 provider_cost = $5,
                 billed_cost = $6,
                 lease_expires_at = NULL,
+                not_before_at = NULL,
                 locked_by = NULL,
                 completed_at = NOW()
             WHERE item_id = $1
@@ -229,6 +263,7 @@ class BatchItemRepository:
                         provider_cost = p.provider_cost,
                         billed_cost = p.billed_cost,
                         lease_expires_at = NULL,
+                        not_before_at = NULL,
                         locked_by = NULL,
                         completed_at = NOW()
                     FROM payload p
@@ -272,6 +307,7 @@ class BatchItemRepository:
                     provider_cost = p.provider_cost,
                     billed_cost = p.billed_cost,
                     lease_expires_at = NULL,
+                    not_before_at = NULL,
                     locked_by = NULL,
                     completed_at = NOW()
                 FROM payload p
@@ -331,6 +367,10 @@ class BatchItemRepository:
                         WHEN ${retry_delay_param} > 0 THEN NOW() + (${retry_delay_param} || ' seconds')::interval
                         ELSE NULL
                     END,
+                    not_before_at = CASE
+                        WHEN ${retry_delay_param} > 0 THEN NOW() + (${retry_delay_param} || ' seconds')::interval
+                        ELSE NULL
+                    END,
                     locked_by = NULL,
                     error_body = COALESCE(${error_body_param}::jsonb, i.error_body),
                     last_error = COALESCE(${last_error_param}, i.last_error)
@@ -369,6 +409,7 @@ class BatchItemRepository:
                         error_body = $2::jsonb,
                         last_error = $3,
                         lease_expires_at = NOW() + ($4 || ' seconds')::interval,
+                        not_before_at = NOW() + ($4 || ' seconds')::interval,
                         locked_by = NULL
                     FROM deltallm_batch_job j
                     WHERE i.item_id = $1
@@ -390,6 +431,7 @@ class BatchItemRepository:
                     error_body = $2::jsonb,
                     last_error = $3,
                     lease_expires_at = NOW() + ($4 || ' seconds')::interval,
+                    not_before_at = NOW() + ($4 || ' seconds')::interval,
                     locked_by = NULL
                 FROM deltallm_batch_job j
                 WHERE i.item_id = $1
@@ -414,6 +456,7 @@ class BatchItemRepository:
                     error_body = $2::jsonb,
                     last_error = $3,
                     lease_expires_at = NULL,
+                    not_before_at = NULL,
                     locked_by = NULL,
                     completed_at = NOW()
                 WHERE item_id = $1
@@ -432,6 +475,7 @@ class BatchItemRepository:
                 error_body = $3::jsonb,
                 last_error = $4,
                 lease_expires_at = NULL,
+                not_before_at = NULL,
                 locked_by = NULL,
                 completed_at = NOW()
             WHERE item_id = $1
@@ -472,6 +516,7 @@ class BatchItemRepository:
             UPDATE deltallm_batch_item
             SET status = 'cancelled',
                 lease_expires_at = NULL,
+                not_before_at = NULL,
                 locked_by = NULL,
                 completed_at = NOW()
             WHERE batch_id = $1
@@ -525,6 +570,11 @@ class BatchItemRepository:
                 i.last_error,
                 i.locked_by,
                 i.lease_expires_at,
+                i.scheduling_model,
+                i.scheduling_model_group,
+                i.estimated_work_units,
+                i.not_before_at,
+                i.last_scheduled_at,
                 i.created_at,
                 i.started_at,
                 i.completed_at
@@ -618,7 +668,8 @@ class BatchItemRepository:
             UPDATE deltallm_batch_item
             SET status = 'pending',
                 locked_by = NULL,
-                lease_expires_at = NULL
+                lease_expires_at = NULL,
+                not_before_at = NULL
             WHERE batch_id = $1
               AND status = 'in_progress'
               AND lease_expires_at IS NOT NULL
@@ -641,6 +692,7 @@ class BatchItemRepository:
                 last_error = $3,
                 locked_by = NULL,
                 lease_expires_at = NULL,
+                not_before_at = NULL,
                 completed_at = NOW()
             WHERE batch_id = $1
               AND status IN ('pending', 'in_progress')
