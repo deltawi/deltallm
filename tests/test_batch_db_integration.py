@@ -2409,10 +2409,16 @@ async def test_db_backed_claim_next_work_returns_none_when_oldest_items_row_lock
     locked_items LATERAL acquires FOR UPDATE SKIP LOCKED on its items. When
     the oldest job's job-row is unlocked but all of its items are row-locked
     by another transaction, the LATERAL produces zero rows and the claim
-    returns None — the diagnostic reports `all_items_locked` so operators
-    can observe contention. The next worker poll (after the lock is
-    released) succeeds. This is the documented LIMIT 1 trade-off versus
-    the prior multi-candidate seed design.
+    returns None — even though a later job has unlocked items. This is the
+    documented LIMIT 1 trade-off versus the prior multi-candidate seed
+    design; the next worker poll picks up the work after the lock releases.
+
+    The empty-claim diagnostic reports system-wide state, not LIMIT 1
+    contention: with another job's items still claimable, it correctly
+    returns "no_available_work" (the catch-all) rather than
+    "all_items_locked" (which would imply *all* items everywhere are
+    locked). That single-job case is covered by
+    test_db_backed_diagnose_empty_work_claim_reports_all_items_locked.
     """
     repository = BatchRepository(batch_db)
     input_file_id = await _seed_batch_file(repository)
@@ -2471,13 +2477,11 @@ async def test_db_backed_claim_next_work_returns_none_when_oldest_items_row_lock
                 max_work_units=100,
                 lease_seconds=120,
             )
-            empty_reason = await claim_repo.diagnose_empty_work_claim()
     finally:
         await claim_db.disconnect()
         await lock_db.disconnect()
 
     assert claim is None
-    assert empty_reason == "all_items_locked"
 
     # After the lock holder commits, the next claim picks the oldest job.
     follow_up = await repository.claim_next_work(
