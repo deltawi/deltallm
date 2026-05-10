@@ -619,8 +619,12 @@ class BatchJobRepository:
                             OR (i.status = 'in_progress' AND i.lease_expires_at < NOW())
                         )
                   )
-                ORDER BY (j.last_scheduled_at IS NOT NULL) ASC,
-                         j.last_scheduled_at ASC,
+                -- last_scheduled_at NULLS FIRST keeps never-scheduled jobs
+                -- ahead of jobs that have already taken a slice (round-robin
+                -- against head-of-line); among scheduled jobs, oldest first.
+                -- COALESCE keeps the FIFO tiebreak working during the
+                -- queue_entered_at backfill window.
+                ORDER BY j.last_scheduled_at ASC NULLS FIRST,
                          COALESCE(j.queue_entered_at, j.created_at) ASC,
                          j.created_at ASC
                 FOR KEY SHARE SKIP LOCKED
@@ -815,8 +819,7 @@ class BatchJobRepository:
                     j.created_at
                 FROM deltallm_batch_job j
                 WHERE j.status IN ('queued', 'in_progress')
-                ORDER BY (j.last_scheduled_at IS NOT NULL) ASC,
-                         j.last_scheduled_at ASC,
+                ORDER BY j.last_scheduled_at ASC NULLS FIRST,
                          COALESCE(j.queue_entered_at, j.created_at) ASC,
                          j.created_at ASC
                 LIMIT 100
@@ -843,8 +846,7 @@ class BatchJobRepository:
                     )
                     OR (i.status = 'in_progress' AND i.lease_expires_at < NOW())
                 )
-                ORDER BY (j.last_scheduled_at IS NOT NULL) ASC,
-                         j.last_scheduled_at ASC,
+                ORDER BY j.last_scheduled_at ASC NULLS FIRST,
                          COALESCE(j.queue_entered_at, j.created_at) ASC,
                          j.created_at ASC,
                          i.line_number ASC

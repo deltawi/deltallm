@@ -143,7 +143,7 @@ async def test_claim_next_work_uses_item_slice_claim_shape() -> None:
     assert claim is None
     assert "j.status IN ('queued', 'in_progress')" in prisma.sql
     assert "j.locked_by IS NULL OR j.lease_expires_at IS NULL OR j.lease_expires_at < NOW()" in prisma.sql
-    assert "ORDER BY (j.last_scheduled_at IS NOT NULL) ASC" in prisma.sql
+    assert "ORDER BY j.last_scheduled_at ASC NULLS FIRST" in prisma.sql
     assert "WITH selected_job AS" in prisma.sql
     assert "FOR KEY SHARE SKIP LOCKED" in prisma.sql
     # Single-job selection: no candidate_jobs CTE and no per-candidate seed lock.

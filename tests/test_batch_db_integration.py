@@ -2404,7 +2404,16 @@ async def test_db_backed_claim_next_work_rotates_to_unscheduled_small_job(batch_
 
 
 @pytest.mark.asyncio
-async def test_db_backed_claim_next_work_skips_row_locked_oldest_job(batch_db) -> None:
+async def test_db_backed_claim_next_work_returns_none_when_oldest_items_row_locked(batch_db) -> None:
+    """selected_job picks the FIFO-oldest job under FOR KEY SHARE, then the
+    locked_items LATERAL acquires FOR UPDATE SKIP LOCKED on its items. When
+    the oldest job's job-row is unlocked but all of its items are row-locked
+    by another transaction, the LATERAL produces zero rows and the claim
+    returns None — the diagnostic reports `all_items_locked` so operators
+    can observe contention. The next worker poll (after the lock is
+    released) succeeds. This is the documented LIMIT 1 trade-off versus
+    the prior multi-candidate seed design.
+    """
     repository = BatchRepository(batch_db)
     input_file_id = await _seed_batch_file(repository)
     oldest = await repository.create_job(
@@ -2455,18 +2464,30 @@ async def test_db_backed_claim_next_work_skips_row_locked_oldest_job(batch_db) -
             )
             assert locked
 
-            claim = await BatchRepository(claim_db).claim_next_work(
+            claim_repo = BatchRepository(claim_db)
+            claim = await claim_repo.claim_next_work(
                 worker_id="w1",
                 max_items=1,
                 max_work_units=100,
                 lease_seconds=120,
             )
+            empty_reason = await claim_repo.diagnose_empty_work_claim()
     finally:
         await claim_db.disconnect()
         await lock_db.disconnect()
 
-    assert claim is not None
-    assert claim.batch_id == next_job.batch_id
+    assert claim is None
+    assert empty_reason == "all_items_locked"
+
+    # After the lock holder commits, the next claim picks the oldest job.
+    follow_up = await repository.claim_next_work(
+        worker_id="w1",
+        max_items=1,
+        max_work_units=100,
+        lease_seconds=120,
+    )
+    assert follow_up is not None
+    assert follow_up.batch_id == oldest.batch_id
 
 
 @pytest.mark.asyncio
