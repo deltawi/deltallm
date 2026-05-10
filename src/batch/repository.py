@@ -13,6 +13,7 @@ from src.batch.models import (
     BatchItemRecord,
     BatchJobRecord,
     BatchJobStatus,
+    BatchWorkClaim,
 )
 from src.batch.repositories import (
     BatchCompletionOutboxRepository,
@@ -192,6 +193,27 @@ class BatchRepository:
     async def claim_next_job(self, *, worker_id: str, lease_seconds: int = 30) -> BatchJobRecord | None:
         return await self.jobs.claim_next_job(worker_id=worker_id, lease_seconds=lease_seconds)
 
+    async def claim_next_finalization(self, *, worker_id: str, lease_seconds: int = 30) -> BatchJobRecord | None:
+        return await self.jobs.claim_next_finalization(worker_id=worker_id, lease_seconds=lease_seconds)
+
+    async def claim_next_work(
+        self,
+        *,
+        worker_id: str,
+        max_items: int,
+        max_work_units: int,
+        lease_seconds: int,
+    ) -> BatchWorkClaim | None:
+        return await self.jobs.claim_next_work(
+            worker_id=worker_id,
+            max_items=max_items,
+            max_work_units=max_work_units,
+            lease_seconds=lease_seconds,
+        )
+
+    async def diagnose_empty_work_claim(self) -> str:
+        return await self.jobs.diagnose_empty_work_claim()
+
     async def claim_items(
         self,
         *,
@@ -209,6 +231,17 @@ class BatchRepository:
 
     async def list_items_by_ids(self, item_ids: list[str]) -> list[BatchItemRecord]:
         return await self.items.list_items_by_ids(item_ids)
+
+    async def load_claim_items(self, item_ids: list[str]) -> list[BatchItemRecord]:
+        return await self.items.list_items_by_ids(item_ids)
+
+    async def release_claim_items(
+        self,
+        *,
+        item_ids: list[str],
+        worker_id: str,
+    ) -> int:
+        return await self.items.release_claim_items(item_ids=item_ids, worker_id=worker_id)
 
     async def mark_item_completed(
         self,
@@ -261,6 +294,18 @@ class BatchRepository:
 
     async def refresh_job_progress(self, batch_id: str) -> BatchJobRecord | None:
         return await self.jobs.refresh_job_progress(batch_id)
+
+    async def refresh_jobs_after_claim(self, batch_ids: list[str]) -> list[BatchJobRecord]:
+        records: list[BatchJobRecord] = []
+        seen: set[str] = set()
+        for batch_id in batch_ids:
+            if batch_id in seen:
+                continue
+            seen.add(batch_id)
+            record = await self.refresh_job_progress(batch_id)
+            if record is not None:
+                records.append(record)
+        return records
 
     async def renew_job_lease(self, *, batch_id: str, worker_id: str, lease_seconds: int) -> bool:
         return await self.jobs.renew_job_lease(batch_id=batch_id, worker_id=worker_id, lease_seconds=lease_seconds)

@@ -11,7 +11,13 @@ import pytest
 from fastapi import HTTPException
 
 from src.callbacks import CallbackManager, CustomLogger
-from src.batch.models import BatchItemRecord, BatchJobRecord, BatchJobStatus, encode_operator_failed_reason
+from src.batch.models import (
+    BatchItemRecord,
+    BatchJobRecord,
+    BatchJobStatus,
+    BatchWorkClaim,
+    encode_operator_failed_reason,
+)
 from src.batch.service import BatchService
 from src.batch.worker import BatchArtifactValidationError, BatchExecutorWorker, BatchWorkerConfig
 from src.db.repositories import KeyRecord
@@ -4098,7 +4104,7 @@ async def test_batch_worker_processes_cancel_requested_job():
             if self.claim_count > 1:
                 return None
             return BatchJobRecord(
-                batch_id="b-cancel",
+                batch_id="b-work",
                 endpoint="/v1/embeddings",
                 status=BatchJobStatus.IN_PROGRESS,
                 execution_mode="managed_internal",
@@ -4130,7 +4136,7 @@ async def test_batch_worker_processes_cancel_requested_job():
             )
 
         async def mark_pending_items_cancelled(self, batch_id: str) -> None:
-            assert batch_id == "b-cancel"
+            assert batch_id == "b-work"
             self.cancel_called = True
 
         async def claim_items(self, **kwargs):
@@ -4138,10 +4144,10 @@ async def test_batch_worker_processes_cancel_requested_job():
             return []
 
         async def refresh_job_progress(self, batch_id: str):
-            assert batch_id == "b-cancel"
+            assert batch_id == "b-work"
             self.refreshed = True
             return BatchJobRecord(
-                batch_id="b-cancel",
+                batch_id="b-work",
                 endpoint="/v1/embeddings",
                 status=BatchJobStatus.FINALIZING,
                 execution_mode="managed_internal",
@@ -4173,7 +4179,7 @@ async def test_batch_worker_processes_cancel_requested_job():
             )
 
         async def release_job_lease(self, *, batch_id: str, worker_id: str) -> None:
-            assert batch_id == "b-cancel"
+            assert batch_id == "b-work"
             assert worker_id == "w1"
             self.released = True
 
@@ -4197,7 +4203,7 @@ async def test_batch_worker_processes_cancel_requested_job():
     assert repo.cancel_called is True
     assert repo.refreshed is True
     assert repo.released is True
-    assert finalized == ["b-cancel"]
+    assert finalized == ["b-work"]
 
 
 @pytest.mark.asyncio
@@ -5370,3 +5376,433 @@ async def test_batch_worker_refresh_runtime_metrics_logs_debug_on_publish_failur
         await worker._refresh_batch_runtime_metrics()
 
     assert "batch worker runtime metrics refresh failed" in caplog.text
+
+
+def _work_slice_job(
+    *,
+    status: BatchJobStatus = BatchJobStatus.IN_PROGRESS,
+    batch_id: str = "b-work",
+) -> BatchJobRecord:
+    now = datetime.now(tz=UTC)
+    return BatchJobRecord(
+        batch_id=batch_id,
+        endpoint="/v1/embeddings",
+        status=status,
+        execution_mode="managed_internal",
+        input_file_id="file-1",
+        output_file_id=None,
+        error_file_id=None,
+        model="m-1",
+        metadata={},
+        provider_batch_id=None,
+        provider_status=None,
+        provider_error=None,
+        provider_last_sync_at=None,
+        total_items=1,
+        in_progress_items=1,
+        completed_items=0,
+        failed_items=0,
+        cancelled_items=0,
+        locked_by="w1" if status == BatchJobStatus.FINALIZING else None,
+        lease_expires_at=now + timedelta(seconds=60) if status == BatchJobStatus.FINALIZING else None,
+        cancel_requested_at=None,
+        status_last_updated_at=now,
+        created_by_api_key="tok-1",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+        expires_at=None,
+        scheduling_model_group="m-1",
+        service_tier="standard",
+        remaining_work_units=1,
+    )
+
+
+def _work_slice_item() -> BatchItemRecord:
+    now = datetime.now(tz=UTC)
+    return BatchItemRecord(
+        item_id="item-1",
+        batch_id="b-work",
+        line_number=1,
+        custom_id="custom-1",
+        status="in_progress",
+        request_body={"model": "m-1", "input": "hello"},
+        response_body=None,
+        error_body=None,
+        usage=None,
+        provider_cost=0.0,
+        billed_cost=0.0,
+        attempts=1,
+        last_error=None,
+        locked_by="w1",
+        lease_expires_at=now + timedelta(seconds=60),
+        created_at=now,
+        started_at=now,
+        completed_at=None,
+        scheduling_model="m-1",
+        scheduling_model_group="m-1",
+        estimated_work_units=1,
+    )
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_work_slice_mode_processes_claim_without_job_lease():
+    now = datetime.now(tz=UTC)
+
+    class _WorkSliceRepo:
+        def __init__(self) -> None:
+            self.claim_next_job_called = False
+            self.claim_next_work_kwargs: dict | None = None
+            self.release_claim_items_calls: list[dict] = []
+            self.release_job_lease_called = False
+            self.refreshed: list[list[str]] = []
+
+        async def claim_next_job(self, **kwargs):  # pragma: no cover
+            del kwargs
+            self.claim_next_job_called = True
+            raise AssertionError("job_fifo claim should not run in work_slice mode")
+
+        async def claim_next_finalization(self, **kwargs):
+            del kwargs
+            return None
+
+        async def claim_next_work(self, **kwargs):
+            self.claim_next_work_kwargs = kwargs
+            return BatchWorkClaim(
+                claim_id="claim-1",
+                worker_id="w1",
+                batch_id="b-work",
+                endpoint="/v1/embeddings",
+                model_group="m-1",
+                tenant_scope_type="api_key",
+                tenant_scope_id="tok-1",
+                service_tier="standard",
+                item_ids=["item-1"],
+                claimed_work_units=1,
+                lease_expires_at=now + timedelta(seconds=60),
+            )
+
+        async def get_job(self, batch_id: str):
+            assert batch_id == "b-work"
+            return _work_slice_job()
+
+        async def load_claim_items(self, item_ids: list[str]):
+            assert item_ids == ["item-1"]
+            return [_work_slice_item()]
+
+        async def release_claim_items(self, **kwargs) -> int:
+            self.release_claim_items_calls.append(kwargs)
+            return 0
+
+        async def refresh_jobs_after_claim(self, batch_ids: list[str]):
+            self.refreshed.append(batch_ids)
+            return [_work_slice_job()]
+
+        async def summarize_runtime_statuses(self, *, now):  # noqa: ANN001
+            del now
+            return {"queued": 0, "in_progress": 1, "finalizing": 0}
+
+        async def release_job_lease(self, **kwargs):  # pragma: no cover
+            del kwargs
+            self.release_job_lease_called = True
+            raise AssertionError("work-slice item execution must not hold a job lease")
+
+    repo = _WorkSliceRepo()
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(
+            worker_id="w1",
+            scheduler_claim_mode="work_slice",
+            work_claim_max_items=3,
+            work_claim_max_work_units=7,
+        ),
+    )
+    processed: list[tuple[str, list[str]]] = []
+
+    async def _process_items(job, items):  # noqa: ANN001
+        processed.append((job.batch_id, [item.item_id for item in items]))
+
+    worker._process_items = _process_items  # type: ignore[assignment]
+
+    did_work = await worker.process_once()
+
+    assert did_work is True
+    assert repo.claim_next_job_called is False
+    assert repo.claim_next_work_kwargs == {
+        "worker_id": "w1",
+        "max_items": 3,
+        "max_work_units": 7,
+        "lease_seconds": 360,
+    }
+    assert processed == [("b-work", ["item-1"])]
+    assert repo.release_claim_items_calls == [{"item_ids": ["item-1"], "worker_id": "w1"}]
+    assert repo.refreshed == [["b-work"]]
+    assert repo.release_job_lease_called is False
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_work_slice_empty_claim_records_diagnostic_reason(monkeypatch):
+    class _EmptyClaimRepo:
+        async def claim_next_finalization(self, **kwargs):
+            del kwargs
+            return None
+
+        async def claim_next_work(self, **kwargs):
+            del kwargs
+            return None
+
+        async def diagnose_empty_work_claim(self) -> str:
+            return "not_before_future"
+
+    recorded_reasons: list[str] = []
+    monkeypatch.setattr(
+        "src.batch.worker.increment_batch_claim_empty_job",
+        lambda *, reason: recorded_reasons.append(reason),
+    )
+
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=_EmptyClaimRepo(),  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1", scheduler_claim_mode="work_slice"),
+    )
+
+    did_work = await worker.process_once()
+
+    assert did_work is False
+    assert recorded_reasons == ["not_before_future"]
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_work_slice_empty_claim_diagnostic_failure_falls_back(monkeypatch):
+    class _FailingDiagnosticRepo:
+        async def claim_next_finalization(self, **kwargs):
+            del kwargs
+            return None
+
+        async def claim_next_work(self, **kwargs):
+            del kwargs
+            return None
+
+        async def diagnose_empty_work_claim(self) -> str:
+            raise RuntimeError("diagnostic unavailable")
+
+    recorded_reasons: list[str] = []
+    monkeypatch.setattr(
+        "src.batch.worker.increment_batch_claim_empty_job",
+        lambda *, reason: recorded_reasons.append(reason),
+    )
+
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=_FailingDiagnosticRepo(),  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1", scheduler_claim_mode="work_slice"),
+    )
+
+    did_work = await worker.process_once()
+
+    assert did_work is False
+    assert recorded_reasons == ["no_available_work"]
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_work_slice_finalization_first_uses_job_lease():
+    class _FinalizationRepo:
+        def __init__(self) -> None:
+            self.claim_next_work_called = False
+            self.released = False
+
+        async def claim_next_finalization(self, **kwargs):
+            assert kwargs == {"worker_id": "w1", "lease_seconds": 120}
+            return _work_slice_job(status=BatchJobStatus.FINALIZING)
+
+        async def claim_next_work(self, **kwargs):  # pragma: no cover
+            del kwargs
+            self.claim_next_work_called = True
+            raise AssertionError("work claim should not run before prioritized finalization")
+
+        async def renew_job_lease(self, **kwargs) -> bool:
+            del kwargs
+            return True
+
+        async def release_job_lease(self, *, batch_id: str, worker_id: str) -> None:
+            assert batch_id == "b-work"
+            assert worker_id == "w1"
+            self.released = True
+
+        async def summarize_runtime_statuses(self, *, now):  # noqa: ANN001
+            del now
+            return {"queued": 0, "in_progress": 0, "finalizing": 1}
+
+    repo = _FinalizationRepo()
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1", scheduler_claim_mode="work_slice"),
+    )
+    finalized: list[str] = []
+
+    async def _finalize(job):  # noqa: ANN001
+        finalized.append(job.batch_id)
+
+    worker._finalize_artifacts = _finalize  # type: ignore[assignment]
+
+    did_work = await worker.process_once()
+
+    assert did_work is True
+    assert finalized == ["b-work"]
+    assert repo.claim_next_work_called is False
+    assert repo.released is True
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_work_slice_zeros_saturation_after_success(monkeypatch):
+    now = datetime.now(tz=UTC)
+
+    class _SaturationRepo:
+        async def claim_next_finalization(self, **kwargs):
+            del kwargs
+            return None
+
+        async def claim_next_work(self, **kwargs):
+            del kwargs
+            return BatchWorkClaim(
+                claim_id="claim-sat",
+                worker_id="w1",
+                batch_id="b-work",
+                endpoint="/v1/embeddings",
+                model_group="m-1",
+                tenant_scope_type="api_key",
+                tenant_scope_id="tok-1",
+                service_tier="standard",
+                item_ids=["item-1"],
+                claimed_work_units=1,
+                lease_expires_at=now + timedelta(seconds=60),
+            )
+
+        async def get_job(self, batch_id: str):
+            assert batch_id == "b-work"
+            return _work_slice_job()
+
+        async def load_claim_items(self, item_ids: list[str]):
+            return [_work_slice_item()]
+
+        async def release_claim_items(self, **kwargs) -> int:
+            del kwargs
+            return 0
+
+        async def refresh_jobs_after_claim(self, batch_ids: list[str]):
+            del batch_ids
+            return []
+
+        async def summarize_runtime_statuses(self, *, now):  # noqa: ANN001
+            del now
+            return {"queued": 0, "in_progress": 1, "finalizing": 0}
+
+    saturation_calls: list[dict] = []
+    monkeypatch.setattr(
+        "src.batch.worker.set_batch_worker_saturation",
+        lambda **kwargs: saturation_calls.append(kwargs),
+    )
+
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=_SaturationRepo(),  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1", scheduler_claim_mode="work_slice"),
+    )
+
+    async def _process_items(job, items):  # noqa: ANN001
+        del job, items
+
+    worker._process_items = _process_items  # type: ignore[assignment]
+
+    did_work = await worker.process_once()
+
+    assert did_work is True
+    # Guards the regression from the first review: the success path used to
+    # skip the saturation reset entirely. With zero calls, indexing would
+    # IndexError; with the wrong active value, the equality fails.
+    assert saturation_calls, "set_batch_worker_saturation should be called on success path"
+    assert saturation_calls[-1]["active"] == 0
+    assert saturation_calls[-1]["worker_id"] == "w1"
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_work_slice_cancels_pending_items_when_cancel_requested():
+    now = datetime.now(tz=UTC)
+
+    class _CancelRepo:
+        def __init__(self) -> None:
+            self.release_calls: list[dict] = []
+            self.mark_cancelled_called_with: str | None = None
+
+        async def claim_next_finalization(self, **kwargs):
+            del kwargs
+            return None
+
+        async def claim_next_work(self, **kwargs):
+            del kwargs
+            return BatchWorkClaim(
+                claim_id="claim-cancel",
+                worker_id="w1",
+                batch_id="b-cancel",
+                endpoint="/v1/embeddings",
+                model_group="m-1",
+                tenant_scope_type="api_key",
+                tenant_scope_id="tok-1",
+                service_tier="standard",
+                item_ids=["item-1", "item-2"],
+                claimed_work_units=2,
+                lease_expires_at=now + timedelta(seconds=60),
+            )
+
+        async def get_job(self, batch_id: str):
+            assert batch_id == "b-cancel"
+            job = _work_slice_job(batch_id="b-cancel")
+            job.cancel_requested_at = now
+            return job
+
+        async def load_claim_items(self, item_ids):  # pragma: no cover
+            del item_ids
+            raise AssertionError("load_claim_items must not run on cancel path")
+
+        async def release_claim_items(self, **kwargs) -> int:
+            self.release_calls.append(kwargs)
+            return len(kwargs["item_ids"])
+
+        async def mark_pending_items_cancelled(self, batch_id: str) -> int:
+            self.mark_cancelled_called_with = batch_id
+            return 2
+
+        async def refresh_jobs_after_claim(self, batch_ids):
+            del batch_ids
+            return []
+
+        async def summarize_runtime_statuses(self, *, now):  # noqa: ANN001
+            del now
+            return {"queued": 0, "in_progress": 0, "finalizing": 0}
+
+    repo = _CancelRepo()
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1", scheduler_claim_mode="work_slice"),
+    )
+
+    did_work = await worker.process_once()
+
+    assert did_work is True
+    # Cancel branch released items exactly once; the finally must NOT release
+    # them again now that needs_finally_release short-circuits the second call.
+    assert len(repo.release_calls) == 1
+    assert repo.release_calls[0]["item_ids"] == ["item-1", "item-2"]
+    assert repo.release_calls[0]["worker_id"] == "w1"
+    assert repo.mark_cancelled_called_with == "b-cancel"

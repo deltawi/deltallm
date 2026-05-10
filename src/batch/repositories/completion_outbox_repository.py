@@ -65,7 +65,8 @@ class BatchCompletionOutboxRepository:
             completion_ids.append(completion_id)
             values_sql.append(
                 f"(${param_index}, ${param_index + 1}, ${param_index + 2}, ${param_index + 3}::jsonb, "
-                f"${param_index + 4}, ${param_index + 5}, ${param_index + 6}, ${param_index + 7}::timestamptz, "
+                f"${param_index + 4}, ${param_index + 5}, ${param_index + 6}, "
+                f"COALESCE(${param_index + 7}::timestamptz, NOW()), "
                 f"${param_index + 8}, NOW(), NOW())"
             )
             params.extend(
@@ -77,7 +78,7 @@ class BatchCompletionOutboxRepository:
                     record.status,
                     record.attempt_count,
                     record.max_attempts,
-                    record.next_attempt_at or datetime.now(tz=UTC),
+                    record.next_attempt_at,
                     record.last_error,
                 ]
             )

@@ -179,6 +179,21 @@ class BatchItemRecord:
 
 
 @dataclass
+class BatchWorkClaim:
+    claim_id: str
+    worker_id: str
+    batch_id: str
+    endpoint: str
+    model_group: str | None
+    tenant_scope_type: str | None
+    tenant_scope_id: str | None
+    service_tier: str
+    item_ids: list[str]
+    claimed_work_units: int
+    lease_expires_at: datetime
+
+
+@dataclass
 class BatchCompletionOutboxRecord:
     completion_id: str
     batch_id: str

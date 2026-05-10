@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from src.batch.models import BatchJobRecord, BatchJobStatus, normalize_batch_job_status
+from src.batch.models import BatchJobRecord, BatchJobStatus, BatchWorkClaim, normalize_batch_job_status
 from src.batch.repositories.mappers import job_from_row, parse_datetime
 from src.batch.scheduling import (
     API_KEY_TENANT_SCOPE_PREFIX,
@@ -14,7 +15,9 @@ from src.batch.scheduling import (
     resolve_model_group,
     stable_tenant_scope_id,
 )
-from src.metrics import observe_batch_estimated_work_units, observe_batch_queue_wait
+from src.metrics import increment_batch_item_reclaim, observe_batch_estimated_work_units, observe_batch_queue_wait
+
+logger = logging.getLogger(__name__)
 
 
 class BatchJobRepository:
@@ -532,6 +535,404 @@ class BatchJobRepository:
                 ),
             )
         return record
+
+    async def claim_next_finalization(self, *, worker_id: str, lease_seconds: int = 30) -> BatchJobRecord | None:
+        if self.prisma is None:
+            return None
+        rows = await self.prisma.query_raw(
+            """
+            WITH candidate AS (
+                SELECT batch_id
+                FROM deltallm_batch_job
+                WHERE status = 'finalizing'
+                  AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
+                ORDER BY COALESCE(queue_entered_at, created_at) ASC,
+                         created_at ASC
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+            )
+            UPDATE deltallm_batch_job j
+            SET locked_by = $1,
+                lease_expires_at = NOW() + ($2 || ' seconds')::interval,
+                last_claimed_at = NOW(),
+                last_scheduled_at = NOW(),
+                status_last_updated_at = NOW()
+            FROM candidate
+            WHERE j.batch_id = candidate.batch_id
+            RETURNING j.*
+            """,
+            worker_id,
+            lease_seconds,
+        )
+        if not rows:
+            return None
+        return job_from_row(rows[0])
+
+    async def claim_next_work(
+        self,
+        *,
+        worker_id: str,
+        max_items: int,
+        max_work_units: int,
+        lease_seconds: int,
+    ) -> BatchWorkClaim | None:
+        if self.prisma is None:
+            return None
+        bounded_max_items = max(1, min(int(max_items), 200))
+        bounded_max_work_units = max(1, int(max_work_units))
+        # selected_job picks one job under FOR KEY SHARE so multiple workers can
+        # slice the same job concurrently. The CTE chain runs in a single
+        # statement, so two workers can both hold FOR KEY SHARE on the same row;
+        # when each later upgrades to FOR NO KEY UPDATE for the updated_job
+        # UPDATE, Postgres serializes the upgrades (FOR NO KEY UPDATE is
+        # compatible with another tx's FOR KEY SHARE per the row-lock matrix),
+        # so workers do not deadlock — they take turns updating the job row
+        # while their item slices stay disjoint via FOR UPDATE SKIP LOCKED.
+        #
+        # updated_items derives from updated_job (FROM ... updated_job uj) so
+        # the data-modifying CTEs are forced to execute in order. If
+        # updated_job's WHERE filter fails (status flipped to 'finalizing'
+        # between snapshot and UPDATE), updated_job's RETURNING is empty, the
+        # join produces no rows, and no item is flipped to in_progress.
+        rows = await self.prisma.query_raw(
+            """
+            WITH selected_job AS (
+                SELECT
+                    j.batch_id,
+                    j.status AS previous_status
+                FROM deltallm_batch_job j
+                WHERE j.status IN ('queued', 'in_progress')
+                  AND (j.locked_by IS NULL OR j.lease_expires_at IS NULL OR j.lease_expires_at < NOW())
+                  AND EXISTS (
+                      -- Runnable-item predicate. Mirror in
+                      -- diagnose_empty_work_claim (and vice versa) — Phase 3
+                      -- changes here must update both call sites.
+                      SELECT 1
+                      FROM deltallm_batch_item i
+                      WHERE i.batch_id = j.batch_id
+                        AND (
+                            (
+                                i.status = 'pending'
+                                AND (i.lease_expires_at IS NULL OR i.lease_expires_at < NOW())
+                                AND (i.not_before_at IS NULL OR i.not_before_at <= NOW())
+                            )
+                            OR (i.status = 'in_progress' AND i.lease_expires_at < NOW())
+                        )
+                  )
+                ORDER BY (j.last_scheduled_at IS NOT NULL) ASC,
+                         j.last_scheduled_at ASC,
+                         COALESCE(j.queue_entered_at, j.created_at) ASC,
+                         j.created_at ASC
+                FOR KEY SHARE SKIP LOCKED
+                LIMIT 1
+            ),
+            locked_items AS (
+                SELECT
+                    i.item_id,
+                    i.status AS previous_status,
+                    i.line_number,
+                    GREATEST(COALESCE(i.estimated_work_units, 1), 1)::int AS estimated_work_units
+                FROM selected_job sj
+                JOIN deltallm_batch_item i ON i.batch_id = sj.batch_id
+                -- Same runnable-item predicate as selected_job's EXISTS.
+                WHERE (
+                    (
+                        i.status = 'pending'
+                        AND (i.lease_expires_at IS NULL OR i.lease_expires_at < NOW())
+                        AND (i.not_before_at IS NULL OR i.not_before_at <= NOW())
+                    )
+                    OR (i.status = 'in_progress' AND i.lease_expires_at < NOW())
+                )
+                ORDER BY i.line_number ASC
+                FOR UPDATE SKIP LOCKED
+                LIMIT $2
+            ),
+            candidate_items AS (
+                SELECT
+                    item_id,
+                    previous_status,
+                    line_number,
+                    estimated_work_units,
+                    ROW_NUMBER() OVER (ORDER BY line_number ASC) AS claim_rank,
+                    SUM(estimated_work_units) OVER (ORDER BY line_number ASC) AS cumulative_work_units
+                FROM locked_items
+            ),
+            eligible_items AS (
+                -- locked_items already enforces the max-items cap via LIMIT $2;
+                -- here we only enforce the work-unit cap, with claim_rank = 1
+                -- guaranteeing at least one item even when the seed exceeds it.
+                SELECT item_id, previous_status, line_number, estimated_work_units
+                FROM candidate_items
+                WHERE cumulative_work_units <= $3 OR claim_rank = 1
+            ),
+            updated_job AS (
+                UPDATE deltallm_batch_job j
+                SET status = (
+                        CASE
+                        WHEN j.status = 'queued' THEN 'in_progress'
+                        ELSE j.status
+                        END
+                    )::"DeltaLLM_BatchJobStatus",
+                    started_at = COALESCE(j.started_at, NOW()),
+                    first_claimed_at = COALESCE(j.first_claimed_at, NOW()),
+                    last_claimed_at = NOW(),
+                    last_scheduled_at = NOW(),
+                    locked_by = NULL,
+                    lease_expires_at = NULL,
+                    status_last_updated_at = NOW()
+                FROM selected_job sj
+                WHERE j.batch_id = sj.batch_id
+                  AND j.status IN ('queued', 'in_progress')
+                  AND (j.locked_by IS NULL OR j.lease_expires_at IS NULL OR j.lease_expires_at < NOW())
+                  AND EXISTS (SELECT 1 FROM eligible_items)
+                RETURNING
+                    j.batch_id,
+                    j.endpoint,
+                    j.scheduling_model_group,
+                    j.tenant_scope_type,
+                    j.tenant_scope_id,
+                    j.service_tier,
+                    j.size_class,
+                    j.queue_entered_at,
+                    sj.previous_status,
+                    (j.first_claimed_at = j.last_claimed_at) AS queue_wait_observed
+            ),
+            updated_items AS (
+                UPDATE deltallm_batch_item i
+                SET status = 'in_progress',
+                    locked_by = $1,
+                    lease_expires_at = NOW() + ($4 || ' seconds')::interval,
+                    attempts = attempts + 1,
+                    started_at = COALESCE(i.started_at, NOW()),
+                    not_before_at = NULL,
+                    last_scheduled_at = NOW()
+                FROM eligible_items s, updated_job uj
+                WHERE i.item_id = s.item_id
+                  AND i.batch_id = uj.batch_id
+                RETURNING
+                    i.item_id,
+                    i.line_number,
+                    i.estimated_work_units,
+                    i.lease_expires_at,
+                    s.previous_status
+            )
+            SELECT
+                j.batch_id,
+                j.endpoint,
+                j.scheduling_model_group AS model_group,
+                j.tenant_scope_type,
+                j.tenant_scope_id,
+                j.service_tier,
+                j.size_class,
+                j.queue_entered_at,
+                j.previous_status,
+                j.queue_wait_observed,
+                ARRAY_AGG(u.item_id ORDER BY u.line_number ASC) AS item_ids,
+                COALESCE(SUM(GREATEST(COALESCE(u.estimated_work_units, 1), 1)), 0)::int AS claimed_work_units,
+                MAX(u.lease_expires_at) AS lease_expires_at,
+                COUNT(*) FILTER (WHERE u.previous_status = 'in_progress')::int AS reclaimed_items
+            FROM updated_job j
+            JOIN updated_items u ON TRUE
+            GROUP BY
+                j.batch_id,
+                j.endpoint,
+                j.scheduling_model_group,
+                j.tenant_scope_type,
+                j.tenant_scope_id,
+                j.service_tier,
+                j.size_class,
+                j.queue_entered_at,
+                j.previous_status,
+                j.queue_wait_observed
+            """,
+            worker_id,
+            bounded_max_items,
+            bounded_max_work_units,
+            lease_seconds,
+        )
+        if not rows:
+            return None
+        row = dict(rows[0])
+        item_ids_value = row.get("item_ids") or []
+        if isinstance(item_ids_value, str):
+            item_ids = [value for value in item_ids_value.strip("{}").split(",") if value]
+        else:
+            item_ids = [str(item_id) for item_id in item_ids_value]
+        if not item_ids:
+            return None
+
+        parsed_lease = parse_datetime(row.get("lease_expires_at"))
+        if parsed_lease is None:
+            logger.error(
+                "batch work claim missing lease_expires_at batch_id=%s item_count=%s",
+                row.get("batch_id"),
+                len(item_ids),
+            )
+            return None
+
+        reclaimed_count = int(row.get("reclaimed_items") or 0)
+        for _ in range(reclaimed_count):
+            increment_batch_item_reclaim()
+
+        queue_entered_at = parse_datetime(row.get("queue_entered_at"))
+        if bool(row.get("queue_wait_observed")) and queue_entered_at is not None:
+            observe_batch_queue_wait(
+                model_group=str(row.get("model_group") or "unknown"),
+                service_tier=str(row.get("service_tier") or "standard"),
+                size_class=str(row.get("size_class") or "unknown"),
+                wait_seconds=max(
+                    0.0,
+                    (datetime.now(tz=UTC) - queue_entered_at).total_seconds(),
+                ),
+            )
+
+        return BatchWorkClaim(
+            claim_id=str(uuid4()),
+            worker_id=worker_id,
+            batch_id=str(row["batch_id"]),
+            endpoint=str(row.get("endpoint") or ""),
+            model_group=row.get("model_group"),
+            tenant_scope_type=row.get("tenant_scope_type"),
+            tenant_scope_id=row.get("tenant_scope_id"),
+            service_tier=str(row.get("service_tier") or "standard"),
+            item_ids=item_ids,
+            claimed_work_units=int(row.get("claimed_work_units") or len(item_ids)),
+            lease_expires_at=parsed_lease,
+        )
+
+    async def diagnose_empty_work_claim(self) -> str:
+        if self.prisma is None:
+            return "no_available_work"
+        rows = await self.prisma.query_raw(
+            """
+            WITH candidate_jobs AS (
+                SELECT
+                    j.batch_id,
+                    j.locked_by,
+                    j.lease_expires_at,
+                    j.last_scheduled_at,
+                    j.queue_entered_at,
+                    j.created_at
+                FROM deltallm_batch_job j
+                WHERE j.status IN ('queued', 'in_progress')
+                ORDER BY (j.last_scheduled_at IS NOT NULL) ASC,
+                         j.last_scheduled_at ASC,
+                         COALESCE(j.queue_entered_at, j.created_at) ASC,
+                         j.created_at ASC
+                LIMIT 100
+            ),
+            unleased_jobs AS (
+                SELECT *
+                FROM candidate_jobs
+                WHERE locked_by IS NULL
+                   OR lease_expires_at IS NULL
+                   OR lease_expires_at < NOW()
+            ),
+            claimable_probe AS (
+                SELECT i.item_id
+                FROM unleased_jobs j
+                JOIN deltallm_batch_item i ON i.batch_id = j.batch_id
+                -- Runnable-item predicate. Mirror in claim_next_work (and
+                -- vice versa) — Phase 3 changes here must update both call
+                -- sites.
+                WHERE (
+                    (
+                        i.status = 'pending'
+                        AND (i.lease_expires_at IS NULL OR i.lease_expires_at < NOW())
+                        AND (i.not_before_at IS NULL OR i.not_before_at <= NOW())
+                    )
+                    OR (i.status = 'in_progress' AND i.lease_expires_at < NOW())
+                )
+                ORDER BY (j.last_scheduled_at IS NOT NULL) ASC,
+                         j.last_scheduled_at ASC,
+                         COALESCE(j.queue_entered_at, j.created_at) ASC,
+                         j.created_at ASC,
+                         i.line_number ASC
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+            )
+            SELECT
+                EXISTS (SELECT 1 FROM candidate_jobs) AS active_jobs,
+                EXISTS (SELECT 1 FROM unleased_jobs) AS unleased_jobs,
+                EXISTS (
+                    SELECT 1
+                    FROM unleased_jobs j
+                    JOIN deltallm_batch_item i ON i.batch_id = j.batch_id
+                    WHERE i.status IN ('pending', 'in_progress')
+                    LIMIT 1
+                ) AS pending_or_in_progress_items,
+                EXISTS (
+                    SELECT 1
+                    FROM unleased_jobs j
+                    JOIN deltallm_batch_item i ON i.batch_id = j.batch_id
+                    WHERE i.status = 'pending'
+                    LIMIT 1
+                ) AS pending_items,
+                EXISTS (
+                    SELECT 1
+                    FROM unleased_jobs j
+                    JOIN deltallm_batch_item i ON i.batch_id = j.batch_id
+                    WHERE i.status = 'in_progress'
+                    LIMIT 1
+                ) AS in_progress_items,
+                EXISTS (
+                    SELECT 1
+                    FROM unleased_jobs j
+                    JOIN deltallm_batch_item i ON i.batch_id = j.batch_id
+                    WHERE i.status = 'pending'
+                      AND (i.not_before_at IS NULL OR i.not_before_at <= NOW())
+                    LIMIT 1
+                ) AS due_pending_items,
+                EXISTS (
+                    SELECT 1
+                    FROM unleased_jobs j
+                    JOIN deltallm_batch_item i ON i.batch_id = j.batch_id
+                    WHERE i.status = 'pending'
+                      AND i.not_before_at IS NOT NULL
+                      AND i.not_before_at > NOW()
+                    LIMIT 1
+                ) AS future_pending_items,
+                EXISTS (
+                    SELECT 1
+                    FROM unleased_jobs j
+                    JOIN deltallm_batch_item i ON i.batch_id = j.batch_id
+                    WHERE (
+                        (
+                            i.status = 'pending'
+                            AND (i.lease_expires_at IS NULL OR i.lease_expires_at < NOW())
+                            AND (i.not_before_at IS NULL OR i.not_before_at <= NOW())
+                        )
+                        OR (i.status = 'in_progress' AND i.lease_expires_at < NOW())
+                    )
+                    LIMIT 1
+                ) AS runnable_items,
+                EXISTS (SELECT 1 FROM claimable_probe) AS claimable_items
+            """
+        )
+        if not rows:
+            return "no_available_work"
+        row = dict(rows[0])
+        active_jobs = bool(row.get("active_jobs"))
+        unleased_jobs = bool(row.get("unleased_jobs"))
+        pending_or_in_progress_items = bool(row.get("pending_or_in_progress_items"))
+        pending_items = bool(row.get("pending_items"))
+        in_progress_items = bool(row.get("in_progress_items"))
+        due_pending_items = bool(row.get("due_pending_items"))
+        future_pending_items = bool(row.get("future_pending_items"))
+        runnable_items = bool(row.get("runnable_items"))
+        claimable_items = bool(row.get("claimable_items"))
+
+        if not active_jobs or not unleased_jobs:
+            return "job_terminal_or_leased"
+        if not pending_or_in_progress_items:
+            return "no_pending_items"
+        if not runnable_items:
+            if pending_items and future_pending_items and not due_pending_items and not in_progress_items:
+                return "not_before_future"
+            return "all_items_locked"
+        if not claimable_items:
+            return "all_items_locked"
+        return "no_available_work"
 
     async def renew_job_lease(self, *, batch_id: str, worker_id: str, lease_seconds: int) -> bool:
         if self.prisma is None:

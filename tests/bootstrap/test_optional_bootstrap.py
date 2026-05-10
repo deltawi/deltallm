@@ -96,6 +96,11 @@ def _batch_config(
             embeddings_batch_scheduler_backfill_enabled=scheduler_backfill_enabled,
             embeddings_batch_scheduler_backfill_interval_seconds=60.0,
             embeddings_batch_scheduler_backfill_scan_limit=500,
+            embeddings_batch_scheduler_claim_mode="job_fifo",
+            embeddings_batch_work_claim_max_items=0,
+            embeddings_batch_work_claim_max_work_units=0,
+            embeddings_batch_work_claim_min_items_for_microbatch=4,
+            embeddings_batch_finalization_first=True,
             batch_completed_artifact_retention_days=7,
             batch_failed_artifact_retention_days=2,
             embeddings_batch_gc_interval_seconds=60,
@@ -402,6 +407,11 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
     assert created["worker"].config.worker_concurrency == 4
     assert created["worker"].config.item_buffer_multiplier == 2
     assert created["worker"].config.finalization_page_size == 500
+    assert created["worker"].config.scheduler_claim_mode == "job_fifo"
+    assert created["worker"].config.work_claim_max_items == 0
+    assert created["worker"].config.work_claim_max_work_units == 0
+    assert created["worker"].config.work_claim_min_items_for_microbatch == 4
+    assert created["worker"].config.finalization_first is True
     assert created["worker"].config.microbatch_retry_enabled is True
     assert created["worker"].config.microbatch_max_group_retries == 2
     assert runtime.statuses == (

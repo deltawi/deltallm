@@ -2221,6 +2221,634 @@ async def test_db_backed_claim_items_are_disjoint_under_contention(batch_db) -> 
 
 
 @pytest.mark.asyncio
+async def test_db_backed_claim_next_work_allows_multiple_slices_from_same_job(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert job is not None
+    inserted = await repository.create_items(
+        job.batch_id,
+        [
+            BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}),
+            BatchItemCreate(line_number=2, custom_id="c2", request_body={"model": "m1", "input": "b"}),
+            BatchItemCreate(line_number=3, custom_id="c3", request_body={"model": "m1", "input": "c"}),
+            BatchItemCreate(line_number=4, custom_id="c4", request_body={"model": "m1", "input": "d"}),
+        ],
+    )
+    assert inserted == 4
+    await repository.set_job_queued(job.batch_id, inserted)
+
+    db_one = await _connect_prisma()
+    db_two = await _connect_prisma()
+    try:
+        repo_one = BatchRepository(db_one)
+        repo_two = BatchRepository(db_two)
+        first, second = await asyncio.gather(
+            repo_one.claim_next_work(
+                worker_id="w1",
+                max_items=2,
+                max_work_units=100,
+                lease_seconds=120,
+            ),
+            repo_two.claim_next_work(
+                worker_id="w2",
+                max_items=2,
+                max_work_units=100,
+                lease_seconds=120,
+            ),
+        )
+    finally:
+        await db_one.disconnect()
+        await db_two.disconnect()
+
+    assert first is not None
+    assert second is not None
+    first_items = await repository.load_claim_items(first.item_ids)
+    second_items = await repository.load_claim_items(second.item_ids)
+    first_lines = {item.line_number for item in first_items}
+    second_lines = {item.line_number for item in second_items}
+    assert first_lines
+    assert second_lines
+    assert first_lines.isdisjoint(second_lines)
+    assert first_lines | second_lines == {1, 2, 3, 4}
+
+
+@pytest.mark.asyncio
+async def test_db_backed_claim_next_work_respects_not_before_and_large_first_item(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert job is not None
+    inserted = await repository.create_items(
+        job.batch_id,
+        [
+            BatchItemCreate(
+                line_number=1,
+                custom_id="future",
+                request_body={"model": "m1", "input": "future"},
+                estimated_work_units=1,
+                not_before_at=datetime.now(tz=UTC) + timedelta(hours=1),
+            ),
+            BatchItemCreate(
+                line_number=2,
+                custom_id="large",
+                request_body={"model": "m1", "input": "large"},
+                estimated_work_units=10,
+            ),
+            BatchItemCreate(
+                line_number=3,
+                custom_id="small",
+                request_body={"model": "m1", "input": "small"},
+                estimated_work_units=1,
+            ),
+        ],
+    )
+    assert inserted == 3
+    await repository.set_job_queued(job.batch_id, inserted)
+
+    claim = await repository.claim_next_work(
+        worker_id="w1",
+        max_items=3,
+        max_work_units=5,
+        lease_seconds=120,
+    )
+
+    assert claim is not None
+    assert claim.claimed_work_units == 10
+    claimed_items = await repository.load_claim_items(claim.item_ids)
+    assert [item.line_number for item in claimed_items] == [2]
+    assert claimed_items[0].status == "in_progress"
+    future_items = await repository.list_items(job.batch_id)
+    assert [item.status for item in future_items if item.line_number == 1] == ["pending"]
+
+
+@pytest.mark.asyncio
+async def test_db_backed_claim_next_work_rotates_to_unscheduled_small_job(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    large = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    small = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-b",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert large is not None
+    assert small is not None
+    large_count = await repository.create_items(
+        large.batch_id,
+        [
+            BatchItemCreate(line_number=1, custom_id="large-1", request_body={"model": "m1", "input": "a"}),
+            BatchItemCreate(line_number=2, custom_id="large-2", request_body={"model": "m1", "input": "b"}),
+            BatchItemCreate(line_number=3, custom_id="large-3", request_body={"model": "m1", "input": "c"}),
+            BatchItemCreate(line_number=4, custom_id="large-4", request_body={"model": "m1", "input": "d"}),
+        ],
+    )
+    small_count = await repository.create_items(
+        small.batch_id,
+        [BatchItemCreate(line_number=1, custom_id="small-1", request_body={"model": "m1", "input": "small"})],
+    )
+    assert large_count == 4
+    assert small_count == 1
+    await repository.set_job_queued(large.batch_id, large_count)
+    await repository.set_job_queued(small.batch_id, small_count)
+
+    first = await repository.claim_next_work(
+        worker_id="w1",
+        max_items=2,
+        max_work_units=100,
+        lease_seconds=120,
+    )
+    assert first is not None
+    assert first.batch_id == large.batch_id
+
+    second = await repository.claim_next_work(
+        worker_id="w2",
+        max_items=2,
+        max_work_units=100,
+        lease_seconds=120,
+    )
+    assert second is not None
+    assert second.batch_id == small.batch_id
+
+
+@pytest.mark.asyncio
+async def test_db_backed_claim_next_work_skips_row_locked_oldest_job(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    oldest = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    next_job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-b",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert oldest is not None
+    assert next_job is not None
+    assert await repository.create_items(
+        oldest.batch_id,
+        [BatchItemCreate(line_number=1, custom_id="oldest-1", request_body={"model": "m1", "input": "a"})],
+    ) == 1
+    assert await repository.create_items(
+        next_job.batch_id,
+        [BatchItemCreate(line_number=1, custom_id="next-1", request_body={"model": "m1", "input": "b"})],
+    ) == 1
+    await repository.set_job_queued(oldest.batch_id, 1)
+    await repository.set_job_queued(next_job.batch_id, 1)
+
+    lock_db = await _connect_prisma()
+    claim_db = await _connect_prisma()
+    try:
+        async with lock_db.tx(timeout=10000) as tx:
+            locked = await tx.query_raw(
+                """
+                SELECT item_id
+                FROM deltallm_batch_item
+                WHERE batch_id = $1
+                FOR UPDATE
+                """,
+                oldest.batch_id,
+            )
+            assert locked
+
+            claim = await BatchRepository(claim_db).claim_next_work(
+                worker_id="w1",
+                max_items=1,
+                max_work_units=100,
+                lease_seconds=120,
+            )
+    finally:
+        await claim_db.disconnect()
+        await lock_db.disconnect()
+
+    assert claim is not None
+    assert claim.batch_id == next_job.batch_id
+
+
+@pytest.mark.asyncio
+async def test_db_backed_claim_next_work_skips_job_row_locked_oldest_job(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    oldest = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    next_job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-b",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert oldest is not None
+    assert next_job is not None
+    assert await repository.create_items(
+        oldest.batch_id,
+        [BatchItemCreate(line_number=1, custom_id="oldest-1", request_body={"model": "m1", "input": "a"})],
+    ) == 1
+    assert await repository.create_items(
+        next_job.batch_id,
+        [BatchItemCreate(line_number=1, custom_id="next-1", request_body={"model": "m1", "input": "b"})],
+    ) == 1
+    await repository.set_job_queued(oldest.batch_id, 1)
+    await repository.set_job_queued(next_job.batch_id, 1)
+
+    lock_db = await _connect_prisma()
+    claim_db = await _connect_prisma()
+    try:
+        async with lock_db.tx(timeout=10000) as tx:
+            locked = await tx.query_raw(
+                """
+                SELECT batch_id
+                FROM deltallm_batch_job
+                WHERE batch_id = $1
+                FOR UPDATE
+                """,
+                oldest.batch_id,
+            )
+            assert locked
+
+            claim = await BatchRepository(claim_db).claim_next_work(
+                worker_id="w1",
+                max_items=1,
+                max_work_units=100,
+                lease_seconds=120,
+            )
+    finally:
+        await claim_db.disconnect()
+        await lock_db.disconnect()
+
+    assert claim is not None
+    assert claim.batch_id == next_job.batch_id
+
+
+@pytest.mark.asyncio
+async def test_db_backed_claim_next_work_skips_live_job_lease(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    leased = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    next_job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-b",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert leased is not None
+    assert next_job is not None
+    assert await repository.create_items(
+        leased.batch_id,
+        [BatchItemCreate(line_number=1, custom_id="leased-1", request_body={"model": "m1", "input": "a"})],
+    ) == 1
+    assert await repository.create_items(
+        next_job.batch_id,
+        [BatchItemCreate(line_number=1, custom_id="next-1", request_body={"model": "m1", "input": "b"})],
+    ) == 1
+    await repository.set_job_queued(leased.batch_id, 1)
+    await repository.set_job_queued(next_job.batch_id, 1)
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_job
+        SET locked_by = 'job-fifo-worker',
+            lease_expires_at = NOW() + INTERVAL '10 minutes'
+        WHERE batch_id = $1
+        """,
+        leased.batch_id,
+    )
+
+    claim = await repository.claim_next_work(
+        worker_id="w1",
+        max_items=1,
+        max_work_units=100,
+        lease_seconds=120,
+    )
+
+    assert claim is not None
+    assert claim.batch_id == next_job.batch_id
+
+
+@pytest.mark.asyncio
+async def test_db_backed_claim_next_work_skips_item_with_future_not_before_after_retry(batch_db) -> None:
+    """A retryable failure sets not_before_at into the future via
+    mark_item_failed(retryable=True, retry_delay_seconds>0). The next
+    work-slice claim must skip that item (predicate excludes future
+    not_before_at) and pick the next eligible one in line order.
+    """
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert job is not None
+    inserted = await repository.create_items(
+        job.batch_id,
+        [
+            BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"}),
+            BatchItemCreate(line_number=2, custom_id="c2", request_body={"model": "m1", "input": "b"}),
+        ],
+    )
+    assert inserted == 2
+    await repository.set_job_queued(job.batch_id, inserted)
+
+    first = await repository.claim_next_work(
+        worker_id="w1",
+        max_items=1,
+        max_work_units=100,
+        lease_seconds=120,
+    )
+    assert first is not None
+    assert len(first.item_ids) == 1
+    retried_item_id = first.item_ids[0]
+
+    # Mark the claimed item as a retryable failure with a 1h backoff.
+    marked = await repository.mark_item_failed(
+        item_id=retried_item_id,
+        worker_id="w1",
+        error_body={"message": "transient upstream"},
+        last_error="transient upstream",
+        retryable=True,
+        retry_delay_seconds=3600,
+    )
+    assert marked is True
+
+    second = await repository.claim_next_work(
+        worker_id="w1",
+        max_items=2,
+        max_work_units=100,
+        lease_seconds=120,
+    )
+
+    assert second is not None
+    second_items = await repository.load_claim_items(second.item_ids)
+    # Retried item is in the future; only line 2 should be returned.
+    assert [item.line_number for item in second_items] == [2]
+    assert retried_item_id not in second.item_ids
+
+
+@pytest.mark.asyncio
+async def test_db_backed_claim_next_work_does_not_strand_items_when_job_finalizing(batch_db) -> None:
+    """Race-symmetry guard for the updated_items / updated_job CTE dependency.
+
+    If the only candidate job is no longer ('queued', 'in_progress'), the SQL must
+    leave its items untouched. updated_items is wired off updated_job, so an empty
+    updated_job (status filter fails, EvalPlanQual or otherwise) means no item is
+    flipped to 'in_progress' and the worker correctly observes claim=None.
+    """
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert job is not None
+    inserted = await repository.create_items(
+        job.batch_id,
+        [BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"})],
+    )
+    assert inserted == 1
+    await repository.set_job_queued(job.batch_id, inserted)
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_job
+        SET status = 'finalizing'::"DeltaLLM_BatchJobStatus",
+            status_last_updated_at = NOW()
+        WHERE batch_id = $1
+        """,
+        job.batch_id,
+    )
+
+    claim = await repository.claim_next_work(
+        worker_id="w1",
+        max_items=4,
+        max_work_units=16,
+        lease_seconds=120,
+    )
+
+    assert claim is None
+    items = await repository.list_items(job.batch_id)
+    assert [item.status for item in items] == ["pending"]
+    assert all(item.locked_by is None for item in items)
+    assert all(item.lease_expires_at is None for item in items)
+
+
+@pytest.mark.asyncio
+async def test_db_backed_diagnose_empty_work_claim_reports_not_before_future(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert job is not None
+    inserted = await repository.create_items(
+        job.batch_id,
+        [
+            BatchItemCreate(
+                line_number=1,
+                custom_id="future-1",
+                request_body={"model": "m1", "input": "a"},
+                not_before_at=datetime.now(tz=UTC) + timedelta(hours=1),
+            )
+        ],
+    )
+    assert inserted == 1
+    await repository.set_job_queued(job.batch_id, inserted)
+
+    assert await repository.claim_next_work(
+        worker_id="w1",
+        max_items=1,
+        max_work_units=100,
+        lease_seconds=120,
+    ) is None
+    assert await repository.diagnose_empty_work_claim() == "not_before_future"
+
+
+@pytest.mark.asyncio
+async def test_db_backed_diagnose_empty_work_claim_reports_all_items_locked(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert job is not None
+    inserted = await repository.create_items(
+        job.batch_id,
+        [BatchItemCreate(line_number=1, custom_id="locked-1", request_body={"model": "m1", "input": "a"})],
+    )
+    assert inserted == 1
+    await repository.set_job_queued(job.batch_id, inserted)
+
+    lock_db = await _connect_prisma()
+    diagnostic_db = await _connect_prisma()
+    try:
+        async with lock_db.tx(timeout=10000) as tx:
+            locked = await tx.query_raw(
+                """
+                SELECT item_id
+                FROM deltallm_batch_item
+                WHERE batch_id = $1
+                FOR UPDATE
+                """,
+                job.batch_id,
+            )
+            assert locked
+
+            reason = await BatchRepository(diagnostic_db).diagnose_empty_work_claim()
+    finally:
+        await diagnostic_db.disconnect()
+        await lock_db.disconnect()
+
+    assert reason == "all_items_locked"
+
+
+@pytest.mark.asyncio
+async def test_db_backed_diagnose_empty_work_claim_reports_locked_for_mixed_due_and_future(
+    batch_db,
+) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert job is not None
+    inserted = await repository.create_items(
+        job.batch_id,
+        [
+            BatchItemCreate(line_number=1, custom_id="locked-1", request_body={"model": "m1", "input": "a"}),
+            BatchItemCreate(
+                line_number=2,
+                custom_id="future-1",
+                request_body={"model": "m1", "input": "b"},
+                not_before_at=datetime.now(tz=UTC) + timedelta(hours=1),
+            ),
+        ],
+    )
+    assert inserted == 2
+    await repository.set_job_queued(job.batch_id, inserted)
+
+    lock_db = await _connect_prisma()
+    diagnostic_db = await _connect_prisma()
+    try:
+        async with lock_db.tx(timeout=10000) as tx:
+            locked = await tx.query_raw(
+                """
+                SELECT item_id
+                FROM deltallm_batch_item
+                WHERE batch_id = $1
+                  AND line_number = 1
+                FOR UPDATE
+                """,
+                job.batch_id,
+            )
+            assert locked
+
+            reason = await BatchRepository(diagnostic_db).diagnose_empty_work_claim()
+    finally:
+        await diagnostic_db.disconnect()
+        await lock_db.disconnect()
+
+    assert reason == "all_items_locked"
+
+
+@pytest.mark.asyncio
 async def test_db_backed_expired_item_can_be_reclaimed_after_crash(batch_db) -> None:
     repository = BatchRepository(batch_db)
     input_file_id = await _seed_batch_file(repository)
