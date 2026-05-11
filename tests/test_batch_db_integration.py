@@ -2341,6 +2341,366 @@ async def test_db_backed_claim_next_work_respects_not_before_and_large_first_ite
 
 
 @pytest.mark.asyncio
+async def test_db_backed_capacity_claim_skips_oversized_head_job(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    now = datetime.now(tz=UTC)
+    oversized = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+        queue_entered_at=now,
+    )
+    fitting = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-b",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+        queue_entered_at=now + timedelta(seconds=1),
+    )
+    assert oversized is not None
+    assert fitting is not None
+    assert await repository.create_items(
+        oversized.batch_id,
+        [
+            BatchItemCreate(
+                line_number=1,
+                custom_id="oversized-1",
+                request_body={"model": "m1", "input": "large"},
+                estimated_work_units=10,
+            )
+        ],
+    ) == 1
+    assert await repository.create_items(
+        fitting.batch_id,
+        [
+            BatchItemCreate(
+                line_number=1,
+                custom_id="fitting-1",
+                request_body={"model": "m1", "input": "small"},
+                estimated_work_units=1,
+            )
+        ],
+    ) == 1
+    await repository.set_job_queued(oversized.batch_id, 1)
+    await repository.set_job_queued(fitting.batch_id, 1)
+
+    claim = await repository.claim_next_work(
+        worker_id="w1",
+        max_items=4,
+        max_work_units=5,
+        lease_seconds=120,
+        allowed_model_groups=["m1"],
+        service_tier="standard",
+        claim_order="fifo",
+        capacity_model_group="m1",
+        capacity_service_tier="standard",
+        capacity_max_in_flight_items=4,
+        capacity_max_in_flight_work_units=20,
+        allow_oversized_first_item=False,
+    )
+
+    assert claim is not None
+    assert claim.batch_id == fitting.batch_id
+    oversized_items = await repository.list_items(oversized.batch_id)
+    assert [item.status for item in oversized_items] == ["pending"]
+    reason = await repository.diagnose_model_group_work_claim_empty(
+        model_group="m1",
+        service_tier="standard",
+        max_work_units=5,
+        capacity_max_in_flight_items=4,
+        capacity_max_in_flight_work_units=20,
+    )
+    assert reason == "oversized_head_item"
+
+
+@pytest.mark.asyncio
+async def test_db_backed_capacity_claim_serializes_in_flight_count(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    first_job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    second_job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-b",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert first_job is not None
+    assert second_job is not None
+    assert await repository.create_items(
+        first_job.batch_id,
+        [BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"})],
+    ) == 1
+    assert await repository.create_items(
+        second_job.batch_id,
+        [BatchItemCreate(line_number=1, custom_id="c2", request_body={"model": "m1", "input": "b"})],
+    ) == 1
+    await repository.set_job_queued(first_job.batch_id, 1)
+    await repository.set_job_queued(second_job.batch_id, 1)
+
+    claim_db_one = await _connect_prisma()
+    claim_db_two = await _connect_prisma()
+    try:
+        repo_one = BatchRepository(claim_db_one)
+        repo_two = BatchRepository(claim_db_two)
+        claims = await asyncio.gather(
+            repo_one.claim_next_work(
+                worker_id="w1",
+                max_items=1,
+                max_work_units=100,
+                lease_seconds=120,
+                allowed_model_groups=["m1"],
+                service_tier="standard",
+                claim_order="fifo",
+                capacity_model_group="m1",
+                capacity_service_tier="standard",
+                capacity_max_in_flight_items=1,
+                capacity_max_in_flight_work_units=100,
+                allow_oversized_first_item=False,
+            ),
+            repo_two.claim_next_work(
+                worker_id="w2",
+                max_items=1,
+                max_work_units=100,
+                lease_seconds=120,
+                allowed_model_groups=["m1"],
+                service_tier="standard",
+                claim_order="fifo",
+                capacity_model_group="m1",
+                capacity_service_tier="standard",
+                capacity_max_in_flight_items=1,
+                capacity_max_in_flight_work_units=100,
+                allow_oversized_first_item=False,
+            ),
+        )
+    finally:
+        await claim_db_one.disconnect()
+        await claim_db_two.disconnect()
+
+    successful_claims = [claim for claim in claims if claim is not None]
+    assert len(successful_claims) == 1
+    rows = await batch_db.query_raw(
+        """
+        SELECT COUNT(*)::int AS in_flight_items
+        FROM deltallm_batch_item
+        WHERE status = 'in_progress'
+        """
+    )
+    assert int(rows[0]["in_flight_items"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_db_backed_capacity_claim_remains_work_conserving_across_workers(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    first_job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    second_job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-b",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert first_job is not None
+    assert second_job is not None
+    assert await repository.create_items(
+        first_job.batch_id,
+        [BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"})],
+    ) == 1
+    assert await repository.create_items(
+        second_job.batch_id,
+        [BatchItemCreate(line_number=1, custom_id="c2", request_body={"model": "m1", "input": "b"})],
+    ) == 1
+    await repository.set_job_queued(first_job.batch_id, 1)
+    await repository.set_job_queued(second_job.batch_id, 1)
+
+    claim_db_one = await _connect_prisma()
+    claim_db_two = await _connect_prisma()
+    try:
+        repo_one = BatchRepository(claim_db_one)
+        repo_two = BatchRepository(claim_db_two)
+        claims = await asyncio.gather(
+            repo_one.claim_next_work(
+                worker_id="w1",
+                max_items=1,
+                max_work_units=100,
+                lease_seconds=120,
+                allowed_model_groups=["m1"],
+                service_tier="standard",
+                claim_order="fifo",
+                capacity_model_group="m1",
+                capacity_service_tier="standard",
+                capacity_max_in_flight_items=4,
+                allow_oversized_first_item=False,
+            ),
+            repo_two.claim_next_work(
+                worker_id="w2",
+                max_items=1,
+                max_work_units=100,
+                lease_seconds=120,
+                allowed_model_groups=["m1"],
+                service_tier="standard",
+                claim_order="fifo",
+                capacity_model_group="m1",
+                capacity_service_tier="standard",
+                capacity_max_in_flight_items=4,
+                allow_oversized_first_item=False,
+            ),
+        )
+    finally:
+        await claim_db_one.disconnect()
+        await claim_db_two.disconnect()
+
+    successful_claims = [claim for claim in claims if claim is not None]
+    assert len(successful_claims) == 2
+    rows = await batch_db.query_raw(
+        """
+        SELECT COUNT(*)::int AS in_flight_items
+        FROM deltallm_batch_item
+        WHERE status = 'in_progress'
+        """
+    )
+    assert int(rows[0]["in_flight_items"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_db_backed_capacity_claim_serializes_in_flight_work_units(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    first_job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    second_job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-b",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert first_job is not None
+    assert second_job is not None
+    assert await repository.create_items(
+        first_job.batch_id,
+        [
+            BatchItemCreate(
+                line_number=1,
+                custom_id="c1",
+                request_body={"model": "m1", "input": "a"},
+                estimated_work_units=1,
+            )
+        ],
+    ) == 1
+    assert await repository.create_items(
+        second_job.batch_id,
+        [
+            BatchItemCreate(
+                line_number=1,
+                custom_id="c2",
+                request_body={"model": "m1", "input": "b"},
+                estimated_work_units=1,
+            )
+        ],
+    ) == 1
+    await repository.set_job_queued(first_job.batch_id, 1)
+    await repository.set_job_queued(second_job.batch_id, 1)
+
+    claim_db_one = await _connect_prisma()
+    claim_db_two = await _connect_prisma()
+    try:
+        repo_one = BatchRepository(claim_db_one)
+        repo_two = BatchRepository(claim_db_two)
+        claims = await asyncio.gather(
+            repo_one.claim_next_work(
+                worker_id="w1",
+                max_items=4,
+                max_work_units=1,
+                lease_seconds=120,
+                allowed_model_groups=["m1"],
+                service_tier="standard",
+                claim_order="fifo",
+                capacity_model_group="m1",
+                capacity_service_tier="standard",
+                capacity_max_in_flight_items=4,
+                capacity_max_in_flight_work_units=1,
+                allow_oversized_first_item=False,
+            ),
+            repo_two.claim_next_work(
+                worker_id="w2",
+                max_items=4,
+                max_work_units=1,
+                lease_seconds=120,
+                allowed_model_groups=["m1"],
+                service_tier="standard",
+                claim_order="fifo",
+                capacity_model_group="m1",
+                capacity_service_tier="standard",
+                capacity_max_in_flight_items=4,
+                capacity_max_in_flight_work_units=1,
+                allow_oversized_first_item=False,
+            ),
+        )
+    finally:
+        await claim_db_one.disconnect()
+        await claim_db_two.disconnect()
+
+    successful_claims = [claim for claim in claims if claim is not None]
+    assert len(successful_claims) == 1
+    rows = await batch_db.query_raw(
+        """
+        SELECT COALESCE(SUM(GREATEST(COALESCE(estimated_work_units, 1), 1)), 0)::int
+            AS in_flight_work_units
+        FROM deltallm_batch_item
+        WHERE status = 'in_progress'
+        """
+    )
+    assert int(rows[0]["in_flight_work_units"]) == 1
+
+
+@pytest.mark.asyncio
 async def test_db_backed_claim_next_work_rotates_to_unscheduled_small_job(batch_db) -> None:
     repository = BatchRepository(batch_db)
     input_file_id = await _seed_batch_file(repository)

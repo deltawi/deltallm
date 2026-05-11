@@ -412,6 +412,37 @@ async def test_promote_session_records_shadow_scheduler_decision(
 
 
 @pytest.mark.asyncio
+async def test_promote_session_records_active_scheduler_version() -> None:
+    session = _session(status=BatchCreateSessionStatus.STAGED)
+    tx_repository = _SuccessfulTxRepository(session_repo=_TxSessionRepo(session), active_jobs=0)
+    repository = _FakeRepository(
+        session_repo=_SessionRepo(session),
+        tx_repository=tx_repository,
+        active_jobs=0,
+    )
+    staging = _FakeStaging(
+        records=[
+            BatchCreateStagedRequest(
+                line_number=1,
+                custom_id="req-1",
+                request_body={"model": "m1", "input": "hello"},
+            )
+        ]
+    )
+    promoter = BatchCreateSessionPromoter(
+        repository=repository,
+        staging=staging,
+        scheduler_enabled=True,
+        scheduler_shadow_enabled=True,
+        strict_model_homogeneity_enabled=True,
+    )
+
+    await promoter.promote_session("session-1")
+
+    assert tx_repository.created_jobs[0]["scheduler_version"] == "scheduler_v2"
+
+
+@pytest.mark.asyncio
 async def test_promote_session_marks_mixed_model_jobs_with_sentinel_group() -> None:
     session = _session(status=BatchCreateSessionStatus.STAGED, expected_item_count=2)
     tx_repository = _SuccessfulTxRepository(session_repo=_TxSessionRepo(session))

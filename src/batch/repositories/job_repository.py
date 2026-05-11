@@ -6,7 +6,14 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from src.batch.models import BatchJobRecord, BatchJobStatus, BatchWorkClaim, normalize_batch_job_status
+from src.batch.models import (
+    BatchJobRecord,
+    BatchJobStatus,
+    BatchModelBacklogRecord,
+    BatchModelInFlightRecord,
+    BatchWorkClaim,
+    normalize_batch_job_status,
+)
 from src.batch.repositories.mappers import job_from_row, parse_datetime
 from src.batch.scheduling import (
     API_KEY_TENANT_SCOPE_PREFIX,
@@ -15,7 +22,12 @@ from src.batch.scheduling import (
     resolve_model_group,
     stable_tenant_scope_id,
 )
-from src.metrics import increment_batch_item_reclaim, observe_batch_estimated_work_units, observe_batch_queue_wait
+from src.metrics import (
+    increment_batch_item_reclaim,
+    observe_batch_claim_wait_by_model,
+    observe_batch_estimated_work_units,
+    observe_batch_queue_wait,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +52,10 @@ class BatchJobRepository:
             return
         await self.prisma.query_raw(
             """
-            SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))
+            WITH scope_lock AS (
+                SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))
+            )
+            SELECT 1::int AS locked FROM scope_lock
             """,
             scope_type,
             scope_id,
@@ -568,6 +583,100 @@ class BatchJobRepository:
             return None
         return job_from_row(rows[0])
 
+    async def list_model_group_backlog(self) -> list[BatchModelBacklogRecord]:
+        if self.prisma is None:
+            return []
+        rows = await self.prisma.query_raw(
+            """
+            WITH runnable_jobs AS (
+                SELECT
+                    j.batch_id,
+                    COALESCE(NULLIF(j.scheduling_model_group, ''), 'unknown') AS model_group,
+                    COALESCE(NULLIF(j.service_tier, ''), 'standard') AS service_tier,
+                    COALESCE(NULLIF(j.size_class, ''), 'unknown') AS size_class,
+                    GREATEST(COALESCE(j.remaining_work_units, j.estimated_work_units, j.total_items, 0), 0)::int
+                        AS remaining_work_units,
+                    COALESCE(j.queue_entered_at, j.created_at) AS queue_entered_at
+                FROM deltallm_batch_job j
+                WHERE j.status IN ('queued', 'in_progress')
+                  AND (j.locked_by IS NULL OR j.lease_expires_at IS NULL OR j.lease_expires_at < NOW())
+                  AND j.scheduling_model_group IS NOT NULL
+                  AND j.scheduling_model_group <> ''
+                  AND EXISTS (
+                      SELECT 1
+                      FROM deltallm_batch_item i
+                      WHERE i.batch_id = j.batch_id
+                        AND (
+                            (
+                                i.status = 'pending'
+                                AND (i.lease_expires_at IS NULL OR i.lease_expires_at < NOW())
+                                AND (i.not_before_at IS NULL OR i.not_before_at <= NOW())
+                            )
+                            OR (i.status = 'in_progress' AND i.lease_expires_at < NOW())
+                        )
+                  )
+            )
+            SELECT
+                model_group,
+                service_tier,
+                size_class,
+                COUNT(*)::int AS queued_jobs,
+                COALESCE(SUM(remaining_work_units), 0)::int AS queued_work_units,
+                MIN(queue_entered_at) AS oldest_queue_entered_at
+            FROM runnable_jobs
+            GROUP BY model_group, service_tier, size_class
+            ORDER BY MIN(queue_entered_at) ASC, model_group ASC, service_tier ASC, size_class ASC
+            """,
+        )
+        records: list[BatchModelBacklogRecord] = []
+        for row in rows:
+            row_dict = dict(row)
+            records.append(
+                BatchModelBacklogRecord(
+                    model_group=str(row_dict.get("model_group") or "unknown"),
+                    service_tier=str(row_dict.get("service_tier") or "standard"),
+                    size_class=str(row_dict.get("size_class") or "unknown"),
+                    queued_jobs=int(row_dict.get("queued_jobs") or 0),
+                    queued_work_units=int(row_dict.get("queued_work_units") or 0),
+                    oldest_queue_entered_at=parse_datetime(row_dict.get("oldest_queue_entered_at")),
+                )
+            )
+        return records
+
+    async def list_model_group_in_flight(self) -> list[BatchModelInFlightRecord]:
+        if self.prisma is None:
+            return []
+        rows = await self.prisma.query_raw(
+            """
+            SELECT
+                COALESCE(NULLIF(i.scheduling_model_group, ''), NULLIF(j.scheduling_model_group, ''), 'unknown')
+                    AS model_group,
+                COALESCE(NULLIF(j.service_tier, ''), 'standard') AS service_tier,
+                COUNT(*)::int AS in_flight_items,
+                COALESCE(SUM(GREATEST(COALESCE(i.estimated_work_units, 1), 1)), 0)::int
+                    AS in_flight_work_units
+            FROM deltallm_batch_item i
+            JOIN deltallm_batch_job j ON j.batch_id = i.batch_id
+            WHERE i.status = 'in_progress'
+              AND (i.lease_expires_at IS NULL OR i.lease_expires_at > NOW())
+              AND COALESCE(NULLIF(i.scheduling_model_group, ''), NULLIF(j.scheduling_model_group, '')) IS NOT NULL
+            GROUP BY model_group, service_tier
+            ORDER BY model_group ASC, service_tier ASC
+            """,
+        )
+        records: list[BatchModelInFlightRecord] = []
+        for row in rows:
+            row_dict = dict(row)
+            records.append(
+                BatchModelInFlightRecord(
+                    model_group=str(row_dict.get("model_group") or "unknown"),
+                    service_tier=str(row_dict.get("service_tier") or "standard"),
+                    in_flight_items=int(row_dict.get("in_flight_items") or 0),
+                    in_flight_work_units=int(row_dict.get("in_flight_work_units") or 0),
+                )
+            )
+        return records
+
     async def claim_next_work(
         self,
         *,
@@ -575,11 +684,229 @@ class BatchJobRepository:
         max_items: int,
         max_work_units: int,
         lease_seconds: int,
+        allowed_model_groups: list[str] | None = None,
+        service_tier: str | None = None,
+        legacy_only: bool = False,
+        claim_order: str = "round_robin",
+        capacity_model_group: str | None = None,
+        capacity_service_tier: str | None = None,
+        capacity_max_in_flight_items: int | None = None,
+        capacity_max_in_flight_work_units: int | None = None,
+        allow_oversized_first_item: bool = True,
     ) -> BatchWorkClaim | None:
         if self.prisma is None:
             return None
+        normalized_capacity_model_group = str(capacity_model_group or "").strip()
+        normalized_capacity_service_tier = (
+            str(capacity_service_tier or service_tier or "standard").strip() or "standard"
+        )
+        if capacity_max_in_flight_items is not None and normalized_capacity_model_group:
+            capacity_max_in_flight = max(0, int(capacity_max_in_flight_items))
+            if capacity_max_in_flight <= 0:
+                return None
+            capacity_max_work_units = (
+                max(0, int(capacity_max_in_flight_work_units))
+                if capacity_max_in_flight_work_units is not None
+                else None
+            )
+            if capacity_max_work_units is not None and capacity_max_work_units <= 0:
+                return None
+            tx_factory = getattr(self.prisma, "tx", None)
+            if not callable(tx_factory):
+                logger.warning(
+                    "batch capacity claim requires transaction-capable prisma client model_group=%s",
+                    normalized_capacity_model_group,
+                )
+                return None
+            async with tx_factory() as tx:
+                await self._acquire_model_capacity_lock(
+                    tx,
+                    model_group=normalized_capacity_model_group,
+                    service_tier=normalized_capacity_service_tier,
+                )
+                return await self._claim_next_work_with_client(
+                    tx,
+                    worker_id=worker_id,
+                    max_items=max_items,
+                    max_work_units=max_work_units,
+                    lease_seconds=lease_seconds,
+                    allowed_model_groups=allowed_model_groups,
+                    service_tier=service_tier,
+                    legacy_only=legacy_only,
+                    claim_order=claim_order,
+                    capacity_model_group=normalized_capacity_model_group,
+                    capacity_service_tier=normalized_capacity_service_tier,
+                    capacity_max_in_flight_items=capacity_max_in_flight,
+                    capacity_max_in_flight_work_units=capacity_max_work_units,
+                    allow_oversized_first_item=allow_oversized_first_item,
+                )
+        return await self._claim_next_work_with_client(
+            self.prisma,
+            worker_id=worker_id,
+            max_items=max_items,
+            max_work_units=max_work_units,
+            lease_seconds=lease_seconds,
+            allowed_model_groups=allowed_model_groups,
+            service_tier=service_tier,
+            legacy_only=legacy_only,
+            claim_order=claim_order,
+            capacity_model_group=capacity_model_group,
+            capacity_service_tier=capacity_service_tier,
+            capacity_max_in_flight_items=capacity_max_in_flight_items,
+            capacity_max_in_flight_work_units=capacity_max_in_flight_work_units,
+            allow_oversized_first_item=allow_oversized_first_item,
+        )
+
+    async def _acquire_model_capacity_lock(
+        self,
+        db: Any,
+        *,
+        model_group: str,
+        service_tier: str,
+    ) -> None:
+        await db.query_raw(
+            """
+            WITH capacity_lock AS (
+                SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))
+            )
+            SELECT 1::int AS locked FROM capacity_lock
+            """,
+            model_group,
+            service_tier,
+        )
+
+    async def _claim_next_work_with_client(
+        self,
+        db: Any,
+        *,
+        worker_id: str,
+        max_items: int,
+        max_work_units: int,
+        lease_seconds: int,
+        allowed_model_groups: list[str] | None = None,
+        service_tier: str | None = None,
+        legacy_only: bool = False,
+        claim_order: str = "round_robin",
+        capacity_model_group: str | None = None,
+        capacity_service_tier: str | None = None,
+        capacity_max_in_flight_items: int | None = None,
+        capacity_max_in_flight_work_units: int | None = None,
+        allow_oversized_first_item: bool = True,
+    ) -> BatchWorkClaim | None:
         bounded_max_items = max(1, min(int(max_items), 200))
         bounded_max_work_units = max(1, int(max_work_units))
+        normalized_model_groups = [
+            str(model_group).strip()
+            for model_group in (allowed_model_groups or [])
+            if str(model_group or "").strip()
+        ]
+        params: list[Any] = [
+            worker_id,
+            bounded_max_items,
+            bounded_max_work_units,
+            lease_seconds,
+        ]
+        model_group_filter_sql = ""
+        if normalized_model_groups:
+            params.append(normalized_model_groups)
+            model_group_filter_sql = f"AND j.scheduling_model_group = ANY(${len(params)}::text[])"
+        service_tier_filter_sql = ""
+        normalized_service_tier = str(service_tier or "").strip()
+        if normalized_service_tier:
+            params.append(normalized_service_tier)
+            service_tier_filter_sql = f"AND j.service_tier = ${len(params)}"
+        legacy_filter_sql = ""
+        if legacy_only:
+            legacy_filter_sql = """
+                  AND COALESCE(NULLIF(j.scheduler_version, ''), 'fifo_v1') = 'fifo_v1'
+                  AND (j.scheduling_model_group IS NULL OR j.scheduling_model_group = '')
+            """
+        capacity_cte_sql = ""
+        capacity_filter_sql = ""
+        locked_items_limit_sql = "$2"
+        work_unit_claim_limit_sql = "$3"
+        normalized_capacity_model_group = str(capacity_model_group or "").strip()
+        normalized_capacity_service_tier = (
+            str(capacity_service_tier or service_tier or "standard").strip() or "standard"
+        )
+        if capacity_max_in_flight_items is not None and normalized_capacity_model_group:
+            capacity_max_in_flight = max(0, int(capacity_max_in_flight_items))
+            params.append(normalized_capacity_model_group)
+            capacity_model_param = len(params)
+            params.append(normalized_capacity_service_tier)
+            capacity_service_tier_param = len(params)
+            params.append(capacity_max_in_flight)
+            capacity_max_in_flight_param = len(params)
+            remaining_work_units_sql = "$3::int"
+            if capacity_max_in_flight_work_units is not None:
+                capacity_max_work_units = max(0, int(capacity_max_in_flight_work_units))
+                params.append(capacity_max_work_units)
+                capacity_max_work_units_param = len(params)
+                remaining_work_units_sql = (
+                    f"GREATEST(${capacity_max_work_units_param}::int "
+                    "- COALESCE(capacity_usage.in_flight_work_units, 0), 0)::int"
+                )
+            capacity_cte_sql = f"""
+            capacity_usage AS (
+                SELECT
+                    COUNT(*)::int AS in_flight_items,
+                    COALESCE(SUM(GREATEST(COALESCE(capacity_item.estimated_work_units, 1), 1)), 0)::int
+                        AS in_flight_work_units
+                FROM deltallm_batch_item capacity_item
+                JOIN deltallm_batch_job capacity_job
+                  ON capacity_job.batch_id = capacity_item.batch_id
+                WHERE capacity_item.status = 'in_progress'
+                  AND (
+                      capacity_item.lease_expires_at IS NULL
+                      OR capacity_item.lease_expires_at > NOW()
+                  )
+                  AND COALESCE(
+                      NULLIF(capacity_item.scheduling_model_group, ''),
+                      NULLIF(capacity_job.scheduling_model_group, '')
+                  ) = ${capacity_model_param}
+                  AND COALESCE(NULLIF(capacity_job.service_tier, ''), 'standard')
+                      = ${capacity_service_tier_param}
+            ),
+            capacity_state AS (
+                SELECT
+                    GREATEST(
+                        ${capacity_max_in_flight_param}::int - COALESCE(capacity_usage.in_flight_items, 0),
+                        0
+                    )::int AS remaining_slots,
+                    {remaining_work_units_sql} AS remaining_work_units
+                FROM capacity_usage
+            ),
+            """
+            capacity_filter_sql = """
+                  AND (SELECT remaining_slots FROM capacity_state) > 0
+                  AND (SELECT remaining_work_units FROM capacity_state) > 0
+            """
+            locked_items_limit_sql = "LEAST($2, (SELECT remaining_slots FROM capacity_state))"
+            work_unit_claim_limit_sql = "LEAST($3, (SELECT remaining_work_units FROM capacity_state))"
+        if claim_order == "fifo":
+            job_order_sql = """
+                ORDER BY COALESCE(j.queue_entered_at, j.created_at) ASC,
+                         j.created_at ASC,
+                         j.batch_id ASC
+            """
+        else:
+            job_order_sql = """
+                -- last_scheduled_at NULLS FIRST keeps never-scheduled jobs
+                -- ahead of jobs that have already taken a slice (round-robin
+                -- against head-of-line); among scheduled jobs, oldest first.
+                -- COALESCE keeps the FIFO tiebreak working during the
+                -- queue_entered_at backfill window.
+                ORDER BY j.last_scheduled_at ASC NULLS FIRST,
+                         COALESCE(j.queue_entered_at, j.created_at) ASC,
+                         j.created_at ASC
+            """
+        work_unit_filter_sql = f"cumulative_work_units <= {work_unit_claim_limit_sql}"
+        selected_job_head_work_filter_sql = "TRUE"
+        if allow_oversized_first_item:
+            work_unit_filter_sql = f"{work_unit_filter_sql} OR claim_rank = 1"
+        else:
+            selected_job_head_work_filter_sql = f"head_item.estimated_work_units <= {work_unit_claim_limit_sql}"
+        with_selected_job_sql = f"WITH {capacity_cte_sql}selected_job AS"
         # selected_job picks one job under FOR KEY SHARE so multiple workers can
         # slice the same job concurrently. The CTE chain runs in a single
         # statement, so two workers can both hold FOR KEY SHARE on the same row;
@@ -594,39 +921,45 @@ class BatchJobRepository:
         # updated_job's WHERE filter fails (status flipped to 'finalizing'
         # between snapshot and UPDATE), updated_job's RETURNING is empty, the
         # join produces no rows, and no item is flipped to in_progress.
-        rows = await self.prisma.query_raw(
-            """
-            WITH selected_job AS (
+        rows = await db.query_raw(
+            f"""
+            {with_selected_job_sql} (
                 SELECT
                     j.batch_id,
                     j.status AS previous_status
                 FROM deltallm_batch_job j
                 WHERE j.status IN ('queued', 'in_progress')
                   AND (j.locked_by IS NULL OR j.lease_expires_at IS NULL OR j.lease_expires_at < NOW())
+                  {model_group_filter_sql}
+                  {service_tier_filter_sql}
+                  {legacy_filter_sql}
+                  {capacity_filter_sql}
                   AND EXISTS (
-                      -- Runnable-item predicate. Mirror in
-                      -- diagnose_empty_work_claim (and vice versa) — Phase 3
-                      -- changes here must update both call sites.
                       SELECT 1
-                      FROM deltallm_batch_item i
-                      WHERE i.batch_id = j.batch_id
-                        AND (
-                            (
-                                i.status = 'pending'
-                                AND (i.lease_expires_at IS NULL OR i.lease_expires_at < NOW())
-                                AND (i.not_before_at IS NULL OR i.not_before_at <= NOW())
+                      FROM (
+                          -- The head runnable item controls whether this job
+                          -- can produce a bounded claim. Capacity mode disables
+                          -- the Phase 2 first-item oversize fallback, so jobs
+                          -- with an oversized head item must not block newer
+                          -- eligible jobs for the same model group.
+                          SELECT GREATEST(COALESCE(i.estimated_work_units, 1), 1)::int
+                              AS estimated_work_units
+                          FROM deltallm_batch_item i
+                          WHERE i.batch_id = j.batch_id
+                            AND (
+                                (
+                                    i.status = 'pending'
+                                    AND (i.lease_expires_at IS NULL OR i.lease_expires_at < NOW())
+                                    AND (i.not_before_at IS NULL OR i.not_before_at <= NOW())
+                                )
+                                OR (i.status = 'in_progress' AND i.lease_expires_at < NOW())
                             )
-                            OR (i.status = 'in_progress' AND i.lease_expires_at < NOW())
-                        )
+                          ORDER BY i.line_number ASC
+                          LIMIT 1
+                      ) head_item
+                      WHERE {selected_job_head_work_filter_sql}
                   )
-                -- last_scheduled_at NULLS FIRST keeps never-scheduled jobs
-                -- ahead of jobs that have already taken a slice (round-robin
-                -- against head-of-line); among scheduled jobs, oldest first.
-                -- COALESCE keeps the FIFO tiebreak working during the
-                -- queue_entered_at backfill window.
-                ORDER BY j.last_scheduled_at ASC NULLS FIRST,
-                         COALESCE(j.queue_entered_at, j.created_at) ASC,
-                         j.created_at ASC
+                {job_order_sql}
                 FOR KEY SHARE SKIP LOCKED
                 LIMIT 1
             ),
@@ -649,7 +982,7 @@ class BatchJobRepository:
                 )
                 ORDER BY i.line_number ASC
                 FOR UPDATE SKIP LOCKED
-                LIMIT $2
+                LIMIT {locked_items_limit_sql}
             ),
             candidate_items AS (
                 SELECT
@@ -662,12 +995,12 @@ class BatchJobRepository:
                 FROM locked_items
             ),
             eligible_items AS (
-                -- locked_items already enforces the max-items cap via LIMIT $2;
-                -- here we only enforce the work-unit cap, with claim_rank = 1
-                -- guaranteeing at least one item even when the seed exceeds it.
+                -- locked_items already enforces the max-items cap via LIMIT $2
+                -- and any capacity slot cap. Here we enforce the work-unit cap,
+                -- with the Phase 2 first-item fallback only when enabled.
                 SELECT item_id, previous_status, line_number, estimated_work_units
                 FROM candidate_items
-                WHERE cumulative_work_units <= $3 OR claim_rank = 1
+                WHERE {work_unit_filter_sql}
             ),
             updated_job AS (
                 UPDATE deltallm_batch_job j
@@ -749,10 +1082,7 @@ class BatchJobRepository:
                 j.previous_status,
                 j.queue_wait_observed
             """,
-            worker_id,
-            bounded_max_items,
-            bounded_max_work_units,
-            lease_seconds,
+            *params,
         )
         if not rows:
             return None
@@ -780,14 +1110,20 @@ class BatchJobRepository:
 
         queue_entered_at = parse_datetime(row.get("queue_entered_at"))
         if bool(row.get("queue_wait_observed")) and queue_entered_at is not None:
+            wait_seconds = max(
+                0.0,
+                (datetime.now(tz=UTC) - queue_entered_at).total_seconds(),
+            )
             observe_batch_queue_wait(
                 model_group=str(row.get("model_group") or "unknown"),
                 service_tier=str(row.get("service_tier") or "standard"),
                 size_class=str(row.get("size_class") or "unknown"),
-                wait_seconds=max(
-                    0.0,
-                    (datetime.now(tz=UTC) - queue_entered_at).total_seconds(),
-                ),
+                wait_seconds=wait_seconds,
+            )
+            observe_batch_claim_wait_by_model(
+                model_group=str(row.get("model_group") or "unknown"),
+                service_tier=str(row.get("service_tier") or "standard"),
+                wait_seconds=wait_seconds,
             )
 
         return BatchWorkClaim(
@@ -803,6 +1139,110 @@ class BatchJobRepository:
             claimed_work_units=int(row.get("claimed_work_units") or len(item_ids)),
             lease_expires_at=parsed_lease,
         )
+
+    async def diagnose_model_group_work_claim_empty(
+        self,
+        *,
+        model_group: str,
+        service_tier: str,
+        max_work_units: int,
+        capacity_max_in_flight_items: int | None = None,
+        capacity_max_in_flight_work_units: int | None = None,
+    ) -> str:
+        if self.prisma is None:
+            return "empty_after_selection"
+        normalized_model_group = str(model_group or "").strip()
+        normalized_service_tier = str(service_tier or "standard").strip() or "standard"
+        bounded_max_work_units = max(1, int(max_work_units))
+        if not normalized_model_group:
+            return "empty_after_selection"
+        if capacity_max_in_flight_items is not None and int(capacity_max_in_flight_items) <= 0:
+            return "capacity_full_after_lock"
+        if capacity_max_in_flight_work_units is not None and int(capacity_max_in_flight_work_units) <= 0:
+            return "capacity_work_units_full_after_lock"
+
+        params: list[Any] = [normalized_model_group, normalized_service_tier, bounded_max_work_units]
+        head_work_threshold_sql = "$3"
+        if capacity_max_in_flight_work_units is not None:
+            params.append(max(0, int(capacity_max_in_flight_work_units)))
+            capacity_max_work_units_param = len(params)
+            head_work_threshold_sql = (
+                f"LEAST($3, GREATEST(${capacity_max_work_units_param}::int "
+                "- COALESCE((SELECT in_flight_work_units FROM in_flight), 0), 0))"
+            )
+
+        rows = await self.prisma.query_raw(
+            f"""
+            WITH in_flight AS (
+                SELECT
+                    COUNT(*)::int AS in_flight_items,
+                    COALESCE(SUM(GREATEST(COALESCE(i.estimated_work_units, 1), 1)), 0)::int
+                        AS in_flight_work_units
+                FROM deltallm_batch_item i
+                JOIN deltallm_batch_job j ON j.batch_id = i.batch_id
+                WHERE i.status = 'in_progress'
+                  AND (i.lease_expires_at IS NULL OR i.lease_expires_at > NOW())
+                  AND COALESCE(
+                      NULLIF(i.scheduling_model_group, ''),
+                      NULLIF(j.scheduling_model_group, '')
+                  ) = $1
+                  AND COALESCE(NULLIF(j.service_tier, ''), 'standard') = $2
+            ),
+            runnable_head_items AS (
+                SELECT DISTINCT ON (j.batch_id)
+                    j.batch_id,
+                    GREATEST(COALESCE(i.estimated_work_units, 1), 1)::int AS estimated_work_units
+                FROM deltallm_batch_job j
+                JOIN deltallm_batch_item i ON i.batch_id = j.batch_id
+                WHERE j.status IN ('queued', 'in_progress')
+                  AND (j.locked_by IS NULL OR j.lease_expires_at IS NULL OR j.lease_expires_at < NOW())
+                  AND j.scheduling_model_group = $1
+                  AND COALESCE(NULLIF(j.service_tier, ''), 'standard') = $2
+                  AND (
+                      (
+                          i.status = 'pending'
+                          AND (i.lease_expires_at IS NULL OR i.lease_expires_at < NOW())
+                          AND (i.not_before_at IS NULL OR i.not_before_at <= NOW())
+                      )
+                      OR (i.status = 'in_progress' AND i.lease_expires_at < NOW())
+                  )
+                ORDER BY j.batch_id ASC, i.line_number ASC
+            )
+            SELECT
+                COALESCE((SELECT in_flight_items FROM in_flight), 0)::int AS in_flight_items,
+                COALESCE((SELECT in_flight_work_units FROM in_flight), 0)::int AS in_flight_work_units,
+                EXISTS (SELECT 1 FROM runnable_head_items) AS has_runnable_head_item,
+                EXISTS (
+                    SELECT 1
+                    FROM runnable_head_items
+                    WHERE estimated_work_units <= {head_work_threshold_sql}
+                ) AS has_fitting_head_item
+            """,
+            *params,
+        )
+        row = dict(rows[0]) if rows else {}
+        capacity_max = (
+            int(capacity_max_in_flight_items)
+            if capacity_max_in_flight_items is not None
+            else None
+        )
+        if capacity_max is not None and int(row.get("in_flight_items") or 0) >= capacity_max:
+            return "capacity_full_after_lock"
+        capacity_work_units_max = (
+            int(capacity_max_in_flight_work_units)
+            if capacity_max_in_flight_work_units is not None
+            else None
+        )
+        if (
+            capacity_work_units_max is not None
+            and int(row.get("in_flight_work_units") or 0) >= capacity_work_units_max
+        ):
+            return "capacity_work_units_full_after_lock"
+        if bool(row.get("has_runnable_head_item")) and not bool(row.get("has_fitting_head_item")):
+            return "oversized_head_item"
+        if not bool(row.get("has_runnable_head_item")):
+            return "no_runnable_items_after_selection"
+        return "empty_after_selection"
 
     async def diagnose_empty_work_claim(self) -> str:
         if self.prisma is None:

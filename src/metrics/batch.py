@@ -339,6 +339,70 @@ deltallm_batch_work_claim_latency_metric = Histogram(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_model_capacity_slots_metric = Gauge(
+    "deltallm_batch_model_capacity_slots",
+    "Configured batch in-flight capacity slots by model group and service tier",
+    ["model_group", "service_tier", "source"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_model_in_flight_items_metric = Gauge(
+    "deltallm_batch_model_in_flight_items",
+    "Current batch in-flight items by model group and service tier",
+    ["model_group", "service_tier"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_model_available_slots_metric = Gauge(
+    "deltallm_batch_model_available_slots",
+    "Available batch in-flight capacity slots by model group and service tier",
+    ["model_group", "service_tier"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_model_backlog_work_units_metric = Gauge(
+    "deltallm_batch_model_backlog_work_units",
+    "Queued batch work units by model group, service tier, and size class",
+    ["model_group", "service_tier", "size_class"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_model_skips_metric = Counter(
+    "deltallm_batch_scheduler_model_skips_total",
+    "Batch scheduler model-group skips by bounded reason",
+    ["model_group", "reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_model_claims_metric = Counter(
+    "deltallm_batch_scheduler_model_claims_total",
+    "Batch scheduler model-group claims by result",
+    ["model_group", "result"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_model_capacity_snapshot_failures_metric = Counter(
+    "deltallm_batch_model_capacity_snapshot_failures_total",
+    "Batch model-capacity snapshot failures by bounded reason",
+    ["reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_model_selection_latency_metric = Histogram(
+    "deltallm_batch_scheduler_model_selection_latency_seconds",
+    "Batch scheduler model selection latency",
+    buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_claim_wait_by_model_metric = Histogram(
+    "deltallm_batch_claim_wait_by_model_seconds",
+    "Batch queue wait seconds before first claim by model group and service tier",
+    ["model_group", "service_tier"],
+    buckets=[1, 5, 10, 30, 60, 120, 300, 600, 1_800, 3_600, 7_200, 21_600],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_batch_finalization_claims_metric = Counter(
     "deltallm_batch_finalization_claims_total",
     "Batch finalization job claims by result",
@@ -673,6 +737,79 @@ def observe_batch_work_claim_latency(*, claim_mode: str, latency_seconds: float)
     deltallm_batch_work_claim_latency_metric.labels(claim_mode=sanitize_label(claim_mode)).observe(
         max(0.0, float(latency_seconds))
     )
+
+
+def clear_batch_model_capacity_metrics() -> None:
+    for metric in (
+        deltallm_batch_model_capacity_slots_metric,
+        deltallm_batch_model_in_flight_items_metric,
+        deltallm_batch_model_available_slots_metric,
+        deltallm_batch_model_backlog_work_units_metric,
+    ):
+        with contextlib.suppress(AttributeError):
+            metric.clear()
+
+
+def publish_batch_model_capacity_snapshot(snapshot: Any) -> None:
+    model_group = sanitize_label(getattr(snapshot, "model_group", None))
+    service_tier = sanitize_label(getattr(snapshot, "service_tier", None), fallback="standard")
+    source = sanitize_label(getattr(snapshot, "capacity_source", None))
+    deltallm_batch_model_capacity_slots_metric.labels(
+        model_group=model_group,
+        service_tier=service_tier,
+        source=source,
+    ).set(max(0, int(getattr(snapshot, "max_in_flight_items", 0) or 0)))
+    deltallm_batch_model_in_flight_items_metric.labels(
+        model_group=model_group,
+        service_tier=service_tier,
+    ).set(max(0, int(getattr(snapshot, "in_flight_items", 0) or 0)))
+    deltallm_batch_model_available_slots_metric.labels(
+        model_group=model_group,
+        service_tier=service_tier,
+    ).set(max(0, int(getattr(snapshot, "available_in_flight_items", 0) or 0)))
+
+
+def set_batch_model_backlog_work_units(
+    *,
+    model_group: str,
+    service_tier: str,
+    size_class: str,
+    work_units: int,
+) -> None:
+    deltallm_batch_model_backlog_work_units_metric.labels(
+        model_group=sanitize_label(model_group),
+        service_tier=sanitize_label(service_tier, fallback="standard"),
+        size_class=sanitize_label(size_class),
+    ).set(max(0, int(work_units)))
+
+
+def increment_batch_scheduler_model_skip(*, model_group: str, reason: str) -> None:
+    deltallm_batch_scheduler_model_skips_metric.labels(
+        model_group=sanitize_label(model_group),
+        reason=sanitize_label(reason),
+    ).inc()
+
+
+def increment_batch_scheduler_model_claim(*, model_group: str, result: str) -> None:
+    deltallm_batch_scheduler_model_claims_metric.labels(
+        model_group=sanitize_label(model_group),
+        result=sanitize_label(result),
+    ).inc()
+
+
+def increment_batch_model_capacity_snapshot_failure(*, reason: str) -> None:
+    deltallm_batch_model_capacity_snapshot_failures_metric.labels(reason=sanitize_label(reason)).inc()
+
+
+def observe_batch_scheduler_model_selection_latency(*, latency_seconds: float) -> None:
+    deltallm_batch_scheduler_model_selection_latency_metric.observe(max(0.0, float(latency_seconds)))
+
+
+def observe_batch_claim_wait_by_model(*, model_group: str, service_tier: str, wait_seconds: float) -> None:
+    deltallm_batch_claim_wait_by_model_metric.labels(
+        model_group=sanitize_label(model_group),
+        service_tier=sanitize_label(service_tier, fallback="standard"),
+    ).observe(max(0.0, float(wait_seconds)))
 
 
 def increment_batch_finalization_claim(*, result: str) -> None:

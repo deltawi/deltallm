@@ -73,3 +73,9 @@ config:
     cache_backend: redis
     model_deployment_source: db_only
     model_deployment_bootstrap_from_config: false
+    embeddings_batch_model_capacity_enabled: false
+    embeddings_batch_default_model_max_in_flight: 16
+    embeddings_batch_default_model_max_claim_work_units: 64
+    embeddings_batch_model_capacity_fraction: 0.25
+    embeddings_batch_model_capacity_refresh_seconds: 5
+    embeddings_batch_model_capacity_fail_open: false

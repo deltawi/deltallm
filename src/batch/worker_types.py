@@ -27,6 +27,7 @@ class BatchWorkerConfig:
     work_claim_max_items: int = 0
     work_claim_max_work_units: int = 0
     work_claim_min_items_for_microbatch: int = 4
+    model_capacity_enabled: bool = False
     finalization_first: bool = True
     max_attempts: int = 3
     retry_initial_seconds: int = 5

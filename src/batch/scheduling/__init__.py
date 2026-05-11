@@ -17,6 +17,12 @@ from src.batch.scheduling.estimator import (
     estimate_request_work_units,
     size_class_for_work_units,
 )
+from src.batch.scheduling.model_capacity import (
+    BatchModelCapacityConfig,
+    BatchModelCapacityResolver,
+    BatchModelCapacitySelection,
+    BatchModelCapacitySnapshot,
+)
 
 __all__ = [
     "DEFAULT_SCHEDULER_VERSION",
@@ -25,6 +31,10 @@ __all__ = [
     "API_KEY_TENANT_SCOPE_PREFIX",
     "BatchSchedulingDimensions",
     "BatchTenantScope",
+    "BatchModelCapacityConfig",
+    "BatchModelCapacityResolver",
+    "BatchModelCapacitySelection",
+    "BatchModelCapacitySnapshot",
     "MIXED_MODEL_GROUP",
     "build_scheduling_dimensions",
     "estimate_request_work_units",

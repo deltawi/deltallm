@@ -27,6 +27,7 @@ from src.batch.create.session_stager import BatchCreateSessionStager
 from src.batch.create.staging import BatchCreateArtifactStorageBackend
 from src.batch.completion_outbox import BatchCompletionOutboxWorker, BatchCompletionOutboxWorkerConfig
 from src.batch.service import BatchService
+from src.batch.scheduling import BatchModelCapacityConfig, BatchModelCapacityResolver
 from src.batch.storage import LocalBatchArtifactStorage, S3BatchArtifactStorage
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
 from src.bootstrap.status import BootstrapStatus
@@ -64,6 +65,7 @@ def _batch_worker_id(role: str) -> str:
 @dataclass
 class BatchRuntime:
     backpressure: BatchBackpressureCoordinator | None = None
+    model_capacity_resolver: BatchModelCapacityResolver | None = None
     worker: BatchExecutorWorker | None = None
     worker_task: Task[None] | None = None
     completion_outbox_worker: BatchCompletionOutboxWorker | None = None
@@ -216,6 +218,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         app.state.batch_create_session_cleanup_worker = None
         app.state.batch_scheduler_backfill_worker = None
         app.state.batch_backpressure = None
+        app.state.batch_model_capacity_resolver = None
         runtime.statuses = (BootstrapStatus("embeddings_batch", "disabled"),)
         return runtime
 
@@ -241,6 +244,16 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         max_delay_seconds=cfg.general_settings.embeddings_batch_model_group_backpressure_max_seconds,
     )
     app.state.batch_backpressure = runtime.backpressure
+    model_capacity_config = BatchModelCapacityConfig.from_settings(cfg.general_settings)
+    if model_capacity_config.enabled:
+        runtime.model_capacity_resolver = BatchModelCapacityResolver(
+            repository=repository,
+            config=model_capacity_config,
+            router=getattr(app.state, "router", None),
+            router_state_backend=getattr(app.state, "router_state_backend", None),
+            backpressure=runtime.backpressure,
+        )
+    app.state.batch_model_capacity_resolver = runtime.model_capacity_resolver
     app.state.batch_service = BatchService(
         repository=repository,
         storage=batch_storage,
@@ -266,11 +279,11 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         raise RuntimeError("Batch create-session schema is unavailable while embeddings batching is enabled") from exc
 
     if cfg.general_settings.embeddings_batch_worker_enabled:
-        runtime.worker = BatchExecutorWorker(
-            app=app,
-            repository=repository,
-            storage=batch_storage,
-            config=BatchWorkerConfig(
+        worker_kwargs = {
+            "app": app,
+            "repository": repository,
+            "storage": batch_storage,
+            "config": BatchWorkerConfig(
                 worker_id=_batch_worker_id("batch-executor"),
                 poll_interval_seconds=cfg.general_settings.embeddings_batch_poll_interval_seconds,
                 heartbeat_interval_seconds=cfg.general_settings.embeddings_batch_heartbeat_interval_seconds,
@@ -287,6 +300,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
                 work_claim_min_items_for_microbatch=(
                     cfg.general_settings.embeddings_batch_work_claim_min_items_for_microbatch
                 ),
+                model_capacity_enabled=model_capacity_config.enabled,
                 finalization_first=cfg.general_settings.embeddings_batch_finalization_first,
                 max_attempts=cfg.general_settings.embeddings_batch_max_attempts,
                 retry_initial_seconds=cfg.general_settings.embeddings_batch_retry_initial_seconds,
@@ -300,7 +314,10 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
                 completed_artifact_retention_days=cfg.general_settings.batch_completed_artifact_retention_days,
                 failed_artifact_retention_days=cfg.general_settings.batch_failed_artifact_retention_days,
             ),
-        )
+        }
+        if runtime.model_capacity_resolver is not None:
+            worker_kwargs["model_capacity_resolver"] = runtime.model_capacity_resolver
+        runtime.worker = BatchExecutorWorker(**worker_kwargs)
         runtime.worker_task = create_task(runtime.worker.run())
 
     if cfg.general_settings.embeddings_batch_completion_outbox_worker_enabled:

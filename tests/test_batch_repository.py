@@ -18,11 +18,13 @@ class _PrismaSpy:
         self.sql = ""
         self.params = ()
         self.queries: list[str] = []
+        self.calls: list[tuple[str, tuple[object, ...]]] = []
 
     async def query_raw(self, sql: str, *params):
         self.sql = sql
         self.params = params
         self.queries.append(sql)
+        self.calls.append((sql, params))
         return []
 
 
@@ -145,6 +147,7 @@ async def test_claim_next_work_uses_item_slice_claim_shape() -> None:
     assert "j.locked_by IS NULL OR j.lease_expires_at IS NULL OR j.lease_expires_at < NOW()" in prisma.sql
     assert "ORDER BY j.last_scheduled_at ASC NULLS FIRST" in prisma.sql
     assert "WITH selected_job AS" in prisma.sql
+    assert "pg_advisory_xact_lock" not in prisma.sql
     assert "FOR KEY SHARE SKIP LOCKED" in prisma.sql
     # Single-job selection: no candidate_jobs CTE and no per-candidate seed lock.
     assert "WITH candidate_jobs AS" not in prisma.sql
@@ -166,6 +169,266 @@ async def test_claim_next_work_uses_item_slice_claim_shape() -> None:
     assert "locked_by = NULL" in prisma.sql
     assert "first_claimed_at = COALESCE" in prisma.sql
     assert "queue_wait_observed" in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_claim_next_work_can_filter_selected_model_group_and_service_tier() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    claim = await repository.claim_next_work(
+        worker_id="worker-1",
+        max_items=10,
+        max_work_units=25,
+        lease_seconds=120,
+        allowed_model_groups=["model-a"],
+        service_tier="standard",
+    )
+
+    assert claim is None
+    assert "j.scheduling_model_group = ANY($5::text[])" in prisma.sql
+    assert "j.service_tier = $6" in prisma.sql
+    assert prisma.params[4] == ["model-a"]
+    assert prisma.params[5] == "standard"
+
+
+@pytest.mark.asyncio
+async def test_claim_next_work_can_use_fifo_order_for_capacity_claims() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    claim = await repository.claim_next_work(
+        worker_id="worker-1",
+        max_items=10,
+        max_work_units=25,
+        lease_seconds=120,
+        allowed_model_groups=["model-a"],
+        service_tier="standard",
+        claim_order="fifo",
+    )
+
+    assert claim is None
+    assert "ORDER BY COALESCE(j.queue_entered_at, j.created_at) ASC" in prisma.sql
+    assert "j.batch_id ASC" in prisma.sql
+    assert "ORDER BY j.last_scheduled_at ASC NULLS FIRST" not in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_claim_next_work_capacity_guard_rechecks_in_flight_under_model_lock() -> None:
+    class _Prisma:
+        def __init__(self) -> None:
+            self.tx_client = _PrismaSpy()
+            self.tx_entered = False
+
+        @asynccontextmanager
+        async def tx(self):
+            self.tx_entered = True
+            yield self.tx_client
+
+        async def query_raw(self, sql: str, *params):  # pragma: no cover
+            del sql, params
+            raise AssertionError("capacity claim must use the transaction client")
+
+    prisma = _Prisma()
+    repository = BatchRepository(prisma_client=prisma)
+
+    claim = await repository.claim_next_work(
+        worker_id="worker-1",
+        max_items=10,
+        max_work_units=25,
+        lease_seconds=120,
+        allowed_model_groups=["model-a"],
+        service_tier="standard",
+        claim_order="fifo",
+        capacity_model_group="model-a",
+        capacity_service_tier="standard",
+        capacity_max_in_flight_items=2,
+        capacity_max_in_flight_work_units=30,
+        allow_oversized_first_item=False,
+    )
+
+    assert claim is None
+    assert prisma.tx_entered is True
+    assert len(prisma.tx_client.calls) == 2
+    lock_sql, lock_params = prisma.tx_client.calls[0]
+    claim_sql, claim_params = prisma.tx_client.calls[1]
+    assert "pg_advisory_xact_lock" in lock_sql
+    assert "SELECT 1::int AS locked" in lock_sql
+    assert lock_params == ("model-a", "standard")
+    assert "capacity_lock AS" not in claim_sql
+    assert "capacity_usage AS" in claim_sql
+    assert "capacity_state AS" in claim_sql
+    assert "capacity_item.status = 'in_progress'" in claim_sql
+    assert "capacity_item.lease_expires_at IS NULL" in claim_sql
+    assert "capacity_item.lease_expires_at > NOW()" in claim_sql
+    assert "AS in_flight_work_units" in claim_sql
+    assert "AND (SELECT remaining_slots FROM capacity_state) > 0" in claim_sql
+    assert "AND (SELECT remaining_work_units FROM capacity_state) > 0" in claim_sql
+    assert "LIMIT LEAST($2, (SELECT remaining_slots FROM capacity_state))" in claim_sql
+    assert "WHERE cumulative_work_units <= LEAST($3, (SELECT remaining_work_units FROM capacity_state))" in claim_sql
+    assert "head_item.estimated_work_units <= LEAST($3, (SELECT remaining_work_units FROM capacity_state))" in claim_sql
+    assert "OR claim_rank = 1" not in claim_sql
+    assert claim_params[6] == "model-a"
+    assert claim_params[7] == "standard"
+    assert claim_params[8] == 2
+    assert claim_params[9] == 30
+
+
+@pytest.mark.asyncio
+async def test_claim_next_work_capacity_guard_keeps_work_units_per_claim_when_no_work_unit_cap() -> None:
+    class _Prisma:
+        def __init__(self) -> None:
+            self.tx_client = _PrismaSpy()
+
+        @asynccontextmanager
+        async def tx(self):
+            yield self.tx_client
+
+    prisma = _Prisma()
+    repository = BatchRepository(prisma_client=prisma)
+
+    claim = await repository.claim_next_work(
+        worker_id="worker-1",
+        max_items=10,
+        max_work_units=25,
+        lease_seconds=120,
+        allowed_model_groups=["model-a"],
+        service_tier="standard",
+        claim_order="fifo",
+        capacity_model_group="model-a",
+        capacity_service_tier="standard",
+        capacity_max_in_flight_items=16,
+        allow_oversized_first_item=False,
+    )
+
+    assert claim is None
+    assert len(prisma.tx_client.calls) == 2
+    claim_sql, claim_params = prisma.tx_client.calls[1]
+    assert "capacity_state AS" in claim_sql
+    assert "$9::int AS remaining_work_units" not in claim_sql
+    assert "$3::int AS remaining_work_units" in claim_sql
+    assert "WHERE cumulative_work_units <= LEAST($3, (SELECT remaining_work_units FROM capacity_state))" in claim_sql
+    assert "head_item.estimated_work_units <= LEAST($3, (SELECT remaining_work_units FROM capacity_state))" in claim_sql
+    assert len(claim_params) == 9
+    assert claim_params[8] == 16
+
+
+@pytest.mark.asyncio
+async def test_diagnose_model_group_work_claim_empty_reports_oversized_head_item() -> None:
+    class _DiagnosticPrisma:
+        def __init__(self) -> None:
+            self.sql = ""
+            self.params = ()
+
+        async def query_raw(self, sql: str, *params):
+            self.sql = sql
+            self.params = params
+            return [
+                {
+                    "in_flight_items": 0,
+                    "has_runnable_head_item": True,
+                    "has_fitting_head_item": False,
+                }
+            ]
+
+    prisma = _DiagnosticPrisma()
+    repository = BatchRepository(prisma_client=prisma)
+
+    reason = await repository.diagnose_model_group_work_claim_empty(
+        model_group="model-a",
+        service_tier="standard",
+        max_work_units=5,
+        capacity_max_in_flight_items=4,
+    )
+
+    assert reason == "oversized_head_item"
+    assert "runnable_head_items AS" in prisma.sql
+    assert "estimated_work_units <= $3" in prisma.sql
+    assert prisma.params == ("model-a", "standard", 5)
+
+
+@pytest.mark.asyncio
+async def test_diagnose_model_group_work_claim_empty_reports_work_unit_capacity_full() -> None:
+    class _DiagnosticPrisma:
+        def __init__(self) -> None:
+            self.sql = ""
+            self.params = ()
+
+        async def query_raw(self, sql: str, *params):
+            self.sql = sql
+            self.params = params
+            return [
+                {
+                    "in_flight_items": 1,
+                    "in_flight_work_units": 7,
+                    "has_runnable_head_item": True,
+                    "has_fitting_head_item": False,
+                }
+            ]
+
+    prisma = _DiagnosticPrisma()
+    repository = BatchRepository(prisma_client=prisma)
+
+    reason = await repository.diagnose_model_group_work_claim_empty(
+        model_group="model-a",
+        service_tier="standard",
+        max_work_units=5,
+        capacity_max_in_flight_items=4,
+        capacity_max_in_flight_work_units=7,
+    )
+
+    assert reason == "capacity_work_units_full_after_lock"
+    assert "AS in_flight_work_units" in prisma.sql
+    assert "estimated_work_units <= LEAST($3, GREATEST($4::int" in prisma.sql
+    assert prisma.params == ("model-a", "standard", 5, 7)
+
+
+@pytest.mark.asyncio
+async def test_claim_next_work_legacy_only_claims_only_legacy_missing_model_group_jobs() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    claim = await repository.claim_next_work(
+        worker_id="worker-1",
+        max_items=10,
+        max_work_units=25,
+        lease_seconds=120,
+        legacy_only=True,
+        claim_order="fifo",
+    )
+
+    assert claim is None
+    assert "COALESCE(NULLIF(j.scheduler_version, ''), 'fifo_v1') = 'fifo_v1'" in prisma.sql
+    assert "j.scheduling_model_group IS NULL OR j.scheduling_model_group = ''" in prisma.sql
+    assert "ORDER BY COALESCE(j.queue_entered_at, j.created_at) ASC" in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_model_group_backlog_query_counts_runnable_jobs_by_model() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    rows = await repository.list_model_group_backlog()
+
+    assert rows == []
+    assert "WITH runnable_jobs AS" in prisma.sql
+    assert "j.scheduling_model_group IS NOT NULL" in prisma.sql
+    assert "GROUP BY model_group, service_tier, size_class" in prisma.sql
+    assert "SUM(remaining_work_units)" in prisma.sql
+    assert "i.not_before_at IS NULL OR i.not_before_at <= NOW()" in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_model_group_in_flight_query_excludes_expired_leases() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    rows = await repository.list_model_group_in_flight()
+
+    assert rows == []
+    assert "i.status = 'in_progress'" in prisma.sql
+    assert "i.lease_expires_at IS NULL OR i.lease_expires_at > NOW()" in prisma.sql
+    assert "GROUP BY model_group, service_tier" in prisma.sql
 
 
 @pytest.mark.asyncio
