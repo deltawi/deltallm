@@ -14,7 +14,7 @@ from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit,
 from src.audit.actions import AuditAction
 from src.batch.repository import BatchRepository
 from src.batch.models import BATCH_JOB_STATUS_SET, decode_operator_failed_reason, encode_operator_failed_reason
-from src.batch.scheduling import API_KEY_TENANT_SCOPE_PREFIX
+from src.batch.scheduling import API_KEY_TENANT_SCOPE_PREFIX, BatchModelCapacityConfig, BatchModelCapacityResolver
 from src.metrics import (
     increment_batch_repair_action,
     publish_batch_runtime_summary,
@@ -83,6 +83,46 @@ def _display_tenant_scope_id(*, scope_type: str | None, scope_id: str | None) ->
         digest = normalized_scope_id[len(API_KEY_TENANT_SCOPE_PREFIX) :]
         return f"api_key:{digest[:12]}" if digest else "api_key"
     return "api_key"
+
+
+def _model_capacity_resolver_or_503(request: Request, repository: BatchRepository) -> BatchModelCapacityResolver:
+    resolver = getattr(request.app.state, "batch_model_capacity_resolver", None)
+    if resolver is not None:
+        return resolver
+    general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+    if general_settings is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="App config unavailable")
+    return BatchModelCapacityResolver(
+        repository=repository,
+        config=BatchModelCapacityConfig.from_settings(general_settings),
+        router=getattr(request.app.state, "router", None),
+        router_state_backend=getattr(request.app.state, "router_state_backend", None),
+        backpressure=getattr(request.app.state, "batch_backpressure", None),
+    )
+
+
+def _capacity_snapshot_response(snapshot) -> dict[str, Any]:  # noqa: ANN001
+    return {
+        "model_group": snapshot.model_group,
+        "service_tier": snapshot.service_tier,
+        "queued_jobs": snapshot.queued_jobs,
+        "queued_work_units": snapshot.queued_work_units,
+        "in_flight_items": snapshot.in_flight_items,
+        "in_flight_work_units": snapshot.in_flight_work_units,
+        "capacity_source": snapshot.capacity_source,
+        "max_in_flight": snapshot.max_in_flight_items,
+        "max_claim_work_units": snapshot.max_claim_work_units,
+        "available_in_flight": snapshot.available_in_flight_items,
+        "available_work_units": snapshot.available_work_units,
+        "rpm_remaining": snapshot.rpm_remaining,
+        "tpm_remaining": snapshot.tpm_remaining,
+        "healthy_deployments": snapshot.healthy_deployments,
+        "backpressure_until": to_json_value(snapshot.backpressure_until),
+        "skip_reason": snapshot.reason,
+        "skip_reason_summary": dict(snapshot.skip_reasons or {}),
+        "last_selected_at": to_json_value(snapshot.last_selected_at),
+        "oldest_queue_entered_at": to_json_value(snapshot.oldest_queue_entered_at),
+    }
 
 
 async def _load_batch_scope_row(db: Any, batch_id: str) -> dict[str, Any]:
@@ -306,6 +346,32 @@ async def batch_feature_status(
     general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
     return {
         "embeddings_batch_enabled": bool(getattr(general_settings, "embeddings_batch_enabled", False)),
+    }
+
+
+@router.get("/ui/api/batches/scheduler/model-capacity")
+async def batch_scheduler_model_capacity(
+    request: Request,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    get_auth_scope(
+        request,
+        authorization,
+        x_master_key,
+        required_permission=Permission.PLATFORM_ADMIN,
+    )
+    repository = _batch_repository_or_503(request)
+    resolver = _model_capacity_resolver_or_503(request, repository)
+    snapshots = await resolver.build_snapshots()
+    return {
+        "enabled": resolver.config.enabled,
+        "fail_open": resolver.config.fail_open,
+        "default_model_max_in_flight": resolver.config.default_model_max_in_flight,
+        "default_model_max_claim_work_units": resolver.config.default_model_max_claim_work_units,
+        "capacity_fraction": resolver.config.capacity_fraction,
+        "refresh_seconds": resolver.config.refresh_seconds,
+        "data": [_capacity_snapshot_response(snapshot) for snapshot in snapshots],
     }
 
 

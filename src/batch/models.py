@@ -194,6 +194,24 @@ class BatchWorkClaim:
 
 
 @dataclass
+class BatchModelBacklogRecord:
+    model_group: str
+    service_tier: str
+    size_class: str
+    queued_jobs: int
+    queued_work_units: int
+    oldest_queue_entered_at: datetime | None
+
+
+@dataclass
+class BatchModelInFlightRecord:
+    model_group: str
+    service_tier: str
+    in_flight_items: int
+    in_flight_work_units: int
+
+
+@dataclass
 class BatchCompletionOutboxRecord:
     completion_id: str
     batch_id: str

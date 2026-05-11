@@ -89,6 +89,15 @@ def _service_by_component(docs: list[dict[str, Any]], component: str | None) -> 
     raise AssertionError(f"missing Service with component {component}")
 
 
+def test_helm_schema_allows_active_batch_scheduler_flag() -> None:
+    schema = yaml.safe_load((REPO_ROOT / "helm" / "values.schema.json").read_text())
+    scheduler_enabled = schema["properties"]["config"]["properties"]["general_settings"]["properties"][
+        "embeddings_batch_scheduler_enabled"
+    ]
+
+    assert scheduler_enabled == {"type": "boolean"}
+
+
 def test_default_service_selector_remains_upgrade_safe() -> None:
     service = _by_kind_and_name(_render("--show-only", "templates/service.yaml"), "Service", "deltallm")
 

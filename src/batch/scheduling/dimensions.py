@@ -49,9 +49,8 @@ def normalize_service_tier(value: object, *, default: str = DEFAULT_SERVICE_TIER
 
 
 def resolve_scheduler_version(*, active_enabled: bool = False, shadow_enabled: bool = False) -> str:
-    # Phase 1 only instruments the FIFO scheduler. The active flag is validated
-    # at config load, but keep this helper conservative for direct callers.
-    del active_enabled
+    if active_enabled:
+        return "scheduler_v2"
     if shadow_enabled:
         return "scheduler_v2_shadow"
     return DEFAULT_SCHEDULER_VERSION

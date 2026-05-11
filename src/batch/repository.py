@@ -13,6 +13,8 @@ from src.batch.models import (
     BatchItemRecord,
     BatchJobRecord,
     BatchJobStatus,
+    BatchModelBacklogRecord,
+    BatchModelInFlightRecord,
     BatchWorkClaim,
 )
 from src.batch.repositories import (
@@ -203,16 +205,57 @@ class BatchRepository:
         max_items: int,
         max_work_units: int,
         lease_seconds: int,
+        allowed_model_groups: list[str] | None = None,
+        service_tier: str | None = None,
+        legacy_only: bool = False,
+        claim_order: str = "round_robin",
+        capacity_model_group: str | None = None,
+        capacity_service_tier: str | None = None,
+        capacity_max_in_flight_items: int | None = None,
+        capacity_max_in_flight_work_units: int | None = None,
+        allow_oversized_first_item: bool = True,
     ) -> BatchWorkClaim | None:
         return await self.jobs.claim_next_work(
             worker_id=worker_id,
             max_items=max_items,
             max_work_units=max_work_units,
             lease_seconds=lease_seconds,
+            allowed_model_groups=allowed_model_groups,
+            service_tier=service_tier,
+            legacy_only=legacy_only,
+            claim_order=claim_order,
+            capacity_model_group=capacity_model_group,
+            capacity_service_tier=capacity_service_tier,
+            capacity_max_in_flight_items=capacity_max_in_flight_items,
+            capacity_max_in_flight_work_units=capacity_max_in_flight_work_units,
+            allow_oversized_first_item=allow_oversized_first_item,
         )
+
+    async def list_model_group_backlog(self) -> list[BatchModelBacklogRecord]:
+        return await self.jobs.list_model_group_backlog()
+
+    async def list_model_group_in_flight(self) -> list[BatchModelInFlightRecord]:
+        return await self.jobs.list_model_group_in_flight()
 
     async def diagnose_empty_work_claim(self) -> str:
         return await self.jobs.diagnose_empty_work_claim()
+
+    async def diagnose_model_group_work_claim_empty(
+        self,
+        *,
+        model_group: str,
+        service_tier: str,
+        max_work_units: int,
+        capacity_max_in_flight_items: int | None = None,
+        capacity_max_in_flight_work_units: int | None = None,
+    ) -> str:
+        return await self.jobs.diagnose_model_group_work_claim_empty(
+            model_group=model_group,
+            service_tier=service_tier,
+            max_work_units=max_work_units,
+            capacity_max_in_flight_items=capacity_max_in_flight_items,
+            capacity_max_in_flight_work_units=capacity_max_in_flight_work_units,
+        )
 
     async def claim_items(
         self,

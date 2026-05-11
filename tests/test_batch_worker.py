@@ -5611,6 +5611,215 @@ async def test_batch_worker_work_slice_empty_claim_diagnostic_failure_falls_back
 
 
 @pytest.mark.asyncio
+async def test_batch_worker_capacity_claim_tries_next_model_after_empty_selection() -> None:
+    now = datetime.now(tz=UTC)
+
+    class _CapacityRepo:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+            self.diagnostic_calls: list[dict] = []
+
+        async def claim_next_work(self, **kwargs):
+            self.calls.append(kwargs)
+            if kwargs.get("allowed_model_groups") == ["model-b"]:
+                return BatchWorkClaim(
+                    claim_id="claim-b",
+                    worker_id="w1",
+                    batch_id="b-work",
+                    endpoint="/v1/embeddings",
+                    model_group="model-b",
+                    tenant_scope_type="api_key",
+                    tenant_scope_id="tok-1",
+                    service_tier="standard",
+                    item_ids=["item-1"],
+                    claimed_work_units=1,
+                    lease_expires_at=now + timedelta(seconds=60),
+                )
+            return None
+
+        async def diagnose_model_group_work_claim_empty(self, **kwargs):
+            self.diagnostic_calls.append(kwargs)
+            return "oversized_head_item"
+
+    class _CapacityResolver:
+        def __init__(self) -> None:
+            self.selected: list[str] = []
+            self.results: list[tuple[str, str]] = []
+
+        async def select_model_groups(self, **kwargs):
+            assert kwargs == {"max_items": 3, "max_work_units": 7}
+            return [
+                SimpleNamespace(
+                    snapshot=SimpleNamespace(
+                        model_group="model-a",
+                        service_tier="standard",
+                        max_in_flight_items=99,
+                        in_flight_items=6,
+                        available_in_flight_items=16,
+                        in_flight_work_units=11,
+                        tpm_remaining=25,
+                    ),
+                    max_items=2,
+                    max_work_units=5,
+                ),
+                SimpleNamespace(
+                    snapshot=SimpleNamespace(
+                        model_group="model-b",
+                        service_tier="standard",
+                        max_in_flight_items=42,
+                        in_flight_items=3,
+                        available_in_flight_items=1,
+                        in_flight_work_units=2,
+                        tpm_remaining=None,
+                    ),
+                    max_items=1,
+                    max_work_units=3,
+                ),
+            ]
+
+        def record_selection(self, snapshot):
+            self.selected.append(snapshot.model_group)
+
+        def record_claim_result(self, *, model_group: str, result: str) -> None:
+            self.results.append((model_group, result))
+
+    repo = _CapacityRepo()
+    resolver = _CapacityResolver()
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(
+            worker_id="w1",
+            scheduler_claim_mode="work_slice",
+            work_claim_max_items=3,
+            work_claim_max_work_units=7,
+            model_capacity_enabled=True,
+        ),
+        model_capacity_resolver=resolver,
+    )
+
+    claim = await worker._claim_next_work_slice()
+
+    assert claim is not None
+    assert claim.model_group == "model-b"
+    assert repo.calls == [
+        {
+            "worker_id": "w1",
+            "max_items": 2,
+            "max_work_units": 5,
+            "lease_seconds": 360,
+            "allowed_model_groups": ["model-a"],
+            "service_tier": "standard",
+            "claim_order": "fifo",
+            "capacity_model_group": "model-a",
+            "capacity_service_tier": "standard",
+            "capacity_max_in_flight_items": 22,
+            "capacity_max_in_flight_work_units": 36,
+            "allow_oversized_first_item": False,
+        },
+        {
+            "worker_id": "w1",
+            "max_items": 1,
+            "max_work_units": 3,
+            "lease_seconds": 360,
+            "allowed_model_groups": ["model-b"],
+            "service_tier": "standard",
+            "claim_order": "fifo",
+            "capacity_model_group": "model-b",
+            "capacity_service_tier": "standard",
+            "capacity_max_in_flight_items": 4,
+            "capacity_max_in_flight_work_units": None,
+            "allow_oversized_first_item": False,
+        },
+    ]
+    assert resolver.selected == ["model-a", "model-b"]
+    assert resolver.results == [
+        ("model-a", "oversized_head_item"),
+        ("model-b", "claimed"),
+    ]
+    assert repo.diagnostic_calls == [
+        {
+            "model_group": "model-a",
+            "service_tier": "standard",
+            "max_work_units": 5,
+            "capacity_max_in_flight_items": 22,
+            "capacity_max_in_flight_work_units": 36,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_capacity_claim_uses_legacy_fallback_when_no_model_is_eligible() -> None:
+    now = datetime.now(tz=UTC)
+
+    class _LegacyRepo:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def claim_next_work(self, **kwargs):
+            self.calls.append(kwargs)
+            if kwargs.get("legacy_only"):
+                return BatchWorkClaim(
+                    claim_id="claim-legacy",
+                    worker_id="w1",
+                    batch_id="b-legacy",
+                    endpoint="/v1/embeddings",
+                    model_group=None,
+                    tenant_scope_type=None,
+                    tenant_scope_id=None,
+                    service_tier="standard",
+                    item_ids=["item-1"],
+                    claimed_work_units=1,
+                    lease_expires_at=now + timedelta(seconds=60),
+                )
+            return None
+
+    class _CapacityResolver:
+        def __init__(self) -> None:
+            self.results: list[tuple[str, str]] = []
+
+        async def select_model_groups(self, **kwargs):
+            assert kwargs == {"max_items": 3, "max_work_units": 7}
+            return []
+
+        def record_claim_result(self, *, model_group: str, result: str) -> None:
+            self.results.append((model_group, result))
+
+    repo = _LegacyRepo()
+    resolver = _CapacityResolver()
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(
+            worker_id="w1",
+            scheduler_claim_mode="work_slice",
+            work_claim_max_items=3,
+            work_claim_max_work_units=7,
+            model_capacity_enabled=True,
+        ),
+        model_capacity_resolver=resolver,
+    )
+
+    claim = await worker._claim_next_work_slice()
+
+    assert claim is not None
+    assert claim.batch_id == "b-legacy"
+    assert repo.calls == [
+        {
+            "worker_id": "w1",
+            "max_items": 3,
+            "max_work_units": 7,
+            "lease_seconds": 360,
+            "legacy_only": True,
+            "claim_order": "fifo",
+        }
+    ]
+    assert resolver.results == [("legacy", "claimed")]
+
+
+@pytest.mark.asyncio
 async def test_batch_worker_work_slice_finalization_first_uses_job_lease():
     class _FinalizationRepo:
         def __init__(self) -> None:

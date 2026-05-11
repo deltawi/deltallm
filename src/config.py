@@ -54,6 +54,12 @@ RoutingStrategyName = Literal[
 ChatBatchingMode = Literal["disabled", "concurrent", "sync_microbatch"]
 
 
+class BatchModelCapacityInfo(BaseModel):
+    max_in_flight: int | None = Field(default=None, ge=1)
+    max_claim_work_units: int | None = Field(default=None, ge=1)
+    capacity_fraction: float | None = Field(default=None, gt=0.0, le=1.0)
+
+
 class ChatBatchingConfig(BaseModel):
     mode: ChatBatchingMode = "concurrent"
     max_in_flight: int | None = Field(default=None, ge=1)
@@ -153,6 +159,7 @@ class ModelInfo(BaseModel):
     max_input_tokens: int | None = None
     max_output_tokens: int | None = None
     upstream_max_batch_inputs: int | None = Field(default=None, ge=1)
+    batch_capacity: BatchModelCapacityInfo | None = None
     default_params: dict[str, Any] | None = None
 
     @field_validator("access_groups", mode="before")
@@ -422,6 +429,12 @@ class GeneralSettings(BaseModel):
     embeddings_batch_work_claim_max_items: int = Field(default=0, ge=0, le=200)
     embeddings_batch_work_claim_max_work_units: int = Field(default=0, ge=0)
     embeddings_batch_work_claim_min_items_for_microbatch: int = Field(default=4, ge=1, le=200)
+    embeddings_batch_model_capacity_enabled: bool = False
+    embeddings_batch_default_model_max_in_flight: int = Field(default=16, ge=1)
+    embeddings_batch_default_model_max_claim_work_units: int = Field(default=64, ge=1)
+    embeddings_batch_model_capacity_fraction: float = Field(default=0.25, gt=0.0, le=1.0)
+    embeddings_batch_model_capacity_refresh_seconds: float = Field(default=5.0, gt=0.0)
+    embeddings_batch_model_capacity_fail_open: bool = False
     embeddings_batch_finalization_first: bool = True
     batch_completed_artifact_retention_days: int = 7
     batch_failed_artifact_retention_days: int = 14
@@ -455,11 +468,17 @@ class GeneralSettings(BaseModel):
                 "upstream_http_max_keepalive_connections must be less than or equal to "
                 "upstream_http_max_connections"
             )
-        if self.embeddings_batch_scheduler_enabled:
-            raise ValueError(
-                "embeddings_batch_scheduler_enabled is reserved until active scheduler v2 "
-                "claiming is implemented; use embeddings_batch_scheduler_shadow_enabled for Phase 1"
-            )
+        if self.embeddings_batch_scheduler_enabled or self.embeddings_batch_model_capacity_enabled:
+            if self.embeddings_batch_scheduler_claim_mode != "work_slice":
+                raise ValueError(
+                    "active batch scheduler v2 requires "
+                    "embeddings_batch_scheduler_claim_mode='work_slice'"
+                )
+            if not self.embeddings_batch_scheduler_strict_model_homogeneity_enabled:
+                raise ValueError(
+                    "active batch scheduler v2 requires "
+                    "embeddings_batch_scheduler_strict_model_homogeneity_enabled=true"
+                )
         return self
 
 

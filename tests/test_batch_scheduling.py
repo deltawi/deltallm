@@ -39,18 +39,67 @@ def test_api_key_tenant_scope_uses_stable_non_secret_hash() -> None:
     assert resolve_tenant_scope(api_key="sk-test-secret").scope_id == scope.scope_id
 
 
-def test_phase_one_scheduler_version_never_reports_active_scheduler() -> None:
-    assert resolve_scheduler_version(active_enabled=True, shadow_enabled=False) == "fifo_v1"
-    assert resolve_scheduler_version(active_enabled=True, shadow_enabled=True) == "scheduler_v2_shadow"
+def test_resolve_scheduler_version_prefers_active_then_shadow_then_fifo() -> None:
+    assert resolve_scheduler_version(active_enabled=True, shadow_enabled=False) == "scheduler_v2"
+    assert resolve_scheduler_version(active_enabled=True, shadow_enabled=True) == "scheduler_v2"
+    assert resolve_scheduler_version(active_enabled=False, shadow_enabled=True) == "scheduler_v2_shadow"
+    assert resolve_scheduler_version(active_enabled=False, shadow_enabled=False) == "fifo_v1"
 
 
-def test_active_scheduler_flag_is_rejected_until_active_claiming_exists() -> None:
-    with pytest.raises(ValidationError, match="reserved until active scheduler v2 claiming"):
+def test_active_scheduler_requires_work_slice_claiming() -> None:
+    with pytest.raises(ValidationError, match="scheduler_claim_mode='work_slice'"):
         GeneralSettings(embeddings_batch_scheduler_enabled=True)
+
+
+def test_active_scheduler_requires_strict_model_homogeneity() -> None:
+    with pytest.raises(ValidationError, match="strict_model_homogeneity"):
+        GeneralSettings(
+            embeddings_batch_scheduler_enabled=True,
+            embeddings_batch_scheduler_claim_mode="work_slice",
+        )
+
+
+def test_active_scheduler_config_is_allowed_with_safe_prerequisites() -> None:
+    settings = GeneralSettings(
+        embeddings_batch_scheduler_enabled=True,
+        embeddings_batch_scheduler_claim_mode="work_slice",
+        embeddings_batch_scheduler_strict_model_homogeneity_enabled=True,
+    )
+
+    assert settings.embeddings_batch_scheduler_enabled is True
 
 
 def test_scheduler_backfill_worker_is_opt_in_by_default() -> None:
     assert GeneralSettings().embeddings_batch_scheduler_backfill_enabled is False
+
+
+def test_model_capacity_scheduler_requires_work_slice_claiming() -> None:
+    with pytest.raises(ValidationError, match="scheduler_claim_mode='work_slice'"):
+        GeneralSettings(
+            embeddings_batch_model_capacity_enabled=True,
+            embeddings_batch_scheduler_strict_model_homogeneity_enabled=True,
+        )
+
+
+def test_model_capacity_scheduler_requires_strict_model_homogeneity() -> None:
+    with pytest.raises(ValidationError, match="strict_model_homogeneity"):
+        GeneralSettings(
+            embeddings_batch_model_capacity_enabled=True,
+            embeddings_batch_scheduler_claim_mode="work_slice",
+        )
+
+
+def test_model_capacity_scheduler_config_is_opt_in() -> None:
+    settings = GeneralSettings(
+        embeddings_batch_model_capacity_enabled=True,
+        embeddings_batch_scheduler_claim_mode="work_slice",
+        embeddings_batch_scheduler_strict_model_homogeneity_enabled=True,
+    )
+
+    assert settings.embeddings_batch_default_model_max_in_flight == 16
+    assert settings.embeddings_batch_default_model_max_claim_work_units == 64
+    assert settings.embeddings_batch_model_capacity_fraction == 0.25
+    assert settings.embeddings_batch_model_capacity_fail_open is False
 
 
 def test_resolve_model_group_uses_router_alias_with_identity_fallback() -> None:

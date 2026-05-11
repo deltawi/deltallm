@@ -3,6 +3,7 @@ from __future__ import annotations
 from prometheus_client import generate_latest
 
 from src.metrics import (
+    clear_batch_model_capacity_metrics,
     increment_batch_create_session_action,
     get_prometheus_registry,
     increment_batch_artifact_failure,
@@ -14,8 +15,11 @@ from src.metrics import (
     increment_batch_item_terminal_failure,
     increment_batch_model_group_deferral,
     increment_batch_model_group_deferred_items,
+    increment_batch_model_capacity_snapshot_failure,
     increment_batch_microbatch_requeue,
     increment_batch_repair_action,
+    increment_batch_scheduler_model_claim,
+    increment_batch_scheduler_model_skip,
     increment_batch_work_claim,
     observe_batch_create_latency,
     observe_batch_finalize_latency,
@@ -23,11 +27,15 @@ from src.metrics import (
     observe_batch_item_retry_delay,
     observe_batch_model_group_deferral_seconds,
     observe_batch_microbatch_retry_delay,
+    observe_batch_claim_wait_by_model,
+    observe_batch_scheduler_model_selection_latency,
     observe_batch_work_claim_items,
     observe_batch_work_claim_latency,
     observe_batch_work_claim_units,
     publish_batch_create_session_summary,
+    publish_batch_model_capacity_snapshot,
     publish_batch_runtime_summary,
+    set_batch_model_backlog_work_units,
     set_batch_create_session_count,
     set_batch_item_count,
     set_batch_job_count,
@@ -62,6 +70,9 @@ def test_batch_metrics_are_exported() -> None:
     increment_batch_item_terminal_failure(category="budget", reason="not_retryable")
     increment_batch_model_group_deferral(reason="no_healthy_deployments")
     increment_batch_model_group_deferred_items(reason="no_healthy_deployments")
+    increment_batch_model_capacity_snapshot_failure(reason="unknown_capacity")
+    increment_batch_scheduler_model_skip(model_group="embeddings-small", reason="no_available_slots")
+    increment_batch_scheduler_model_claim(model_group="embeddings-small", result="claimed")
     increment_batch_microbatch_requeue(category="upstream_5xx", result="scheduled")
     increment_batch_work_claim(result="claimed", claim_mode="work_slice")
     increment_batch_finalization_claim(result="claimed")
@@ -72,9 +83,31 @@ def test_batch_metrics_are_exported() -> None:
     observe_batch_item_retry_delay(category="rate_limit", delay_seconds=5.0)
     observe_batch_model_group_deferral_seconds(reason="no_healthy_deployments", delay_seconds=5.0)
     observe_batch_microbatch_retry_delay(category="upstream_5xx", delay_seconds=5.0)
+    observe_batch_claim_wait_by_model(model_group="embeddings-small", service_tier="standard", wait_seconds=10.0)
+    observe_batch_scheduler_model_selection_latency(latency_seconds=0.01)
     observe_batch_work_claim_items(claim_mode="work_slice", count=10)
     observe_batch_work_claim_units(claim_mode="work_slice", work_units=40)
     observe_batch_work_claim_latency(claim_mode="work_slice", latency_seconds=0.01)
+    set_batch_model_backlog_work_units(
+        model_group="embeddings-small",
+        service_tier="standard",
+        size_class="s",
+        work_units=12,
+    )
+    publish_batch_model_capacity_snapshot(
+        type(
+            "Snapshot",
+            (),
+            {
+                "model_group": "embeddings-small",
+                "service_tier": "standard",
+                "capacity_source": "default",
+                "max_in_flight_items": 16,
+                "in_flight_items": 2,
+                "available_in_flight_items": 14,
+            },
+        )()
+    )
     publish_batch_create_session_summary({"completed": 2, "failed_retryable": 1})
 
     metrics_text = generate_latest(get_prometheus_registry()).decode("utf-8")
@@ -98,6 +131,15 @@ def test_batch_metrics_are_exported() -> None:
     assert "deltallm_batch_model_group_deferrals_total" in metrics_text
     assert "deltallm_batch_model_group_deferred_items_total" in metrics_text
     assert "deltallm_batch_model_group_deferral_seconds" in metrics_text
+    assert "deltallm_batch_model_capacity_slots" in metrics_text
+    assert "deltallm_batch_model_in_flight_items" in metrics_text
+    assert "deltallm_batch_model_available_slots" in metrics_text
+    assert "deltallm_batch_model_backlog_work_units" in metrics_text
+    assert "deltallm_batch_scheduler_model_skips_total" in metrics_text
+    assert "deltallm_batch_scheduler_model_claims_total" in metrics_text
+    assert "deltallm_batch_model_capacity_snapshot_failures_total" in metrics_text
+    assert "deltallm_batch_scheduler_model_selection_latency_seconds" in metrics_text
+    assert "deltallm_batch_claim_wait_by_model_seconds" in metrics_text
     assert "deltallm_batch_microbatch_requeues_total" in metrics_text
     assert "deltallm_batch_work_claims_total" in metrics_text
     assert "deltallm_batch_work_claim_items" in metrics_text
@@ -165,4 +207,65 @@ def test_batch_runtime_summary_oldest_job_age_uses_max_across_tenant_scopes() ->
             },
         )
         == 45.0
+    )
+
+
+def test_batch_model_capacity_gauges_can_be_cleared_when_model_drains() -> None:
+    set_batch_model_backlog_work_units(
+        model_group="stale-model",
+        service_tier="standard",
+        size_class="s",
+        work_units=12,
+    )
+    publish_batch_model_capacity_snapshot(
+        type(
+            "Snapshot",
+            (),
+            {
+                "model_group": "stale-model",
+                "service_tier": "standard",
+                "capacity_source": "default",
+                "max_in_flight_items": 16,
+                "in_flight_items": 2,
+                "available_in_flight_items": 14,
+            },
+        )()
+    )
+
+    metrics_text = generate_latest(get_prometheus_registry()).decode("utf-8")
+    assert (
+        _metric_value(
+            metrics_text,
+            "deltallm_batch_model_capacity_slots",
+            {"model_group": "stale-model", "service_tier": "standard", "source": "default"},
+        )
+        == 16.0
+    )
+    assert (
+        _metric_value(
+            metrics_text,
+            "deltallm_batch_model_backlog_work_units",
+            {"model_group": "stale-model", "service_tier": "standard", "size_class": "s"},
+        )
+        == 12.0
+    )
+
+    clear_batch_model_capacity_metrics()
+    metrics_text = generate_latest(get_prometheus_registry()).decode("utf-8")
+
+    assert (
+        _metric_value(
+            metrics_text,
+            "deltallm_batch_model_capacity_slots",
+            {"model_group": "stale-model", "service_tier": "standard", "source": "default"},
+        )
+        is None
+    )
+    assert (
+        _metric_value(
+            metrics_text,
+            "deltallm_batch_model_backlog_work_units",
+            {"model_group": "stale-model", "service_tier": "standard", "size_class": "s"},
+        )
+        is None
     )

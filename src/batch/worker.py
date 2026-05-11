@@ -54,11 +54,13 @@ class BatchExecutorWorker:
         repository: BatchRepository,
         storage: BatchArtifactStorage,
         config: BatchWorkerConfig,
+        model_capacity_resolver: Any | None = None,
     ) -> None:
         self.app = app
         self.repository = repository
         self.storage = storage
         self.config = config
+        self.model_capacity_resolver = model_capacity_resolver
         self._running = False
         self._artifact_finalizer = BatchArtifactFinalizer(
             repository=repository,
@@ -247,12 +249,7 @@ class BatchExecutorWorker:
             return True
 
         claim_started = time.perf_counter()
-        claim = await self.repository.claim_next_work(
-            worker_id=self.config.worker_id,
-            max_items=self._work_claim_max_items(),
-            max_work_units=self._work_claim_max_work_units(),
-            lease_seconds=self.config.item_lease_seconds,
-        )
+        claim = await self._claim_next_work_slice()
         observe_batch_work_claim_latency(
             claim_mode=self.config.scheduler_claim_mode,
             latency_seconds=time.perf_counter() - claim_started,
@@ -339,6 +336,128 @@ class BatchExecutorWorker:
                 break
         await self._refresh_batch_runtime_metrics()
         return True
+
+    async def _claim_next_work_slice(self):
+        max_items = self._work_claim_max_items()
+        max_work_units = self._work_claim_max_work_units()
+        resolver = self.model_capacity_resolver if self.config.model_capacity_enabled else None
+        if resolver is None:
+            return await self.repository.claim_next_work(
+                worker_id=self.config.worker_id,
+                max_items=max_items,
+                max_work_units=max_work_units,
+                lease_seconds=self.config.item_lease_seconds,
+            )
+
+        select_model_groups = getattr(resolver, "select_model_groups", None)
+        if callable(select_model_groups):
+            selections = await select_model_groups(max_items=max_items, max_work_units=max_work_units)
+        else:
+            selection = await resolver.select_model_group(max_items=max_items, max_work_units=max_work_units)
+            selections = [selection] if selection is not None else []
+
+        for selection in selections:
+            snapshot = selection.snapshot
+            record_selection = getattr(resolver, "record_selection", None)
+            if callable(record_selection):
+                record_selection(snapshot)
+            capacity_max_in_flight_items, capacity_max_in_flight_work_units = self._capacity_claim_caps(
+                snapshot,
+                max_items=selection.max_items,
+                max_work_units=selection.max_work_units,
+            )
+            claim = await self.repository.claim_next_work(
+                worker_id=self.config.worker_id,
+                max_items=selection.max_items,
+                max_work_units=selection.max_work_units,
+                lease_seconds=self.config.item_lease_seconds,
+                allowed_model_groups=[snapshot.model_group],
+                service_tier=snapshot.service_tier,
+                claim_order="fifo",
+                capacity_model_group=snapshot.model_group,
+                capacity_service_tier=snapshot.service_tier,
+                capacity_max_in_flight_items=capacity_max_in_flight_items,
+                capacity_max_in_flight_work_units=capacity_max_in_flight_work_units,
+                allow_oversized_first_item=False,
+            )
+            result = "claimed"
+            if claim is None:
+                result = await self._capacity_empty_claim_result(
+                    snapshot=snapshot,
+                    max_items=selection.max_items,
+                    max_work_units=selection.max_work_units,
+                )
+            resolver.record_claim_result(
+                model_group=snapshot.model_group,
+                result=result,
+            )
+            if claim is not None:
+                return claim
+
+        return await self._claim_legacy_work_slice(
+            max_items=max_items,
+            max_work_units=max_work_units,
+            resolver=resolver,
+        )
+
+    @staticmethod
+    def _capacity_claim_caps(snapshot: Any, *, max_items: int, max_work_units: int) -> tuple[int, int | None]:
+        in_flight_items = max(0, int(getattr(snapshot, "in_flight_items", 0) or 0))
+        available_in_flight_items = max(
+            0,
+            int(getattr(snapshot, "available_in_flight_items", max_items) or 0),
+        )
+        in_flight_work_units = max(0, int(getattr(snapshot, "in_flight_work_units", 0) or 0))
+        tpm_remaining = getattr(snapshot, "tpm_remaining", None)
+        work_unit_cap = (
+            in_flight_work_units + max(0, int(tpm_remaining))
+            if tpm_remaining is not None
+            else None
+        )
+        return in_flight_items + available_in_flight_items, work_unit_cap
+
+    async def _capacity_empty_claim_result(self, *, snapshot: Any, max_items: int, max_work_units: int) -> str:
+        diagnose_model_group_work_claim_empty = getattr(
+            self.repository,
+            "diagnose_model_group_work_claim_empty",
+            None,
+        )
+        if not callable(diagnose_model_group_work_claim_empty):
+            return "empty_after_selection"
+        capacity_max_in_flight_items, capacity_max_in_flight_work_units = self._capacity_claim_caps(
+            snapshot,
+            max_items=max_items,
+            max_work_units=max_work_units,
+        )
+        try:
+            return str(
+                await diagnose_model_group_work_claim_empty(
+                    model_group=snapshot.model_group,
+                    service_tier=snapshot.service_tier,
+                    max_work_units=max_work_units,
+                    capacity_max_in_flight_items=capacity_max_in_flight_items,
+                    capacity_max_in_flight_work_units=capacity_max_in_flight_work_units,
+                )
+                or "empty_after_selection"
+            )
+        except Exception:
+            logger.warning("batch capacity empty claim diagnostic failed", exc_info=True)
+            return "empty_after_selection"
+
+    async def _claim_legacy_work_slice(self, *, max_items: int, max_work_units: int, resolver: Any):
+        claim = await self.repository.claim_next_work(
+            worker_id=self.config.worker_id,
+            max_items=max_items,
+            max_work_units=max_work_units,
+            lease_seconds=self.config.item_lease_seconds,
+            legacy_only=True,
+            claim_order="fifo",
+        )
+        resolver.record_claim_result(
+            model_group="legacy",
+            result="claimed" if claim is not None else "empty",
+        )
+        return claim
 
     async def _empty_work_claim_reason(self) -> str:
         diagnose_empty_work_claim = getattr(self.repository, "diagnose_empty_work_claim", None)
