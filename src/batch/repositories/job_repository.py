@@ -52,7 +52,10 @@ class BatchJobRepository:
             return
         await self.prisma.query_raw(
             """
-            SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))
+            WITH scope_lock AS (
+                SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))
+            )
+            SELECT 1::int AS locked FROM scope_lock
             """,
             scope_type,
             scope_id,
@@ -763,7 +766,10 @@ class BatchJobRepository:
     ) -> None:
         await db.query_raw(
             """
-            SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))
+            WITH capacity_lock AS (
+                SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))
+            )
+            SELECT 1::int AS locked FROM capacity_lock
             """,
             model_group,
             service_tier,

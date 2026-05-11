@@ -253,6 +253,7 @@ async def test_claim_next_work_capacity_guard_rechecks_in_flight_under_model_loc
     lock_sql, lock_params = prisma.tx_client.calls[0]
     claim_sql, claim_params = prisma.tx_client.calls[1]
     assert "pg_advisory_xact_lock" in lock_sql
+    assert "SELECT 1::int AS locked" in lock_sql
     assert lock_params == ("model-a", "standard")
     assert "capacity_lock AS" not in claim_sql
     assert "capacity_usage AS" in claim_sql
