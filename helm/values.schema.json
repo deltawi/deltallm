@@ -270,6 +270,16 @@
             },
             "embeddings_batch_model_capacity_refresh_seconds": { "type": "number", "exclusiveMinimum": 0 },
             "embeddings_batch_model_capacity_fail_open": { "type": "boolean" },
+            "embeddings_batch_tenant_fair_share_enabled": { "type": "boolean" },
+            "embeddings_batch_scheduler_base_quantum_work_units": { "type": "integer", "minimum": 1 },
+            "embeddings_batch_scheduler_max_deficit_multiplier": { "type": "integer", "minimum": 1 },
+            "embeddings_batch_tenant_max_in_flight_work_units": { "type": "integer", "minimum": 0 },
+            "embeddings_batch_tenant_max_queued_work_units": { "type": "integer", "minimum": 0 },
+            "embeddings_batch_tenant_scope_preference": { "type": "string" },
+            "embeddings_batch_tenant_fair_share_disabled_model_groups": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
             "embeddings_batch_finalization_first": { "type": "boolean" }
           }
         }

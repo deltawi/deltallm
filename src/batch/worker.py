@@ -23,8 +23,10 @@ from src.chat.executor import execute_chat
 from src.metrics import (
     increment_batch_claim_empty_job,
     increment_batch_finalization_claim,
+    increment_batch_scheduler_shadow_decision,
     increment_batch_work_claim,
     observe_batch_item_execution_latency,
+    observe_batch_scheduler_shadow_share_ratio,
     observe_batch_work_claim_items,
     observe_batch_work_claim_latency,
     observe_batch_work_claim_units,
@@ -35,6 +37,13 @@ from src.router.usage import record_router_usage
 from src.routers.embeddings import _execute_embedding
 
 logger = logging.getLogger(__name__)
+
+_FAIR_SHARE_MODEL_FALLBACK_RESULTS = frozenset(
+    {
+        "no_active_flow",
+        "transaction_unavailable",
+    }
+)
 
 __all__ = [
     "BatchArtifactValidationError",
@@ -366,27 +375,81 @@ class BatchExecutorWorker:
                 max_items=selection.max_items,
                 max_work_units=selection.max_work_units,
             )
-            claim = await self.repository.claim_next_work(
-                worker_id=self.config.worker_id,
-                max_items=selection.max_items,
-                max_work_units=selection.max_work_units,
-                lease_seconds=self.config.item_lease_seconds,
-                allowed_model_groups=[snapshot.model_group],
-                service_tier=snapshot.service_tier,
-                claim_order="fifo",
-                capacity_model_group=snapshot.model_group,
-                capacity_service_tier=snapshot.service_tier,
-                capacity_max_in_flight_items=capacity_max_in_flight_items,
-                capacity_max_in_flight_work_units=capacity_max_in_flight_work_units,
-                allow_oversized_first_item=False,
-            )
-            result = "claimed"
-            if claim is None:
-                result = await self._capacity_empty_claim_result(
-                    snapshot=snapshot,
+            fair_share_model_enabled = self._tenant_fair_share_model_enabled(snapshot.model_group)
+            if self.config.tenant_fair_share_enabled and fair_share_model_enabled:
+                fair_share_result = await self.repository.claim_next_fair_share_work(
+                    worker_id=self.config.worker_id,
+                    service_tier=snapshot.service_tier,
+                    model_group=snapshot.model_group,
                     max_items=selection.max_items,
                     max_work_units=selection.max_work_units,
+                    lease_seconds=self.config.item_lease_seconds,
+                    capacity_max_in_flight_items=capacity_max_in_flight_items,
+                    capacity_max_in_flight_work_units=capacity_max_in_flight_work_units,
+                    base_quantum_work_units=self.config.tenant_fair_share_base_quantum_work_units,
+                    max_deficit_multiplier=self.config.tenant_fair_share_max_deficit_multiplier,
+                    tenant_max_in_flight_work_units=self.config.tenant_max_in_flight_work_units,
                 )
+                claim = fair_share_result.claim
+                result = fair_share_result.result
+                if claim is None and result in _FAIR_SHARE_MODEL_FALLBACK_RESULTS:
+                    claim = await self._claim_model_capacity_work_slice(
+                        snapshot=snapshot,
+                        selection=selection,
+                        capacity_max_in_flight_items=capacity_max_in_flight_items,
+                        capacity_max_in_flight_work_units=capacity_max_in_flight_work_units,
+                    )
+                    if claim is None:
+                        result = await self._capacity_empty_claim_result(
+                            snapshot=snapshot,
+                            max_items=selection.max_items,
+                            max_work_units=selection.max_work_units,
+                        )
+                    else:
+                        result = "claimed"
+            elif self.config.scheduler_shadow_enabled and fair_share_model_enabled:
+                fair_share_result = await self.repository.recommend_next_fair_share_flow(
+                    service_tier=snapshot.service_tier,
+                    model_group=snapshot.model_group,
+                    max_items=selection.max_items,
+                    max_work_units=selection.max_work_units,
+                    base_quantum_work_units=self.config.tenant_fair_share_base_quantum_work_units,
+                    max_deficit_multiplier=self.config.tenant_fair_share_max_deficit_multiplier,
+                    tenant_max_in_flight_work_units=self.config.tenant_max_in_flight_work_units,
+                )
+                claim = await self._claim_model_capacity_work_slice(
+                    snapshot=snapshot,
+                    selection=selection,
+                    capacity_max_in_flight_items=capacity_max_in_flight_items,
+                    capacity_max_in_flight_work_units=capacity_max_in_flight_work_units,
+                )
+                self._record_shadow_fair_share_decision(
+                    recommendation=fair_share_result,
+                    claim=claim,
+                    model_group=snapshot.model_group,
+                    service_tier=snapshot.service_tier,
+                )
+                result = "claimed"
+                if claim is None:
+                    result = await self._capacity_empty_claim_result(
+                        snapshot=snapshot,
+                        max_items=selection.max_items,
+                        max_work_units=selection.max_work_units,
+                    )
+            else:
+                claim = await self._claim_model_capacity_work_slice(
+                    snapshot=snapshot,
+                    selection=selection,
+                    capacity_max_in_flight_items=capacity_max_in_flight_items,
+                    capacity_max_in_flight_work_units=capacity_max_in_flight_work_units,
+                )
+                result = "claimed"
+                if claim is None:
+                    result = await self._capacity_empty_claim_result(
+                        snapshot=snapshot,
+                        max_items=selection.max_items,
+                        max_work_units=selection.max_work_units,
+                    )
             resolver.record_claim_result(
                 model_group=snapshot.model_group,
                 result=result,
@@ -398,6 +461,141 @@ class BatchExecutorWorker:
             max_items=max_items,
             max_work_units=max_work_units,
             resolver=resolver,
+        )
+
+    def _tenant_fair_share_model_enabled(self, model_group: object) -> bool:
+        normalized_model_group = str(model_group or "").strip()
+        if not normalized_model_group:
+            return True
+        disabled = {
+            str(disabled_model_group or "").strip()
+            for disabled_model_group in self.config.tenant_fair_share_disabled_model_groups
+            if str(disabled_model_group or "").strip()
+        }
+        return normalized_model_group not in disabled
+
+    @staticmethod
+    def _record_shadow_fair_share_decision(
+        *,
+        recommendation: Any,
+        claim: Any | None,
+        model_group: str,
+        service_tier: str,
+    ) -> None:
+        flow = getattr(recommendation, "flow", None)
+        if flow is None:
+            increment_batch_scheduler_shadow_decision(
+                model_group=model_group,
+                service_tier=service_tier,
+                result="no_recommendation",
+            )
+            return
+        if claim is None:
+            increment_batch_scheduler_shadow_decision(
+                model_group=model_group,
+                service_tier=service_tier,
+                result="actual_empty",
+            )
+            BatchExecutorWorker._observe_shadow_fair_share_ratio(
+                recommendation=recommendation,
+                claim=None,
+                claim_matches_recommended_flow=False,
+                model_group=model_group,
+                service_tier=service_tier,
+            )
+            return
+        claim_matches_flow = BatchExecutorWorker._shadow_claim_matches_flow(claim=claim, flow=flow)
+        increment_batch_scheduler_shadow_decision(
+            model_group=model_group,
+            service_tier=service_tier,
+            result="match" if claim_matches_flow else "mismatch",
+        )
+        BatchExecutorWorker._observe_shadow_fair_share_ratio(
+            recommendation=recommendation,
+            claim=claim,
+            claim_matches_recommended_flow=claim_matches_flow,
+            model_group=model_group,
+            service_tier=service_tier,
+        )
+
+    @staticmethod
+    def _shadow_claim_matches_flow(*, claim: Any, flow: Any) -> bool:
+        return (
+            str(getattr(claim, "model_group", "") or "") == str(getattr(flow, "model_group", "") or "")
+            and str(getattr(claim, "service_tier", "") or "")
+            == str(getattr(flow, "service_tier", "") or "")
+            and str(getattr(claim, "tenant_scope_type", "") or "")
+            == str(getattr(flow, "tenant_scope_type", "") or "")
+            and str(getattr(claim, "tenant_scope_id", "") or "")
+            == str(getattr(flow, "tenant_scope_id", "") or "")
+        )
+
+    @staticmethod
+    def _observe_shadow_fair_share_ratio(
+        *,
+        recommendation: Any,
+        claim: Any | None,
+        claim_matches_recommended_flow: bool,
+        model_group: str,
+        service_tier: str,
+    ) -> None:
+        expected_share = getattr(recommendation, "expected_share", None)
+        if expected_share is None:
+            return
+        try:
+            bounded_expected_share = float(expected_share)
+        except (TypeError, ValueError):
+            return
+        if bounded_expected_share <= 0:
+            return
+        flow = getattr(recommendation, "flow", None)
+        if flow is None:
+            return
+        try:
+            selected_in_flight_work_units = max(0, int(getattr(flow, "in_flight_work_units", 0) or 0))
+            total_in_flight_work_units = max(
+                0,
+                int(getattr(recommendation, "total_in_flight_work_units", 0) or 0),
+            )
+            claimed_work_units = max(1, int(getattr(claim, "claimed_work_units", 1) or 1))
+        except (TypeError, ValueError):
+            return
+        if claim is None:
+            claimed_work_units = 0
+        if claim_matches_recommended_flow:
+            selected_in_flight_work_units += claimed_work_units
+        total_work_units = total_in_flight_work_units + claimed_work_units
+        if total_work_units <= 0:
+            actual_share = 0.0
+        else:
+            actual_share = float(selected_in_flight_work_units) / float(total_work_units)
+        observe_batch_scheduler_shadow_share_ratio(
+            model_group=model_group,
+            service_tier=service_tier,
+            ratio=actual_share / bounded_expected_share,
+        )
+
+    async def _claim_model_capacity_work_slice(
+        self,
+        *,
+        snapshot: Any,
+        selection: Any,
+        capacity_max_in_flight_items: int,
+        capacity_max_in_flight_work_units: int | None,
+    ):
+        return await self.repository.claim_next_work(
+            worker_id=self.config.worker_id,
+            max_items=selection.max_items,
+            max_work_units=selection.max_work_units,
+            lease_seconds=self.config.item_lease_seconds,
+            allowed_model_groups=[snapshot.model_group],
+            service_tier=snapshot.service_tier,
+            claim_order="fifo",
+            capacity_model_group=snapshot.model_group,
+            capacity_service_tier=snapshot.service_tier,
+            capacity_max_in_flight_items=capacity_max_in_flight_items,
+            capacity_max_in_flight_work_units=capacity_max_in_flight_work_units,
+            allow_oversized_first_item=False,
         )
 
     @staticmethod

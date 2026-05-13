@@ -6,7 +6,14 @@ from pydantic import ValidationError
 from src.batch.endpoints import BATCH_ENDPOINT_CHAT_COMPLETIONS, BATCH_ENDPOINT_EMBEDDINGS
 from src.batch.scheduling import (
     API_KEY_TENANT_SCOPE_PREFIX,
+    BatchTenantFairShareConfig,
+    build_flow_id,
+    display_tenant_scope_id,
     estimate_request_work_units,
+    max_deficit_for_flow,
+    parse_model_group_list,
+    parse_tenant_scope_preference,
+    quantum_for_weight,
     resolve_model_group,
     resolve_scheduler_version,
     resolve_tenant_scope,
@@ -37,6 +44,62 @@ def test_api_key_tenant_scope_uses_stable_non_secret_hash() -> None:
     assert scope.scope_id.startswith(API_KEY_TENANT_SCOPE_PREFIX)
     assert "sk-test-secret" not in scope.scope_id
     assert resolve_tenant_scope(api_key="sk-test-secret").scope_id == scope.scope_id
+
+
+def test_resolve_tenant_scope_accepts_operator_preference_order() -> None:
+    scope = resolve_tenant_scope(
+        organization_id="org-1",
+        team_id="team-1",
+        api_key="key-1",
+        scope_preference=("team", "organization", "api_key"),
+    )
+
+    assert scope.scope_type == "team"
+    assert scope.scope_id == "team-1"
+
+
+def test_fair_share_flow_id_is_stable_and_hides_api_key() -> None:
+    raw_api_key = "sk-test-secret"
+    hashed_scope = resolve_tenant_scope(api_key=raw_api_key).scope_id
+    flow_id = build_flow_id(
+        service_tier="standard",
+        model_group="text-embedding-3-small",
+        tenant_scope_type="api_key",
+        tenant_scope_id=hashed_scope,
+    )
+
+    assert flow_id == build_flow_id(
+        service_tier="standard",
+        model_group="text-embedding-3-small",
+        tenant_scope_type="api_key",
+        tenant_scope_id=hashed_scope,
+    )
+    assert raw_api_key not in flow_id
+    assert hashed_scope not in flow_id
+    assert display_tenant_scope_id(scope_type="api_key", scope_id=hashed_scope).startswith("api_key:")
+
+
+def test_fair_share_config_quantum_and_deficit_caps() -> None:
+    assert parse_tenant_scope_preference("team,organization,api_key,team,bad") == (
+        "team",
+        "organization",
+        "api_key",
+    )
+    assert quantum_for_weight(base_quantum_work_units=16, weight=4) == 64
+    assert quantum_for_weight(base_quantum_work_units=300, weight=4) == 256
+    assert max_deficit_for_flow(quantum_work_units=16, max_deficit_multiplier=8) == 128
+    config = BatchTenantFairShareConfig.from_settings(
+        GeneralSettings(
+            embeddings_batch_tenant_fair_share_enabled=True,
+            embeddings_batch_model_capacity_enabled=True,
+            embeddings_batch_scheduler_claim_mode="work_slice",
+            embeddings_batch_scheduler_strict_model_homogeneity_enabled=True,
+        )
+    )
+    assert config.enabled is True
+    assert config.base_quantum_work_units == 16
+    assert config.max_deficit_multiplier == 8
+    assert parse_model_group_list("model-a,model-b,model-a,, ") == ("model-a", "model-b")
 
 
 def test_resolve_scheduler_version_prefers_active_then_shadow_then_fifo() -> None:
@@ -100,6 +163,67 @@ def test_model_capacity_scheduler_config_is_opt_in() -> None:
     assert settings.embeddings_batch_default_model_max_claim_work_units == 64
     assert settings.embeddings_batch_model_capacity_fraction == 0.25
     assert settings.embeddings_batch_model_capacity_fail_open is False
+
+
+def test_scheduler_shadow_requires_work_slice_claiming() -> None:
+    with pytest.raises(ValidationError, match="scheduler_claim_mode='work_slice'"):
+        GeneralSettings(
+            embeddings_batch_scheduler_shadow_enabled=True,
+            embeddings_batch_model_capacity_enabled=True,
+            embeddings_batch_scheduler_strict_model_homogeneity_enabled=True,
+        )
+
+
+def test_scheduler_shadow_requires_strict_model_homogeneity() -> None:
+    with pytest.raises(ValidationError, match="strict_model_homogeneity"):
+        GeneralSettings(
+            embeddings_batch_scheduler_shadow_enabled=True,
+            embeddings_batch_model_capacity_enabled=True,
+            embeddings_batch_scheduler_claim_mode="work_slice",
+        )
+
+
+def test_scheduler_shadow_requires_model_capacity() -> None:
+    with pytest.raises(ValidationError, match="model_capacity_enabled"):
+        GeneralSettings(
+            embeddings_batch_scheduler_shadow_enabled=True,
+            embeddings_batch_scheduler_claim_mode="work_slice",
+            embeddings_batch_scheduler_strict_model_homogeneity_enabled=True,
+        )
+
+
+def test_scheduler_shadow_config_is_allowed_with_safe_prerequisites() -> None:
+    settings = GeneralSettings(
+        embeddings_batch_scheduler_shadow_enabled=True,
+        embeddings_batch_model_capacity_enabled=True,
+        embeddings_batch_scheduler_claim_mode="work_slice",
+        embeddings_batch_scheduler_strict_model_homogeneity_enabled=True,
+    )
+
+    assert settings.embeddings_batch_scheduler_shadow_enabled is True
+
+
+def test_tenant_fair_share_requires_model_capacity() -> None:
+    with pytest.raises(ValidationError, match="model_capacity_enabled"):
+        GeneralSettings(
+            embeddings_batch_tenant_fair_share_enabled=True,
+            embeddings_batch_scheduler_claim_mode="work_slice",
+            embeddings_batch_scheduler_strict_model_homogeneity_enabled=True,
+        )
+
+
+def test_tenant_fair_share_config_supports_disabled_model_groups() -> None:
+    config = BatchTenantFairShareConfig.from_settings(
+        GeneralSettings(
+            embeddings_batch_tenant_fair_share_enabled=True,
+            embeddings_batch_model_capacity_enabled=True,
+            embeddings_batch_scheduler_claim_mode="work_slice",
+            embeddings_batch_scheduler_strict_model_homogeneity_enabled=True,
+            embeddings_batch_tenant_fair_share_disabled_model_groups=["model-a", "model-b"],
+        )
+    )
+
+    assert config.disabled_model_groups == ("model-a", "model-b")
 
 
 def test_resolve_model_group_uses_router_alias_with_identity_fallback() -> None:

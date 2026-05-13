@@ -435,6 +435,13 @@ class GeneralSettings(BaseModel):
     embeddings_batch_model_capacity_fraction: float = Field(default=0.25, gt=0.0, le=1.0)
     embeddings_batch_model_capacity_refresh_seconds: float = Field(default=5.0, gt=0.0)
     embeddings_batch_model_capacity_fail_open: bool = False
+    embeddings_batch_tenant_fair_share_enabled: bool = False
+    embeddings_batch_scheduler_base_quantum_work_units: int = Field(default=16, ge=1)
+    embeddings_batch_scheduler_max_deficit_multiplier: int = Field(default=8, ge=1)
+    embeddings_batch_tenant_max_in_flight_work_units: int = Field(default=0, ge=0)
+    embeddings_batch_tenant_max_queued_work_units: int = Field(default=0, ge=0)
+    embeddings_batch_tenant_scope_preference: str = "organization,team,api_key,user"
+    embeddings_batch_tenant_fair_share_disabled_model_groups: list[str] = Field(default_factory=list)
     embeddings_batch_finalization_first: bool = True
     batch_completed_artifact_retention_days: int = 7
     batch_failed_artifact_retention_days: int = 14
@@ -468,7 +475,12 @@ class GeneralSettings(BaseModel):
                 "upstream_http_max_keepalive_connections must be less than or equal to "
                 "upstream_http_max_connections"
             )
-        if self.embeddings_batch_scheduler_enabled or self.embeddings_batch_model_capacity_enabled:
+        if (
+            self.embeddings_batch_scheduler_enabled
+            or self.embeddings_batch_model_capacity_enabled
+            or self.embeddings_batch_tenant_fair_share_enabled
+            or self.embeddings_batch_scheduler_shadow_enabled
+        ):
             if self.embeddings_batch_scheduler_claim_mode != "work_slice":
                 raise ValueError(
                     "active batch scheduler v2 requires "
@@ -479,6 +491,14 @@ class GeneralSettings(BaseModel):
                     "active batch scheduler v2 requires "
                     "embeddings_batch_scheduler_strict_model_homogeneity_enabled=true"
                 )
+        if self.embeddings_batch_tenant_fair_share_enabled and not self.embeddings_batch_model_capacity_enabled:
+            raise ValueError(
+                "tenant fair-share scheduling requires embeddings_batch_model_capacity_enabled=true"
+            )
+        if self.embeddings_batch_scheduler_shadow_enabled and not self.embeddings_batch_model_capacity_enabled:
+            raise ValueError(
+                "batch scheduler shadow mode requires embeddings_batch_model_capacity_enabled=true"
+            )
         return self
 
 

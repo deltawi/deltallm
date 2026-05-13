@@ -20,6 +20,12 @@ from src.metrics import (
     increment_batch_repair_action,
     increment_batch_scheduler_model_claim,
     increment_batch_scheduler_model_skip,
+    increment_batch_scheduler_shadow_decision,
+    increment_batch_scheduler_shadow_record,
+    increment_batch_scheduler_shadow_skip,
+    increment_batch_scheduler_deficit_refill,
+    increment_batch_scheduler_flow_claim,
+    increment_batch_scheduler_flow_skip,
     increment_batch_work_claim,
     observe_batch_create_latency,
     observe_batch_finalize_latency,
@@ -28,12 +34,17 @@ from src.metrics import (
     observe_batch_model_group_deferral_seconds,
     observe_batch_microbatch_retry_delay,
     observe_batch_claim_wait_by_model,
+    observe_batch_scheduler_fairness_ratio,
+    observe_batch_scheduler_flow_wait,
+    observe_batch_scheduler_shadow_share_ratio,
     observe_batch_scheduler_model_selection_latency,
     observe_batch_work_claim_items,
     observe_batch_work_claim_latency,
     observe_batch_work_claim_units,
     publish_batch_create_session_summary,
     publish_batch_model_capacity_snapshot,
+    publish_batch_scheduler_flow,
+    publish_batch_scheduler_flows,
     publish_batch_runtime_summary,
     set_batch_model_backlog_work_units,
     set_batch_create_session_count,
@@ -73,6 +84,25 @@ def test_batch_metrics_are_exported() -> None:
     increment_batch_model_capacity_snapshot_failure(reason="unknown_capacity")
     increment_batch_scheduler_model_skip(model_group="embeddings-small", reason="no_available_slots")
     increment_batch_scheduler_model_claim(model_group="embeddings-small", result="claimed")
+    increment_batch_scheduler_flow_claim(
+        model_group="embeddings-small",
+        service_tier="standard",
+        tenant_scope_type="team",
+        result="claimed",
+    )
+    increment_batch_scheduler_flow_skip(reason="tenant_in_flight_full")
+    increment_batch_scheduler_deficit_refill(model_group="embeddings-small", service_tier="standard", count=2)
+    increment_batch_scheduler_shadow_decision(
+        model_group="embeddings-small",
+        service_tier="standard",
+        result="match",
+    )
+    increment_batch_scheduler_shadow_record(result="recorded")
+    increment_batch_scheduler_shadow_skip(
+        model_group="embeddings-small",
+        service_tier="standard",
+        reason="insufficient_deficit",
+    )
     increment_batch_microbatch_requeue(category="upstream_5xx", result="scheduled")
     increment_batch_work_claim(result="claimed", claim_mode="work_slice")
     increment_batch_finalization_claim(result="claimed")
@@ -84,6 +114,18 @@ def test_batch_metrics_are_exported() -> None:
     observe_batch_model_group_deferral_seconds(reason="no_healthy_deployments", delay_seconds=5.0)
     observe_batch_microbatch_retry_delay(category="upstream_5xx", delay_seconds=5.0)
     observe_batch_claim_wait_by_model(model_group="embeddings-small", service_tier="standard", wait_seconds=10.0)
+    observe_batch_scheduler_flow_wait(
+        model_group="embeddings-small",
+        service_tier="standard",
+        tenant_scope_type="team",
+        wait_seconds=10.0,
+    )
+    observe_batch_scheduler_fairness_ratio(model_group="embeddings-small", service_tier="standard", ratio=1.0)
+    observe_batch_scheduler_shadow_share_ratio(
+        model_group="embeddings-small",
+        service_tier="standard",
+        ratio=1.0,
+    )
     observe_batch_scheduler_model_selection_latency(latency_seconds=0.01)
     observe_batch_work_claim_items(claim_mode="work_slice", count=10)
     observe_batch_work_claim_units(claim_mode="work_slice", work_units=40)
@@ -105,6 +147,21 @@ def test_batch_metrics_are_exported() -> None:
                 "max_in_flight_items": 16,
                 "in_flight_items": 2,
                 "available_in_flight_items": 14,
+            },
+        )()
+    )
+    publish_batch_scheduler_flow(
+        type(
+            "Flow",
+            (),
+            {
+                "model_group": "embeddings-small",
+                "service_tier": "standard",
+                "tenant_scope_type": "team",
+                "active": True,
+                "deficit_work_units": 16,
+                "queued_work_units": 32,
+                "in_flight_work_units": 4,
             },
         )()
     )
@@ -137,6 +194,22 @@ def test_batch_metrics_are_exported() -> None:
     assert "deltallm_batch_model_backlog_work_units" in metrics_text
     assert "deltallm_batch_scheduler_model_skips_total" in metrics_text
     assert "deltallm_batch_scheduler_model_claims_total" in metrics_text
+    assert "deltallm_batch_scheduler_active_flows" in metrics_text
+    assert "deltallm_batch_scheduler_flow_deficit" in metrics_text
+    assert "deltallm_batch_scheduler_flow_queued_work_units" in metrics_text
+    assert "deltallm_batch_scheduler_flow_in_flight_work_units" in metrics_text
+    assert "deltallm_batch_scheduler_flow_claims_total" in metrics_text
+    assert "deltallm_batch_scheduler_flow_skips_total" in metrics_text
+    assert "deltallm_batch_scheduler_deficit_refills_total" in metrics_text
+    assert "deltallm_batch_scheduler_shadow_decisions_total" in metrics_text
+    assert "deltallm_batch_scheduler_shadow_records_total" in metrics_text
+    assert "deltallm_batch_scheduler_shadow_skips_total" in metrics_text
+    assert "deltallm_batch_scheduler_shadow_share_ratio" in metrics_text
+    assert 'model_group="embeddings-small"' in metrics_text
+    assert 'service_tier="standard"' in metrics_text
+    assert 'result="match"' in metrics_text
+    assert "deltallm_batch_scheduler_flow_wait_seconds" in metrics_text
+    assert "deltallm_batch_scheduler_fairness_ratio" in metrics_text
     assert "deltallm_batch_model_capacity_snapshot_failures_total" in metrics_text
     assert "deltallm_batch_scheduler_model_selection_latency_seconds" in metrics_text
     assert "deltallm_batch_claim_wait_by_model_seconds" in metrics_text
@@ -208,6 +281,50 @@ def test_batch_runtime_summary_oldest_job_age_uses_max_across_tenant_scopes() ->
         )
         == 45.0
     )
+
+
+def test_batch_scheduler_flow_metrics_aggregate_without_tenant_labels() -> None:
+    publish_batch_scheduler_flows(
+        [
+            type(
+                "Flow",
+                (),
+                {
+                    "model_group": "aggregate-model",
+                    "service_tier": "standard",
+                    "tenant_scope_type": "team",
+                    "active": True,
+                    "deficit_work_units": 8,
+                    "queued_work_units": 20,
+                    "in_flight_work_units": 2,
+                },
+            )(),
+            type(
+                "Flow",
+                (),
+                {
+                    "model_group": "aggregate-model",
+                    "service_tier": "standard",
+                    "tenant_scope_type": "team",
+                    "active": True,
+                    "deficit_work_units": 12,
+                    "queued_work_units": 30,
+                    "in_flight_work_units": 3,
+                },
+            )(),
+        ]
+    )
+
+    metrics_text = generate_latest(get_prometheus_registry()).decode("utf-8")
+    labels = {
+        "model_group": "aggregate-model",
+        "service_tier": "standard",
+        "tenant_scope_type": "team",
+    }
+    assert _metric_value(metrics_text, "deltallm_batch_scheduler_active_flows", labels) == 2
+    assert _metric_value(metrics_text, "deltallm_batch_scheduler_flow_deficit", labels) == 20
+    assert _metric_value(metrics_text, "deltallm_batch_scheduler_flow_queued_work_units", labels) == 50
+    assert _metric_value(metrics_text, "deltallm_batch_scheduler_flow_in_flight_work_units", labels) == 5
 
 
 def test_batch_model_capacity_gauges_can_be_cleared_when_model_drains() -> None:

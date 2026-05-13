@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.batch.create import (
+    BatchCreatePromotionError,
     BatchCreatePromotionResult,
     BatchCreateSessionRecord,
     BatchCreateSessionStatus,
@@ -147,6 +148,20 @@ def test_create_session_service_rejects_unsupported_completion_window(completion
 
     assert exc.value.status_code == 400
     assert exc.value.detail == "completion_window must be '24h'"
+
+
+def test_create_session_service_maps_tenant_queued_work_limit_to_rate_limit() -> None:
+    service = _create_session_service_for_validation()
+
+    exc = service._http_exception_for_promotion_error(  # noqa: SLF001
+        BatchCreatePromotionError(
+            "Tenant queued batch work exceeds embeddings_batch_max_queued_work_units_per_tenant",
+            code="tenant_queued_work_limit_exceeded",
+            retryable=True,
+        )
+    )
+
+    assert exc.status_code == 429
 
 
 @pytest.mark.asyncio

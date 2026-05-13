@@ -251,6 +251,13 @@ config:
     embeddings_batch_model_capacity_fraction: 0.25
     embeddings_batch_model_capacity_refresh_seconds: 5
     embeddings_batch_model_capacity_fail_open: false
+    embeddings_batch_tenant_fair_share_enabled: false
+    embeddings_batch_scheduler_base_quantum_work_units: 16
+    embeddings_batch_scheduler_max_deficit_multiplier: 8
+    embeddings_batch_tenant_max_in_flight_work_units: 0
+    embeddings_batch_tenant_max_queued_work_units: 0
+    embeddings_batch_tenant_scope_preference: organization,team,api_key,user
+    embeddings_batch_tenant_fair_share_disabled_model_groups: []
     embeddings_batch_finalization_first: true
 
 s3:

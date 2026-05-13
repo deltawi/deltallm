@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 from datetime import UTC, datetime
 import logging
 from typing import Any, Iterator
@@ -14,7 +15,12 @@ from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit,
 from src.audit.actions import AuditAction
 from src.batch.repository import BatchRepository
 from src.batch.models import BATCH_JOB_STATUS_SET, decode_operator_failed_reason, encode_operator_failed_reason
-from src.batch.scheduling import API_KEY_TENANT_SCOPE_PREFIX, BatchModelCapacityConfig, BatchModelCapacityResolver
+from src.batch.scheduling import (
+    API_KEY_TENANT_SCOPE_PREFIX,
+    BatchModelCapacityConfig,
+    BatchModelCapacityResolver,
+    BatchTenantFairShareConfig,
+)
 from src.metrics import (
     increment_batch_repair_action,
     publish_batch_runtime_summary,
@@ -32,6 +38,12 @@ class MarkBatchFailedRequest(BaseModel):
 
 class SchedulerBackfillRequest(BaseModel):
     limit: int = Field(default=500, ge=1, le=5_000)
+
+
+class SchedulerFlowRefreshRequest(BaseModel):
+    model_group: str | None = Field(default=None, max_length=200)
+    service_tier: str | None = Field(default=None, max_length=100)
+    repair_limit: int = Field(default=500, ge=1, le=5_000)
 
 
 async def _refresh_batch_runtime_metrics(repository: BatchRepository) -> None:
@@ -85,6 +97,20 @@ def _display_tenant_scope_id(*, scope_type: str | None, scope_id: str | None) ->
     return "api_key"
 
 
+def _redacted_tenant_scope_id(*, scope_type: str | None, scope_id: str | None) -> str | None:
+    normalized_scope_type = str(scope_type or "").strip()
+    normalized_scope_id = str(scope_id or "").strip()
+    if not normalized_scope_id:
+        return None
+    if normalized_scope_type == "api_key":
+        return _display_tenant_scope_id(scope_type=normalized_scope_type, scope_id=normalized_scope_id)
+    if normalized_scope_type == "anonymous" and normalized_scope_id == "anonymous":
+        return "anonymous"
+    digest = hashlib.sha256(normalized_scope_id.encode("utf-8")).hexdigest()
+    label = normalized_scope_type or "tenant"
+    return f"{label}:{digest[:12]}"
+
+
 def _model_capacity_resolver_or_503(request: Request, repository: BatchRepository) -> BatchModelCapacityResolver:
     resolver = getattr(request.app.state, "batch_model_capacity_resolver", None)
     if resolver is not None:
@@ -99,6 +125,16 @@ def _model_capacity_resolver_or_503(request: Request, repository: BatchRepositor
         router_state_backend=getattr(request.app.state, "router_state_backend", None),
         backpressure=getattr(request.app.state, "batch_backpressure", None),
     )
+
+
+def _tenant_fair_share_config_or_503(request: Request) -> BatchTenantFairShareConfig:
+    config = getattr(request.app.state, "batch_tenant_fair_share_config", None)
+    if config is not None:
+        return config
+    general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+    if general_settings is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="App config unavailable")
+    return BatchTenantFairShareConfig.from_settings(general_settings)
 
 
 def _capacity_snapshot_response(snapshot) -> dict[str, Any]:  # noqa: ANN001
@@ -122,6 +158,31 @@ def _capacity_snapshot_response(snapshot) -> dict[str, Any]:  # noqa: ANN001
         "skip_reason_summary": dict(snapshot.skip_reasons or {}),
         "last_selected_at": to_json_value(snapshot.last_selected_at),
         "oldest_queue_entered_at": to_json_value(snapshot.oldest_queue_entered_at),
+    }
+
+
+def _scheduler_flow_response(flow) -> dict[str, Any]:  # noqa: ANN001
+    return {
+        "flow_id": flow.flow_id,
+        "service_tier": flow.service_tier,
+        "model_group": flow.model_group,
+        "tenant_scope_type": flow.tenant_scope_type,
+        "tenant_scope_id": _redacted_tenant_scope_id(
+            scope_type=flow.tenant_scope_type,
+            scope_id=flow.tenant_scope_id,
+        ),
+        "active": flow.active,
+        "queued_jobs": flow.queued_jobs,
+        "queued_work_units": flow.queued_work_units,
+        "in_flight_work_units": flow.in_flight_work_units,
+        "weight": flow.weight,
+        "quantum_work_units": flow.quantum_work_units,
+        "deficit_work_units": flow.deficit_work_units,
+        "last_selected_at": to_json_value(flow.last_selected_at),
+        "last_refilled_at": to_json_value(flow.last_refilled_at),
+        "oldest_queue_entered_at": to_json_value(flow.oldest_queue_entered_at),
+        "skip_reason_summary": dict(flow.skip_reasons or {}),
+        "updated_at": to_json_value(flow.updated_at),
     }
 
 
@@ -373,6 +434,123 @@ async def batch_scheduler_model_capacity(
         "refresh_seconds": resolver.config.refresh_seconds,
         "data": [_capacity_snapshot_response(snapshot) for snapshot in snapshots],
     }
+
+
+@router.get("/ui/api/batches/scheduler/flows")
+async def batch_scheduler_flows(
+    request: Request,
+    model_group: str | None = Query(default=None),
+    service_tier: str | None = Query(default=None),
+    tenant_scope_type: str | None = Query(default=None),
+    active: bool | None = Query(default=None),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    get_auth_scope(
+        request,
+        authorization,
+        x_master_key,
+        required_permission=Permission.PLATFORM_ADMIN,
+    )
+    repository = _batch_repository_or_503(request)
+    config = _tenant_fair_share_config_or_503(request)
+    flows = await repository.list_scheduler_flows(
+        service_tier=service_tier,
+        model_group=model_group,
+        tenant_scope_type=tenant_scope_type,
+        active=active,
+    )
+    return {
+        "enabled": config.enabled,
+        "base_quantum_work_units": config.base_quantum_work_units,
+        "max_deficit_multiplier": config.max_deficit_multiplier,
+        "tenant_max_in_flight_work_units": config.tenant_max_in_flight_work_units,
+        "tenant_max_queued_work_units": config.tenant_max_queued_work_units,
+        "tenant_scope_preference": list(config.tenant_scope_preference),
+        "disabled_model_groups": list(config.disabled_model_groups),
+        "data": [_scheduler_flow_response(flow) for flow in flows],
+    }
+
+
+@router.post("/ui/api/batches/scheduler/flows/refresh")
+async def refresh_batch_scheduler_flows(
+    request: Request,
+    payload: SchedulerFlowRefreshRequest | None = None,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    request_start = perf_counter()
+    scope = get_auth_scope(
+        request,
+        authorization,
+        x_master_key,
+        required_permission=Permission.PLATFORM_ADMIN,
+    )
+    repository = _batch_repository_or_503(request)
+    config = _tenant_fair_share_config_or_503(request)
+    bounded_payload = payload or SchedulerFlowRefreshRequest()
+    model_group = (bounded_payload.model_group or "").strip() or None
+    service_tier = (bounded_payload.service_tier or "").strip() or None
+    with _repair_action_metric("scheduler_flow_refresh"):
+        repair_result = await repository.backfill_scheduler_dimensions(
+            limit=bounded_payload.repair_limit,
+            service_tier=service_tier,
+            model_group=model_group,
+        )
+        refreshed = await repository.refresh_scheduler_flows(
+            service_tier=service_tier,
+            model_group=model_group,
+            base_quantum_work_units=config.base_quantum_work_units,
+            max_deficit_multiplier=config.max_deficit_multiplier,
+        )
+    flows = await repository.list_scheduler_flows(
+        service_tier=service_tier,
+        model_group=model_group,
+        active=None,
+    )
+    response = {
+        "enabled": config.enabled,
+        "base_quantum_work_units": config.base_quantum_work_units,
+        "max_deficit_multiplier": config.max_deficit_multiplier,
+        "tenant_max_in_flight_work_units": config.tenant_max_in_flight_work_units,
+        "tenant_max_queued_work_units": config.tenant_max_queued_work_units,
+        "tenant_scope_preference": list(config.tenant_scope_preference),
+        "disabled_model_groups": list(config.disabled_model_groups),
+        "repaired_jobs": int(repair_result.get("jobs") or 0),
+        "repaired_items": int(repair_result.get("items") or 0),
+        "repair_skipped": int(repair_result.get("skipped") or 0),
+        "refreshed_flows": len(refreshed),
+        "data": [_scheduler_flow_response(flow) for flow in flows],
+    }
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_BATCH_SCHEDULER_FLOW_REFRESH,
+        scope=scope,
+        resource_type="batch_scheduler",
+        resource_id="scheduler_flows",
+        request_payload={
+            "model_group": model_group,
+            "service_tier": service_tier,
+            "repair_limit": bounded_payload.repair_limit,
+        },
+        response_payload={
+            "repaired_jobs": response["repaired_jobs"],
+            "repaired_items": response["repaired_items"],
+            "repair_skipped": response["repair_skipped"],
+            "refreshed_flows": response["refreshed_flows"],
+        },
+    )
+    logger.info(
+        "batch repair scheduler-flow-refresh model_group=%s service_tier=%s jobs=%s items=%s flows=%s actor=%s",
+        model_group or "*",
+        service_tier or "*",
+        response["repaired_jobs"],
+        response["repaired_items"],
+        response["refreshed_flows"],
+        scope.account_id,
+    )
+    return response
 
 
 @router.post("/ui/api/batches/scheduler-dimensions/backfill")

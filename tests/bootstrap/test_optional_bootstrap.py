@@ -119,6 +119,27 @@ def test_batch_worker_id_is_cluster_unique_and_log_safe(monkeypatch: pytest.Monk
     assert worker_id == "batch-executor-pod-name-with-spaces-12345-abc123def456"
 
 
+def test_batch_creation_scheduler_active_includes_tenant_fair_share() -> None:
+    assert (
+        batch_bootstrap._batch_scheduler_active_enabled_for_creation(
+            SimpleNamespace(
+                embeddings_batch_scheduler_enabled=False,
+                embeddings_batch_tenant_fair_share_enabled=True,
+            )
+        )
+        is True
+    )
+    assert (
+        batch_bootstrap._batch_scheduler_active_enabled_for_creation(
+            SimpleNamespace(
+                embeddings_batch_scheduler_enabled=False,
+                embeddings_batch_tenant_fair_share_enabled=False,
+            )
+        )
+        is False
+    )
+
+
 class _FakeCreateSessionRepository:
     def __init__(self, *, fail_on_ready: bool = False) -> None:
         self.fail_on_ready = fail_on_ready

@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, Sequence
 
 from src.batch.scheduling.estimator import size_class_for_work_units
 
 API_KEY_TENANT_SCOPE_PREFIX = "api_key_sha256:"
 DEFAULT_SCHEDULER_VERSION = "fifo_v1"
 DEFAULT_SERVICE_TIER = "standard"
+DEFAULT_TENANT_SCOPE_PREFERENCE = ("organization", "team", "api_key", "user")
 MIXED_MODEL_GROUP = "mixed"
+TENANT_SCOPE_TYPES = (*DEFAULT_TENANT_SCOPE_PREFERENCE, "anonymous")
 
 
 class ModelGroupResolver(Protocol):
@@ -75,20 +77,37 @@ def resolve_tenant_scope(
     team_id: str | None = None,
     api_key: str | None = None,
     user_id: str | None = None,
+    scope_preference: Sequence[str] | None = None,
 ) -> BatchTenantScope:
-    for scope_type, scope_id in (
-        ("organization", organization_id),
-        ("team", team_id),
-        ("api_key", api_key),
-        ("user", user_id),
-    ):
+    scope_values = {
+        "organization": organization_id,
+        "team": team_id,
+        "api_key": api_key,
+        "user": user_id,
+    }
+    preference = tuple(scope_preference or DEFAULT_TENANT_SCOPE_PREFERENCE)
+    for scope_type in preference:
+        normalized_type = str(scope_type or "").strip().lower()
+        scope_id = scope_values.get(normalized_type)
         normalized = _normalize_optional(scope_id)
         if normalized is not None:
             return BatchTenantScope(
-                scope_type=scope_type,
-                scope_id=stable_tenant_scope_id(scope_type=scope_type, scope_id=normalized),
+                scope_type=normalized_type,
+                scope_id=stable_tenant_scope_id(scope_type=normalized_type, scope_id=normalized),
             )
     return BatchTenantScope(scope_type="anonymous", scope_id="anonymous")
+
+
+def normalize_tenant_scope_preference(scope_preference: Sequence[str] | None = None) -> tuple[str, ...]:
+    seen: set[str] = set()
+    parsed: list[str] = []
+    for scope_type in scope_preference or DEFAULT_TENANT_SCOPE_PREFERENCE:
+        normalized = str(scope_type or "").strip().lower()
+        if normalized not in TENANT_SCOPE_TYPES or normalized == "anonymous" or normalized in seen:
+            continue
+        seen.add(normalized)
+        parsed.append(normalized)
+    return tuple(parsed) or DEFAULT_TENANT_SCOPE_PREFERENCE
 
 
 def resolve_model_group(model: str | None, resolver: ModelGroupResolver | None = None) -> str | None:
@@ -121,12 +140,14 @@ def build_scheduling_dimensions(
     scheduler_debug: dict[str, Any] | None = None,
     mixed_model: bool = False,
     strict_model_homogeneity_enabled: bool = False,
+    tenant_scope_preference: Sequence[str] | None = None,
 ) -> BatchSchedulingDimensions:
     tenant = resolve_tenant_scope(
         organization_id=organization_id,
         team_id=team_id,
         api_key=api_key,
         user_id=user_id,
+        scope_preference=tenant_scope_preference,
     )
     bounded_work_units = max(0, int(estimated_work_units or 0))
     bounded_remaining = (
@@ -136,6 +157,9 @@ def build_scheduling_dimensions(
     )
     debug = dict(scheduler_debug or {})
     debug.setdefault("estimator_version", estimator_version)
+    debug["tenant_scope_preference"] = ",".join(
+        normalize_tenant_scope_preference(tenant_scope_preference)
+    )
     if mixed_model:
         debug["mixed_model"] = True
         debug["strict_model_homogeneity_enabled"] = bool(strict_model_homogeneity_enabled)

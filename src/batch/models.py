@@ -212,6 +212,39 @@ class BatchModelInFlightRecord:
 
 
 @dataclass
+class BatchSchedulerFlowRecord:
+    flow_id: str
+    service_tier: str
+    model_group: str
+    tenant_scope_type: str
+    tenant_scope_id: str
+    weight: int
+    quantum_work_units: int
+    deficit_work_units: int
+    active: bool
+    queued_jobs: int
+    queued_work_units: int
+    in_flight_work_units: int
+    last_selected_at: datetime | None
+    last_refilled_at: datetime | None
+    created_at: datetime | None
+    updated_at: datetime | None
+    oldest_queue_entered_at: datetime | None = None
+    next_item_work_units: int = 1
+    skip_reasons: dict[str, int] | None = None
+
+
+@dataclass
+class BatchFairShareClaimResult:
+    claim: BatchWorkClaim | None
+    result: str
+    flow: BatchSchedulerFlowRecord | None = None
+    expected_share: float | None = None
+    active_flow_count: int = 0
+    total_in_flight_work_units: int = 0
+
+
+@dataclass
 class BatchCompletionOutboxRecord:
     completion_id: str
     batch_id: str

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Iterable
 from typing import Any, Mapping
 
 from prometheus_client import Counter, Gauge, Histogram
@@ -395,6 +396,71 @@ deltallm_batch_scheduler_model_selection_latency_metric = Histogram(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_scheduler_active_flows_metric = Gauge(
+    "deltallm_batch_scheduler_active_flows",
+    "Active batch scheduler tenant flows by model group, service tier, and tenant scope type",
+    ["model_group", "service_tier", "tenant_scope_type"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_flow_deficit_metric = Gauge(
+    "deltallm_batch_scheduler_flow_deficit",
+    "Batch scheduler tenant flow deficit work units",
+    ["model_group", "service_tier", "tenant_scope_type"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_flow_queued_work_units_metric = Gauge(
+    "deltallm_batch_scheduler_flow_queued_work_units",
+    "Batch scheduler tenant flow queued work units",
+    ["model_group", "service_tier", "tenant_scope_type"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_flow_in_flight_work_units_metric = Gauge(
+    "deltallm_batch_scheduler_flow_in_flight_work_units",
+    "Batch scheduler tenant flow in-flight work units",
+    ["model_group", "service_tier", "tenant_scope_type"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_flow_claims_metric = Counter(
+    "deltallm_batch_scheduler_flow_claims_total",
+    "Batch scheduler tenant flow claims by result",
+    ["model_group", "service_tier", "tenant_scope_type", "result"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_flow_skips_metric = Counter(
+    "deltallm_batch_scheduler_flow_skips_total",
+    "Batch scheduler tenant flow skips by bounded reason",
+    ["reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_deficit_refills_metric = Counter(
+    "deltallm_batch_scheduler_deficit_refills_total",
+    "Batch scheduler tenant flow deficit refills by model group and service tier",
+    ["model_group", "service_tier"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_flow_wait_metric = Histogram(
+    "deltallm_batch_scheduler_flow_wait_seconds",
+    "Batch scheduler tenant flow queue wait seconds",
+    ["model_group", "service_tier", "tenant_scope_type"],
+    buckets=[1, 5, 10, 30, 60, 120, 300, 600, 1_800, 3_600, 7_200, 21_600],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_fairness_ratio_metric = Histogram(
+    "deltallm_batch_scheduler_fairness_ratio",
+    "Batch scheduler selected tenant actual share divided by expected weighted share",
+    ["model_group", "service_tier"],
+    buckets=[0.1, 0.25, 0.5, 0.75, 1.0, 1.25, 2.0, 4.0, 8.0],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_batch_claim_wait_by_model_metric = Histogram(
     "deltallm_batch_claim_wait_by_model_seconds",
     "Batch queue wait seconds before first claim by model group and service tier",
@@ -426,8 +492,30 @@ deltallm_batch_mixed_model_jobs_metric = Counter(
 
 deltallm_batch_scheduler_shadow_decisions_metric = Counter(
     "deltallm_batch_scheduler_shadow_decisions_total",
-    "Batch scheduler shadow decisions by result",
+    "Batch scheduler shadow decisions by model group, service tier, and result",
+    ["model_group", "service_tier", "result"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_shadow_records_metric = Counter(
+    "deltallm_batch_scheduler_shadow_records_total",
+    "Batch scheduler shadow flow-state records by result",
     ["result"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_shadow_skips_metric = Counter(
+    "deltallm_batch_scheduler_shadow_skips_total",
+    "Batch scheduler shadow flow skips by model group, service tier, and bounded reason",
+    ["model_group", "service_tier", "reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_shadow_share_ratio_metric = Histogram(
+    "deltallm_batch_scheduler_shadow_share_ratio",
+    "Ratio of actual shadow claim share to expected fair-share weight share",
+    ["model_group", "service_tier"],
+    buckets=[0.1, 0.25, 0.5, 0.75, 1.0, 1.25, 2.0, 4.0, 8.0],
     registry=get_prometheus_registry(),
 )
 
@@ -805,6 +893,99 @@ def observe_batch_scheduler_model_selection_latency(*, latency_seconds: float) -
     deltallm_batch_scheduler_model_selection_latency_metric.observe(max(0.0, float(latency_seconds)))
 
 
+def _scheduler_flow_metric_labels(flow: Any) -> tuple[str, str, str]:
+    return (
+        sanitize_label(getattr(flow, "model_group", None)),
+        sanitize_label(getattr(flow, "service_tier", None), fallback="standard"),
+        sanitize_label(getattr(flow, "tenant_scope_type", None), fallback="anonymous"),
+    )
+
+
+def publish_batch_scheduler_flows(flows: Iterable[Any]) -> None:
+    aggregates: dict[tuple[str, str, str], dict[str, int]] = {}
+    for flow in flows:
+        labels_key = _scheduler_flow_metric_labels(flow)
+        aggregate = aggregates.setdefault(
+            labels_key,
+            {
+                "active_flows": 0,
+                "deficit_work_units": 0,
+                "queued_work_units": 0,
+                "in_flight_work_units": 0,
+            },
+        )
+        if bool(getattr(flow, "active", False)):
+            aggregate["active_flows"] += 1
+        aggregate["deficit_work_units"] += int(getattr(flow, "deficit_work_units", 0) or 0)
+        aggregate["queued_work_units"] += max(0, int(getattr(flow, "queued_work_units", 0) or 0))
+        aggregate["in_flight_work_units"] += max(0, int(getattr(flow, "in_flight_work_units", 0) or 0))
+    for (model_group, service_tier, tenant_scope_type), aggregate in aggregates.items():
+        labels = {
+            "model_group": model_group,
+            "service_tier": service_tier,
+            "tenant_scope_type": tenant_scope_type,
+        }
+        deltallm_batch_scheduler_active_flows_metric.labels(**labels).set(aggregate["active_flows"])
+        deltallm_batch_scheduler_flow_deficit_metric.labels(**labels).set(aggregate["deficit_work_units"])
+        deltallm_batch_scheduler_flow_queued_work_units_metric.labels(**labels).set(
+            aggregate["queued_work_units"]
+        )
+        deltallm_batch_scheduler_flow_in_flight_work_units_metric.labels(**labels).set(
+            aggregate["in_flight_work_units"]
+        )
+
+
+def publish_batch_scheduler_flow(flow: Any) -> None:
+    publish_batch_scheduler_flows([flow])
+
+
+def increment_batch_scheduler_flow_claim(
+    *,
+    model_group: str,
+    service_tier: str,
+    tenant_scope_type: str,
+    result: str,
+) -> None:
+    deltallm_batch_scheduler_flow_claims_metric.labels(
+        model_group=sanitize_label(model_group),
+        service_tier=sanitize_label(service_tier, fallback="standard"),
+        tenant_scope_type=sanitize_label(tenant_scope_type, fallback="anonymous"),
+        result=sanitize_label(result),
+    ).inc()
+
+
+def increment_batch_scheduler_flow_skip(*, reason: str) -> None:
+    deltallm_batch_scheduler_flow_skips_metric.labels(reason=sanitize_label(reason)).inc()
+
+
+def increment_batch_scheduler_deficit_refill(*, model_group: str, service_tier: str, count: int) -> None:
+    deltallm_batch_scheduler_deficit_refills_metric.labels(
+        model_group=sanitize_label(model_group),
+        service_tier=sanitize_label(service_tier, fallback="standard"),
+    ).inc(max(0, int(count)))
+
+
+def observe_batch_scheduler_flow_wait(
+    *,
+    model_group: str,
+    service_tier: str,
+    tenant_scope_type: str,
+    wait_seconds: float,
+) -> None:
+    deltallm_batch_scheduler_flow_wait_metric.labels(
+        model_group=sanitize_label(model_group),
+        service_tier=sanitize_label(service_tier, fallback="standard"),
+        tenant_scope_type=sanitize_label(tenant_scope_type, fallback="anonymous"),
+    ).observe(max(0.0, float(wait_seconds)))
+
+
+def observe_batch_scheduler_fairness_ratio(*, model_group: str, service_tier: str, ratio: float) -> None:
+    deltallm_batch_scheduler_fairness_ratio_metric.labels(
+        model_group=sanitize_label(model_group),
+        service_tier=sanitize_label(service_tier, fallback="standard"),
+    ).observe(max(0.0, float(ratio)))
+
+
 def observe_batch_claim_wait_by_model(*, model_group: str, service_tier: str, wait_seconds: float) -> None:
     deltallm_batch_claim_wait_by_model_metric.labels(
         model_group=sanitize_label(model_group),
@@ -824,8 +1005,46 @@ def increment_batch_mixed_model_job(*, mode: str) -> None:
     deltallm_batch_mixed_model_jobs_metric.labels(mode=sanitize_label(mode)).inc()
 
 
-def increment_batch_scheduler_shadow_decision(*, result: str) -> None:
-    deltallm_batch_scheduler_shadow_decisions_metric.labels(result=sanitize_label(result)).inc()
+def increment_batch_scheduler_shadow_decision(
+    *,
+    result: str,
+    model_group: str = "unknown",
+    service_tier: str = "standard",
+) -> None:
+    deltallm_batch_scheduler_shadow_decisions_metric.labels(
+        model_group=sanitize_label(model_group, fallback="unknown"),
+        service_tier=sanitize_label(service_tier, fallback="standard"),
+        result=sanitize_label(result),
+    ).inc()
+
+
+def increment_batch_scheduler_shadow_record(*, result: str) -> None:
+    deltallm_batch_scheduler_shadow_records_metric.labels(result=sanitize_label(result)).inc()
+
+
+def increment_batch_scheduler_shadow_skip(
+    *,
+    model_group: str,
+    service_tier: str,
+    reason: str,
+) -> None:
+    deltallm_batch_scheduler_shadow_skips_metric.labels(
+        model_group=sanitize_label(model_group, fallback="unknown"),
+        service_tier=sanitize_label(service_tier, fallback="standard"),
+        reason=sanitize_label(reason),
+    ).inc()
+
+
+def observe_batch_scheduler_shadow_share_ratio(
+    *,
+    model_group: str,
+    service_tier: str,
+    ratio: float,
+) -> None:
+    deltallm_batch_scheduler_shadow_share_ratio_metric.labels(
+        model_group=sanitize_label(model_group, fallback="unknown"),
+        service_tier=sanitize_label(service_tier, fallback="standard"),
+    ).observe(max(0.0, float(ratio)))
 
 
 def increment_batch_scheduler_backfill_run(*, status: str) -> None:

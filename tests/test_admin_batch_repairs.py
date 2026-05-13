@@ -6,8 +6,10 @@ import pytest
 from prometheus_client import generate_latest
 
 from src.api.admin.endpoints.common import AuthScope
-from src.batch.models import BatchJobRecord, BatchJobStatus
+from src.audit.actions import AuditAction
+from src.batch.models import BatchJobRecord, BatchJobStatus, BatchSchedulerFlowRecord
 from src.batch.models import encode_operator_failed_reason
+from src.batch.scheduling import BatchTenantFairShareConfig
 from src.metrics import get_prometheus_registry
 
 
@@ -43,6 +45,9 @@ class _FakeBatchRepairRepository:
         self.fail_calls: list[tuple[str, str]] = []
         self.provider_errors: list[tuple[str, str | None]] = []
         self.scheduler_backfill_limits: list[int] = []
+        self.scheduler_backfill_calls: list[dict[str, object]] = []
+        self.refresh_scheduler_flow_calls: list[dict[str, object]] = []
+        self.list_scheduler_flow_calls: list[dict[str, object]] = []
 
     async def summarize_runtime_statuses(self, *, now):  # noqa: ANN001
         del now
@@ -135,9 +140,68 @@ class _FakeBatchRepairRepository:
         self.provider_errors.append((batch_id, provider_error))
         return None
 
-    async def backfill_scheduler_dimensions(self, *, limit: int) -> dict[str, int]:
+    async def backfill_scheduler_dimensions(
+        self,
+        *,
+        limit: int,
+        service_tier: str | None = None,
+        model_group: str | None = None,
+    ) -> dict[str, int]:
         self.scheduler_backfill_limits.append(limit)
+        self.scheduler_backfill_calls.append(
+            {
+                "limit": limit,
+                "service_tier": service_tier,
+                "model_group": model_group,
+            }
+        )
         return {"jobs": 4, "items": 9}
+
+    async def refresh_scheduler_flows(self, **kwargs):  # noqa: ANN003
+        self.refresh_scheduler_flow_calls.append(kwargs)
+        return [
+            BatchSchedulerFlowRecord(
+                flow_id="flow-1",
+                service_tier=str(kwargs.get("service_tier") or "standard"),
+                model_group=str(kwargs.get("model_group") or "m1"),
+                tenant_scope_type="team",
+                tenant_scope_id="team-1",
+                weight=1,
+                quantum_work_units=16,
+                deficit_work_units=0,
+                active=True,
+                queued_jobs=1,
+                queued_work_units=2,
+                in_flight_work_units=0,
+                last_selected_at=None,
+                last_refilled_at=None,
+                created_at=datetime.now(tz=UTC),
+                updated_at=datetime.now(tz=UTC),
+            )
+        ]
+
+    async def list_scheduler_flows(self, **kwargs):  # noqa: ANN003
+        self.list_scheduler_flow_calls.append(kwargs)
+        return [
+            BatchSchedulerFlowRecord(
+                flow_id="flow-1",
+                service_tier=str(kwargs.get("service_tier") or "standard"),
+                model_group=str(kwargs.get("model_group") or "m1"),
+                tenant_scope_type=str(kwargs.get("tenant_scope_type") or "team"),
+                tenant_scope_id="team-1",
+                weight=1,
+                quantum_work_units=16,
+                deficit_work_units=0,
+                active=True,
+                queued_jobs=1,
+                queued_work_units=2,
+                in_flight_work_units=0,
+                last_selected_at=None,
+                last_refilled_at=None,
+                created_at=datetime.now(tz=UTC),
+                updated_at=datetime.now(tz=UTC),
+            )
+        ]
 
 
 @pytest.mark.asyncio
@@ -258,9 +322,122 @@ async def test_scheduler_dimensions_backfill_endpoint(client, test_app, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_scheduler_flows_get_lists_without_refreshing(client, test_app, monkeypatch):
+    repository = _FakeBatchRepairRepository()
+    test_app.state.batch_repository = repository
+    test_app.state.batch_tenant_fair_share_config = BatchTenantFairShareConfig(enabled=True)
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=True,
+            account_id="acct-1",
+        ),
+    )
+
+    response = await client.get(
+        "/ui/api/batches/scheduler/flows?model_group=m1&service_tier=standard",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["enabled"] is True
+    assert payload["data"][0]["model_group"] == "m1"
+    assert repository.refresh_scheduler_flow_calls == []
+    assert repository.list_scheduler_flow_calls == [
+        {
+            "service_tier": "standard",
+            "model_group": "m1",
+            "tenant_scope_type": None,
+            "active": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_flows_refresh_endpoint_refreshes_and_audits(client, test_app, monkeypatch):
+    repository = _FakeBatchRepairRepository()
+    test_app.state.batch_repository = repository
+    test_app.state.batch_tenant_fair_share_config = BatchTenantFairShareConfig(
+        enabled=True,
+        base_quantum_work_units=32,
+        max_deficit_multiplier=4,
+    )
+    recorded: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=True,
+            account_id="acct-1",
+        ),
+    )
+
+    async def _capture_audit(**kwargs):  # noqa: ANN003
+        recorded.append(kwargs)
+
+    monkeypatch.setattr("src.api.admin.endpoints.batches.emit_admin_mutation_audit", _capture_audit)
+
+    response = await client.post(
+        "/ui/api/batches/scheduler/flows/refresh",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"model_group": "m1", "service_tier": "standard"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["refreshed_flows"] == 1
+    assert payload["repaired_jobs"] == 4
+    assert payload["repaired_items"] == 9
+    assert payload["repair_skipped"] == 0
+    assert payload["data"][0]["tenant_scope_id"].startswith("team:")
+    assert repository.scheduler_backfill_limits == [500]
+    assert repository.scheduler_backfill_calls == [
+        {
+            "limit": 500,
+            "service_tier": "standard",
+            "model_group": "m1",
+        }
+    ]
+    assert repository.refresh_scheduler_flow_calls == [
+        {
+            "service_tier": "standard",
+            "model_group": "m1",
+            "base_quantum_work_units": 32,
+            "max_deficit_multiplier": 4,
+        }
+    ]
+    assert repository.list_scheduler_flow_calls[-1] == {
+        "service_tier": "standard",
+        "model_group": "m1",
+        "active": None,
+    }
+    assert recorded[0]["action"] == AuditAction.ADMIN_BATCH_SCHEDULER_FLOW_REFRESH
+    assert recorded[0]["request_payload"] == {
+        "model_group": "m1",
+        "service_tier": "standard",
+        "repair_limit": 500,
+    }
+    assert recorded[0]["response_payload"] == {
+        "repaired_jobs": 4,
+        "repaired_items": 9,
+        "repair_skipped": 0,
+        "refreshed_flows": 1,
+    }
+
+
+@pytest.mark.asyncio
 async def test_scheduler_dimensions_backfill_endpoint_reports_lock_skip(client, test_app, monkeypatch):
     class _LockedBackfillRepository(_FakeBatchRepairRepository):
-        async def backfill_scheduler_dimensions(self, *, limit: int) -> dict[str, int]:
+        async def backfill_scheduler_dimensions(
+            self,
+            *,
+            limit: int,
+            service_tier: str | None = None,
+            model_group: str | None = None,
+        ) -> dict[str, int]:
+            del service_tier, model_group
             self.scheduler_backfill_limits.append(limit)
             return {"jobs": 0, "items": 0, "skipped": 1}
 
