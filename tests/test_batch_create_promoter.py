@@ -136,11 +136,13 @@ class _FakeRepository:
         job: BatchJobRecord | None = None,
         tx_repository: _FakeRepository | None = None,
         active_jobs: int = 0,
+        tenant_queued_work_units: int = 0,
     ) -> None:
         self.create_sessions = session_repo
         self._job = job
         self._tx_repository = tx_repository
         self._active_jobs = active_jobs
+        self._tenant_queued_work_units = tenant_queued_work_units
         self.lock_calls: list[tuple[str, str]] = []
         self.prisma = _FakePrisma(object()) if tx_repository is None else None
         if tx_repository is not None:
@@ -160,6 +162,26 @@ class _FakeRepository:
     async def count_active_jobs_for_scope(self, *, created_by_api_key=None, created_by_team_id=None) -> int:  # noqa: ANN001
         del created_by_api_key, created_by_team_id
         return self._active_jobs
+
+    async def get_tenant_queued_work_units(
+        self,
+        *,
+        tenant_scope_type: str,
+        tenant_scope_id: str,
+        created_by_api_key: str | None = None,
+        created_by_team_id: str | None = None,
+        created_by_organization_id: str | None = None,
+        created_by_user_id: str | None = None,
+    ) -> int:
+        del (
+            tenant_scope_type,
+            tenant_scope_id,
+            created_by_api_key,
+            created_by_team_id,
+            created_by_organization_id,
+            created_by_user_id,
+        )
+        return self._tenant_queued_work_units
 
     async def create_job(self, **kwargs):  # noqa: ANN003
         raise AssertionError("create_job should not be reached in this test")
@@ -184,8 +206,18 @@ class _FakeStaging:
 
 
 class _SuccessfulTxRepository(_FakeRepository):
-    def __init__(self, *, session_repo: _TxSessionRepo, active_jobs: int = 0) -> None:
-        super().__init__(session_repo=session_repo, active_jobs=active_jobs)
+    def __init__(
+        self,
+        *,
+        session_repo: _TxSessionRepo,
+        active_jobs: int = 0,
+        tenant_queued_work_units: int = 0,
+    ) -> None:
+        super().__init__(
+            session_repo=session_repo,
+            active_jobs=active_jobs,
+            tenant_queued_work_units=tenant_queued_work_units,
+        )
         self.created_jobs: list[dict[str, object]] = []
         self.created_items: list[tuple[str, list[BatchCreateStagedRequest]]] = []
 
@@ -339,6 +371,46 @@ async def test_promote_session_uses_configured_tx_timings_and_locked_recheck() -
 
 
 @pytest.mark.asyncio
+async def test_promote_session_locks_configured_tenant_scope_before_queued_work_check() -> None:
+    session = _session(status=BatchCreateSessionStatus.STAGED)
+    tx_repository = _SuccessfulTxRepository(
+        session_repo=_TxSessionRepo(session),
+        tenant_queued_work_units=1,
+    )
+    repository = _FakeRepository(
+        session_repo=_SessionRepo(session),
+        tx_repository=tx_repository,
+        active_jobs=0,
+    )
+    staging = _FakeStaging(
+        records=[
+            BatchCreateStagedRequest(
+                line_number=1,
+                custom_id="req-1",
+                request_body={"model": "m1", "input": "hello"},
+            )
+        ]
+    )
+    promoter = BatchCreateSessionPromoter(
+        repository=repository,
+        staging=staging,
+        max_pending_batches_per_scope=0,
+        tenant_scope_preference="organization,team,api_key,user",
+        tenant_max_queued_work_units=2,
+    )
+
+    await promoter.promote_session("session-1")
+
+    assert tx_repository.lock_calls == [("organization", "org-1")]
+    assert tx_repository.created_jobs[0]["tenant_scope_preference"] == (
+        "organization",
+        "team",
+        "api_key",
+        "user",
+    )
+
+
+@pytest.mark.asyncio
 async def test_promote_session_estimates_legacy_work_units_and_preserves_not_before_at() -> None:
     not_before_at = datetime(2026, 5, 9, 12, 30, tzinfo=UTC)
     session = _session(status=BatchCreateSessionStatus.STAGED)
@@ -372,7 +444,7 @@ async def test_promote_session_estimates_legacy_work_units_and_preserves_not_bef
 
 
 @pytest.mark.asyncio
-async def test_promote_session_records_shadow_scheduler_decision(
+async def test_promote_session_records_shadow_scheduler_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from src.batch.create import promoter as promoter_module
@@ -380,7 +452,7 @@ async def test_promote_session_records_shadow_scheduler_decision(
     metric_results: list[str] = []
     monkeypatch.setattr(
         promoter_module,
-        "increment_batch_scheduler_shadow_decision",
+        "increment_batch_scheduler_shadow_record",
         lambda *, result: metric_results.append(result),
     )
     session = _session(status=BatchCreateSessionStatus.STAGED)

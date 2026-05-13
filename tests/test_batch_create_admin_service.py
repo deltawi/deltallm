@@ -155,12 +155,25 @@ async def test_admin_retry_uses_promoter_and_returns_refreshed_session() -> None
 
 
 @pytest.mark.asyncio
-async def test_admin_retry_maps_promotion_error_to_http() -> None:
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        (
+            "pending_limit_exceeded",
+            "Active batch count exceeds embeddings_batch_max_pending_batches_per_scope (20)",
+        ),
+        (
+            "tenant_queued_work_limit_exceeded",
+            "Tenant queued batch work exceeds embeddings_batch_max_queued_work_units_per_tenant",
+        ),
+    ],
+)
+async def test_admin_retry_maps_promotion_error_to_http(code: str, message: str) -> None:
     repository = _RepositoryStub(_session(status=BatchCreateSessionStatus.FAILED_RETRYABLE))
     promoter = _PromoterStub(
         error=BatchCreatePromotionError(
-            "Active batch count exceeds embeddings_batch_max_pending_batches_per_scope (20)",
-            code="pending_limit_exceeded",
+            message,
+            code=code,
             retryable=True,
         )
     )

@@ -28,6 +28,12 @@ class BatchWorkerConfig:
     work_claim_max_work_units: int = 0
     work_claim_min_items_for_microbatch: int = 4
     model_capacity_enabled: bool = False
+    scheduler_shadow_enabled: bool = False
+    tenant_fair_share_enabled: bool = False
+    tenant_fair_share_base_quantum_work_units: int = 16
+    tenant_fair_share_max_deficit_multiplier: int = 8
+    tenant_max_in_flight_work_units: int = 0
+    tenant_fair_share_disabled_model_groups: tuple[str, ...] = ()
     finalization_first: bool = True
     max_attempts: int = 3
     retry_initial_seconds: int = 5

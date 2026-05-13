@@ -98,6 +98,121 @@ def test_helm_schema_allows_active_batch_scheduler_flag() -> None:
     assert scheduler_enabled == {"type": "boolean"}
 
 
+def test_helm_schema_allows_tenant_fair_share_settings() -> None:
+    schema = yaml.safe_load((REPO_ROOT / "helm" / "values.schema.json").read_text())
+    general_settings = schema["properties"]["config"]["properties"]["general_settings"]["properties"]
+
+    assert general_settings["embeddings_batch_tenant_fair_share_enabled"] == {"type": "boolean"}
+    assert general_settings["embeddings_batch_scheduler_base_quantum_work_units"]["minimum"] == 1
+    assert general_settings["embeddings_batch_tenant_scope_preference"] == {"type": "string"}
+    assert general_settings["embeddings_batch_tenant_fair_share_disabled_model_groups"] == {
+        "type": "array",
+        "items": {"type": "string"},
+    }
+
+
+def test_helm_rejects_scheduler_without_work_slice_claiming() -> None:
+    error = _render_error(
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_enabled=true",
+        "--show-only",
+        "templates/configmap.yaml",
+    )
+
+    assert "embeddings_batch_scheduler_claim_mode=work_slice" in error
+
+
+def test_helm_rejects_scheduler_without_strict_model_homogeneity() -> None:
+    error = _render_error(
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_enabled=true",
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_claim_mode=work_slice",
+        "--show-only",
+        "templates/configmap.yaml",
+    )
+
+    assert "embeddings_batch_scheduler_strict_model_homogeneity_enabled=true" in error
+
+
+def test_helm_rejects_fair_share_without_model_capacity() -> None:
+    error = _render_error(
+        "--set",
+        "config.general_settings.embeddings_batch_tenant_fair_share_enabled=true",
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_claim_mode=work_slice",
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_strict_model_homogeneity_enabled=true",
+        "--show-only",
+        "templates/configmap.yaml",
+    )
+
+    assert "tenant fair-share scheduling requires embeddings_batch_model_capacity_enabled=true" in error
+
+
+def test_helm_rejects_model_capacity_without_work_slice_claiming() -> None:
+    error = _render_error(
+        "--set",
+        "config.general_settings.embeddings_batch_model_capacity_enabled=true",
+        "--show-only",
+        "templates/configmap.yaml",
+    )
+
+    assert "embeddings_batch_scheduler_claim_mode=work_slice" in error
+
+
+def test_helm_rejects_model_capacity_without_strict_model_homogeneity() -> None:
+    error = _render_error(
+        "--set",
+        "config.general_settings.embeddings_batch_model_capacity_enabled=true",
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_claim_mode=work_slice",
+        "--show-only",
+        "templates/configmap.yaml",
+    )
+
+    assert "embeddings_batch_scheduler_strict_model_homogeneity_enabled=true" in error
+
+
+def test_helm_allows_model_capacity_with_scheduler_prerequisites() -> None:
+    docs = _render(
+        "--set",
+        "config.general_settings.embeddings_batch_model_capacity_enabled=true",
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_claim_mode=work_slice",
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_strict_model_homogeneity_enabled=true",
+        "--show-only",
+        "templates/configmap.yaml",
+    )
+
+    api_general = _config_yaml(_by_kind_and_name(docs, "ConfigMap", "deltallm-config"))[
+        "general_settings"
+    ]
+    assert api_general["embeddings_batch_model_capacity_enabled"] is True
+
+
+def test_helm_allows_fair_share_with_scheduler_prerequisites() -> None:
+    docs = _render(
+        "--set",
+        "config.general_settings.embeddings_batch_tenant_fair_share_enabled=true",
+        "--set",
+        "config.general_settings.embeddings_batch_model_capacity_enabled=true",
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_claim_mode=work_slice",
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_strict_model_homogeneity_enabled=true",
+        "--show-only",
+        "templates/configmap.yaml",
+    )
+
+    api_general = _config_yaml(_by_kind_and_name(docs, "ConfigMap", "deltallm-config"))[
+        "general_settings"
+    ]
+    assert api_general["embeddings_batch_tenant_fair_share_enabled"] is True
+    assert api_general["embeddings_batch_model_capacity_enabled"] is True
+
+
 def test_default_service_selector_remains_upgrade_safe() -> None:
     service = _by_kind_and_name(_render("--show-only", "templates/service.yaml"), "Service", "deltallm")
 

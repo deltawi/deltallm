@@ -4,11 +4,20 @@ import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
-from src.batch.models import BatchJobStatus
+from src.api.admin.endpoints.batches import _scheduler_flow_response
+from src.batch.models import (
+    BatchFairShareClaimResult,
+    BatchJobStatus,
+    BatchSchedulerFlowRecord,
+    BatchWorkClaim,
+)
 from src.batch.repository import BatchRepository
+from src.batch.repositories.job_repository import BatchJobRepository, flow_from_row
+from src.batch.repositories.mappers import job_from_row
 from src.batch.repositories import job_repository as job_repository_module
 from src.batch.scheduling import API_KEY_TENANT_SCOPE_PREFIX, MIXED_MODEL_GROUP, stable_tenant_scope_id
 
@@ -58,6 +67,49 @@ def _job_row(**overrides):
     }
     row.update(overrides)
     return row
+
+
+def _scheduler_flow(**overrides) -> BatchSchedulerFlowRecord:
+    now = datetime.now(tz=UTC)
+    values = {
+        "flow_id": "flow-1",
+        "service_tier": "standard",
+        "model_group": "model-a",
+        "tenant_scope_type": "team",
+        "tenant_scope_id": "team-1",
+        "weight": 1,
+        "quantum_work_units": 16,
+        "deficit_work_units": 16,
+        "active": True,
+        "queued_jobs": 1,
+        "queued_work_units": 10,
+        "in_flight_work_units": 0,
+        "last_selected_at": None,
+        "last_refilled_at": None,
+        "created_at": now,
+        "updated_at": now,
+        "oldest_queue_entered_at": now,
+        "next_item_work_units": 1,
+        "skip_reasons": {},
+    }
+    values.update(overrides)
+    return BatchSchedulerFlowRecord(**values)
+
+
+def test_batch_repository_with_prisma_preserves_tenant_scope_preference() -> None:
+    repository = BatchRepository(
+        prisma_client=object(),
+        tenant_scope_preference="api_key,team,organization",
+    )
+
+    tx_repository = repository.with_prisma(object())
+
+    assert tx_repository.tenant_scope_preference == ("api_key", "team", "organization")
+    assert tx_repository.maintenance.tenant_scope_preference == (
+        "api_key",
+        "team",
+        "organization",
+    )
 
 
 @pytest.mark.asyncio
@@ -311,6 +363,1193 @@ async def test_claim_next_work_capacity_guard_keeps_work_units_per_claim_when_no
     assert "head_item.estimated_work_units <= LEAST($3, (SELECT remaining_work_units FROM capacity_state))" in claim_sql
     assert len(claim_params) == 9
     assert claim_params[8] == 16
+
+
+@pytest.mark.asyncio
+async def test_claim_next_work_can_filter_to_tenant_flow() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    claim = await repository.claim_next_work(
+        worker_id="worker-1",
+        max_items=10,
+        max_work_units=25,
+        lease_seconds=120,
+        allowed_model_groups=["model-a"],
+        service_tier="standard",
+        tenant_scope_type="team",
+        tenant_scope_id="team-1",
+    )
+
+    assert claim is None
+    assert "AND j.tenant_scope_type = $7 AND j.tenant_scope_id = $8" in prisma.sql
+    assert prisma.params[6] == "team"
+    assert prisma.params[7] == "team-1"
+
+
+def test_select_scheduler_flow_uses_oversized_fallback_for_single_flow() -> None:
+    flow = _scheduler_flow(next_item_work_units=10, deficit_work_units=128)
+
+    selection = BatchJobRepository._select_scheduler_flow(
+        [flow],
+        max_work_units=4,
+        tenant_max_in_flight_work_units=0,
+        allow_deficit_bypass=False,
+    )
+
+    assert selection.selected == flow
+    assert selection.selected_uses_oversized_first_item is True
+    assert selection.skip_reasons == {}
+    assert selection.active_flow_count == 1
+    assert selection.eligible_flow_count == 1
+
+    fallback_selection = BatchJobRepository._select_scheduler_flow(
+        [flow],
+        max_work_units=4,
+        tenant_max_in_flight_work_units=0,
+        allow_deficit_bypass=True,
+    )
+    assert fallback_selection.selected == flow
+    assert fallback_selection.skip_reasons == {}
+    assert fallback_selection.single_eligible_flow is True
+    assert fallback_selection.selected_uses_oversized_first_item is True
+
+
+def test_select_scheduler_flow_allows_oversized_flow_at_capped_deficit() -> None:
+    now = datetime.now(tz=UTC)
+    fitting = _scheduler_flow(
+        flow_id="flow-fitting",
+        tenant_scope_id="team-fitting",
+        next_item_work_units=1,
+        deficit_work_units=1,
+        last_selected_at=now,
+    )
+    oversized = _scheduler_flow(
+        flow_id="flow-oversized",
+        tenant_scope_id="team-oversized",
+        next_item_work_units=10,
+        quantum_work_units=1,
+        deficit_work_units=4,
+        oldest_queue_entered_at=now,
+    )
+
+    selection = BatchJobRepository._select_scheduler_flow(
+        [fitting, oversized],
+        max_work_units=1,
+        tenant_max_in_flight_work_units=0,
+        allow_deficit_bypass=False,
+        max_deficit_multiplier=4,
+    )
+
+    assert selection.selected == oversized
+    assert selection.selected_uses_oversized_first_item is True
+    assert selection.skip_reasons == {}
+
+
+def test_select_scheduler_flow_respects_tenant_in_flight_remaining_budget() -> None:
+    fitting = _scheduler_flow(
+        flow_id="flow-fitting",
+        in_flight_work_units=31,
+        next_item_work_units=1,
+        deficit_work_units=16,
+    )
+    too_large = _scheduler_flow(
+        flow_id="flow-too-large",
+        in_flight_work_units=31,
+        next_item_work_units=2,
+        deficit_work_units=16,
+    )
+
+    selection = BatchJobRepository._select_scheduler_flow(
+        [too_large],
+        max_work_units=16,
+        tenant_max_in_flight_work_units=32,
+        allow_deficit_bypass=True,
+    )
+    assert selection.selected is None
+    assert selection.skip_reasons == {too_large.flow_id: "tenant_in_flight_full"}
+    assert selection.eligible_flow_count == 0
+
+    selection = BatchJobRepository._select_scheduler_flow(
+        [fitting],
+        max_work_units=16,
+        tenant_max_in_flight_work_units=32,
+        allow_deficit_bypass=False,
+    )
+    assert selection.selected == fitting
+    assert selection.skip_reasons == {}
+    assert selection.single_eligible_flow is True
+    assert (
+        BatchJobRepository._flow_claim_work_units(
+            fitting,
+            max_work_units=16,
+            tenant_max_in_flight_work_units=32,
+            single_eligible_flow=True,
+        )
+        == 1
+    )
+
+
+def test_select_scheduler_flow_allows_work_conserving_borrow_from_capped_tenant() -> None:
+    borrower = _scheduler_flow(
+        flow_id="flow-borrower",
+        deficit_work_units=1,
+        next_item_work_units=1,
+        queued_work_units=50,
+    )
+    capped = _scheduler_flow(
+        flow_id="flow-capped",
+        tenant_scope_id="team-capped",
+        in_flight_work_units=32,
+        deficit_work_units=16,
+        next_item_work_units=1,
+        queued_work_units=50,
+    )
+
+    selection = BatchJobRepository._select_scheduler_flow(
+        [borrower, capped],
+        max_work_units=16,
+        tenant_max_in_flight_work_units=32,
+        allow_deficit_bypass=False,
+    )
+
+    assert selection.selected == borrower
+    assert selection.skip_reasons == {capped.flow_id: "tenant_in_flight_full"}
+    assert selection.active_flow_count == 2
+    assert selection.eligible_flow_count == 1
+    assert (
+        BatchJobRepository._flow_claim_work_units(
+            borrower,
+            max_work_units=16,
+            tenant_max_in_flight_work_units=32,
+            single_eligible_flow=selection.single_eligible_flow,
+        )
+        == 16
+    )
+
+
+@pytest.mark.asyncio
+async def test_record_scheduler_flow_skip_reasons_emits_bounded_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _SkipReasonPrisma:
+        def __init__(self) -> None:
+            self.sql = ""
+            self.params: tuple[object, ...] = ()
+
+        async def query_raw(self, sql: str, *params):
+            self.sql = sql
+            self.params = params
+            return []
+
+    recorded: list[str] = []
+    monkeypatch.setattr(
+        job_repository_module,
+        "increment_batch_scheduler_flow_skip",
+        lambda *, reason: recorded.append(reason),
+    )
+    prisma = _SkipReasonPrisma()
+    repository = BatchJobRepository()
+
+    await repository._record_scheduler_flow_skip_reasons(
+        prisma,
+        {
+            "flow-a": "tenant_in_flight_full",
+            "flow-b": "oversized_head_item",
+            "flow-c": "not-a-public-reason",
+        },
+    )
+
+    assert recorded == ["tenant_in_flight_full", "oversized_head_item", "unknown"]
+    assert prisma.params == (
+        "flow-a",
+        "tenant_in_flight_full",
+        "flow-b",
+        "oversized_head_item",
+        "flow-c",
+        "unknown",
+    )
+
+
+def test_flow_from_row_maps_durable_skip_reason_summary() -> None:
+    flow = flow_from_row(
+        {
+            "flow_id": "flow-1",
+            "service_tier": "standard",
+            "model_group": "model-a",
+            "tenant_scope_type": "team",
+            "tenant_scope_id": "team-1",
+            "weight": 1,
+            "quantum_work_units": 16,
+            "deficit_work_units": 0,
+            "active": True,
+            "queued_jobs": 1,
+            "queued_work_units": 1,
+            "in_flight_work_units": 0,
+            "skip_reason_summary": {"tenant_in_flight_full": 2, "oversized_head_item": 1},
+        }
+    )
+
+    assert flow.skip_reasons == {"tenant_in_flight_full": 2, "oversized_head_item": 1}
+
+
+def test_scheduler_flow_admin_response_includes_skip_reason_summary() -> None:
+    flow = _scheduler_flow(skip_reasons={"tenant_in_flight_full": 2})
+
+    response = _scheduler_flow_response(flow)
+
+    assert response["skip_reason_summary"] == {"tenant_in_flight_full": 2}
+
+
+@pytest.mark.parametrize(
+    ("scope_type", "scope_id"),
+    [
+        ("organization", "org-sensitive-123"),
+        ("team", "team-sensitive-123"),
+        ("user", "user-sensitive-123"),
+    ],
+)
+def test_scheduler_flow_admin_response_redacts_non_api_key_tenant_ids(
+    scope_type: str,
+    scope_id: str,
+) -> None:
+    flow = _scheduler_flow(tenant_scope_type=scope_type, tenant_scope_id=scope_id)
+
+    response = _scheduler_flow_response(flow)
+
+    assert response["tenant_scope_id"].startswith(f"{scope_type}:")
+    assert scope_id not in response["tenant_scope_id"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_scheduler_flows_upserts_durable_flow_state() -> None:
+    now = datetime.now(tz=UTC)
+
+    class _FlowPrisma:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def query_raw(self, sql: str, *params):
+            self.calls.append((sql, params))
+            if "WITH runnable_jobs AS" in sql:
+                return [
+                    {
+                        "service_tier": "standard",
+                        "model_group": "model-a",
+                        "tenant_scope_type": "team",
+                        "tenant_scope_id": "team-1",
+                        "queued_jobs": 2,
+                        "queued_work_units": 7,
+                        "in_flight_work_units": 3,
+                        "oldest_queue_entered_at": now,
+                        "next_item_work_units": 2,
+                    }
+                ]
+            if "INSERT INTO deltallm_batch_scheduler_flow" in sql:
+                return [
+                    {
+                        "flow_id": params[0],
+                        "service_tier": params[1],
+                        "model_group": params[2],
+                        "tenant_scope_type": params[3],
+                        "tenant_scope_id": params[4],
+                        "weight": params[5],
+                        "quantum_work_units": params[6],
+                        "deficit_work_units": 0,
+                        "active": params[7],
+                        "queued_jobs": params[8],
+                        "queued_work_units": params[9],
+                        "in_flight_work_units": params[10],
+                        "last_selected_at": None,
+                        "last_refilled_at": None,
+                        "created_at": now,
+                        "updated_at": now,
+                        "oldest_queue_entered_at": params[13],
+                        "next_item_work_units": params[14],
+                    }
+                ]
+            return []
+
+    prisma = _FlowPrisma()
+    repository = BatchRepository(prisma_client=prisma)
+
+    flows = await repository.refresh_scheduler_flows(
+        service_tier="standard",
+        model_group="model-a",
+        base_quantum_work_units=16,
+        max_deficit_multiplier=8,
+    )
+
+    assert len(flows) == 1
+    flow = flows[0]
+    assert flow.model_group == "model-a"
+    assert flow.tenant_scope_type == "team"
+    assert flow.queued_work_units == 7
+    assert flow.in_flight_work_units == 3
+    assert flow.quantum_work_units == 16
+    refresh_sql = prisma.calls[0][0]
+    assert "SUM(runnable_work_units)" in refresh_sql
+    assert "j.remaining_work_units" not in refresh_sql
+    assert "ON CONFLICT" in prisma.calls[1][0]
+    assert "weight = GREATEST(deltallm_batch_scheduler_flow.weight, 1)" in prisma.calls[1][0]
+    assert (
+        "active = true OR queued_jobs <> 0 OR queued_work_units <> 0 OR in_flight_work_units <> 0"
+        in prisma.calls[2][0]
+    )
+    assert prisma.calls[2][1][0] == [flow.flow_id]
+
+
+@pytest.mark.asyncio
+async def test_refresh_scheduler_flows_normalizes_legacy_api_key_scope_ids() -> None:
+    now = datetime.now(tz=UTC)
+    raw_api_key = "sk-legacy-key"
+    stable_scope_id = stable_tenant_scope_id(scope_type="api_key", scope_id=raw_api_key)
+
+    class _ApiKeyFlowPrisma:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def query_raw(self, sql: str, *params):
+            self.calls.append((sql, params))
+            if "WITH runnable_jobs AS" in sql:
+                return [
+                    {
+                        "service_tier": "standard",
+                        "model_group": "model-a",
+                        "tenant_scope_type": "api_key",
+                        "tenant_scope_id": raw_api_key,
+                        "queued_jobs": 1,
+                        "queued_work_units": 2,
+                        "in_flight_work_units": 0,
+                        "oldest_queue_entered_at": now + timedelta(seconds=1),
+                        "next_item_work_units": 2,
+                    },
+                    {
+                        "service_tier": "standard",
+                        "model_group": "model-a",
+                        "tenant_scope_type": "api_key",
+                        "tenant_scope_id": stable_scope_id,
+                        "queued_jobs": 1,
+                        "queued_work_units": 3,
+                        "in_flight_work_units": 4,
+                        "oldest_queue_entered_at": now,
+                        "next_item_work_units": 3,
+                    },
+                ]
+            if "INSERT INTO deltallm_batch_scheduler_flow" in sql:
+                return [
+                    {
+                        "flow_id": params[0],
+                        "service_tier": params[1],
+                        "model_group": params[2],
+                        "tenant_scope_type": params[3],
+                        "tenant_scope_id": params[4],
+                        "weight": params[5],
+                        "quantum_work_units": params[6],
+                        "deficit_work_units": 0,
+                        "active": params[7],
+                        "queued_jobs": params[8],
+                        "queued_work_units": params[9],
+                        "in_flight_work_units": params[10],
+                        "last_selected_at": None,
+                        "last_refilled_at": None,
+                        "created_at": now,
+                        "updated_at": now,
+                        "oldest_queue_entered_at": params[13],
+                        "next_item_work_units": params[14],
+                    }
+                ]
+            return []
+
+    prisma = _ApiKeyFlowPrisma()
+    repository = BatchRepository(prisma_client=prisma)
+
+    flows = await repository.refresh_scheduler_flows(
+        service_tier="standard",
+        model_group="model-a",
+        base_quantum_work_units=16,
+        max_deficit_multiplier=8,
+    )
+
+    assert len(flows) == 1
+    assert flows[0].tenant_scope_type == "api_key"
+    assert flows[0].tenant_scope_id == stable_scope_id
+    assert flows[0].queued_jobs == 2
+    assert flows[0].queued_work_units == 5
+    assert flows[0].in_flight_work_units == 4
+    assert flows[0].oldest_queue_entered_at == now
+    assert flows[0].next_item_work_units == 3
+    repair_calls = [call for call in prisma.calls if "UPDATE deltallm_batch_job j" in call[0]]
+    assert len(repair_calls) == 1
+    assert repair_calls[0][1][:3] == (
+        raw_api_key,
+        stable_scope_id,
+        f"{API_KEY_TENANT_SCOPE_PREFIX}%",
+    )
+    assert "j.scheduling_model_group = $4" in repair_calls[0][0]
+    assert "COALESCE(NULLIF(j.service_tier, ''), 'standard') = $5" in repair_calls[0][0]
+    upsert_calls = [call for call in prisma.calls if "INSERT INTO deltallm_batch_scheduler_flow" in call[0]]
+    assert len(upsert_calls) == 1
+    assert upsert_calls[0][1][4] == stable_scope_id
+    assert prisma.calls[-1][1][0] == [flows[0].flow_id]
+
+
+@pytest.mark.asyncio
+async def test_refresh_scheduler_flows_preserves_existing_weight_for_quantum() -> None:
+    now = datetime.now(tz=UTC)
+
+    class _WeightedFlowPrisma:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def query_raw(self, sql: str, *params):
+            self.calls.append((sql, params))
+            if "WITH runnable_jobs AS" in sql:
+                return [
+                    {
+                        "service_tier": "standard",
+                        "model_group": "model-a",
+                        "tenant_scope_type": "team",
+                        "tenant_scope_id": "team-1",
+                        "queued_jobs": 4,
+                        "queued_work_units": 4,
+                        "in_flight_work_units": 0,
+                        "oldest_queue_entered_at": now,
+                        "next_item_work_units": 1,
+                    }
+                ]
+            if "INSERT INTO deltallm_batch_scheduler_flow" in sql:
+                return [
+                    {
+                        "flow_id": params[0],
+                        "service_tier": params[1],
+                        "model_group": params[2],
+                        "tenant_scope_type": params[3],
+                        "tenant_scope_id": params[4],
+                        "weight": 4,
+                        "quantum_work_units": 64,
+                        "deficit_work_units": 0,
+                        "active": params[7],
+                        "queued_jobs": params[8],
+                        "queued_work_units": params[9],
+                        "in_flight_work_units": params[10],
+                        "last_selected_at": None,
+                        "last_refilled_at": None,
+                        "created_at": now,
+                        "updated_at": now,
+                        "oldest_queue_entered_at": params[13],
+                        "next_item_work_units": params[14],
+                    }
+                ]
+            return []
+
+    prisma = _WeightedFlowPrisma()
+    repository = BatchRepository(prisma_client=prisma)
+
+    flows = await repository.refresh_scheduler_flows(
+        service_tier="standard",
+        model_group="model-a",
+        base_quantum_work_units=16,
+        max_deficit_multiplier=8,
+    )
+
+    assert len(flows) == 1
+    assert flows[0].weight == 4
+    assert flows[0].quantum_work_units == 64
+    refresh_sql, refresh_params = prisma.calls[1]
+    assert "$12::int * GREATEST(deltallm_batch_scheduler_flow.weight, 1)" in refresh_sql
+    assert refresh_params[11] == 16
+    assert refresh_params[12] == 8
+
+
+@pytest.mark.asyncio
+async def test_upsert_scheduler_flow_for_job_preserves_existing_weight_for_quantum() -> None:
+    now = datetime.now(tz=UTC)
+
+    class _UpsertFlowPrisma:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def query_raw(self, sql: str, *params):
+            self.calls.append((sql, params))
+            return [
+                {
+                    "flow_id": params[0],
+                    "service_tier": params[1],
+                    "model_group": params[2],
+                    "tenant_scope_type": params[3],
+                    "tenant_scope_id": params[4],
+                    "weight": 4,
+                    "quantum_work_units": 64,
+                    "deficit_work_units": 0,
+                    "active": params[7],
+                    "queued_jobs": params[8],
+                    "queued_work_units": params[9],
+                    "in_flight_work_units": 0,
+                    "last_selected_at": None,
+                    "last_refilled_at": None,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            ]
+
+    prisma = _UpsertFlowPrisma()
+    repository = BatchJobRepository(prisma)
+    job = job_from_row(
+        _job_row(
+            scheduling_model_group="model-a",
+            tenant_scope_type="team",
+            tenant_scope_id="team-1",
+            remaining_work_units=4,
+        )
+    )
+
+    flow = await repository.upsert_scheduler_flow_for_job(
+        job,
+        base_quantum_work_units=16,
+        max_deficit_multiplier=8,
+    )
+
+    assert flow is not None
+    assert flow.weight == 4
+    assert flow.quantum_work_units == 64
+    upsert_sql, upsert_params = prisma.calls[0]
+    assert "weight = GREATEST(deltallm_batch_scheduler_flow.weight, 1)" in upsert_sql
+    assert "$11::int * GREATEST(deltallm_batch_scheduler_flow.weight, 1)" in upsert_sql
+    assert upsert_params[10] == 16
+    assert upsert_params[11] == 8
+
+
+@pytest.mark.asyncio
+async def test_get_tenant_queued_work_units_counts_admission_backlog() -> None:
+    class _QueuedWorkPrisma(_PrismaSpy):
+        async def query_raw(self, sql: str, *params):
+            self.sql = sql
+            self.params = params
+            self.calls.append((sql, params))
+            return [{"queued_work_units": 7}]
+
+    prisma = _QueuedWorkPrisma()
+    repository = BatchRepository(prisma_client=prisma)
+
+    queued_work_units = await repository.get_tenant_queued_work_units(
+        tenant_scope_type="team",
+        tenant_scope_id="team-1",
+    )
+
+    assert queued_work_units == 7
+    assert "FROM deltallm_batch_item i" in prisma.sql
+    assert "JOIN deltallm_batch_job j ON j.batch_id = i.batch_id" in prisma.sql
+    assert "i.status = 'pending'" in prisma.sql
+    assert "i.status = 'in_progress' AND i.lease_expires_at < NOW()" in prisma.sql
+    assert "i.not_before_at" not in prisma.sql
+    assert "remaining_work_units" not in prisma.sql
+    assert prisma.params == ("team", "team-1", "", "", "", "")
+
+
+@pytest.mark.asyncio
+async def test_get_tenant_queued_work_units_counts_legacy_raw_api_key_backlog() -> None:
+    class _QueuedWorkPrisma(_PrismaSpy):
+        async def query_raw(self, sql: str, *params):
+            self.sql = sql
+            self.params = params
+            self.calls.append((sql, params))
+            return [{"queued_work_units": 11}]
+
+    prisma = _QueuedWorkPrisma()
+    repository = BatchRepository(prisma_client=prisma)
+
+    queued_work_units = await repository.get_tenant_queued_work_units(
+        tenant_scope_type="api_key",
+        tenant_scope_id=stable_tenant_scope_id(scope_type="api_key", scope_id="sk-legacy-key"),
+        created_by_api_key="sk-legacy-key",
+    )
+
+    assert queued_work_units == 11
+    assert "j.tenant_scope_id = $3" in prisma.sql
+    assert "j.created_by_api_key = $3" in prisma.sql
+    assert prisma.params == (
+        "api_key",
+        stable_tenant_scope_id(scope_type="api_key", scope_id="sk-legacy-key"),
+        "sk-legacy-key",
+        "",
+        "",
+        "",
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_tenant_queued_work_units_counts_owner_rows_during_scope_migration() -> None:
+    class _QueuedWorkPrisma(_PrismaSpy):
+        async def query_raw(self, sql: str, *params):
+            self.sql = sql
+            self.params = params
+            self.calls.append((sql, params))
+            return [{"queued_work_units": 13}]
+
+    prisma = _QueuedWorkPrisma()
+    repository = BatchRepository(prisma_client=prisma)
+
+    queued_work_units = await repository.get_tenant_queued_work_units(
+        tenant_scope_type="api_key",
+        tenant_scope_id=stable_tenant_scope_id(scope_type="api_key", scope_id="sk-migrating-key"),
+        created_by_api_key="sk-migrating-key",
+    )
+
+    assert queued_work_units == 13
+    assert "j.tenant_scope_type = $1" in prisma.sql
+    assert "j.created_by_api_key = $3" in prisma.sql
+    assert prisma.params == (
+        "api_key",
+        stable_tenant_scope_id(scope_type="api_key", scope_id="sk-migrating-key"),
+        "sk-migrating-key",
+        "",
+        "",
+        "",
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_tenant_queued_work_units_requires_raw_key_for_stable_api_key_scope() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    with pytest.raises(ValueError, match="created_by_api_key is required"):
+        await repository.get_tenant_queued_work_units(
+            tenant_scope_type="api_key",
+            tenant_scope_id=stable_tenant_scope_id(scope_type="api_key", scope_id="sk-legacy-key"),
+        )
+
+    assert prisma.calls == []
+
+
+@pytest.mark.asyncio
+async def test_fair_share_claim_reports_tenant_in_flight_full_when_all_active_flows_are_capped() -> None:
+    flow = _scheduler_flow(
+        flow_id="flow-full",
+        in_flight_work_units=32,
+        queued_work_units=1,
+        next_item_work_units=1,
+        deficit_work_units=16,
+    )
+
+    class _TxPrisma:
+        @asynccontextmanager
+        async def tx(self):
+            yield object()
+
+    class _TenantFullRepository(BatchJobRepository):
+        def __init__(self) -> None:
+            super().__init__(_TxPrisma())
+            self.recorded_skip_reasons: list[dict[str, str]] = []
+            self.refills = 0
+
+        async def _try_acquire_scheduler_flow_lock(self, db, **kwargs):  # noqa: ANN001, ANN003
+            del db, kwargs
+            return True
+
+        async def refresh_scheduler_flows(self, **kwargs):  # noqa: ANN003
+            del kwargs
+            return [flow]
+
+        async def _record_scheduler_flow_skip_reasons(self, db, skip_reasons):  # noqa: ANN001
+            del db
+            self.recorded_skip_reasons.append(dict(skip_reasons))
+            return []
+
+        async def _refill_scheduler_flow_deficits(self, db, **kwargs):  # noqa: ANN001, ANN003
+            del db, kwargs
+            self.refills += 1
+            return 1
+
+    repository = _TenantFullRepository()
+
+    result = await repository.claim_next_fair_share_work(
+        worker_id="worker-1",
+        service_tier="standard",
+        model_group="model-a",
+        max_items=4,
+        max_work_units=16,
+        lease_seconds=120,
+        tenant_max_in_flight_work_units=32,
+        max_deficit_multiplier=1,
+    )
+
+    assert result.claim is None
+    assert result.result == "tenant_in_flight_full"
+    assert repository.refills == 0
+    assert repository.recorded_skip_reasons == [{"flow-full": "tenant_in_flight_full"}]
+
+
+@pytest.mark.asyncio
+async def test_fair_share_claim_retries_next_flow_after_empty_selected_flow() -> None:
+    now = datetime.now(tz=UTC)
+    empty_flow = _scheduler_flow(
+        flow_id="flow-empty",
+        tenant_scope_id="team-empty",
+        oldest_queue_entered_at=now,
+    )
+    next_flow = _scheduler_flow(
+        flow_id="flow-next",
+        tenant_scope_id="team-next",
+        oldest_queue_entered_at=now + timedelta(seconds=1),
+    )
+
+    class _TxPrisma:
+        @asynccontextmanager
+        async def tx(self):
+            yield object()
+
+    class _RetryRepository(BatchJobRepository):
+        def __init__(self) -> None:
+            super().__init__(_TxPrisma())
+            self.claimed_flow_ids: list[str] = []
+            self.recorded_skip_reasons: list[dict[str, str]] = []
+
+        async def _try_acquire_scheduler_flow_lock(self, db, **kwargs):  # noqa: ANN001, ANN003
+            del db, kwargs
+            return True
+
+        async def refresh_scheduler_flows(self, **kwargs):  # noqa: ANN003
+            del kwargs
+            return [empty_flow, next_flow]
+
+        async def _record_scheduler_flow_skip_reasons(self, db, skip_reasons):  # noqa: ANN001
+            del db
+            self.recorded_skip_reasons.append(dict(skip_reasons))
+            return []
+
+        async def _refill_scheduler_flow_deficits(self, db, **kwargs):  # noqa: ANN001, ANN003
+            del db, kwargs
+            return 0
+
+        async def _claim_scheduler_flow_with_client(self, db, *, flow, **kwargs):  # noqa: ANN001, ANN003
+            del db, kwargs
+            self.claimed_flow_ids.append(flow.flow_id)
+            if flow.flow_id == "flow-empty":
+                return BatchFairShareClaimResult(claim=None, result="empty_flow", flow=flow)
+            return BatchFairShareClaimResult(
+                claim=BatchWorkClaim(
+                    claim_id="claim-next",
+                    worker_id="worker-1",
+                    batch_id="batch-next",
+                    endpoint="/v1/embeddings",
+                    model_group=flow.model_group,
+                    tenant_scope_type=flow.tenant_scope_type,
+                    tenant_scope_id=flow.tenant_scope_id,
+                    service_tier=flow.service_tier,
+                    item_ids=["item-1"],
+                    claimed_work_units=1,
+                    lease_expires_at=now + timedelta(seconds=60),
+                ),
+                result="claimed",
+                flow=flow,
+            )
+
+    repository = _RetryRepository()
+
+    result = await repository.claim_next_fair_share_work(
+        worker_id="worker-1",
+        service_tier="standard",
+        model_group="model-a",
+        max_items=4,
+        max_work_units=16,
+        lease_seconds=120,
+    )
+
+    assert result.claim is not None
+    assert result.claim.batch_id == "batch-next"
+    assert repository.claimed_flow_ids == ["flow-empty", "flow-next"]
+    assert {"flow-empty": "empty_flow"} in repository.recorded_skip_reasons
+
+
+@pytest.mark.asyncio
+async def test_fair_share_claim_reuses_refreshed_flows_after_deficit_refill() -> None:
+    now = datetime.now(tz=UTC)
+    first_flow = _scheduler_flow(
+        flow_id="flow-first",
+        tenant_scope_id="team-first",
+        deficit_work_units=0,
+        quantum_work_units=4,
+        next_item_work_units=4,
+        queued_work_units=4,
+        oldest_queue_entered_at=now,
+    )
+    second_flow = _scheduler_flow(
+        flow_id="flow-second",
+        tenant_scope_id="team-second",
+        deficit_work_units=0,
+        quantum_work_units=4,
+        next_item_work_units=4,
+        queued_work_units=4,
+        oldest_queue_entered_at=now + timedelta(seconds=1),
+    )
+
+    class _TxPrisma:
+        @asynccontextmanager
+        async def tx(self):
+            yield object()
+
+    class _RefillRepository(BatchJobRepository):
+        def __init__(self) -> None:
+            super().__init__(_TxPrisma())
+            self.refresh_calls = 0
+            self.refills = 0
+            self.claimed_deficits: list[int] = []
+
+        async def _try_acquire_scheduler_flow_lock(self, db, **kwargs):  # noqa: ANN001, ANN003
+            del db, kwargs
+            return True
+
+        async def refresh_scheduler_flows(self, **kwargs):  # noqa: ANN003
+            del kwargs
+            self.refresh_calls += 1
+            return [first_flow, second_flow]
+
+        async def _record_scheduler_flow_skip_reasons(self, db, skip_reasons):  # noqa: ANN001
+            del db, skip_reasons
+            return []
+
+        async def _refill_scheduler_flow_deficits(self, db, **kwargs):  # noqa: ANN001, ANN003
+            del db, kwargs
+            self.refills += 1
+            return 2
+
+        async def _claim_scheduler_flow_with_client(self, db, *, flow, **kwargs):  # noqa: ANN001, ANN003
+            del db, kwargs
+            self.claimed_deficits.append(flow.deficit_work_units)
+            return BatchFairShareClaimResult(
+                claim=BatchWorkClaim(
+                    claim_id="claim-refilled",
+                    worker_id="worker-1",
+                    batch_id="batch-refilled",
+                    endpoint="/v1/embeddings",
+                    model_group=flow.model_group,
+                    tenant_scope_type=flow.tenant_scope_type,
+                    tenant_scope_id=flow.tenant_scope_id,
+                    service_tier=flow.service_tier,
+                    item_ids=["item-1"],
+                    claimed_work_units=4,
+                    lease_expires_at=now + timedelta(seconds=60),
+                ),
+                result="claimed",
+                flow=flow,
+            )
+
+    repository = _RefillRepository()
+
+    result = await repository.claim_next_fair_share_work(
+        worker_id="worker-1",
+        service_tier="standard",
+        model_group="model-a",
+        max_items=4,
+        max_work_units=4,
+        lease_seconds=120,
+        max_deficit_multiplier=2,
+    )
+
+    assert result.result == "claimed"
+    assert result.flow is not None
+    assert result.flow.flow_id == "flow-first"
+    assert repository.refresh_calls == 1
+    assert repository.refills == 1
+    assert repository.claimed_deficits == [4]
+
+
+@pytest.mark.asyncio
+async def test_fair_share_shadow_recommendation_selects_flow_without_claiming_items() -> None:
+    flow = _scheduler_flow(flow_id="flow-recommended", tenant_scope_id="team-1")
+
+    class _TxPrisma:
+        @asynccontextmanager
+        async def tx(self):
+            yield object()
+
+    class _RecommendRepository(BatchJobRepository):
+        def __init__(self) -> None:
+            super().__init__(_TxPrisma())
+            self.claim_called = False
+
+        async def _try_acquire_scheduler_flow_lock(self, db, **kwargs):  # noqa: ANN001, ANN003
+            del db, kwargs
+            return True
+
+        async def refresh_scheduler_flows(self, **kwargs):  # noqa: ANN003
+            del kwargs
+            return [flow]
+
+        async def _record_scheduler_flow_skip_reasons(self, db, skip_reasons):  # noqa: ANN001
+            del db, skip_reasons
+            raise AssertionError("shadow recommendation should not update active skip summaries")
+
+        async def _refill_scheduler_flow_deficits(self, db, **kwargs):  # noqa: ANN001, ANN003
+            del db, kwargs
+            raise AssertionError("shadow recommendation should not refill durable deficits")
+
+        async def _claim_scheduler_flow_with_client(self, db, **kwargs):  # pragma: no cover
+            del db, kwargs
+            self.claim_called = True
+            raise AssertionError("recommendation should not claim items")
+
+    repository = _RecommendRepository()
+
+    result = await repository.recommend_next_fair_share_flow(
+        service_tier="standard",
+        model_group="model-a",
+        max_items=4,
+        max_work_units=16,
+    )
+
+    assert result.claim is None
+    assert result.result == "recommended"
+    assert result.flow == flow
+    assert result.expected_share == 1.0
+    assert result.active_flow_count == 1
+    assert result.total_in_flight_work_units == 0
+    assert repository.claim_called is False
+
+
+@pytest.mark.asyncio
+async def test_fair_share_shadow_recommendation_simulates_refill_without_durable_mutation() -> None:
+    now = datetime.now(tz=UTC)
+    flow = _scheduler_flow(
+        flow_id="flow-refill",
+        tenant_scope_id="team-1",
+        deficit_work_units=0,
+        quantum_work_units=4,
+        next_item_work_units=4,
+        queued_work_units=4,
+        oldest_queue_entered_at=now,
+    )
+    peer_flow = _scheduler_flow(
+        flow_id="flow-peer",
+        tenant_scope_id="team-2",
+        deficit_work_units=0,
+        quantum_work_units=4,
+        next_item_work_units=4,
+        queued_work_units=4,
+        oldest_queue_entered_at=now + timedelta(seconds=1),
+    )
+
+    class _TxPrisma:
+        @asynccontextmanager
+        async def tx(self):
+            yield object()
+
+    class _RecommendRepository(BatchJobRepository):
+        def __init__(self) -> None:
+            super().__init__(_TxPrisma())
+            self.refresh_calls = 0
+
+        async def _try_acquire_scheduler_flow_lock(self, db, **kwargs):  # noqa: ANN001, ANN003
+            del db, kwargs
+            return True
+
+        async def refresh_scheduler_flows(self, **kwargs):  # noqa: ANN003
+            del kwargs
+            self.refresh_calls += 1
+            return [flow, peer_flow]
+
+        async def _record_scheduler_flow_skip_reasons(self, db, skip_reasons):  # noqa: ANN001
+            del db, skip_reasons
+            raise AssertionError("shadow recommendation should not update active skip summaries")
+
+        async def _refill_scheduler_flow_deficits(self, db, **kwargs):  # pragma: no cover
+            del db, kwargs
+            raise AssertionError("shadow recommendation should not refill durable deficits")
+
+    repository = _RecommendRepository()
+
+    result = await repository.recommend_next_fair_share_flow(
+        service_tier="standard",
+        model_group="model-a",
+        max_items=4,
+        max_work_units=4,
+        max_deficit_multiplier=2,
+    )
+
+    assert result.result == "recommended"
+    assert result.flow is not None
+    assert result.flow.flow_id == "flow-refill"
+    assert result.flow.deficit_work_units == 4
+    assert result.expected_share == 0.5
+    assert result.active_flow_count == 2
+    assert flow.deficit_work_units == 0
+    assert peer_flow.deficit_work_units == 0
+    assert repository.refresh_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_fair_share_shadow_recommendation_uses_shadow_skip_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flow = _scheduler_flow(
+        flow_id="flow-capped",
+        in_flight_work_units=32,
+        queued_work_units=1,
+        next_item_work_units=1,
+        deficit_work_units=16,
+    )
+    shadow_skips: list[tuple[str, str, str]] = []
+    active_skips: list[str] = []
+    monkeypatch.setattr(
+        job_repository_module,
+        "increment_batch_scheduler_shadow_skip",
+        lambda *, model_group, service_tier, reason: shadow_skips.append(
+            (model_group, service_tier, reason)
+        ),
+    )
+    monkeypatch.setattr(
+        job_repository_module,
+        "increment_batch_scheduler_flow_skip",
+        lambda *, reason: active_skips.append(reason),
+    )
+
+    class _TxPrisma:
+        @asynccontextmanager
+        async def tx(self):
+            yield object()
+
+    class _RecommendRepository(BatchJobRepository):
+        def __init__(self) -> None:
+            super().__init__(_TxPrisma())
+
+        async def _try_acquire_scheduler_flow_lock(self, db, **kwargs):  # noqa: ANN001, ANN003
+            del db, kwargs
+            return True
+
+        async def refresh_scheduler_flows(self, **kwargs):  # noqa: ANN003
+            del kwargs
+            return [flow]
+
+        async def _record_scheduler_flow_skip_reasons(self, db, skip_reasons):  # noqa: ANN001
+            del db, skip_reasons
+            raise AssertionError("shadow recommendation should not update active skip summaries")
+
+    repository = _RecommendRepository()
+
+    result = await repository.recommend_next_fair_share_flow(
+        service_tier="standard",
+        model_group="model-a",
+        max_items=4,
+        max_work_units=16,
+        tenant_max_in_flight_work_units=32,
+    )
+
+    assert result.result == "tenant_in_flight_full"
+    assert shadow_skips == [
+        ("model-a", "standard", "tenant_in_flight_full"),
+        ("model-a", "standard", "tenant_in_flight_full"),
+    ]
+    assert active_skips == []
+
+
+@pytest.mark.asyncio
+async def test_fairness_ratio_uses_actual_share_over_expected_weight_share(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected = _scheduler_flow(
+        flow_id="flow-selected",
+        tenant_scope_id="team-selected",
+        weight=1,
+        in_flight_work_units=8,
+    )
+    peer = _scheduler_flow(
+        flow_id="flow-peer",
+        tenant_scope_id="team-peer",
+        weight=3,
+        in_flight_work_units=24,
+    )
+    observed: list[float] = []
+    monkeypatch.setattr(
+        job_repository_module,
+        "observe_batch_scheduler_fairness_ratio",
+        lambda **kwargs: observed.append(kwargs["ratio"]),
+    )
+
+    class _FairnessRepository(BatchJobRepository):
+        async def list_scheduler_flows(self, **kwargs):  # noqa: ANN003
+            assert kwargs["active"] is True
+            return [selected, peer]
+
+    repository = _FairnessRepository()
+    claim = BatchWorkClaim(
+        claim_id="claim-1",
+        worker_id="worker-1",
+        batch_id="batch-1",
+        endpoint="/v1/embeddings",
+        model_group="model-a",
+        tenant_scope_type="team",
+        tenant_scope_id="team-selected",
+        service_tier="standard",
+        item_ids=["item-1"],
+        claimed_work_units=8,
+        lease_expires_at=datetime.now(tz=UTC) + timedelta(seconds=60),
+    )
+
+    await repository._observe_scheduler_fairness_ratio_for_claim(object(), flow=selected, claim=claim)
+
+    assert observed == [pytest.approx(1.6)]
+
+
+@pytest.mark.asyncio
+async def test_fair_share_claim_skips_model_when_scheduler_lock_busy() -> None:
+    class _TxPrisma:
+        def __init__(self) -> None:
+            self.tx_client = _PrismaSpy()
+
+        @asynccontextmanager
+        async def tx(self):
+            yield self.tx_client
+
+    class _LockBusySpy(_PrismaSpy):
+        async def query_raw(self, sql: str, *params):
+            self.sql = sql
+            self.params = params
+            self.calls.append((sql, params))
+            return [{"locked": False}]
+
+    prisma = _TxPrisma()
+    prisma.tx_client = _LockBusySpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    result = await repository.claim_next_fair_share_work(
+        worker_id="worker-1",
+        service_tier="standard",
+        model_group="model-a",
+        max_items=4,
+        max_work_units=16,
+        lease_seconds=120,
+    )
+
+    assert result.claim is None
+    assert result.result == "lock_busy"
+    assert "pg_try_advisory_xact_lock" in prisma.tx_client.sql
+    assert prisma.tx_client.params == ("model-a", "standard")
+
+
+@pytest.mark.asyncio
+async def test_fair_share_scheduler_lock_uses_capacity_lock_key_order() -> None:
+    class _LockPrisma:
+        def __init__(self) -> None:
+            self.sql = ""
+            self.params: tuple[object, ...] = ()
+
+        async def query_raw(self, sql: str, *params):
+            self.sql = sql
+            self.params = params
+            return [{"locked": True}]
+
+    prisma = _LockPrisma()
+    repository = BatchJobRepository()
+
+    locked = await repository._try_acquire_scheduler_flow_lock(
+        prisma,
+        service_tier="standard",
+        model_group="model-a",
+    )
+
+    assert locked is True
+    assert "pg_try_advisory_xact_lock" in prisma.sql
+    assert prisma.params == ("model-a", "standard")
 
 
 @pytest.mark.asyncio
@@ -835,6 +2074,8 @@ async def test_create_job_hashes_api_key_tenant_scope_id() -> None:
             self.sql = sql
             self.params = params
             self.queries.append(sql)
+            if "INSERT INTO deltallm_batch_scheduler_flow" in sql:
+                return []
             return [
                 {
                     "batch_id": params[0],
@@ -881,6 +2122,71 @@ async def test_create_job_hashes_api_key_tenant_scope_id() -> None:
     assert job.tenant_scope_id is not None
     assert job.tenant_scope_id.startswith("api_key_sha256:")
     assert "sk-test-secret" not in job.tenant_scope_id
+
+
+@pytest.mark.asyncio
+async def test_create_job_uses_repository_tenant_scope_preference_by_default() -> None:
+    class _CreateJobPrisma(_PrismaSpy):
+        async def query_raw(self, sql: str, *params):
+            self.sql = sql
+            self.params = params
+            self.queries.append(sql)
+            if "INSERT INTO deltallm_batch_scheduler_flow" in sql:
+                return []
+            return [
+                {
+                    "batch_id": params[0],
+                    "endpoint": params[1],
+                    "status": params[2],
+                    "execution_mode": params[3],
+                    "input_file_id": params[4],
+                    "model": params[5],
+                    "metadata": params[6],
+                    "total_items": params[7],
+                    "scheduler_version": params[8],
+                    "scheduling_model": params[9],
+                    "scheduling_model_group": params[10],
+                    "scheduling_endpoint": params[11],
+                    "tenant_scope_type": params[12],
+                    "tenant_scope_id": params[13],
+                    "service_tier": params[14],
+                    "estimated_work_units": params[15],
+                    "remaining_work_units": params[16],
+                    "size_class": params[17],
+                    "queue_entered_at": params[18],
+                    "scheduler_debug": params[19],
+                    "created_by_api_key": params[20],
+                    "created_by_team_id": params[22],
+                    "created_by_organization_id": params[23],
+                    "created_at": datetime.now(tz=UTC),
+                }
+            ]
+
+    prisma = _CreateJobPrisma()
+    repository = BatchRepository(
+        prisma_client=prisma,
+        tenant_scope_preference="api_key,team,organization",
+    )
+
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id="file-1",
+        model="m1",
+        metadata=None,
+        created_by_api_key="sk-preferred-secret",
+        created_by_user_id=None,
+        created_by_team_id="team-1",
+        created_by_organization_id="org-1",
+        expires_at=None,
+    )
+
+    assert job is not None
+    assert job.tenant_scope_type == "api_key"
+    assert job.tenant_scope_id == stable_tenant_scope_id(
+        scope_type="api_key",
+        scope_id="sk-preferred-secret",
+    )
+    assert job.tenant_scope_id != "team-1"
 
 
 @pytest.mark.asyncio
@@ -1002,6 +2308,8 @@ async def test_set_job_queued_repairs_missing_api_key_tenant_scope_id() -> None:
             self.calls.append((sql, params))
             if len(self.calls) == 1:
                 return [self.first_row]
+            if "INSERT INTO deltallm_batch_scheduler_flow" in sql:
+                return []
             repaired = dict(self.first_row)
             repaired["tenant_scope_id"] = params[1]
             return [repaired]
@@ -1014,9 +2322,10 @@ async def test_set_job_queued_repairs_missing_api_key_tenant_scope_id() -> None:
     expected_scope_id = stable_tenant_scope_id(scope_type="api_key", scope_id="sk-test-secret")
     assert queued is not None
     assert queued.tenant_scope_id == expected_scope_id
-    assert len(prisma.calls) == 2
+    assert len(prisma.calls) == 3
     assert prisma.calls[1][1][1] == expected_scope_id
     assert "tenant_scope_id NOT LIKE $3" in prisma.calls[1][0]
+    assert "INSERT INTO deltallm_batch_scheduler_flow" in prisma.calls[2][0]
 
 
 @pytest.mark.asyncio
@@ -1034,6 +2343,8 @@ async def test_set_job_queued_repairs_raw_api_key_tenant_scope_id() -> None:
             self.calls.append((sql, params))
             if len(self.calls) == 1:
                 return [self.first_row]
+            if "INSERT INTO deltallm_batch_scheduler_flow" in sql:
+                return []
             repaired = dict(self.first_row)
             repaired["tenant_scope_id"] = params[1]
             return [repaired]
@@ -1049,9 +2360,10 @@ async def test_set_job_queued_repairs_raw_api_key_tenant_scope_id() -> None:
     )
     assert queued is not None
     assert queued.tenant_scope_id == expected_scope_id
-    assert len(prisma.calls) == 2
+    assert len(prisma.calls) == 3
     assert "sk-existing-raw-secret" not in queued.tenant_scope_id
     assert prisma.calls[1][1][2] == f"{API_KEY_TENANT_SCOPE_PREFIX}%"
+    assert "INSERT INTO deltallm_batch_scheduler_flow" in prisma.calls[2][0]
 
 
 @pytest.mark.asyncio
@@ -1062,6 +2374,8 @@ async def test_set_job_queued_skips_tenant_scope_repair_for_team_scope() -> None
 
         async def query_raw(self, sql: str, *params):
             self.calls.append((sql, params))
+            if "INSERT INTO deltallm_batch_scheduler_flow" in sql:
+                return []
             return [_job_row(created_by_team_id="team-1", tenant_scope_type="team", tenant_scope_id="team-1")]
 
     prisma = _SetQueuedPrisma()
@@ -1071,7 +2385,8 @@ async def test_set_job_queued_skips_tenant_scope_repair_for_team_scope() -> None
 
     assert queued is not None
     assert queued.tenant_scope_id == "team-1"
-    assert len(prisma.calls) == 1
+    assert len(prisma.calls) == 2
+    assert "INSERT INTO deltallm_batch_scheduler_flow" in prisma.calls[1][0]
 
 
 @pytest.mark.asyncio
@@ -1160,6 +2475,7 @@ async def test_backfill_scheduler_dimensions_repairs_active_rows_with_estimator_
     assert "aggregate_drift_scan_jobs AS" in select_sql
     assert "aggregate_drift_item_stats AS" in select_sql
     assert "aggregate_drift_candidate_jobs AS" in select_sql
+    assert "tenant_scope_scan_jobs AS" in select_sql
     assert "candidate_jobs AS" in select_sql
     assert "WITH scanned_jobs AS" not in select_sql
     assert "JOIN candidate_jobs s ON s.batch_id = i.batch_id" in select_sql
@@ -1167,23 +2483,183 @@ async def test_backfill_scheduler_dimensions_repairs_active_rows_with_estimator_
     assert "missing_dimension_items" in select_sql
     assert "ci.missing_dimension_items = 0" in select_sql
     assert "j.scheduler_debug->>'estimator_version' IS DISTINCT FROM $3" in select_sql
+    assert "j.scheduler_debug->>'tenant_scope_preference' IS DISTINCT FROM $5" in select_sql
     assert "j.estimated_work_units IS DISTINCT FROM COALESCE(j.total_items, 0)" not in select_sql
     assert "ci.estimated_work_units IS DISTINCT FROM ci.derived_estimated_work_units" in select_sql
+    assert "OR ci.candidate_priority = 1" in select_sql
+    assert "ORDER BY ci.candidate_priority ASC" in select_sql
     assert "FOR UPDATE OF j SKIP LOCKED" in select_sql
-    assert select_params == (500, 5000, "v1", f"{API_KEY_TENANT_SCOPE_PREFIX}%")
+    assert select_params == (
+        500,
+        5000,
+        "v1",
+        f"{API_KEY_TENANT_SCOPE_PREFIX}%",
+        "organization,team,api_key,user",
+    )
     assert update_params[5] == "api_key"
     assert update_params[6] == expected_scope_id
     assert update_params[8] == 2
     assert update_params[9] == 2
     assert update_params[3] == "group-m1"
-    assert json.loads(str(update_params[12]))["estimator_version"] == "v1"
+    scheduler_debug = json.loads(str(update_params[12]))
+    assert scheduler_debug["estimator_version"] == "v1"
+    assert scheduler_debug["tenant_scope_preference"] == "organization,team,api_key,user"
     assert update_params[13] == f"{API_KEY_TENANT_SCOPE_PREFIX}%"
     assert "scheduling_model = $3" in update_sql
+    assert "tenant_scope_type = $6" in update_sql
+    assert "tenant_scope_id = $7" in update_sql
     assert "tenant_scope_id NOT LIKE $14" in update_sql
     assert "estimated_work_units = GREATEST($9, 0)" in update_sql
     assert "remaining_work_units = GREATEST($10, 0)" in update_sql
     assert "status IN ('queued', 'in_progress', 'finalizing')" in update_sql
     assert "'completed'" not in update_sql
+
+
+@pytest.mark.asyncio
+async def test_backfill_scheduler_dimensions_uses_configured_tenant_scope_preference() -> None:
+    now = datetime.now(tz=UTC)
+
+    class _BackfillPrisma:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def query_raw(self, sql: str, *params):
+            self.calls.append((sql, params))
+            if "pg_try_advisory_xact_lock" in sql:
+                return [{"acquired": True}]
+            if "SELECT * FROM candidate" in sql and "FROM deltallm_batch_item" in sql:
+                return []
+            if "WITH field_candidate_jobs AS" in sql:
+                return [
+                    {
+                        "batch_id": "batch-tenant-preference",
+                        "endpoint": "/v1/embeddings",
+                        "model": "m1",
+                        "created_by_organization_id": "org-1",
+                        "created_by_team_id": "team-1",
+                        "created_by_api_key": "sk-preferred-secret",
+                        "created_by_user_id": "user-1",
+                        "tenant_scope_type": None,
+                        "tenant_scope_id": None,
+                        "service_tier": "standard",
+                        "estimated_work_units": 0,
+                        "remaining_work_units": 0,
+                        "total_items": 1,
+                        "created_at": now,
+                        "item_estimated_work_units": 1,
+                        "item_remaining_work_units": 1,
+                        "missing_dimension_items": 0,
+                        "distinct_models": 1,
+                        "distinct_model_groups": 1,
+                        "item_scheduling_model": "m1",
+                        "item_scheduling_model_group": "m1",
+                    }
+                ]
+            if "UPDATE deltallm_batch_job" in sql:
+                return [{"batch_id": params[0]}]
+            return []
+
+    prisma = _BackfillPrisma()
+    repository = BatchRepository(
+        prisma_client=prisma,
+        tenant_scope_preference=("api_key", "team", "organization", "user"),
+    )
+
+    result = await repository.backfill_scheduler_dimensions(limit=500)
+
+    expected_scope_id = stable_tenant_scope_id(
+        scope_type="api_key",
+        scope_id="sk-preferred-secret",
+    )
+    update_sql, update_params = next(
+        (sql, params) for sql, params in prisma.calls if "UPDATE deltallm_batch_job" in sql
+    )
+    assert result == {"jobs": 1, "items": 0}
+    assert update_params[5] == "api_key"
+    assert update_params[6] == expected_scope_id
+    assert "tenant_scope_type = $6" in update_sql
+    assert "tenant_scope_type IS DISTINCT FROM $6" in update_sql
+    scheduler_debug = json.loads(str(update_params[12]))
+    assert scheduler_debug["tenant_scope_preference"] == "api_key,team,organization,user"
+    assert "sk-preferred-secret" not in expected_scope_id
+
+
+@pytest.mark.asyncio
+async def test_backfill_scheduler_dimensions_rewrites_stale_tenant_scope_fields_with_current_debug() -> None:
+    now = datetime.now(tz=UTC)
+
+    class _BackfillPrisma:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def query_raw(self, sql: str, *params):
+            self.calls.append((sql, params))
+            if "pg_try_advisory_xact_lock" in sql:
+                return [{"acquired": True}]
+            if "SELECT * FROM candidate" in sql and "FROM deltallm_batch_item" in sql:
+                return []
+            if "WITH field_candidate_jobs AS" in sql:
+                return [
+                    {
+                        "batch_id": "batch-stale-preference",
+                        "endpoint": "/v1/embeddings",
+                        "model": "m1",
+                        "created_by_organization_id": "org-1",
+                        "created_by_team_id": "team-1",
+                        "created_by_api_key": "sk-preferred-secret",
+                        "created_by_user_id": "user-1",
+                        "tenant_scope_type": "team",
+                        "tenant_scope_id": "team-1",
+                        "service_tier": "standard",
+                        "estimated_work_units": 1,
+                        "remaining_work_units": 1,
+                        "total_items": 1,
+                        "created_at": now,
+                        "scheduler_debug": {
+                            "estimator_version": "v1",
+                            "tenant_scope_preference": "api_key,team,organization,user",
+                        },
+                        "item_estimated_work_units": 1,
+                        "item_remaining_work_units": 1,
+                        "missing_dimension_items": 0,
+                        "distinct_models": 1,
+                        "distinct_model_groups": 1,
+                        "item_scheduling_model": "m1",
+                        "item_scheduling_model_group": "m1",
+                    }
+                ]
+            if "UPDATE deltallm_batch_job" in sql:
+                return [{"batch_id": params[0]}]
+            return []
+
+    prisma = _BackfillPrisma()
+    repository = BatchRepository(
+        prisma_client=prisma,
+        tenant_scope_preference=("api_key", "team", "organization", "user"),
+    )
+
+    result = await repository.backfill_scheduler_dimensions(limit=500)
+
+    expected_scope_id = stable_tenant_scope_id(
+        scope_type="api_key",
+        scope_id="sk-preferred-secret",
+    )
+    update_sql, update_params = next(
+        (sql, params) for sql, params in prisma.calls if "UPDATE deltallm_batch_job" in sql
+    )
+    assert result == {"jobs": 1, "items": 0}
+    assert update_params[5] == "api_key"
+    assert update_params[6] == expected_scope_id
+    select_sql, _select_params = next(
+        (sql, params) for sql, params in prisma.calls if "WITH field_candidate_jobs AS" in sql
+    )
+    assert "tenant_scope_scan_jobs AS" in select_sql
+    assert "OR ci.candidate_priority = 1" in select_sql
+    assert "tenant_scope_id IS DISTINCT FROM $7" in update_sql
+    assert (
+        "scheduler_debug->>'tenant_scope_preference' IS DISTINCT FROM "
+        "$13::jsonb->>'tenant_scope_preference'"
+    ) in update_sql
 
 
 @pytest.mark.asyncio
@@ -1237,15 +2713,77 @@ async def test_backfill_scheduler_dimensions_uses_targeted_candidates_before_job
         (sql, params) for sql, params in prisma.calls if "WITH field_candidate_jobs AS" in sql
     )
     assert result == {"jobs": 1, "items": 0}
-    assert select_params == (1, 10, "v1", f"{API_KEY_TENANT_SCOPE_PREFIX}%")
+    assert select_params == (
+        1,
+        10,
+        "v1",
+        f"{API_KEY_TENANT_SCOPE_PREFIX}%",
+        "organization,team,api_key,user",
+    )
     assert "field_candidate_jobs AS" in select_sql
     assert "aggregate_candidate_jobs AS" in select_sql
     assert "aggregate_drift_candidate_jobs AS" in select_sql
+    assert "tenant_scope_scan_jobs AS" in select_sql
     assert "candidate_jobs AS" in select_sql
     assert "WITH scanned_jobs AS" not in select_sql
     assert "LIMIT $2" in select_sql
     assert "ci.missing_dimension_items = 0" in select_sql
     assert "FOR UPDATE OF j SKIP LOCKED" in select_sql
+
+
+@pytest.mark.asyncio
+async def test_backfill_scheduler_dimensions_filters_targeted_refresh_by_flow() -> None:
+    class _Router:
+        config = SimpleNamespace(model_group_alias={"model-a": "group-a"})
+
+    class _BackfillPrisma:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def query_raw(self, sql: str, *params):
+            self.calls.append((sql, params))
+            if "pg_try_advisory_xact_lock" in sql:
+                return [{"acquired": True}]
+            return []
+
+    prisma = _BackfillPrisma()
+    repository = BatchRepository(prisma_client=prisma, model_group_resolver=_Router())
+
+    result = await repository.backfill_scheduler_dimensions(
+        limit=10,
+        service_tier="standard",
+        model_group="group-a",
+    )
+
+    item_select_sql, item_select_params = prisma.calls[1]
+    job_select_sql, job_select_params = prisma.calls[2]
+    assert result == {"jobs": 0, "items": 0}
+    assert item_select_params == (10, ["group-a", "model-a"], "standard")
+    assert (
+        "COALESCE(NULLIF(i.scheduling_model_group, ''), "
+        "NULLIF(j.scheduling_model_group, ''), NULLIF(i.scheduling_model, ''), "
+        "NULLIF(i.request_body->>'model', ''), NULLIF(j.model, '')) = ANY($2::text[])"
+    ) in item_select_sql
+    assert "COALESCE(NULLIF(j.service_tier, ''), 'standard') = $3" in item_select_sql
+    assert job_select_params == (
+        10,
+        100,
+        "v1",
+        f"{API_KEY_TENANT_SCOPE_PREFIX}%",
+        "organization,team,api_key,user",
+        ["group-a", "model-a"],
+        "standard",
+    )
+    assert (
+        "COALESCE(NULLIF(j.scheduling_model_group, ''), NULLIF(j.model, '')) = "
+        "ANY($6::text[])"
+    ) in job_select_sql
+    assert "COALESCE(NULLIF(j.service_tier, ''), 'standard') = $7" in job_select_sql
+    assert job_select_sql.count(
+        "COALESCE(NULLIF(j.scheduling_model_group, ''), NULLIF(j.model, '')) = "
+        "ANY($6::text[])"
+    ) == 4
+    assert job_select_sql.count("COALESCE(NULLIF(j.service_tier, ''), 'standard') = $7") == 4
 
 
 @pytest.mark.asyncio

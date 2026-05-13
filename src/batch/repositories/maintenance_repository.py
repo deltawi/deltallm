@@ -11,8 +11,8 @@ from src.batch.scheduling import (
     MIXED_MODEL_GROUP,
     build_scheduling_dimensions,
     estimate_request_work_units,
+    parse_tenant_scope_preference,
     resolve_model_group,
-    stable_tenant_scope_id,
 )
 
 _BACKFILL_LOCK_SCOPE = "batch_scheduler"
@@ -32,10 +32,36 @@ def _json_mapping(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _model_group_filter_values(
+    model_group: str | None,
+    model_group_resolver: Any | None,
+) -> list[str]:
+    normalized_model_group = str(model_group or "").strip()
+    if not normalized_model_group:
+        return []
+    values = {normalized_model_group}
+    resolver_config = getattr(model_group_resolver, "config", None)
+    aliases = getattr(resolver_config, "model_group_alias", None)
+    if isinstance(aliases, Mapping):
+        for model_name, resolved_group in aliases.items():
+            if str(resolved_group or "").strip() == normalized_model_group:
+                normalized_model = str(model_name or "").strip()
+                if normalized_model:
+                    values.add(normalized_model)
+    return sorted(values)
+
+
 class BatchMaintenanceRepository:
-    def __init__(self, prisma_client: Any | None = None, *, model_group_resolver: Any | None = None) -> None:
+    def __init__(
+        self,
+        prisma_client: Any | None = None,
+        *,
+        model_group_resolver: Any | None = None,
+        tenant_scope_preference: tuple[str, ...] | list[str] | str | None = None,
+    ) -> None:
         self.prisma = prisma_client
         self.model_group_resolver = model_group_resolver
+        self.tenant_scope_preference = parse_tenant_scope_preference(tenant_scope_preference)
 
     async def list_expired_terminal_job_ids(self, *, now: datetime, limit: int = 100) -> list[str]:
         if self.prisma is None:
@@ -73,14 +99,32 @@ class BatchMaintenanceRepository:
             batch_id,
         )
 
-    async def backfill_scheduler_dimensions(self, *, limit: int = 500) -> dict[str, int]:
+    async def backfill_scheduler_dimensions(
+        self,
+        *,
+        limit: int = 500,
+        service_tier: str | None = None,
+        model_group: str | None = None,
+    ) -> dict[str, int]:
         if self.prisma is None:
             return {"jobs": 0, "items": 0}
         bounded_limit = max(1, min(int(limit), 5_000))
+        normalized_service_tier = str(service_tier or "").strip() or None
+        normalized_model_group = str(model_group or "").strip() or None
         if hasattr(self.prisma, "tx"):
             async with self.prisma.tx() as tx:
-                return await self._backfill_scheduler_dimensions_locked(tx, limit=bounded_limit)
-        return await self._backfill_scheduler_dimensions_locked(self.prisma, limit=bounded_limit)
+                return await self._backfill_scheduler_dimensions_locked(
+                    tx,
+                    limit=bounded_limit,
+                    service_tier=normalized_service_tier,
+                    model_group=normalized_model_group,
+                )
+        return await self._backfill_scheduler_dimensions_locked(
+            self.prisma,
+            limit=bounded_limit,
+            service_tier=normalized_service_tier,
+            model_group=normalized_model_group,
+        )
 
     async def _try_backfill_lock(self, prisma: Any) -> bool:
         rows = await prisma.query_raw(
@@ -95,9 +139,31 @@ class BatchMaintenanceRepository:
         row = dict(rows[0])
         return bool(row.get("acquired") or row.get("pg_try_advisory_xact_lock"))
 
-    async def _backfill_active_items(self, prisma: Any, *, limit: int) -> int:
+    async def _backfill_active_items(
+        self,
+        prisma: Any,
+        *,
+        limit: int,
+        service_tier: str | None,
+        model_group: str | None,
+    ) -> int:
+        params: list[Any] = [limit]
+        filters: list[str] = []
+        model_filter_values = _model_group_filter_values(model_group, self.model_group_resolver)
+        if model_filter_values:
+            params.append(model_filter_values)
+            filters.append(
+                "COALESCE(NULLIF(i.scheduling_model_group, ''), "
+                "NULLIF(j.scheduling_model_group, ''), NULLIF(i.scheduling_model, ''), "
+                "NULLIF(i.request_body->>'model', ''), NULLIF(j.model, '')) "
+                f"= ANY(${len(params)}::text[])"
+            )
+        if service_tier:
+            params.append(service_tier)
+            filters.append(f"COALESCE(NULLIF(j.service_tier, ''), 'standard') = ${len(params)}")
+        filter_sql = "".join(f"\n                  AND {filter_clause}" for filter_clause in filters)
         candidates = await prisma.query_raw(
-            """
+            f"""
             WITH candidate AS (
                 SELECT
                     i.item_id,
@@ -113,6 +179,7 @@ class BatchMaintenanceRepository:
                 FROM deltallm_batch_item i
                 JOIN deltallm_batch_job j ON j.batch_id = i.batch_id
                 WHERE j.status IN ('queued', 'in_progress', 'finalizing')
+                  {filter_sql}
                   AND (
                       i.scheduling_model IS NULL
                       OR i.scheduling_model = ''
@@ -128,7 +195,7 @@ class BatchMaintenanceRepository:
             )
             SELECT * FROM candidate
             """,
-            limit,
+            *params,
         )
         if not candidates:
             return 0
@@ -188,10 +255,37 @@ class BatchMaintenanceRepository:
         )
         return len(rows)
 
-    async def _backfill_active_jobs(self, prisma: Any, *, limit: int) -> int:
+    async def _backfill_active_jobs(
+        self,
+        prisma: Any,
+        *,
+        limit: int,
+        service_tier: str | None,
+        model_group: str | None,
+    ) -> int:
         scan_limit = max(limit, min(limit * 10, 5_000))
+        tenant_scope_preference_key = ",".join(self.tenant_scope_preference)
+        params: list[Any] = [
+            limit,
+            scan_limit,
+            ESTIMATOR_VERSION,
+            f"{API_KEY_TENANT_SCOPE_PREFIX}%",
+            tenant_scope_preference_key,
+        ]
+        filters: list[str] = []
+        model_filter_values = _model_group_filter_values(model_group, self.model_group_resolver)
+        if model_filter_values:
+            params.append(model_filter_values)
+            filters.append(
+                "COALESCE(NULLIF(j.scheduling_model_group, ''), NULLIF(j.model, '')) "
+                f"= ANY(${len(params)}::text[])"
+            )
+        if service_tier:
+            params.append(service_tier)
+            filters.append(f"COALESCE(NULLIF(j.service_tier, ''), 'standard') = ${len(params)}")
+        filter_sql = "".join(f"\n                  AND {filter_clause}" for filter_clause in filters)
         job_candidates = await prisma.query_raw(
-            """
+            f"""
             WITH field_candidate_jobs AS (
                 SELECT
                     j.batch_id,
@@ -199,6 +293,7 @@ class BatchMaintenanceRepository:
                     j.created_at
                 FROM deltallm_batch_job j
                 WHERE j.status IN ('queued', 'in_progress', 'finalizing')
+                  {filter_sql}
                   AND (
                       j.scheduler_version IS NULL
                       OR j.scheduler_version = ''
@@ -219,6 +314,7 @@ class BatchMaintenanceRepository:
                       OR j.queue_entered_at IS NULL
                       OR j.scheduler_debug IS NULL
                       OR j.scheduler_debug->>'estimator_version' IS DISTINCT FROM $3
+                      OR j.scheduler_debug->>'tenant_scope_preference' IS DISTINCT FROM $5
                       OR (
                           j.tenant_scope_type = 'api_key'
                           AND j.tenant_scope_id IS NOT NULL
@@ -237,6 +333,7 @@ class BatchMaintenanceRepository:
                     j.created_at
                 FROM deltallm_batch_job j
                 WHERE j.status IN ('queued', 'in_progress', 'finalizing')
+                  {filter_sql}
                   AND (
                       j.estimated_work_units IS NULL
                       OR j.estimated_work_units <= 0
@@ -261,6 +358,7 @@ class BatchMaintenanceRepository:
                     j.created_at
                 FROM deltallm_batch_job j
                 WHERE j.status IN ('queued', 'in_progress', 'finalizing')
+                  {filter_sql}
                 ORDER BY queue_order ASC NULLS FIRST,
                          j.created_at ASC
                 LIMIT $2
@@ -311,20 +409,40 @@ class BatchMaintenanceRepository:
                          s.created_at ASC
                 LIMIT $2
             ),
+            tenant_scope_scan_jobs AS (
+                SELECT
+                    j.batch_id,
+                    COALESCE(j.queue_entered_at, j.created_at) AS queue_order,
+                    j.created_at
+                FROM deltallm_batch_job j
+                WHERE j.status IN ('queued', 'in_progress', 'finalizing')
+                  {filter_sql}
+                  AND j.tenant_scope_type IS NOT NULL
+                  AND j.tenant_scope_type <> ''
+                  AND j.tenant_scope_id IS NOT NULL
+                  AND j.tenant_scope_id <> ''
+                ORDER BY queue_order ASC NULLS FIRST,
+                         j.created_at ASC
+                LIMIT $2
+            ),
             candidate_jobs AS (
                 SELECT
                     targeted_jobs.batch_id,
+                    MIN(targeted_jobs.candidate_priority) AS candidate_priority,
                     MIN(targeted_jobs.queue_order) AS queue_order,
                     MIN(targeted_jobs.created_at) AS created_at
                 FROM (
-                    SELECT batch_id, queue_order, created_at
+                    SELECT batch_id, 0 AS candidate_priority, queue_order, created_at
                     FROM field_candidate_jobs
                     UNION ALL
-                    SELECT batch_id, queue_order, created_at
+                    SELECT batch_id, 0 AS candidate_priority, queue_order, created_at
                     FROM aggregate_candidate_jobs
                     UNION ALL
-                    SELECT batch_id, queue_order, created_at
+                    SELECT batch_id, 0 AS candidate_priority, queue_order, created_at
                     FROM aggregate_drift_candidate_jobs
+                    UNION ALL
+                    SELECT batch_id, 1 AS candidate_priority, queue_order, created_at
+                    FROM tenant_scope_scan_jobs
                 ) targeted_jobs
                 GROUP BY targeted_jobs.batch_id
             ),
@@ -393,7 +511,8 @@ class BatchMaintenanceRepository:
                             THEN GREATEST(COALESCE(item_stats.remaining_work_units, 0), 0)::int
                         ELSE GREATEST(COALESCE(j.remaining_work_units, 0), 0)::int
                     END AS derived_remaining_work_units,
-                    s.queue_order
+                    s.queue_order,
+                    s.candidate_priority
                 FROM candidate_jobs s
                 JOIN deltallm_batch_job j ON j.batch_id = s.batch_id
                 LEFT JOIN item_stats ON item_stats.batch_id = j.batch_id
@@ -433,14 +552,17 @@ class BatchMaintenanceRepository:
                       OR ci.queue_entered_at IS NULL
                       OR ci.scheduler_debug IS NULL
                       OR ci.scheduler_debug->>'estimator_version' IS DISTINCT FROM $3
+                      OR ci.scheduler_debug->>'tenant_scope_preference' IS DISTINCT FROM $5
                       OR (
                           ci.tenant_scope_type = 'api_key'
                           AND ci.tenant_scope_id IS NOT NULL
                           AND ci.tenant_scope_id <> ''
                           AND ci.tenant_scope_id NOT LIKE $4
                       )
+                      OR ci.candidate_priority = 1
                   )
-                ORDER BY ci.queue_order ASC NULLS FIRST,
+                ORDER BY ci.candidate_priority ASC,
+                         ci.queue_order ASC NULLS FIRST,
                          ci.created_at ASC
                 FOR UPDATE OF j SKIP LOCKED
                 LIMIT $1
@@ -470,10 +592,7 @@ class BatchMaintenanceRepository:
                 item_scheduling_model_group
             FROM candidate c
             """,
-            limit,
-            scan_limit,
-            ESTIMATOR_VERSION,
-            f"{API_KEY_TENANT_SCOPE_PREFIX}%",
+            *params,
         )
         jobs = 0
         for row in job_candidates:
@@ -513,32 +632,28 @@ class BatchMaintenanceRepository:
                 else str(candidate.get("item_scheduling_model_group") or "").strip()
                 or resolve_model_group(scheduling_model, self.model_group_resolver)
             )
+            candidate_api_key = (
+                existing_tenant_scope_id
+                if existing_tenant_scope_type == "api_key" and existing_tenant_scope_id
+                else candidate.get("created_by_api_key")
+            )
             dimensions = build_scheduling_dimensions(
                 endpoint=str(candidate.get("endpoint") or ""),
                 model=scheduling_model,
                 model_group=scheduling_model_group,
                 organization_id=candidate.get("created_by_organization_id"),
                 team_id=candidate.get("created_by_team_id"),
-                api_key=candidate.get("created_by_api_key"),
+                api_key=candidate_api_key,
                 user_id=candidate.get("created_by_user_id"),
                 service_tier=candidate.get("service_tier"),
                 estimated_work_units=estimated_work_units,
                 remaining_work_units=remaining_work_units,
                 estimator_version=ESTIMATOR_VERSION,
                 mixed_model=mixed_model,
+                tenant_scope_preference=self.tenant_scope_preference,
             )
             tenant_scope_type = dimensions.tenant_scope_type
             tenant_scope_id = dimensions.tenant_scope_id
-            if existing_tenant_scope_type == "api_key":
-                tenant_scope_type = "api_key"
-                raw_api_key_scope_id = existing_tenant_scope_id or str(
-                    candidate.get("created_by_api_key") or ""
-                ).strip()
-                if raw_api_key_scope_id:
-                    tenant_scope_id = stable_tenant_scope_id(
-                        scope_type="api_key",
-                        scope_id=raw_api_key_scope_id,
-                    )
             updated = await prisma.query_raw(
                 """
                 UPDATE deltallm_batch_job
@@ -546,14 +661,8 @@ class BatchMaintenanceRepository:
                     scheduling_model = $3,
                     scheduling_model_group = $4,
                     scheduling_endpoint = COALESCE(NULLIF(scheduling_endpoint, ''), $5),
-                    tenant_scope_type = COALESCE(NULLIF(tenant_scope_type, ''), $6),
-                    tenant_scope_id = CASE
-                        WHEN COALESCE(NULLIF(tenant_scope_type, ''), $6) = 'api_key'
-                         AND tenant_scope_id IS NOT NULL
-                         AND tenant_scope_id <> ''
-                         AND tenant_scope_id NOT LIKE $14 THEN $7
-                        ELSE COALESCE(NULLIF(tenant_scope_id, ''), $7)
-                    END,
+                    tenant_scope_type = $6,
+                    tenant_scope_id = $7,
                     service_tier = COALESCE(NULLIF(service_tier, ''), $8),
                     estimated_work_units = GREATEST($9, 0),
                     remaining_work_units = GREATEST($10, 0),
@@ -571,8 +680,10 @@ class BatchMaintenanceRepository:
                       OR scheduling_endpoint = ''
                       OR tenant_scope_type IS NULL
                       OR tenant_scope_type = ''
+                      OR tenant_scope_type IS DISTINCT FROM $6
                       OR tenant_scope_id IS NULL
                       OR tenant_scope_id = ''
+                      OR tenant_scope_id IS DISTINCT FROM $7
                       OR service_tier IS NULL
                       OR service_tier = ''
                       OR estimated_work_units IS DISTINCT FROM GREATEST($9, 0)
@@ -592,6 +703,10 @@ class BatchMaintenanceRepository:
                       OR (
                           $13::jsonb ? 'estimator_version'
                           AND scheduler_debug->>'estimator_version' IS DISTINCT FROM $13::jsonb->>'estimator_version'
+                      )
+                      OR (
+                          $13::jsonb ? 'tenant_scope_preference'
+                          AND scheduler_debug->>'tenant_scope_preference' IS DISTINCT FROM $13::jsonb->>'tenant_scope_preference'
                       )
                   )
                 RETURNING batch_id
@@ -614,9 +729,26 @@ class BatchMaintenanceRepository:
             jobs += len(updated)
         return jobs
 
-    async def _backfill_scheduler_dimensions_locked(self, prisma: Any, *, limit: int) -> dict[str, int]:
+    async def _backfill_scheduler_dimensions_locked(
+        self,
+        prisma: Any,
+        *,
+        limit: int,
+        service_tier: str | None,
+        model_group: str | None,
+    ) -> dict[str, int]:
         if not await self._try_backfill_lock(prisma):
             return {"jobs": 0, "items": 0, "skipped": 1}
-        items = await self._backfill_active_items(prisma, limit=limit)
-        jobs = await self._backfill_active_jobs(prisma, limit=limit)
+        items = await self._backfill_active_items(
+            prisma,
+            limit=limit,
+            service_tier=service_tier,
+            model_group=model_group,
+        )
+        jobs = await self._backfill_active_jobs(
+            prisma,
+            limit=limit,
+            service_tier=service_tier,
+            model_group=model_group,
+        )
         return {"jobs": jobs, "items": items}

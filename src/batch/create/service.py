@@ -508,7 +508,7 @@ class BatchCreateSessionService:
 
     def _http_exception_for_promotion_error(self, exc: BatchCreatePromotionError) -> HTTPException:
         code = str(exc.code or "promotion_failed")
-        if code == "pending_limit_exceeded":
+        if code in {"pending_limit_exceeded", "tenant_queued_work_limit_exceeded"}:
             return HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc))
         if code in {"staged_artifact_invalid", "item_count_mismatch"}:
             return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))

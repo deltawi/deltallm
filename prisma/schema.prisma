@@ -1065,6 +1065,32 @@ model DeltaLLM_BatchItem {
   @@map("deltallm_batch_item")
 }
 
+model DeltaLLM_BatchSchedulerFlow {
+  flow_id              String    @id
+  service_tier         String
+  model_group          String
+  tenant_scope_type    String
+  tenant_scope_id      String
+  weight               Int       @default(1)
+  quantum_work_units   Int       @default(16)
+  deficit_work_units   Int       @default(0)
+  active               Boolean   @default(false)
+  queued_jobs          Int       @default(0)
+  queued_work_units    Int       @default(0)
+  in_flight_work_units Int       @default(0)
+  skip_reason_summary  Json      @default("{}")
+  last_selected_at     DateTime?
+  last_refilled_at     DateTime?
+  created_at           DateTime  @default(now())
+  updated_at           DateTime  @default(now())
+
+  @@unique([service_tier, model_group, tenant_scope_type, tenant_scope_id], map: "deltallm_batch_scheduler_flow_key")
+  @@index([service_tier, model_group, active, last_selected_at], map: "deltallm_batch_scheduler_flow_tier_model_active_idx")
+  @@index([model_group, active, deficit_work_units], map: "deltallm_batch_scheduler_flow_model_deficit_idx")
+  @@index([tenant_scope_type, tenant_scope_id, active], map: "deltallm_batch_scheduler_flow_tenant_active_idx")
+  @@map("deltallm_batch_scheduler_flow")
+}
+
 model DeltaLLM_BatchCompletionOutbox {
   completion_id    String   @id @default(uuid())
   batch_id         String

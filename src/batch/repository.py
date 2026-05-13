@@ -13,8 +13,10 @@ from src.batch.models import (
     BatchItemRecord,
     BatchJobRecord,
     BatchJobStatus,
+    BatchFairShareClaimResult,
     BatchModelBacklogRecord,
     BatchModelInFlightRecord,
+    BatchSchedulerFlowRecord,
     BatchWorkClaim,
 )
 from src.batch.repositories import (
@@ -24,14 +26,22 @@ from src.batch.repositories import (
     BatchJobRepository,
     BatchMaintenanceRepository,
 )
+from src.batch.scheduling import parse_tenant_scope_preference
 
 
 class BatchRepository:
     """Compatibility facade delegating batch persistence by concern."""
 
-    def __init__(self, prisma_client: Any | None = None, *, model_group_resolver: Any | None = None) -> None:
+    def __init__(
+        self,
+        prisma_client: Any | None = None,
+        *,
+        model_group_resolver: Any | None = None,
+        tenant_scope_preference: tuple[str, ...] | list[str] | str | None = None,
+    ) -> None:
         self.prisma = prisma_client
         self.model_group_resolver = model_group_resolver
+        self.tenant_scope_preference = parse_tenant_scope_preference(tenant_scope_preference)
         self.create_sessions = BatchCreateSessionRepository(prisma_client)
         self.files = BatchFileRepository(prisma_client)
         self.jobs = BatchJobRepository(prisma_client, model_group_resolver=model_group_resolver)
@@ -40,15 +50,27 @@ class BatchRepository:
         self.maintenance = BatchMaintenanceRepository(
             prisma_client,
             model_group_resolver=model_group_resolver,
+            tenant_scope_preference=self.tenant_scope_preference,
         )
 
     def with_prisma(self, prisma_client: Any | None) -> BatchRepository:
-        return BatchRepository(prisma_client, model_group_resolver=self.model_group_resolver)
+        return BatchRepository(
+            prisma_client,
+            model_group_resolver=self.model_group_resolver,
+            tenant_scope_preference=self.tenant_scope_preference,
+        )
 
     def set_model_group_resolver(self, model_group_resolver: Any | None) -> None:
         self.model_group_resolver = model_group_resolver
         self.jobs.model_group_resolver = model_group_resolver
         self.maintenance.model_group_resolver = model_group_resolver
+
+    def set_tenant_scope_preference(
+        self,
+        tenant_scope_preference: tuple[str, ...] | list[str] | str | None,
+    ) -> None:
+        self.tenant_scope_preference = parse_tenant_scope_preference(tenant_scope_preference)
+        self.maintenance.tenant_scope_preference = self.tenant_scope_preference
 
     async def create_file(
         self,
@@ -110,7 +132,13 @@ class BatchRepository:
         size_class: str | None = None,
         queue_entered_at: datetime | None = None,
         scheduler_debug: dict[str, Any] | None = None,
+        tenant_scope_preference: tuple[str, ...] | list[str] | None = None,
     ) -> BatchJobRecord | None:
+        effective_tenant_scope_preference = (
+            tenant_scope_preference
+            if tenant_scope_preference is not None
+            else self.tenant_scope_preference
+        )
         return await self.jobs.create_job(
             batch_id=batch_id,
             endpoint=endpoint,
@@ -137,6 +165,7 @@ class BatchRepository:
             size_class=size_class,
             queue_entered_at=queue_entered_at,
             scheduler_debug=scheduler_debug,
+            tenant_scope_preference=effective_tenant_scope_preference,
         )
 
     async def get_job(self, batch_id: str) -> BatchJobRecord | None:
@@ -213,6 +242,8 @@ class BatchRepository:
         capacity_service_tier: str | None = None,
         capacity_max_in_flight_items: int | None = None,
         capacity_max_in_flight_work_units: int | None = None,
+        tenant_scope_type: str | None = None,
+        tenant_scope_id: str | None = None,
         allow_oversized_first_item: bool = True,
     ) -> BatchWorkClaim | None:
         return await self.jobs.claim_next_work(
@@ -228,6 +259,8 @@ class BatchRepository:
             capacity_service_tier=capacity_service_tier,
             capacity_max_in_flight_items=capacity_max_in_flight_items,
             capacity_max_in_flight_work_units=capacity_max_in_flight_work_units,
+            tenant_scope_type=tenant_scope_type,
+            tenant_scope_id=tenant_scope_id,
             allow_oversized_first_item=allow_oversized_first_item,
         )
 
@@ -236,6 +269,105 @@ class BatchRepository:
 
     async def list_model_group_in_flight(self) -> list[BatchModelInFlightRecord]:
         return await self.jobs.list_model_group_in_flight()
+
+    async def refresh_scheduler_flows(
+        self,
+        *,
+        service_tier: str | None = None,
+        model_group: str | None = None,
+        base_quantum_work_units: int = 16,
+        max_deficit_multiplier: int = 8,
+    ) -> list[BatchSchedulerFlowRecord]:
+        return await self.jobs.refresh_scheduler_flows(
+            service_tier=service_tier,
+            model_group=model_group,
+            base_quantum_work_units=base_quantum_work_units,
+            max_deficit_multiplier=max_deficit_multiplier,
+        )
+
+    async def list_scheduler_flows(
+        self,
+        *,
+        service_tier: str | None = None,
+        model_group: str | None = None,
+        tenant_scope_type: str | None = None,
+        active: bool | None = None,
+    ) -> list[BatchSchedulerFlowRecord]:
+        return await self.jobs.list_scheduler_flows(
+            service_tier=service_tier,
+            model_group=model_group,
+            tenant_scope_type=tenant_scope_type,
+            active=active,
+        )
+
+    async def claim_next_fair_share_work(
+        self,
+        *,
+        worker_id: str,
+        service_tier: str,
+        model_group: str,
+        max_items: int,
+        max_work_units: int,
+        lease_seconds: int,
+        capacity_max_in_flight_items: int | None = None,
+        capacity_max_in_flight_work_units: int | None = None,
+        base_quantum_work_units: int = 16,
+        max_deficit_multiplier: int = 8,
+        tenant_max_in_flight_work_units: int = 0,
+    ) -> BatchFairShareClaimResult:
+        return await self.jobs.claim_next_fair_share_work(
+            worker_id=worker_id,
+            service_tier=service_tier,
+            model_group=model_group,
+            max_items=max_items,
+            max_work_units=max_work_units,
+            lease_seconds=lease_seconds,
+            capacity_max_in_flight_items=capacity_max_in_flight_items,
+            capacity_max_in_flight_work_units=capacity_max_in_flight_work_units,
+            base_quantum_work_units=base_quantum_work_units,
+            max_deficit_multiplier=max_deficit_multiplier,
+            tenant_max_in_flight_work_units=tenant_max_in_flight_work_units,
+        )
+
+    async def recommend_next_fair_share_flow(
+        self,
+        *,
+        service_tier: str,
+        model_group: str,
+        max_items: int,
+        max_work_units: int,
+        base_quantum_work_units: int = 16,
+        max_deficit_multiplier: int = 8,
+        tenant_max_in_flight_work_units: int = 0,
+    ) -> BatchFairShareClaimResult:
+        return await self.jobs.recommend_next_fair_share_flow(
+            service_tier=service_tier,
+            model_group=model_group,
+            max_items=max_items,
+            max_work_units=max_work_units,
+            base_quantum_work_units=base_quantum_work_units,
+            max_deficit_multiplier=max_deficit_multiplier,
+            tenant_max_in_flight_work_units=tenant_max_in_flight_work_units,
+        )
+
+    async def get_tenant_queued_work_units(
+        self,
+        *,
+        tenant_scope_type: str,
+        tenant_scope_id: str,
+        created_by_api_key: str | None = None,
+        created_by_team_id: str | None = None,
+        created_by_organization_id: str | None = None,
+        created_by_user_id: str | None = None,
+    ) -> int:
+        return await self.jobs.get_tenant_queued_work_units(
+            tenant_scope_type=tenant_scope_type,
+            tenant_scope_id=tenant_scope_id,
+            created_by_api_key=created_by_api_key,
+            created_by_team_id=created_by_team_id,
+            created_by_organization_id=created_by_organization_id,
+            created_by_user_id=created_by_user_id,
+        )
 
     async def diagnose_empty_work_claim(self) -> str:
         return await self.jobs.diagnose_empty_work_claim()
@@ -574,8 +706,18 @@ class BatchRepository:
     async def delete_job_metadata(self, batch_id: str) -> None:
         await self.maintenance.delete_job_metadata(batch_id)
 
-    async def backfill_scheduler_dimensions(self, *, limit: int = 500) -> dict[str, int]:
-        return await self.maintenance.backfill_scheduler_dimensions(limit=limit)
+    async def backfill_scheduler_dimensions(
+        self,
+        *,
+        limit: int = 500,
+        service_tier: str | None = None,
+        model_group: str | None = None,
+    ) -> dict[str, int]:
+        return await self.maintenance.backfill_scheduler_dimensions(
+            limit=limit,
+            service_tier=service_tier,
+            model_group=model_group,
+        )
 
     async def list_expired_unreferenced_files(self, *, now: datetime, limit: int = 100) -> list[BatchFileRecord]:
         return await self.files.list_expired_unreferenced_files(now=now, limit=limit)

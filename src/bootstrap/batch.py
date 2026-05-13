@@ -27,7 +27,7 @@ from src.batch.create.session_stager import BatchCreateSessionStager
 from src.batch.create.staging import BatchCreateArtifactStorageBackend
 from src.batch.completion_outbox import BatchCompletionOutboxWorker, BatchCompletionOutboxWorkerConfig
 from src.batch.service import BatchService
-from src.batch.scheduling import BatchModelCapacityConfig, BatchModelCapacityResolver
+from src.batch.scheduling import BatchModelCapacityConfig, BatchModelCapacityResolver, BatchTenantFairShareConfig
 from src.batch.storage import LocalBatchArtifactStorage, S3BatchArtifactStorage
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
 from src.bootstrap.status import BootstrapStatus
@@ -62,10 +62,18 @@ def _batch_worker_id(role: str) -> str:
     )
 
 
+def _batch_scheduler_active_enabled_for_creation(general: Any) -> bool:
+    return bool(
+        getattr(general, "embeddings_batch_scheduler_enabled", False)
+        or getattr(general, "embeddings_batch_tenant_fair_share_enabled", False)
+    )
+
+
 @dataclass
 class BatchRuntime:
     backpressure: BatchBackpressureCoordinator | None = None
     model_capacity_resolver: BatchModelCapacityResolver | None = None
+    tenant_fair_share_config: BatchTenantFairShareConfig | None = None
     worker: BatchExecutorWorker | None = None
     worker_task: Task[None] | None = None
     completion_outbox_worker: BatchCompletionOutboxWorker | None = None
@@ -192,7 +200,7 @@ def _build_create_session_promoter(
         tx_max_wait_seconds=general.embeddings_batch_create_promotion_tx_max_wait_seconds,
         tx_timeout_seconds=general.embeddings_batch_create_promotion_tx_timeout_seconds,
         model_group_resolver=model_group_resolver,
-        scheduler_enabled=getattr(general, "embeddings_batch_scheduler_enabled", False),
+        scheduler_enabled=_batch_scheduler_active_enabled_for_creation(general),
         scheduler_shadow_enabled=getattr(general, "embeddings_batch_scheduler_shadow_enabled", False),
         strict_model_homogeneity_enabled=getattr(
             general,
@@ -200,6 +208,12 @@ def _build_create_session_promoter(
             False,
         ),
         default_service_tier=getattr(general, "embeddings_batch_scheduler_default_service_tier", "standard"),
+        tenant_scope_preference=getattr(
+            general,
+            "embeddings_batch_tenant_scope_preference",
+            "organization,team,api_key,user",
+        ),
+        tenant_max_queued_work_units=getattr(general, "embeddings_batch_tenant_max_queued_work_units", 0),
     )
 
 
@@ -219,6 +233,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         app.state.batch_scheduler_backfill_worker = None
         app.state.batch_backpressure = None
         app.state.batch_model_capacity_resolver = None
+        app.state.batch_tenant_fair_share_config = None
         runtime.statuses = (BootstrapStatus("embeddings_batch", "disabled"),)
         return runtime
 
@@ -245,6 +260,11 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
     )
     app.state.batch_backpressure = runtime.backpressure
     model_capacity_config = BatchModelCapacityConfig.from_settings(cfg.general_settings)
+    tenant_fair_share_config = BatchTenantFairShareConfig.from_settings(cfg.general_settings)
+    set_repository_tenant_scope_preference = getattr(repository, "set_tenant_scope_preference", None)
+    if callable(set_repository_tenant_scope_preference):
+        set_repository_tenant_scope_preference(tenant_fair_share_config.tenant_scope_preference)
+    runtime.tenant_fair_share_config = tenant_fair_share_config
     if model_capacity_config.enabled:
         runtime.model_capacity_resolver = BatchModelCapacityResolver(
             repository=repository,
@@ -254,6 +274,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
             backpressure=runtime.backpressure,
         )
     app.state.batch_model_capacity_resolver = runtime.model_capacity_resolver
+    app.state.batch_tenant_fair_share_config = tenant_fair_share_config
     app.state.batch_service = BatchService(
         repository=repository,
         storage=batch_storage,
@@ -301,6 +322,16 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
                     cfg.general_settings.embeddings_batch_work_claim_min_items_for_microbatch
                 ),
                 model_capacity_enabled=model_capacity_config.enabled,
+                scheduler_shadow_enabled=getattr(
+                    cfg.general_settings,
+                    "embeddings_batch_scheduler_shadow_enabled",
+                    False,
+                ),
+                tenant_fair_share_enabled=tenant_fair_share_config.enabled,
+                tenant_fair_share_base_quantum_work_units=tenant_fair_share_config.base_quantum_work_units,
+                tenant_fair_share_max_deficit_multiplier=tenant_fair_share_config.max_deficit_multiplier,
+                tenant_max_in_flight_work_units=tenant_fair_share_config.tenant_max_in_flight_work_units,
+                tenant_fair_share_disabled_model_groups=tenant_fair_share_config.disabled_model_groups,
                 finalization_first=cfg.general_settings.embeddings_batch_finalization_first,
                 max_attempts=cfg.general_settings.embeddings_batch_max_attempts,
                 retry_initial_seconds=cfg.general_settings.embeddings_batch_retry_initial_seconds,
@@ -409,7 +440,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         ),
         idempotency_enabled=cfg.general_settings.embeddings_batch_create_idempotency_enabled,
         model_group_resolver=model_group_resolver,
-        scheduler_enabled=getattr(cfg.general_settings, "embeddings_batch_scheduler_enabled", False),
+        scheduler_enabled=_batch_scheduler_active_enabled_for_creation(cfg.general_settings),
         scheduler_shadow_enabled=getattr(cfg.general_settings, "embeddings_batch_scheduler_shadow_enabled", False),
         strict_model_homogeneity_enabled=getattr(
             cfg.general_settings,

@@ -23,7 +23,9 @@ from src.batch.models import BatchItemCreate, BatchJobRecord, BatchJobStatus
 from src.batch.scheduling import (
     ESTIMATOR_VERSION,
     MIXED_MODEL_GROUP,
+    build_scheduling_dimensions,
     estimate_request_work_units,
+    parse_tenant_scope_preference,
     resolve_model_group,
     resolve_scheduler_version,
     size_class_for_work_units,
@@ -32,7 +34,7 @@ from src.batch.storage import BatchArtifactLineTooLongError
 from src.metrics import (
     increment_batch_create_session_action,
     increment_batch_mixed_model_job,
-    increment_batch_scheduler_shadow_decision,
+    increment_batch_scheduler_shadow_record,
 )
 
 if TYPE_CHECKING:
@@ -90,6 +92,8 @@ class BatchCreateSessionPromoter:
         scheduler_shadow_enabled: bool = False,
         strict_model_homogeneity_enabled: bool = False,
         default_service_tier: str = "standard",
+        tenant_scope_preference: tuple[str, ...] | list[str] | str | None = None,
+        tenant_max_queued_work_units: int = 0,
     ) -> None:
         self.repository = repository
         self.staging = staging
@@ -104,6 +108,8 @@ class BatchCreateSessionPromoter:
         self.scheduler_shadow_enabled = bool(scheduler_shadow_enabled)
         self.strict_model_homogeneity_enabled = bool(strict_model_homogeneity_enabled)
         self.default_service_tier = str(default_service_tier or "standard").strip() or "standard"
+        self.tenant_scope_preference = parse_tenant_scope_preference(tenant_scope_preference)
+        self.tenant_max_queued_work_units = max(0, int(tenant_max_queued_work_units or 0))
 
     async def promote_session(self, session_id: str) -> BatchCreatePromotionResult:
         session = await self.repository.create_sessions.get_session(session_id)
@@ -363,6 +369,11 @@ class BatchCreateSessionPromoter:
                 )
 
             await self._enforce_pending_capacity(session=session, repository=tx_repository)
+            await self._enforce_tenant_queued_work_capacity(
+                session=session,
+                scheduling_summary=scheduling_summary,
+                repository=tx_repository,
+            )
 
             await asyncio.to_thread(spool.seek, 0)
             scheduler_version = resolve_scheduler_version(
@@ -396,6 +407,7 @@ class BatchCreateSessionPromoter:
                     "mixed_model": scheduling_summary.mixed_model,
                     "strict_model_homogeneity_enabled": self.strict_model_homogeneity_enabled,
                 },
+                tenant_scope_preference=self.tenant_scope_preference,
             )
             if job is None:
                 raise BatchCreatePromotionError(
@@ -430,7 +442,7 @@ class BatchCreateSessionPromoter:
                     retryable=True,
                 )
             if self.scheduler_shadow_enabled and scheduler_version == "scheduler_v2_shadow":
-                increment_batch_scheduler_shadow_decision(result="recorded")
+                increment_batch_scheduler_shadow_record(result="recorded")
 
             return BatchCreatePromotionResult(
                 session_id=completed.session_id,
@@ -471,6 +483,51 @@ class BatchCreateSessionPromoter:
             created_by_team_id=created_by_team_id,
         )
         self._raise_if_pending_capacity_exceeded(active_jobs)
+
+    async def _enforce_tenant_queued_work_capacity(
+        self,
+        *,
+        session: BatchCreateSessionRecord,
+        scheduling_summary: BatchCreatePromotionSchedulingSummary,
+        repository: BatchRepository,
+    ) -> None:
+        if self.tenant_max_queued_work_units <= 0:
+            return
+        dimensions = build_scheduling_dimensions(
+            endpoint=session.endpoint,
+            model=session.inferred_model,
+            model_group=scheduling_summary.scheduling_model_group,
+            organization_id=session.created_by_organization_id,
+            team_id=session.created_by_team_id,
+            api_key=session.created_by_api_key,
+            user_id=session.created_by_user_id,
+            service_tier=session.effective_service_tier or self.default_service_tier,
+            estimated_work_units=scheduling_summary.estimated_work_units,
+            remaining_work_units=scheduling_summary.remaining_work_units,
+            tenant_scope_preference=self.tenant_scope_preference,
+        )
+        await repository.acquire_scope_advisory_lock(
+            scope_type=dimensions.tenant_scope_type,
+            scope_id=dimensions.tenant_scope_id,
+        )
+        queued_work_units = await repository.get_tenant_queued_work_units(
+            tenant_scope_type=dimensions.tenant_scope_type,
+            tenant_scope_id=dimensions.tenant_scope_id,
+            created_by_api_key=session.created_by_api_key,
+            created_by_team_id=session.created_by_team_id,
+            created_by_organization_id=session.created_by_organization_id,
+            created_by_user_id=session.created_by_user_id,
+        )
+        if queued_work_units + max(0, int(scheduling_summary.remaining_work_units or 0)) <= self.tenant_max_queued_work_units:
+            return
+        raise BatchCreatePromotionError(
+            (
+                "Tenant queued batch work exceeds "
+                f"embeddings_batch_tenant_max_queued_work_units ({self.tenant_max_queued_work_units})"
+            ),
+            code="tenant_queued_work_limit_exceeded",
+            retryable=True,
+        )
 
     def _raise_if_pending_capacity_exceeded(self, active_jobs: int) -> None:
         if int(active_jobs) < self.max_pending_batches_per_scope:

@@ -29,6 +29,7 @@ from src.batch.cleanup import BatchCleanupConfig, BatchRetentionCleanupWorker
 from src.batch.models import BATCH_JOB_STATUS_VALUES, BatchCompletionOutboxCreate, BatchItemCreate
 from src.batch.models import encode_operator_failed_reason
 from src.batch.repository import BatchRepository
+from src.batch.scheduling import stable_tenant_scope_id
 from src.batch.service import BatchService
 from src.batch.storage import LocalBatchArtifactStorage, S3BatchArtifactStorage
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
@@ -142,6 +143,7 @@ async def _connect_prisma() -> Any:
 
 
 async def _reset_batch_tables(db: Any) -> None:
+    await db.execute_raw("DELETE FROM deltallm_batch_scheduler_flow")
     await db.execute_raw("DELETE FROM deltallm_batch_create_session")
     await db.execute_raw("DELETE FROM deltallm_batch_completion_outbox")
     await db.execute_raw("DELETE FROM deltallm_batch_item")
@@ -597,6 +599,72 @@ async def test_db_backed_backfill_repairs_complete_scheduler_aggregate_drift(bat
     )
     assert result == {"jobs": 1, "items": 0}
     assert rows == [{"estimated_work_units": 10, "remaining_work_units": 10, "size_class": "xs"}]
+
+
+@pytest.mark.asyncio
+async def test_db_backed_backfill_repairs_stale_tenant_scope_with_current_debug(batch_db) -> None:
+    repository = BatchRepository(
+        batch_db,
+        tenant_scope_preference=("api_key", "team", "organization", "user"),
+    )
+    input_file_id = await _seed_batch_file(repository)
+    raw_api_key = "sk-db-stale-tenant-scope"
+    expected_scope_id = stable_tenant_scope_id(scope_type="api_key", scope_id=raw_api_key)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key=raw_api_key,
+        created_by_user_id="user-a",
+        created_by_team_id="team-a",
+        created_by_organization_id="org-a",
+        expires_at=None,
+        status="queued",
+        total_items=1,
+        scheduler_version="fifo_v1",
+        scheduling_model="m1",
+        scheduling_model_group="m1",
+        scheduling_endpoint="/v1/embeddings",
+        tenant_scope_type="team",
+        tenant_scope_id="team-a",
+        service_tier="standard",
+        estimated_work_units=1,
+        remaining_work_units=1,
+        size_class="xs",
+        scheduler_debug={
+            "estimator_version": "v1",
+            "tenant_scope_preference": "api_key,team,organization,user",
+        },
+    )
+    assert job is not None
+    assert await repository.create_items(
+        job.batch_id,
+        [
+            BatchItemCreate(
+                line_number=1,
+                custom_id="c1",
+                request_body={"model": "m1", "input": "a"},
+                scheduling_model="m1",
+                scheduling_model_group="m1",
+                estimated_work_units=1,
+            )
+        ],
+    ) == 1
+
+    result = await repository.backfill_scheduler_dimensions(limit=10)
+
+    rows = await batch_db.query_raw(
+        """
+        SELECT tenant_scope_type, tenant_scope_id, scheduler_debug
+        FROM deltallm_batch_job
+        WHERE batch_id = $1
+        """,
+        job.batch_id,
+    )
+    assert result == {"jobs": 1, "items": 0}
+    assert rows[0]["tenant_scope_type"] == "api_key"
+    assert rows[0]["tenant_scope_id"] == expected_scope_id
 
 
 async def _seed_create_session_input_file(repository: BatchRepository) -> str:
@@ -2698,6 +2766,558 @@ async def test_db_backed_capacity_claim_serializes_in_flight_work_units(batch_db
         """
     )
     assert int(rows[0]["in_flight_work_units"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_db_backed_scheduler_flow_refresh_persists_tenant_backlog(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    for team_id, custom_id in (("team-a", "a1"), ("team-b", "b1")):
+        job = await repository.create_job(
+            endpoint="/v1/embeddings",
+            input_file_id=input_file_id,
+            model="m1",
+            metadata=None,
+            created_by_api_key=f"key-{team_id}",
+            created_by_user_id=None,
+            created_by_team_id=team_id,
+            expires_at=None,
+        )
+        assert job is not None
+        assert await repository.create_items(
+            job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1,
+                    custom_id=custom_id,
+                    request_body={"model": "m1", "input": custom_id},
+                    estimated_work_units=2,
+                )
+            ],
+        ) == 1
+        await repository.set_job_queued(job.batch_id, 1)
+
+    flows = await repository.refresh_scheduler_flows(service_tier="standard", model_group="m1")
+
+    assert {flow.tenant_scope_id for flow in flows} == {"team-a", "team-b"}
+    assert all(flow.active for flow in flows)
+    assert all(flow.queued_work_units >= 1 for flow in flows)
+    persisted = await batch_db.query_raw(
+        """
+        SELECT tenant_scope_type, tenant_scope_id, active
+        FROM deltallm_batch_scheduler_flow
+        WHERE model_group = 'm1'
+        ORDER BY tenant_scope_id ASC
+        """
+    )
+    assert [(row["tenant_scope_type"], row["tenant_scope_id"], row["active"]) for row in persisted] == [
+        ("team", "team-a", True),
+        ("team", "team-b", True),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_db_backed_scheduler_flow_refresh_excludes_active_leased_work(
+    batch_db,
+) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id="team-a",
+        expires_at=None,
+    )
+    assert job is not None
+    assert await repository.create_items(
+        job.batch_id,
+        [
+            BatchItemCreate(
+                line_number=1,
+                custom_id="leased",
+                request_body={"model": "m1", "input": "leased"},
+                estimated_work_units=2,
+            ),
+            BatchItemCreate(
+                line_number=2,
+                custom_id="queued",
+                request_body={"model": "m1", "input": "queued"},
+                estimated_work_units=3,
+            ),
+        ],
+    ) == 2
+    await repository.set_job_queued(job.batch_id, 2)
+
+    claim = await repository.claim_next_work(
+        worker_id="w1",
+        max_items=1,
+        max_work_units=2,
+        lease_seconds=120,
+        allowed_model_groups=["m1"],
+        service_tier="standard",
+        claim_order="fifo",
+        capacity_model_group="m1",
+        capacity_service_tier="standard",
+        capacity_max_in_flight_items=10,
+        capacity_max_in_flight_work_units=20,
+        tenant_scope_type="team",
+        tenant_scope_id="team-a",
+        allow_oversized_first_item=False,
+    )
+    assert claim is not None
+    assert claim.claimed_work_units == 2
+
+    flows = await repository.refresh_scheduler_flows(service_tier="standard", model_group="m1")
+
+    assert len(flows) == 1
+    flow = flows[0]
+    assert flow.queued_jobs == 1
+    assert flow.queued_work_units == 3
+    assert flow.in_flight_work_units == 2
+    assert flow.next_item_work_units == 3
+
+
+@pytest.mark.asyncio
+async def test_db_backed_tenant_queued_work_units_counts_future_deferred_pending(
+    batch_db,
+) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id="team-a",
+        expires_at=None,
+    )
+    assert job is not None
+    assert await repository.create_items(
+        job.batch_id,
+        [
+            BatchItemCreate(
+                line_number=1,
+                custom_id="future",
+                request_body={"model": "m1", "input": "future"},
+                estimated_work_units=5,
+                not_before_at=datetime.now(tz=UTC) + timedelta(days=1),
+            ),
+            BatchItemCreate(
+                line_number=2,
+                custom_id="ready",
+                request_body={"model": "m1", "input": "ready"},
+                estimated_work_units=2,
+            ),
+        ],
+    ) == 2
+    await repository.set_job_queued(job.batch_id, 2)
+
+    queued_work_units = await repository.get_tenant_queued_work_units(
+        tenant_scope_type="team",
+        tenant_scope_id="team-a",
+    )
+
+    assert queued_work_units == 7
+
+
+@pytest.mark.asyncio
+async def test_db_backed_fair_share_claim_repairs_legacy_raw_api_key_scope(
+    batch_db,
+) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    raw_api_key = "sk-legacy-fair-share-claim"
+    stable_scope_id = stable_tenant_scope_id(scope_type="api_key", scope_id=raw_api_key)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key=raw_api_key,
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert job is not None
+    assert await repository.create_items(
+        job.batch_id,
+        [
+            BatchItemCreate(
+                line_number=1,
+                custom_id="legacy-api-key-1",
+                request_body={"model": "m1", "input": "legacy"},
+                estimated_work_units=1,
+            )
+        ],
+    ) == 1
+    await repository.set_job_queued(job.batch_id, 1)
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_job
+        SET tenant_scope_type = 'api_key',
+            tenant_scope_id = $2
+        WHERE batch_id = $1
+        """,
+        job.batch_id,
+        raw_api_key,
+    )
+
+    result = await repository.claim_next_fair_share_work(
+        worker_id="w1",
+        service_tier="standard",
+        model_group="m1",
+        max_items=4,
+        max_work_units=4,
+        lease_seconds=120,
+        capacity_max_in_flight_items=4,
+        base_quantum_work_units=1,
+        max_deficit_multiplier=4,
+    )
+
+    assert result.claim is not None
+    assert result.claim.batch_id == job.batch_id
+    assert result.claim.tenant_scope_type == "api_key"
+    assert result.claim.tenant_scope_id == stable_scope_id
+    rows = await batch_db.query_raw(
+        """
+        SELECT tenant_scope_id
+        FROM deltallm_batch_job
+        WHERE batch_id = $1
+        """,
+        job.batch_id,
+    )
+    assert rows[0]["tenant_scope_id"] == stable_scope_id
+
+
+@pytest.mark.asyncio
+async def test_db_backed_fair_share_claim_rotates_between_tenants(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    for team_id, custom_id in (("team-a", "a1"), ("team-b", "b1")):
+        job = await repository.create_job(
+            endpoint="/v1/embeddings",
+            input_file_id=input_file_id,
+            model="m1",
+            metadata=None,
+            created_by_api_key=f"key-{team_id}",
+            created_by_user_id=None,
+            created_by_team_id=team_id,
+            expires_at=None,
+        )
+        assert job is not None
+        assert await repository.create_items(
+            job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1,
+                    custom_id=custom_id,
+                    request_body={"model": "m1", "input": custom_id},
+                    estimated_work_units=1,
+                )
+            ],
+        ) == 1
+        await repository.set_job_queued(job.batch_id, 1)
+
+    first = await repository.claim_next_fair_share_work(
+        worker_id="w1",
+        service_tier="standard",
+        model_group="m1",
+        max_items=4,
+        max_work_units=4,
+        lease_seconds=120,
+        capacity_max_in_flight_items=4,
+        base_quantum_work_units=1,
+        max_deficit_multiplier=4,
+    )
+    second = await repository.claim_next_fair_share_work(
+        worker_id="w2",
+        service_tier="standard",
+        model_group="m1",
+        max_items=4,
+        max_work_units=4,
+        lease_seconds=120,
+        capacity_max_in_flight_items=4,
+        base_quantum_work_units=1,
+        max_deficit_multiplier=4,
+    )
+
+    assert first.claim is not None
+    assert second.claim is not None
+    assert {first.claim.tenant_scope_id, second.claim.tenant_scope_id} == {"team-a", "team-b"}
+
+
+@pytest.mark.asyncio
+async def test_db_backed_fair_share_preserves_weighted_tenant_share(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    for team_id in ("team-a", "team-b"):
+        job = await repository.create_job(
+            endpoint="/v1/embeddings",
+            input_file_id=input_file_id,
+            model="m1",
+            metadata=None,
+            created_by_api_key=f"key-{team_id}",
+            created_by_user_id=None,
+            created_by_team_id=team_id,
+            expires_at=None,
+        )
+        assert job is not None
+        assert await repository.create_items(
+            job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=line_number,
+                    custom_id=f"{team_id}-{line_number}",
+                    request_body={"model": "m1", "input": f"{team_id}-{line_number}"},
+                    estimated_work_units=1,
+                )
+                for line_number in range(1, 7)
+            ],
+        ) == 6
+        await repository.set_job_queued(job.batch_id, 6)
+
+    await repository.refresh_scheduler_flows(service_tier="standard", model_group="m1")
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_scheduler_flow
+        SET weight = 4,
+            quantum_work_units = 4
+        WHERE service_tier = 'standard'
+          AND model_group = 'm1'
+          AND tenant_scope_id = 'team-a'
+        """
+    )
+
+    claims: list[str] = []
+    for claim_index in range(5):
+        result = await repository.claim_next_fair_share_work(
+            worker_id=f"w{claim_index}",
+            service_tier="standard",
+            model_group="m1",
+            max_items=1,
+            max_work_units=1,
+            lease_seconds=120,
+            capacity_max_in_flight_items=20,
+            base_quantum_work_units=1,
+            max_deficit_multiplier=8,
+        )
+        assert result.claim is not None
+        assert result.claim.tenant_scope_id is not None
+        claims.append(result.claim.tenant_scope_id)
+
+    assert claims.count("team-a") == 4
+    assert claims.count("team-b") == 1
+    flows = await repository.list_scheduler_flows(model_group="m1", service_tier="standard")
+    weighted = next(flow for flow in flows if flow.tenant_scope_id == "team-a")
+    assert weighted.weight == 4
+    assert weighted.quantum_work_units == 4
+
+
+@pytest.mark.asyncio
+async def test_db_backed_fair_share_claim_uses_oversized_fallback_for_single_flow(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id="team-a",
+        expires_at=None,
+    )
+    assert job is not None
+    assert await repository.create_items(
+        job.batch_id,
+        [
+            BatchItemCreate(
+                line_number=1,
+                custom_id="oversized-1",
+                request_body={"model": "m1", "input": "large"},
+                estimated_work_units=10,
+            )
+        ],
+    ) == 1
+    await repository.set_job_queued(job.batch_id, 1)
+
+    result = await repository.claim_next_fair_share_work(
+        worker_id="w1",
+        service_tier="standard",
+        model_group="m1",
+        max_items=4,
+        max_work_units=1,
+        lease_seconds=120,
+        capacity_max_in_flight_items=4,
+        base_quantum_work_units=1,
+        max_deficit_multiplier=2,
+    )
+
+    assert result.claim is not None
+    assert result.claim.batch_id == job.batch_id
+    assert result.claim.claimed_work_units == 10
+
+
+@pytest.mark.asyncio
+async def test_db_backed_fair_share_claim_eventually_serves_oversized_tenant(
+    batch_db,
+) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    now = datetime.now(tz=UTC)
+    small_job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id="team-a",
+        expires_at=None,
+        queue_entered_at=now,
+    )
+    oversized_job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-b",
+        created_by_user_id=None,
+        created_by_team_id="team-b",
+        expires_at=None,
+        queue_entered_at=now + timedelta(seconds=1),
+    )
+    assert small_job is not None
+    assert oversized_job is not None
+    assert await repository.create_items(
+        small_job.batch_id,
+        [
+            BatchItemCreate(
+                line_number=line_number,
+                custom_id=f"small-{line_number}",
+                request_body={"model": "m1", "input": f"small-{line_number}"},
+                estimated_work_units=1,
+            )
+            for line_number in range(1, 8)
+        ],
+    ) == 7
+    assert await repository.create_items(
+        oversized_job.batch_id,
+        [
+            BatchItemCreate(
+                line_number=1,
+                custom_id="oversized-1",
+                request_body={"model": "m1", "input": "large"},
+                estimated_work_units=10,
+            )
+        ],
+    ) == 1
+    await repository.set_job_queued(small_job.batch_id, 7)
+    await repository.set_job_queued(oversized_job.batch_id, 1)
+
+    claimed_tenants: list[str | None] = []
+    for claim_index in range(6):
+        result = await repository.claim_next_fair_share_work(
+            worker_id=f"w{claim_index}",
+            service_tier="standard",
+            model_group="m1",
+            max_items=1,
+            max_work_units=1,
+            lease_seconds=120,
+            capacity_max_in_flight_items=20,
+            capacity_max_in_flight_work_units=40,
+            base_quantum_work_units=1,
+            max_deficit_multiplier=4,
+        )
+        assert result.claim is not None
+        claimed_tenants.append(result.claim.tenant_scope_id)
+        if result.claim.tenant_scope_id == "team-b":
+            break
+
+    assert "team-a" in claimed_tenants
+    assert "team-b" in claimed_tenants
+    oversized_items = await repository.list_items(oversized_job.batch_id)
+    assert [item.status for item in oversized_items] == ["in_progress"]
+
+
+@pytest.mark.asyncio
+async def test_db_backed_fair_share_claim_reports_tenant_in_flight_full(
+    batch_db,
+) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id="team-a",
+        expires_at=None,
+    )
+    assert job is not None
+    assert await repository.create_items(
+        job.batch_id,
+        [
+            BatchItemCreate(
+                line_number=1,
+                custom_id="leased",
+                request_body={"model": "m1", "input": "leased"},
+                estimated_work_units=2,
+            ),
+            BatchItemCreate(
+                line_number=2,
+                custom_id="blocked",
+                request_body={"model": "m1", "input": "blocked"},
+                estimated_work_units=1,
+            ),
+        ],
+    ) == 2
+    await repository.set_job_queued(job.batch_id, 2)
+    first_claim = await repository.claim_next_work(
+        worker_id="w1",
+        max_items=1,
+        max_work_units=2,
+        lease_seconds=120,
+        allowed_model_groups=["m1"],
+        service_tier="standard",
+        claim_order="fifo",
+        capacity_model_group="m1",
+        capacity_service_tier="standard",
+        capacity_max_in_flight_items=10,
+        capacity_max_in_flight_work_units=20,
+        tenant_scope_type="team",
+        tenant_scope_id="team-a",
+        allow_oversized_first_item=False,
+    )
+    assert first_claim is not None
+    assert first_claim.claimed_work_units == 2
+
+    result = await repository.claim_next_fair_share_work(
+        worker_id="w2",
+        service_tier="standard",
+        model_group="m1",
+        max_items=4,
+        max_work_units=4,
+        lease_seconds=120,
+        capacity_max_in_flight_items=10,
+        capacity_max_in_flight_work_units=20,
+        base_quantum_work_units=1,
+        max_deficit_multiplier=1,
+        tenant_max_in_flight_work_units=2,
+    )
+
+    assert result.claim is None
+    assert result.result == "tenant_in_flight_full"
+    items = await repository.list_items(job.batch_id)
+    assert [item.status for item in items] == ["in_progress", "pending"]
 
 
 @pytest.mark.asyncio
