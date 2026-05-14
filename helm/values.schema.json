@@ -280,6 +280,12 @@
               "type": "array",
               "items": { "type": "string" }
             },
+            "embeddings_batch_size_aware_scheduling_enabled": { "type": "boolean" },
+            "embeddings_batch_aging_seconds_per_work_unit": { "type": "integer", "minimum": 1 },
+            "embeddings_batch_max_age_credit_work_units": { "type": "integer", "minimum": 0 },
+            "embeddings_batch_min_large_job_claim_interval_seconds": { "type": "integer", "minimum": 0 },
+            "embeddings_batch_small_job_fast_lane_enabled": { "type": "boolean" },
+            "embeddings_batch_small_job_max_work_units": { "type": "integer", "minimum": 1 },
             "embeddings_batch_finalization_first": { "type": "boolean" }
           }
         }

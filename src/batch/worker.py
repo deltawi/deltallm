@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import time
 from datetime import UTC, datetime
@@ -365,6 +366,12 @@ class BatchExecutorWorker:
             selection = await resolver.select_model_group(max_items=max_items, max_work_units=max_work_units)
             selections = [selection] if selection is not None else []
 
+        size_aware_shadow_enabled = (
+            self.config.scheduler_shadow_enabled and self.config.size_aware_scheduling_enabled
+        )
+        size_aware_active_enabled = (
+            self.config.size_aware_scheduling_enabled and not size_aware_shadow_enabled
+        )
         for selection in selections:
             snapshot = selection.snapshot
             record_selection = getattr(resolver, "record_selection", None)
@@ -377,6 +384,24 @@ class BatchExecutorWorker:
             )
             fair_share_model_enabled = self._tenant_fair_share_model_enabled(snapshot.model_group)
             if self.config.tenant_fair_share_enabled and fair_share_model_enabled:
+                shadow_recommendation = None
+                if size_aware_shadow_enabled:
+                    shadow_recommendation = await self.repository.recommend_next_fair_share_flow(
+                        service_tier=snapshot.service_tier,
+                        model_group=snapshot.model_group,
+                        max_items=selection.max_items,
+                        max_work_units=selection.max_work_units,
+                        base_quantum_work_units=self.config.tenant_fair_share_base_quantum_work_units,
+                        max_deficit_multiplier=self.config.tenant_fair_share_max_deficit_multiplier,
+                        tenant_max_in_flight_work_units=self.config.tenant_max_in_flight_work_units,
+                        size_aware_scheduling_enabled=True,
+                        aging_seconds_per_work_unit=self.config.aging_seconds_per_work_unit,
+                        max_age_credit_work_units=self.config.max_age_credit_work_units,
+                        min_large_job_claim_interval_seconds=(
+                            self.config.min_large_job_claim_interval_seconds
+                        ),
+                        small_job_max_work_units=self.config.small_job_max_work_units,
+                    )
                 fair_share_result = await self.repository.claim_next_fair_share_work(
                     worker_id=self.config.worker_id,
                     service_tier=snapshot.service_tier,
@@ -389,6 +414,16 @@ class BatchExecutorWorker:
                     base_quantum_work_units=self.config.tenant_fair_share_base_quantum_work_units,
                     max_deficit_multiplier=self.config.tenant_fair_share_max_deficit_multiplier,
                     tenant_max_in_flight_work_units=self.config.tenant_max_in_flight_work_units,
+                    size_aware_scheduling_enabled=size_aware_active_enabled,
+                    aging_seconds_per_work_unit=self.config.aging_seconds_per_work_unit,
+                    max_age_credit_work_units=self.config.max_age_credit_work_units,
+                    min_large_job_claim_interval_seconds=(
+                        self.config.min_large_job_claim_interval_seconds
+                    ),
+                    small_job_max_work_units=self.config.small_job_max_work_units,
+                    work_claim_min_items_for_microbatch=(
+                        self.config.work_claim_min_items_for_microbatch
+                    ),
                 )
                 claim = fair_share_result.claim
                 result = fair_share_result.result
@@ -407,6 +442,13 @@ class BatchExecutorWorker:
                         )
                     else:
                         result = "claimed"
+                if shadow_recommendation is not None:
+                    self._record_shadow_fair_share_decision(
+                        recommendation=shadow_recommendation,
+                        claim=claim,
+                        model_group=snapshot.model_group,
+                        service_tier=snapshot.service_tier,
+                    )
             elif self.config.scheduler_shadow_enabled and fair_share_model_enabled:
                 fair_share_result = await self.repository.recommend_next_fair_share_flow(
                     service_tier=snapshot.service_tier,
@@ -416,6 +458,13 @@ class BatchExecutorWorker:
                     base_quantum_work_units=self.config.tenant_fair_share_base_quantum_work_units,
                     max_deficit_multiplier=self.config.tenant_fair_share_max_deficit_multiplier,
                     tenant_max_in_flight_work_units=self.config.tenant_max_in_flight_work_units,
+                    size_aware_scheduling_enabled=self.config.size_aware_scheduling_enabled,
+                    aging_seconds_per_work_unit=self.config.aging_seconds_per_work_unit,
+                    max_age_credit_work_units=self.config.max_age_credit_work_units,
+                    min_large_job_claim_interval_seconds=(
+                        self.config.min_large_job_claim_interval_seconds
+                    ),
+                    small_job_max_work_units=self.config.small_job_max_work_units,
                 )
                 claim = await self._claim_model_capacity_work_slice(
                     snapshot=snapshot,
@@ -496,6 +545,14 @@ class BatchExecutorWorker:
                 service_tier=service_tier,
                 result="actual_empty",
             )
+            BatchExecutorWorker._log_shadow_fair_share_job_decision(
+                recommendation=recommendation,
+                claim=None,
+                model_group=model_group,
+                service_tier=service_tier,
+                result="actual_empty",
+                claim_matches_recommended_flow=False,
+            )
             BatchExecutorWorker._observe_shadow_fair_share_ratio(
                 recommendation=recommendation,
                 claim=None,
@@ -510,6 +567,33 @@ class BatchExecutorWorker:
             service_tier=service_tier,
             result="match" if claim_matches_flow else "mismatch",
         )
+        recommended_batch_id = str(getattr(recommendation, "recommended_batch_id", "") or "")
+        if recommended_batch_id and claim_matches_flow:
+            increment_batch_scheduler_shadow_decision(
+                model_group=model_group,
+                service_tier=service_tier,
+                result=(
+                    "job_match"
+                    if str(getattr(claim, "batch_id", "") or "") == recommended_batch_id
+                    else "job_mismatch"
+                ),
+            )
+        if recommended_batch_id:
+            BatchExecutorWorker._log_shadow_fair_share_job_decision(
+                recommendation=recommendation,
+                claim=claim,
+                model_group=model_group,
+                service_tier=service_tier,
+                result=(
+                    "job_match"
+                    if claim_matches_flow
+                    and str(getattr(claim, "batch_id", "") or "") == recommended_batch_id
+                    else "job_mismatch"
+                    if claim_matches_flow
+                    else "flow_mismatch"
+                ),
+                claim_matches_recommended_flow=claim_matches_flow,
+            )
         BatchExecutorWorker._observe_shadow_fair_share_ratio(
             recommendation=recommendation,
             claim=claim,
@@ -529,6 +613,62 @@ class BatchExecutorWorker:
             and str(getattr(claim, "tenant_scope_id", "") or "")
             == str(getattr(flow, "tenant_scope_id", "") or "")
         )
+
+    @staticmethod
+    def _log_shadow_fair_share_job_decision(
+        *,
+        recommendation: Any,
+        claim: Any | None,
+        model_group: str,
+        service_tier: str,
+        result: str,
+        claim_matches_recommended_flow: bool,
+    ) -> None:
+        flow = getattr(recommendation, "flow", None)
+        if flow is None:
+            return
+        logger.info(
+            "batch scheduler shadow job decision",
+            extra={
+                "shadow_model_group": model_group,
+                "shadow_service_tier": service_tier,
+                "shadow_tenant_scope_type": str(getattr(flow, "tenant_scope_type", "") or ""),
+                "shadow_tenant_scope_id": BatchExecutorWorker._shadow_tenant_scope_label(flow),
+                "shadow_recommended_batch_id": str(
+                    getattr(recommendation, "recommended_batch_id", "") or ""
+                ),
+                "shadow_actual_batch_id": str(getattr(claim, "batch_id", "") or ""),
+                "shadow_recommended_size_class": str(
+                    getattr(recommendation, "recommended_size_class", "") or ""
+                ),
+                "shadow_recommended_scheduler_rank": getattr(
+                    recommendation,
+                    "recommended_scheduler_rank",
+                    None,
+                ),
+                "shadow_recommended_age_credit_work_units": getattr(
+                    recommendation,
+                    "recommended_age_credit_work_units",
+                    None,
+                ),
+                "shadow_recommended_policy_reason": str(
+                    getattr(recommendation, "recommended_policy_reason", "") or ""
+                ),
+                "shadow_result": result,
+                "shadow_flow_match": bool(claim_matches_recommended_flow),
+            },
+        )
+
+    @staticmethod
+    def _shadow_tenant_scope_label(flow: Any) -> str:
+        scope_type = str(getattr(flow, "tenant_scope_type", "") or "").strip()
+        scope_id = str(getattr(flow, "tenant_scope_id", "") or "").strip()
+        if not scope_id:
+            return ""
+        if scope_type == "api_key":
+            return "api_key"
+        digest = hashlib.sha256(scope_id.encode("utf-8")).hexdigest()
+        return f"{scope_type or 'tenant'}:{digest[:12]}"
 
     @staticmethod
     def _observe_shadow_fair_share_ratio(

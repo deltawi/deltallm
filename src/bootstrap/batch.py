@@ -27,7 +27,12 @@ from src.batch.create.session_stager import BatchCreateSessionStager
 from src.batch.create.staging import BatchCreateArtifactStorageBackend
 from src.batch.completion_outbox import BatchCompletionOutboxWorker, BatchCompletionOutboxWorkerConfig
 from src.batch.service import BatchService
-from src.batch.scheduling import BatchModelCapacityConfig, BatchModelCapacityResolver, BatchTenantFairShareConfig
+from src.batch.scheduling import (
+    BatchModelCapacityConfig,
+    BatchModelCapacityResolver,
+    BatchSizeAgingConfig,
+    BatchTenantFairShareConfig,
+)
 from src.batch.storage import LocalBatchArtifactStorage, S3BatchArtifactStorage
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
 from src.bootstrap.status import BootstrapStatus
@@ -66,6 +71,7 @@ def _batch_scheduler_active_enabled_for_creation(general: Any) -> bool:
     return bool(
         getattr(general, "embeddings_batch_scheduler_enabled", False)
         or getattr(general, "embeddings_batch_tenant_fair_share_enabled", False)
+        or getattr(general, "embeddings_batch_size_aware_scheduling_enabled", False)
     )
 
 
@@ -261,6 +267,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
     app.state.batch_backpressure = runtime.backpressure
     model_capacity_config = BatchModelCapacityConfig.from_settings(cfg.general_settings)
     tenant_fair_share_config = BatchTenantFairShareConfig.from_settings(cfg.general_settings)
+    size_aging_config = BatchSizeAgingConfig.from_settings(cfg.general_settings)
     set_repository_tenant_scope_preference = getattr(repository, "set_tenant_scope_preference", None)
     if callable(set_repository_tenant_scope_preference):
         set_repository_tenant_scope_preference(tenant_fair_share_config.tenant_scope_preference)
@@ -275,6 +282,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         )
     app.state.batch_model_capacity_resolver = runtime.model_capacity_resolver
     app.state.batch_tenant_fair_share_config = tenant_fair_share_config
+    app.state.batch_size_aging_config = size_aging_config
     app.state.batch_service = BatchService(
         repository=repository,
         storage=batch_storage,
@@ -332,6 +340,14 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
                 tenant_fair_share_max_deficit_multiplier=tenant_fair_share_config.max_deficit_multiplier,
                 tenant_max_in_flight_work_units=tenant_fair_share_config.tenant_max_in_flight_work_units,
                 tenant_fair_share_disabled_model_groups=tenant_fair_share_config.disabled_model_groups,
+                size_aware_scheduling_enabled=size_aging_config.enabled,
+                aging_seconds_per_work_unit=size_aging_config.aging_seconds_per_work_unit,
+                max_age_credit_work_units=size_aging_config.max_age_credit_work_units,
+                min_large_job_claim_interval_seconds=(
+                    size_aging_config.min_large_job_claim_interval_seconds
+                ),
+                small_job_fast_lane_enabled=size_aging_config.small_job_fast_lane_enabled,
+                small_job_max_work_units=size_aging_config.small_job_max_work_units,
                 finalization_first=cfg.general_settings.embeddings_batch_finalization_first,
                 max_attempts=cfg.general_settings.embeddings_batch_max_attempts,
                 retry_initial_seconds=cfg.general_settings.embeddings_batch_retry_initial_seconds,

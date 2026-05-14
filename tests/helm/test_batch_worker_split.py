@@ -109,6 +109,12 @@ def test_helm_schema_allows_tenant_fair_share_settings() -> None:
         "type": "array",
         "items": {"type": "string"},
     }
+    assert general_settings["embeddings_batch_size_aware_scheduling_enabled"] == {"type": "boolean"}
+    assert general_settings["embeddings_batch_aging_seconds_per_work_unit"]["minimum"] == 1
+    assert general_settings["embeddings_batch_max_age_credit_work_units"]["minimum"] == 0
+    assert general_settings["embeddings_batch_min_large_job_claim_interval_seconds"]["minimum"] == 0
+    assert general_settings["embeddings_batch_small_job_fast_lane_enabled"] == {"type": "boolean"}
+    assert general_settings["embeddings_batch_small_job_max_work_units"]["minimum"] == 1
 
 
 def test_helm_rejects_scheduler_without_work_slice_claiming() -> None:
@@ -148,6 +154,26 @@ def test_helm_rejects_fair_share_without_model_capacity() -> None:
     )
 
     assert "tenant fair-share scheduling requires embeddings_batch_model_capacity_enabled=true" in error
+
+
+def test_helm_rejects_size_aware_without_fair_share_or_shadow() -> None:
+    error = _render_error(
+        "--set",
+        "config.general_settings.embeddings_batch_size_aware_scheduling_enabled=true",
+        "--set",
+        "config.general_settings.embeddings_batch_model_capacity_enabled=true",
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_claim_mode=work_slice",
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_strict_model_homogeneity_enabled=true",
+        "--show-only",
+        "templates/configmap.yaml",
+    )
+
+    assert (
+        "size-aware batch scheduling requires embeddings_batch_tenant_fair_share_enabled=true "
+        "or embeddings_batch_scheduler_shadow_enabled=true"
+    ) in error
 
 
 def test_helm_rejects_model_capacity_without_work_slice_claiming() -> None:
@@ -211,6 +237,51 @@ def test_helm_allows_fair_share_with_scheduler_prerequisites() -> None:
     ]
     assert api_general["embeddings_batch_tenant_fair_share_enabled"] is True
     assert api_general["embeddings_batch_model_capacity_enabled"] is True
+
+
+def test_helm_allows_size_aware_with_fair_share_prerequisites() -> None:
+    docs = _render(
+        "--set",
+        "config.general_settings.embeddings_batch_size_aware_scheduling_enabled=true",
+        "--set",
+        "config.general_settings.embeddings_batch_tenant_fair_share_enabled=true",
+        "--set",
+        "config.general_settings.embeddings_batch_model_capacity_enabled=true",
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_claim_mode=work_slice",
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_strict_model_homogeneity_enabled=true",
+        "--show-only",
+        "templates/configmap.yaml",
+    )
+
+    api_general = _config_yaml(_by_kind_and_name(docs, "ConfigMap", "deltallm-config"))[
+        "general_settings"
+    ]
+    assert api_general["embeddings_batch_size_aware_scheduling_enabled"] is True
+
+
+def test_helm_allows_size_aware_shadow_with_scheduler_prerequisites() -> None:
+    docs = _render(
+        "--set",
+        "config.general_settings.embeddings_batch_size_aware_scheduling_enabled=true",
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_shadow_enabled=true",
+        "--set",
+        "config.general_settings.embeddings_batch_model_capacity_enabled=true",
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_claim_mode=work_slice",
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_strict_model_homogeneity_enabled=true",
+        "--show-only",
+        "templates/configmap.yaml",
+    )
+
+    api_general = _config_yaml(_by_kind_and_name(docs, "ConfigMap", "deltallm-config"))[
+        "general_settings"
+    ]
+    assert api_general["embeddings_batch_size_aware_scheduling_enabled"] is True
+    assert api_general["embeddings_batch_scheduler_shadow_enabled"] is True
 
 
 def test_default_service_selector_remains_upgrade_safe() -> None:

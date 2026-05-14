@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.api.admin.endpoints.batches import _scheduler_flow_response
+from src.api.admin.endpoints.batches import _scheduler_flow_response, _scheduler_policy_fields
 from src.batch.models import (
     BatchFairShareClaimResult,
     BatchJobStatus,
@@ -19,7 +19,12 @@ from src.batch.repository import BatchRepository
 from src.batch.repositories.job_repository import BatchJobRepository, flow_from_row
 from src.batch.repositories.mappers import job_from_row
 from src.batch.repositories import job_repository as job_repository_module
-from src.batch.scheduling import API_KEY_TENANT_SCOPE_PREFIX, MIXED_MODEL_GROUP, stable_tenant_scope_id
+from src.batch.scheduling import (
+    API_KEY_TENANT_SCOPE_PREFIX,
+    MIXED_MODEL_GROUP,
+    BatchSizeAgingConfig,
+    stable_tenant_scope_id,
+)
 
 
 class _PrismaSpy:
@@ -260,9 +265,41 @@ async def test_claim_next_work_can_use_fifo_order_for_capacity_claims() -> None:
     )
 
     assert claim is None
-    assert "ORDER BY COALESCE(j.queue_entered_at, j.created_at) ASC" in prisma.sql
+    assert "COALESCE(j.queue_entered_at, j.created_at) ASC" in prisma.sql
     assert "j.batch_id ASC" in prisma.sql
     assert "ORDER BY j.last_scheduled_at ASC NULLS FIRST" not in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_claim_next_work_can_rank_jobs_by_size_and_aging() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    claim = await repository.claim_next_work(
+        worker_id="worker-1",
+        max_items=10,
+        max_work_units=25,
+        lease_seconds=120,
+        allowed_model_groups=["model-a"],
+        service_tier="standard",
+        claim_order="size_aging",
+        size_aware_scheduling_enabled=True,
+        aging_seconds_per_work_unit=15,
+        max_age_credit_work_units=200,
+        min_large_job_claim_interval_seconds=45,
+        small_job_max_work_units=50,
+        work_claim_min_items_for_microbatch=4,
+    )
+
+    assert claim is None
+    assert "scheduler_rank" in prisma.sql
+    assert "age_credit_work_units" in prisma.sql
+    assert "large_job_progress_floor DESC" in prisma.sql
+    assert "next_policy_reason" in prisma.sql
+    assert "jsonb_build_object" in prisma.sql
+    assert "LEAST($2, (SELECT selected_max_items FROM selected_job))" in prisma.sql
+    assert "COALESCE(j.queue_entered_at, j.created_at) ASC" in prisma.sql
+    assert prisma.params[-5:] == (15, 200, 45, 50, 4)
 
 
 @pytest.mark.asyncio
@@ -599,6 +636,50 @@ def test_scheduler_flow_admin_response_includes_skip_reason_summary() -> None:
     assert response["skip_reason_summary"] == {"tenant_in_flight_full": 2}
 
 
+def test_scheduler_policy_fields_compute_live_rank_without_debug() -> None:
+    fields = _scheduler_policy_fields(
+        {
+            "queue_entered_at": datetime.now(tz=UTC) - timedelta(seconds=90),
+            "last_scheduled_at": None,
+            "remaining_work_units": 100,
+            "estimated_work_units": 100,
+            "total_items": 1,
+            "size_class": "s",
+            "scheduler_debug": {},
+        }
+    )
+
+    assert fields["age_seconds"] is not None
+    assert fields["age_credit_work_units"] == 3
+    assert fields["scheduler_rank"] == pytest.approx(97.0, abs=0.01)
+    assert fields["next_policy_reason"] == "aging_credit"
+
+
+def test_scheduler_policy_fields_use_size_aging_config_for_live_rank() -> None:
+    fields = _scheduler_policy_fields(
+        {
+            "queue_entered_at": datetime.now(tz=UTC) - timedelta(seconds=90),
+            "last_scheduled_at": None,
+            "remaining_work_units": 100,
+            "estimated_work_units": 100,
+            "total_items": 1,
+            "size_class": "s",
+            "scheduler_debug": {},
+        },
+        size_aging_config=BatchSizeAgingConfig(
+            enabled=True,
+            aging_seconds_per_work_unit=60,
+            max_age_credit_work_units=1_000,
+            min_large_job_claim_interval_seconds=300,
+            small_job_max_work_units=25,
+        ),
+    )
+
+    assert fields["age_credit_work_units"] == 1
+    assert fields["scheduler_rank"] == pytest.approx(98.5, abs=0.01)
+    assert fields["next_policy_reason"] == "aging_credit"
+
+
 @pytest.mark.parametrize(
     ("scope_type", "scope_id"),
     [
@@ -695,6 +776,30 @@ async def test_refresh_scheduler_flows_upserts_durable_flow_state() -> None:
         in prisma.calls[2][0]
     )
     assert prisma.calls[2][1][0] == [flow.flow_id]
+
+
+@pytest.mark.asyncio
+async def test_refresh_scheduler_flows_uses_size_aware_candidate_order() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    flows = await repository.refresh_scheduler_flows(
+        service_tier="standard",
+        model_group="model-a",
+        size_aware_scheduling_enabled=True,
+        aging_seconds_per_work_unit=15,
+        max_age_credit_work_units=200,
+        min_large_job_claim_interval_seconds=45,
+        small_job_max_work_units=50,
+    )
+
+    assert flows == []
+    refresh_sql, refresh_params = prisma.calls[0]
+    assert "ARRAY_AGG(next_item_work_units ORDER BY" in refresh_sql
+    assert "large_job_progress_floor DESC" in refresh_sql
+    assert "scheduler_rank ASC" in refresh_sql
+    assert "GREATEST(0.0" in refresh_sql
+    assert refresh_params == ("model-a", "standard", 15, 200, 45, 50)
 
 
 @pytest.mark.asyncio
@@ -1256,7 +1361,15 @@ async def test_fair_share_claim_reuses_refreshed_flows_after_deficit_refill() ->
 
 @pytest.mark.asyncio
 async def test_fair_share_shadow_recommendation_selects_flow_without_claiming_items() -> None:
-    flow = _scheduler_flow(flow_id="flow-recommended", tenant_scope_id="team-1")
+    flow = _scheduler_flow(
+        flow_id="flow-recommended",
+        tenant_scope_id="team-1",
+        next_batch_id="batch-recommended",
+        next_size_class="xs",
+        next_scheduler_rank=1.0,
+        next_age_credit_work_units=2,
+        next_policy_reason="aging_credit",
+    )
 
     class _TxPrisma:
         @asynccontextmanager
@@ -1267,13 +1380,14 @@ async def test_fair_share_shadow_recommendation_selects_flow_without_claiming_it
         def __init__(self) -> None:
             super().__init__(_TxPrisma())
             self.claim_called = False
+            self.refresh_kwargs: dict[str, object] = {}
 
         async def _try_acquire_scheduler_flow_lock(self, db, **kwargs):  # noqa: ANN001, ANN003
             del db, kwargs
             return True
 
         async def refresh_scheduler_flows(self, **kwargs):  # noqa: ANN003
-            del kwargs
+            self.refresh_kwargs = dict(kwargs)
             return [flow]
 
         async def _record_scheduler_flow_skip_reasons(self, db, skip_reasons):  # noqa: ANN001
@@ -1296,6 +1410,11 @@ async def test_fair_share_shadow_recommendation_selects_flow_without_claiming_it
         model_group="model-a",
         max_items=4,
         max_work_units=16,
+        size_aware_scheduling_enabled=True,
+        aging_seconds_per_work_unit=15,
+        max_age_credit_work_units=200,
+        min_large_job_claim_interval_seconds=45,
+        small_job_max_work_units=50,
     )
 
     assert result.claim is None
@@ -1304,6 +1423,16 @@ async def test_fair_share_shadow_recommendation_selects_flow_without_claiming_it
     assert result.expected_share == 1.0
     assert result.active_flow_count == 1
     assert result.total_in_flight_work_units == 0
+    assert result.recommended_batch_id == "batch-recommended"
+    assert result.recommended_size_class == "xs"
+    assert result.recommended_scheduler_rank == 1.0
+    assert result.recommended_age_credit_work_units == 2
+    assert result.recommended_policy_reason == "aging_credit"
+    assert repository.refresh_kwargs["size_aware_scheduling_enabled"] is True
+    assert repository.refresh_kwargs["aging_seconds_per_work_unit"] == 15
+    assert repository.refresh_kwargs["max_age_credit_work_units"] == 200
+    assert repository.refresh_kwargs["min_large_job_claim_interval_seconds"] == 45
+    assert repository.refresh_kwargs["small_job_max_work_units"] == 50
     assert repository.claim_called is False
 
 

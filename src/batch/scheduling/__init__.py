@@ -27,6 +27,14 @@ from src.batch.scheduling.fair_share import (
     parse_tenant_scope_preference,
     quantum_for_weight,
 )
+from src.batch.scheduling.size_aging import (
+    BatchJobRankInput,
+    BatchJobRankResult,
+    BatchSizeAgingConfig,
+    calculate_size_aging_rank,
+    is_large_size_class,
+    tuned_claim_item_limit,
+)
 from src.batch.scheduling.model_capacity import (
     BatchModelCapacityConfig,
     BatchModelCapacityResolver,
@@ -46,12 +54,17 @@ __all__ = [
     "BatchModelCapacitySelection",
     "BatchModelCapacitySnapshot",
     "BatchTenantFairShareConfig",
+    "BatchJobRankInput",
+    "BatchJobRankResult",
+    "BatchSizeAgingConfig",
     "MIXED_MODEL_GROUP",
     "build_flow_id",
     "build_scheduling_dimensions",
+    "calculate_size_aging_rank",
     "default_flow_weight",
     "display_tenant_scope_id",
     "estimate_request_work_units",
+    "is_large_size_class",
     "max_deficit_for_flow",
     "normalize_service_tier",
     "parse_model_group_list",
@@ -62,4 +75,5 @@ __all__ = [
     "resolve_tenant_scope",
     "size_class_for_work_units",
     "stable_tenant_scope_id",
+    "tuned_claim_item_limit",
 ]

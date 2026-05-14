@@ -26,7 +26,9 @@ from src.metrics import (
     increment_batch_scheduler_deficit_refill,
     increment_batch_scheduler_flow_claim,
     increment_batch_scheduler_flow_skip,
+    increment_batch_scheduler_large_job_floor_claim,
     increment_batch_work_claim,
+    increment_batch_scheduler_size_claim,
     observe_batch_create_latency,
     observe_batch_finalize_latency,
     observe_batch_item_execution_latency,
@@ -34,13 +36,16 @@ from src.metrics import (
     observe_batch_model_group_deferral_seconds,
     observe_batch_microbatch_retry_delay,
     observe_batch_claim_wait_by_model,
+    observe_batch_scheduler_age_credit_work_units,
     observe_batch_scheduler_fairness_ratio,
     observe_batch_scheduler_flow_wait,
+    observe_batch_scheduler_job_rank,
     observe_batch_scheduler_shadow_share_ratio,
     observe_batch_scheduler_model_selection_latency,
     observe_batch_work_claim_items,
     observe_batch_work_claim_latency,
     observe_batch_work_claim_units,
+    observe_batch_time_to_first_claim,
     publish_batch_create_session_summary,
     publish_batch_model_capacity_snapshot,
     publish_batch_scheduler_flow,
@@ -91,6 +96,12 @@ def test_batch_metrics_are_exported() -> None:
         result="claimed",
     )
     increment_batch_scheduler_flow_skip(reason="tenant_in_flight_full")
+    increment_batch_scheduler_size_claim(size_class="s", result="claimed")
+    increment_batch_scheduler_size_claim(size_class="s", result="empty")
+    increment_batch_scheduler_large_job_floor_claim(
+        model_group="embeddings-small",
+        service_tier="standard",
+    )
     increment_batch_scheduler_deficit_refill(model_group="embeddings-small", service_tier="standard", count=2)
     increment_batch_scheduler_shadow_decision(
         model_group="embeddings-small",
@@ -114,6 +125,24 @@ def test_batch_metrics_are_exported() -> None:
     observe_batch_model_group_deferral_seconds(reason="no_healthy_deployments", delay_seconds=5.0)
     observe_batch_microbatch_retry_delay(category="upstream_5xx", delay_seconds=5.0)
     observe_batch_claim_wait_by_model(model_group="embeddings-small", service_tier="standard", wait_seconds=10.0)
+    observe_batch_time_to_first_claim(
+        model_group="embeddings-small",
+        service_tier="standard",
+        size_class="s",
+        wait_seconds=10.0,
+    )
+    observe_batch_scheduler_job_rank(
+        model_group="embeddings-small",
+        service_tier="standard",
+        size_class="s",
+        rank=3.0,
+    )
+    observe_batch_scheduler_age_credit_work_units(
+        model_group="embeddings-small",
+        service_tier="standard",
+        size_class="s",
+        work_units=2,
+    )
     observe_batch_scheduler_flow_wait(
         model_group="embeddings-small",
         service_tier="standard",
@@ -200,6 +229,11 @@ def test_batch_metrics_are_exported() -> None:
     assert "deltallm_batch_scheduler_flow_in_flight_work_units" in metrics_text
     assert "deltallm_batch_scheduler_flow_claims_total" in metrics_text
     assert "deltallm_batch_scheduler_flow_skips_total" in metrics_text
+    assert "deltallm_batch_scheduler_size_claims_total" in metrics_text
+    assert 'result="empty"' in metrics_text
+    assert "deltallm_batch_scheduler_large_job_floor_claims_total" in metrics_text
+    assert "deltallm_batch_scheduler_job_rank" in metrics_text
+    assert "deltallm_batch_scheduler_age_credit_work_units" in metrics_text
     assert "deltallm_batch_scheduler_deficit_refills_total" in metrics_text
     assert "deltallm_batch_scheduler_shadow_decisions_total" in metrics_text
     assert "deltallm_batch_scheduler_shadow_records_total" in metrics_text
@@ -213,6 +247,7 @@ def test_batch_metrics_are_exported() -> None:
     assert "deltallm_batch_model_capacity_snapshot_failures_total" in metrics_text
     assert "deltallm_batch_scheduler_model_selection_latency_seconds" in metrics_text
     assert "deltallm_batch_claim_wait_by_model_seconds" in metrics_text
+    assert "deltallm_batch_time_to_first_claim_seconds" in metrics_text
     assert "deltallm_batch_microbatch_requeues_total" in metrics_text
     assert "deltallm_batch_work_claims_total" in metrics_text
     assert "deltallm_batch_work_claim_items" in metrics_text

@@ -245,6 +245,12 @@ class BatchRepository:
         tenant_scope_type: str | None = None,
         tenant_scope_id: str | None = None,
         allow_oversized_first_item: bool = True,
+        size_aware_scheduling_enabled: bool = False,
+        aging_seconds_per_work_unit: int = 30,
+        max_age_credit_work_units: int = 1_000,
+        min_large_job_claim_interval_seconds: int = 30,
+        small_job_max_work_units: int = 100,
+        work_claim_min_items_for_microbatch: int = 4,
     ) -> BatchWorkClaim | None:
         return await self.jobs.claim_next_work(
             worker_id=worker_id,
@@ -262,6 +268,12 @@ class BatchRepository:
             tenant_scope_type=tenant_scope_type,
             tenant_scope_id=tenant_scope_id,
             allow_oversized_first_item=allow_oversized_first_item,
+            size_aware_scheduling_enabled=size_aware_scheduling_enabled,
+            aging_seconds_per_work_unit=aging_seconds_per_work_unit,
+            max_age_credit_work_units=max_age_credit_work_units,
+            min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
+            small_job_max_work_units=small_job_max_work_units,
+            work_claim_min_items_for_microbatch=work_claim_min_items_for_microbatch,
         )
 
     async def list_model_group_backlog(self) -> list[BatchModelBacklogRecord]:
@@ -277,12 +289,22 @@ class BatchRepository:
         model_group: str | None = None,
         base_quantum_work_units: int = 16,
         max_deficit_multiplier: int = 8,
+        size_aware_scheduling_enabled: bool = False,
+        aging_seconds_per_work_unit: int = 30,
+        max_age_credit_work_units: int = 1_000,
+        min_large_job_claim_interval_seconds: int = 30,
+        small_job_max_work_units: int = 100,
     ) -> list[BatchSchedulerFlowRecord]:
         return await self.jobs.refresh_scheduler_flows(
             service_tier=service_tier,
             model_group=model_group,
             base_quantum_work_units=base_quantum_work_units,
             max_deficit_multiplier=max_deficit_multiplier,
+            size_aware_scheduling_enabled=size_aware_scheduling_enabled,
+            aging_seconds_per_work_unit=aging_seconds_per_work_unit,
+            max_age_credit_work_units=max_age_credit_work_units,
+            min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
+            small_job_max_work_units=small_job_max_work_units,
         )
 
     async def list_scheduler_flows(
@@ -314,6 +336,12 @@ class BatchRepository:
         base_quantum_work_units: int = 16,
         max_deficit_multiplier: int = 8,
         tenant_max_in_flight_work_units: int = 0,
+        size_aware_scheduling_enabled: bool = False,
+        aging_seconds_per_work_unit: int = 30,
+        max_age_credit_work_units: int = 1_000,
+        min_large_job_claim_interval_seconds: int = 30,
+        small_job_max_work_units: int = 100,
+        work_claim_min_items_for_microbatch: int = 4,
     ) -> BatchFairShareClaimResult:
         return await self.jobs.claim_next_fair_share_work(
             worker_id=worker_id,
@@ -327,6 +355,12 @@ class BatchRepository:
             base_quantum_work_units=base_quantum_work_units,
             max_deficit_multiplier=max_deficit_multiplier,
             tenant_max_in_flight_work_units=tenant_max_in_flight_work_units,
+            size_aware_scheduling_enabled=size_aware_scheduling_enabled,
+            aging_seconds_per_work_unit=aging_seconds_per_work_unit,
+            max_age_credit_work_units=max_age_credit_work_units,
+            min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
+            small_job_max_work_units=small_job_max_work_units,
+            work_claim_min_items_for_microbatch=work_claim_min_items_for_microbatch,
         )
 
     async def recommend_next_fair_share_flow(
@@ -339,6 +373,11 @@ class BatchRepository:
         base_quantum_work_units: int = 16,
         max_deficit_multiplier: int = 8,
         tenant_max_in_flight_work_units: int = 0,
+        size_aware_scheduling_enabled: bool = False,
+        aging_seconds_per_work_unit: int = 30,
+        max_age_credit_work_units: int = 1_000,
+        min_large_job_claim_interval_seconds: int = 30,
+        small_job_max_work_units: int = 100,
     ) -> BatchFairShareClaimResult:
         return await self.jobs.recommend_next_fair_share_flow(
             service_tier=service_tier,
@@ -348,6 +387,11 @@ class BatchRepository:
             base_quantum_work_units=base_quantum_work_units,
             max_deficit_multiplier=max_deficit_multiplier,
             tenant_max_in_flight_work_units=tenant_max_in_flight_work_units,
+            size_aware_scheduling_enabled=size_aware_scheduling_enabled,
+            aging_seconds_per_work_unit=aging_seconds_per_work_unit,
+            max_age_credit_work_units=max_age_credit_work_units,
+            min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
+            small_job_max_work_units=small_job_max_work_units,
         )
 
     async def get_tenant_queued_work_units(

@@ -38,9 +38,14 @@ from src.metrics import (
     increment_batch_scheduler_shadow_skip,
     observe_batch_claim_wait_by_model,
     observe_batch_estimated_work_units,
+    increment_batch_scheduler_large_job_floor_claim,
+    increment_batch_scheduler_size_claim,
     observe_batch_scheduler_fairness_ratio,
+    observe_batch_scheduler_age_credit_work_units,
     observe_batch_scheduler_flow_wait,
+    observe_batch_scheduler_job_rank,
     observe_batch_queue_wait,
+    observe_batch_time_to_first_claim,
     publish_batch_scheduler_flows,
 )
 
@@ -91,6 +96,29 @@ def _integer_reason_counts(value: Any) -> dict[str, int]:
     return counts
 
 
+def _optional_text(value: Any) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized or None
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def flow_from_row(row: Any) -> BatchSchedulerFlowRecord:
     row_dict = dict(row)
     return BatchSchedulerFlowRecord(
@@ -115,6 +143,11 @@ def flow_from_row(row: Any) -> BatchSchedulerFlowRecord:
         skip_reasons=_integer_reason_counts(
             row_dict.get("skip_reason_summary") or row_dict.get("skip_reasons")
         ),
+        next_batch_id=_optional_text(row_dict.get("next_batch_id")),
+        next_size_class=_optional_text(row_dict.get("next_size_class")),
+        next_scheduler_rank=_optional_float(row_dict.get("next_scheduler_rank")),
+        next_age_credit_work_units=_optional_int(row_dict.get("next_age_credit_work_units")),
+        next_policy_reason=_optional_text(row_dict.get("next_policy_reason")),
     )
 
 
@@ -142,6 +175,12 @@ class _SchedulerFlowRefreshAggregate:
     in_flight_work_units: int = 0
     oldest_queue_entered_at: datetime | None = None
     next_item_work_units: int = 1
+    next_batch_id: str | None = None
+    next_size_class: str | None = None
+    next_scheduler_rank: float | None = None
+    next_age_credit_work_units: int | None = None
+    next_policy_reason: str | None = None
+    next_candidate_sort_key: tuple[Any, ...] | None = None
 
 
 def _normalize_scheduler_tenant_scope(
@@ -961,6 +1000,11 @@ class BatchJobRepository:
         db: Any | None = None,
         base_quantum_work_units: int = 16,
         max_deficit_multiplier: int = 8,
+        size_aware_scheduling_enabled: bool = False,
+        aging_seconds_per_work_unit: int = 30,
+        max_age_credit_work_units: int = 1_000,
+        min_large_job_claim_interval_seconds: int = 30,
+        small_job_max_work_units: int = 100,
     ) -> list[BatchSchedulerFlowRecord]:
         executor = db or self.prisma
         if executor is None:
@@ -976,6 +1020,67 @@ class BatchJobRepository:
         if normalized_service_tier:
             params.append(normalized_service_tier)
             service_tier_filter_sql = f"AND COALESCE(NULLIF(j.service_tier, ''), 'standard') = ${len(params)}"
+        candidate_order_sql = "queue_entered_at ASC, created_at ASC, batch_id ASC"
+        runnable_rank_fields_sql = """
+                    COALESCE(NULLIF(j.size_class, ''), 'unknown') AS size_class,
+                    false::bool AS large_job_progress_floor,
+                    0::double precision AS scheduler_rank,
+                    0::int AS age_credit_work_units,
+                    'tenant_fair_share'::text AS scheduler_policy_reason
+        """
+        if size_aware_scheduling_enabled:
+            aging_seconds = max(1, int(aging_seconds_per_work_unit or 30))
+            max_age_credit = max(0, int(max_age_credit_work_units or 0))
+            large_interval_seconds = max(0, int(min_large_job_claim_interval_seconds or 0))
+            bounded_small_job_max_work_units = max(1, int(small_job_max_work_units or 100))
+            params.extend(
+                [
+                    aging_seconds,
+                    max_age_credit,
+                    large_interval_seconds,
+                    bounded_small_job_max_work_units,
+                ]
+            )
+            aging_seconds_param = len(params) - 3
+            max_age_credit_param = len(params) - 2
+            large_interval_param = len(params) - 1
+            small_job_max_param = len(params)
+            remaining_work_expr = (
+                "GREATEST(COALESCE(j.remaining_work_units, j.estimated_work_units, "
+                "j.total_items, 1), 1)::double precision"
+            )
+            age_credit_expr = (
+                f"LEAST(${max_age_credit_param}::double precision, "
+                "GREATEST(0.0, EXTRACT(EPOCH FROM (NOW() - COALESCE(j.queue_entered_at, "
+                f"j.created_at))) / ${aging_seconds_param}::double precision))"
+            )
+            large_job_floor_expr = (
+                "LOWER(COALESCE(NULLIF(j.size_class, ''), 'unknown')) IN ('l', 'xl') "
+                f"AND ${large_interval_param}::int > 0 "
+                "AND COALESCE(j.last_scheduled_at, j.queue_entered_at, j.created_at) "
+                f"<= NOW() - (${large_interval_param}::text || ' seconds')::interval"
+            )
+            runnable_rank_fields_sql = f"""
+                    COALESCE(NULLIF(j.size_class, ''), 'unknown') AS size_class,
+                    ({large_job_floor_expr}) AS large_job_progress_floor,
+                    GREATEST(0.0, {remaining_work_expr} - {age_credit_expr})::double precision
+                        AS scheduler_rank,
+                    FLOOR({age_credit_expr})::int AS age_credit_work_units,
+                    CASE
+                    WHEN {large_job_floor_expr} THEN 'large_job_progress_floor'
+                    WHEN FLOOR({age_credit_expr})::int > 0 THEN 'aging_credit'
+                    WHEN {remaining_work_expr} <= ${small_job_max_param}::int
+                        THEN 'small_remaining_work'
+                    ELSE 'tenant_fair_share'
+                    END AS scheduler_policy_reason
+            """
+            candidate_order_sql = """
+                        large_job_progress_floor DESC,
+                        scheduler_rank ASC,
+                        queue_entered_at ASC,
+                        created_at ASC,
+                        batch_id ASC
+            """
         rows = await executor.query_raw(
             f"""
             WITH runnable_jobs AS (
@@ -988,7 +1093,8 @@ class BatchJobRepository:
                     runnable_items.runnable_work_units,
                     COALESCE(j.queue_entered_at, j.created_at) AS queue_entered_at,
                     j.created_at,
-                    runnable_items.next_item_work_units
+                    runnable_items.next_item_work_units,
+                    {runnable_rank_fields_sql}
                 FROM deltallm_batch_job j
                 JOIN LATERAL (
                     SELECT
@@ -1034,8 +1140,24 @@ class BatchJobRepository:
                     COUNT(*)::int AS queued_jobs,
                     COALESCE(SUM(runnable_work_units), 0)::int AS queued_work_units,
                     MIN(queue_entered_at) AS oldest_queue_entered_at,
-                    (ARRAY_AGG(next_item_work_units ORDER BY queue_entered_at ASC, created_at ASC, batch_id ASC))[1]::int
-                        AS next_item_work_units
+                    (ARRAY_AGG(next_item_work_units ORDER BY {candidate_order_sql}))[1]::int
+                        AS next_item_work_units,
+                    (ARRAY_AGG(batch_id ORDER BY {candidate_order_sql}))[1]::text
+                        AS next_batch_id,
+                    (ARRAY_AGG(size_class ORDER BY {candidate_order_sql}))[1]::text
+                        AS next_size_class,
+                    (ARRAY_AGG(scheduler_rank ORDER BY {candidate_order_sql}))[1]::double precision
+                        AS next_scheduler_rank,
+                    (ARRAY_AGG(age_credit_work_units ORDER BY {candidate_order_sql}))[1]::int
+                        AS next_age_credit_work_units,
+                    (ARRAY_AGG(scheduler_policy_reason ORDER BY {candidate_order_sql}))[1]::text
+                        AS next_policy_reason,
+                    (ARRAY_AGG(large_job_progress_floor ORDER BY {candidate_order_sql}))[1]::bool
+                        AS next_large_job_progress_floor,
+                    (ARRAY_AGG(queue_entered_at ORDER BY {candidate_order_sql}))[1]
+                        AS next_queue_entered_at,
+                    (ARRAY_AGG(created_at ORDER BY {candidate_order_sql}))[1]
+                        AS next_created_at
                 FROM runnable_jobs
                 GROUP BY service_tier, model_group, tenant_scope_type, tenant_scope_id
             ),
@@ -1065,7 +1187,16 @@ class BatchJobRepository:
                 COALESCE(q.queued_work_units, 0)::int AS queued_work_units,
                 COALESCE(f.in_flight_work_units, 0)::int AS in_flight_work_units,
                 q.oldest_queue_entered_at,
-                COALESCE(q.next_item_work_units, 1)::int AS next_item_work_units
+                COALESCE(q.next_item_work_units, 1)::int AS next_item_work_units,
+                q.next_batch_id,
+                q.next_size_class,
+                q.next_scheduler_rank,
+                q.next_age_credit_work_units,
+                q.next_policy_reason,
+                COALESCE(q.next_large_job_progress_floor, false)::bool
+                    AS next_large_job_progress_floor,
+                q.next_queue_entered_at,
+                q.next_created_at
             FROM queued q
             FULL OUTER JOIN in_flight f
               ON f.service_tier = q.service_tier
@@ -1122,10 +1253,49 @@ class BatchJobRepository:
                 or row_oldest_queue_entered_at < aggregate.oldest_queue_entered_at
             ):
                 aggregate.oldest_queue_entered_at = row_oldest_queue_entered_at
-                aggregate.next_item_work_units = max(
-                    1,
-                    int(row_dict.get("next_item_work_units") or 1),
+                if _optional_text(row_dict.get("next_batch_id")) is None:
+                    aggregate.next_item_work_units = max(
+                        1,
+                        int(row_dict.get("next_item_work_units") or 1),
+                    )
+            row_next_batch_id = _optional_text(row_dict.get("next_batch_id"))
+            if row_next_batch_id is not None:
+                row_next_queue_entered_at = (
+                    parse_datetime(row_dict.get("next_queue_entered_at"))
+                    or row_oldest_queue_entered_at
+                    or datetime.max.replace(tzinfo=UTC)
                 )
+                row_next_created_at = (
+                    parse_datetime(row_dict.get("next_created_at"))
+                    or row_next_queue_entered_at
+                )
+                row_next_scheduler_rank = _optional_float(row_dict.get("next_scheduler_rank"))
+                row_next_large_floor = bool(row_dict.get("next_large_job_progress_floor"))
+                candidate_sort_key = (
+                    0 if row_next_large_floor else 1,
+                    row_next_scheduler_rank if row_next_scheduler_rank is not None else 0.0,
+                    row_next_queue_entered_at,
+                    row_next_created_at,
+                    row_next_batch_id,
+                )
+                if (
+                    aggregate.next_candidate_sort_key is None
+                    or candidate_sort_key < aggregate.next_candidate_sort_key
+                ):
+                    aggregate.next_candidate_sort_key = candidate_sort_key
+                    aggregate.next_batch_id = row_next_batch_id
+                    aggregate.next_item_work_units = max(
+                        1,
+                        int(row_dict.get("next_item_work_units") or 1),
+                    )
+                    aggregate.next_size_class = _optional_text(row_dict.get("next_size_class"))
+                    aggregate.next_scheduler_rank = row_next_scheduler_rank
+                    aggregate.next_age_credit_work_units = _optional_int(
+                        row_dict.get("next_age_credit_work_units")
+                    )
+                    aggregate.next_policy_reason = _optional_text(
+                        row_dict.get("next_policy_reason")
+                    )
         active_flow_ids: list[str] = []
         refreshed: list[BatchSchedulerFlowRecord] = []
         await _repair_legacy_api_key_scope_ids_for_scheduler_refresh(
@@ -1193,7 +1363,12 @@ class BatchJobRepository:
                 RETURNING
                     *,
                     $14::timestamp AS oldest_queue_entered_at,
-                    $15::int AS next_item_work_units
+                    $15::int AS next_item_work_units,
+                    $16::text AS next_batch_id,
+                    $17::text AS next_size_class,
+                    $18::double precision AS next_scheduler_rank,
+                    $19::int AS next_age_credit_work_units,
+                    $20::text AS next_policy_reason
                 """,
                 flow_id,
                 aggregate.service_tier,
@@ -1210,6 +1385,11 @@ class BatchJobRepository:
                 bounded_max_deficit_multiplier,
                 aggregate.oldest_queue_entered_at,
                 aggregate.next_item_work_units,
+                aggregate.next_batch_id,
+                aggregate.next_size_class,
+                aggregate.next_scheduler_rank,
+                aggregate.next_age_credit_work_units,
+                aggregate.next_policy_reason,
             )
             if upserted:
                 flow = flow_from_row(upserted[0])
@@ -1416,6 +1596,12 @@ class BatchJobRepository:
         base_quantum_work_units: int = 16,
         max_deficit_multiplier: int = 8,
         tenant_max_in_flight_work_units: int = 0,
+        size_aware_scheduling_enabled: bool = False,
+        aging_seconds_per_work_unit: int = 30,
+        max_age_credit_work_units: int = 1_000,
+        min_large_job_claim_interval_seconds: int = 30,
+        small_job_max_work_units: int = 100,
+        work_claim_min_items_for_microbatch: int = 4,
     ) -> BatchFairShareClaimResult:
         if self.prisma is None:
             return BatchFairShareClaimResult(claim=None, result="repository_unavailable")
@@ -1448,6 +1634,11 @@ class BatchJobRepository:
                 db=tx,
                 base_quantum_work_units=base_quantum_work_units,
                 max_deficit_multiplier=max_deficit_multiplier,
+                size_aware_scheduling_enabled=size_aware_scheduling_enabled,
+                aging_seconds_per_work_unit=aging_seconds_per_work_unit,
+                max_age_credit_work_units=max_age_credit_work_units,
+                min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
+                small_job_max_work_units=small_job_max_work_units,
             )
             for _ in range(rounds):
                 flow_selection = self._select_scheduler_flow(
@@ -1473,6 +1664,12 @@ class BatchJobRepository:
                         capacity_max_in_flight_work_units=capacity_max_in_flight_work_units,
                         tenant_max_in_flight_work_units=tenant_max_in_flight_work_units,
                         max_deficit_multiplier=max_deficit_multiplier,
+                        size_aware_scheduling_enabled=size_aware_scheduling_enabled,
+                        aging_seconds_per_work_unit=aging_seconds_per_work_unit,
+                        max_age_credit_work_units=max_age_credit_work_units,
+                        min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
+                        small_job_max_work_units=small_job_max_work_units,
+                        work_claim_min_items_for_microbatch=work_claim_min_items_for_microbatch,
                     )
                     if claim_result.result != "empty_flow":
                         return claim_result
@@ -1528,6 +1725,12 @@ class BatchJobRepository:
                 tenant_max_in_flight_work_units=tenant_max_in_flight_work_units,
                 max_deficit_multiplier=max_deficit_multiplier,
                 allow_oversized_first_item=True,
+                size_aware_scheduling_enabled=size_aware_scheduling_enabled,
+                aging_seconds_per_work_unit=aging_seconds_per_work_unit,
+                max_age_credit_work_units=max_age_credit_work_units,
+                min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
+                small_job_max_work_units=small_job_max_work_units,
+                work_claim_min_items_for_microbatch=work_claim_min_items_for_microbatch,
             )
 
     async def recommend_next_fair_share_flow(
@@ -1540,6 +1743,11 @@ class BatchJobRepository:
         base_quantum_work_units: int = 16,
         max_deficit_multiplier: int = 8,
         tenant_max_in_flight_work_units: int = 0,
+        size_aware_scheduling_enabled: bool = False,
+        aging_seconds_per_work_unit: int = 30,
+        max_age_credit_work_units: int = 1_000,
+        min_large_job_claim_interval_seconds: int = 30,
+        small_job_max_work_units: int = 100,
     ) -> BatchFairShareClaimResult:
         del max_items
         if self.prisma is None:
@@ -1575,6 +1783,11 @@ class BatchJobRepository:
                 db=tx,
                 base_quantum_work_units=base_quantum_work_units,
                 max_deficit_multiplier=max_deficit_multiplier,
+                size_aware_scheduling_enabled=size_aware_scheduling_enabled,
+                aging_seconds_per_work_unit=aging_seconds_per_work_unit,
+                max_age_credit_work_units=max_age_credit_work_units,
+                min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
+                small_job_max_work_units=small_job_max_work_units,
             )
             simulated_flows = [replace(flow) for flow in flows]
             rounds = max(1, int(max_deficit_multiplier))
@@ -1604,6 +1817,13 @@ class BatchJobRepository:
                         total_in_flight_work_units=self._total_scheduler_flow_in_flight_work_units(
                             simulated_flows
                         ),
+                        recommended_batch_id=flow_selection.selected.next_batch_id,
+                        recommended_size_class=flow_selection.selected.next_size_class,
+                        recommended_scheduler_rank=flow_selection.selected.next_scheduler_rank,
+                        recommended_age_credit_work_units=(
+                            flow_selection.selected.next_age_credit_work_units
+                        ),
+                        recommended_policy_reason=flow_selection.selected.next_policy_reason,
                     )
                 terminal_result = self._terminal_empty_scheduler_flow_result(flow_selection)
                 if terminal_result is not None:
@@ -1658,6 +1878,11 @@ class BatchJobRepository:
                 total_in_flight_work_units=self._total_scheduler_flow_in_flight_work_units(
                     simulated_flows
                 ),
+                recommended_batch_id=flow_selection.selected.next_batch_id,
+                recommended_size_class=flow_selection.selected.next_size_class,
+                recommended_scheduler_rank=flow_selection.selected.next_scheduler_rank,
+                recommended_age_credit_work_units=flow_selection.selected.next_age_credit_work_units,
+                recommended_policy_reason=flow_selection.selected.next_policy_reason,
             )
 
     @staticmethod
@@ -1746,6 +1971,12 @@ class BatchJobRepository:
         tenant_max_in_flight_work_units: int,
         max_deficit_multiplier: int,
         allow_oversized_first_item: bool | None = None,
+        size_aware_scheduling_enabled: bool = False,
+        aging_seconds_per_work_unit: int = 30,
+        max_age_credit_work_units: int = 1_000,
+        min_large_job_claim_interval_seconds: int = 30,
+        small_job_max_work_units: int = 100,
+        work_claim_min_items_for_microbatch: int = 4,
     ) -> BatchFairShareClaimResult:
         oversized_first_item = (
             flow_selection.selected_uses_oversized_first_item
@@ -1769,6 +2000,12 @@ class BatchJobRepository:
             capacity_max_in_flight_work_units=capacity_max_in_flight_work_units,
             allow_oversized_first_item=oversized_first_item,
             max_deficit_multiplier=max_deficit_multiplier,
+            size_aware_scheduling_enabled=size_aware_scheduling_enabled,
+            aging_seconds_per_work_unit=aging_seconds_per_work_unit,
+            max_age_credit_work_units=max_age_credit_work_units,
+            min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
+            small_job_max_work_units=small_job_max_work_units,
+            work_claim_min_items_for_microbatch=work_claim_min_items_for_microbatch,
         )
 
     async def _try_acquire_scheduler_flow_lock(
@@ -2013,6 +2250,12 @@ class BatchJobRepository:
         capacity_max_in_flight_work_units: int | None,
         allow_oversized_first_item: bool,
         max_deficit_multiplier: int,
+        size_aware_scheduling_enabled: bool = False,
+        aging_seconds_per_work_unit: int = 30,
+        max_age_credit_work_units: int = 1_000,
+        min_large_job_claim_interval_seconds: int = 30,
+        small_job_max_work_units: int = 100,
+        work_claim_min_items_for_microbatch: int = 4,
     ) -> BatchFairShareClaimResult:
         claim = await self._claim_next_work_with_client(
             db,
@@ -2022,7 +2265,7 @@ class BatchJobRepository:
             lease_seconds=lease_seconds,
             allowed_model_groups=[flow.model_group],
             service_tier=flow.service_tier,
-            claim_order="fifo",
+            claim_order="size_aging" if size_aware_scheduling_enabled else "fifo",
             capacity_model_group=flow.model_group,
             capacity_service_tier=flow.service_tier,
             capacity_max_in_flight_items=capacity_max_in_flight_items,
@@ -2030,9 +2273,20 @@ class BatchJobRepository:
             tenant_scope_type=flow.tenant_scope_type,
             tenant_scope_id=flow.tenant_scope_id,
             allow_oversized_first_item=allow_oversized_first_item,
+            size_aware_scheduling_enabled=size_aware_scheduling_enabled,
+            aging_seconds_per_work_unit=aging_seconds_per_work_unit,
+            max_age_credit_work_units=max_age_credit_work_units,
+            min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
+            small_job_max_work_units=small_job_max_work_units,
+            work_claim_min_items_for_microbatch=work_claim_min_items_for_microbatch,
         )
         if claim is None:
             await self._record_scheduler_flow_skip_reasons(db, {flow.flow_id: "empty_flow"})
+            if size_aware_scheduling_enabled:
+                increment_batch_scheduler_size_claim(
+                    size_class=str(flow.next_size_class or "unknown"),
+                    result="empty",
+                )
             increment_batch_scheduler_flow_claim(
                 model_group=flow.model_group,
                 service_tier=flow.service_tier,
@@ -2147,6 +2401,12 @@ class BatchJobRepository:
         tenant_scope_type: str | None = None,
         tenant_scope_id: str | None = None,
         allow_oversized_first_item: bool = True,
+        size_aware_scheduling_enabled: bool = False,
+        aging_seconds_per_work_unit: int = 30,
+        max_age_credit_work_units: int = 1_000,
+        min_large_job_claim_interval_seconds: int = 30,
+        small_job_max_work_units: int = 100,
+        work_claim_min_items_for_microbatch: int = 4,
     ) -> BatchWorkClaim | None:
         if self.prisma is None:
             return None
@@ -2195,6 +2455,12 @@ class BatchJobRepository:
                     tenant_scope_type=tenant_scope_type,
                     tenant_scope_id=tenant_scope_id,
                     allow_oversized_first_item=allow_oversized_first_item,
+                    size_aware_scheduling_enabled=size_aware_scheduling_enabled,
+                    aging_seconds_per_work_unit=aging_seconds_per_work_unit,
+                    max_age_credit_work_units=max_age_credit_work_units,
+                    min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
+                    small_job_max_work_units=small_job_max_work_units,
+                    work_claim_min_items_for_microbatch=work_claim_min_items_for_microbatch,
                 )
         return await self._claim_next_work_with_client(
             self.prisma,
@@ -2213,6 +2479,12 @@ class BatchJobRepository:
             tenant_scope_type=tenant_scope_type,
             tenant_scope_id=tenant_scope_id,
             allow_oversized_first_item=allow_oversized_first_item,
+            size_aware_scheduling_enabled=size_aware_scheduling_enabled,
+            aging_seconds_per_work_unit=aging_seconds_per_work_unit,
+            max_age_credit_work_units=max_age_credit_work_units,
+            min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
+            small_job_max_work_units=small_job_max_work_units,
+            work_claim_min_items_for_microbatch=work_claim_min_items_for_microbatch,
         )
 
     async def _acquire_model_capacity_lock(
@@ -2252,6 +2524,12 @@ class BatchJobRepository:
         tenant_scope_type: str | None = None,
         tenant_scope_id: str | None = None,
         allow_oversized_first_item: bool = True,
+        size_aware_scheduling_enabled: bool = False,
+        aging_seconds_per_work_unit: int = 30,
+        max_age_credit_work_units: int = 1_000,
+        min_large_job_claim_interval_seconds: int = 30,
+        small_job_max_work_units: int = 100,
+        work_claim_min_items_for_microbatch: int = 4,
     ) -> BatchWorkClaim | None:
         bounded_max_items = max(1, min(int(max_items), 200))
         bounded_max_work_units = max(1, int(max_work_units))
@@ -2355,7 +2633,106 @@ class BatchJobRepository:
             """
             locked_items_limit_sql = "LEAST($2, (SELECT remaining_slots FROM capacity_state))"
             work_unit_claim_limit_sql = "LEAST($3, (SELECT remaining_work_units FROM capacity_state))"
-        if claim_order == "fifo":
+        size_aware_selected_fields_sql = """
+                    0::double precision AS scheduler_rank,
+                    0::int AS age_credit_work_units,
+                    'tenant_fair_share'::text AS scheduler_policy_reason,
+                    false::bool AS large_job_progress_floor,
+                    $2::int AS selected_max_items,
+            """
+        scheduler_debug_update_sql = ""
+        scheduler_debug_return_sql = """
+                    NULL::double precision AS scheduler_rank,
+                    NULL::int AS age_credit_work_units,
+                    NULL::text AS scheduler_policy_reason,
+                    false::bool AS large_job_progress_floor,
+        """
+        effective_locked_items_limit_sql = locked_items_limit_sql
+        effective_work_unit_claim_limit_sql = work_unit_claim_limit_sql
+        if size_aware_scheduling_enabled or claim_order == "size_aging":
+            aging_seconds = max(1, int(aging_seconds_per_work_unit or 30))
+            max_age_credit = max(0, int(max_age_credit_work_units or 0))
+            large_interval_seconds = max(0, int(min_large_job_claim_interval_seconds or 0))
+            bounded_small_job_max_work_units = max(1, int(small_job_max_work_units or 100))
+            min_microbatch_items = max(1, int(work_claim_min_items_for_microbatch or 1))
+            params.extend(
+                [
+                    aging_seconds,
+                    max_age_credit,
+                    large_interval_seconds,
+                    bounded_small_job_max_work_units,
+                    min_microbatch_items,
+                ]
+            )
+            aging_seconds_param = len(params) - 4
+            max_age_credit_param = len(params) - 3
+            large_interval_param = len(params) - 2
+            small_job_max_param = len(params) - 1
+            min_microbatch_items_param = len(params)
+            remaining_work_expr = (
+                "GREATEST(COALESCE(j.remaining_work_units, j.estimated_work_units, "
+                "j.total_items, 1), 1)::double precision"
+            )
+            age_credit_expr = (
+                f"LEAST(${max_age_credit_param}::double precision, "
+                "GREATEST(0.0, EXTRACT(EPOCH FROM (NOW() - COALESCE(j.queue_entered_at, "
+                f"j.created_at))) / ${aging_seconds_param}::double precision))"
+            )
+            large_job_floor_expr = (
+                "LOWER(COALESCE(NULLIF(j.size_class, ''), 'unknown')) IN ('l', 'xl') "
+                f"AND ${large_interval_param}::int > 0 "
+                "AND COALESCE(j.last_scheduled_at, j.queue_entered_at, j.created_at) "
+                f"<= NOW() - (${large_interval_param}::text || ' seconds')::interval"
+            )
+            half_items_expr = (
+                f"GREATEST(LEAST($2::int, ${min_microbatch_items_param}::int), "
+                "(($2::int + 1) / 2))"
+            )
+            size_aware_selected_fields_sql = f"""
+                    GREATEST(0.0, {remaining_work_expr} - {age_credit_expr})::double precision
+                        AS scheduler_rank,
+                    FLOOR({age_credit_expr})::int AS age_credit_work_units,
+                    CASE
+                    WHEN {large_job_floor_expr} THEN 'large_job_progress_floor'
+                    WHEN FLOOR({age_credit_expr})::int > 0 THEN 'aging_credit'
+                    WHEN {remaining_work_expr} <= ${small_job_max_param}::int
+                        THEN 'small_remaining_work'
+                    ELSE 'tenant_fair_share'
+                    END AS scheduler_policy_reason,
+                    ({large_job_floor_expr}) AS large_job_progress_floor,
+                    CASE
+                    WHEN LOWER(COALESCE(NULLIF(j.size_class, ''), 'unknown')) IN ('l', 'xl')
+                        THEN {half_items_expr}
+                    ELSE $2::int
+                    END AS selected_max_items,
+            """
+            scheduler_debug_update_sql = """
+                    scheduler_debug = COALESCE(j.scheduler_debug, '{}'::jsonb)
+                        || jsonb_build_object(
+                            'age_credit_work_units', sj.age_credit_work_units,
+                            'scheduler_rank', sj.scheduler_rank,
+                            'scheduler_rank_updated_at', NOW(),
+                            'next_policy_reason', sj.scheduler_policy_reason
+                        ),
+            """
+            scheduler_debug_return_sql = """
+                    sj.scheduler_rank,
+                    sj.age_credit_work_units,
+                    sj.scheduler_policy_reason,
+                    sj.large_job_progress_floor,
+            """
+            effective_locked_items_limit_sql = (
+                f"LEAST({locked_items_limit_sql}, (SELECT selected_max_items FROM selected_job))"
+            )
+            effective_work_unit_claim_limit_sql = work_unit_claim_limit_sql
+            job_order_sql = """
+                ORDER BY large_job_progress_floor DESC,
+                         scheduler_rank ASC,
+                         COALESCE(j.queue_entered_at, j.created_at) ASC,
+                         j.created_at ASC,
+                         j.batch_id ASC
+            """
+        elif claim_order == "fifo":
             job_order_sql = """
                 ORDER BY COALESCE(j.queue_entered_at, j.created_at) ASC,
                          j.created_at ASC,
@@ -2372,7 +2749,7 @@ class BatchJobRepository:
                          COALESCE(j.queue_entered_at, j.created_at) ASC,
                          j.created_at ASC
             """
-        work_unit_filter_sql = f"cumulative_work_units <= {work_unit_claim_limit_sql}"
+        work_unit_filter_sql = f"cumulative_work_units <= {effective_work_unit_claim_limit_sql}"
         selected_job_head_work_filter_sql = "TRUE"
         if allow_oversized_first_item:
             work_unit_filter_sql = f"{work_unit_filter_sql} OR claim_rank = 1"
@@ -2398,7 +2775,9 @@ class BatchJobRepository:
             {with_selected_job_sql} (
                 SELECT
                     j.batch_id,
-                    j.status AS previous_status
+                    j.status AS previous_status,
+                    {size_aware_selected_fields_sql}
+                    j.size_class AS selected_size_class
                 FROM deltallm_batch_job j
                 WHERE j.status IN ('queued', 'in_progress')
                   AND (j.locked_by IS NULL OR j.lease_expires_at IS NULL OR j.lease_expires_at < NOW())
@@ -2455,7 +2834,7 @@ class BatchJobRepository:
                 )
                 ORDER BY i.line_number ASC
                 FOR UPDATE SKIP LOCKED
-                LIMIT {locked_items_limit_sql}
+                LIMIT {effective_locked_items_limit_sql}
             ),
             candidate_items AS (
                 SELECT
@@ -2487,6 +2866,7 @@ class BatchJobRepository:
                     first_claimed_at = COALESCE(j.first_claimed_at, NOW()),
                     last_claimed_at = NOW(),
                     last_scheduled_at = NOW(),
+                    {scheduler_debug_update_sql}
                     locked_by = NULL,
                     lease_expires_at = NULL,
                     status_last_updated_at = NOW()
@@ -2505,7 +2885,9 @@ class BatchJobRepository:
                     j.size_class,
                     j.queue_entered_at,
                     sj.previous_status,
-                    (j.first_claimed_at = j.last_claimed_at) AS queue_wait_observed
+                    (j.first_claimed_at = j.last_claimed_at) AS queue_wait_observed,
+                    {scheduler_debug_return_sql}
+                    j.scheduler_debug
             ),
             updated_items AS (
                 UPDATE deltallm_batch_item i
@@ -2540,7 +2922,12 @@ class BatchJobRepository:
                 ARRAY_AGG(u.item_id ORDER BY u.line_number ASC) AS item_ids,
                 COALESCE(SUM(GREATEST(COALESCE(u.estimated_work_units, 1), 1)), 0)::int AS claimed_work_units,
                 MAX(u.lease_expires_at) AS lease_expires_at,
-                COUNT(*) FILTER (WHERE u.previous_status = 'in_progress')::int AS reclaimed_items
+                COUNT(*) FILTER (WHERE u.previous_status = 'in_progress')::int AS reclaimed_items,
+                j.scheduler_rank,
+                j.age_credit_work_units,
+                j.scheduler_policy_reason,
+                j.large_job_progress_floor,
+                j.scheduler_debug
             FROM updated_job j
             JOIN updated_items u ON TRUE
             GROUP BY
@@ -2553,7 +2940,12 @@ class BatchJobRepository:
                 j.size_class,
                 j.queue_entered_at,
                 j.previous_status,
-                j.queue_wait_observed
+                j.queue_wait_observed,
+                j.scheduler_rank,
+                j.age_credit_work_units,
+                j.scheduler_policy_reason,
+                j.large_job_progress_floor,
+                j.scheduler_debug
             """,
             *params,
         )
@@ -2581,6 +2973,29 @@ class BatchJobRepository:
         for _ in range(reclaimed_count):
             increment_batch_item_reclaim()
 
+        model_group_label = str(row.get("model_group") or "unknown")
+        service_tier_label = str(row.get("service_tier") or "standard")
+        size_class_label = str(row.get("size_class") or "unknown")
+        if row.get("scheduler_rank") is not None:
+            observe_batch_scheduler_job_rank(
+                model_group=model_group_label,
+                service_tier=service_tier_label,
+                size_class=size_class_label,
+                rank=float(row.get("scheduler_rank") or 0.0),
+            )
+            observe_batch_scheduler_age_credit_work_units(
+                model_group=model_group_label,
+                service_tier=service_tier_label,
+                size_class=size_class_label,
+                work_units=int(row.get("age_credit_work_units") or 0),
+            )
+            increment_batch_scheduler_size_claim(size_class=size_class_label, result="claimed")
+            if str(row.get("scheduler_policy_reason") or "") == "large_job_progress_floor":
+                increment_batch_scheduler_large_job_floor_claim(
+                    model_group=model_group_label,
+                    service_tier=service_tier_label,
+                )
+
         queue_entered_at = parse_datetime(row.get("queue_entered_at"))
         if bool(row.get("queue_wait_observed")) and queue_entered_at is not None:
             wait_seconds = max(
@@ -2588,14 +3003,20 @@ class BatchJobRepository:
                 (datetime.now(tz=UTC) - queue_entered_at).total_seconds(),
             )
             observe_batch_queue_wait(
-                model_group=str(row.get("model_group") or "unknown"),
-                service_tier=str(row.get("service_tier") or "standard"),
-                size_class=str(row.get("size_class") or "unknown"),
+                model_group=model_group_label,
+                service_tier=service_tier_label,
+                size_class=size_class_label,
+                wait_seconds=wait_seconds,
+            )
+            observe_batch_time_to_first_claim(
+                model_group=model_group_label,
+                service_tier=service_tier_label,
+                size_class=size_class_label,
                 wait_seconds=wait_seconds,
             )
             observe_batch_claim_wait_by_model(
-                model_group=str(row.get("model_group") or "unknown"),
-                service_tier=str(row.get("service_tier") or "standard"),
+                model_group=model_group_label,
+                service_tier=service_tier_label,
                 wait_seconds=wait_seconds,
             )
 

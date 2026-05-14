@@ -442,6 +442,12 @@ class GeneralSettings(BaseModel):
     embeddings_batch_tenant_max_queued_work_units: int = Field(default=0, ge=0)
     embeddings_batch_tenant_scope_preference: str = "organization,team,api_key,user"
     embeddings_batch_tenant_fair_share_disabled_model_groups: list[str] = Field(default_factory=list)
+    embeddings_batch_size_aware_scheduling_enabled: bool = False
+    embeddings_batch_aging_seconds_per_work_unit: int = Field(default=30, ge=1)
+    embeddings_batch_max_age_credit_work_units: int = Field(default=1_000, ge=0)
+    embeddings_batch_min_large_job_claim_interval_seconds: int = Field(default=30, ge=0)
+    embeddings_batch_small_job_fast_lane_enabled: bool = False
+    embeddings_batch_small_job_max_work_units: int = Field(default=100, ge=1)
     embeddings_batch_finalization_first: bool = True
     batch_completed_artifact_retention_days: int = 7
     batch_failed_artifact_retention_days: int = 14
@@ -479,6 +485,7 @@ class GeneralSettings(BaseModel):
             self.embeddings_batch_scheduler_enabled
             or self.embeddings_batch_model_capacity_enabled
             or self.embeddings_batch_tenant_fair_share_enabled
+            or self.embeddings_batch_size_aware_scheduling_enabled
             or self.embeddings_batch_scheduler_shadow_enabled
         ):
             if self.embeddings_batch_scheduler_claim_mode != "work_slice":
@@ -494,6 +501,24 @@ class GeneralSettings(BaseModel):
         if self.embeddings_batch_tenant_fair_share_enabled and not self.embeddings_batch_model_capacity_enabled:
             raise ValueError(
                 "tenant fair-share scheduling requires embeddings_batch_model_capacity_enabled=true"
+            )
+        if (
+            self.embeddings_batch_size_aware_scheduling_enabled
+            and not self.embeddings_batch_model_capacity_enabled
+        ):
+            raise ValueError(
+                "size-aware batch scheduling requires embeddings_batch_model_capacity_enabled=true"
+            )
+        if (
+            self.embeddings_batch_size_aware_scheduling_enabled
+            and not (
+                self.embeddings_batch_tenant_fair_share_enabled
+                or self.embeddings_batch_scheduler_shadow_enabled
+            )
+        ):
+            raise ValueError(
+                "size-aware batch scheduling requires embeddings_batch_tenant_fair_share_enabled=true "
+                "or embeddings_batch_scheduler_shadow_enabled=true"
             )
         if self.embeddings_batch_scheduler_shadow_enabled and not self.embeddings_batch_model_capacity_enabled:
             raise ValueError(

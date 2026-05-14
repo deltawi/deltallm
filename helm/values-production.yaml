@@ -86,3 +86,9 @@ config:
     embeddings_batch_tenant_max_queued_work_units: 0
     embeddings_batch_tenant_scope_preference: organization,team,api_key,user
     embeddings_batch_tenant_fair_share_disabled_model_groups: []
+    embeddings_batch_size_aware_scheduling_enabled: false
+    embeddings_batch_aging_seconds_per_work_unit: 30
+    embeddings_batch_max_age_credit_work_units: 1000
+    embeddings_batch_min_large_job_claim_interval_seconds: 30
+    embeddings_batch_small_job_fast_lane_enabled: false
+    embeddings_batch_small_job_max_work_units: 100

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from datetime import UTC, datetime, timedelta
 import json
 import logging
@@ -5917,8 +5918,190 @@ async def test_batch_worker_capacity_claim_uses_tenant_fair_share_when_enabled()
             "base_quantum_work_units": 16,
             "max_deficit_multiplier": 8,
             "tenant_max_in_flight_work_units": 32,
+            "size_aware_scheduling_enabled": False,
+            "aging_seconds_per_work_unit": 30,
+            "max_age_credit_work_units": 1000,
+            "min_large_job_claim_interval_seconds": 30,
+            "small_job_max_work_units": 100,
+            "work_claim_min_items_for_microbatch": 4,
         }
     ]
+    assert resolver.results == [("model-a", "claimed")]
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_size_aware_shadow_preserves_active_fair_share_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.batch import worker as worker_module
+
+    now = datetime.now(tz=UTC)
+    shadow_results: list[str] = []
+    observed_ratios: list[float] = []
+    monkeypatch.setattr(
+        worker_module,
+        "increment_batch_scheduler_shadow_decision",
+        lambda *, model_group, service_tier, result: shadow_results.append(result),
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "observe_batch_scheduler_shadow_share_ratio",
+        lambda *, model_group, service_tier, ratio: observed_ratios.append(ratio),
+    )
+
+    class _FairShareShadowRepo:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+            self.recommend_calls: list[dict] = []
+            self.fair_share_calls: list[dict] = []
+            self.claim_next_work_called = False
+
+        async def recommend_next_fair_share_flow(self, **kwargs):
+            self.calls.append("recommend")
+            self.recommend_calls.append(kwargs)
+            return SimpleNamespace(
+                result="recommended",
+                claim=None,
+                flow=SimpleNamespace(
+                    model_group="model-a",
+                    service_tier="standard",
+                    tenant_scope_type="team",
+                    tenant_scope_id="team-1",
+                    in_flight_work_units=1,
+                ),
+                recommended_batch_id="b-shadow",
+                recommended_size_class="xs",
+                recommended_scheduler_rank=0.5,
+                recommended_age_credit_work_units=1,
+                recommended_policy_reason="small_remaining_work",
+                expected_share=0.5,
+                total_in_flight_work_units=5,
+            )
+
+        async def claim_next_fair_share_work(self, **kwargs):
+            self.calls.append("claim")
+            self.fair_share_calls.append(kwargs)
+            return SimpleNamespace(
+                result="claimed",
+                claim=BatchWorkClaim(
+                    claim_id="claim-flow",
+                    worker_id="w1",
+                    batch_id="b-active",
+                    endpoint="/v1/embeddings",
+                    model_group="model-a",
+                    tenant_scope_type="team",
+                    tenant_scope_id="team-1",
+                    service_tier="standard",
+                    item_ids=["item-1"],
+                    claimed_work_units=3,
+                    lease_expires_at=now + timedelta(seconds=60),
+                ),
+            )
+
+        async def claim_next_work(self, **kwargs):  # pragma: no cover
+            del kwargs
+            self.claim_next_work_called = True
+            raise AssertionError("model-only claim should not run when active fair-share succeeds")
+
+    class _CapacityResolver:
+        def __init__(self) -> None:
+            self.results: list[tuple[str, str]] = []
+
+        async def select_model_groups(self, **kwargs):
+            assert kwargs == {"max_items": 4, "max_work_units": 9}
+            return [
+                SimpleNamespace(
+                    snapshot=SimpleNamespace(
+                        model_group="model-a",
+                        service_tier="standard",
+                        in_flight_items=2,
+                        available_in_flight_items=5,
+                        in_flight_work_units=4,
+                        tpm_remaining=20,
+                    ),
+                    max_items=4,
+                    max_work_units=9,
+                )
+            ]
+
+        def record_selection(self, snapshot):
+            assert snapshot.model_group == "model-a"
+
+        def record_claim_result(self, *, model_group: str, result: str) -> None:
+            self.results.append((model_group, result))
+
+    repo = _FairShareShadowRepo()
+    resolver = _CapacityResolver()
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(
+            worker_id="w1",
+            scheduler_claim_mode="work_slice",
+            work_claim_max_items=4,
+            work_claim_max_work_units=9,
+            work_claim_min_items_for_microbatch=5,
+            model_capacity_enabled=True,
+            scheduler_shadow_enabled=True,
+            tenant_fair_share_enabled=True,
+            tenant_fair_share_base_quantum_work_units=16,
+            tenant_fair_share_max_deficit_multiplier=8,
+            tenant_max_in_flight_work_units=32,
+            size_aware_scheduling_enabled=True,
+            aging_seconds_per_work_unit=11,
+            max_age_credit_work_units=42,
+            min_large_job_claim_interval_seconds=7,
+            small_job_max_work_units=9,
+        ),
+        model_capacity_resolver=resolver,
+    )
+
+    claim = await worker._claim_next_work_slice()
+
+    assert claim is not None
+    assert claim.batch_id == "b-active"
+    assert repo.claim_next_work_called is False
+    assert repo.calls == ["recommend", "claim"]
+    assert repo.recommend_calls == [
+        {
+            "service_tier": "standard",
+            "model_group": "model-a",
+            "max_items": 4,
+            "max_work_units": 9,
+            "base_quantum_work_units": 16,
+            "max_deficit_multiplier": 8,
+            "tenant_max_in_flight_work_units": 32,
+            "size_aware_scheduling_enabled": True,
+            "aging_seconds_per_work_unit": 11,
+            "max_age_credit_work_units": 42,
+            "min_large_job_claim_interval_seconds": 7,
+            "small_job_max_work_units": 9,
+        }
+    ]
+    assert repo.fair_share_calls == [
+        {
+            "worker_id": "w1",
+            "service_tier": "standard",
+            "model_group": "model-a",
+            "max_items": 4,
+            "max_work_units": 9,
+            "lease_seconds": 360,
+            "capacity_max_in_flight_items": 7,
+            "capacity_max_in_flight_work_units": 24,
+            "base_quantum_work_units": 16,
+            "max_deficit_multiplier": 8,
+            "tenant_max_in_flight_work_units": 32,
+            "size_aware_scheduling_enabled": False,
+            "aging_seconds_per_work_unit": 11,
+            "max_age_credit_work_units": 42,
+            "min_large_job_claim_interval_seconds": 7,
+            "small_job_max_work_units": 9,
+            "work_claim_min_items_for_microbatch": 5,
+        }
+    ]
+    assert shadow_results == ["match", "job_mismatch"]
+    assert observed_ratios == [1.0]
     assert resolver.results == [("model-a", "claimed")]
 
 
@@ -6058,6 +6241,11 @@ async def test_batch_worker_shadow_recommends_fair_share_without_claiming_it(
             "base_quantum_work_units": 16,
             "max_deficit_multiplier": 8,
             "tenant_max_in_flight_work_units": 32,
+            "size_aware_scheduling_enabled": False,
+            "aging_seconds_per_work_unit": 30,
+            "max_age_credit_work_units": 1000,
+            "min_large_job_claim_interval_seconds": 30,
+            "small_job_max_work_units": 100,
         }
     ]
     assert shadow_results == [
@@ -6075,6 +6263,92 @@ async def test_batch_worker_shadow_recommends_fair_share_without_claiming_it(
         }
     ]
     assert resolver.results == [("model-a", "claimed")]
+
+
+def test_batch_worker_shadow_decision_records_recommended_job_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from src.batch import worker as worker_module
+
+    caplog.set_level(logging.INFO, logger=worker_module.__name__)
+    shadow_results: list[str] = []
+    observed_ratios: list[float] = []
+    monkeypatch.setattr(
+        worker_module,
+        "increment_batch_scheduler_shadow_decision",
+        lambda *, model_group, service_tier, result: shadow_results.append(result),
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "observe_batch_scheduler_shadow_share_ratio",
+        lambda *, model_group, service_tier, ratio: observed_ratios.append(ratio),
+    )
+
+    recommendation = SimpleNamespace(
+        flow=SimpleNamespace(
+            model_group="model-a",
+            service_tier="standard",
+            tenant_scope_type="team",
+            tenant_scope_id="team-1",
+            in_flight_work_units=1,
+        ),
+        recommended_batch_id="b-recommended",
+        recommended_size_class="xs",
+        recommended_scheduler_rank=1.25,
+        recommended_age_credit_work_units=2,
+        recommended_policy_reason="aging_credit",
+        expected_share=0.5,
+        total_in_flight_work_units=5,
+    )
+    claim = BatchWorkClaim(
+        claim_id="claim-model",
+        worker_id="w1",
+        batch_id="b-actual",
+        endpoint="/v1/embeddings",
+        model_group="model-a",
+        tenant_scope_type="team",
+        tenant_scope_id="team-1",
+        service_tier="standard",
+        item_ids=["item-1"],
+        claimed_work_units=3,
+        lease_expires_at=datetime.now(tz=UTC) + timedelta(seconds=60),
+    )
+
+    BatchExecutorWorker._record_shadow_fair_share_decision(
+        recommendation=recommendation,
+        claim=claim,
+        model_group="model-a",
+        service_tier="standard",
+    )
+
+    assert shadow_results == ["match", "job_mismatch"]
+    assert observed_ratios == [1.0]
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "batch scheduler shadow job decision"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    digest = hashlib.sha256(b"team-1").hexdigest()[:12]
+    assert record.shadow_tenant_scope_type == "team"
+    assert record.shadow_tenant_scope_id == f"team:{digest}"
+    assert record.shadow_tenant_scope_id != "team-1"
+    assert record.shadow_recommended_batch_id == "b-recommended"
+    assert record.shadow_actual_batch_id == "b-actual"
+    assert record.shadow_recommended_size_class == "xs"
+    assert record.shadow_recommended_scheduler_rank == 1.25
+    assert record.shadow_recommended_age_credit_work_units == 2
+    assert record.shadow_recommended_policy_reason == "aging_credit"
+    assert record.shadow_result == "job_mismatch"
+    assert record.shadow_flow_match is True
+    assert (
+        BatchExecutorWorker._shadow_tenant_scope_label(
+            SimpleNamespace(tenant_scope_type="api_key", tenant_scope_id="secret")
+        )
+        == "api_key"
+    )
 
 
 @pytest.mark.asyncio
