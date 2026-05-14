@@ -3053,6 +3053,281 @@ async def test_db_backed_fair_share_claim_rotates_between_tenants(batch_db) -> N
 
 
 @pytest.mark.asyncio
+async def test_db_backed_size_aware_fair_share_claim_picks_small_job_inside_flow(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    now = datetime.now(tz=UTC)
+    large_job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id="team-a",
+        expires_at=None,
+        queue_entered_at=now,
+        estimated_work_units=5_000,
+        remaining_work_units=5_000,
+        size_class="xl",
+    )
+    small_job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id="team-a",
+        expires_at=None,
+        queue_entered_at=now + timedelta(seconds=1),
+        estimated_work_units=1,
+        remaining_work_units=1,
+        size_class="xs",
+    )
+    assert large_job is not None
+    assert small_job is not None
+    assert await repository.create_items(
+        large_job.batch_id,
+        [
+            BatchItemCreate(
+                line_number=1,
+                custom_id="large-1",
+                request_body={"model": "m1", "input": "large"},
+                estimated_work_units=1,
+            )
+        ],
+    ) == 1
+    assert await repository.create_items(
+        small_job.batch_id,
+        [
+            BatchItemCreate(
+                line_number=1,
+                custom_id="small-1",
+                request_body={"model": "m1", "input": "small"},
+                estimated_work_units=1,
+            )
+        ],
+    ) == 1
+    await repository.set_job_queued(large_job.batch_id, 1)
+    await repository.set_job_queued(small_job.batch_id, 1)
+
+    result = await repository.claim_next_fair_share_work(
+        worker_id="w1",
+        service_tier="standard",
+        model_group="m1",
+        max_items=4,
+        max_work_units=4,
+        lease_seconds=120,
+        capacity_max_in_flight_items=4,
+        capacity_max_in_flight_work_units=4,
+        base_quantum_work_units=16,
+        max_deficit_multiplier=4,
+        size_aware_scheduling_enabled=True,
+        aging_seconds_per_work_unit=30,
+        max_age_credit_work_units=1_000,
+        min_large_job_claim_interval_seconds=30,
+        small_job_max_work_units=100,
+    )
+
+    assert result.claim is not None
+    assert result.claim.batch_id == small_job.batch_id
+    rows = await batch_db.query_raw(
+        """
+        SELECT scheduler_debug
+        FROM deltallm_batch_job
+        WHERE batch_id = $1
+        """,
+        small_job.batch_id,
+    )
+    debug = dict(rows[0]["scheduler_debug"] or {})
+    assert debug["next_policy_reason"] == "small_remaining_work"
+    assert debug["scheduler_rank"] == 1
+
+
+@pytest.mark.asyncio
+async def test_db_backed_size_aware_flow_selection_uses_ranked_head_job(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    now = datetime.now(tz=UTC)
+    oversized_job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id="team-a",
+        expires_at=None,
+        queue_entered_at=now,
+        estimated_work_units=5_000,
+        remaining_work_units=5_000,
+        size_class="xl",
+    )
+    fitting_job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id="team-a",
+        expires_at=None,
+        queue_entered_at=now + timedelta(seconds=1),
+        estimated_work_units=1,
+        remaining_work_units=1,
+        size_class="xs",
+    )
+    peer_job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-b",
+        created_by_user_id=None,
+        created_by_team_id="team-b",
+        expires_at=None,
+        queue_entered_at=now + timedelta(seconds=2),
+        estimated_work_units=1,
+        remaining_work_units=1,
+        size_class="xs",
+    )
+    assert oversized_job is not None
+    assert fitting_job is not None
+    assert peer_job is not None
+    assert await repository.create_items(
+        oversized_job.batch_id,
+        [
+            BatchItemCreate(
+                line_number=1,
+                custom_id="oversized-1",
+                request_body={"model": "m1", "input": "large"},
+                estimated_work_units=10,
+            )
+        ],
+    ) == 1
+    for job, custom_id in ((fitting_job, "fitting-1"), (peer_job, "peer-1")):
+        assert await repository.create_items(
+            job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1,
+                    custom_id=custom_id,
+                    request_body={"model": "m1", "input": custom_id},
+                    estimated_work_units=1,
+                )
+            ],
+        ) == 1
+    await repository.set_job_queued(oversized_job.batch_id, 1)
+    await repository.set_job_queued(fitting_job.batch_id, 1)
+    await repository.set_job_queued(peer_job.batch_id, 1)
+
+    result = await repository.claim_next_fair_share_work(
+        worker_id="w1",
+        service_tier="standard",
+        model_group="m1",
+        max_items=4,
+        max_work_units=4,
+        lease_seconds=120,
+        capacity_max_in_flight_items=10,
+        capacity_max_in_flight_work_units=10,
+        base_quantum_work_units=1,
+        max_deficit_multiplier=4,
+        size_aware_scheduling_enabled=True,
+        aging_seconds_per_work_unit=30,
+        max_age_credit_work_units=1_000,
+        min_large_job_claim_interval_seconds=300,
+        small_job_max_work_units=100,
+    )
+
+    assert result.claim is not None
+    assert result.claim.batch_id == fitting_job.batch_id
+    oversized_items = await repository.list_items(oversized_job.batch_id)
+    assert [item.status for item in oversized_items] == ["pending"]
+
+
+@pytest.mark.asyncio
+async def test_db_backed_size_aware_large_job_floor_claims_after_interval(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    now = datetime.now(tz=UTC)
+    large_job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id="team-a",
+        expires_at=None,
+        queue_entered_at=now - timedelta(seconds=60),
+        estimated_work_units=5_000,
+        remaining_work_units=5_000,
+        size_class="xl",
+    )
+    small_job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id="team-a",
+        expires_at=None,
+        queue_entered_at=now,
+        estimated_work_units=1,
+        remaining_work_units=1,
+        size_class="xs",
+    )
+    assert large_job is not None
+    assert small_job is not None
+    for job, custom_id in ((large_job, "large-1"), (small_job, "small-1")):
+        assert await repository.create_items(
+            job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1,
+                    custom_id=custom_id,
+                    request_body={"model": "m1", "input": custom_id},
+                    estimated_work_units=1,
+                )
+            ],
+        ) == 1
+        await repository.set_job_queued(job.batch_id, 1)
+
+    result = await repository.claim_next_fair_share_work(
+        worker_id="w1",
+        service_tier="standard",
+        model_group="m1",
+        max_items=4,
+        max_work_units=4,
+        lease_seconds=120,
+        capacity_max_in_flight_items=4,
+        capacity_max_in_flight_work_units=4,
+        base_quantum_work_units=16,
+        max_deficit_multiplier=4,
+        size_aware_scheduling_enabled=True,
+        aging_seconds_per_work_unit=30,
+        max_age_credit_work_units=1_000,
+        min_large_job_claim_interval_seconds=30,
+        small_job_max_work_units=100,
+    )
+
+    assert result.claim is not None
+    assert result.claim.batch_id == large_job.batch_id
+    rows = await batch_db.query_raw(
+        """
+        SELECT scheduler_debug
+        FROM deltallm_batch_job
+        WHERE batch_id = $1
+        """,
+        large_job.batch_id,
+    )
+    debug = dict(rows[0]["scheduler_debug"] or {})
+    assert debug["next_policy_reason"] == "large_job_progress_floor"
+
+
+@pytest.mark.asyncio
 async def test_db_backed_fair_share_preserves_weighted_tenant_share(batch_db) -> None:
     repository = BatchRepository(batch_db)
     input_file_id = await _seed_batch_file(repository)

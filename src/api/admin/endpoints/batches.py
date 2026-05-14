@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 from datetime import UTC, datetime
 import logging
 from typing import Any, Iterator
@@ -17,9 +18,12 @@ from src.batch.repository import BatchRepository
 from src.batch.models import BATCH_JOB_STATUS_SET, decode_operator_failed_reason, encode_operator_failed_reason
 from src.batch.scheduling import (
     API_KEY_TENANT_SCOPE_PREFIX,
+    BatchJobRankInput,
     BatchModelCapacityConfig,
     BatchModelCapacityResolver,
+    BatchSizeAgingConfig,
     BatchTenantFairShareConfig,
+    calculate_size_aging_rank,
 )
 from src.metrics import (
     increment_batch_repair_action,
@@ -95,6 +99,79 @@ def _display_tenant_scope_id(*, scope_type: str | None, scope_id: str | None) ->
         digest = normalized_scope_id[len(API_KEY_TENANT_SCOPE_PREFIX) :]
         return f"api_key:{digest[:12]}" if digest else "api_key"
     return "api_key"
+
+
+def _scheduler_debug_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _batch_size_aging_config_or_default(request: Request) -> BatchSizeAgingConfig:
+    config = getattr(request.app.state, "batch_size_aging_config", None)
+    if isinstance(config, BatchSizeAgingConfig):
+        return config
+    return BatchSizeAgingConfig()
+
+
+def _scheduler_policy_fields(
+    row: dict[str, Any],
+    *,
+    size_aging_config: BatchSizeAgingConfig | None = None,
+) -> dict[str, Any]:
+    config = size_aging_config or BatchSizeAgingConfig()
+    debug = _scheduler_debug_dict(row.get("scheduler_debug"))
+    queue_entered_at = row.get("queue_entered_at")
+    age_seconds: float | None = None
+    if isinstance(queue_entered_at, datetime):
+        age_seconds = max(0.0, (datetime.now(tz=UTC) - queue_entered_at).total_seconds())
+    scheduler_rank = debug.get("scheduler_rank")
+    age_credit_work_units = debug.get("age_credit_work_units")
+    next_policy_reason = debug.get("next_policy_reason")
+    if scheduler_rank is None or age_credit_work_units is None or not next_policy_reason:
+        rank_result = calculate_size_aging_rank(
+            BatchJobRankInput(
+                remaining_work_units=max(
+                    1,
+                    int(
+                        row.get("remaining_work_units")
+                        or row.get("estimated_work_units")
+                        or row.get("total_items")
+                        or 1
+                    ),
+                ),
+                queue_entered_at=queue_entered_at if isinstance(queue_entered_at, datetime) else None,
+                last_scheduled_at=(
+                    row.get("last_scheduled_at")
+                    if isinstance(row.get("last_scheduled_at"), datetime)
+                    else None
+                ),
+                size_class=str(row.get("size_class") or "unknown"),
+            ),
+            aging_seconds_per_work_unit=config.aging_seconds_per_work_unit,
+            max_age_credit_work_units=config.max_age_credit_work_units,
+            min_large_job_claim_interval_seconds=config.min_large_job_claim_interval_seconds,
+            small_job_max_work_units=config.small_job_max_work_units,
+        )
+        if scheduler_rank is None:
+            scheduler_rank = rank_result.rank
+        if age_credit_work_units is None:
+            age_credit_work_units = rank_result.age_credit_work_units
+        if not next_policy_reason:
+            next_policy_reason = rank_result.policy_reason
+    return {
+        "age_seconds": age_seconds,
+        "age_credit_work_units": age_credit_work_units,
+        "scheduler_rank": scheduler_rank,
+        "scheduler_rank_updated_at": debug.get("scheduler_rank_updated_at"),
+        "next_policy_reason": next_policy_reason or "tenant_fair_share",
+    }
 
 
 def _redacted_tenant_scope_id(*, scope_type: str | None, scope_id: str | None) -> str | None:
@@ -283,6 +360,7 @@ async def list_batches(
         *params,
     )
     total = int((count_rows[0] if count_rows else {}).get("total") or 0)
+    size_aging_config = _batch_size_aging_config_or_default(request)
 
     params.append(limit)
     params.append(offset)
@@ -293,7 +371,7 @@ async def list_batches(
                j.scheduler_version, j.scheduling_model, j.scheduling_model_group, j.scheduling_endpoint,
                j.tenant_scope_type, j.tenant_scope_id, j.service_tier, j.estimated_work_units,
                j.remaining_work_units, j.size_class, j.queue_entered_at, j.first_claimed_at,
-               j.last_claimed_at, j.last_scheduled_at,
+               j.last_claimed_at, j.last_scheduled_at, j.scheduler_debug,
                j.created_by_api_key, j.created_by_team_id, j.created_by_organization_id,
                j.created_at, j.started_at, j.completed_at,
                t.team_alias, COALESCE(j.created_by_organization_id, t.organization_id) AS organization_id,
@@ -314,6 +392,7 @@ async def list_batches(
         completed = int(r.get("completed_items") or 0)
         failed = int(r.get("failed_items") or 0)
         masked_key = _mask_api_key(r.get("created_by_api_key"))
+        scheduler_policy_fields = _scheduler_policy_fields(r, size_aging_config=size_aging_config)
         data.append({
             "batch_id": r.get("batch_id"),
             "endpoint": r.get("endpoint"),
@@ -341,6 +420,7 @@ async def list_batches(
             "first_claimed_at": to_json_value(r.get("first_claimed_at")),
             "last_claimed_at": to_json_value(r.get("last_claimed_at")),
             "last_scheduled_at": to_json_value(r.get("last_scheduled_at")),
+            **scheduler_policy_fields,
             "total_cost": float(r.get("total_cost") or 0),
             "created_by_api_key": masked_key,
             "created_by_team_id": r.get("created_by_team_id"),
@@ -625,6 +705,7 @@ async def get_batch(
 
     job = dict(rows[0])
     await _enforce_batch_update_scope(db=db, scope=scope, job=job)
+    size_aging_config = _batch_size_aging_config_or_default(request)
 
     cost_rows = await db.query_raw(
         """
@@ -661,6 +742,7 @@ async def get_batch(
     )
 
     masked_key = _mask_api_key(job.get("created_by_api_key"))
+    scheduler_policy_fields = _scheduler_policy_fields(job, size_aging_config=size_aging_config)
 
     return {
         "batch_id": job.get("batch_id"),
@@ -692,6 +774,7 @@ async def get_batch(
         "first_claimed_at": to_json_value(job.get("first_claimed_at")),
         "last_claimed_at": to_json_value(job.get("last_claimed_at")),
         "last_scheduled_at": to_json_value(job.get("last_scheduled_at")),
+        **scheduler_policy_fields,
         "scheduler_debug": to_json_value(job.get("scheduler_debug")),
         "total_provider_cost": float(cost_row.get("total_provider_cost") or 0),
         "total_billed_cost": float(cost_row.get("total_billed_cost") or 0),

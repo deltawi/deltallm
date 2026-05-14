@@ -34,6 +34,12 @@ class BatchWorkerConfig:
     tenant_fair_share_max_deficit_multiplier: int = 8
     tenant_max_in_flight_work_units: int = 0
     tenant_fair_share_disabled_model_groups: tuple[str, ...] = ()
+    size_aware_scheduling_enabled: bool = False
+    aging_seconds_per_work_unit: int = 30
+    max_age_credit_work_units: int = 1_000
+    min_large_job_claim_interval_seconds: int = 30
+    small_job_fast_lane_enabled: bool = False
+    small_job_max_work_units: int = 100
     finalization_first: bool = True
     max_attempts: int = 3
     retry_initial_seconds: int = 5

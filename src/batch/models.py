@@ -232,6 +232,11 @@ class BatchSchedulerFlowRecord:
     oldest_queue_entered_at: datetime | None = None
     next_item_work_units: int = 1
     skip_reasons: dict[str, int] | None = None
+    next_batch_id: str | None = None
+    next_size_class: str | None = None
+    next_scheduler_rank: float | None = None
+    next_age_credit_work_units: int | None = None
+    next_policy_reason: str | None = None
 
 
 @dataclass
@@ -242,6 +247,11 @@ class BatchFairShareClaimResult:
     expected_share: float | None = None
     active_flow_count: int = 0
     total_in_flight_work_units: int = 0
+    recommended_batch_id: str | None = None
+    recommended_size_class: str | None = None
+    recommended_scheduler_rank: float | None = None
+    recommended_age_credit_work_units: int | None = None
+    recommended_policy_reason: str | None = None
 
 
 @dataclass

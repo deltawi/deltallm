@@ -309,6 +309,44 @@ deltallm_batch_queue_wait_metric = Histogram(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_time_to_first_claim_metric = Histogram(
+    "deltallm_batch_time_to_first_claim_seconds",
+    "Batch seconds from queue entry to first worker claim by scheduler dimensions",
+    ["model_group", "service_tier", "size_class"],
+    buckets=[1, 5, 10, 30, 60, 120, 300, 600, 1_800, 3_600, 7_200, 21_600],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_job_rank_metric = Histogram(
+    "deltallm_batch_scheduler_job_rank",
+    "Rank score used by size-aware batch scheduling",
+    ["model_group", "service_tier", "size_class"],
+    buckets=[0, 1, 2, 5, 10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_age_credit_work_units_metric = Histogram(
+    "deltallm_batch_scheduler_age_credit_work_units",
+    "Age credit work units used by size-aware batch scheduling",
+    ["model_group", "service_tier", "size_class"],
+    buckets=[0, 1, 2, 5, 10, 25, 50, 100, 250, 500, 1_000],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_size_claims_metric = Counter(
+    "deltallm_batch_scheduler_size_claims_total",
+    "Size-aware scheduler claims by size class and result",
+    ["size_class", "result"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_large_job_floor_claims_metric = Counter(
+    "deltallm_batch_scheduler_large_job_floor_claims_total",
+    "Large job progress-floor scheduler claims by model group and service tier",
+    ["model_group", "service_tier"],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_batch_work_claims_metric = Counter(
     "deltallm_batch_work_claims_total",
     "Batch work-slice claims by result and claim mode",
@@ -800,6 +838,62 @@ def observe_batch_queue_wait(
         service_tier=sanitize_label(service_tier),
         size_class=sanitize_label(size_class),
     ).observe(max(0.0, float(wait_seconds)))
+
+
+def observe_batch_time_to_first_claim(
+    *,
+    model_group: str,
+    service_tier: str,
+    size_class: str,
+    wait_seconds: float,
+) -> None:
+    deltallm_batch_time_to_first_claim_metric.labels(
+        model_group=sanitize_label(model_group),
+        service_tier=sanitize_label(service_tier),
+        size_class=sanitize_label(size_class),
+    ).observe(max(0.0, float(wait_seconds)))
+
+
+def observe_batch_scheduler_job_rank(
+    *,
+    model_group: str,
+    service_tier: str,
+    size_class: str,
+    rank: float,
+) -> None:
+    deltallm_batch_scheduler_job_rank_metric.labels(
+        model_group=sanitize_label(model_group),
+        service_tier=sanitize_label(service_tier),
+        size_class=sanitize_label(size_class),
+    ).observe(max(0.0, float(rank)))
+
+
+def observe_batch_scheduler_age_credit_work_units(
+    *,
+    model_group: str,
+    service_tier: str,
+    size_class: str,
+    work_units: int,
+) -> None:
+    deltallm_batch_scheduler_age_credit_work_units_metric.labels(
+        model_group=sanitize_label(model_group),
+        service_tier=sanitize_label(service_tier),
+        size_class=sanitize_label(size_class),
+    ).observe(max(0, int(work_units)))
+
+
+def increment_batch_scheduler_size_claim(*, size_class: str, result: str) -> None:
+    deltallm_batch_scheduler_size_claims_metric.labels(
+        size_class=sanitize_label(size_class),
+        result=sanitize_label(result),
+    ).inc()
+
+
+def increment_batch_scheduler_large_job_floor_claim(*, model_group: str, service_tier: str) -> None:
+    deltallm_batch_scheduler_large_job_floor_claims_metric.labels(
+        model_group=sanitize_label(model_group),
+        service_tier=sanitize_label(service_tier),
+    ).inc()
 
 
 def increment_batch_work_claim(*, result: str, claim_mode: str) -> None:

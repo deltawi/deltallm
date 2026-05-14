@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from pydantic import ValidationError
 
 from src.batch.endpoints import BATCH_ENDPOINT_CHAT_COMPLETIONS, BATCH_ENDPOINT_EMBEDDINGS
 from src.batch.scheduling import (
     API_KEY_TENANT_SCOPE_PREFIX,
+    BatchJobRankInput,
+    BatchSizeAgingConfig,
     BatchTenantFairShareConfig,
     build_flow_id,
+    calculate_size_aging_rank,
     display_tenant_scope_id,
     estimate_request_work_units,
     max_deficit_for_flow,
@@ -17,6 +22,7 @@ from src.batch.scheduling import (
     resolve_model_group,
     resolve_scheduler_version,
     resolve_tenant_scope,
+    tuned_claim_item_limit,
 )
 from src.batch.scheduling.estimator import size_class_for_work_units
 from src.config import GeneralSettings
@@ -224,6 +230,139 @@ def test_tenant_fair_share_config_supports_disabled_model_groups() -> None:
     )
 
     assert config.disabled_model_groups == ("model-a", "model-b")
+
+
+def test_size_aware_scheduler_requires_fair_share_or_shadow() -> None:
+    with pytest.raises(ValidationError, match="tenant_fair_share_enabled=true or"):
+        GeneralSettings(
+            embeddings_batch_size_aware_scheduling_enabled=True,
+            embeddings_batch_model_capacity_enabled=True,
+            embeddings_batch_scheduler_claim_mode="work_slice",
+            embeddings_batch_scheduler_strict_model_homogeneity_enabled=True,
+        )
+
+
+def test_size_aware_scheduler_allows_shadow_rollout() -> None:
+    settings = GeneralSettings(
+        embeddings_batch_size_aware_scheduling_enabled=True,
+        embeddings_batch_scheduler_shadow_enabled=True,
+        embeddings_batch_model_capacity_enabled=True,
+        embeddings_batch_scheduler_claim_mode="work_slice",
+        embeddings_batch_scheduler_strict_model_homogeneity_enabled=True,
+    )
+
+    assert settings.embeddings_batch_size_aware_scheduling_enabled is True
+    assert settings.embeddings_batch_scheduler_shadow_enabled is True
+
+
+def test_size_aware_scheduler_config_defaults_are_bounded() -> None:
+    config = BatchSizeAgingConfig.from_settings(
+        GeneralSettings(
+            embeddings_batch_tenant_fair_share_enabled=True,
+            embeddings_batch_model_capacity_enabled=True,
+            embeddings_batch_size_aware_scheduling_enabled=True,
+            embeddings_batch_scheduler_claim_mode="work_slice",
+            embeddings_batch_scheduler_strict_model_homogeneity_enabled=True,
+        )
+    )
+
+    assert config.enabled is True
+    assert config.aging_seconds_per_work_unit == 30
+    assert config.max_age_credit_work_units == 1_000
+    assert config.min_large_job_claim_interval_seconds == 30
+    assert config.small_job_fast_lane_enabled is False
+    assert config.small_job_max_work_units == 100
+
+
+def test_size_aging_rank_favors_smaller_remaining_work_at_equal_age() -> None:
+    now = datetime.now(tz=UTC)
+
+    small = calculate_size_aging_rank(
+        BatchJobRankInput(remaining_work_units=10, queue_entered_at=now),
+        now=now,
+    )
+    large = calculate_size_aging_rank(
+        BatchJobRankInput(remaining_work_units=100, queue_entered_at=now),
+        now=now,
+    )
+
+    assert small.rank < large.rank
+    assert small.policy_reason == "small_remaining_work"
+
+
+def test_size_aging_rank_decreases_with_capped_age_credit() -> None:
+    now = datetime.now(tz=UTC)
+
+    aged = calculate_size_aging_rank(
+        BatchJobRankInput(remaining_work_units=500, queue_entered_at=now - timedelta(seconds=600)),
+        now=now,
+        aging_seconds_per_work_unit=30,
+        max_age_credit_work_units=5,
+    )
+
+    assert aged.age_credit_work_units == 5
+    assert aged.rank == 495
+    assert aged.policy_reason == "aging_credit"
+
+
+def test_size_aging_rank_uses_fractional_age_credit_like_sql() -> None:
+    now = datetime.now(tz=UTC)
+
+    result = calculate_size_aging_rank(
+        BatchJobRankInput(
+            remaining_work_units=10,
+            queue_entered_at=now - timedelta(seconds=45),
+        ),
+        now=now,
+        aging_seconds_per_work_unit=30,
+        max_age_credit_work_units=1_000,
+    )
+
+    assert result.age_credit_work_units == 1
+    assert result.rank == 8.5
+    assert result.policy_reason == "aging_credit"
+
+
+def test_large_job_progress_floor_activates_after_interval() -> None:
+    now = datetime.now(tz=UTC)
+
+    result = calculate_size_aging_rank(
+        BatchJobRankInput(
+            remaining_work_units=5_000,
+            queue_entered_at=now,
+            last_scheduled_at=now - timedelta(seconds=31),
+            size_class="xl",
+        ),
+        now=now,
+        min_large_job_claim_interval_seconds=30,
+    )
+
+    assert result.large_job_progress_floor is True
+    assert result.policy_reason == "large_job_progress_floor"
+
+
+def test_large_job_progress_floor_does_not_activate_immediately() -> None:
+    now = datetime.now(tz=UTC)
+
+    result = calculate_size_aging_rank(
+        BatchJobRankInput(
+            remaining_work_units=5_000,
+            queue_entered_at=now,
+            last_scheduled_at=None,
+            size_class="xl",
+        ),
+        now=now,
+        min_large_job_claim_interval_seconds=30,
+    )
+
+    assert result.large_job_progress_floor is False
+    assert result.policy_reason == "tenant_fair_share"
+
+
+def test_size_aware_large_claim_limit_respects_microbatch_floor() -> None:
+    assert tuned_claim_item_limit(max_items=10, min_items_for_microbatch=4, size_class="xl") == 5
+    assert tuned_claim_item_limit(max_items=3, min_items_for_microbatch=4, size_class="l") == 3
+    assert tuned_claim_item_limit(max_items=10, min_items_for_microbatch=4, size_class="s") == 10
 
 
 def test_resolve_model_group_uses_router_alias_with_identity_fallback() -> None:

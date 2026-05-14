@@ -123,18 +123,25 @@ general_settings:
 {{- $schedulerEnabled := eq (lower (toString (default false (get $general "embeddings_batch_scheduler_enabled")))) "true" -}}
 {{- $schedulerShadowEnabled := eq (lower (toString (default false (get $general "embeddings_batch_scheduler_shadow_enabled")))) "true" -}}
 {{- $tenantFairShareEnabled := eq (lower (toString (default false (get $general "embeddings_batch_tenant_fair_share_enabled")))) "true" -}}
+{{- $sizeAwareSchedulingEnabled := eq (lower (toString (default false (get $general "embeddings_batch_size_aware_scheduling_enabled")))) "true" -}}
 {{- $modelCapacityEnabled := eq (lower (toString (default false (get $general "embeddings_batch_model_capacity_enabled")))) "true" -}}
-{{- $schedulerConfigured := or $schedulerEnabled $schedulerShadowEnabled $tenantFairShareEnabled $modelCapacityEnabled -}}
+{{- $schedulerConfigured := or $schedulerEnabled $schedulerShadowEnabled $tenantFairShareEnabled $modelCapacityEnabled $sizeAwareSchedulingEnabled -}}
 {{- $claimMode := lower (toString (default "job_fifo" (get $general "embeddings_batch_scheduler_claim_mode"))) -}}
 {{- $strictModelHomogeneityEnabled := eq (lower (toString (default false (get $general "embeddings_batch_scheduler_strict_model_homogeneity_enabled")))) "true" -}}
 {{- if and $schedulerConfigured (ne $claimMode "work_slice") -}}
-{{- fail (printf "%s scheduler requires embeddings_batch_scheduler_claim_mode=work_slice when embeddings_batch_scheduler_enabled, embeddings_batch_model_capacity_enabled, embeddings_batch_scheduler_shadow_enabled, or embeddings_batch_tenant_fair_share_enabled is true" $role) -}}
+{{- fail (printf "%s scheduler requires embeddings_batch_scheduler_claim_mode=work_slice when embeddings_batch_scheduler_enabled, embeddings_batch_model_capacity_enabled, embeddings_batch_scheduler_shadow_enabled, embeddings_batch_tenant_fair_share_enabled, or embeddings_batch_size_aware_scheduling_enabled is true" $role) -}}
 {{- end -}}
 {{- if and $schedulerConfigured (not $strictModelHomogeneityEnabled) -}}
-{{- fail (printf "%s scheduler requires embeddings_batch_scheduler_strict_model_homogeneity_enabled=true when embeddings_batch_scheduler_enabled, embeddings_batch_model_capacity_enabled, embeddings_batch_scheduler_shadow_enabled, or embeddings_batch_tenant_fair_share_enabled is true" $role) -}}
+{{- fail (printf "%s scheduler requires embeddings_batch_scheduler_strict_model_homogeneity_enabled=true when embeddings_batch_scheduler_enabled, embeddings_batch_model_capacity_enabled, embeddings_batch_scheduler_shadow_enabled, embeddings_batch_tenant_fair_share_enabled, or embeddings_batch_size_aware_scheduling_enabled is true" $role) -}}
 {{- end -}}
 {{- if and $tenantFairShareEnabled (not $modelCapacityEnabled) -}}
 {{- fail (printf "%s tenant fair-share scheduling requires embeddings_batch_model_capacity_enabled=true" $role) -}}
+{{- end -}}
+{{- if and $sizeAwareSchedulingEnabled (not $modelCapacityEnabled) -}}
+{{- fail (printf "%s size-aware batch scheduling requires embeddings_batch_model_capacity_enabled=true" $role) -}}
+{{- end -}}
+{{- if and $sizeAwareSchedulingEnabled (not (or $tenantFairShareEnabled $schedulerShadowEnabled)) -}}
+{{- fail (printf "%s size-aware batch scheduling requires embeddings_batch_tenant_fair_share_enabled=true or embeddings_batch_scheduler_shadow_enabled=true" $role) -}}
 {{- end -}}
 {{- if and $schedulerShadowEnabled (not $modelCapacityEnabled) -}}
 {{- fail (printf "%s scheduler shadow mode requires embeddings_batch_model_capacity_enabled=true" $role) -}}
