@@ -18,6 +18,7 @@ from src.batch.models import (
     BatchModelInFlightRecord,
     BatchSchedulerFlowRecord,
     BatchWorkClaim,
+    BatchWorkRecommendation,
 )
 from src.batch.repositories import (
     BatchCompletionOutboxRepository,
@@ -221,8 +222,18 @@ class BatchRepository:
     async def create_items(self, batch_id: str, items: list[BatchItemCreate]) -> int:
         return await self.items.create_items(batch_id, items)
 
-    async def claim_next_job(self, *, worker_id: str, lease_seconds: int = 30) -> BatchJobRecord | None:
-        return await self.jobs.claim_next_job(worker_id=worker_id, lease_seconds=lease_seconds)
+    async def claim_next_job(
+        self,
+        *,
+        worker_id: str,
+        lease_seconds: int = 30,
+        scheduler_mode: str = "fifo_v1",
+    ) -> BatchJobRecord | None:
+        return await self.jobs.claim_next_job(
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
+            scheduler_mode=scheduler_mode,
+        )
 
     async def claim_next_finalization(self, *, worker_id: str, lease_seconds: int = 30) -> BatchJobRecord | None:
         return await self.jobs.claim_next_finalization(worker_id=worker_id, lease_seconds=lease_seconds)
@@ -251,6 +262,7 @@ class BatchRepository:
         min_large_job_claim_interval_seconds: int = 30,
         small_job_max_work_units: int = 100,
         work_claim_min_items_for_microbatch: int = 4,
+        scheduler_mode: str = "slice_v1",
     ) -> BatchWorkClaim | None:
         return await self.jobs.claim_next_work(
             worker_id=worker_id,
@@ -274,6 +286,42 @@ class BatchRepository:
             min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
             small_job_max_work_units=small_job_max_work_units,
             work_claim_min_items_for_microbatch=work_claim_min_items_for_microbatch,
+            scheduler_mode=scheduler_mode,
+        )
+
+    async def recommend_next_work(
+        self,
+        *,
+        max_items: int,
+        max_work_units: int,
+        allowed_model_groups: list[str] | None = None,
+        service_tier: str | None = None,
+        legacy_only: bool = False,
+        claim_order: str = "round_robin",
+        capacity_model_group: str | None = None,
+        capacity_service_tier: str | None = None,
+        capacity_max_in_flight_items: int | None = None,
+        capacity_max_in_flight_work_units: int | None = None,
+        tenant_scope_type: str | None = None,
+        tenant_scope_id: str | None = None,
+        allow_oversized_first_item: bool = True,
+        reason: str = "work_slice",
+    ) -> BatchWorkRecommendation | None:
+        return await self.jobs.recommend_next_work(
+            max_items=max_items,
+            max_work_units=max_work_units,
+            allowed_model_groups=allowed_model_groups,
+            service_tier=service_tier,
+            legacy_only=legacy_only,
+            claim_order=claim_order,
+            capacity_model_group=capacity_model_group,
+            capacity_service_tier=capacity_service_tier,
+            capacity_max_in_flight_items=capacity_max_in_flight_items,
+            capacity_max_in_flight_work_units=capacity_max_in_flight_work_units,
+            tenant_scope_type=tenant_scope_type,
+            tenant_scope_id=tenant_scope_id,
+            allow_oversized_first_item=allow_oversized_first_item,
+            reason=reason,
         )
 
     async def list_model_group_backlog(self) -> list[BatchModelBacklogRecord]:
@@ -289,6 +337,7 @@ class BatchRepository:
         model_group: str | None = None,
         base_quantum_work_units: int = 16,
         max_deficit_multiplier: int = 8,
+        max_candidate_jobs_per_flow: int = 50,
         size_aware_scheduling_enabled: bool = False,
         aging_seconds_per_work_unit: int = 30,
         max_age_credit_work_units: int = 1_000,
@@ -300,6 +349,7 @@ class BatchRepository:
             model_group=model_group,
             base_quantum_work_units=base_quantum_work_units,
             max_deficit_multiplier=max_deficit_multiplier,
+            max_candidate_jobs_per_flow=max_candidate_jobs_per_flow,
             size_aware_scheduling_enabled=size_aware_scheduling_enabled,
             aging_seconds_per_work_unit=aging_seconds_per_work_unit,
             max_age_credit_work_units=max_age_credit_work_units,
@@ -314,12 +364,14 @@ class BatchRepository:
         model_group: str | None = None,
         tenant_scope_type: str | None = None,
         active: bool | None = None,
+        limit: int | None = None,
     ) -> list[BatchSchedulerFlowRecord]:
         return await self.jobs.list_scheduler_flows(
             service_tier=service_tier,
             model_group=model_group,
             tenant_scope_type=tenant_scope_type,
             active=active,
+            limit=limit,
         )
 
     async def claim_next_fair_share_work(
@@ -341,7 +393,10 @@ class BatchRepository:
         max_age_credit_work_units: int = 1_000,
         min_large_job_claim_interval_seconds: int = 30,
         small_job_max_work_units: int = 100,
+        max_active_flows_per_decision: int = 100,
+        max_candidate_jobs_per_flow: int = 50,
         work_claim_min_items_for_microbatch: int = 4,
+        scheduler_mode: str = "fair_share_v1",
     ) -> BatchFairShareClaimResult:
         return await self.jobs.claim_next_fair_share_work(
             worker_id=worker_id,
@@ -360,7 +415,10 @@ class BatchRepository:
             max_age_credit_work_units=max_age_credit_work_units,
             min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
             small_job_max_work_units=small_job_max_work_units,
+            max_active_flows_per_decision=max_active_flows_per_decision,
+            max_candidate_jobs_per_flow=max_candidate_jobs_per_flow,
             work_claim_min_items_for_microbatch=work_claim_min_items_for_microbatch,
+            scheduler_mode=scheduler_mode,
         )
 
     async def recommend_next_fair_share_flow(
@@ -378,6 +436,8 @@ class BatchRepository:
         max_age_credit_work_units: int = 1_000,
         min_large_job_claim_interval_seconds: int = 30,
         small_job_max_work_units: int = 100,
+        max_active_flows_per_decision: int = 100,
+        max_candidate_jobs_per_flow: int = 50,
     ) -> BatchFairShareClaimResult:
         return await self.jobs.recommend_next_fair_share_flow(
             service_tier=service_tier,
@@ -392,6 +452,8 @@ class BatchRepository:
             max_age_credit_work_units=max_age_credit_work_units,
             min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
             small_job_max_work_units=small_job_max_work_units,
+            max_active_flows_per_decision=max_active_flows_per_decision,
+            max_candidate_jobs_per_flow=max_candidate_jobs_per_flow,
         )
 
     async def get_tenant_queued_work_units(
@@ -545,8 +607,20 @@ class BatchRepository:
     async def release_job_lease(self, *, batch_id: str, worker_id: str) -> None:
         await self.jobs.release_job_lease(batch_id=batch_id, worker_id=worker_id)
 
-    async def renew_item_lease(self, *, item_id: str, worker_id: str, lease_seconds: int) -> bool:
-        return await self.items.renew_item_lease(item_id=item_id, worker_id=worker_id, lease_seconds=lease_seconds)
+    async def renew_item_lease(
+        self,
+        *,
+        item_id: str,
+        worker_id: str,
+        lease_seconds: int,
+        claim_epoch: int | None = None,
+    ) -> bool:
+        return await self.items.renew_item_lease(
+            item_id=item_id,
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
+            claim_epoch=claim_epoch,
+        )
 
     async def release_items_for_retry(
         self,
@@ -556,6 +630,7 @@ class BatchRepository:
         retry_delay_seconds: int = 0,
         error_body: dict[str, Any] | None = None,
         last_error: str | None = None,
+        item_claim_epochs: dict[str, int] | None = None,
     ) -> list[str]:
         return await self.items.release_items_for_retry(
             item_ids=item_ids,
@@ -563,6 +638,7 @@ class BatchRepository:
             retry_delay_seconds=retry_delay_seconds,
             error_body=error_body,
             last_error=last_error,
+            item_claim_epochs=item_claim_epochs,
         )
 
     async def enqueue_completion_outbox_many(self, records: list[BatchCompletionOutboxCreate]) -> list[str]:
@@ -705,6 +781,7 @@ class BatchRepository:
                         "usage": item.get("usage"),
                         "provider_cost": item["provider_cost"],
                         "billed_cost": item["billed_cost"],
+                        "claim_epoch": item.get("claim_epoch"),
                     }
                     for item in items
                 ],

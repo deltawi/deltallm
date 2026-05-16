@@ -23,9 +23,18 @@ from src.batch.scheduling import (
     BatchModelCapacityResolver,
     BatchSizeAgingConfig,
     BatchTenantFairShareConfig,
+    SchedulerMode,
+    SchedulerShadowMode,
     calculate_size_aging_rank,
+    resolve_scheduler_modes_from_settings,
+    scheduler_mode_uses_fair_share,
+    scheduler_mode_uses_model_capacity,
+    scheduler_mode_uses_size_aware,
+    scheduler_mode_uses_work_slice,
 )
+from src.config_runtime.dynamic import DynamicConfigPersistenceError, DynamicConfigValidationError
 from src.metrics import (
+    collect_batch_scheduler_status_metrics,
     increment_batch_repair_action,
     publish_batch_runtime_summary,
 )
@@ -34,6 +43,8 @@ from src.services.ui_authorization import build_batch_capabilities
 
 router = APIRouter(tags=["Admin Batches"])
 logger = logging.getLogger(__name__)
+SCHEDULER_FLOW_LIST_DEFAULT_LIMIT = 200
+SCHEDULER_FLOW_LIST_MAX_LIMIT = 1000
 
 
 class MarkBatchFailedRequest(BaseModel):
@@ -48,6 +59,12 @@ class SchedulerFlowRefreshRequest(BaseModel):
     model_group: str | None = Field(default=None, max_length=200)
     service_tier: str | None = Field(default=None, max_length=100)
     repair_limit: int = Field(default=500, ge=1, le=5_000)
+
+
+class SchedulerModeUpdateRequest(BaseModel):
+    active_mode: SchedulerMode
+    shadow_mode: SchedulerShadowMode = "none"
+    reason: str | None = Field(default=None, max_length=500)
 
 
 async def _refresh_batch_runtime_metrics(repository: BatchRepository) -> None:
@@ -214,6 +231,14 @@ def _tenant_fair_share_config_or_503(request: Request) -> BatchTenantFairShareCo
     return BatchTenantFairShareConfig.from_settings(general_settings)
 
 
+def _dynamic_config_or_503(request: Request):  # noqa: ANN202
+    dynamic_config = getattr(request.app.state, "dynamic_config_manager", None)
+    update_config = getattr(dynamic_config, "update_config", None)
+    if dynamic_config is None or not callable(update_config):
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Config manager unavailable")
+    return dynamic_config
+
+
 def _capacity_snapshot_response(snapshot) -> dict[str, Any]:  # noqa: ANN001
     return {
         "model_group": snapshot.model_group,
@@ -238,6 +263,104 @@ def _capacity_snapshot_response(snapshot) -> dict[str, Any]:  # noqa: ANN001
     }
 
 
+def _scheduler_status_response(request: Request) -> dict[str, Any]:
+    general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+    if general_settings is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="App config unavailable")
+    modes = resolve_scheduler_modes_from_settings(general_settings)
+    model_capacity = BatchModelCapacityConfig.from_settings(general_settings)
+    fair_share = BatchTenantFairShareConfig.from_settings(general_settings)
+    size_aging = BatchSizeAgingConfig.from_settings(general_settings)
+    worker = getattr(getattr(request.app.state, "batch_runtime", None), "worker", None)
+    worker_active_mode = None
+    worker_shadow_mode = None
+    if worker is not None:
+        worker_active_mode = worker._active_scheduler_mode()
+        worker_shadow_mode = worker._shadow_scheduler_mode()
+    return {
+        "active_mode": modes.active_mode,
+        "shadow_mode": modes.shadow_mode,
+        "local_worker": {
+            "present": worker is not None,
+            "active_mode": worker_active_mode,
+            "shadow_mode": worker_shadow_mode,
+            "matches_config": (
+                worker is not None
+                and worker_active_mode == modes.active_mode
+                and worker_shadow_mode == modes.shadow_mode
+            ),
+        },
+        "effective": {
+            "work_slice_claims": scheduler_mode_uses_work_slice(modes.active_mode),
+            "model_capacity_gates": scheduler_mode_uses_model_capacity(modes.active_mode),
+            "tenant_fair_share": scheduler_mode_uses_fair_share(modes.active_mode),
+            "size_aware_ranking": scheduler_mode_uses_size_aware(modes.active_mode),
+            "shadow_model_capacity_gates": scheduler_mode_uses_model_capacity(modes.shadow_mode),
+            "shadow_tenant_fair_share": scheduler_mode_uses_fair_share(modes.shadow_mode),
+            "shadow_size_aware_ranking": scheduler_mode_uses_size_aware(modes.shadow_mode),
+        },
+        "legacy_flags": {
+            "embeddings_batch_scheduler_enabled": bool(
+                getattr(general_settings, "embeddings_batch_scheduler_enabled", False)
+            ),
+            "embeddings_batch_scheduler_shadow_enabled": bool(
+                getattr(general_settings, "embeddings_batch_scheduler_shadow_enabled", False)
+            ),
+            "embeddings_batch_model_capacity_enabled": bool(
+                getattr(general_settings, "embeddings_batch_model_capacity_enabled", False)
+            ),
+            "embeddings_batch_tenant_fair_share_enabled": bool(
+                getattr(general_settings, "embeddings_batch_tenant_fair_share_enabled", False)
+            ),
+            "embeddings_batch_size_aware_scheduling_enabled": bool(
+                getattr(general_settings, "embeddings_batch_size_aware_scheduling_enabled", False)
+            ),
+        },
+        "claim_mode": (
+            "work_slice"
+            if scheduler_mode_uses_work_slice(modes.active_mode)
+            else getattr(general_settings, "embeddings_batch_scheduler_claim_mode", "job_fifo")
+        ),
+        "strict_model_homogeneity_enabled": bool(
+            getattr(general_settings, "embeddings_batch_scheduler_strict_model_homogeneity_enabled", False)
+        ),
+        "model_capacity": {
+            "enabled": model_capacity.enabled,
+            "fail_open": model_capacity.fail_open,
+            "default_model_max_in_flight": model_capacity.default_model_max_in_flight,
+            "default_model_max_claim_work_units": model_capacity.default_model_max_claim_work_units,
+            "capacity_fraction": model_capacity.capacity_fraction,
+            "refresh_seconds": model_capacity.refresh_seconds,
+        },
+        "fair_share": {
+            "enabled": fair_share.enabled,
+            "base_quantum_work_units": fair_share.base_quantum_work_units,
+            "max_deficit_multiplier": fair_share.max_deficit_multiplier,
+            "tenant_max_in_flight_work_units": fair_share.tenant_max_in_flight_work_units,
+            "tenant_max_queued_work_units": fair_share.tenant_max_queued_work_units,
+            "max_active_flows_per_decision": fair_share.max_active_flows_per_decision,
+            "max_candidate_jobs_per_flow": fair_share.max_candidate_jobs_per_flow,
+            "tenant_scope_preference": list(fair_share.tenant_scope_preference),
+            "disabled_model_groups": list(fair_share.disabled_model_groups),
+        },
+        "size_aging": {
+            "enabled": size_aging.enabled,
+            "aging_seconds_per_work_unit": size_aging.aging_seconds_per_work_unit,
+            "max_age_credit_work_units": size_aging.max_age_credit_work_units,
+            "min_large_job_claim_interval_seconds": (
+                size_aging.min_large_job_claim_interval_seconds
+            ),
+            "small_job_fast_lane_enabled": size_aging.small_job_fast_lane_enabled,
+            "small_job_max_work_units": size_aging.small_job_max_work_units,
+        },
+        "rollback": {
+            "primary": "set embeddings_batch_scheduler_mode=fifo_v1",
+            "disable_shadow": "set embeddings_batch_scheduler_shadow_mode=none",
+        },
+        "metrics": collect_batch_scheduler_status_metrics(),
+    }
+
+
 def _scheduler_flow_response(flow) -> dict[str, Any]:  # noqa: ANN001
     return {
         "flow_id": flow.flow_id,
@@ -258,6 +381,12 @@ def _scheduler_flow_response(flow) -> dict[str, Any]:  # noqa: ANN001
         "last_selected_at": to_json_value(flow.last_selected_at),
         "last_refilled_at": to_json_value(flow.last_refilled_at),
         "oldest_queue_entered_at": to_json_value(flow.oldest_queue_entered_at),
+        "next_item_work_units": flow.next_item_work_units,
+        "next_batch_id": flow.next_batch_id,
+        "next_size_class": flow.next_size_class,
+        "next_scheduler_rank": flow.next_scheduler_rank,
+        "next_age_credit_work_units": flow.next_age_credit_work_units,
+        "next_policy_reason": flow.next_policy_reason,
         "skip_reason_summary": dict(flow.skip_reasons or {}),
         "updated_at": to_json_value(flow.updated_at),
     }
@@ -516,6 +645,88 @@ async def batch_scheduler_model_capacity(
     }
 
 
+@router.get("/ui/api/batches/scheduler/status")
+async def batch_scheduler_status(
+    request: Request,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    get_auth_scope(
+        request,
+        authorization,
+        x_master_key,
+        required_permission=Permission.PLATFORM_ADMIN,
+    )
+    return _scheduler_status_response(request)
+
+
+@router.post("/ui/api/batches/scheduler/mode")
+async def update_batch_scheduler_mode(
+    request: Request,
+    payload: SchedulerModeUpdateRequest,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    request_start = perf_counter()
+    scope = get_auth_scope(
+        request,
+        authorization,
+        x_master_key,
+        required_permission=Permission.PLATFORM_ADMIN,
+    )
+    dynamic_config = _dynamic_config_or_503(request)
+    before = _scheduler_status_response(request)
+    config_update = {
+        "general_settings": {
+            "embeddings_batch_scheduler_mode": payload.active_mode,
+            "embeddings_batch_scheduler_shadow_mode": payload.shadow_mode,
+        }
+    }
+    try:
+        await dynamic_config.update_config(config_update, updated_by="admin_api")
+    except DynamicConfigValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Scheduler mode update is invalid",
+        ) from exc
+    except DynamicConfigPersistenceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Scheduler mode update could not be persisted",
+        ) from exc
+    get_app_config = getattr(dynamic_config, "get_app_config", None)
+    if callable(get_app_config):
+        request.app.state.app_config = get_app_config()
+    response = _scheduler_status_response(request)
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_BATCH_SCHEDULER_MODE_UPDATE,
+        scope=scope,
+        resource_type="batch_scheduler",
+        resource_id="scheduler_mode",
+        request_payload={
+            "active_mode": payload.active_mode,
+            "shadow_mode": payload.shadow_mode,
+            "reason": payload.reason,
+        },
+        response_payload={
+            "active_mode": response["active_mode"],
+            "shadow_mode": response["shadow_mode"],
+        },
+        before=before,
+        after=response,
+    )
+    logger.warning(
+        "batch scheduler mode updated active_mode=%s shadow_mode=%s actor=%s reason=%s",
+        response["active_mode"],
+        response["shadow_mode"],
+        scope.account_id,
+        payload.reason or "",
+    )
+    return response
+
+
 @router.get("/ui/api/batches/scheduler/flows")
 async def batch_scheduler_flows(
     request: Request,
@@ -523,6 +734,11 @@ async def batch_scheduler_flows(
     service_tier: str | None = Query(default=None),
     tenant_scope_type: str | None = Query(default=None),
     active: bool | None = Query(default=None),
+    limit: int = Query(
+        default=SCHEDULER_FLOW_LIST_DEFAULT_LIMIT,
+        ge=1,
+        le=SCHEDULER_FLOW_LIST_MAX_LIMIT,
+    ),
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
@@ -539,9 +755,11 @@ async def batch_scheduler_flows(
         model_group=model_group,
         tenant_scope_type=tenant_scope_type,
         active=active,
+        limit=limit,
     )
     return {
         "enabled": config.enabled,
+        "limit": limit,
         "base_quantum_work_units": config.base_quantum_work_units,
         "max_deficit_multiplier": config.max_deficit_multiplier,
         "tenant_max_in_flight_work_units": config.tenant_max_in_flight_work_units,
@@ -556,6 +774,11 @@ async def batch_scheduler_flows(
 async def refresh_batch_scheduler_flows(
     request: Request,
     payload: SchedulerFlowRefreshRequest | None = None,
+    limit: int = Query(
+        default=SCHEDULER_FLOW_LIST_DEFAULT_LIMIT,
+        ge=1,
+        le=SCHEDULER_FLOW_LIST_MAX_LIMIT,
+    ),
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
@@ -568,6 +791,18 @@ async def refresh_batch_scheduler_flows(
     )
     repository = _batch_repository_or_503(request)
     config = _tenant_fair_share_config_or_503(request)
+    general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+    if general_settings is None:
+        size_aging_config = BatchSizeAgingConfig()
+        size_aware_scheduling_enabled = False
+    else:
+        modes = resolve_scheduler_modes_from_settings(general_settings)
+        size_aging_config = BatchSizeAgingConfig.from_settings(general_settings)
+        size_aware_scheduling_enabled = (
+            scheduler_mode_uses_size_aware(modes.active_mode)
+            or scheduler_mode_uses_size_aware(modes.shadow_mode)
+            or size_aging_config.enabled
+        )
     bounded_payload = payload or SchedulerFlowRefreshRequest()
     model_group = (bounded_payload.model_group or "").strip() or None
     service_tier = (bounded_payload.service_tier or "").strip() or None
@@ -582,14 +817,24 @@ async def refresh_batch_scheduler_flows(
             model_group=model_group,
             base_quantum_work_units=config.base_quantum_work_units,
             max_deficit_multiplier=config.max_deficit_multiplier,
+            max_candidate_jobs_per_flow=config.max_candidate_jobs_per_flow,
+            size_aware_scheduling_enabled=size_aware_scheduling_enabled,
+            aging_seconds_per_work_unit=size_aging_config.aging_seconds_per_work_unit,
+            max_age_credit_work_units=size_aging_config.max_age_credit_work_units,
+            min_large_job_claim_interval_seconds=(
+                size_aging_config.min_large_job_claim_interval_seconds
+            ),
+            small_job_max_work_units=size_aging_config.small_job_max_work_units,
         )
     flows = await repository.list_scheduler_flows(
         service_tier=service_tier,
         model_group=model_group,
         active=None,
+        limit=limit,
     )
     response = {
         "enabled": config.enabled,
+        "limit": limit,
         "base_quantum_work_units": config.base_quantum_work_units,
         "max_deficit_multiplier": config.max_deficit_multiplier,
         "tenant_max_in_flight_work_units": config.tenant_max_in_flight_work_units,
@@ -613,6 +858,7 @@ async def refresh_batch_scheduler_flows(
             "model_group": model_group,
             "service_tier": service_tier,
             "repair_limit": bounded_payload.repair_limit,
+            "flow_limit": limit,
         },
         response_payload={
             "repaired_jobs": response["repaired_jobs"],

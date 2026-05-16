@@ -8,7 +8,11 @@ from typing import Any
 import pytest
 
 from src.config import AppConfig, RouterSettings
-from src.config_runtime.dynamic import DynamicConfigManager
+from src.config_runtime.dynamic import (
+    DynamicConfigManager,
+    DynamicConfigPersistenceError,
+    DynamicConfigValidationError,
+)
 from src.config_runtime.models import ModelHotReloadManager
 from src.config_runtime.secrets import BaseSecretManager, SecretResolver
 from src.db.repositories import ModelDeploymentRecord
@@ -68,17 +72,43 @@ class FakeRedis:
         self.messages.append((channel, payload))
 
 
+class FailingPubSub:
+    async def subscribe(self, channel: str) -> None:
+        del channel
+
+    async def listen(self):
+        raise RuntimeError("redis unavailable")
+        yield {}  # pragma: no cover
+
+    async def unsubscribe(self, channel: str) -> None:
+        del channel
+
+    async def close(self) -> None:
+        return None
+
+
+class FailingRedis(FakeRedis):
+    def pubsub(self) -> FailingPubSub:
+        return FailingPubSub()
+
+
 class FakeDB:
     def __init__(self, config_value: dict[str, Any] | None = None) -> None:
         self.config_value = config_value or {}
         self.updated_by: str | None = None
+        self.fail_query = False
+        self.fail_execute = False
 
     async def query_raw(self, query: str, name: str):
         del query, name
+        if self.fail_query:
+            raise RuntimeError("db read unavailable")
         return [{"config_value": json.dumps(self.config_value)}]
 
     async def execute_raw(self, query: str, name: str, payload: str, updated_by: str):
         del query, name
+        if self.fail_execute:
+            raise RuntimeError("db write unavailable")
         self.config_value = json.loads(payload)
         self.updated_by = updated_by
 
@@ -259,6 +289,164 @@ async def test_dynamic_config_config_updated_without_diff_is_noop():
     assert called == []
 
     await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_config_polling_reloads_db_changes_without_pubsub():
+    db = FakeDB()
+    manager = DynamicConfigManager(
+        db_client=db,
+        redis_client=None,
+        file_config={},
+        poll_interval_seconds=0.01,
+    )
+
+    called: list[dict[str, list[str]]] = []
+
+    async def on_change(new_config, changes):
+        del new_config
+        called.append(changes)
+
+    manager.subscribe(on_change)
+    await manager.initialize()
+
+    try:
+        db.config_value["router_settings"] = RouterSettings(routing_strategy="weighted").model_dump()
+        for _ in range(20):
+            if called:
+                break
+            await asyncio.sleep(0.01)
+
+        cfg = manager.get_app_config()
+        assert cfg.router_settings.routing_strategy == "weighted"
+        assert called == [{"added": [], "removed": [], "modified": ["router_settings"]}]
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_config_update_fails_closed_when_db_write_fails():
+    db = FakeDB()
+    redis = FakeRedis()
+    manager = DynamicConfigManager(db_client=db, redis_client=redis, file_config={})
+    await manager.initialize()
+
+    db.fail_execute = True
+    with pytest.raises(DynamicConfigPersistenceError):
+        await manager.update_config(
+            {"router_settings": {"routing_strategy": "weighted"}},
+            updated_by="test",
+        )
+
+    assert manager.get_app_config().router_settings.routing_strategy != "weighted"
+    assert db.config_value == {}
+    assert db.updated_by is None
+    assert redis.messages == []
+
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_config_update_validates_before_db_write():
+    db = FakeDB()
+    redis = FakeRedis()
+    manager = DynamicConfigManager(db_client=db, redis_client=redis, file_config={})
+    await manager.initialize()
+
+    with pytest.raises(DynamicConfigValidationError):
+        await manager.update_config(
+            {"general_settings": {"db_pool_size": 0}},
+            updated_by="test",
+        )
+
+    assert manager.get_app_config().general_settings.db_pool_size == 20
+    assert db.config_value == {}
+    assert db.updated_by is None
+    assert redis.messages == []
+
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_config_poll_db_failure_records_failed_not_unchanged(monkeypatch):
+    events: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        "src.config_runtime.dynamic.increment_config_reload",
+        lambda *, source, result: events.append({"source": source, "result": result}),
+    )
+
+    db = FakeDB()
+    manager = DynamicConfigManager(
+        db_client=db,
+        redis_client=None,
+        file_config={},
+        poll_interval_seconds=0,
+    )
+    await manager.initialize()
+
+    db.fail_query = True
+    changed = await manager._reload_config_from_source(source="poll")
+
+    assert changed is False
+    assert {"source": "poll", "result": "failed"} in events
+    assert {"source": "poll", "result": "unchanged"} not in events
+
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_config_poll_success_without_diff_records_unchanged(monkeypatch):
+    events: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        "src.config_runtime.dynamic.increment_config_reload",
+        lambda *, source, result: events.append({"source": source, "result": result}),
+    )
+
+    manager = DynamicConfigManager(
+        db_client=FakeDB(),
+        redis_client=None,
+        file_config={},
+        poll_interval_seconds=0,
+    )
+    await manager.initialize()
+
+    changed = await manager._reload_config_from_source(source="poll")
+
+    assert changed is False
+    assert {"source": "poll", "result": "unchanged"} in events
+
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_config_pubsub_failure_keeps_polling_and_records_metric(monkeypatch):
+    events: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        "src.config_runtime.dynamic.increment_config_reload",
+        lambda *, source, result: events.append({"source": source, "result": result}),
+    )
+
+    db = FakeDB()
+    manager = DynamicConfigManager(
+        db_client=db,
+        redis_client=FailingRedis(),
+        file_config={},
+        poll_interval_seconds=0.01,
+    )
+    await manager.initialize()
+
+    try:
+        db.config_value["router_settings"] = RouterSettings(routing_strategy="weighted").model_dump()
+        for _ in range(20):
+            if manager.get_app_config().router_settings.routing_strategy == "weighted":
+                break
+            await asyncio.sleep(0.01)
+
+        assert manager.get_app_config().router_settings.routing_strategy == "weighted"
+        assert {"source": "pubsub", "result": "listener_failed"} in events
+        assert {"source": "poll", "result": "applied"} in events
+    finally:
+        await manager.close()
 
 
 @pytest.mark.asyncio

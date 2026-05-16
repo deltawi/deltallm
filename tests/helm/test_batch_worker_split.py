@@ -104,11 +104,36 @@ def test_helm_schema_allows_tenant_fair_share_settings() -> None:
 
     assert general_settings["embeddings_batch_tenant_fair_share_enabled"] == {"type": "boolean"}
     assert general_settings["embeddings_batch_scheduler_base_quantum_work_units"]["minimum"] == 1
+    assert general_settings["embeddings_batch_scheduler_max_active_flows_per_decision"] == {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1000,
+    }
+    assert general_settings["embeddings_batch_scheduler_max_candidate_jobs_per_flow"] == {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1000,
+    }
     assert general_settings["embeddings_batch_tenant_scope_preference"] == {"type": "string"}
     assert general_settings["embeddings_batch_tenant_fair_share_disabled_model_groups"] == {
         "type": "array",
         "items": {"type": "string"},
     }
+    assert general_settings["embeddings_batch_scheduler_mode"]["enum"] == [
+        "fifo_v1",
+        "slice_v1",
+        "model_capacity_v1",
+        "fair_share_v1",
+        "smart_v1",
+    ]
+    assert general_settings["embeddings_batch_scheduler_shadow_mode"]["enum"] == [
+        "none",
+        "fifo_v1",
+        "slice_v1",
+        "model_capacity_v1",
+        "fair_share_v1",
+        "smart_v1",
+    ]
     assert general_settings["embeddings_batch_size_aware_scheduling_enabled"] == {"type": "boolean"}
     assert general_settings["embeddings_batch_aging_seconds_per_work_unit"]["minimum"] == 1
     assert general_settings["embeddings_batch_max_age_credit_work_units"]["minimum"] == 0
@@ -128,8 +153,8 @@ def test_helm_rejects_scheduler_without_work_slice_claiming() -> None:
     assert "embeddings_batch_scheduler_claim_mode=work_slice" in error
 
 
-def test_helm_rejects_scheduler_without_strict_model_homogeneity() -> None:
-    error = _render_error(
+def test_helm_allows_scheduler_without_strict_model_homogeneity() -> None:
+    docs = _render(
         "--set",
         "config.general_settings.embeddings_batch_scheduler_enabled=true",
         "--set",
@@ -138,7 +163,11 @@ def test_helm_rejects_scheduler_without_strict_model_homogeneity() -> None:
         "templates/configmap.yaml",
     )
 
-    assert "embeddings_batch_scheduler_strict_model_homogeneity_enabled=true" in error
+    api_general = _config_yaml(_by_kind_and_name(docs, "ConfigMap", "deltallm-config"))[
+        "general_settings"
+    ]
+    assert api_general["embeddings_batch_scheduler_enabled"] is True
+    assert api_general["embeddings_batch_scheduler_strict_model_homogeneity_enabled"] is False
 
 
 def test_helm_rejects_fair_share_without_model_capacity() -> None:
@@ -187,8 +216,8 @@ def test_helm_rejects_model_capacity_without_work_slice_claiming() -> None:
     assert "embeddings_batch_scheduler_claim_mode=work_slice" in error
 
 
-def test_helm_rejects_model_capacity_without_strict_model_homogeneity() -> None:
-    error = _render_error(
+def test_helm_allows_model_capacity_without_strict_model_homogeneity() -> None:
+    docs = _render(
         "--set",
         "config.general_settings.embeddings_batch_model_capacity_enabled=true",
         "--set",
@@ -197,7 +226,11 @@ def test_helm_rejects_model_capacity_without_strict_model_homogeneity() -> None:
         "templates/configmap.yaml",
     )
 
-    assert "embeddings_batch_scheduler_strict_model_homogeneity_enabled=true" in error
+    api_general = _config_yaml(_by_kind_and_name(docs, "ConfigMap", "deltallm-config"))[
+        "general_settings"
+    ]
+    assert api_general["embeddings_batch_model_capacity_enabled"] is True
+    assert api_general["embeddings_batch_scheduler_strict_model_homogeneity_enabled"] is False
 
 
 def test_helm_allows_model_capacity_with_scheduler_prerequisites() -> None:
@@ -216,6 +249,66 @@ def test_helm_allows_model_capacity_with_scheduler_prerequisites() -> None:
         "general_settings"
     ]
     assert api_general["embeddings_batch_model_capacity_enabled"] is True
+
+
+def test_helm_allows_explicit_smart_scheduler_mode_without_legacy_flags() -> None:
+    docs = _render(
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_mode=smart_v1",
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_shadow_mode=none",
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_strict_model_homogeneity_enabled=true",
+        "--show-only",
+        "templates/configmap.yaml",
+    )
+
+    api_general = _config_yaml(_by_kind_and_name(docs, "ConfigMap", "deltallm-config"))[
+        "general_settings"
+    ]
+    assert api_general["embeddings_batch_scheduler_mode"] == "smart_v1"
+    assert api_general["embeddings_batch_scheduler_shadow_mode"] == "none"
+
+
+def test_helm_treats_shadow_fair_share_as_effective_fair_share() -> None:
+    docs = _render(
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_mode=model_capacity_v1",
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_shadow_mode=fair_share_v1",
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_strict_model_homogeneity_enabled=true",
+        "--show-only",
+        "templates/configmap.yaml",
+    )
+
+    api_general = _config_yaml(_by_kind_and_name(docs, "ConfigMap", "deltallm-config"))[
+        "general_settings"
+    ]
+    assert api_general["embeddings_batch_scheduler_mode"] == "model_capacity_v1"
+    assert api_general["embeddings_batch_scheduler_shadow_mode"] == "fair_share_v1"
+
+
+def test_helm_explicit_fifo_mode_rolls_back_legacy_scheduler_flags() -> None:
+    docs = _render(
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_mode=fifo_v1",
+        "--set",
+        "config.general_settings.embeddings_batch_scheduler_shadow_mode=none",
+        "--set",
+        "config.general_settings.embeddings_batch_model_capacity_enabled=true",
+        "--set",
+        "config.general_settings.embeddings_batch_tenant_fair_share_enabled=true",
+        "--set",
+        "config.general_settings.embeddings_batch_size_aware_scheduling_enabled=true",
+        "--show-only",
+        "templates/configmap.yaml",
+    )
+
+    api_general = _config_yaml(_by_kind_and_name(docs, "ConfigMap", "deltallm-config"))[
+        "general_settings"
+    ]
+    assert api_general["embeddings_batch_scheduler_mode"] == "fifo_v1"
 
 
 def test_helm_allows_fair_share_with_scheduler_prerequisites() -> None:

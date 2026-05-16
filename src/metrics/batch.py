@@ -9,6 +9,7 @@ from prometheus_client import Counter, Gauge, Histogram
 from src.metrics.prometheus import get_prometheus_registry, sanitize_label
 
 BATCH_LATENCY_BUCKETS = [0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0]
+SCHEDULER_STATUS_METRIC_SAMPLE_LIMIT = 200
 
 deltallm_batch_jobs_metric = Gauge(
     "deltallm_batch_jobs",
@@ -312,7 +313,15 @@ deltallm_batch_queue_wait_metric = Histogram(
 deltallm_batch_time_to_first_claim_metric = Histogram(
     "deltallm_batch_time_to_first_claim_seconds",
     "Batch seconds from queue entry to first worker claim by scheduler dimensions",
-    ["model_group", "service_tier", "size_class"],
+    ["mode", "model_group", "service_tier", "size_class"],
+    buckets=[1, 5, 10, 30, 60, 120, 300, 600, 1_800, 3_600, 7_200, 21_600],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_completion_latency_metric = Histogram(
+    "deltallm_batch_completion_latency_seconds",
+    "Batch seconds from queue entry to terminal completion by scheduler mode and dimensions",
+    ["mode", "model_group", "service_tier", "size_class"],
     buckets=[1, 5, 10, 30, 60, 120, 300, 600, 1_800, 3_600, 7_200, 21_600],
     registry=get_prometheus_registry(),
 )
@@ -554,6 +563,56 @@ deltallm_batch_scheduler_shadow_share_ratio_metric = Histogram(
     "Ratio of actual shadow claim share to expected fair-share weight share",
     ["model_group", "service_tier"],
     buckets=[0.1, 0.25, 0.5, 0.75, 1.0, 1.25, 2.0, 4.0, 8.0],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_shadow_comparisons_metric = Counter(
+    "deltallm_batch_scheduler_shadow_comparisons_total",
+    "Batch scheduler active-vs-shadow comparisons by bounded result",
+    ["active_mode", "shadow_mode", "result"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_shadow_better_choice_metric = Counter(
+    "deltallm_batch_scheduler_shadow_better_choice_total",
+    "Batch scheduler shadow recommendations that differed for a bounded policy reason",
+    ["reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_rollbacks_metric = Counter(
+    "deltallm_batch_scheduler_rollbacks_total",
+    "Batch scheduler mode rollback events by mode pair and bounded reason",
+    ["from_mode", "to_mode", "reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_mode_info_metric = Gauge(
+    "deltallm_batch_scheduler_mode_info",
+    "Batch scheduler active and shadow mode info gauge; value is always 1 for the current process mode",
+    ["active_mode", "shadow_mode"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_oldest_wait_seconds_metric = Gauge(
+    "deltallm_batch_scheduler_oldest_wait_seconds",
+    "Oldest queued batch wait seconds by scheduler dimensions",
+    ["model_group", "service_tier", "size_class"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_fairness_deviation_metric = Gauge(
+    "deltallm_batch_scheduler_fairness_deviation",
+    "Absolute deviation between tenant actual in-flight share and expected weighted share",
+    ["model_group", "service_tier", "tenant_scope_type"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_decision_latency_metric = Histogram(
+    "deltallm_batch_scheduler_decision_latency_seconds",
+    "Batch scheduler decision latency by effective scheduler mode",
+    ["mode"],
+    buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0],
     registry=get_prometheus_registry(),
 )
 
@@ -842,16 +901,34 @@ def observe_batch_queue_wait(
 
 def observe_batch_time_to_first_claim(
     *,
+    mode: str = "fifo_v1",
     model_group: str,
     service_tier: str,
     size_class: str,
     wait_seconds: float,
 ) -> None:
     deltallm_batch_time_to_first_claim_metric.labels(
+        mode=sanitize_label(mode, fallback="fifo_v1"),
         model_group=sanitize_label(model_group),
         service_tier=sanitize_label(service_tier),
         size_class=sanitize_label(size_class),
     ).observe(max(0.0, float(wait_seconds)))
+
+
+def observe_batch_completion_latency(
+    *,
+    mode: str,
+    model_group: str,
+    service_tier: str,
+    size_class: str,
+    latency_seconds: float,
+) -> None:
+    deltallm_batch_completion_latency_metric.labels(
+        mode=sanitize_label(mode, fallback="fifo_v1"),
+        model_group=sanitize_label(model_group),
+        service_tier=sanitize_label(service_tier),
+        size_class=sanitize_label(size_class),
+    ).observe(max(0.0, float(latency_seconds)))
 
 
 def observe_batch_scheduler_job_rank(
@@ -995,10 +1072,32 @@ def _scheduler_flow_metric_labels(flow: Any) -> tuple[str, str, str]:
     )
 
 
+def _clear_batch_scheduler_fairness_deviation_scope(*, model_group: str, service_tier: str) -> None:
+    tenant_scope_types: set[str] = set()
+    for family in deltallm_batch_scheduler_fairness_deviation_metric.collect():
+        for sample in family.samples:
+            if sample.name != "deltallm_batch_scheduler_fairness_deviation":
+                continue
+            labels = sample.labels
+            if labels.get("model_group") == model_group and labels.get("service_tier") == service_tier:
+                tenant_scope_types.add(str(labels.get("tenant_scope_type") or "anonymous"))
+    for tenant_scope_type in tenant_scope_types:
+        with contextlib.suppress(AttributeError, KeyError, ValueError):
+            deltallm_batch_scheduler_fairness_deviation_metric.remove(
+                model_group,
+                service_tier,
+                tenant_scope_type,
+            )
+
+
 def publish_batch_scheduler_flows(flows: Iterable[Any]) -> None:
     aggregates: dict[tuple[str, str, str], dict[str, int]] = {}
+    fairness_groups: dict[tuple[str, str], list[tuple[str, int, int]]] = {}
+    fairness_scopes: set[tuple[str, str]] = set()
     for flow in flows:
         labels_key = _scheduler_flow_metric_labels(flow)
+        model_group, service_tier, tenant_scope_type = labels_key
+        fairness_scopes.add((model_group, service_tier))
         aggregate = aggregates.setdefault(
             labels_key,
             {
@@ -1013,6 +1112,14 @@ def publish_batch_scheduler_flows(flows: Iterable[Any]) -> None:
         aggregate["deficit_work_units"] += int(getattr(flow, "deficit_work_units", 0) or 0)
         aggregate["queued_work_units"] += max(0, int(getattr(flow, "queued_work_units", 0) or 0))
         aggregate["in_flight_work_units"] += max(0, int(getattr(flow, "in_flight_work_units", 0) or 0))
+        if bool(getattr(flow, "active", False)):
+            fairness_groups.setdefault((model_group, service_tier), []).append(
+                (
+                    tenant_scope_type,
+                    max(1, int(getattr(flow, "weight", 1) or 1)),
+                    max(0, int(getattr(flow, "in_flight_work_units", 0) or 0)),
+                )
+            )
     for (model_group, service_tier, tenant_scope_type), aggregate in aggregates.items():
         labels = {
             "model_group": model_group,
@@ -1027,6 +1134,31 @@ def publish_batch_scheduler_flows(flows: Iterable[Any]) -> None:
         deltallm_batch_scheduler_flow_in_flight_work_units_metric.labels(**labels).set(
             aggregate["in_flight_work_units"]
         )
+    for model_group, service_tier in fairness_scopes:
+        _clear_batch_scheduler_fairness_deviation_scope(
+            model_group=model_group,
+            service_tier=service_tier,
+        )
+    for (model_group, service_tier), group_flows in fairness_groups.items():
+        total_weight = sum(weight for _, weight, _ in group_flows)
+        total_in_flight = sum(in_flight for _, _, in_flight in group_flows)
+        if total_weight <= 0:
+            continue
+        deviations: dict[str, float] = {}
+        for tenant_scope_type, weight, in_flight in group_flows:
+            expected_share = float(weight) / float(total_weight)
+            actual_share = 0.0 if total_in_flight <= 0 else float(in_flight) / float(total_in_flight)
+            deviations[tenant_scope_type] = max(
+                deviations.get(tenant_scope_type, 0.0),
+                abs(actual_share - expected_share),
+            )
+        for tenant_scope_type, deviation in deviations.items():
+            set_batch_scheduler_fairness_deviation(
+                model_group=model_group,
+                service_tier=service_tier,
+                tenant_scope_type=tenant_scope_type,
+                deviation=deviation,
+            )
 
 
 def publish_batch_scheduler_flow(flow: Any) -> None:
@@ -1141,6 +1273,164 @@ def observe_batch_scheduler_shadow_share_ratio(
     ).observe(max(0.0, float(ratio)))
 
 
+def increment_batch_scheduler_shadow_comparison(
+    *,
+    active_mode: str,
+    shadow_mode: str,
+    result: str,
+) -> None:
+    deltallm_batch_scheduler_shadow_comparisons_metric.labels(
+        active_mode=sanitize_label(active_mode, fallback="fifo_v1"),
+        shadow_mode=sanitize_label(shadow_mode, fallback="none"),
+        result=sanitize_label(result),
+    ).inc()
+
+
+def increment_batch_scheduler_shadow_better_choice(*, reason: str) -> None:
+    deltallm_batch_scheduler_shadow_better_choice_metric.labels(
+        reason=sanitize_label(reason),
+    ).inc()
+
+
+def increment_batch_scheduler_rollback(*, from_mode: str, to_mode: str, reason: str) -> None:
+    deltallm_batch_scheduler_rollbacks_metric.labels(
+        from_mode=sanitize_label(from_mode, fallback="unknown"),
+        to_mode=sanitize_label(to_mode, fallback="unknown"),
+        reason=sanitize_label(reason),
+    ).inc()
+
+
+def _metric_counter_samples(metric: Any, sample_name: str) -> list[dict[str, Any]]:
+    samples: list[dict[str, Any]] = []
+    for family in metric.collect():
+        for sample in family.samples:
+            if sample.name != sample_name:
+                continue
+            samples.append(
+                {
+                    "labels": dict(sample.labels),
+                    "value": float(sample.value),
+                }
+            )
+    return sorted(samples, key=lambda item: tuple(sorted(item["labels"].items())))[
+        :SCHEDULER_STATUS_METRIC_SAMPLE_LIMIT
+    ]
+
+
+def _metric_histogram_count_sum(metric: Any, base_name: str) -> list[dict[str, Any]]:
+    rows: dict[tuple[tuple[str, str], ...], dict[str, Any]] = {}
+    for family in metric.collect():
+        for sample in family.samples:
+            if sample.name not in {f"{base_name}_count", f"{base_name}_sum"}:
+                continue
+            labels = tuple(sorted((str(key), str(value)) for key, value in sample.labels.items()))
+            row = rows.setdefault(labels, {"labels": dict(labels), "count": 0.0, "sum": 0.0})
+            if sample.name.endswith("_count"):
+                row["count"] = float(sample.value)
+            else:
+                row["sum"] = float(sample.value)
+    return [rows[key] for key in sorted(rows)][:SCHEDULER_STATUS_METRIC_SAMPLE_LIMIT]
+
+
+def collect_batch_scheduler_status_metrics() -> dict[str, Any]:
+    return {
+        "scope": "process_local",
+        "cluster_wide": False,
+        "warning": (
+            "Metric samples in this payload are from the current process only. In split "
+            "API/worker deployments, read these metric names from Prometheus for worker-pod "
+            "scheduler counters and histograms."
+        ),
+        "metric_names": {
+            "shadow_decisions": "deltallm_batch_scheduler_shadow_decisions_total",
+            "shadow_comparisons": "deltallm_batch_scheduler_shadow_comparisons_total",
+            "shadow_better_choice": "deltallm_batch_scheduler_shadow_better_choice_total",
+            "rollbacks": "deltallm_batch_scheduler_rollbacks_total",
+            "decision_latency": "deltallm_batch_scheduler_decision_latency_seconds",
+            "time_to_first_claim": "deltallm_batch_time_to_first_claim_seconds",
+            "completion_latency": "deltallm_batch_completion_latency_seconds",
+        },
+        "sample_limit": SCHEDULER_STATUS_METRIC_SAMPLE_LIMIT,
+        "process_local_samples": {
+            "counters": {
+                "shadow_decisions": _metric_counter_samples(
+                    deltallm_batch_scheduler_shadow_decisions_metric,
+                    "deltallm_batch_scheduler_shadow_decisions_total",
+                ),
+                "shadow_comparisons": _metric_counter_samples(
+                    deltallm_batch_scheduler_shadow_comparisons_metric,
+                    "deltallm_batch_scheduler_shadow_comparisons_total",
+                ),
+                "shadow_better_choice": _metric_counter_samples(
+                    deltallm_batch_scheduler_shadow_better_choice_metric,
+                    "deltallm_batch_scheduler_shadow_better_choice_total",
+                ),
+                "rollbacks": _metric_counter_samples(
+                    deltallm_batch_scheduler_rollbacks_metric,
+                    "deltallm_batch_scheduler_rollbacks_total",
+                ),
+            },
+            "histograms": {
+                "decision_latency": _metric_histogram_count_sum(
+                    deltallm_batch_scheduler_decision_latency_metric,
+                    "deltallm_batch_scheduler_decision_latency_seconds",
+                ),
+                "time_to_first_claim": _metric_histogram_count_sum(
+                    deltallm_batch_time_to_first_claim_metric,
+                    "deltallm_batch_time_to_first_claim_seconds",
+                ),
+                "completion_latency": _metric_histogram_count_sum(
+                    deltallm_batch_completion_latency_metric,
+                    "deltallm_batch_completion_latency_seconds",
+                ),
+            },
+        },
+    }
+
+
+def set_batch_scheduler_mode_info(*, active_mode: str, shadow_mode: str) -> None:
+    with contextlib.suppress(AttributeError):
+        deltallm_batch_scheduler_mode_info_metric.clear()
+    deltallm_batch_scheduler_mode_info_metric.labels(
+        active_mode=sanitize_label(active_mode, fallback="fifo_v1"),
+        shadow_mode=sanitize_label(shadow_mode, fallback="none"),
+    ).set(1)
+
+
+def set_batch_scheduler_oldest_wait(
+    *,
+    model_group: str,
+    service_tier: str,
+    size_class: str,
+    wait_seconds: float,
+) -> None:
+    deltallm_batch_scheduler_oldest_wait_seconds_metric.labels(
+        model_group=sanitize_label(model_group, fallback="unknown"),
+        service_tier=sanitize_label(service_tier, fallback="standard"),
+        size_class=sanitize_label(size_class, fallback="unknown"),
+    ).set(max(0.0, float(wait_seconds)))
+
+
+def set_batch_scheduler_fairness_deviation(
+    *,
+    model_group: str,
+    service_tier: str,
+    tenant_scope_type: str,
+    deviation: float,
+) -> None:
+    deltallm_batch_scheduler_fairness_deviation_metric.labels(
+        model_group=sanitize_label(model_group, fallback="unknown"),
+        service_tier=sanitize_label(service_tier, fallback="standard"),
+        tenant_scope_type=sanitize_label(tenant_scope_type, fallback="anonymous"),
+    ).set(max(0.0, float(deviation)))
+
+
+def observe_batch_scheduler_decision_latency(*, mode: str, latency_seconds: float) -> None:
+    deltallm_batch_scheduler_decision_latency_metric.labels(
+        mode=sanitize_label(mode, fallback="fifo_v1"),
+    ).observe(max(0.0, float(latency_seconds)))
+
+
 def increment_batch_scheduler_backfill_run(*, status: str) -> None:
     deltallm_batch_scheduler_backfill_runs_metric.labels(status=sanitize_label(status)).inc()
 
@@ -1181,6 +1471,7 @@ def publish_batch_runtime_summary(summary: Mapping[str, Any]) -> None:
         deltallm_batch_queue_work_units_metric,
         deltallm_batch_oldest_job_age_metric,
         deltallm_batch_scheduler_missing_dimensions_metric,
+        deltallm_batch_scheduler_oldest_wait_seconds_metric,
     ):
         with contextlib.suppress(AttributeError):
             metric.clear()
@@ -1214,6 +1505,13 @@ def publish_batch_runtime_summary(summary: Mapping[str, Any]) -> None:
             oldest_job_age_by_label.get(oldest_job_age_key, 0.0),
             float(row.get("oldest_job_age_seconds") or 0.0),
         )
+        if status == "queued":
+            set_batch_scheduler_oldest_wait(
+                model_group=model_group,
+                service_tier=service_tier,
+                size_class=size_class,
+                wait_seconds=float(row.get("oldest_job_age_seconds") or 0.0),
+            )
     for (status, model_group, service_tier, size_class), age_seconds in oldest_job_age_by_label.items():
         set_batch_oldest_job_age(
             status=status,

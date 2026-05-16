@@ -238,6 +238,22 @@
             "upstream_http_max_connections": { "type": "integer", "minimum": 1 },
             "upstream_http_max_keepalive_connections": { "type": "integer", "minimum": 0 },
             "upstream_http_keepalive_expiry_seconds": { "type": "number", "minimum": 0 },
+            "embeddings_batch_scheduler_mode": {
+              "type": "string",
+              "enum": ["fifo_v1", "slice_v1", "model_capacity_v1", "fair_share_v1", "smart_v1"]
+            },
+            "embeddings_batch_scheduler_shadow_mode": {
+              "type": "string",
+              "enum": ["none", "fifo_v1", "slice_v1", "model_capacity_v1", "fair_share_v1", "smart_v1"]
+            },
+            "embeddings_batch_scheduler_shadow_decision_timeout_seconds": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "embeddings_batch_scheduler_shadow_max_pending_decisions": {
+              "type": "integer",
+              "minimum": 0
+            },
             "embeddings_batch_scheduler_enabled": { "type": "boolean" },
             "embeddings_batch_scheduler_shadow_enabled": { "type": "boolean" },
             "embeddings_batch_scheduler_strict_model_homogeneity_enabled": { "type": "boolean" },
@@ -275,6 +291,16 @@
             "embeddings_batch_scheduler_max_deficit_multiplier": { "type": "integer", "minimum": 1 },
             "embeddings_batch_tenant_max_in_flight_work_units": { "type": "integer", "minimum": 0 },
             "embeddings_batch_tenant_max_queued_work_units": { "type": "integer", "minimum": 0 },
+            "embeddings_batch_scheduler_max_active_flows_per_decision": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "embeddings_batch_scheduler_max_candidate_jobs_per_flow": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
             "embeddings_batch_tenant_scope_preference": { "type": "string" },
             "embeddings_batch_tenant_fair_share_disabled_model_groups": {
               "type": "array",

@@ -87,6 +87,13 @@ deltallm_callable_target_policy_fallback_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_config_reload_events_metric = Counter(
+    "deltallm_config_reload_events_total",
+    "Dynamic config reload events by source and result",
+    ["source", "result"],
+    registry=get_prometheus_registry(),
+)
+
 
 def increment_request(
     *,
@@ -165,6 +172,13 @@ def increment_cache_miss(*, model: str, cache_type: str) -> None:
     deltallm_cache_miss_metric.labels(
         model=sanitize_label(model),
         cache_type=sanitize_label(cache_type),
+    ).inc()
+
+
+def increment_config_reload(*, source: str, result: str) -> None:
+    deltallm_config_reload_events_metric.labels(
+        source=sanitize_label(source),
+        result=sanitize_label(result),
     ).inc()
 
 

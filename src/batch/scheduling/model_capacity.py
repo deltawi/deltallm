@@ -18,6 +18,7 @@ from src.metrics import (
     publish_batch_model_capacity_snapshot,
     set_batch_model_backlog_work_units,
 )
+from src.batch.scheduling.modes import resolve_scheduler_modes_from_settings
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +34,21 @@ class BatchModelCapacityConfig:
 
     @classmethod
     def from_settings(cls, settings: Any) -> "BatchModelCapacityConfig":
+        scheduler_modes = resolve_scheduler_modes_from_settings(settings)
+        explicit_mode_control = (
+            "embeddings_batch_scheduler_mode" in getattr(settings, "model_fields_set", set())
+            or "embeddings_batch_scheduler_shadow_mode" in getattr(settings, "model_fields_set", set())
+        )
+        mode_enabled = (
+            scheduler_modes.active_uses_model_capacity or scheduler_modes.shadow_uses_model_capacity
+        )
         return cls(
-            enabled=bool(getattr(settings, "embeddings_batch_model_capacity_enabled", False)),
+            enabled=(
+                mode_enabled
+                if explicit_mode_control
+                else bool(getattr(settings, "embeddings_batch_model_capacity_enabled", False))
+                or mode_enabled
+            ),
             default_model_max_in_flight=max(
                 1,
                 int(getattr(settings, "embeddings_batch_default_model_max_in_flight", 16) or 16),

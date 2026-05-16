@@ -16,6 +16,7 @@ from src.batch.models import (
     BatchModelInFlightRecord,
     BatchSchedulerFlowRecord,
     BatchWorkClaim,
+    BatchWorkRecommendation,
     normalize_batch_job_status,
 )
 from src.batch.repositories.mappers import job_from_row, parse_datetime
@@ -37,6 +38,7 @@ from src.metrics import (
     increment_batch_scheduler_flow_skip,
     increment_batch_scheduler_shadow_skip,
     observe_batch_claim_wait_by_model,
+    observe_batch_completion_latency,
     observe_batch_estimated_work_units,
     increment_batch_scheduler_large_job_floor_claim,
     increment_batch_scheduler_size_claim,
@@ -54,6 +56,7 @@ logger = logging.getLogger(__name__)
 _SCHEDULER_FLOW_SKIP_REASONS = frozenset(
     {
         "empty_flow",
+        "flow_scan_limit_reached",
         "insufficient_deficit",
         "lock_busy",
         "no_active_flow",
@@ -119,6 +122,15 @@ def _optional_float(value: Any) -> float | None:
         return None
 
 
+def _scheduler_metric_mode(value: object) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return "fifo_v1"
+    if normalized.endswith("_shadow"):
+        return "fifo_v1"
+    return normalized
+
+
 def flow_from_row(row: Any) -> BatchSchedulerFlowRecord:
     row_dict = dict(row)
     return BatchSchedulerFlowRecord(
@@ -158,10 +170,12 @@ class _SchedulerFlowSelection:
     active_flow_count: int
     eligible_flow_count: int
     selected_uses_oversized_first_item: bool = False
+    scanned_flow_count: int = 0
+    scan_limit_reached: bool = False
 
     @property
     def single_eligible_flow(self) -> bool:
-        return self.eligible_flow_count == 1
+        return self.eligible_flow_count == 1 and not self.scan_limit_reached
 
 
 @dataclass(slots=True)
@@ -181,6 +195,14 @@ class _SchedulerFlowRefreshAggregate:
     next_age_credit_work_units: int | None = None
     next_policy_reason: str | None = None
     next_candidate_sort_key: tuple[Any, ...] | None = None
+
+
+@dataclass(slots=True)
+class _SchedulerFlowRefreshSnapshot:
+    service_tier: str
+    model_group: str
+    aggregates: tuple[_SchedulerFlowRefreshAggregate, ...]
+    legacy_api_key_scope_repairs: dict[str, str]
 
 
 def _normalize_scheduler_tenant_scope(
@@ -806,7 +828,13 @@ class BatchJobRepository:
             return None
         return job_from_row(rows[0])
 
-    async def claim_next_job(self, *, worker_id: str, lease_seconds: int = 30) -> BatchJobRecord | None:
+    async def claim_next_job(
+        self,
+        *,
+        worker_id: str,
+        lease_seconds: int = 30,
+        scheduler_mode: str = "fifo_v1",
+    ) -> BatchJobRecord | None:
         if self.prisma is None:
             return None
         rows = await self.prisma.query_raw(
@@ -855,14 +883,22 @@ class BatchJobRepository:
             and previous_first_claimed_at is None
             and record.queue_entered_at is not None
         ):
+            wait_seconds = max(
+                0.0,
+                (datetime.now(tz=UTC) - record.queue_entered_at).total_seconds(),
+            )
             observe_batch_queue_wait(
                 model_group=record.scheduling_model_group or "unknown",
                 service_tier=record.service_tier,
                 size_class=record.size_class,
-                wait_seconds=max(
-                    0.0,
-                    (datetime.now(tz=UTC) - record.queue_entered_at).total_seconds(),
-                ),
+                wait_seconds=wait_seconds,
+            )
+            observe_batch_time_to_first_claim(
+                mode=scheduler_mode,
+                model_group=record.scheduling_model_group or "unknown",
+                service_tier=record.service_tier,
+                size_class=record.size_class,
+                wait_seconds=wait_seconds,
             )
         return record
 
@@ -903,40 +939,54 @@ class BatchJobRepository:
             return []
         rows = await self.prisma.query_raw(
             """
-            WITH runnable_jobs AS (
+            WITH base_jobs AS (
                 SELECT
                     j.batch_id,
                     COALESCE(NULLIF(j.scheduling_model_group, ''), 'unknown') AS model_group,
                     COALESCE(NULLIF(j.service_tier, ''), 'standard') AS service_tier,
                     COALESCE(NULLIF(j.size_class, ''), 'unknown') AS size_class,
-                    GREATEST(COALESCE(j.remaining_work_units, j.estimated_work_units, j.total_items, 0), 0)::int
-                        AS remaining_work_units,
                     COALESCE(j.queue_entered_at, j.created_at) AS queue_entered_at
                 FROM deltallm_batch_job j
                 WHERE j.status IN ('queued', 'in_progress')
                   AND (j.locked_by IS NULL OR j.lease_expires_at IS NULL OR j.lease_expires_at < NOW())
                   AND j.scheduling_model_group IS NOT NULL
                   AND j.scheduling_model_group <> ''
-                  AND EXISTS (
-                      SELECT 1
-                      FROM deltallm_batch_item i
-                      WHERE i.batch_id = j.batch_id
-                        AND (
-                            (
-                                i.status = 'pending'
-                                AND (i.lease_expires_at IS NULL OR i.lease_expires_at < NOW())
-                                AND (i.not_before_at IS NULL OR i.not_before_at <= NOW())
-                            )
-                            OR (i.status = 'in_progress' AND i.lease_expires_at < NOW())
-                        )
-                  )
+            ),
+            runnable_job_backlog AS (
+                SELECT
+                    b.batch_id,
+                    COUNT(*)::int AS runnable_items,
+                    COALESCE(SUM(GREATEST(COALESCE(i.estimated_work_units, 1), 1)), 0)::int
+                        AS runnable_work_units
+                FROM base_jobs b
+                JOIN deltallm_batch_item i ON i.batch_id = b.batch_id
+                WHERE (
+                    (
+                        i.status = 'pending'
+                        AND (i.lease_expires_at IS NULL OR i.lease_expires_at < NOW())
+                        AND (i.not_before_at IS NULL OR i.not_before_at <= NOW())
+                    )
+                    OR (i.status = 'in_progress' AND i.lease_expires_at < NOW())
+                )
+                GROUP BY b.batch_id
+            ),
+            runnable_jobs AS (
+                SELECT
+                    b.batch_id,
+                    b.model_group,
+                    b.service_tier,
+                    b.size_class,
+                    GREATEST(r.runnable_work_units, 1)::int AS runnable_work_units,
+                    b.queue_entered_at
+                FROM base_jobs b
+                JOIN runnable_job_backlog r ON r.batch_id = b.batch_id
             )
             SELECT
                 model_group,
                 service_tier,
                 size_class,
                 COUNT(*)::int AS queued_jobs,
-                COALESCE(SUM(remaining_work_units), 0)::int AS queued_work_units,
+                COALESCE(SUM(runnable_work_units), 0)::int AS queued_work_units,
                 MIN(queue_entered_at) AS oldest_queue_entered_at
             FROM runnable_jobs
             GROUP BY model_group, service_tier, size_class
@@ -992,23 +1042,19 @@ class BatchJobRepository:
             )
         return records
 
-    async def refresh_scheduler_flows(
+    async def _load_scheduler_flow_refresh_snapshot(
         self,
+        executor: Any,
         *,
         service_tier: str | None = None,
         model_group: str | None = None,
-        db: Any | None = None,
-        base_quantum_work_units: int = 16,
-        max_deficit_multiplier: int = 8,
+        max_candidate_jobs_per_flow: int = 50,
         size_aware_scheduling_enabled: bool = False,
         aging_seconds_per_work_unit: int = 30,
         max_age_credit_work_units: int = 1_000,
         min_large_job_claim_interval_seconds: int = 30,
         small_job_max_work_units: int = 100,
-    ) -> list[BatchSchedulerFlowRecord]:
-        executor = db or self.prisma
-        if executor is None:
-            return []
+    ) -> _SchedulerFlowRefreshSnapshot:
         normalized_service_tier = str(service_tier or "").strip()
         normalized_model_group = str(model_group or "").strip()
         params: list[Any] = []
@@ -1020,9 +1066,13 @@ class BatchJobRepository:
         if normalized_service_tier:
             params.append(normalized_service_tier)
             service_tier_filter_sql = f"AND COALESCE(NULLIF(j.service_tier, ''), 'standard') = ${len(params)}"
+        bounded_max_candidate_jobs = max(1, min(int(max_candidate_jobs_per_flow or 50), 1_000))
+        params.append(bounded_max_candidate_jobs)
+        max_candidate_jobs_param = len(params)
+        candidate_seed_order_sql = "queue_entered_at ASC, created_at ASC, batch_id ASC"
         candidate_order_sql = "queue_entered_at ASC, created_at ASC, batch_id ASC"
-        runnable_rank_fields_sql = """
-                    COALESCE(NULLIF(j.size_class, ''), 'unknown') AS size_class,
+        candidate_rank_fields_sql = """
+                    c.size_class,
                     false::bool AS large_job_progress_floor,
                     0::double precision AS scheduler_rank,
                     0::int AS age_credit_work_units,
@@ -1045,23 +1095,20 @@ class BatchJobRepository:
             max_age_credit_param = len(params) - 2
             large_interval_param = len(params) - 1
             small_job_max_param = len(params)
-            remaining_work_expr = (
-                "GREATEST(COALESCE(j.remaining_work_units, j.estimated_work_units, "
-                "j.total_items, 1), 1)::double precision"
-            )
+            remaining_work_expr = "GREATEST(c.remaining_work_units, 1)::double precision"
             age_credit_expr = (
                 f"LEAST(${max_age_credit_param}::double precision, "
-                "GREATEST(0.0, EXTRACT(EPOCH FROM (NOW() - COALESCE(j.queue_entered_at, "
-                f"j.created_at))) / ${aging_seconds_param}::double precision))"
+                "GREATEST(0.0, EXTRACT(EPOCH FROM (NOW() - COALESCE(c.queue_entered_at, "
+                f"c.created_at))) / ${aging_seconds_param}::double precision))"
             )
             large_job_floor_expr = (
-                "LOWER(COALESCE(NULLIF(j.size_class, ''), 'unknown')) IN ('l', 'xl') "
+                "LOWER(COALESCE(NULLIF(c.size_class, ''), 'unknown')) IN ('l', 'xl') "
                 f"AND ${large_interval_param}::int > 0 "
-                "AND COALESCE(j.last_scheduled_at, j.queue_entered_at, j.created_at) "
+                "AND COALESCE(c.last_scheduled_at, c.queue_entered_at, c.created_at) "
                 f"<= NOW() - (${large_interval_param}::text || ' seconds')::interval"
             )
-            runnable_rank_fields_sql = f"""
-                    COALESCE(NULLIF(j.size_class, ''), 'unknown') AS size_class,
+            candidate_rank_fields_sql = f"""
+                    c.size_class,
                     ({large_job_floor_expr}) AS large_job_progress_floor,
                     GREATEST(0.0, {remaining_work_expr} - {age_credit_expr})::double precision
                         AS scheduler_rank,
@@ -1083,43 +1130,18 @@ class BatchJobRepository:
             """
         rows = await executor.query_raw(
             f"""
-            WITH runnable_jobs AS (
+            WITH base_jobs AS (
                 SELECT
                     j.batch_id,
                     COALESCE(NULLIF(j.service_tier, ''), 'standard') AS service_tier,
                     j.scheduling_model_group AS model_group,
                     COALESCE(NULLIF(j.tenant_scope_type, ''), 'anonymous') AS tenant_scope_type,
                     COALESCE(NULLIF(j.tenant_scope_id, ''), 'anonymous') AS tenant_scope_id,
-                    runnable_items.runnable_work_units,
                     COALESCE(j.queue_entered_at, j.created_at) AS queue_entered_at,
                     j.created_at,
-                    runnable_items.next_item_work_units,
-                    {runnable_rank_fields_sql}
+                    j.last_scheduled_at,
+                    COALESCE(NULLIF(j.size_class, ''), 'unknown') AS size_class
                 FROM deltallm_batch_job j
-                JOIN LATERAL (
-                    SELECT
-                        COUNT(*)::int AS runnable_item_count,
-                        COALESCE(
-                            SUM(GREATEST(COALESCE(i.estimated_work_units, 1), 1)),
-                            0
-                        )::int AS runnable_work_units,
-                        (
-                            ARRAY_AGG(
-                                GREATEST(COALESCE(i.estimated_work_units, 1), 1)::int
-                                ORDER BY i.line_number ASC
-                            )
-                        )[1]::int AS next_item_work_units
-                    FROM deltallm_batch_item i
-                    WHERE i.batch_id = j.batch_id
-                      AND (
-                          (
-                              i.status = 'pending'
-                              AND (i.lease_expires_at IS NULL OR i.lease_expires_at < NOW())
-                              AND (i.not_before_at IS NULL OR i.not_before_at <= NOW())
-                          )
-                          OR (i.status = 'in_progress' AND i.lease_expires_at < NOW())
-                      )
-                ) runnable_items ON runnable_items.runnable_item_count > 0
                 WHERE j.status IN ('queued', 'in_progress')
                   AND (j.locked_by IS NULL OR j.lease_expires_at IS NULL OR j.lease_expires_at < NOW())
                   AND j.scheduling_model_group IS NOT NULL
@@ -1131,6 +1153,39 @@ class BatchJobRepository:
                   {model_filter_sql}
                   {service_tier_filter_sql}
             ),
+            runnable_job_backlog AS (
+                SELECT
+                    b.batch_id,
+                    COUNT(*)::int AS runnable_items,
+                    COALESCE(SUM(GREATEST(COALESCE(i.estimated_work_units, 1), 1)), 0)::int
+                        AS runnable_work_units
+                FROM base_jobs b
+                JOIN deltallm_batch_item i ON i.batch_id = b.batch_id
+                WHERE (
+                    (
+                        i.status = 'pending'
+                        AND (i.lease_expires_at IS NULL OR i.lease_expires_at < NOW())
+                        AND (i.not_before_at IS NULL OR i.not_before_at <= NOW())
+                    )
+                    OR (i.status = 'in_progress' AND i.lease_expires_at < NOW())
+                )
+                GROUP BY b.batch_id
+            ),
+            flow_jobs AS (
+                SELECT
+                    b.batch_id,
+                    b.service_tier,
+                    b.model_group,
+                    b.tenant_scope_type,
+                    b.tenant_scope_id,
+                    GREATEST(r.runnable_work_units, 1)::int AS remaining_work_units,
+                    b.queue_entered_at,
+                    b.created_at,
+                    b.last_scheduled_at,
+                    b.size_class
+                FROM base_jobs b
+                JOIN runnable_job_backlog r ON r.batch_id = b.batch_id
+            ),
             queued AS (
                 SELECT
                     service_tier,
@@ -1138,8 +1193,64 @@ class BatchJobRepository:
                     tenant_scope_type,
                     tenant_scope_id,
                     COUNT(*)::int AS queued_jobs,
-                    COALESCE(SUM(runnable_work_units), 0)::int AS queued_work_units,
-                    MIN(queue_entered_at) AS oldest_queue_entered_at,
+                    COALESCE(SUM(remaining_work_units), 0)::int AS queued_work_units,
+                    MIN(queue_entered_at) AS oldest_queue_entered_at
+                FROM flow_jobs
+                GROUP BY service_tier, model_group, tenant_scope_type, tenant_scope_id
+            ),
+            ranked_candidate_seed_jobs AS (
+                SELECT
+                    flow_jobs.*,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY
+                            service_tier,
+                            model_group,
+                            tenant_scope_type,
+                            tenant_scope_id
+                        ORDER BY {candidate_seed_order_sql}
+                    ) AS flow_candidate_rank
+                FROM flow_jobs
+            ),
+            candidate_seed_jobs AS (
+                SELECT *
+                FROM ranked_candidate_seed_jobs
+                WHERE flow_candidate_rank <= ${max_candidate_jobs_param}::int
+            ),
+            candidate_jobs AS (
+                SELECT
+                    c.batch_id,
+                    c.service_tier,
+                    c.model_group,
+                    c.tenant_scope_type,
+                    c.tenant_scope_id,
+                    c.queue_entered_at,
+                    c.created_at,
+                    candidate_items.next_item_work_units,
+                    {candidate_rank_fields_sql}
+                FROM candidate_seed_jobs c
+                JOIN LATERAL (
+                    SELECT GREATEST(COALESCE(i.estimated_work_units, 1), 1)::int
+                        AS next_item_work_units
+                    FROM deltallm_batch_item i
+                    WHERE i.batch_id = c.batch_id
+                      AND (
+                          (
+                              i.status = 'pending'
+                              AND (i.lease_expires_at IS NULL OR i.lease_expires_at < NOW())
+                              AND (i.not_before_at IS NULL OR i.not_before_at <= NOW())
+                          )
+                          OR (i.status = 'in_progress' AND i.lease_expires_at < NOW())
+                      )
+                    ORDER BY i.line_number ASC
+                    LIMIT 1
+                ) candidate_items ON TRUE
+            ),
+            queued_candidates AS (
+                SELECT
+                    service_tier,
+                    model_group,
+                    tenant_scope_type,
+                    tenant_scope_id,
                     (ARRAY_AGG(next_item_work_units ORDER BY {candidate_order_sql}))[1]::int
                         AS next_item_work_units,
                     (ARRAY_AGG(batch_id ORDER BY {candidate_order_sql}))[1]::text
@@ -1158,8 +1269,33 @@ class BatchJobRepository:
                         AS next_queue_entered_at,
                     (ARRAY_AGG(created_at ORDER BY {candidate_order_sql}))[1]
                         AS next_created_at
-                FROM runnable_jobs
+                FROM candidate_jobs
                 GROUP BY service_tier, model_group, tenant_scope_type, tenant_scope_id
+            ),
+            queued_state AS (
+                SELECT
+                    q.service_tier,
+                    q.model_group,
+                    q.tenant_scope_type,
+                    q.tenant_scope_id,
+                    q.queued_jobs,
+                    q.queued_work_units,
+                    q.oldest_queue_entered_at,
+                    qc.next_item_work_units,
+                    qc.next_batch_id,
+                    qc.next_size_class,
+                    qc.next_scheduler_rank,
+                    qc.next_age_credit_work_units,
+                    qc.next_policy_reason,
+                    qc.next_large_job_progress_floor,
+                    qc.next_queue_entered_at,
+                    qc.next_created_at
+                FROM queued q
+                LEFT JOIN queued_candidates qc
+                  ON qc.service_tier = q.service_tier
+                 AND qc.model_group = q.model_group
+                 AND qc.tenant_scope_type = q.tenant_scope_type
+                 AND qc.tenant_scope_id = q.tenant_scope_id
             ),
             in_flight AS (
                 SELECT
@@ -1197,7 +1333,7 @@ class BatchJobRepository:
                     AS next_large_job_progress_floor,
                 q.next_queue_entered_at,
                 q.next_created_at
-            FROM queued q
+            FROM queued_state q
             FULL OUTER JOIN in_flight f
               ON f.service_tier = q.service_tier
              AND f.model_group = q.model_group
@@ -1296,23 +1432,64 @@ class BatchJobRepository:
                     aggregate.next_policy_reason = _optional_text(
                         row_dict.get("next_policy_reason")
                     )
+        ordered_aggregates = tuple(
+            sorted(
+                aggregates.values(),
+                key=lambda aggregate: (
+                    aggregate.oldest_queue_entered_at or datetime.max.replace(tzinfo=UTC),
+                    aggregate.model_group,
+                    aggregate.tenant_scope_type,
+                    aggregate.tenant_scope_id,
+                ),
+            )
+        )
+        return _SchedulerFlowRefreshSnapshot(
+            service_tier=normalized_service_tier,
+            model_group=normalized_model_group,
+            aggregates=ordered_aggregates,
+            legacy_api_key_scope_repairs=legacy_api_key_scope_repairs,
+        )
+
+    async def refresh_scheduler_flows(
+        self,
+        *,
+        service_tier: str | None = None,
+        model_group: str | None = None,
+        db: Any | None = None,
+        base_quantum_work_units: int = 16,
+        max_deficit_multiplier: int = 8,
+        max_candidate_jobs_per_flow: int = 50,
+        size_aware_scheduling_enabled: bool = False,
+        aging_seconds_per_work_unit: int = 30,
+        max_age_credit_work_units: int = 1_000,
+        min_large_job_claim_interval_seconds: int = 30,
+        small_job_max_work_units: int = 100,
+    ) -> list[BatchSchedulerFlowRecord]:
+        executor = db or self.prisma
+        if executor is None:
+            return []
+        snapshot = await self._load_scheduler_flow_refresh_snapshot(
+            executor,
+            service_tier=service_tier,
+            model_group=model_group,
+            max_candidate_jobs_per_flow=max_candidate_jobs_per_flow,
+            size_aware_scheduling_enabled=size_aware_scheduling_enabled,
+            aging_seconds_per_work_unit=aging_seconds_per_work_unit,
+            max_age_credit_work_units=max_age_credit_work_units,
+            min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
+            small_job_max_work_units=small_job_max_work_units,
+        )
+        normalized_service_tier = snapshot.service_tier
+        normalized_model_group = snapshot.model_group
         active_flow_ids: list[str] = []
         refreshed: list[BatchSchedulerFlowRecord] = []
         await _repair_legacy_api_key_scope_ids_for_scheduler_refresh(
             executor,
             service_tier=normalized_service_tier,
             model_group=normalized_model_group,
-            scope_repairs=legacy_api_key_scope_repairs,
+            scope_repairs=snapshot.legacy_api_key_scope_repairs,
         )
-        ordered_aggregates = sorted(
-            aggregates.values(),
-            key=lambda aggregate: (
-                aggregate.oldest_queue_entered_at or datetime.max.replace(tzinfo=UTC),
-                aggregate.model_group,
-                aggregate.tenant_scope_type,
-                aggregate.tenant_scope_id,
-            ),
-        )
+        ordered_aggregates = snapshot.aggregates
         for aggregate in ordered_aggregates:
             flow_id = build_flow_id(
                 service_tier=aggregate.service_tier,
@@ -1403,6 +1580,134 @@ class BatchJobRepository:
         publish_batch_scheduler_flows([*refreshed, *deactivated])
         return refreshed
 
+    @staticmethod
+    def _preview_flow_from_refresh_aggregate(
+        aggregate: _SchedulerFlowRefreshAggregate,
+        *,
+        existing: BatchSchedulerFlowRecord | None,
+        base_quantum_work_units: int,
+        max_deficit_multiplier: int,
+        now: datetime,
+    ) -> BatchSchedulerFlowRecord:
+        weight = (
+            max(1, int(existing.weight or 1))
+            if existing is not None
+            else default_flow_weight(service_tier=aggregate.service_tier)
+        )
+        quantum = quantum_for_weight(
+            base_quantum_work_units=base_quantum_work_units,
+            weight=weight,
+        )
+        max_deficit = max_deficit_for_flow(
+            quantum_work_units=quantum,
+            max_deficit_multiplier=max_deficit_multiplier,
+        )
+        return BatchSchedulerFlowRecord(
+            flow_id=(
+                existing.flow_id
+                if existing is not None and existing.flow_id
+                else build_flow_id(
+                    service_tier=aggregate.service_tier,
+                    model_group=aggregate.model_group,
+                    tenant_scope_type=aggregate.tenant_scope_type,
+                    tenant_scope_id=aggregate.tenant_scope_id,
+                )
+            ),
+            service_tier=aggregate.service_tier,
+            model_group=aggregate.model_group,
+            tenant_scope_type=aggregate.tenant_scope_type,
+            tenant_scope_id=aggregate.tenant_scope_id,
+            weight=weight,
+            quantum_work_units=quantum,
+            deficit_work_units=min(
+                max(0, int(getattr(existing, "deficit_work_units", 0) or 0)),
+                max_deficit,
+            ),
+            active=aggregate.queued_jobs > 0,
+            queued_jobs=aggregate.queued_jobs,
+            queued_work_units=aggregate.queued_work_units,
+            in_flight_work_units=aggregate.in_flight_work_units,
+            last_selected_at=getattr(existing, "last_selected_at", None),
+            last_refilled_at=getattr(existing, "last_refilled_at", None),
+            created_at=getattr(existing, "created_at", None) or now,
+            updated_at=getattr(existing, "updated_at", None) or now,
+            oldest_queue_entered_at=aggregate.oldest_queue_entered_at,
+            next_item_work_units=aggregate.next_item_work_units,
+            skip_reasons=dict(getattr(existing, "skip_reasons", {}) or {}),
+            next_batch_id=aggregate.next_batch_id,
+            next_size_class=aggregate.next_size_class,
+            next_scheduler_rank=aggregate.next_scheduler_rank,
+            next_age_credit_work_units=aggregate.next_age_credit_work_units,
+            next_policy_reason=aggregate.next_policy_reason,
+        )
+
+    async def preview_scheduler_flows(
+        self,
+        *,
+        service_tier: str | None = None,
+        model_group: str | None = None,
+        db: Any | None = None,
+        base_quantum_work_units: int = 16,
+        max_deficit_multiplier: int = 8,
+        max_candidate_jobs_per_flow: int = 50,
+        size_aware_scheduling_enabled: bool = False,
+        aging_seconds_per_work_unit: int = 30,
+        max_age_credit_work_units: int = 1_000,
+        min_large_job_claim_interval_seconds: int = 30,
+        small_job_max_work_units: int = 100,
+    ) -> list[BatchSchedulerFlowRecord]:
+        executor = db or self.prisma
+        if executor is None:
+            return []
+        snapshot = await self._load_scheduler_flow_refresh_snapshot(
+            executor,
+            service_tier=service_tier,
+            model_group=model_group,
+            max_candidate_jobs_per_flow=max_candidate_jobs_per_flow,
+            size_aware_scheduling_enabled=size_aware_scheduling_enabled,
+            aging_seconds_per_work_unit=aging_seconds_per_work_unit,
+            max_age_credit_work_units=max_age_credit_work_units,
+            min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
+            small_job_max_work_units=small_job_max_work_units,
+        )
+        existing_flows = await self.list_scheduler_flows(
+            service_tier=snapshot.service_tier or None,
+            model_group=snapshot.model_group or None,
+            db=executor,
+        )
+        existing_by_key: dict[tuple[str, str, str, str], BatchSchedulerFlowRecord] = {}
+        for flow in existing_flows:
+            tenant_scope_type, tenant_scope_id = _normalize_scheduler_tenant_scope(
+                tenant_scope_type=flow.tenant_scope_type,
+                tenant_scope_id=flow.tenant_scope_id,
+            )
+            key = (
+                flow.service_tier,
+                flow.model_group,
+                tenant_scope_type,
+                tenant_scope_id,
+            )
+            if key not in existing_by_key or flow.tenant_scope_id == tenant_scope_id:
+                existing_by_key[key] = flow
+        now = datetime.now(tz=UTC)
+        return [
+            self._preview_flow_from_refresh_aggregate(
+                aggregate,
+                existing=existing_by_key.get(
+                    (
+                        aggregate.service_tier,
+                        aggregate.model_group,
+                        aggregate.tenant_scope_type,
+                        aggregate.tenant_scope_id,
+                    )
+                ),
+                base_quantum_work_units=base_quantum_work_units,
+                max_deficit_multiplier=max_deficit_multiplier,
+                now=now,
+            )
+            for aggregate in snapshot.aggregates
+        ]
+
     async def _deactivate_stale_scheduler_flows(
         self,
         db: Any,
@@ -1444,6 +1749,7 @@ class BatchJobRepository:
         model_group: str | None = None,
         tenant_scope_type: str | None = None,
         active: bool | None = None,
+        limit: int | None = None,
         db: Any | None = None,
     ) -> list[BatchSchedulerFlowRecord]:
         executor = db or self.prisma
@@ -1464,6 +1770,10 @@ class BatchJobRepository:
             params.append(bool(active))
             filters.append(f"active = ${len(params)}")
         where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        limit_sql = ""
+        if limit is not None:
+            params.append(max(1, min(int(limit), 1000)))
+            limit_sql = f"LIMIT ${len(params)}"
         rows = await executor.query_raw(
             f"""
             SELECT *, NULL::timestamp AS oldest_queue_entered_at, 1::int AS next_item_work_units
@@ -1475,6 +1785,7 @@ class BatchJobRepository:
                      last_selected_at ASC NULLS FIRST,
                      tenant_scope_type ASC,
                      tenant_scope_id ASC
+            {limit_sql}
             """,
             *params,
         )
@@ -1601,7 +1912,10 @@ class BatchJobRepository:
         max_age_credit_work_units: int = 1_000,
         min_large_job_claim_interval_seconds: int = 30,
         small_job_max_work_units: int = 100,
+        max_active_flows_per_decision: int = 100,
+        max_candidate_jobs_per_flow: int = 50,
         work_claim_min_items_for_microbatch: int = 4,
+        scheduler_mode: str = "fair_share_v1",
     ) -> BatchFairShareClaimResult:
         if self.prisma is None:
             return BatchFairShareClaimResult(claim=None, result="repository_unavailable")
@@ -1634,6 +1948,7 @@ class BatchJobRepository:
                 db=tx,
                 base_quantum_work_units=base_quantum_work_units,
                 max_deficit_multiplier=max_deficit_multiplier,
+                max_candidate_jobs_per_flow=max_candidate_jobs_per_flow,
                 size_aware_scheduling_enabled=size_aware_scheduling_enabled,
                 aging_seconds_per_work_unit=aging_seconds_per_work_unit,
                 max_age_credit_work_units=max_age_credit_work_units,
@@ -1648,6 +1963,7 @@ class BatchJobRepository:
                     allow_deficit_bypass=False,
                     max_deficit_multiplier=max_deficit_multiplier,
                     excluded_flow_ids=empty_flow_ids,
+                    max_active_flows_per_decision=max_active_flows_per_decision,
                 )
                 await self._record_scheduler_flow_skip_reasons(tx, flow_selection.skip_reasons)
                 selected = flow_selection.selected
@@ -1670,6 +1986,8 @@ class BatchJobRepository:
                         min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
                         small_job_max_work_units=small_job_max_work_units,
                         work_claim_min_items_for_microbatch=work_claim_min_items_for_microbatch,
+                        scheduler_mode=scheduler_mode,
+                        fairness_flows=flows,
                     )
                     if claim_result.result != "empty_flow":
                         return claim_result
@@ -1703,6 +2021,7 @@ class BatchJobRepository:
                 allow_deficit_bypass=True,
                 max_deficit_multiplier=max_deficit_multiplier,
                 excluded_flow_ids=empty_flow_ids,
+                max_active_flows_per_decision=max_active_flows_per_decision,
             )
             await self._record_scheduler_flow_skip_reasons(tx, flow_selection.skip_reasons)
             selected = flow_selection.selected
@@ -1731,6 +2050,8 @@ class BatchJobRepository:
                 min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
                 small_job_max_work_units=small_job_max_work_units,
                 work_claim_min_items_for_microbatch=work_claim_min_items_for_microbatch,
+                scheduler_mode=scheduler_mode,
+                fairness_flows=flows,
             )
 
     async def recommend_next_fair_share_flow(
@@ -1748,6 +2069,8 @@ class BatchJobRepository:
         max_age_credit_work_units: int = 1_000,
         min_large_job_claim_interval_seconds: int = 30,
         small_job_max_work_units: int = 100,
+        max_active_flows_per_decision: int = 100,
+        max_candidate_jobs_per_flow: int = 50,
     ) -> BatchFairShareClaimResult:
         del max_items
         if self.prisma is None:
@@ -1756,134 +2079,115 @@ class BatchJobRepository:
         normalized_model_group = str(model_group or "").strip()
         if not normalized_model_group:
             return BatchFairShareClaimResult(claim=None, result="missing_model_group")
-        tx_factory = getattr(self.prisma, "tx", None)
-        if not callable(tx_factory):
-            logger.warning(
-                "batch fair-share recommendation requires transaction-capable prisma client model_group=%s",
-                normalized_model_group,
-            )
-            return BatchFairShareClaimResult(claim=None, result="transaction_unavailable")
-        async with tx_factory() as tx:
-            locked = await self._try_acquire_scheduler_flow_lock(
-                tx,
-                service_tier=normalized_service_tier,
-                model_group=normalized_model_group,
-            )
-            if not locked:
-                increment_batch_scheduler_shadow_skip(
-                    model_group=normalized_model_group,
-                    service_tier=normalized_service_tier,
-                    reason="lock_busy",
-                )
-                return BatchFairShareClaimResult(claim=None, result="lock_busy")
-
-            flows = await self.refresh_scheduler_flows(
-                service_tier=normalized_service_tier,
-                model_group=normalized_model_group,
-                db=tx,
-                base_quantum_work_units=base_quantum_work_units,
-                max_deficit_multiplier=max_deficit_multiplier,
-                size_aware_scheduling_enabled=size_aware_scheduling_enabled,
-                aging_seconds_per_work_unit=aging_seconds_per_work_unit,
-                max_age_credit_work_units=max_age_credit_work_units,
-                min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
-                small_job_max_work_units=small_job_max_work_units,
-            )
-            simulated_flows = [replace(flow) for flow in flows]
-            rounds = max(1, int(max_deficit_multiplier))
-            for _ in range(rounds):
-                flow_selection = self._select_scheduler_flow(
-                    simulated_flows,
-                    max_work_units=max_work_units,
-                    tenant_max_in_flight_work_units=tenant_max_in_flight_work_units,
-                    allow_deficit_bypass=False,
-                    max_deficit_multiplier=max_deficit_multiplier,
-                )
-                self._record_scheduler_shadow_skip_reasons(
-                    model_group=normalized_model_group,
-                    service_tier=normalized_service_tier,
-                    skip_reasons=flow_selection.skip_reasons,
-                )
-                if flow_selection.selected is not None:
-                    return BatchFairShareClaimResult(
-                        claim=None,
-                        result="recommended",
-                        flow=flow_selection.selected,
-                        expected_share=self._expected_scheduler_flow_share(
-                            simulated_flows,
-                            flow_selection.selected,
-                        ),
-                        active_flow_count=flow_selection.active_flow_count,
-                        total_in_flight_work_units=self._total_scheduler_flow_in_flight_work_units(
-                            simulated_flows
-                        ),
-                        recommended_batch_id=flow_selection.selected.next_batch_id,
-                        recommended_size_class=flow_selection.selected.next_size_class,
-                        recommended_scheduler_rank=flow_selection.selected.next_scheduler_rank,
-                        recommended_age_credit_work_units=(
-                            flow_selection.selected.next_age_credit_work_units
-                        ),
-                        recommended_policy_reason=flow_selection.selected.next_policy_reason,
-                    )
-                terminal_result = self._terminal_empty_scheduler_flow_result(flow_selection)
-                if terminal_result is not None:
-                    increment_batch_scheduler_shadow_skip(
-                        model_group=normalized_model_group,
-                        service_tier=normalized_service_tier,
-                        reason=terminal_result,
-                    )
-                    return BatchFairShareClaimResult(
-                        claim=None,
-                        result=terminal_result,
-                        active_flow_count=flow_selection.active_flow_count,
-                    )
-                simulated_flows = self._simulate_scheduler_flow_deficit_refill(
-                    simulated_flows,
-                    max_deficit_multiplier=max_deficit_multiplier,
-                )
-
+        flows = await self.preview_scheduler_flows(
+            service_tier=normalized_service_tier,
+            model_group=normalized_model_group,
+            base_quantum_work_units=base_quantum_work_units,
+            max_deficit_multiplier=max_deficit_multiplier,
+            max_candidate_jobs_per_flow=max_candidate_jobs_per_flow,
+            size_aware_scheduling_enabled=size_aware_scheduling_enabled,
+            aging_seconds_per_work_unit=aging_seconds_per_work_unit,
+            max_age_credit_work_units=max_age_credit_work_units,
+            min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
+            small_job_max_work_units=small_job_max_work_units,
+        )
+        simulated_flows = [replace(flow) for flow in flows]
+        rounds = max(1, int(max_deficit_multiplier))
+        for _ in range(rounds):
             flow_selection = self._select_scheduler_flow(
                 simulated_flows,
                 max_work_units=max_work_units,
                 tenant_max_in_flight_work_units=tenant_max_in_flight_work_units,
-                allow_deficit_bypass=True,
+                allow_deficit_bypass=False,
                 max_deficit_multiplier=max_deficit_multiplier,
+                max_active_flows_per_decision=max_active_flows_per_decision,
             )
             self._record_scheduler_shadow_skip_reasons(
                 model_group=normalized_model_group,
                 service_tier=normalized_service_tier,
                 skip_reasons=flow_selection.skip_reasons,
             )
-            if flow_selection.selected is None:
-                result = self._terminal_empty_scheduler_flow_result(flow_selection) or "no_active_flow"
+            if flow_selection.selected is not None:
+                return BatchFairShareClaimResult(
+                    claim=None,
+                    result="recommended",
+                    flow=flow_selection.selected,
+                    expected_share=self._expected_scheduler_flow_share(
+                        simulated_flows,
+                        flow_selection.selected,
+                    ),
+                    active_flow_count=flow_selection.active_flow_count,
+                    total_in_flight_work_units=self._total_scheduler_flow_in_flight_work_units(
+                        simulated_flows
+                    ),
+                    recommended_batch_id=flow_selection.selected.next_batch_id,
+                    recommended_size_class=flow_selection.selected.next_size_class,
+                    recommended_scheduler_rank=flow_selection.selected.next_scheduler_rank,
+                    recommended_age_credit_work_units=(
+                        flow_selection.selected.next_age_credit_work_units
+                    ),
+                    recommended_policy_reason=flow_selection.selected.next_policy_reason,
+                )
+            terminal_result = self._terminal_empty_scheduler_flow_result(flow_selection)
+            if terminal_result is not None:
                 increment_batch_scheduler_shadow_skip(
                     model_group=normalized_model_group,
                     service_tier=normalized_service_tier,
-                    reason=result,
+                    reason=terminal_result,
                 )
                 return BatchFairShareClaimResult(
                     claim=None,
-                    result=result,
+                    result=terminal_result,
                     active_flow_count=flow_selection.active_flow_count,
                 )
+            simulated_flows = self._simulate_scheduler_flow_deficit_refill(
+                simulated_flows,
+                max_deficit_multiplier=max_deficit_multiplier,
+            )
+
+        flow_selection = self._select_scheduler_flow(
+            simulated_flows,
+            max_work_units=max_work_units,
+            tenant_max_in_flight_work_units=tenant_max_in_flight_work_units,
+            allow_deficit_bypass=True,
+            max_deficit_multiplier=max_deficit_multiplier,
+            max_active_flows_per_decision=max_active_flows_per_decision,
+        )
+        self._record_scheduler_shadow_skip_reasons(
+            model_group=normalized_model_group,
+            service_tier=normalized_service_tier,
+            skip_reasons=flow_selection.skip_reasons,
+        )
+        if flow_selection.selected is None:
+            result = self._terminal_empty_scheduler_flow_result(flow_selection) or "no_active_flow"
+            increment_batch_scheduler_shadow_skip(
+                model_group=normalized_model_group,
+                service_tier=normalized_service_tier,
+                reason=result,
+            )
             return BatchFairShareClaimResult(
                 claim=None,
-                result="recommended",
-                flow=flow_selection.selected,
-                expected_share=self._expected_scheduler_flow_share(
-                    simulated_flows,
-                    flow_selection.selected,
-                ),
+                result=result,
                 active_flow_count=flow_selection.active_flow_count,
-                total_in_flight_work_units=self._total_scheduler_flow_in_flight_work_units(
-                    simulated_flows
-                ),
-                recommended_batch_id=flow_selection.selected.next_batch_id,
-                recommended_size_class=flow_selection.selected.next_size_class,
-                recommended_scheduler_rank=flow_selection.selected.next_scheduler_rank,
-                recommended_age_credit_work_units=flow_selection.selected.next_age_credit_work_units,
-                recommended_policy_reason=flow_selection.selected.next_policy_reason,
             )
+        return BatchFairShareClaimResult(
+            claim=None,
+            result="recommended",
+            flow=flow_selection.selected,
+            expected_share=self._expected_scheduler_flow_share(
+                simulated_flows,
+                flow_selection.selected,
+            ),
+            active_flow_count=flow_selection.active_flow_count,
+            total_in_flight_work_units=self._total_scheduler_flow_in_flight_work_units(
+                simulated_flows
+            ),
+            recommended_batch_id=flow_selection.selected.next_batch_id,
+            recommended_size_class=flow_selection.selected.next_size_class,
+            recommended_scheduler_rank=flow_selection.selected.next_scheduler_rank,
+            recommended_age_credit_work_units=flow_selection.selected.next_age_credit_work_units,
+            recommended_policy_reason=flow_selection.selected.next_policy_reason,
+        )
 
     @staticmethod
     def _record_scheduler_shadow_skip_reasons(
@@ -1977,6 +2281,8 @@ class BatchJobRepository:
         min_large_job_claim_interval_seconds: int = 30,
         small_job_max_work_units: int = 100,
         work_claim_min_items_for_microbatch: int = 4,
+        scheduler_mode: str = "fair_share_v1",
+        fairness_flows: list[BatchSchedulerFlowRecord] | None = None,
     ) -> BatchFairShareClaimResult:
         oversized_first_item = (
             flow_selection.selected_uses_oversized_first_item
@@ -2006,6 +2312,8 @@ class BatchJobRepository:
             min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
             small_job_max_work_units=small_job_max_work_units,
             work_claim_min_items_for_microbatch=work_claim_min_items_for_microbatch,
+            scheduler_mode=scheduler_mode,
+            fairness_flows=fairness_flows,
         )
 
     async def _try_acquire_scheduler_flow_lock(
@@ -2085,6 +2393,8 @@ class BatchJobRepository:
             and set(flow_selection.skip_reasons.values()) == {"tenant_in_flight_full"}
         ):
             return "tenant_in_flight_full"
+        if flow_selection.scan_limit_reached:
+            return "flow_scan_limit_reached"
         return None
 
     @staticmethod
@@ -2128,6 +2438,7 @@ class BatchJobRepository:
         allow_deficit_bypass: bool,
         max_deficit_multiplier: int = 8,
         excluded_flow_ids: set[str] | None = None,
+        max_active_flows_per_decision: int = 100,
     ) -> _SchedulerFlowSelection:
         candidates: list[BatchSchedulerFlowRecord] = []
         oversized_candidate_flow_ids: set[str] = set()
@@ -2140,7 +2451,19 @@ class BatchJobRepository:
             for flow in flows
             if flow.active and flow.queued_jobs > 0 and flow.queued_work_units > 0
         ]
-        single_active_flow = len(active_flows) == 1
+        total_active_flow_count = len(active_flows)
+        bounded_max_active_flows = max(1, min(int(max_active_flows_per_decision or 100), 1_000))
+        active_flows = sorted(
+            active_flows,
+            key=lambda flow: (
+                flow.last_selected_at or datetime.min.replace(tzinfo=UTC),
+                flow.oldest_queue_entered_at or datetime.max.replace(tzinfo=UTC),
+                flow.flow_id,
+            ),
+        )[:bounded_max_active_flows]
+        scanned_flow_count = len(active_flows)
+        scan_limit_reached = total_active_flow_count > scanned_flow_count
+        single_active_flow = total_active_flow_count == 1
         for flow in active_flows:
             if flow.flow_id in excluded:
                 skip_reasons[flow.flow_id] = "empty_flow"
@@ -2189,8 +2512,10 @@ class BatchJobRepository:
             return _SchedulerFlowSelection(
                 selected=None,
                 skip_reasons=skip_reasons,
-                active_flow_count=len(active_flows),
+                active_flow_count=total_active_flow_count,
                 eligible_flow_count=eligible_flow_count,
+                scanned_flow_count=scanned_flow_count,
+                scan_limit_reached=scan_limit_reached,
             )
         selected = sorted(
             candidates,
@@ -2203,9 +2528,11 @@ class BatchJobRepository:
         return _SchedulerFlowSelection(
             selected=selected,
             skip_reasons=skip_reasons,
-            active_flow_count=len(active_flows),
+            active_flow_count=total_active_flow_count,
             eligible_flow_count=eligible_flow_count,
             selected_uses_oversized_first_item=selected.flow_id in oversized_candidate_flow_ids,
+            scanned_flow_count=scanned_flow_count,
+            scan_limit_reached=scan_limit_reached,
         )
 
     async def _refill_scheduler_flow_deficits(
@@ -2256,6 +2583,8 @@ class BatchJobRepository:
         min_large_job_claim_interval_seconds: int = 30,
         small_job_max_work_units: int = 100,
         work_claim_min_items_for_microbatch: int = 4,
+        scheduler_mode: str = "fair_share_v1",
+        fairness_flows: list[BatchSchedulerFlowRecord] | None = None,
     ) -> BatchFairShareClaimResult:
         claim = await self._claim_next_work_with_client(
             db,
@@ -2279,6 +2608,7 @@ class BatchJobRepository:
             min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
             small_job_max_work_units=small_job_max_work_units,
             work_claim_min_items_for_microbatch=work_claim_min_items_for_microbatch,
+            scheduler_mode=scheduler_mode,
         )
         if claim is None:
             await self._record_scheduler_flow_skip_reasons(db, {flow.flow_id: "empty_flow"})
@@ -2315,12 +2645,7 @@ class BatchJobRepository:
             max_negative_deficit,
         )
         updated_flow = flow_from_row(rows[0]) if rows else flow
-        await self._publish_scheduler_flow_metric_group(
-            db,
-            service_tier=flow.service_tier,
-            model_group=flow.model_group,
-            tenant_scope_type=flow.tenant_scope_type,
-        )
+        publish_batch_scheduler_flows([updated_flow])
         increment_batch_scheduler_flow_claim(
             model_group=flow.model_group,
             service_tier=flow.service_tier,
@@ -2337,7 +2662,12 @@ class BatchJobRepository:
                     (datetime.now(tz=UTC) - flow.oldest_queue_entered_at).total_seconds(),
                 ),
             )
-        await self._observe_scheduler_fairness_ratio_for_claim(db, flow=flow, claim=claim)
+        await self._observe_scheduler_fairness_ratio_for_claim(
+            db,
+            flow=flow,
+            claim=claim,
+            active_flows=fairness_flows,
+        )
         return BatchFairShareClaimResult(claim=claim, result="claimed", flow=updated_flow)
 
     async def _observe_scheduler_fairness_ratio_for_claim(
@@ -2346,14 +2676,16 @@ class BatchJobRepository:
         *,
         flow: BatchSchedulerFlowRecord,
         claim: BatchWorkClaim,
+        active_flows: list[BatchSchedulerFlowRecord] | None = None,
     ) -> None:
-        flows = await self.list_scheduler_flows(
-            service_tier=flow.service_tier,
-            model_group=flow.model_group,
-            active=True,
-            db=db,
-        )
-        active_flows = [candidate for candidate in flows if candidate.active]
+        if active_flows is None:
+            active_flows = await self.list_scheduler_flows(
+                service_tier=flow.service_tier,
+                model_group=flow.model_group,
+                active=True,
+                db=db,
+            )
+        active_flows = [candidate for candidate in active_flows if candidate.active]
         if not active_flows:
             active_flows = [flow]
         total_weight = sum(max(1, int(candidate.weight or 1)) for candidate in active_flows)
@@ -2407,6 +2739,7 @@ class BatchJobRepository:
         min_large_job_claim_interval_seconds: int = 30,
         small_job_max_work_units: int = 100,
         work_claim_min_items_for_microbatch: int = 4,
+        scheduler_mode: str = "slice_v1",
     ) -> BatchWorkClaim | None:
         if self.prisma is None:
             return None
@@ -2461,6 +2794,7 @@ class BatchJobRepository:
                     min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
                     small_job_max_work_units=small_job_max_work_units,
                     work_claim_min_items_for_microbatch=work_claim_min_items_for_microbatch,
+                    scheduler_mode=scheduler_mode,
                 )
         return await self._claim_next_work_with_client(
             self.prisma,
@@ -2485,6 +2819,267 @@ class BatchJobRepository:
             min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
             small_job_max_work_units=small_job_max_work_units,
             work_claim_min_items_for_microbatch=work_claim_min_items_for_microbatch,
+            scheduler_mode=scheduler_mode,
+        )
+
+    async def recommend_next_work(
+        self,
+        *,
+        max_items: int,
+        max_work_units: int,
+        allowed_model_groups: list[str] | None = None,
+        service_tier: str | None = None,
+        legacy_only: bool = False,
+        claim_order: str = "round_robin",
+        capacity_model_group: str | None = None,
+        capacity_service_tier: str | None = None,
+        capacity_max_in_flight_items: int | None = None,
+        capacity_max_in_flight_work_units: int | None = None,
+        tenant_scope_type: str | None = None,
+        tenant_scope_id: str | None = None,
+        allow_oversized_first_item: bool = True,
+        reason: str = "work_slice",
+    ) -> BatchWorkRecommendation | None:
+        if self.prisma is None:
+            return None
+        bounded_max_items = max(1, min(int(max_items), 200))
+        bounded_max_work_units = max(1, int(max_work_units))
+        normalized_model_groups = [
+            str(model_group).strip()
+            for model_group in (allowed_model_groups or [])
+            if str(model_group or "").strip()
+        ]
+        params: list[Any] = [bounded_max_items, bounded_max_work_units]
+        model_group_filter_sql = ""
+        if normalized_model_groups:
+            params.append(normalized_model_groups)
+            model_group_filter_sql = f"AND j.scheduling_model_group = ANY(${len(params)}::text[])"
+        service_tier_filter_sql = ""
+        normalized_service_tier = str(service_tier or "").strip()
+        if normalized_service_tier:
+            params.append(normalized_service_tier)
+            service_tier_filter_sql = (
+                f"AND COALESCE(NULLIF(j.service_tier, ''), 'standard') = ${len(params)}"
+            )
+        tenant_filter_sql = ""
+        normalized_tenant_scope_type = str(tenant_scope_type or "").strip()
+        normalized_tenant_scope_id = str(tenant_scope_id or "").strip()
+        if normalized_tenant_scope_type and normalized_tenant_scope_id:
+            params.append(normalized_tenant_scope_type)
+            tenant_scope_type_param = len(params)
+            params.append(normalized_tenant_scope_id)
+            tenant_scope_id_param = len(params)
+            tenant_filter_sql = (
+                f"AND j.tenant_scope_type = ${tenant_scope_type_param} "
+                f"AND j.tenant_scope_id = ${tenant_scope_id_param}"
+            )
+        legacy_filter_sql = ""
+        if legacy_only:
+            legacy_filter_sql = """
+                  AND COALESCE(NULLIF(j.scheduler_version, ''), 'fifo_v1') = 'fifo_v1'
+                  AND (j.scheduling_model_group IS NULL OR j.scheduling_model_group = '')
+            """
+
+        capacity_cte_sql = ""
+        capacity_filter_sql = ""
+        items_limit_sql = "$1"
+        work_unit_limit_sql = "$2"
+        normalized_capacity_model_group = str(capacity_model_group or "").strip()
+        normalized_capacity_service_tier = (
+            str(capacity_service_tier or service_tier or "standard").strip() or "standard"
+        )
+        if capacity_max_in_flight_items is not None and normalized_capacity_model_group:
+            capacity_max_in_flight = max(0, int(capacity_max_in_flight_items))
+            if capacity_max_in_flight <= 0:
+                return None
+            params.append(normalized_capacity_model_group)
+            capacity_model_param = len(params)
+            params.append(normalized_capacity_service_tier)
+            capacity_service_tier_param = len(params)
+            params.append(capacity_max_in_flight)
+            capacity_items_param = len(params)
+            remaining_work_units_sql = "$2::int"
+            if capacity_max_in_flight_work_units is not None:
+                capacity_max_work_units = max(0, int(capacity_max_in_flight_work_units))
+                if capacity_max_work_units <= 0:
+                    return None
+                params.append(capacity_max_work_units)
+                capacity_work_units_param = len(params)
+                remaining_work_units_sql = (
+                    f"GREATEST(${capacity_work_units_param}::int "
+                    "- COALESCE(capacity_usage.in_flight_work_units, 0), 0)::int"
+                )
+            capacity_cte_sql = f"""
+            capacity_usage AS (
+                SELECT
+                    COUNT(*)::int AS in_flight_items,
+                    COALESCE(SUM(GREATEST(COALESCE(capacity_item.estimated_work_units, 1), 1)), 0)::int
+                        AS in_flight_work_units
+                FROM deltallm_batch_item capacity_item
+                JOIN deltallm_batch_job capacity_job
+                  ON capacity_job.batch_id = capacity_item.batch_id
+                WHERE capacity_item.status = 'in_progress'
+                  AND (
+                      capacity_item.lease_expires_at IS NULL
+                      OR capacity_item.lease_expires_at > NOW()
+                  )
+                  AND COALESCE(
+                      NULLIF(capacity_item.scheduling_model_group, ''),
+                      NULLIF(capacity_job.scheduling_model_group, '')
+                  ) = ${capacity_model_param}
+                  AND COALESCE(NULLIF(capacity_job.service_tier, ''), 'standard')
+                      = ${capacity_service_tier_param}
+            ),
+            capacity_state AS (
+                SELECT
+                    GREATEST(
+                        ${capacity_items_param}::int - COALESCE(capacity_usage.in_flight_items, 0),
+                        0
+                    )::int AS remaining_slots,
+                    {remaining_work_units_sql} AS remaining_work_units
+                FROM capacity_usage
+            ),
+            """
+            capacity_filter_sql = """
+                  AND (SELECT remaining_slots FROM capacity_state) > 0
+                  AND (SELECT remaining_work_units FROM capacity_state) > 0
+            """
+            items_limit_sql = "LEAST($1, (SELECT remaining_slots FROM capacity_state))"
+            work_unit_limit_sql = "LEAST($2, (SELECT remaining_work_units FROM capacity_state))"
+
+        if claim_order == "fifo":
+            job_order_sql = """
+                ORDER BY COALESCE(j.queue_entered_at, j.created_at) ASC,
+                         j.created_at ASC,
+                         j.batch_id ASC
+            """
+        else:
+            job_order_sql = """
+                ORDER BY j.last_scheduled_at ASC NULLS FIRST,
+                         COALESCE(j.queue_entered_at, j.created_at) ASC,
+                         j.created_at ASC,
+                         j.batch_id ASC
+            """
+        item_work_filter_sql = f"cumulative_work_units <= {work_unit_limit_sql}"
+        selected_job_head_work_filter_sql = "TRUE"
+        if allow_oversized_first_item:
+            item_work_filter_sql = f"{item_work_filter_sql} OR item_rank = 1"
+        else:
+            selected_job_head_work_filter_sql = (
+                f"head_item.estimated_work_units <= {work_unit_limit_sql}"
+            )
+
+        rows = await self.prisma.query_raw(
+            f"""
+            WITH {capacity_cte_sql}selected_job AS (
+                SELECT
+                    j.batch_id,
+                    j.endpoint,
+                    j.scheduling_model_group AS model_group,
+                    j.tenant_scope_type,
+                    j.tenant_scope_id,
+                    COALESCE(NULLIF(j.service_tier, ''), 'standard') AS service_tier,
+                    j.size_class
+                FROM deltallm_batch_job j
+                WHERE j.status IN ('queued', 'in_progress')
+                  AND (j.locked_by IS NULL OR j.lease_expires_at IS NULL OR j.lease_expires_at < NOW())
+                  {model_group_filter_sql}
+                  {service_tier_filter_sql}
+                  {tenant_filter_sql}
+                  {legacy_filter_sql}
+                  {capacity_filter_sql}
+                  AND EXISTS (
+                      SELECT 1
+                      FROM (
+                          SELECT GREATEST(COALESCE(i.estimated_work_units, 1), 1)::int
+                              AS estimated_work_units
+                          FROM deltallm_batch_item i
+                          WHERE i.batch_id = j.batch_id
+                            AND (
+                                (
+                                    i.status = 'pending'
+                                    AND (i.lease_expires_at IS NULL OR i.lease_expires_at < NOW())
+                                    AND (i.not_before_at IS NULL OR i.not_before_at <= NOW())
+                                )
+                                OR (i.status = 'in_progress' AND i.lease_expires_at < NOW())
+                            )
+                          ORDER BY i.line_number ASC
+                          LIMIT 1
+                      ) head_item
+                      WHERE {selected_job_head_work_filter_sql}
+                  )
+                {job_order_sql}
+                LIMIT 1
+            ),
+            candidate_items AS (
+                SELECT
+                    i.item_id,
+                    i.line_number,
+                    GREATEST(COALESCE(i.estimated_work_units, 1), 1)::int AS estimated_work_units
+                FROM selected_job sj
+                JOIN deltallm_batch_item i ON i.batch_id = sj.batch_id
+                WHERE (
+                    (
+                        i.status = 'pending'
+                        AND (i.lease_expires_at IS NULL OR i.lease_expires_at < NOW())
+                        AND (i.not_before_at IS NULL OR i.not_before_at <= NOW())
+                    )
+                    OR (i.status = 'in_progress' AND i.lease_expires_at < NOW())
+                )
+                ORDER BY i.line_number ASC
+                LIMIT {items_limit_sql}
+            ),
+            ranked_items AS (
+                SELECT
+                    item_id,
+                    estimated_work_units,
+                    ROW_NUMBER() OVER (ORDER BY line_number ASC) AS item_rank,
+                    SUM(estimated_work_units) OVER (ORDER BY line_number ASC) AS cumulative_work_units
+                FROM candidate_items
+            ),
+            eligible_items AS (
+                SELECT item_id, estimated_work_units
+                FROM ranked_items
+                WHERE {item_work_filter_sql}
+            )
+            SELECT
+                sj.batch_id,
+                sj.endpoint,
+                sj.model_group,
+                sj.tenant_scope_type,
+                sj.tenant_scope_id,
+                sj.service_tier,
+                sj.size_class,
+                COUNT(ei.item_id)::int AS item_count,
+                COALESCE(SUM(ei.estimated_work_units), 0)::int AS work_units
+            FROM selected_job sj
+            JOIN eligible_items ei ON TRUE
+            GROUP BY
+                sj.batch_id,
+                sj.endpoint,
+                sj.model_group,
+                sj.tenant_scope_type,
+                sj.tenant_scope_id,
+                sj.service_tier,
+                sj.size_class
+            HAVING COUNT(ei.item_id) > 0
+            """,
+            *params,
+        )
+        if not rows:
+            return None
+        row = dict(rows[0])
+        return BatchWorkRecommendation(
+            batch_id=str(row.get("batch_id") or ""),
+            endpoint=str(row.get("endpoint") or ""),
+            model_group=row.get("model_group"),
+            tenant_scope_type=row.get("tenant_scope_type"),
+            tenant_scope_id=row.get("tenant_scope_id"),
+            service_tier=str(row.get("service_tier") or "standard"),
+            size_class=row.get("size_class"),
+            item_count=max(0, int(row.get("item_count") or 0)),
+            work_units=max(0, int(row.get("work_units") or 0)),
+            reason=str(reason or "work_slice"),
         )
 
     async def _acquire_model_capacity_lock(
@@ -2494,6 +3089,16 @@ class BatchJobRepository:
         model_group: str,
         service_tier: str,
     ) -> None:
+        execute_raw = getattr(db, "execute_raw", None)
+        if callable(execute_raw):
+            await execute_raw(
+                """
+                SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))
+                """,
+                model_group,
+                service_tier,
+            )
+            return
         await db.query_raw(
             """
             WITH capacity_lock AS (
@@ -2530,6 +3135,7 @@ class BatchJobRepository:
         min_large_job_claim_interval_seconds: int = 30,
         small_job_max_work_units: int = 100,
         work_claim_min_items_for_microbatch: int = 4,
+        scheduler_mode: str = "slice_v1",
     ) -> BatchWorkClaim | None:
         bounded_max_items = max(1, min(int(max_items), 200))
         bounded_max_work_units = max(1, int(max_work_units))
@@ -2895,6 +3501,7 @@ class BatchJobRepository:
                     locked_by = $1,
                     lease_expires_at = NOW() + ($4 || ' seconds')::interval,
                     attempts = attempts + 1,
+                    claim_epoch = i.claim_epoch + 1,
                     started_at = COALESCE(i.started_at, NOW()),
                     not_before_at = NULL,
                     last_scheduled_at = NOW()
@@ -3009,6 +3616,7 @@ class BatchJobRepository:
                 wait_seconds=wait_seconds,
             )
             observe_batch_time_to_first_claim(
+                mode=scheduler_mode,
                 model_group=model_group_label,
                 service_tier=service_tier_label,
                 size_class=size_class_label,
@@ -3431,7 +4039,17 @@ class BatchJobRepository:
             )
         if not rows:
             return None
-        return job_from_row(rows[0])
+        record = job_from_row(rows[0])
+        latency_start = record.queue_entered_at or record.created_at
+        latency_end = record.completed_at or datetime.now(tz=UTC)
+        observe_batch_completion_latency(
+            mode=_scheduler_metric_mode(record.scheduler_version),
+            model_group=record.scheduling_model_group or "unknown",
+            service_tier=record.service_tier,
+            size_class=record.size_class,
+            latency_seconds=max(0.0, (latency_end - latency_start).total_seconds()),
+        )
+        return record
 
     async def retry_finalization_now(self, batch_id: str) -> BatchJobRecord | None:
         if self.prisma is None:

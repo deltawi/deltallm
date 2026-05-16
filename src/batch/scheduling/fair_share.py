@@ -11,6 +11,7 @@ from src.batch.scheduling.dimensions import (
     DEFAULT_TENANT_SCOPE_PREFERENCE,
     normalize_tenant_scope_preference,
 )
+from src.batch.scheduling.modes import resolve_scheduler_modes_from_settings
 
 MAX_QUANTUM_WORK_UNITS = 256
 
@@ -22,13 +23,26 @@ class BatchTenantFairShareConfig:
     max_deficit_multiplier: int = 8
     tenant_max_in_flight_work_units: int = 0
     tenant_max_queued_work_units: int = 0
+    max_active_flows_per_decision: int = 100
+    max_candidate_jobs_per_flow: int = 50
     tenant_scope_preference: tuple[str, ...] = DEFAULT_TENANT_SCOPE_PREFERENCE
     disabled_model_groups: tuple[str, ...] = ()
 
     @classmethod
     def from_settings(cls, settings: Any) -> "BatchTenantFairShareConfig":
+        scheduler_modes = resolve_scheduler_modes_from_settings(settings)
+        explicit_mode_control = (
+            "embeddings_batch_scheduler_mode" in getattr(settings, "model_fields_set", set())
+            or "embeddings_batch_scheduler_shadow_mode" in getattr(settings, "model_fields_set", set())
+        )
+        mode_enabled = scheduler_modes.active_uses_fair_share or scheduler_modes.shadow_uses_fair_share
         return cls(
-            enabled=bool(getattr(settings, "embeddings_batch_tenant_fair_share_enabled", False)),
+            enabled=(
+                mode_enabled
+                if explicit_mode_control
+                else bool(getattr(settings, "embeddings_batch_tenant_fair_share_enabled", False))
+                or mode_enabled
+            ),
             base_quantum_work_units=max(
                 1,
                 int(getattr(settings, "embeddings_batch_scheduler_base_quantum_work_units", 16) or 16),
@@ -44,6 +58,34 @@ class BatchTenantFairShareConfig:
             tenant_max_queued_work_units=max(
                 0,
                 int(getattr(settings, "embeddings_batch_tenant_max_queued_work_units", 0) or 0),
+            ),
+            max_active_flows_per_decision=max(
+                1,
+                min(
+                    1_000,
+                    int(
+                        getattr(
+                            settings,
+                            "embeddings_batch_scheduler_max_active_flows_per_decision",
+                            100,
+                        )
+                        or 100
+                    ),
+                ),
+            ),
+            max_candidate_jobs_per_flow=max(
+                1,
+                min(
+                    1_000,
+                    int(
+                        getattr(
+                            settings,
+                            "embeddings_batch_scheduler_max_candidate_jobs_per_flow",
+                            50,
+                        )
+                        or 50
+                    ),
+                ),
             ),
             tenant_scope_preference=parse_tenant_scope_preference(
                 getattr(

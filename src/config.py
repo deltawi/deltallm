@@ -22,6 +22,11 @@ from src.batch.create.defaults import (
     DEFAULT_CREATE_SESSION_PROMOTION_TX_TIMEOUT_SECONDS,
     DEFAULT_CREATE_SESSION_RETRYABLE_RETENTION_SECONDS,
 )
+from src.batch.scheduling.modes import (
+    SchedulerMode,
+    SchedulerShadowMode,
+    resolve_scheduler_modes_from_settings,
+)
 from src.upstream_auth import (
     supports_custom_openai_compatible_auth,
     validate_auth_header_format,
@@ -417,6 +422,10 @@ class GeneralSettings(BaseModel):
     embeddings_batch_model_group_backpressure_enabled: bool = True
     embeddings_batch_model_group_backpressure_min_seconds: int = Field(default=5, ge=1)
     embeddings_batch_model_group_backpressure_max_seconds: int = Field(default=300, ge=1)
+    embeddings_batch_scheduler_mode: SchedulerMode = "fifo_v1"
+    embeddings_batch_scheduler_shadow_mode: SchedulerShadowMode = "none"
+    embeddings_batch_scheduler_shadow_decision_timeout_seconds: float = Field(default=0.5, gt=0.0)
+    embeddings_batch_scheduler_shadow_max_pending_decisions: int = Field(default=16, ge=0)
     embeddings_batch_scheduler_enabled: bool = False
     embeddings_batch_scheduler_shadow_enabled: bool = False
     embeddings_batch_scheduler_strict_model_homogeneity_enabled: bool = False
@@ -440,6 +449,16 @@ class GeneralSettings(BaseModel):
     embeddings_batch_scheduler_max_deficit_multiplier: int = Field(default=8, ge=1)
     embeddings_batch_tenant_max_in_flight_work_units: int = Field(default=0, ge=0)
     embeddings_batch_tenant_max_queued_work_units: int = Field(default=0, ge=0)
+    embeddings_batch_scheduler_max_active_flows_per_decision: int = Field(
+        default=100,
+        ge=1,
+        le=1_000,
+    )
+    embeddings_batch_scheduler_max_candidate_jobs_per_flow: int = Field(
+        default=50,
+        ge=1,
+        le=1_000,
+    )
     embeddings_batch_tenant_scope_preference: str = "organization,team,api_key,user"
     embeddings_batch_tenant_fair_share_disabled_model_groups: list[str] = Field(default_factory=list)
     embeddings_batch_size_aware_scheduling_enabled: bool = False
@@ -481,36 +500,39 @@ class GeneralSettings(BaseModel):
                 "upstream_http_max_keepalive_connections must be less than or equal to "
                 "upstream_http_max_connections"
             )
-        if (
-            self.embeddings_batch_scheduler_enabled
-            or self.embeddings_batch_model_capacity_enabled
-            or self.embeddings_batch_tenant_fair_share_enabled
-            or self.embeddings_batch_size_aware_scheduling_enabled
-            or self.embeddings_batch_scheduler_shadow_enabled
-        ):
+        scheduler_modes = resolve_scheduler_modes_from_settings(self)
+        mode_control_explicit = (
+            "embeddings_batch_scheduler_mode" in self.model_fields_set
+            or "embeddings_batch_scheduler_shadow_mode" in self.model_fields_set
+        )
+        scheduler_configured = (
+            scheduler_modes.active_uses_work_slice or scheduler_modes.shadow_mode != "none"
+        )
+        if scheduler_configured and not mode_control_explicit:
             if self.embeddings_batch_scheduler_claim_mode != "work_slice":
                 raise ValueError(
                     "active batch scheduler v2 requires "
                     "embeddings_batch_scheduler_claim_mode='work_slice'"
                 )
-            if not self.embeddings_batch_scheduler_strict_model_homogeneity_enabled:
-                raise ValueError(
-                    "active batch scheduler v2 requires "
-                    "embeddings_batch_scheduler_strict_model_homogeneity_enabled=true"
-                )
-        if self.embeddings_batch_tenant_fair_share_enabled and not self.embeddings_batch_model_capacity_enabled:
+        if (
+            not mode_control_explicit
+            and self.embeddings_batch_tenant_fair_share_enabled
+            and not self.embeddings_batch_model_capacity_enabled
+        ):
             raise ValueError(
                 "tenant fair-share scheduling requires embeddings_batch_model_capacity_enabled=true"
             )
         if (
-            self.embeddings_batch_size_aware_scheduling_enabled
+            not mode_control_explicit
+            and self.embeddings_batch_size_aware_scheduling_enabled
             and not self.embeddings_batch_model_capacity_enabled
         ):
             raise ValueError(
                 "size-aware batch scheduling requires embeddings_batch_model_capacity_enabled=true"
             )
         if (
-            self.embeddings_batch_size_aware_scheduling_enabled
+            not mode_control_explicit
+            and self.embeddings_batch_size_aware_scheduling_enabled
             and not (
                 self.embeddings_batch_tenant_fair_share_enabled
                 or self.embeddings_batch_scheduler_shadow_enabled
@@ -520,7 +542,11 @@ class GeneralSettings(BaseModel):
                 "size-aware batch scheduling requires embeddings_batch_tenant_fair_share_enabled=true "
                 "or embeddings_batch_scheduler_shadow_enabled=true"
             )
-        if self.embeddings_batch_scheduler_shadow_enabled and not self.embeddings_batch_model_capacity_enabled:
+        if (
+            not mode_control_explicit
+            and self.embeddings_batch_scheduler_shadow_enabled
+            and not self.embeddings_batch_model_capacity_enabled
+        ):
             raise ValueError(
                 "batch scheduler shadow mode requires embeddings_batch_model_capacity_enabled=true"
             )

@@ -90,6 +90,8 @@ class BatchCreateSessionPromoter:
         model_group_resolver: Any | None = None,
         scheduler_enabled: bool = False,
         scheduler_shadow_enabled: bool = False,
+        scheduler_mode: str | None = None,
+        scheduler_shadow_mode: str | None = None,
         strict_model_homogeneity_enabled: bool = False,
         default_service_tier: str = "standard",
         tenant_scope_preference: tuple[str, ...] | list[str] | str | None = None,
@@ -106,6 +108,29 @@ class BatchCreateSessionPromoter:
         self.model_group_resolver = model_group_resolver
         self.scheduler_enabled = bool(scheduler_enabled)
         self.scheduler_shadow_enabled = bool(scheduler_shadow_enabled)
+        self.scheduler_mode = scheduler_mode
+        self.scheduler_shadow_mode = scheduler_shadow_mode
+        self.strict_model_homogeneity_enabled = bool(strict_model_homogeneity_enabled)
+        self.default_service_tier = str(default_service_tier or "standard").strip() or "standard"
+        self.tenant_scope_preference = parse_tenant_scope_preference(tenant_scope_preference)
+        self.tenant_max_queued_work_units = max(0, int(tenant_max_queued_work_units or 0))
+
+    def configure_scheduler(
+        self,
+        *,
+        scheduler_enabled: bool,
+        scheduler_shadow_enabled: bool,
+        scheduler_mode: str | None,
+        scheduler_shadow_mode: str | None,
+        strict_model_homogeneity_enabled: bool,
+        default_service_tier: str,
+        tenant_scope_preference: tuple[str, ...] | list[str] | str | None,
+        tenant_max_queued_work_units: int,
+    ) -> None:
+        self.scheduler_enabled = bool(scheduler_enabled)
+        self.scheduler_shadow_enabled = bool(scheduler_shadow_enabled)
+        self.scheduler_mode = scheduler_mode
+        self.scheduler_shadow_mode = scheduler_shadow_mode
         self.strict_model_homogeneity_enabled = bool(strict_model_homogeneity_enabled)
         self.default_service_tier = str(default_service_tier or "standard").strip() or "standard"
         self.tenant_scope_preference = parse_tenant_scope_preference(tenant_scope_preference)
@@ -379,6 +404,8 @@ class BatchCreateSessionPromoter:
             scheduler_version = resolve_scheduler_version(
                 active_enabled=self.scheduler_enabled,
                 shadow_enabled=self.scheduler_shadow_enabled,
+                active_mode=self.scheduler_mode,
+                shadow_mode=self.scheduler_shadow_mode,
             )
             job = await tx_repository.create_job(
                 batch_id=session.target_batch_id,
@@ -441,7 +468,7 @@ class BatchCreateSessionPromoter:
                     code="session_update_failed",
                     retryable=True,
                 )
-            if self.scheduler_shadow_enabled and scheduler_version == "scheduler_v2_shadow":
+            if self.scheduler_shadow_enabled and scheduler_version.endswith("_shadow"):
                 increment_batch_scheduler_shadow_record(result="recorded")
 
             return BatchCreatePromotionResult(

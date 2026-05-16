@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -9,6 +10,7 @@ from src.batch.endpoints import BATCH_ENDPOINT_CHAT_COMPLETIONS, BATCH_ENDPOINT_
 from src.batch.scheduling import (
     API_KEY_TENANT_SCOPE_PREFIX,
     BatchJobRankInput,
+    BatchModelCapacityConfig,
     BatchSizeAgingConfig,
     BatchTenantFairShareConfig,
     build_flow_id,
@@ -20,12 +22,18 @@ from src.batch.scheduling import (
     parse_tenant_scope_preference,
     quantum_for_weight,
     resolve_model_group,
+    resolve_scheduler_modes_from_settings,
     resolve_scheduler_version,
     resolve_tenant_scope,
+    scheduler_rollback_events,
+    scheduler_version_for_modes,
     tuned_claim_item_limit,
 )
 from src.batch.scheduling.estimator import size_class_for_work_units
-from src.config import GeneralSettings
+from src.batch.worker import BatchWorkerConfig
+from src.bootstrap.batch import BatchRuntime, _apply_live_batch_scheduler_config
+from src.config import AppConfig, GeneralSettings
+from src.config_runtime.dynamic import DynamicConfigManager
 
 
 def test_resolve_tenant_scope_prefers_organization_then_team_then_api_key_then_user() -> None:
@@ -105,7 +113,22 @@ def test_fair_share_config_quantum_and_deficit_caps() -> None:
     assert config.enabled is True
     assert config.base_quantum_work_units == 16
     assert config.max_deficit_multiplier == 8
+    assert config.max_active_flows_per_decision == 100
+    assert config.max_candidate_jobs_per_flow == 50
     assert parse_model_group_list("model-a,model-b,model-a,, ") == ("model-a", "model-b")
+
+
+@pytest.mark.parametrize("shadow_mode", ["fair_share_v1", "smart_v1"])
+def test_fair_share_config_is_enabled_for_shadow_fair_share_modes(shadow_mode: str) -> None:
+    config = BatchTenantFairShareConfig.from_settings(
+        GeneralSettings(
+            embeddings_batch_scheduler_mode="model_capacity_v1",
+            embeddings_batch_scheduler_shadow_mode=shadow_mode,
+            embeddings_batch_scheduler_strict_model_homogeneity_enabled=True,
+        )
+    )
+
+    assert config.enabled is True
 
 
 def test_resolve_scheduler_version_prefers_active_then_shadow_then_fifo() -> None:
@@ -113,6 +136,301 @@ def test_resolve_scheduler_version_prefers_active_then_shadow_then_fifo() -> Non
     assert resolve_scheduler_version(active_enabled=True, shadow_enabled=True) == "scheduler_v2"
     assert resolve_scheduler_version(active_enabled=False, shadow_enabled=True) == "scheduler_v2_shadow"
     assert resolve_scheduler_version(active_enabled=False, shadow_enabled=False) == "fifo_v1"
+    assert (
+        resolve_scheduler_version(active_mode="smart_v1", shadow_mode="none")
+        == "smart_v1"
+    )
+    assert scheduler_version_for_modes(active_mode="fifo_v1", shadow_mode="smart_v1") == (
+        "smart_v1_shadow"
+    )
+
+
+def test_scheduler_modes_default_to_legacy_flags_when_mode_not_set() -> None:
+    settings = GeneralSettings(
+        embeddings_batch_tenant_fair_share_enabled=True,
+        embeddings_batch_model_capacity_enabled=True,
+        embeddings_batch_scheduler_claim_mode="work_slice",
+        embeddings_batch_scheduler_strict_model_homogeneity_enabled=True,
+    )
+
+    modes = resolve_scheduler_modes_from_settings(settings)
+
+    assert modes.active_mode == "fair_share_v1"
+    assert modes.shadow_mode == "none"
+
+
+def test_explicit_scheduler_mode_controls_active_behavior_without_legacy_flags() -> None:
+    settings = GeneralSettings(
+        embeddings_batch_scheduler_mode="smart_v1",
+        embeddings_batch_scheduler_shadow_mode="none",
+        embeddings_batch_scheduler_strict_model_homogeneity_enabled=True,
+    )
+
+    modes = resolve_scheduler_modes_from_settings(settings)
+
+    assert modes.active_mode == "smart_v1"
+    assert modes.shadow_mode == "none"
+
+
+def test_explicit_fifo_mode_can_roll_back_legacy_flags() -> None:
+    settings = GeneralSettings(
+        embeddings_batch_scheduler_mode="fifo_v1",
+        embeddings_batch_scheduler_shadow_mode="none",
+        embeddings_batch_model_capacity_enabled=True,
+        embeddings_batch_tenant_fair_share_enabled=True,
+        embeddings_batch_size_aware_scheduling_enabled=True,
+    )
+
+    modes = resolve_scheduler_modes_from_settings(settings)
+
+    assert modes.active_mode == "fifo_v1"
+    assert modes.shadow_mode == "none"
+
+
+def test_explicit_fifo_mode_disables_legacy_scheduler_capability_configs() -> None:
+    settings = GeneralSettings(
+        embeddings_batch_scheduler_mode="fifo_v1",
+        embeddings_batch_scheduler_shadow_mode="none",
+        embeddings_batch_model_capacity_enabled=True,
+        embeddings_batch_tenant_fair_share_enabled=True,
+        embeddings_batch_size_aware_scheduling_enabled=True,
+    )
+
+    assert BatchModelCapacityConfig.from_settings(settings).enabled is False
+    assert BatchTenantFairShareConfig.from_settings(settings).enabled is False
+    assert BatchSizeAgingConfig.from_settings(settings).enabled is False
+
+
+def test_scheduler_rollback_events_are_bounded_and_ranked() -> None:
+    previous = resolve_scheduler_modes_from_settings(
+        GeneralSettings(
+            embeddings_batch_scheduler_mode="smart_v1",
+            embeddings_batch_scheduler_shadow_mode="smart_v1",
+            embeddings_batch_scheduler_strict_model_homogeneity_enabled=True,
+        )
+    )
+    current = resolve_scheduler_modes_from_settings(
+        GeneralSettings(
+            embeddings_batch_scheduler_mode="model_capacity_v1",
+            embeddings_batch_scheduler_shadow_mode="fair_share_v1",
+            embeddings_batch_scheduler_strict_model_homogeneity_enabled=True,
+        )
+    )
+
+    events = scheduler_rollback_events(previous=previous, current=current)
+
+    assert [(event.from_mode, event.to_mode, event.reason) for event in events] == [
+        ("smart_v1", "model_capacity_v1", "active_mode_downgrade"),
+        ("smart_v1", "fair_share_v1", "shadow_mode_downgrade"),
+    ]
+
+
+def test_scheduler_rollback_events_record_shadow_disabled() -> None:
+    previous = resolve_scheduler_modes_from_settings(
+        GeneralSettings(
+            embeddings_batch_scheduler_mode="model_capacity_v1",
+            embeddings_batch_scheduler_shadow_mode="fair_share_v1",
+            embeddings_batch_scheduler_strict_model_homogeneity_enabled=True,
+        )
+    )
+    current = resolve_scheduler_modes_from_settings(
+        GeneralSettings(
+            embeddings_batch_scheduler_mode="model_capacity_v1",
+            embeddings_batch_scheduler_shadow_mode="none",
+            embeddings_batch_scheduler_strict_model_homogeneity_enabled=True,
+        )
+    )
+
+    events = scheduler_rollback_events(previous=previous, current=current)
+
+    assert [(event.from_mode, event.to_mode, event.reason) for event in events] == [
+        ("fair_share_v1", "none", "shadow_disabled")
+    ]
+
+
+def test_dynamic_config_records_scheduler_rollback_metric(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorded: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        "src.config_runtime.dynamic.increment_batch_scheduler_rollback",
+        lambda **kwargs: recorded.append(kwargs),
+    )
+    previous = AppConfig.model_validate(
+        {
+            "general_settings": {
+                "embeddings_batch_scheduler_mode": "smart_v1",
+                "embeddings_batch_scheduler_shadow_mode": "smart_v1",
+                "embeddings_batch_scheduler_strict_model_homogeneity_enabled": True,
+            }
+        }
+    )
+    current = AppConfig.model_validate(
+        {
+            "general_settings": {
+                "embeddings_batch_scheduler_mode": "fair_share_v1",
+                "embeddings_batch_scheduler_shadow_mode": "none",
+                "embeddings_batch_scheduler_strict_model_homogeneity_enabled": True,
+            }
+        }
+    )
+
+    DynamicConfigManager._record_scheduler_rollbacks(
+        previous_config=previous,
+        current_config=current,
+    )
+
+    assert recorded == [
+        {
+            "from_mode": "smart_v1",
+            "to_mode": "fair_share_v1",
+            "reason": "active_mode_downgrade",
+        },
+        {
+            "from_mode": "smart_v1",
+            "to_mode": "none",
+            "reason": "shadow_disabled",
+        },
+    ]
+
+
+def test_dynamic_config_detects_explicit_scheduler_mode_presence_change() -> None:
+    previous = AppConfig.model_validate(
+        {
+            "general_settings": {
+                "embeddings_batch_model_capacity_enabled": True,
+                "embeddings_batch_scheduler_claim_mode": "work_slice",
+                "embeddings_batch_scheduler_strict_model_homogeneity_enabled": True,
+            }
+        }
+    )
+    current = AppConfig.model_validate(
+        {
+            "general_settings": {
+                "embeddings_batch_scheduler_mode": "fifo_v1",
+                "embeddings_batch_scheduler_shadow_mode": "none",
+                "embeddings_batch_model_capacity_enabled": True,
+                "embeddings_batch_scheduler_claim_mode": "work_slice",
+                "embeddings_batch_scheduler_strict_model_homogeneity_enabled": True,
+            }
+        }
+    )
+
+    assert previous.model_dump(mode="python", exclude_none=True) == current.model_dump(
+        mode="python",
+        exclude_none=True,
+    )
+
+    changes = DynamicConfigManager._detect_app_config_changes(previous, current)
+
+    assert changes == {"added": [], "removed": [], "modified": ["general_settings"]}
+
+
+def test_live_scheduler_config_rolls_existing_worker_back_to_fifo() -> None:
+    class _Repository:
+        def __init__(self) -> None:
+            self.tenant_scope_preference = ()
+
+        def set_tenant_scope_preference(self, preference):  # noqa: ANN001
+            self.tenant_scope_preference = preference
+
+    class _Promoter:
+        def __init__(self) -> None:
+            self.scheduler_config: dict[str, object] = {}
+
+        def configure_scheduler(self, **kwargs):  # noqa: ANN003
+            self.scheduler_config = dict(kwargs)
+
+    class _Service:
+        def __init__(self) -> None:
+            self.scheduler_config: dict[str, object] = {}
+
+        def configure_scheduler(self, **kwargs):  # noqa: ANN003
+            self.scheduler_config = dict(kwargs)
+
+    repository = _Repository()
+    promoter = _Promoter()
+    service = _Service()
+    worker = SimpleNamespace(
+        config=BatchWorkerConfig(
+            worker_id="w1",
+            scheduler_mode="smart_v1",
+            scheduler_shadow_mode="smart_v1",
+            scheduler_claim_mode="work_slice",
+            model_capacity_enabled=True,
+            scheduler_shadow_enabled=True,
+            tenant_fair_share_enabled=True,
+            size_aware_scheduling_enabled=True,
+        ),
+        model_capacity_resolver=object(),
+    )
+    runtime = BatchRuntime(
+        model_capacity_resolver=object(),
+        worker=worker,  # type: ignore[arg-type]
+        create_session_promoter=promoter,  # type: ignore[arg-type]
+    )
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            router=None,
+            router_state_backend=None,
+            batch_create_session_service=service,
+        )
+    )
+    cfg = AppConfig.model_validate(
+        {
+            "general_settings": {
+                "embeddings_batch_scheduler_mode": "fifo_v1",
+                "embeddings_batch_scheduler_shadow_mode": "none",
+            }
+        }
+    )
+
+    modes = _apply_live_batch_scheduler_config(
+        app=app,
+        runtime=runtime,
+        cfg=cfg,
+        repository=repository,  # type: ignore[arg-type]
+    )
+
+    assert modes.active_mode == "fifo_v1"
+    assert modes.shadow_mode == "none"
+    assert runtime.model_capacity_resolver is None
+    assert app.state.batch_model_capacity_resolver is None
+    assert app.state.batch_scheduler_modes == modes
+    assert worker.model_capacity_resolver is None
+    assert worker.config.scheduler_mode == "fifo_v1"
+    assert worker.config.scheduler_shadow_mode == "none"
+    assert worker.config.scheduler_claim_mode == "job_fifo"
+    assert worker.config.model_capacity_enabled is False
+    assert worker.config.scheduler_shadow_enabled is False
+    assert worker.config.tenant_fair_share_enabled is False
+    assert worker.config.size_aware_scheduling_enabled is False
+    assert promoter.scheduler_config["scheduler_enabled"] is False
+    assert promoter.scheduler_config["scheduler_shadow_enabled"] is False
+    assert promoter.scheduler_config["scheduler_mode"] == "fifo_v1"
+    assert promoter.scheduler_config["scheduler_shadow_mode"] == "none"
+    assert service.scheduler_config["scheduler_enabled"] is False
+    assert service.scheduler_config["scheduler_shadow_enabled"] is False
+    assert repository.tenant_scope_preference == (
+        "organization",
+        "team",
+        "api_key",
+        "user",
+    )
+
+
+def test_legacy_size_aware_shadow_keeps_smart_active() -> None:
+    settings = GeneralSettings(
+        embeddings_batch_scheduler_shadow_enabled=True,
+        embeddings_batch_model_capacity_enabled=True,
+        embeddings_batch_tenant_fair_share_enabled=True,
+        embeddings_batch_size_aware_scheduling_enabled=True,
+        embeddings_batch_scheduler_claim_mode="work_slice",
+        embeddings_batch_scheduler_strict_model_homogeneity_enabled=True,
+    )
+
+    modes = resolve_scheduler_modes_from_settings(settings)
+
+    assert modes.active_mode == "smart_v1"
+    assert modes.shadow_mode == "smart_v1"
 
 
 def test_active_scheduler_requires_work_slice_claiming() -> None:
@@ -120,12 +438,14 @@ def test_active_scheduler_requires_work_slice_claiming() -> None:
         GeneralSettings(embeddings_batch_scheduler_enabled=True)
 
 
-def test_active_scheduler_requires_strict_model_homogeneity() -> None:
-    with pytest.raises(ValidationError, match="strict_model_homogeneity"):
-        GeneralSettings(
-            embeddings_batch_scheduler_enabled=True,
-            embeddings_batch_scheduler_claim_mode="work_slice",
-        )
+def test_active_scheduler_allows_strict_model_homogeneity_disabled() -> None:
+    settings = GeneralSettings(
+        embeddings_batch_scheduler_enabled=True,
+        embeddings_batch_scheduler_claim_mode="work_slice",
+    )
+
+    assert settings.embeddings_batch_scheduler_enabled is True
+    assert settings.embeddings_batch_scheduler_strict_model_homogeneity_enabled is False
 
 
 def test_active_scheduler_config_is_allowed_with_safe_prerequisites() -> None:
@@ -150,12 +470,14 @@ def test_model_capacity_scheduler_requires_work_slice_claiming() -> None:
         )
 
 
-def test_model_capacity_scheduler_requires_strict_model_homogeneity() -> None:
-    with pytest.raises(ValidationError, match="strict_model_homogeneity"):
-        GeneralSettings(
-            embeddings_batch_model_capacity_enabled=True,
-            embeddings_batch_scheduler_claim_mode="work_slice",
-        )
+def test_model_capacity_scheduler_allows_strict_model_homogeneity_disabled() -> None:
+    settings = GeneralSettings(
+        embeddings_batch_model_capacity_enabled=True,
+        embeddings_batch_scheduler_claim_mode="work_slice",
+    )
+
+    assert settings.embeddings_batch_model_capacity_enabled is True
+    assert settings.embeddings_batch_scheduler_strict_model_homogeneity_enabled is False
 
 
 def test_model_capacity_scheduler_config_is_opt_in() -> None:
@@ -180,13 +502,28 @@ def test_scheduler_shadow_requires_work_slice_claiming() -> None:
         )
 
 
-def test_scheduler_shadow_requires_strict_model_homogeneity() -> None:
-    with pytest.raises(ValidationError, match="strict_model_homogeneity"):
-        GeneralSettings(
-            embeddings_batch_scheduler_shadow_enabled=True,
-            embeddings_batch_model_capacity_enabled=True,
-            embeddings_batch_scheduler_claim_mode="work_slice",
-        )
+def test_scheduler_shadow_allows_strict_model_homogeneity_disabled() -> None:
+    settings = GeneralSettings(
+        embeddings_batch_scheduler_shadow_enabled=True,
+        embeddings_batch_model_capacity_enabled=True,
+        embeddings_batch_scheduler_claim_mode="work_slice",
+    )
+
+    assert settings.embeddings_batch_scheduler_shadow_enabled is True
+    assert settings.embeddings_batch_scheduler_strict_model_homogeneity_enabled is False
+
+
+def test_explicit_shadow_rollout_allows_strict_model_homogeneity_disabled() -> None:
+    settings = GeneralSettings(
+        embeddings_batch_scheduler_mode="fifo_v1",
+        embeddings_batch_scheduler_shadow_mode="smart_v1",
+    )
+
+    modes = resolve_scheduler_modes_from_settings(settings)
+
+    assert modes.active_mode == "fifo_v1"
+    assert modes.shadow_mode == "smart_v1"
+    assert settings.embeddings_batch_scheduler_strict_model_homogeneity_enabled is False
 
 
 def test_scheduler_shadow_requires_model_capacity() -> None:
