@@ -5789,6 +5789,7 @@ async def test_batch_worker_fifo_active_records_slice_shadow_recommendation(
     worker._process_items = _process_items  # type: ignore[assignment]
 
     did_work = await worker.process_once()
+    await worker.drain_shadow_tasks()
 
     assert did_work is True
     assert repo.recommend_calls == [

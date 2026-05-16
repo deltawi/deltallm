@@ -91,6 +91,8 @@ def _batch_config(
             embeddings_batch_model_group_backpressure_max_seconds=300,
             embeddings_batch_scheduler_enabled=False,
             embeddings_batch_scheduler_shadow_enabled=False,
+            embeddings_batch_scheduler_shadow_decision_timeout_seconds=0.5,
+            embeddings_batch_scheduler_shadow_max_pending_decisions=16,
             embeddings_batch_scheduler_strict_model_homogeneity_enabled=False,
             embeddings_batch_scheduler_default_service_tier="standard",
             embeddings_batch_scheduler_backfill_enabled=scheduler_backfill_enabled,
