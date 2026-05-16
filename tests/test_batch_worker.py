@@ -103,6 +103,7 @@ class _FakeRepository:
                 usage=item["usage"],
                 provider_cost=item["provider_cost"],
                 billed_cost=item["billed_cost"],
+                claim_epoch=item.get("claim_epoch"),
             )
             if not updated:
                 return "not_owned"
@@ -5417,6 +5418,30 @@ async def test_provider_call_wait_is_cancelled_when_item_lease_is_lost():
     with pytest.raises(BatchItemLeaseLostError):
         await asyncio.wait_for(wait_task, timeout=1.0)
     assert cancelled.is_set()
+
+
+def test_lease_loss_metric_helper_records_each_prepared_item():
+    observed: list[dict[str, float | str]] = []
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=_FakeRepository(),  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+
+    def _observe(*, status: str, latency_seconds: float) -> None:
+        observed.append({"status": status, "latency_seconds": latency_seconds})
+
+    worker._execution_engine._observe_batch_item_execution_latency = _observe
+    worker._execution_engine._observe_prepared_items_lease_lost(
+        [
+            SimpleNamespace(item=SimpleNamespace(item_id="i1"), started_at_monotonic=0.0),
+            SimpleNamespace(item=SimpleNamespace(item_id="i2"), started_at_monotonic=0.0),
+        ]
+    )
+
+    assert [entry["status"] for entry in observed] == ["lease_lost", "lease_lost"]
+    assert all(float(entry["latency_seconds"]) >= 0 for entry in observed)
 
 
 @pytest.mark.asyncio

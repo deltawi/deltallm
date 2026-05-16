@@ -154,33 +154,13 @@ class BatchItemRepository:
         usage: dict[str, Any] | None,
         provider_cost: float,
         billed_cost: float,
+        claim_epoch: int | None = None,
     ) -> bool:
         if self.prisma is None:
             return False
-        if worker_id is None:
-            rows = await self.prisma.query_raw(
-                """
-                UPDATE deltallm_batch_item
-                SET status = 'completed',
-                    response_body = $2::jsonb,
-                    usage = $3::jsonb,
-                    provider_cost = $4,
-                    billed_cost = $5,
-                    lease_expires_at = NULL,
-                    not_before_at = NULL,
-                    locked_by = NULL,
-                    completed_at = NOW()
-                WHERE item_id = $1
-                  AND status = 'in_progress'
-                RETURNING item_id
-                """,
-                item_id,
-                json.dumps(response_body),
-                json.dumps(usage or {}),
-                provider_cost,
-                billed_cost,
-            )
-            return bool(rows)
+        if worker_id is None or claim_epoch is None:
+            logger.warning("refusing item completion without worker ownership and claim epoch")
+            return False
         rows = await self.prisma.query_raw(
             """
             UPDATE deltallm_batch_item
@@ -195,6 +175,7 @@ class BatchItemRepository:
                 completed_at = NOW()
             WHERE item_id = $1
               AND locked_by = $2
+              AND claim_epoch = $7::bigint
               AND status = 'in_progress'
             RETURNING item_id
             """,
@@ -204,6 +185,7 @@ class BatchItemRepository:
             json.dumps(usage or {}),
             provider_cost,
             billed_cost,
+            claim_epoch,
         )
         return bool(rows)
 
@@ -220,6 +202,9 @@ class BatchItemRepository:
         if worker_id is None:
             logger.warning("refusing bulk item completion without worker ownership")
             return False
+        if any(item.get("claim_epoch") is None for item in items):
+            logger.warning("refusing bulk item completion without claim epochs")
+            return False
 
         values_sql: list[str] = []
         params: list[Any] = []
@@ -227,7 +212,7 @@ class BatchItemRepository:
         for item in items:
             values_sql.append(
                 f"(${param_index}, ${param_index + 1}::jsonb, ${param_index + 2}::jsonb, "
-                f"${param_index + 3}, ${param_index + 4}, ${param_index + 5}::int)"
+                f"${param_index + 3}, ${param_index + 4}, ${param_index + 5}::bigint)"
             )
             params.extend(
                 [
@@ -255,7 +240,7 @@ class BatchItemRepository:
                 JOIN payload p ON i.item_id = p.item_id
                 WHERE i.status = 'in_progress'
                   AND i.locked_by = ${worker_id_param}
-                  AND (p.claim_epoch IS NULL OR i.claim_epoch = p.claim_epoch)
+                  AND i.claim_epoch = p.claim_epoch
                 FOR UPDATE SKIP LOCKED
             ),
             eligible AS (
@@ -298,13 +283,16 @@ class BatchItemRepository:
     ) -> list[str]:
         if self.prisma is None or not item_ids:
             return []
+        if item_claim_epochs is None or any(item_id not in item_claim_epochs for item_id in item_ids):
+            logger.warning("refusing retry release without claim epochs")
+            return []
 
         values_sql: list[str] = []
         params: list[Any] = []
         param_index = 1
         for item_id in item_ids:
-            values_sql.append(f"(${param_index}, ${param_index + 1}::int)")
-            params.extend([item_id, (item_claim_epochs or {}).get(item_id)])
+            values_sql.append(f"(${param_index}, ${param_index + 1}::bigint)")
+            params.extend([item_id, item_claim_epochs[item_id]])
             param_index += 2
 
         worker_id_param = param_index
@@ -342,7 +330,7 @@ class BatchItemRepository:
                 WHERE i.item_id = p.item_id
                   AND j.batch_id = i.batch_id
                   AND i.locked_by = ${worker_id_param}
-                  AND (p.claim_epoch IS NULL OR i.claim_epoch = p.claim_epoch)
+                  AND i.claim_epoch = p.claim_epoch
                   AND i.status = 'in_progress'
                   AND (j.expires_at IS NULL OR NOW() + (${retry_delay_param} || ' seconds')::interval < j.expires_at)
                 RETURNING i.item_id
@@ -362,33 +350,14 @@ class BatchItemRepository:
         last_error: str,
         retryable: bool,
         retry_delay_seconds: int = 0,
+        claim_epoch: int | None = None,
     ) -> bool:
         if self.prisma is None:
             return False
+        if worker_id is None or claim_epoch is None:
+            logger.warning("refusing item failure update without worker ownership and claim epoch")
+            return False
         if retryable:
-            if worker_id is None:
-                rows = await self.prisma.query_raw(
-                    """
-                    UPDATE deltallm_batch_item i
-                    SET status = 'pending',
-                        error_body = $2::jsonb,
-                        last_error = $3,
-                        lease_expires_at = NOW() + ($4 || ' seconds')::interval,
-                        not_before_at = NOW() + ($4 || ' seconds')::interval,
-                        locked_by = NULL
-                    FROM deltallm_batch_job j
-                    WHERE i.item_id = $1
-                      AND i.status = 'in_progress'
-                      AND j.batch_id = i.batch_id
-                      AND (j.expires_at IS NULL OR NOW() + ($4 || ' seconds')::interval < j.expires_at)
-                    RETURNING i.item_id
-                    """,
-                    item_id,
-                    json.dumps(error_body),
-                    last_error,
-                    max(0, retry_delay_seconds),
-                )
-                return bool(rows)
             rows = await self.prisma.query_raw(
                 """
                 UPDATE deltallm_batch_item i
@@ -401,6 +370,7 @@ class BatchItemRepository:
                 FROM deltallm_batch_job j
                 WHERE i.item_id = $1
                   AND i.locked_by = $5
+                  AND i.claim_epoch = $6::bigint
                   AND i.status = 'in_progress'
                   AND j.batch_id = i.batch_id
                   AND (j.expires_at IS NULL OR NOW() + ($4 || ' seconds')::interval < j.expires_at)
@@ -411,26 +381,7 @@ class BatchItemRepository:
                 last_error,
                 max(0, retry_delay_seconds),
                 worker_id,
-            )
-            return bool(rows)
-        if worker_id is None:
-            rows = await self.prisma.query_raw(
-                """
-                UPDATE deltallm_batch_item
-                SET status = 'failed',
-                    error_body = $2::jsonb,
-                    last_error = $3,
-                    lease_expires_at = NULL,
-                    not_before_at = NULL,
-                    locked_by = NULL,
-                    completed_at = NOW()
-                WHERE item_id = $1
-                  AND status = 'in_progress'
-                RETURNING item_id
-                """,
-                item_id,
-                json.dumps(error_body),
-                last_error,
+                claim_epoch,
             )
             return bool(rows)
         rows = await self.prisma.query_raw(
@@ -445,6 +396,7 @@ class BatchItemRepository:
                 completed_at = NOW()
             WHERE item_id = $1
               AND locked_by = $2
+              AND claim_epoch = $5::bigint
               AND status = 'in_progress'
             RETURNING item_id
             """,
@@ -452,6 +404,7 @@ class BatchItemRepository:
             worker_id,
             json.dumps(error_body),
             last_error,
+            claim_epoch,
         )
         return bool(rows)
 
@@ -472,7 +425,7 @@ class BatchItemRepository:
             WHERE item_id = $1
               AND locked_by = $2
               AND status = 'in_progress'
-              AND ($4::int IS NULL OR claim_epoch = $4::int)
+              AND claim_epoch = $4::bigint
             RETURNING item_id
             """,
             item_id,
@@ -541,6 +494,7 @@ class BatchItemRepository:
                 i.provider_cost,
                 i.billed_cost,
                 i.attempts,
+                i.claim_epoch,
                 i.last_error,
                 i.locked_by,
                 i.lease_expires_at,

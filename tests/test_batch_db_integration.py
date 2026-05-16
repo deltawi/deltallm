@@ -3979,6 +3979,9 @@ async def test_db_backed_claim_next_work_skips_item_with_future_not_before_after
     assert first is not None
     assert len(first.item_ids) == 1
     retried_item_id = first.item_ids[0]
+    first_items = await repository.load_claim_items(first.item_ids)
+    assert len(first_items) == 1
+    assert first_items[0].claim_epoch > 0
 
     # Mark the claimed item as a retryable failure with a 1h backoff.
     marked = await repository.mark_item_failed(
@@ -3988,6 +3991,7 @@ async def test_db_backed_claim_next_work_skips_item_with_future_not_before_after
         last_error="transient upstream",
         retryable=True,
         retry_delay_seconds=3600,
+        claim_epoch=first_items[0].claim_epoch,
     )
     assert marked is True
 
@@ -4239,6 +4243,7 @@ async def test_db_backed_expired_item_can_be_reclaimed_after_crash(batch_db) -> 
         usage={"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
         provider_cost=0.01,
         billed_cost=0.01,
+        claim_epoch=reclaimed[0].claim_epoch,
     )
     assert updated is True
 
@@ -4321,6 +4326,24 @@ async def test_db_backed_item_claim_epoch_fences_stale_completion_and_retry(batc
     )
     assert stale_completed is False
 
+    assert await repository.mark_item_failed(
+        item_id=item_id,
+        worker_id="w1",
+        error_body={"error": {"message": "stale retry"}},
+        last_error="stale retry",
+        retryable=True,
+        retry_delay_seconds=1,
+        claim_epoch=first_epoch,
+    ) is False
+    assert await repository.mark_item_failed(
+        item_id=item_id,
+        worker_id="w1",
+        error_body={"error": {"message": "stale terminal"}},
+        last_error="stale terminal",
+        retryable=False,
+        claim_epoch=first_epoch,
+    ) is False
+
     current_completed = await repository.mark_items_completed_bulk(
         items=[
             {
@@ -4394,6 +4417,7 @@ async def test_db_backed_bulk_completion_is_all_or_nothing_when_any_item_is_no_l
         items=[
             {
                 "item_id": claimed[0].item_id,
+                "claim_epoch": claimed[0].claim_epoch,
                 "response_body": {"object": "list", "data": [{"index": 0, "embedding": [0.1]}]},
                 "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
                 "provider_cost": 0.01,
@@ -4401,6 +4425,7 @@ async def test_db_backed_bulk_completion_is_all_or_nothing_when_any_item_is_no_l
             },
             {
                 "item_id": claimed[1].item_id,
+                "claim_epoch": claimed[1].claim_epoch,
                 "response_body": {"object": "list", "data": [{"index": 0, "embedding": [0.2]}]},
                 "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
                 "provider_cost": 0.01,
@@ -4457,6 +4482,7 @@ async def test_db_backed_bulk_completion_with_outbox_persists_completed_items_an
     items = [
         {
             "item_id": claimed[0].item_id,
+            "claim_epoch": claimed[0].claim_epoch,
             "response_body": {"object": "list", "data": [{"index": 0, "embedding": [0.1]}]},
             "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
             "provider_cost": 0.01,
@@ -4472,6 +4498,7 @@ async def test_db_backed_bulk_completion_with_outbox_persists_completed_items_an
         },
         {
             "item_id": claimed[1].item_id,
+            "claim_epoch": claimed[1].claim_epoch,
             "response_body": {"object": "list", "data": [{"index": 0, "embedding": [0.2]}]},
             "usage": {"prompt_tokens": 2, "completion_tokens": 0, "total_tokens": 2},
             "provider_cost": 0.02,
@@ -4552,6 +4579,7 @@ async def test_db_backed_bulk_completion_with_outbox_reports_already_completed_a
     items = [
         {
             "item_id": claimed[0].item_id,
+            "claim_epoch": claimed[0].claim_epoch,
             "response_body": {"object": "list", "data": [{"index": 0, "embedding": [0.1]}]},
             "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
             "provider_cost": 0.01,
@@ -4561,6 +4589,7 @@ async def test_db_backed_bulk_completion_with_outbox_reports_already_completed_a
         },
         {
             "item_id": claimed[1].item_id,
+            "claim_epoch": claimed[1].claim_epoch,
             "response_body": {"object": "list", "data": [{"index": 0, "embedding": [0.2]}]},
             "usage": {"prompt_tokens": 2, "completion_tokens": 0, "total_tokens": 2},
             "provider_cost": 0.02,

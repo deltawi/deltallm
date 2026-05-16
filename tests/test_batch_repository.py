@@ -65,6 +65,28 @@ async def test_bulk_item_completion_requires_worker_owner() -> None:
     assert prisma.calls == []
 
 
+@pytest.mark.asyncio
+async def test_bulk_item_completion_requires_claim_epoch() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchItemRepository(prisma)
+
+    updated = await repository.mark_items_completed_bulk(
+        items=[
+            {
+                "item_id": "item-1",
+                "response_body": {"ok": True},
+                "usage": {},
+                "provider_cost": 0.0,
+                "billed_cost": 0.0,
+            }
+        ],
+        worker_id="worker-1",
+    )
+
+    assert updated is False
+    assert prisma.calls == []
+
+
 def _job_row(**overrides):
     row = {
         "batch_id": "batch-1",
@@ -2499,12 +2521,54 @@ async def test_retryable_mark_item_failed_uses_database_deadline_guard():
         last_error="rate limited",
         retryable=True,
         retry_delay_seconds=60,
+        claim_epoch=7,
     )
 
     assert updated is False
+    assert prisma.params == (
+        "item-1",
+        json.dumps({"message": "rate limited"}),
+        "rate limited",
+        60,
+        "worker-1",
+        7,
+    )
     assert "FROM deltallm_batch_job j" in prisma.sql
     assert "j.batch_id = i.batch_id" in prisma.sql
     assert "NOW() + ($4 || ' seconds')::interval < j.expires_at" in prisma.sql
+    assert "i.claim_epoch = $6::bigint" in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_mark_item_failed_requires_claim_epoch():
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    updated = await repository.mark_item_failed(
+        item_id="item-1",
+        worker_id="worker-1",
+        error_body={"message": "rate limited"},
+        last_error="rate limited",
+        retryable=True,
+        retry_delay_seconds=60,
+    )
+
+    assert updated is False
+    assert prisma.calls == []
+
+
+@pytest.mark.asyncio
+async def test_release_items_for_retry_requires_claim_epochs():
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    item_ids = await repository.release_items_for_retry(
+        item_ids=["item-1"],
+        worker_id="worker-1",
+    )
+
+    assert item_ids == []
+    assert prisma.calls == []
 
 
 @pytest.mark.asyncio
@@ -2515,10 +2579,11 @@ async def test_release_items_for_retry_preserves_immediate_requeue_defaults():
     item_ids = await repository.release_items_for_retry(
         item_ids=["item-1"],
         worker_id="worker-1",
+        item_claim_epochs={"item-1": 3},
     )
 
     assert item_ids == []
-    assert prisma.params == ("item-1", None, "worker-1", 0, None, None)
+    assert prisma.params == ("item-1", 3, "worker-1", 0, None, None)
     assert "status = 'pending'" in prisma.sql
     assert "ELSE NULL" in prisma.sql
     assert "error_body = COALESCE($5::jsonb, i.error_body)" in prisma.sql
@@ -2526,7 +2591,7 @@ async def test_release_items_for_retry_preserves_immediate_requeue_defaults():
     assert "j.batch_id = i.batch_id" in prisma.sql
     assert "NOW() + ($4 || ' seconds')::interval < j.expires_at" in prisma.sql
     assert "i.locked_by = $3" in prisma.sql
-    assert "(p.claim_epoch IS NULL OR i.claim_epoch = p.claim_epoch)" in prisma.sql
+    assert "i.claim_epoch = p.claim_epoch" in prisma.sql
 
 
 @pytest.mark.asyncio
@@ -2540,9 +2605,10 @@ async def test_release_items_for_retry_can_store_retry_metadata_and_delay():
         retry_delay_seconds=30,
         error_body={"retry_category": "upstream_5xx"},
         last_error="upstream unavailable",
+        item_claim_epochs={"item-1": 11, "item-2": 12},
     )
 
-    assert prisma.params[0:4] == ("item-1", None, "item-2", None)
+    assert prisma.params[0:4] == ("item-1", 11, "item-2", 12)
     assert prisma.params[4] == "worker-1"
     assert prisma.params[5] == 30
     assert json.loads(prisma.params[6]) == {"retry_category": "upstream_5xx"}

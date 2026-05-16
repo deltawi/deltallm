@@ -239,6 +239,7 @@ class ChatWorkerExecutionMixin:
                 claim_epoch=prepared.item.claim_epoch,
             ):
                 item_lease_lost.set()
+                self._observe_prepared_item_lease_lost(prepared)
                 logger.warning(
                     "batch chat completion skipped after lease loss batch_id=%s item_id=%s",
                     job.batch_id,
@@ -270,6 +271,7 @@ class ChatWorkerExecutionMixin:
                 )
                 increment_batch_chat_item_executed(mode=batch_execution_mode, status="success")
         except BatchItemLeaseLostError as exc:
+            self._observe_prepared_item_lease_lost(prepared)
             logger.warning(
                 "batch chat provider call cancelled after lease loss batch_id=%s item_id=%s error=%s",
                 job.batch_id,
@@ -688,6 +690,7 @@ class ChatWorkerExecutionMixin:
                 item_ids,
                 exc,
             )
+            self._observe_prepared_items_lease_lost(prepared_items)
             await self._stop_heartbeat_tasks(item_heartbeats.values())
             item_heartbeats.clear()
             return
@@ -835,6 +838,7 @@ class ChatWorkerExecutionMixin:
                 claim_epoch=prepared.item.claim_epoch,
             ):
                 item_lease_lost.set()
+                self._observe_prepared_items_lease_lost(success_prepared)
                 logger.warning(
                     "batch chat microbatch completion skipped after lease loss batch_id=%s item_id=%s",
                     batch_id,
