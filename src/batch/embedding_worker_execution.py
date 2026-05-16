@@ -20,7 +20,7 @@ from src.batch.endpoints import batch_call_type_for_endpoint, router_usage_mode_
 from src.batch.policy import record_batch_policy_failure, run_batch_request_preflight
 from src.batch.retry import BatchResponseShapeError, BatchRetryCategory, BatchRetryDecision, classify_batch_retry
 from src.batch.worker_constants import COMPLETION_OUTBOX_MAX_ATTEMPTS
-from src.batch.worker_types import _PreparedEmbeddingItem, _RequestShim
+from src.batch.worker_types import BatchItemLeaseLostError, _PreparedEmbeddingItem, _RequestShim
 from src.billing.cost import completion_cost
 from src.metrics import (
     increment_batch_microbatch_ineligible_item,
@@ -345,6 +345,10 @@ class EmbeddingWorkerExecutionMixin:
                 retry_delay_seconds=retry_delay,
                 error_body=error_body,
                 last_error=str(exc),
+                item_claim_epochs={
+                    prepared.item.item_id: prepared.item.claim_epoch
+                    for prepared in prepared_items
+                },
             )
         except Exception as release_exc:
             self._record_microbatch_requeue(category=decision.category, result="partial_release")
@@ -395,6 +399,7 @@ class EmbeddingWorkerExecutionMixin:
 
     async def _execute_prepared_item(self, job, prepared: _PreparedEmbeddingItem) -> None:  # noqa: ANN001
         item_heartbeat: asyncio.Task[None] | None = None
+        item_lease_lost = asyncio.Event()
         try:
             await self._acquire_prepared_policy_lease(prepared=prepared)
         except Exception as exc:
@@ -415,15 +420,21 @@ class EmbeddingWorkerExecutionMixin:
                     item_id=prepared.item.item_id,
                     worker_id=self.config.worker_id,
                     lease_seconds=self.config.item_lease_seconds,
+                    claim_epoch=prepared.item.claim_epoch,
                 ),
                 label=f"item:{prepared.item.item_id}",
+                lease_lost_event=item_lease_lost,
             )
-            data, served_deployment = await self.app.state.failover_manager.execute_with_failover(
-                primary_deployment=prepared.primary_deployment,
-                model_group=prepared.model_group,
-                execute=lambda dep: self._execute_embedding(prepared.request_shim, prepared.payload, dep),
-                return_deployment=True,
-                **prepared.failover_kwargs,
+            data, served_deployment = await self._await_with_lease_loss_cancellation(
+                self.app.state.failover_manager.execute_with_failover(
+                    primary_deployment=prepared.primary_deployment,
+                    model_group=prepared.model_group,
+                    execute=lambda dep: self._execute_embedding(prepared.request_shim, prepared.payload, dep),
+                    return_deployment=True,
+                    **prepared.failover_kwargs,
+                ),
+                lease_lost_event=item_lease_lost,
+                label=f"item:{prepared.item.item_id}",
             )
             response_body, api_base, deployment_model = self._sanitize_embedding_response(data)
             usage_allocations = allocate_embedding_usage(response_body.get("usage"), item_weights=[1])
@@ -467,7 +478,17 @@ class EmbeddingWorkerExecutionMixin:
                 usage=usage,
                 reference=prepared.item.item_id,
             )
-            await self._renew_item_lease_once(prepared.item.item_id)
+            if item_lease_lost.is_set() or not await self._renew_item_lease_once(
+                prepared.item.item_id,
+                claim_epoch=prepared.item.claim_epoch,
+            ):
+                item_lease_lost.set()
+                logger.warning(
+                    "batch embedding completion skipped after lease loss batch_id=%s item_id=%s",
+                    job.batch_id,
+                    prepared.item.item_id,
+                )
+                return
             if item_heartbeat is not None:
                 await self._stop_heartbeat_fn(item_heartbeat)
                 item_heartbeat = None
@@ -475,6 +496,7 @@ class EmbeddingWorkerExecutionMixin:
                 items=[
                     {
                         "item_id": prepared.item.item_id,
+                        "claim_epoch": prepared.item.claim_epoch,
                         "response_body": response_body,
                         "usage": usage,
                         "provider_cost": provider_cost,
@@ -501,6 +523,14 @@ class EmbeddingWorkerExecutionMixin:
                     latency_seconds=perf_counter() - prepared.started_at_monotonic,
                     reference=prepared.item.item_id,
                 )
+        except BatchItemLeaseLostError as exc:
+            logger.warning(
+                "batch embedding provider call cancelled after lease loss batch_id=%s item_id=%s error=%s",
+                job.batch_id,
+                prepared.item.item_id,
+                exc,
+            )
+            return
         except Exception as exc:
             await self._mark_item_failed(
                 job=job,
@@ -535,17 +565,21 @@ class EmbeddingWorkerExecutionMixin:
         first_item = prepared_items[0]
         item_ids = [prepared.item.item_id for prepared in prepared_items]
         item_heartbeats: dict[str, asyncio.Task[None]] = {}
+        item_lease_lost = asyncio.Event()
         served_deployment = None
 
         try:
             for prepared in prepared_items:
                 item_heartbeats[prepared.item.item_id] = self._start_heartbeat_fn(
-                    renew=lambda item_id=prepared.item.item_id: self.repository.renew_item_lease(
+                    renew=lambda item_id=prepared.item.item_id,
+                    claim_epoch=prepared.item.claim_epoch: self.repository.renew_item_lease(
                         item_id=item_id,
                         worker_id=self.config.worker_id,
                         lease_seconds=self.config.item_lease_seconds,
+                        claim_epoch=claim_epoch,
                     ),
                     label=f"item:{prepared.item.item_id}",
+                    lease_lost_event=item_lease_lost,
                 )
             chunk_payload = self._build_microbatch_request(prepared_items)
             logger.info(
@@ -558,12 +592,16 @@ class EmbeddingWorkerExecutionMixin:
             increment_batch_microbatch_requests()
             increment_batch_microbatch_inputs(count=chunk_size)
             observe_batch_microbatch_size(batch_size=chunk_size)
-            data, served_deployment = await self.app.state.failover_manager.execute_with_failover(
-                primary_deployment=first_item.primary_deployment,
-                model_group=first_item.model_group,
-                execute=lambda dep: self._execute_embedding(first_item.request_shim, chunk_payload, dep),
-                return_deployment=True,
-                **first_item.failover_kwargs,
+            data, served_deployment = await self._await_with_lease_loss_cancellation(
+                self.app.state.failover_manager.execute_with_failover(
+                    primary_deployment=first_item.primary_deployment,
+                    model_group=first_item.model_group,
+                    execute=lambda dep: self._execute_embedding(first_item.request_shim, chunk_payload, dep),
+                    return_deployment=True,
+                    **first_item.failover_kwargs,
+                ),
+                lease_lost_event=item_lease_lost,
+                label=f"microbatch:{batch_id}:{item_ids[0]}:{chunk_size}",
             )
             response_body, api_base, deployment_model = self._sanitize_embedding_response(data)
             item_responses = self._validate_embedding_microbatch_response(
@@ -574,6 +612,17 @@ class EmbeddingWorkerExecutionMixin:
                 response_body.get("usage"),
                 item_weights=[prepared.microbatch_weight or 1 for prepared in prepared_items],
             )
+        except BatchItemLeaseLostError as exc:
+            logger.warning(
+                "batch embedding microbatch provider call cancelled after lease loss batch_id=%s size=%s item_ids=%s error=%s",
+                batch_id,
+                chunk_size,
+                item_ids,
+                exc,
+            )
+            await self._stop_heartbeat_tasks(item_heartbeats.values())
+            item_heartbeats.clear()
+            return
         except Exception as exc:
             await self._record_upstream_failure_runtime_hook(
                 batch_id=batch_id,
@@ -676,8 +725,21 @@ class EmbeddingWorkerExecutionMixin:
                     }
                 )
 
-            for item_id in item_ids:
-                await self._renew_item_lease_once(item_id)
+            for prepared in prepared_items:
+                if item_lease_lost.is_set() or not await self._renew_item_lease_once(
+                    prepared.item.item_id,
+                    claim_epoch=prepared.item.claim_epoch,
+                ):
+                    item_lease_lost.set()
+                    logger.warning(
+                        "batch embedding microbatch completion skipped after lease loss batch_id=%s size=%s item_ids=%s",
+                        batch_id,
+                        chunk_size,
+                        item_ids,
+                    )
+                    await self._stop_heartbeat_tasks(item_heartbeats.values())
+                    item_heartbeats.clear()
+                    return
             await self._stop_heartbeat_tasks(item_heartbeats.values())
             item_heartbeats.clear()
 
@@ -685,6 +747,7 @@ class EmbeddingWorkerExecutionMixin:
                 items=[
                     {
                         "item_id": row["prepared"].item.item_id,
+                        "claim_epoch": row["prepared"].item.claim_epoch,
                         "response_body": row["response_body"],
                         "usage": row["usage"],
                         "provider_cost": row["provider_cost"],

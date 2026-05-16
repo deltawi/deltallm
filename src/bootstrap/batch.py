@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import socket
@@ -28,14 +29,20 @@ from src.batch.create.staging import BatchCreateArtifactStorageBackend
 from src.batch.completion_outbox import BatchCompletionOutboxWorker, BatchCompletionOutboxWorkerConfig
 from src.batch.service import BatchService
 from src.batch.scheduling import (
+    BatchSchedulerModes,
     BatchModelCapacityConfig,
     BatchModelCapacityResolver,
     BatchSizeAgingConfig,
     BatchTenantFairShareConfig,
+    normalize_scheduler_mode,
+    normalize_scheduler_shadow_mode,
+    resolve_scheduler_modes_from_settings,
+    scheduler_rollback_events,
 )
 from src.batch.storage import LocalBatchArtifactStorage, S3BatchArtifactStorage
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
 from src.bootstrap.status import BootstrapStatus
+from src.metrics import increment_batch_scheduler_rollback
 from src.services.model_visibility import normalize_callable_target_policy_mode
 
 logger = logging.getLogger(__name__)
@@ -46,6 +53,7 @@ logger = logging.getLogger(__name__)
 # respected; the worker loop's own idle poll is sub-second.
 _WORKER_SHUTDOWN_DRAIN_TIMEOUT_SECONDS = 30.0
 _BATCH_WORKER_BOOT_ID = uuid4().hex[:12]
+_BATCH_SCHEDULER_MODE_STATE_KEY = "batch_scheduler_modes"
 
 
 def _safe_worker_id_part(value: object, *, fallback: str) -> str:
@@ -68,11 +76,267 @@ def _batch_worker_id(role: str) -> str:
 
 
 def _batch_scheduler_active_enabled_for_creation(general: Any) -> bool:
-    return bool(
-        getattr(general, "embeddings_batch_scheduler_enabled", False)
-        or getattr(general, "embeddings_batch_tenant_fair_share_enabled", False)
-        or getattr(general, "embeddings_batch_size_aware_scheduling_enabled", False)
+    modes = resolve_scheduler_modes_from_settings(general)
+    return bool(modes.active_mode != "fifo_v1" or modes.shadow_mode != "none")
+
+
+def _scheduler_general_settings_changed(changes: dict[str, list[str]]) -> bool:
+    touched = set(changes.get("added", ())) | set(changes.get("removed", ())) | set(
+        changes.get("modified", ())
     )
+    return "general_settings" in touched
+
+
+def _clear_model_capacity_snapshot_cache(resolver: Any) -> None:
+    if resolver is None:
+        return
+    with contextlib.suppress(AttributeError):
+        resolver._snapshot_cache = None
+    with contextlib.suppress(AttributeError):
+        resolver._snapshot_cache_expires_at = 0.0
+
+
+def _build_model_capacity_resolver(
+    *,
+    app: Any,
+    repository: BatchRepository,
+    runtime: "BatchRuntime",
+    config: BatchModelCapacityConfig,
+) -> BatchModelCapacityResolver:
+    resolver = runtime.model_capacity_resolver
+    if resolver is None:
+        return BatchModelCapacityResolver(
+            repository=repository,
+            config=config,
+            router=getattr(app.state, "router", None),
+            router_state_backend=getattr(app.state, "router_state_backend", None),
+            backpressure=runtime.backpressure,
+        )
+    resolver.repository = repository
+    resolver.config = config
+    resolver.router = getattr(app.state, "router", None)
+    resolver.router_state_backend = getattr(app.state, "router_state_backend", None)
+    resolver.backpressure = runtime.backpressure
+    _clear_model_capacity_snapshot_cache(resolver)
+    return resolver
+
+
+def _apply_worker_scheduler_config(
+    config: BatchWorkerConfig,
+    *,
+    general: Any,
+    scheduler_modes: BatchSchedulerModes,
+    model_capacity_config: BatchModelCapacityConfig,
+    tenant_fair_share_config: BatchTenantFairShareConfig,
+    size_aging_config: BatchSizeAgingConfig,
+) -> None:
+    config.scheduler_mode = scheduler_modes.active_mode
+    config.scheduler_shadow_mode = scheduler_modes.shadow_mode
+    config.scheduler_claim_mode = (
+        "work_slice"
+        if scheduler_modes.active_uses_work_slice
+        else general.embeddings_batch_scheduler_claim_mode
+    )
+    config.scheduler_shadow_decision_timeout_seconds = (
+        general.embeddings_batch_scheduler_shadow_decision_timeout_seconds
+    )
+    config.scheduler_shadow_max_pending_decisions = (
+        general.embeddings_batch_scheduler_shadow_max_pending_decisions
+    )
+    config.work_claim_max_items = general.embeddings_batch_work_claim_max_items
+    config.work_claim_max_work_units = general.embeddings_batch_work_claim_max_work_units
+    config.work_claim_min_items_for_microbatch = (
+        general.embeddings_batch_work_claim_min_items_for_microbatch
+    )
+    config.model_capacity_enabled = model_capacity_config.enabled
+    config.scheduler_shadow_enabled = scheduler_modes.shadow_mode != "none"
+    config.tenant_fair_share_enabled = tenant_fair_share_config.enabled
+    config.tenant_fair_share_base_quantum_work_units = (
+        tenant_fair_share_config.base_quantum_work_units
+    )
+    config.tenant_fair_share_max_deficit_multiplier = (
+        tenant_fair_share_config.max_deficit_multiplier
+    )
+    config.tenant_max_in_flight_work_units = tenant_fair_share_config.tenant_max_in_flight_work_units
+    config.tenant_fair_share_max_active_flows_per_decision = (
+        tenant_fair_share_config.max_active_flows_per_decision
+    )
+    config.tenant_fair_share_max_candidate_jobs_per_flow = (
+        tenant_fair_share_config.max_candidate_jobs_per_flow
+    )
+    config.tenant_fair_share_disabled_model_groups = tenant_fair_share_config.disabled_model_groups
+    config.size_aware_scheduling_enabled = size_aging_config.enabled
+    config.aging_seconds_per_work_unit = size_aging_config.aging_seconds_per_work_unit
+    config.max_age_credit_work_units = size_aging_config.max_age_credit_work_units
+    config.min_large_job_claim_interval_seconds = (
+        size_aging_config.min_large_job_claim_interval_seconds
+    )
+    config.small_job_fast_lane_enabled = size_aging_config.small_job_fast_lane_enabled
+    config.small_job_max_work_units = size_aging_config.small_job_max_work_units
+
+
+def _apply_create_session_scheduler_config(
+    *,
+    runtime: "BatchRuntime",
+    app: Any,
+    general: Any,
+    scheduler_modes: BatchSchedulerModes,
+    tenant_fair_share_config: BatchTenantFairShareConfig,
+) -> None:
+    scheduler_enabled = _batch_scheduler_active_enabled_for_creation(general)
+    scheduler_shadow_enabled = scheduler_modes.shadow_mode != "none"
+    strict_model_homogeneity_enabled = getattr(
+        general,
+        "embeddings_batch_scheduler_strict_model_homogeneity_enabled",
+        False,
+    )
+    default_service_tier = getattr(
+        general,
+        "embeddings_batch_scheduler_default_service_tier",
+        "standard",
+    )
+    tenant_scope_preference = tenant_fair_share_config.tenant_scope_preference
+    tenant_max_queued_work_units = getattr(
+        general,
+        "embeddings_batch_tenant_max_queued_work_units",
+        0,
+    )
+    if runtime.create_session_promoter is not None:
+        runtime.create_session_promoter.configure_scheduler(
+            scheduler_enabled=scheduler_enabled,
+            scheduler_shadow_enabled=scheduler_shadow_enabled,
+            scheduler_mode=scheduler_modes.active_mode,
+            scheduler_shadow_mode=scheduler_modes.shadow_mode,
+            strict_model_homogeneity_enabled=strict_model_homogeneity_enabled,
+            default_service_tier=default_service_tier,
+            tenant_scope_preference=tenant_scope_preference,
+            tenant_max_queued_work_units=tenant_max_queued_work_units,
+        )
+    service = getattr(app.state, "batch_create_session_service", None)
+    configure_scheduler = getattr(service, "configure_scheduler", None)
+    if callable(configure_scheduler):
+        configure_scheduler(
+            scheduler_enabled=scheduler_enabled,
+            scheduler_shadow_enabled=scheduler_shadow_enabled,
+            strict_model_homogeneity_enabled=strict_model_homogeneity_enabled,
+            default_service_tier=default_service_tier,
+        )
+
+
+def _apply_live_batch_scheduler_config(
+    *,
+    app: Any,
+    runtime: "BatchRuntime",
+    cfg: Any,
+    repository: BatchRepository,
+) -> BatchSchedulerModes:
+    general = cfg.general_settings
+    scheduler_modes = resolve_scheduler_modes_from_settings(general)
+    model_capacity_config = BatchModelCapacityConfig.from_settings(general)
+    tenant_fair_share_config = BatchTenantFairShareConfig.from_settings(general)
+    size_aging_config = BatchSizeAgingConfig.from_settings(general)
+    set_repository_tenant_scope_preference = getattr(repository, "set_tenant_scope_preference", None)
+    if callable(set_repository_tenant_scope_preference):
+        set_repository_tenant_scope_preference(tenant_fair_share_config.tenant_scope_preference)
+
+    runtime.model_capacity_resolver = (
+        _build_model_capacity_resolver(
+            app=app,
+            repository=repository,
+            runtime=runtime,
+            config=model_capacity_config,
+        )
+        if model_capacity_config.enabled
+        else None
+    )
+    runtime.tenant_fair_share_config = tenant_fair_share_config
+    runtime.size_aging_config = size_aging_config
+    app.state.app_config = cfg
+    app.state.batch_scheduler_modes = scheduler_modes
+    app.state.batch_model_capacity_resolver = runtime.model_capacity_resolver
+    app.state.batch_tenant_fair_share_config = tenant_fair_share_config
+    app.state.batch_size_aging_config = size_aging_config
+    worker = runtime.worker
+    if worker is not None:
+        worker.model_capacity_resolver = runtime.model_capacity_resolver
+        _apply_worker_scheduler_config(
+            worker.config,
+            general=general,
+            scheduler_modes=scheduler_modes,
+            model_capacity_config=model_capacity_config,
+            tenant_fair_share_config=tenant_fair_share_config,
+            size_aging_config=size_aging_config,
+        )
+    _apply_create_session_scheduler_config(
+        runtime=runtime,
+        app=app,
+        general=general,
+        scheduler_modes=scheduler_modes,
+        tenant_fair_share_config=tenant_fair_share_config,
+    )
+    return scheduler_modes
+
+
+async def _record_startup_scheduler_rollbacks(
+    repository: BatchRepository,
+    current: BatchSchedulerModes,
+) -> None:
+    prisma = getattr(repository, "prisma", None)
+    if prisma is None:
+        return
+    payload = json.dumps(
+        {
+            "active_mode": current.active_mode,
+            "shadow_mode": current.shadow_mode,
+        },
+        sort_keys=True,
+    )
+    try:
+        rows = await prisma.query_raw(
+            """
+            SELECT config_value
+            FROM deltallm_config
+            WHERE config_name = $1
+            LIMIT 1
+            """,
+            _BATCH_SCHEDULER_MODE_STATE_KEY,
+        )
+        if rows:
+            previous_payload = rows[0].get("config_value")
+            try:
+                if isinstance(previous_payload, str):
+                    previous_data = json.loads(previous_payload)
+                elif isinstance(previous_payload, dict):
+                    previous_data = previous_payload
+                else:
+                    previous_data = {}
+            except json.JSONDecodeError:
+                previous_data = {}
+            previous_modes = BatchSchedulerModes(
+                active_mode=normalize_scheduler_mode(previous_data.get("active_mode", "fifo_v1")),
+                shadow_mode=normalize_scheduler_shadow_mode(previous_data.get("shadow_mode", "none")),
+            )
+            for event in scheduler_rollback_events(previous=previous_modes, current=current):
+                increment_batch_scheduler_rollback(
+                    from_mode=event.from_mode,
+                    to_mode=event.to_mode,
+                    reason=event.reason,
+                )
+        await prisma.execute_raw(
+            """
+            INSERT INTO deltallm_config (config_name, config_value, updated_by, updated_at)
+            VALUES ($1, $2, $3, NOW())
+            ON CONFLICT (config_name) DO UPDATE
+            SET config_value = EXCLUDED.config_value,
+                updated_by = EXCLUDED.updated_by,
+                updated_at = NOW()
+            """,
+            _BATCH_SCHEDULER_MODE_STATE_KEY,
+            payload,
+            "batch_runtime",
+        )
+    except Exception:
+        logger.debug("batch scheduler rollback state update failed", exc_info=True)
 
 
 @dataclass
@@ -80,6 +344,7 @@ class BatchRuntime:
     backpressure: BatchBackpressureCoordinator | None = None
     model_capacity_resolver: BatchModelCapacityResolver | None = None
     tenant_fair_share_config: BatchTenantFairShareConfig | None = None
+    size_aging_config: BatchSizeAgingConfig | None = None
     worker: BatchExecutorWorker | None = None
     worker_task: Task[None] | None = None
     completion_outbox_worker: BatchCompletionOutboxWorker | None = None
@@ -196,6 +461,7 @@ def _build_create_session_promoter(
     model_group_resolver: Any | None = None,
 ) -> BatchCreateSessionPromoter:
     general = cfg.general_settings
+    scheduler_modes = resolve_scheduler_modes_from_settings(general)
     return BatchCreateSessionPromoter(
         repository=repository,
         staging=staging_backend,
@@ -207,7 +473,9 @@ def _build_create_session_promoter(
         tx_timeout_seconds=general.embeddings_batch_create_promotion_tx_timeout_seconds,
         model_group_resolver=model_group_resolver,
         scheduler_enabled=_batch_scheduler_active_enabled_for_creation(general),
-        scheduler_shadow_enabled=getattr(general, "embeddings_batch_scheduler_shadow_enabled", False),
+        scheduler_shadow_enabled=scheduler_modes.shadow_mode != "none",
+        scheduler_mode=scheduler_modes.active_mode,
+        scheduler_shadow_mode=scheduler_modes.shadow_mode,
         strict_model_homogeneity_enabled=getattr(
             general,
             "embeddings_batch_scheduler_strict_model_homogeneity_enabled",
@@ -225,6 +493,7 @@ def _build_create_session_promoter(
 
 async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) -> BatchRuntime:
     runtime = BatchRuntime()
+    app.state.batch_runtime = runtime
 
     if not cfg.general_settings.embeddings_batch_enabled:
         app.state.batch_storage = None
@@ -240,6 +509,8 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         app.state.batch_backpressure = None
         app.state.batch_model_capacity_resolver = None
         app.state.batch_tenant_fair_share_config = None
+        app.state.batch_size_aging_config = None
+        app.state.batch_scheduler_modes = resolve_scheduler_modes_from_settings(cfg.general_settings)
         runtime.statuses = (BootstrapStatus("embeddings_batch", "disabled"),)
         return runtime
 
@@ -265,6 +536,8 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         max_delay_seconds=cfg.general_settings.embeddings_batch_model_group_backpressure_max_seconds,
     )
     app.state.batch_backpressure = runtime.backpressure
+    scheduler_modes = resolve_scheduler_modes_from_settings(cfg.general_settings)
+    await _record_startup_scheduler_rollbacks(repository, scheduler_modes)
     model_capacity_config = BatchModelCapacityConfig.from_settings(cfg.general_settings)
     tenant_fair_share_config = BatchTenantFairShareConfig.from_settings(cfg.general_settings)
     size_aging_config = BatchSizeAgingConfig.from_settings(cfg.general_settings)
@@ -272,6 +545,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
     if callable(set_repository_tenant_scope_preference):
         set_repository_tenant_scope_preference(tenant_fair_share_config.tenant_scope_preference)
     runtime.tenant_fair_share_config = tenant_fair_share_config
+    runtime.size_aging_config = size_aging_config
     if model_capacity_config.enabled:
         runtime.model_capacity_resolver = BatchModelCapacityResolver(
             repository=repository,
@@ -283,6 +557,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
     app.state.batch_model_capacity_resolver = runtime.model_capacity_resolver
     app.state.batch_tenant_fair_share_config = tenant_fair_share_config
     app.state.batch_size_aging_config = size_aging_config
+    app.state.batch_scheduler_modes = scheduler_modes
     app.state.batch_service = BatchService(
         repository=repository,
         storage=batch_storage,
@@ -323,22 +598,36 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
                 item_buffer_multiplier=cfg.general_settings.embeddings_batch_item_buffer_multiplier,
                 finalization_page_size=cfg.general_settings.embeddings_batch_finalization_page_size,
                 item_claim_limit=cfg.general_settings.embeddings_batch_item_claim_limit,
-                scheduler_claim_mode=cfg.general_settings.embeddings_batch_scheduler_claim_mode,
+                scheduler_mode=scheduler_modes.active_mode,
+                scheduler_shadow_mode=scheduler_modes.shadow_mode,
+                scheduler_claim_mode=(
+                    "work_slice"
+                    if scheduler_modes.active_uses_work_slice
+                    else cfg.general_settings.embeddings_batch_scheduler_claim_mode
+                ),
+                scheduler_shadow_decision_timeout_seconds=(
+                    cfg.general_settings.embeddings_batch_scheduler_shadow_decision_timeout_seconds
+                ),
+                scheduler_shadow_max_pending_decisions=(
+                    cfg.general_settings.embeddings_batch_scheduler_shadow_max_pending_decisions
+                ),
                 work_claim_max_items=cfg.general_settings.embeddings_batch_work_claim_max_items,
                 work_claim_max_work_units=cfg.general_settings.embeddings_batch_work_claim_max_work_units,
                 work_claim_min_items_for_microbatch=(
                     cfg.general_settings.embeddings_batch_work_claim_min_items_for_microbatch
                 ),
                 model_capacity_enabled=model_capacity_config.enabled,
-                scheduler_shadow_enabled=getattr(
-                    cfg.general_settings,
-                    "embeddings_batch_scheduler_shadow_enabled",
-                    False,
-                ),
+                scheduler_shadow_enabled=scheduler_modes.shadow_mode != "none",
                 tenant_fair_share_enabled=tenant_fair_share_config.enabled,
                 tenant_fair_share_base_quantum_work_units=tenant_fair_share_config.base_quantum_work_units,
                 tenant_fair_share_max_deficit_multiplier=tenant_fair_share_config.max_deficit_multiplier,
                 tenant_max_in_flight_work_units=tenant_fair_share_config.tenant_max_in_flight_work_units,
+                tenant_fair_share_max_active_flows_per_decision=(
+                    tenant_fair_share_config.max_active_flows_per_decision
+                ),
+                tenant_fair_share_max_candidate_jobs_per_flow=(
+                    tenant_fair_share_config.max_candidate_jobs_per_flow
+                ),
                 tenant_fair_share_disabled_model_groups=tenant_fair_share_config.disabled_model_groups,
                 size_aware_scheduling_enabled=size_aging_config.enabled,
                 aging_seconds_per_work_unit=size_aging_config.aging_seconds_per_work_unit,
@@ -457,7 +746,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         idempotency_enabled=cfg.general_settings.embeddings_batch_create_idempotency_enabled,
         model_group_resolver=model_group_resolver,
         scheduler_enabled=_batch_scheduler_active_enabled_for_creation(cfg.general_settings),
-        scheduler_shadow_enabled=getattr(cfg.general_settings, "embeddings_batch_scheduler_shadow_enabled", False),
+        scheduler_shadow_enabled=scheduler_modes.shadow_mode != "none",
         strict_model_homogeneity_enabled=getattr(
             cfg.general_settings,
             "embeddings_batch_scheduler_strict_model_homogeneity_enabled",
@@ -466,6 +755,21 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         default_service_tier=getattr(cfg.general_settings, "embeddings_batch_scheduler_default_service_tier", "standard"),
     )
     app.state.batch_service.bind_create_session_service(app.state.batch_create_session_service)
+
+    dynamic_config_manager = getattr(app.state, "dynamic_config_manager", None)
+    subscribe = getattr(dynamic_config_manager, "subscribe", None)
+    if callable(subscribe):
+        async def _on_batch_config_change(new_config: Any, changes: dict[str, list[str]]) -> None:
+            if not _scheduler_general_settings_changed(changes):
+                return
+            _apply_live_batch_scheduler_config(
+                app=app,
+                runtime=runtime,
+                cfg=new_config,
+                repository=repository,
+            )
+
+        subscribe(_on_batch_config_change)
 
     if cfg.general_settings.embeddings_batch_create_session_cleanup_enabled:
         assert runtime.create_session_staging_backend is not None

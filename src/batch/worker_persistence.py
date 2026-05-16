@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from datetime import UTC, datetime
 import logging
-from typing import Any
+from typing import Any, Awaitable
 
 from src.batch.endpoints import batch_call_type_for_endpoint
 from src.batch.policy import acquire_batch_policy_lease, release_batch_policy_lease
-from src.batch.worker_types import _PreparedChatItem, _PreparedEmbeddingItem
+from src.batch.worker_types import BatchItemLeaseLostError, _PreparedChatItem, _PreparedEmbeddingItem
 from src.billing.cost import ModelPricing
 
 logger = logging.getLogger(__name__)
@@ -56,12 +58,13 @@ class WorkerPersistenceMixin:
         for prepared in prepared_items:
             await self._release_prepared_policy_lease(prepared)
 
-    async def _renew_item_lease_once(self, item_id: str) -> bool:
+    async def _renew_item_lease_once(self, item_id: str, *, claim_epoch: int | None = None) -> bool:
         try:
             return await self.repository.renew_item_lease(
                 item_id=item_id,
                 worker_id=self.config.worker_id,
                 lease_seconds=self.config.item_lease_seconds,
+                claim_epoch=claim_epoch,
             )
         except Exception as exc:
             logger.warning(
@@ -71,6 +74,38 @@ class WorkerPersistenceMixin:
                 exc_info=True,
             )
             return False
+
+    async def _await_with_lease_loss_cancellation(
+        self,
+        awaitable: Awaitable[Any],
+        *,
+        lease_lost_event: asyncio.Event,
+        label: str,
+    ) -> Any:
+        if lease_lost_event.is_set():
+            raise BatchItemLeaseLostError(f"batch item lease lost before provider call target={label}")
+
+        provider_task = asyncio.ensure_future(awaitable)
+        lease_task = asyncio.create_task(lease_lost_event.wait())
+        try:
+            await asyncio.wait(
+                {provider_task, lease_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if lease_lost_event.is_set():
+                provider_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await provider_task
+                raise BatchItemLeaseLostError(
+                    f"batch item lease lost during provider call target={label}"
+                )
+            return await provider_task
+        finally:
+            lease_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await lease_task
+            if not provider_task.done():
+                provider_task.cancel()
 
     def _build_completion_outbox_payload(
         self,
@@ -152,6 +187,11 @@ class WorkerPersistenceMixin:
             requeued_item_ids = await self.repository.release_items_for_retry(
                 item_ids=item_ids,
                 worker_id=self.config.worker_id,
+                item_claim_epochs={
+                    str(item["item_id"]): int(item["claim_epoch"])
+                    for item in items
+                    if item.get("claim_epoch") is not None
+                },
             )
         except Exception as exc:
             logger.warning(

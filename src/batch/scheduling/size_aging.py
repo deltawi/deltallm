@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from src.batch.scheduling.modes import resolve_scheduler_modes_from_settings
+
 DEFAULT_AGING_SECONDS_PER_WORK_UNIT = 30
 DEFAULT_MAX_AGE_CREDIT_WORK_UNITS = 1_000
 DEFAULT_MIN_LARGE_JOB_CLAIM_INTERVAL_SECONDS = 30
@@ -22,9 +24,18 @@ class BatchSizeAgingConfig:
 
     @classmethod
     def from_settings(cls, settings: Any) -> "BatchSizeAgingConfig":
+        scheduler_modes = resolve_scheduler_modes_from_settings(settings)
+        explicit_mode_control = (
+            "embeddings_batch_scheduler_mode" in getattr(settings, "model_fields_set", set())
+            or "embeddings_batch_scheduler_shadow_mode" in getattr(settings, "model_fields_set", set())
+        )
+        mode_enabled = scheduler_modes.active_uses_size_aware or scheduler_modes.shadow_uses_size_aware
         return cls(
-            enabled=bool(
-                getattr(settings, "embeddings_batch_size_aware_scheduling_enabled", False)
+            enabled=(
+                mode_enabled
+                if explicit_mode_control
+                else bool(getattr(settings, "embeddings_batch_size_aware_scheduling_enabled", False))
+                or mode_enabled
             ),
             aging_seconds_per_work_unit=max(
                 1,

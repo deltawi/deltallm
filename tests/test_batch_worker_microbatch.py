@@ -1842,7 +1842,13 @@ async def test_worker_salvages_grouped_chunk_when_bulk_completion_fails_without_
     assert len(failover.calls) == 1
     assert len(repo.completed_bulk_calls) == 2
     assert repo.completed_calls == []
-    assert repo.release_for_retry_calls == [{"item_ids": ["i1", "i2"], "worker_id": "w1"}]
+    assert repo.release_for_retry_calls == [
+        {
+            "item_ids": ["i1", "i2"],
+            "worker_id": "w1",
+            "item_claim_epochs": {"i1": 0, "i2": 0},
+        }
+    ]
     assert repo.failed_calls == []
     assert passive_health.calls == [("dep-1", True, None)]
     assert router_state_backend.calls == [("dep-1", {"rpm": 1, "tpm": 10})]

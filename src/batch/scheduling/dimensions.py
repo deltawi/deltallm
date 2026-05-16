@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol, Sequence
 
 from src.batch.scheduling.estimator import size_class_for_work_units
+from src.batch.scheduling.modes import scheduler_version_for_modes
 
 API_KEY_TENANT_SCOPE_PREFIX = "api_key_sha256:"
 DEFAULT_SCHEDULER_VERSION = "fifo_v1"
@@ -50,7 +51,18 @@ def normalize_service_tier(value: object, *, default: str = DEFAULT_SERVICE_TIER
     return normalized or default
 
 
-def resolve_scheduler_version(*, active_enabled: bool = False, shadow_enabled: bool = False) -> str:
+def resolve_scheduler_version(
+    *,
+    active_enabled: bool = False,
+    shadow_enabled: bool = False,
+    active_mode: str | None = None,
+    shadow_mode: str | None = None,
+) -> str:
+    if active_mode is not None or shadow_mode is not None:
+        return scheduler_version_for_modes(
+            active_mode=active_mode or DEFAULT_SCHEDULER_VERSION,
+            shadow_mode=shadow_mode or "none",
+        )
     if active_enabled:
         return "scheduler_v2"
     if shadow_enabled:

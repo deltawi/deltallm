@@ -1042,6 +1042,7 @@ model DeltaLLM_BatchItem {
   provider_cost      Float    @default(0)
   billed_cost        Float    @default(0)
   attempts           Int      @default(0)
+  claim_epoch        Int      @default(0)
   last_error         String?
   locked_by          String?
   lease_expires_at   DateTime?

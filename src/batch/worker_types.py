@@ -11,6 +11,10 @@ class BatchArtifactValidationError(ValueError):
     """Raised when a completed batch artifact payload cannot be safely exposed."""
 
 
+class BatchItemLeaseLostError(RuntimeError):
+    """Raised when an item execution loses its DB lease before persistence."""
+
+
 @dataclass
 class BatchWorkerConfig:
     worker_id: str
@@ -23,7 +27,24 @@ class BatchWorkerConfig:
     item_buffer_multiplier: int = 2
     finalization_page_size: int = 500
     item_claim_limit: int = 20
+    scheduler_mode: Literal[
+        "fifo_v1",
+        "slice_v1",
+        "model_capacity_v1",
+        "fair_share_v1",
+        "smart_v1",
+    ] | None = None
+    scheduler_shadow_mode: Literal[
+        "none",
+        "fifo_v1",
+        "slice_v1",
+        "model_capacity_v1",
+        "fair_share_v1",
+        "smart_v1",
+    ] | None = None
     scheduler_claim_mode: Literal["job_fifo", "work_slice"] = "job_fifo"
+    scheduler_shadow_decision_timeout_seconds: float = 0.5
+    scheduler_shadow_max_pending_decisions: int = 16
     work_claim_max_items: int = 0
     work_claim_max_work_units: int = 0
     work_claim_min_items_for_microbatch: int = 4
@@ -33,6 +54,8 @@ class BatchWorkerConfig:
     tenant_fair_share_base_quantum_work_units: int = 16
     tenant_fair_share_max_deficit_multiplier: int = 8
     tenant_max_in_flight_work_units: int = 0
+    tenant_fair_share_max_active_flows_per_decision: int = 100
+    tenant_fair_share_max_candidate_jobs_per_flow: int = 50
     tenant_fair_share_disabled_model_groups: tuple[str, ...] = ()
     size_aware_scheduling_enabled: bool = False
     aging_seconds_per_work_unit: int = 30

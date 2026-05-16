@@ -2240,6 +2240,74 @@ async def test_db_backed_batch_create_session_admin_scope_blocks_other_team(
 
 
 @pytest.mark.asyncio
+async def test_db_backed_model_group_backlog_counts_only_runnable_item_work(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    now = datetime.now(tz=UTC)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+        service_tier="standard",
+        estimated_work_units=21,
+        remaining_work_units=21,
+        queue_entered_at=now,
+    )
+    assert job is not None
+    inserted = await repository.create_items(
+        job.batch_id,
+        [
+            BatchItemCreate(
+                line_number=1,
+                custom_id="runnable",
+                request_body={"model": "m1", "input": "a"},
+                estimated_work_units=3,
+            ),
+            BatchItemCreate(
+                line_number=2,
+                custom_id="leased",
+                request_body={"model": "m1", "input": "b"},
+                estimated_work_units=7,
+            ),
+            BatchItemCreate(
+                line_number=3,
+                custom_id="future",
+                request_body={"model": "m1", "input": "c"},
+                estimated_work_units=11,
+                not_before_at=now + timedelta(minutes=5),
+            ),
+        ],
+    )
+    assert inserted == 3
+    await repository.set_job_queued(job.batch_id, inserted)
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_item
+        SET lease_expires_at = NOW() + INTERVAL '5 minutes'
+        WHERE batch_id = $1 AND custom_id = $2
+        """,
+        job.batch_id,
+        "leased",
+    )
+
+    records = await repository.list_model_group_backlog()
+
+    record = next(
+        row
+        for row in records
+        if row.model_group == "m1" and row.service_tier == "standard" and row.size_class == "s"
+    )
+    assert record.queued_jobs == 1
+    assert record.queued_work_units == 3
+    assert record.oldest_queue_entered_at is not None
+
+
+@pytest.mark.asyncio
 async def test_db_backed_claim_items_are_disjoint_under_contention(batch_db) -> None:
     repository = BatchRepository(batch_db)
     input_file_id = await _seed_batch_file(repository)
@@ -4178,6 +4246,110 @@ async def test_db_backed_expired_item_can_be_reclaimed_after_crash(batch_db) -> 
     assert refreshed is not None
     assert refreshed.completed_items == 1
     assert refreshed.status == "finalizing"
+
+
+@pytest.mark.asyncio
+async def test_db_backed_item_claim_epoch_fences_stale_completion_and_retry(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert job is not None
+    inserted = await repository.create_items(
+        job.batch_id,
+        [BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"})],
+    )
+    assert inserted == 1
+    await repository.set_job_queued(job.batch_id, inserted)
+
+    first_claim = await repository.claim_items(
+        batch_id=job.batch_id,
+        worker_id="w1",
+        limit=1,
+        lease_seconds=120,
+    )
+    assert len(first_claim) == 1
+    item_id = first_claim[0].item_id
+    first_epoch = first_claim[0].claim_epoch
+    assert first_epoch > 0
+
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_item
+        SET lease_expires_at = NOW() - INTERVAL '1 second'
+        WHERE item_id = $1
+        """,
+        item_id,
+    )
+
+    second_claim = await repository.claim_items(
+        batch_id=job.batch_id,
+        worker_id="w1",
+        limit=1,
+        lease_seconds=120,
+    )
+    assert [item.item_id for item in second_claim] == [item_id]
+    second_epoch = second_claim[0].claim_epoch
+    assert second_epoch == first_epoch + 1
+
+    assert await repository.release_items_for_retry(
+        item_ids=[item_id],
+        worker_id="w1",
+        item_claim_epochs={item_id: first_epoch},
+    ) == []
+
+    stale_completed = await repository.mark_items_completed_bulk(
+        items=[
+            {
+                "item_id": item_id,
+                "claim_epoch": first_epoch,
+                "response_body": {"object": "list", "data": [{"index": 0, "embedding": [0.1]}]},
+                "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
+                "provider_cost": 0.01,
+                "billed_cost": 0.01,
+            }
+        ],
+        worker_id="w1",
+    )
+    assert stale_completed is False
+
+    current_completed = await repository.mark_items_completed_bulk(
+        items=[
+            {
+                "item_id": item_id,
+                "claim_epoch": second_epoch,
+                "response_body": {"object": "list", "data": [{"index": 0, "embedding": [0.2]}]},
+                "usage": {"prompt_tokens": 2, "completion_tokens": 0, "total_tokens": 2},
+                "provider_cost": 0.02,
+                "billed_cost": 0.02,
+            }
+        ],
+        worker_id="w1",
+    )
+    assert current_completed is True
+
+    rows = await batch_db.query_raw(
+        """
+        SELECT status, locked_by, claim_epoch, response_body
+        FROM deltallm_batch_item
+        WHERE item_id = $1
+        """,
+        item_id,
+    )
+    assert len(rows) == 1
+    row = dict(rows[0])
+    assert row["status"] == "completed"
+    assert row["locked_by"] is None
+    assert row["claim_epoch"] == second_epoch
+    assert row["response_body"]["data"][0]["embedding"] == [0.2]
 
 
 @pytest.mark.asyncio

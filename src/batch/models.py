@@ -176,6 +176,7 @@ class BatchItemRecord:
     estimated_work_units: int = 1
     not_before_at: datetime | None = None
     last_scheduled_at: datetime | None = None
+    claim_epoch: int = 0
 
 
 @dataclass
@@ -191,6 +192,20 @@ class BatchWorkClaim:
     item_ids: list[str]
     claimed_work_units: int
     lease_expires_at: datetime
+
+
+@dataclass
+class BatchWorkRecommendation:
+    batch_id: str
+    endpoint: str
+    model_group: str | None
+    tenant_scope_type: str | None
+    tenant_scope_id: str | None
+    service_tier: str
+    size_class: str | None
+    item_count: int
+    work_units: int
+    reason: str
 
 
 @dataclass

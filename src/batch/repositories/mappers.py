@@ -137,4 +137,5 @@ def item_from_row(row: dict[str, Any]) -> BatchItemRecord:
         estimated_work_units=int(row.get("estimated_work_units") or 1),
         not_before_at=parse_datetime(row.get("not_before_at")),
         last_scheduled_at=parse_datetime(row.get("last_scheduled_at")),
+        claim_epoch=int(row.get("claim_epoch") or 0),
     )

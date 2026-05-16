@@ -16,6 +16,7 @@ from src.batch.models import (
     BatchWorkClaim,
 )
 from src.batch.repository import BatchRepository
+from src.batch.repositories.item_repository import BatchItemRepository
 from src.batch.repositories.job_repository import BatchJobRepository, flow_from_row
 from src.batch.repositories.mappers import job_from_row
 from src.batch.repositories import job_repository as job_repository_module
@@ -40,6 +41,28 @@ class _PrismaSpy:
         self.queries.append(sql)
         self.calls.append((sql, params))
         return []
+
+
+@pytest.mark.asyncio
+async def test_bulk_item_completion_requires_worker_owner() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchItemRepository(prisma)
+
+    updated = await repository.mark_items_completed_bulk(
+        items=[
+            {
+                "item_id": "item-1",
+                "response_body": {"ok": True},
+                "usage": {},
+                "provider_cost": 0.0,
+                "billed_cost": 0.0,
+            }
+        ],
+        worker_id=None,
+    )
+
+    assert updated is False
+    assert prisma.calls == []
 
 
 def _job_row(**overrides):
@@ -229,6 +252,58 @@ async def test_claim_next_work_uses_item_slice_claim_shape() -> None:
 
 
 @pytest.mark.asyncio
+async def test_recommend_next_work_uses_read_only_shadow_query() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    recommendation = await repository.recommend_next_work(
+        max_items=4,
+        max_work_units=9,
+        allowed_model_groups=["model-a"],
+        service_tier="standard",
+        claim_order="fifo",
+        capacity_model_group="model-a",
+        capacity_service_tier="standard",
+        capacity_max_in_flight_items=8,
+        capacity_max_in_flight_work_units=24,
+        allow_oversized_first_item=False,
+        reason="model_capacity_v1",
+    )
+
+    assert recommendation is None
+    assert "WITH" in prisma.sql
+    assert "selected_job AS" in prisma.sql
+    assert "capacity_state AS" in prisma.sql
+    assert "ORDER BY COALESCE(j.queue_entered_at, j.created_at) ASC" in prisma.sql
+    assert (
+        "head_item.estimated_work_units <= LEAST($2, "
+        "(SELECT remaining_work_units FROM capacity_state))"
+    ) in prisma.sql
+    assert "UPDATE " not in prisma.sql
+    assert "FOR UPDATE" not in prisma.sql
+    assert "FOR KEY SHARE" not in prisma.sql
+    assert "locked_by = $" not in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_recommend_next_work_fifo_shadow_does_not_apply_legacy_filter() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    recommendation = await repository.recommend_next_work(
+        max_items=4,
+        max_work_units=9,
+        claim_order="fifo",
+        reason="fifo_v1",
+    )
+
+    assert recommendation is None
+    assert "ORDER BY COALESCE(j.queue_entered_at, j.created_at) ASC" in prisma.sql
+    assert "COALESCE(NULLIF(j.scheduler_version, ''), 'fifo_v1') = 'fifo_v1'" not in prisma.sql
+    assert "j.scheduling_model_group IS NULL OR j.scheduling_model_group = ''" not in prisma.sql
+
+
+@pytest.mark.asyncio
 async def test_claim_next_work_can_filter_selected_model_group_and_service_tier() -> None:
     prisma = _PrismaSpy()
     repository = BatchRepository(prisma_client=prisma)
@@ -361,6 +436,35 @@ async def test_claim_next_work_capacity_guard_rechecks_in_flight_under_model_loc
     assert claim_params[7] == "standard"
     assert claim_params[8] == 2
     assert claim_params[9] == 30
+
+
+@pytest.mark.asyncio
+async def test_model_capacity_lock_uses_execute_raw_to_avoid_void_deserialization() -> None:
+    class _ExecPrisma:
+        def __init__(self) -> None:
+            self.execute_sql = ""
+            self.execute_params: tuple[object, ...] = ()
+
+        async def execute_raw(self, sql: str, *params):
+            self.execute_sql = sql
+            self.execute_params = params
+            return 0
+
+        async def query_raw(self, sql: str, *params):  # pragma: no cover
+            del sql, params
+            raise AssertionError("blocking advisory lock should not be read through query_raw")
+
+    prisma = _ExecPrisma()
+    repository = BatchJobRepository()
+
+    await repository._acquire_model_capacity_lock(
+        prisma,
+        model_group="model-a",
+        service_tier="standard",
+    )
+
+    assert "pg_advisory_xact_lock" in prisma.execute_sql
+    assert prisma.execute_params == ("model-a", "standard")
 
 
 @pytest.mark.asyncio
@@ -636,6 +740,26 @@ def test_scheduler_flow_admin_response_includes_skip_reason_summary() -> None:
     assert response["skip_reason_summary"] == {"tenant_in_flight_full": 2}
 
 
+def test_scheduler_flow_admin_response_includes_next_candidate_fields() -> None:
+    flow = _scheduler_flow(
+        next_item_work_units=3,
+        next_batch_id="batch-live",
+        next_size_class="xs",
+        next_scheduler_rank=1.25,
+        next_age_credit_work_units=4,
+        next_policy_reason="aging_credit",
+    )
+
+    response = _scheduler_flow_response(flow)
+
+    assert response["next_item_work_units"] == 3
+    assert response["next_batch_id"] == "batch-live"
+    assert response["next_size_class"] == "xs"
+    assert response["next_scheduler_rank"] == 1.25
+    assert response["next_age_credit_work_units"] == 4
+    assert response["next_policy_reason"] == "aging_credit"
+
+
 def test_scheduler_policy_fields_compute_live_rank_without_debug() -> None:
     fields = _scheduler_policy_fields(
         {
@@ -701,6 +825,26 @@ def test_scheduler_flow_admin_response_redacts_non_api_key_tenant_ids(
 
 
 @pytest.mark.asyncio
+async def test_list_scheduler_flows_applies_optional_bounded_limit() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma_client=prisma)
+
+    flows = await repository.list_scheduler_flows(
+        service_tier="standard",
+        model_group="m1",
+        tenant_scope_type="team",
+        active=True,
+        limit=5_000,
+    )
+
+    assert flows == []
+    assert "WHERE service_tier = $1 AND model_group = $2 AND tenant_scope_type = $3 AND active = $4" in prisma.sql
+    assert "ORDER BY service_tier ASC" in prisma.sql
+    assert "LIMIT $5" in prisma.sql
+    assert prisma.params == ("standard", "m1", "team", True, 1000)
+
+
+@pytest.mark.asyncio
 async def test_refresh_scheduler_flows_upserts_durable_flow_state() -> None:
     now = datetime.now(tz=UTC)
 
@@ -710,7 +854,7 @@ async def test_refresh_scheduler_flows_upserts_durable_flow_state() -> None:
 
         async def query_raw(self, sql: str, *params):
             self.calls.append((sql, params))
-            if "WITH runnable_jobs AS" in sql:
+            if "WITH base_jobs AS" in sql:
                 return [
                     {
                         "service_tier": "standard",
@@ -767,8 +911,13 @@ async def test_refresh_scheduler_flows_upserts_durable_flow_state() -> None:
     assert flow.in_flight_work_units == 3
     assert flow.quantum_work_units == 16
     refresh_sql = prisma.calls[0][0]
-    assert "SUM(runnable_work_units)" in refresh_sql
-    assert "j.remaining_work_units" not in refresh_sql
+    assert "runnable_job_backlog AS" in refresh_sql
+    assert "SUM(GREATEST(COALESCE(i.estimated_work_units, 1), 1))" in refresh_sql
+    assert "SUM(remaining_work_units)" in refresh_sql
+    assert "FROM base_jobs" in refresh_sql
+    assert "FROM flow_jobs" in refresh_sql
+    assert "FROM candidate_seed_jobs c" in refresh_sql
+    assert refresh_sql.index("candidate_seed_jobs AS") < refresh_sql.index("JOIN LATERAL")
     assert "ON CONFLICT" in prisma.calls[1][0]
     assert "weight = GREATEST(deltallm_batch_scheduler_flow.weight, 1)" in prisma.calls[1][0]
     assert (
@@ -799,7 +948,7 @@ async def test_refresh_scheduler_flows_uses_size_aware_candidate_order() -> None
     assert "large_job_progress_floor DESC" in refresh_sql
     assert "scheduler_rank ASC" in refresh_sql
     assert "GREATEST(0.0" in refresh_sql
-    assert refresh_params == ("model-a", "standard", 15, 200, 45, 50)
+    assert refresh_params == ("model-a", "standard", 50, 15, 200, 45, 50)
 
 
 @pytest.mark.asyncio
@@ -814,7 +963,7 @@ async def test_refresh_scheduler_flows_normalizes_legacy_api_key_scope_ids() -> 
 
         async def query_raw(self, sql: str, *params):
             self.calls.append((sql, params))
-            if "WITH runnable_jobs AS" in sql:
+            if "WITH base_jobs AS" in sql:
                 return [
                     {
                         "service_tier": "standard",
@@ -898,6 +1047,91 @@ async def test_refresh_scheduler_flows_normalizes_legacy_api_key_scope_ids() -> 
 
 
 @pytest.mark.asyncio
+async def test_preview_scheduler_flows_reads_live_state_without_writes() -> None:
+    now = datetime.now(tz=UTC)
+
+    class _PreviewFlowPrisma:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def query_raw(self, sql: str, *params):
+            self.calls.append((sql, params))
+            normalized_sql = " ".join(sql.split())
+            assert "INSERT INTO" not in normalized_sql
+            assert "UPDATE " not in normalized_sql
+            assert "pg_try_advisory_xact_lock" not in normalized_sql
+            if "WITH base_jobs AS" in sql:
+                return [
+                    {
+                        "service_tier": "standard",
+                        "model_group": "model-a",
+                        "tenant_scope_type": "team",
+                        "tenant_scope_id": "team-1",
+                        "queued_jobs": 2,
+                        "queued_work_units": 7,
+                        "in_flight_work_units": 3,
+                        "oldest_queue_entered_at": now,
+                        "next_item_work_units": 2,
+                        "next_batch_id": "batch-live",
+                        "next_size_class": "xs",
+                        "next_scheduler_rank": 1.25,
+                        "next_age_credit_work_units": 2,
+                        "next_policy_reason": "aging_credit",
+                    }
+                ]
+            if "FROM deltallm_batch_scheduler_flow" in sql:
+                return [
+                    {
+                        "flow_id": "durable-flow",
+                        "service_tier": "standard",
+                        "model_group": "model-a",
+                        "tenant_scope_type": "team",
+                        "tenant_scope_id": "team-1",
+                        "weight": 4,
+                        "quantum_work_units": 64,
+                        "deficit_work_units": 20,
+                        "active": True,
+                        "queued_jobs": 99,
+                        "queued_work_units": 99,
+                        "in_flight_work_units": 99,
+                        "skip_reason_summary": {"insufficient_deficit": 1},
+                        "last_selected_at": now - timedelta(seconds=30),
+                        "last_refilled_at": now - timedelta(seconds=60),
+                        "created_at": now - timedelta(minutes=5),
+                        "updated_at": now - timedelta(minutes=1),
+                        "oldest_queue_entered_at": None,
+                        "next_item_work_units": 1,
+                    }
+                ]
+            return []
+
+    prisma = _PreviewFlowPrisma()
+    repository = BatchJobRepository(prisma)
+
+    flows = await repository.preview_scheduler_flows(
+        service_tier="standard",
+        model_group="model-a",
+        base_quantum_work_units=16,
+        max_deficit_multiplier=8,
+        size_aware_scheduling_enabled=True,
+    )
+
+    assert len(flows) == 1
+    flow = flows[0]
+    assert flow.flow_id == "durable-flow"
+    assert flow.weight == 4
+    assert flow.quantum_work_units == 64
+    assert flow.deficit_work_units == 20
+    assert flow.queued_jobs == 2
+    assert flow.queued_work_units == 7
+    assert flow.in_flight_work_units == 3
+    assert flow.next_batch_id == "batch-live"
+    assert flow.next_policy_reason == "aging_credit"
+    assert flow.skip_reasons == {"insufficient_deficit": 1}
+    assert len(prisma.calls) == 2
+
+
+@pytest.mark.asyncio
 async def test_refresh_scheduler_flows_preserves_existing_weight_for_quantum() -> None:
     now = datetime.now(tz=UTC)
 
@@ -907,7 +1141,7 @@ async def test_refresh_scheduler_flows_preserves_existing_weight_for_quantum() -
 
         async def query_raw(self, sql: str, *params):
             self.calls.append((sql, params))
-            if "WITH runnable_jobs AS" in sql:
+            if "WITH base_jobs AS" in sql:
                 return [
                     {
                         "service_tier": "standard",
@@ -1124,6 +1358,111 @@ async def test_get_tenant_queued_work_units_requires_raw_key_for_stable_api_key_
         )
 
     assert prisma.calls == []
+
+
+@pytest.mark.asyncio
+async def test_scheduler_flow_refresh_snapshot_bounds_candidate_jobs_per_flow() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchJobRepository()
+
+    snapshot = await repository._load_scheduler_flow_refresh_snapshot(
+        prisma,
+        service_tier="standard",
+        model_group="model-a",
+        max_candidate_jobs_per_flow=7,
+    )
+
+    assert snapshot.aggregates == ()
+    assert "queued AS" in prisma.sql
+    assert "runnable_job_backlog AS" in prisma.sql
+    assert "flow_jobs AS" in prisma.sql
+    assert "SUM(GREATEST(COALESCE(i.estimated_work_units, 1), 1))" in prisma.sql
+    assert "SUM(remaining_work_units)" in prisma.sql
+    assert "ranked_candidate_seed_jobs AS" in prisma.sql
+    assert "candidate_seed_jobs AS" in prisma.sql
+    assert "candidate_jobs AS" in prisma.sql
+    assert "ROW_NUMBER() OVER" in prisma.sql
+    assert "flow_candidate_rank <= $3::int" in prisma.sql
+    assert prisma.sql.index("candidate_seed_jobs AS") < prisma.sql.index("JOIN LATERAL")
+    assert prisma.params == ("model-a", "standard", 7)
+
+
+def test_scheduler_flow_selection_reports_scan_limit_when_bound_hides_candidates() -> None:
+    now = datetime.now(tz=UTC)
+    blocked = _scheduler_flow(
+        flow_id="flow-blocked",
+        deficit_work_units=0,
+        next_item_work_units=4,
+        queued_work_units=4,
+        oldest_queue_entered_at=now,
+    )
+    eligible = _scheduler_flow(
+        flow_id="flow-eligible",
+        deficit_work_units=4,
+        next_item_work_units=4,
+        queued_work_units=4,
+        oldest_queue_entered_at=now + timedelta(seconds=1),
+    )
+
+    selection = BatchJobRepository._select_scheduler_flow(
+        [blocked, eligible],
+        max_work_units=4,
+        tenant_max_in_flight_work_units=0,
+        allow_deficit_bypass=False,
+        max_active_flows_per_decision=1,
+    )
+
+    assert selection.selected is None
+    assert selection.active_flow_count == 2
+    assert selection.scanned_flow_count == 1
+    assert selection.scan_limit_reached is True
+    assert selection.skip_reasons == {"flow-blocked": "insufficient_deficit"}
+    assert (
+        BatchJobRepository._terminal_empty_scheduler_flow_result(selection)
+        == "flow_scan_limit_reached"
+    )
+
+
+def test_scheduler_flow_selection_does_not_use_single_flow_bypass_when_scan_is_bounded() -> None:
+    now = datetime.now(tz=UTC)
+    selected = _scheduler_flow(
+        flow_id="flow-selected",
+        deficit_work_units=4,
+        next_item_work_units=4,
+        queued_work_units=4,
+        oldest_queue_entered_at=now,
+    )
+    hidden = _scheduler_flow(
+        flow_id="flow-hidden",
+        deficit_work_units=16,
+        next_item_work_units=4,
+        queued_work_units=4,
+        oldest_queue_entered_at=now + timedelta(seconds=1),
+    )
+
+    selection = BatchJobRepository._select_scheduler_flow(
+        [selected, hidden],
+        max_work_units=16,
+        tenant_max_in_flight_work_units=0,
+        allow_deficit_bypass=False,
+        max_active_flows_per_decision=1,
+    )
+
+    assert selection.selected is not None
+    assert selection.selected.flow_id == "flow-selected"
+    assert selection.active_flow_count == 2
+    assert selection.scanned_flow_count == 1
+    assert selection.scan_limit_reached is True
+    assert selection.single_eligible_flow is False
+    assert (
+        BatchJobRepository._flow_claim_work_units(
+            selection.selected,
+            max_work_units=16,
+            tenant_max_in_flight_work_units=0,
+            single_eligible_flow=selection.single_eligible_flow,
+        )
+        == 4
+    )
 
 
 @pytest.mark.asyncio
@@ -1371,23 +1710,25 @@ async def test_fair_share_shadow_recommendation_selects_flow_without_claiming_it
         next_policy_reason="aging_credit",
     )
 
-    class _TxPrisma:
-        @asynccontextmanager
-        async def tx(self):
-            yield object()
+    class _ReadOnlyPrisma:
+        pass
 
     class _RecommendRepository(BatchJobRepository):
         def __init__(self) -> None:
-            super().__init__(_TxPrisma())
+            super().__init__(_ReadOnlyPrisma())
             self.claim_called = False
-            self.refresh_kwargs: dict[str, object] = {}
+            self.preview_kwargs: dict[str, object] = {}
 
         async def _try_acquire_scheduler_flow_lock(self, db, **kwargs):  # noqa: ANN001, ANN003
             del db, kwargs
-            return True
+            raise AssertionError("shadow recommendation should not acquire the active flow lock")
 
         async def refresh_scheduler_flows(self, **kwargs):  # noqa: ANN003
-            self.refresh_kwargs = dict(kwargs)
+            del kwargs
+            raise AssertionError("shadow recommendation should not refresh durable flow state")
+
+        async def preview_scheduler_flows(self, **kwargs):  # noqa: ANN003
+            self.preview_kwargs = dict(kwargs)
             return [flow]
 
         async def _record_scheduler_flow_skip_reasons(self, db, skip_reasons):  # noqa: ANN001
@@ -1428,11 +1769,11 @@ async def test_fair_share_shadow_recommendation_selects_flow_without_claiming_it
     assert result.recommended_scheduler_rank == 1.0
     assert result.recommended_age_credit_work_units == 2
     assert result.recommended_policy_reason == "aging_credit"
-    assert repository.refresh_kwargs["size_aware_scheduling_enabled"] is True
-    assert repository.refresh_kwargs["aging_seconds_per_work_unit"] == 15
-    assert repository.refresh_kwargs["max_age_credit_work_units"] == 200
-    assert repository.refresh_kwargs["min_large_job_claim_interval_seconds"] == 45
-    assert repository.refresh_kwargs["small_job_max_work_units"] == 50
+    assert repository.preview_kwargs["size_aware_scheduling_enabled"] is True
+    assert repository.preview_kwargs["aging_seconds_per_work_unit"] == 15
+    assert repository.preview_kwargs["max_age_credit_work_units"] == 200
+    assert repository.preview_kwargs["min_large_job_claim_interval_seconds"] == 45
+    assert repository.preview_kwargs["small_job_max_work_units"] == 50
     assert repository.claim_called is False
 
 
@@ -1458,23 +1799,25 @@ async def test_fair_share_shadow_recommendation_simulates_refill_without_durable
         oldest_queue_entered_at=now + timedelta(seconds=1),
     )
 
-    class _TxPrisma:
-        @asynccontextmanager
-        async def tx(self):
-            yield object()
+    class _ReadOnlyPrisma:
+        pass
 
     class _RecommendRepository(BatchJobRepository):
         def __init__(self) -> None:
-            super().__init__(_TxPrisma())
-            self.refresh_calls = 0
+            super().__init__(_ReadOnlyPrisma())
+            self.preview_calls = 0
 
         async def _try_acquire_scheduler_flow_lock(self, db, **kwargs):  # noqa: ANN001, ANN003
             del db, kwargs
-            return True
+            raise AssertionError("shadow recommendation should not acquire the active flow lock")
 
         async def refresh_scheduler_flows(self, **kwargs):  # noqa: ANN003
             del kwargs
-            self.refresh_calls += 1
+            raise AssertionError("shadow recommendation should not refresh durable flow state")
+
+        async def preview_scheduler_flows(self, **kwargs):  # noqa: ANN003
+            del kwargs
+            self.preview_calls += 1
             return [flow, peer_flow]
 
         async def _record_scheduler_flow_skip_reasons(self, db, skip_reasons):  # noqa: ANN001
@@ -1503,7 +1846,7 @@ async def test_fair_share_shadow_recommendation_simulates_refill_without_durable
     assert result.active_flow_count == 2
     assert flow.deficit_work_units == 0
     assert peer_flow.deficit_work_units == 0
-    assert repository.refresh_calls == 1
+    assert repository.preview_calls == 1
 
 
 @pytest.mark.asyncio
@@ -1532,20 +1875,22 @@ async def test_fair_share_shadow_recommendation_uses_shadow_skip_metrics(
         lambda *, reason: active_skips.append(reason),
     )
 
-    class _TxPrisma:
-        @asynccontextmanager
-        async def tx(self):
-            yield object()
+    class _ReadOnlyPrisma:
+        pass
 
     class _RecommendRepository(BatchJobRepository):
         def __init__(self) -> None:
-            super().__init__(_TxPrisma())
+            super().__init__(_ReadOnlyPrisma())
 
         async def _try_acquire_scheduler_flow_lock(self, db, **kwargs):  # noqa: ANN001, ANN003
             del db, kwargs
-            return True
+            raise AssertionError("shadow recommendation should not acquire the active flow lock")
 
         async def refresh_scheduler_flows(self, **kwargs):  # noqa: ANN003
+            del kwargs
+            raise AssertionError("shadow recommendation should not refresh durable flow state")
+
+        async def preview_scheduler_flows(self, **kwargs):  # noqa: ANN003
             del kwargs
             return [flow]
 
@@ -1617,6 +1962,131 @@ async def test_fairness_ratio_uses_actual_share_over_expected_weight_share(
     await repository._observe_scheduler_fairness_ratio_for_claim(object(), flow=selected, claim=claim)
 
     assert observed == [pytest.approx(1.6)]
+
+
+@pytest.mark.asyncio
+async def test_fairness_ratio_uses_claim_snapshot_without_extra_flow_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected = _scheduler_flow(
+        flow_id="flow-selected",
+        tenant_scope_id="team-selected",
+        weight=1,
+        in_flight_work_units=8,
+    )
+    peer = _scheduler_flow(
+        flow_id="flow-peer",
+        tenant_scope_id="team-peer",
+        weight=3,
+        in_flight_work_units=24,
+    )
+    observed: list[float] = []
+    monkeypatch.setattr(
+        job_repository_module,
+        "observe_batch_scheduler_fairness_ratio",
+        lambda **kwargs: observed.append(kwargs["ratio"]),
+    )
+
+    class _FairnessRepository(BatchJobRepository):
+        async def list_scheduler_flows(self, **kwargs):  # noqa: ANN003
+            del kwargs
+            raise AssertionError("claim-time fairness metric should reuse the decision snapshot")
+
+    repository = _FairnessRepository()
+    claim = BatchWorkClaim(
+        claim_id="claim-1",
+        worker_id="worker-1",
+        batch_id="batch-1",
+        endpoint="/v1/embeddings",
+        model_group="model-a",
+        tenant_scope_type="team",
+        tenant_scope_id="team-selected",
+        service_tier="standard",
+        item_ids=["item-1"],
+        claimed_work_units=8,
+        lease_expires_at=datetime.now(tz=UTC) + timedelta(seconds=60),
+    )
+
+    await repository._observe_scheduler_fairness_ratio_for_claim(
+        object(),
+        flow=selected,
+        claim=claim,
+        active_flows=[selected, peer],
+    )
+
+    assert observed == [pytest.approx(1.6)]
+
+
+@pytest.mark.asyncio
+async def test_fair_share_claim_publishes_updated_flow_without_extra_flow_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(tz=UTC)
+    flow = _scheduler_flow(
+        flow_id="flow-selected",
+        tenant_scope_id="team-selected",
+        deficit_work_units=16,
+        queued_work_units=8,
+        in_flight_work_units=4,
+    )
+    claim = BatchWorkClaim(
+        claim_id="claim-1",
+        worker_id="worker-1",
+        batch_id="batch-1",
+        endpoint="/v1/embeddings",
+        model_group="model-a",
+        tenant_scope_type="team",
+        tenant_scope_id="team-selected",
+        service_tier="standard",
+        item_ids=["item-1"],
+        claimed_work_units=8,
+        lease_expires_at=now + timedelta(seconds=60),
+    )
+    published: list[list[BatchSchedulerFlowRecord]] = []
+    monkeypatch.setattr(
+        job_repository_module,
+        "publish_batch_scheduler_flows",
+        lambda flows: published.append(list(flows)),
+    )
+
+    class _Db:
+        async def query_raw(self, sql: str, *params):
+            assert "UPDATE deltallm_batch_scheduler_flow" in sql
+            assert "RETURNING *" in sql
+            row = dict(flow.__dict__)
+            row.update(deficit_work_units=8, skip_reason_summary=json.dumps(flow.skip_reasons or {}))
+            return [row]
+
+    class _ClaimRepository(BatchJobRepository):
+        async def _claim_next_work_with_client(self, db, **kwargs):  # noqa: ANN001, ANN003
+            del db, kwargs
+            return claim
+
+        async def list_scheduler_flows(self, **kwargs):  # noqa: ANN003
+            del kwargs
+            raise AssertionError("claim metrics should not scan scheduler flows in the claim transaction")
+
+    repository = _ClaimRepository()
+
+    result = await repository._claim_scheduler_flow_with_client(
+        _Db(),
+        flow=flow,
+        worker_id="worker-1",
+        max_items=4,
+        max_work_units=16,
+        lease_seconds=120,
+        capacity_max_in_flight_items=None,
+        capacity_max_in_flight_work_units=None,
+        allow_oversized_first_item=False,
+        max_deficit_multiplier=2,
+        fairness_flows=[flow],
+    )
+
+    assert result.result == "claimed"
+    assert result.flow is not None
+    assert result.flow.deficit_work_units == 8
+    assert len(published) == 1
+    assert [published_flow.flow_id for published_flow in published[0]] == ["flow-selected"]
 
 
 @pytest.mark.asyncio
@@ -1779,10 +2249,12 @@ async def test_model_group_backlog_query_counts_runnable_jobs_by_model() -> None
     rows = await repository.list_model_group_backlog()
 
     assert rows == []
-    assert "WITH runnable_jobs AS" in prisma.sql
+    assert "WITH base_jobs AS" in prisma.sql
+    assert "runnable_job_backlog AS" in prisma.sql
     assert "j.scheduling_model_group IS NOT NULL" in prisma.sql
     assert "GROUP BY model_group, service_tier, size_class" in prisma.sql
-    assert "SUM(remaining_work_units)" in prisma.sql
+    assert "SUM(runnable_work_units)" in prisma.sql
+    assert "GREATEST(COALESCE(i.estimated_work_units, 1), 1)" in prisma.sql
     assert "i.not_before_at IS NULL OR i.not_before_at <= NOW()" in prisma.sql
 
 
@@ -2046,13 +2518,15 @@ async def test_release_items_for_retry_preserves_immediate_requeue_defaults():
     )
 
     assert item_ids == []
-    assert prisma.params == ("item-1", "worker-1", 0, None, None)
+    assert prisma.params == ("item-1", None, "worker-1", 0, None, None)
     assert "status = 'pending'" in prisma.sql
     assert "ELSE NULL" in prisma.sql
-    assert "error_body = COALESCE($4::jsonb, i.error_body)" in prisma.sql
-    assert "last_error = COALESCE($5, i.last_error)" in prisma.sql
+    assert "error_body = COALESCE($5::jsonb, i.error_body)" in prisma.sql
+    assert "last_error = COALESCE($6, i.last_error)" in prisma.sql
     assert "j.batch_id = i.batch_id" in prisma.sql
-    assert "NOW() + ($3 || ' seconds')::interval < j.expires_at" in prisma.sql
+    assert "NOW() + ($4 || ' seconds')::interval < j.expires_at" in prisma.sql
+    assert "i.locked_by = $3" in prisma.sql
+    assert "(p.claim_epoch IS NULL OR i.claim_epoch = p.claim_epoch)" in prisma.sql
 
 
 @pytest.mark.asyncio
@@ -2068,13 +2542,13 @@ async def test_release_items_for_retry_can_store_retry_metadata_and_delay():
         last_error="upstream unavailable",
     )
 
-    assert prisma.params[0:2] == ("item-1", "item-2")
-    assert prisma.params[2] == "worker-1"
-    assert prisma.params[3] == 30
-    assert json.loads(prisma.params[4]) == {"retry_category": "upstream_5xx"}
-    assert prisma.params[5] == "upstream unavailable"
-    assert "WHEN $4 > 0 THEN NOW() + ($4 || ' seconds')::interval" in prisma.sql
-    assert "i.locked_by = $3" in prisma.sql
+    assert prisma.params[0:4] == ("item-1", None, "item-2", None)
+    assert prisma.params[4] == "worker-1"
+    assert prisma.params[5] == 30
+    assert json.loads(prisma.params[6]) == {"retry_category": "upstream_5xx"}
+    assert prisma.params[7] == "upstream unavailable"
+    assert "WHEN $6 > 0 THEN NOW() + ($6 || ' seconds')::interval" in prisma.sql
+    assert "i.locked_by = $5" in prisma.sql
 
 
 @pytest.mark.asyncio

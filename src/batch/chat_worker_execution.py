@@ -19,7 +19,12 @@ from src.batch.endpoints import batch_call_type_for_endpoint, router_usage_mode_
 from src.batch.policy import record_batch_policy_failure, run_batch_request_preflight
 from src.batch.retry import BatchResponseShapeError, BatchRetryDecision, classify_batch_retry
 from src.batch.worker_constants import COMPLETION_OUTBOX_MAX_ATTEMPTS
-from src.batch.worker_types import _PreparedChatItem, _PreparedEmbeddingItem, _RequestShim
+from src.batch.worker_types import (
+    BatchItemLeaseLostError,
+    _PreparedChatItem,
+    _PreparedEmbeddingItem,
+    _RequestShim,
+)
 from src.billing.cost import completion_cost
 from src.metrics import (
     increment_batch_chat_item_executed,
@@ -135,6 +140,7 @@ class ChatWorkerExecutionMixin:
         )
         return {
             "item_id": prepared.item.item_id,
+            "claim_epoch": prepared.item.claim_epoch,
             "response_body": response_body,
             "usage": usage,
             "provider_cost": provider_cost,
@@ -163,6 +169,7 @@ class ChatWorkerExecutionMixin:
         batch_execution_mode: str = "concurrent",
     ) -> None:  # noqa: ANN001
         item_heartbeat: asyncio.Task[None] | None = None
+        item_lease_lost = asyncio.Event()
         try:
             await self._acquire_prepared_policy_lease(prepared=prepared)
         except Exception as exc:
@@ -184,20 +191,29 @@ class ChatWorkerExecutionMixin:
                     item_id=prepared.item.item_id,
                     worker_id=self.config.worker_id,
                     lease_seconds=self.config.item_lease_seconds,
+                    claim_epoch=prepared.item.claim_epoch,
                 ),
                 label=f"item:{prepared.item.item_id}",
+                lease_lost_event=item_lease_lost,
             )
-            (response_body, api_latency_ms), served_deployment = await self.app.state.failover_manager.execute_with_failover(
-                primary_deployment=prepared.primary_deployment,
-                model_group=prepared.model_group,
-                execute=lambda dep: self._execute_chat(
-                    prepared.request_shim,
-                    prepared.payload,
-                    dep,
-                    record_usage=False,
+            (
+                response_body,
+                api_latency_ms,
+            ), served_deployment = await self._await_with_lease_loss_cancellation(
+                self.app.state.failover_manager.execute_with_failover(
+                    primary_deployment=prepared.primary_deployment,
+                    model_group=prepared.model_group,
+                    execute=lambda dep: self._execute_chat(
+                        prepared.request_shim,
+                        prepared.payload,
+                        dep,
+                        record_usage=False,
+                    ),
+                    return_deployment=True,
+                    **prepared.failover_kwargs,
                 ),
-                return_deployment=True,
-                **prepared.failover_kwargs,
+                lease_lost_event=item_lease_lost,
+                label=f"item:{prepared.item.item_id}",
             )
             response_body = dict(response_body)
             usage = dict(response_body.get("usage") or {})
@@ -218,7 +234,17 @@ class ChatWorkerExecutionMixin:
                 usage=usage,
                 reference=prepared.item.item_id,
             )
-            await self._renew_item_lease_once(prepared.item.item_id)
+            if item_lease_lost.is_set() or not await self._renew_item_lease_once(
+                prepared.item.item_id,
+                claim_epoch=prepared.item.claim_epoch,
+            ):
+                item_lease_lost.set()
+                logger.warning(
+                    "batch chat completion skipped after lease loss batch_id=%s item_id=%s",
+                    job.batch_id,
+                    prepared.item.item_id,
+                )
+                return
             if item_heartbeat is not None:
                 await self._stop_heartbeat_fn(item_heartbeat)
                 item_heartbeat = None
@@ -243,6 +269,14 @@ class ChatWorkerExecutionMixin:
                     reference=prepared.item.item_id,
                 )
                 increment_batch_chat_item_executed(mode=batch_execution_mode, status="success")
+        except BatchItemLeaseLostError as exc:
+            logger.warning(
+                "batch chat provider call cancelled after lease loss batch_id=%s item_id=%s error=%s",
+                job.batch_id,
+                prepared.item.item_id,
+                exc,
+            )
+            return
         except Exception as exc:
             observe_batch_chat_provider_latency(
                 mode=batch_execution_mode,
@@ -505,6 +539,10 @@ class ChatWorkerExecutionMixin:
                 retry_delay_seconds=retry_delay,
                 error_body=error_body,
                 last_error=str(exc),
+                item_claim_epochs={
+                    prepared.item.item_id: prepared.item.claim_epoch
+                    for prepared in prepared_items
+                },
             )
         except Exception as release_exc:
             logger.warning(
@@ -573,6 +611,7 @@ class ChatWorkerExecutionMixin:
         chat_settings = settings or resolve_chat_batching_settings(first_item.primary_deployment.deltallm_params)
         item_ids = [prepared.item.item_id for prepared in prepared_items]
         item_heartbeats: dict[str, asyncio.Task[None]] = {}
+        item_lease_lost = asyncio.Event()
         microbatch_id = f"{batch_id}:{item_ids[0]}:{chunk_size}"
         chunk_started_at = perf_counter()
         chunk_input_tokens = sum(estimate_chat_input_tokens(prepared.payload) for prepared in prepared_items)
@@ -613,27 +652,45 @@ class ChatWorkerExecutionMixin:
         try:
             for prepared in prepared_items:
                 item_heartbeats[prepared.item.item_id] = self._start_heartbeat_fn(
-                    renew=lambda item_id=prepared.item.item_id: self.repository.renew_item_lease(
+                    renew=lambda item_id=prepared.item.item_id,
+                    claim_epoch=prepared.item.claim_epoch: self.repository.renew_item_lease(
                         item_id=item_id,
                         worker_id=self.config.worker_id,
                         lease_seconds=self.config.item_lease_seconds,
+                        claim_epoch=claim_epoch,
                     ),
                     label=f"item:{prepared.item.item_id}",
+                    lease_lost_event=item_lease_lost,
                 )
 
             observe_batch_chat_microbatch_size(batch_size=chunk_size)
-            raw_results, served_deployment = await self.app.state.failover_manager.execute_with_failover(
-                primary_deployment=first_item.primary_deployment,
-                model_group=first_item.model_group,
-                execute=_execute_for_deployment,
-                return_deployment=True,
-                **first_item.failover_kwargs,
+            raw_results, served_deployment = await self._await_with_lease_loss_cancellation(
+                self.app.state.failover_manager.execute_with_failover(
+                    primary_deployment=first_item.primary_deployment,
+                    model_group=first_item.model_group,
+                    execute=_execute_for_deployment,
+                    return_deployment=True,
+                    **first_item.failover_kwargs,
+                ),
+                lease_lost_event=item_lease_lost,
+                label=f"chat_microbatch:{microbatch_id}",
             )
             normalized_results = normalize_chat_microbatch_results(
                 raw_results,
                 expected_count=chunk_size,
                 custom_ids=[prepared.item.custom_id for prepared in prepared_items],
             )
+        except BatchItemLeaseLostError as exc:
+            logger.warning(
+                "batch chat microbatch provider call cancelled after lease loss batch_id=%s size=%s item_ids=%s error=%s",
+                batch_id,
+                chunk_size,
+                item_ids,
+                exc,
+            )
+            await self._stop_heartbeat_tasks(item_heartbeats.values())
+            item_heartbeats.clear()
+            return
         except Exception as exc:
             await self._stop_heartbeat_tasks(item_heartbeats.values())
             item_heartbeats.clear()
@@ -708,6 +765,16 @@ class ChatWorkerExecutionMixin:
         served_deployment_id = str(getattr(served_deployment, "deployment_id", None) or "")
 
         for result in normalized_results:
+            if item_lease_lost.is_set():
+                logger.warning(
+                    "batch chat microbatch result handling skipped after lease loss batch_id=%s size=%s item_ids=%s",
+                    batch_id,
+                    chunk_size,
+                    item_ids,
+                )
+                await self._stop_heartbeat_tasks(item_heartbeats.values())
+                item_heartbeats.clear()
+                return
             prepared = prepared_items[result.index]
             if result.error is not None:
                 failure_count += 1
@@ -763,7 +830,19 @@ class ChatWorkerExecutionMixin:
                 usage=dict(row["usage"]),
                 reference=prepared.item.item_id,
             )
-            await self._renew_item_lease_once(prepared.item.item_id)
+            if item_lease_lost.is_set() or not await self._renew_item_lease_once(
+                prepared.item.item_id,
+                claim_epoch=prepared.item.claim_epoch,
+            ):
+                item_lease_lost.set()
+                logger.warning(
+                    "batch chat microbatch completion skipped after lease loss batch_id=%s item_id=%s",
+                    batch_id,
+                    prepared.item.item_id,
+                )
+                await self._stop_heartbeat_tasks(item_heartbeats.values())
+                item_heartbeats.clear()
+                return
             item_heartbeat = item_heartbeats.pop(prepared.item.item_id, None)
             if item_heartbeat is not None:
                 await self._stop_heartbeat_fn(item_heartbeat)

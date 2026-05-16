@@ -10,7 +10,13 @@ from src.audit.actions import AuditAction
 from src.batch.models import BatchJobRecord, BatchJobStatus, BatchSchedulerFlowRecord
 from src.batch.models import encode_operator_failed_reason
 from src.batch.scheduling import BatchTenantFairShareConfig
-from src.metrics import get_prometheus_registry
+from src.config import AppConfig
+from src.config_runtime.dynamic import DynamicConfigPersistenceError, DynamicConfigValidationError
+from src.metrics import (
+    get_prometheus_registry,
+    increment_batch_scheduler_rollback,
+    increment_batch_scheduler_shadow_comparison,
+)
 
 
 class _FakeBatchRepairDB:
@@ -177,6 +183,12 @@ class _FakeBatchRepairRepository:
                 last_refilled_at=None,
                 created_at=datetime.now(tz=UTC),
                 updated_at=datetime.now(tz=UTC),
+                next_item_work_units=3,
+                next_batch_id="batch-next",
+                next_size_class="xs",
+                next_scheduler_rank=1.5,
+                next_age_credit_work_units=2,
+                next_policy_reason="aging_credit",
             )
         ]
 
@@ -200,8 +212,41 @@ class _FakeBatchRepairRepository:
                 last_refilled_at=None,
                 created_at=datetime.now(tz=UTC),
                 updated_at=datetime.now(tz=UTC),
+                next_item_work_units=3,
+                next_batch_id="batch-next",
+                next_size_class="xs",
+                next_scheduler_rank=1.5,
+                next_age_credit_work_units=2,
+                next_policy_reason="aging_credit",
             )
         ]
+
+
+class _FakeDynamicConfigManager:
+    def __init__(self, config: AppConfig) -> None:
+        self.config = config
+        self.update_calls: list[tuple[dict[str, object], str]] = []
+        self.fail_update = False
+        self.fail_validation = False
+
+    async def update_config(self, config_update: dict[str, object], updated_by: str) -> None:
+        self.update_calls.append((config_update, updated_by))
+        if self.fail_validation:
+            raise DynamicConfigValidationError("invalid config")
+        if self.fail_update:
+            raise DynamicConfigPersistenceError("write failed")
+        merged = self.config.model_dump(mode="python", exclude_none=True)
+        for section, section_update in config_update.items():
+            if isinstance(section_update, dict):
+                current = merged.setdefault(section, {})
+                assert isinstance(current, dict)
+                current.update(section_update)
+            else:
+                merged[section] = section_update
+        self.config = AppConfig.model_validate(merged)
+
+    def get_app_config(self) -> AppConfig:
+        return self.config
 
 
 @pytest.mark.asyncio
@@ -298,6 +343,283 @@ async def test_mark_batch_failed_endpoint(client, test_app, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_scheduler_status_includes_modes_and_metric_snapshot(client, test_app, monkeypatch):
+    test_app.state.app_config = AppConfig.model_validate(
+        {
+            "general_settings": {
+                "embeddings_batch_scheduler_mode": "model_capacity_v1",
+                "embeddings_batch_scheduler_shadow_mode": "fair_share_v1",
+                "embeddings_batch_scheduler_strict_model_homogeneity_enabled": True,
+            }
+        }
+    )
+    increment_batch_scheduler_shadow_comparison(
+        active_mode="model_capacity_v1",
+        shadow_mode="fair_share_v1",
+        result="job_mismatch",
+    )
+    increment_batch_scheduler_rollback(
+        from_mode="fair_share_v1",
+        to_mode="model_capacity_v1",
+        reason="active_mode_downgrade",
+    )
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=True,
+            account_id="acct-1",
+        ),
+    )
+
+    response = await client.get(
+        "/ui/api/batches/scheduler/status",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["active_mode"] == "model_capacity_v1"
+    assert payload["shadow_mode"] == "fair_share_v1"
+    assert payload["effective"]["shadow_tenant_fair_share"] is True
+    assert payload["fair_share"]["enabled"] is True
+    assert payload["metrics"]["scope"] == "process_local"
+    assert payload["metrics"]["cluster_wide"] is False
+    assert "Prometheus" in payload["metrics"]["warning"]
+    assert payload["metrics"]["metric_names"]["rollbacks"] == "deltallm_batch_scheduler_rollbacks_total"
+    samples = payload["metrics"]["process_local_samples"]
+    assert any(
+        sample["labels"] == {
+            "active_mode": "model_capacity_v1",
+            "shadow_mode": "fair_share_v1",
+            "result": "job_mismatch",
+        }
+        and sample["value"] >= 1.0
+        for sample in samples["counters"]["shadow_comparisons"]
+    )
+    assert any(
+        sample["labels"] == {
+            "from_mode": "fair_share_v1",
+            "to_mode": "model_capacity_v1",
+            "reason": "active_mode_downgrade",
+        }
+        and sample["value"] >= 1.0
+        for sample in samples["counters"]["rollbacks"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_scheduler_status_explicit_fifo_rolls_back_legacy_capabilities(
+    client,
+    test_app,
+    monkeypatch,
+):
+    test_app.state.app_config = AppConfig.model_validate(
+        {
+            "general_settings": {
+                "embeddings_batch_scheduler_mode": "fifo_v1",
+                "embeddings_batch_scheduler_shadow_mode": "none",
+                "embeddings_batch_model_capacity_enabled": True,
+                "embeddings_batch_tenant_fair_share_enabled": True,
+                "embeddings_batch_size_aware_scheduling_enabled": True,
+            }
+        }
+    )
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=True,
+            account_id="acct-1",
+        ),
+    )
+
+    response = await client.get(
+        "/ui/api/batches/scheduler/status",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["active_mode"] == "fifo_v1"
+    assert payload["shadow_mode"] == "none"
+    assert payload["effective"]["model_capacity_gates"] is False
+    assert payload["effective"]["tenant_fair_share"] is False
+    assert payload["effective"]["size_aware_ranking"] is False
+    assert payload["model_capacity"]["enabled"] is False
+    assert payload["fair_share"]["enabled"] is False
+    assert payload["size_aging"]["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_scheduler_mode_endpoint_updates_dynamic_config_and_audits(
+    client,
+    test_app,
+    monkeypatch,
+) -> None:
+    initial_config = AppConfig.model_validate(
+        {
+            "general_settings": {
+                "embeddings_batch_scheduler_mode": "smart_v1",
+                "embeddings_batch_scheduler_shadow_mode": "fair_share_v1",
+            }
+        }
+    )
+    dynamic_config = _FakeDynamicConfigManager(initial_config)
+    test_app.state.app_config = initial_config
+    test_app.state.dynamic_config_manager = dynamic_config
+    recorded: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=True,
+            account_id="acct-1",
+        ),
+    )
+
+    async def _capture_audit(**kwargs):  # noqa: ANN003
+        recorded.append(kwargs)
+
+    monkeypatch.setattr("src.api.admin.endpoints.batches.emit_admin_mutation_audit", _capture_audit)
+
+    response = await client.post(
+        "/ui/api/batches/scheduler/mode",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "active_mode": "fifo_v1",
+            "shadow_mode": "none",
+            "reason": "rollback",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["active_mode"] == "fifo_v1"
+    assert payload["shadow_mode"] == "none"
+    assert test_app.state.app_config.general_settings.embeddings_batch_scheduler_mode == "fifo_v1"
+    assert dynamic_config.update_calls == [
+        (
+            {
+                "general_settings": {
+                    "embeddings_batch_scheduler_mode": "fifo_v1",
+                    "embeddings_batch_scheduler_shadow_mode": "none",
+                }
+            },
+            "admin_api",
+        )
+    ]
+    assert recorded[0]["action"] == AuditAction.ADMIN_BATCH_SCHEDULER_MODE_UPDATE
+    assert recorded[0]["request_payload"] == {
+        "active_mode": "fifo_v1",
+        "shadow_mode": "none",
+        "reason": "rollback",
+    }
+    assert recorded[0]["response_payload"] == {
+        "active_mode": "fifo_v1",
+        "shadow_mode": "none",
+    }
+
+
+@pytest.mark.asyncio
+async def test_scheduler_mode_endpoint_fails_closed_when_dynamic_config_write_fails(
+    client,
+    test_app,
+    monkeypatch,
+) -> None:
+    initial_config = AppConfig.model_validate(
+        {
+            "general_settings": {
+                "embeddings_batch_scheduler_mode": "smart_v1",
+                "embeddings_batch_scheduler_shadow_mode": "fair_share_v1",
+            }
+        }
+    )
+    dynamic_config = _FakeDynamicConfigManager(initial_config)
+    dynamic_config.fail_update = True
+    test_app.state.app_config = initial_config
+    test_app.state.dynamic_config_manager = dynamic_config
+    recorded: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=True,
+            account_id="acct-1",
+        ),
+    )
+
+    async def _capture_audit(**kwargs):  # noqa: ANN003
+        recorded.append(kwargs)
+
+    monkeypatch.setattr("src.api.admin.endpoints.batches.emit_admin_mutation_audit", _capture_audit)
+
+    response = await client.post(
+        "/ui/api/batches/scheduler/mode",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "active_mode": "fifo_v1",
+            "shadow_mode": "none",
+            "reason": "rollback",
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Scheduler mode update could not be persisted"
+    assert test_app.state.app_config.general_settings.embeddings_batch_scheduler_mode == "smart_v1"
+    assert recorded == []
+
+
+@pytest.mark.asyncio
+async def test_scheduler_mode_endpoint_rejects_invalid_dynamic_config_before_audit(
+    client,
+    test_app,
+    monkeypatch,
+) -> None:
+    initial_config = AppConfig.model_validate(
+        {
+            "general_settings": {
+                "embeddings_batch_scheduler_mode": "smart_v1",
+                "embeddings_batch_scheduler_shadow_mode": "fair_share_v1",
+            }
+        }
+    )
+    dynamic_config = _FakeDynamicConfigManager(initial_config)
+    dynamic_config.fail_validation = True
+    test_app.state.app_config = initial_config
+    test_app.state.dynamic_config_manager = dynamic_config
+    recorded: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=True,
+            account_id="acct-1",
+        ),
+    )
+
+    async def _capture_audit(**kwargs):  # noqa: ANN003
+        recorded.append(kwargs)
+
+    monkeypatch.setattr("src.api.admin.endpoints.batches.emit_admin_mutation_audit", _capture_audit)
+
+    response = await client.post(
+        "/ui/api/batches/scheduler/mode",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "active_mode": "fifo_v1",
+            "shadow_mode": "none",
+            "reason": "rollback",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Scheduler mode update is invalid"
+    assert test_app.state.app_config.general_settings.embeddings_batch_scheduler_mode == "smart_v1"
+    assert recorded == []
+
+
+@pytest.mark.asyncio
 async def test_scheduler_dimensions_backfill_endpoint(client, test_app, monkeypatch):
     repository = _FakeBatchRepairRepository()
     test_app.state.batch_repository = repository
@@ -336,13 +658,14 @@ async def test_scheduler_flows_get_lists_without_refreshing(client, test_app, mo
     )
 
     response = await client.get(
-        "/ui/api/batches/scheduler/flows?model_group=m1&service_tier=standard",
+        "/ui/api/batches/scheduler/flows?model_group=m1&service_tier=standard&limit=123",
         headers={"Authorization": "Bearer mk-test"},
     )
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["enabled"] is True
+    assert payload["limit"] == 123
     assert payload["data"][0]["model_group"] == "m1"
     assert repository.refresh_scheduler_flow_calls == []
     assert repository.list_scheduler_flow_calls == [
@@ -351,6 +674,7 @@ async def test_scheduler_flows_get_lists_without_refreshing(client, test_app, mo
             "model_group": "m1",
             "tenant_scope_type": None,
             "active": None,
+            "limit": 123,
         }
     ]
 
@@ -363,6 +687,19 @@ async def test_scheduler_flows_refresh_endpoint_refreshes_and_audits(client, tes
         enabled=True,
         base_quantum_work_units=32,
         max_deficit_multiplier=4,
+        max_candidate_jobs_per_flow=17,
+    )
+    test_app.state.app_config = AppConfig.model_validate(
+        {
+            "general_settings": {
+                "embeddings_batch_scheduler_mode": "smart_v1",
+                "embeddings_batch_scheduler_shadow_mode": "none",
+                "embeddings_batch_aging_seconds_per_work_unit": 45,
+                "embeddings_batch_max_age_credit_work_units": 12,
+                "embeddings_batch_min_large_job_claim_interval_seconds": 90,
+                "embeddings_batch_small_job_max_work_units": 25,
+            }
+        }
     )
     recorded: list[dict[str, object]] = []
 
@@ -388,10 +725,14 @@ async def test_scheduler_flows_refresh_endpoint_refreshes_and_audits(client, tes
     assert response.status_code == 200
     payload = response.json()
     assert payload["refreshed_flows"] == 1
+    assert payload["limit"] == 200
     assert payload["repaired_jobs"] == 4
     assert payload["repaired_items"] == 9
     assert payload["repair_skipped"] == 0
     assert payload["data"][0]["tenant_scope_id"].startswith("team:")
+    assert payload["data"][0]["next_batch_id"] == "batch-next"
+    assert payload["data"][0]["next_scheduler_rank"] == 1.5
+    assert payload["data"][0]["next_policy_reason"] == "aging_credit"
     assert repository.scheduler_backfill_limits == [500]
     assert repository.scheduler_backfill_calls == [
         {
@@ -406,18 +747,26 @@ async def test_scheduler_flows_refresh_endpoint_refreshes_and_audits(client, tes
             "model_group": "m1",
             "base_quantum_work_units": 32,
             "max_deficit_multiplier": 4,
+            "max_candidate_jobs_per_flow": 17,
+            "size_aware_scheduling_enabled": True,
+            "aging_seconds_per_work_unit": 45,
+            "max_age_credit_work_units": 12,
+            "min_large_job_claim_interval_seconds": 90,
+            "small_job_max_work_units": 25,
         }
     ]
     assert repository.list_scheduler_flow_calls[-1] == {
         "service_tier": "standard",
         "model_group": "m1",
         "active": None,
+        "limit": 200,
     }
     assert recorded[0]["action"] == AuditAction.ADMIN_BATCH_SCHEDULER_FLOW_REFRESH
     assert recorded[0]["request_payload"] == {
         "model_group": "m1",
         "service_tier": "standard",
         "repair_limit": 500,
+        "flow_limit": 200,
     }
     assert recorded[0]["response_payload"] == {
         "repaired_jobs": 4,

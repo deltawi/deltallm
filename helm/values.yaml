@@ -233,6 +233,13 @@ config:
     embeddings_batch_storage_dir: .deltallm/batch-artifacts
     embeddings_batch_create_session_cleanup_enabled: true
     embeddings_batch_gc_enabled: true
+    # Phase 6 scheduler rollout controls. Leave commented to preserve legacy
+    # boolean flag behavior; set explicitly to make this one field control
+    # active scheduler behavior.
+    # embeddings_batch_scheduler_mode: fifo_v1
+    # embeddings_batch_scheduler_shadow_mode: none
+    embeddings_batch_scheduler_shadow_decision_timeout_seconds: 0.5
+    embeddings_batch_scheduler_shadow_max_pending_decisions: 16
     embeddings_batch_scheduler_enabled: false
     embeddings_batch_scheduler_shadow_enabled: false
     embeddings_batch_scheduler_strict_model_homogeneity_enabled: false
@@ -256,6 +263,8 @@ config:
     embeddings_batch_scheduler_max_deficit_multiplier: 8
     embeddings_batch_tenant_max_in_flight_work_units: 0
     embeddings_batch_tenant_max_queued_work_units: 0
+    embeddings_batch_scheduler_max_active_flows_per_decision: 100
+    embeddings_batch_scheduler_max_candidate_jobs_per_flow: 50
     embeddings_batch_tenant_scope_preference: organization,team,api_key,user
     embeddings_batch_tenant_fair_share_disabled_model_groups: []
     embeddings_batch_size_aware_scheduling_enabled: false

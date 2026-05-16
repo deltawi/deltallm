@@ -87,6 +87,19 @@ class BatchCreateSessionService:
         self.strict_model_homogeneity_enabled = bool(strict_model_homogeneity_enabled)
         self.default_service_tier = str(default_service_tier or "standard").strip() or "standard"
 
+    def configure_scheduler(
+        self,
+        *,
+        scheduler_enabled: bool,
+        scheduler_shadow_enabled: bool,
+        strict_model_homogeneity_enabled: bool,
+        default_service_tier: str,
+    ) -> None:
+        self.scheduler_enabled = bool(scheduler_enabled)
+        self.scheduler_shadow_enabled = bool(scheduler_shadow_enabled)
+        self.strict_model_homogeneity_enabled = bool(strict_model_homogeneity_enabled)
+        self.default_service_tier = str(default_service_tier or "standard").strip() or "standard"
+
     async def create_embeddings_batch(
         self,
         *,
