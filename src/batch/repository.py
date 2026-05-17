@@ -533,10 +533,12 @@ class BatchRepository:
         usage: dict[str, Any] | None,
         provider_cost: float,
         billed_cost: float,
+        claim_epoch: int | None = None,
     ) -> bool:
         return await self.items.mark_item_completed(
             item_id=item_id,
             worker_id=worker_id,
+            claim_epoch=claim_epoch,
             response_body=response_body,
             usage=usage,
             provider_cost=provider_cost,
@@ -563,6 +565,7 @@ class BatchRepository:
         last_error: str,
         retryable: bool,
         retry_delay_seconds: int = 0,
+        claim_epoch: int | None = None,
     ) -> bool:
         return await self.items.mark_item_failed(
             item_id=item_id,
@@ -571,6 +574,7 @@ class BatchRepository:
             last_error=last_error,
             retryable=retryable,
             retry_delay_seconds=retry_delay_seconds,
+            claim_epoch=claim_epoch,
         )
 
     async def refresh_job_progress(self, batch_id: str) -> BatchJobRecord | None:
@@ -747,11 +751,13 @@ class BatchRepository:
         billed_cost: float,
         outbox_payload: dict[str, Any],
         outbox_max_attempts: int = 5,
+        claim_epoch: int | None = None,
     ) -> Literal["completed", "already_completed", "not_owned"]:
         return await self.complete_items_with_outbox_bulk(
             items=[
                 {
                     "item_id": item_id,
+                    "claim_epoch": claim_epoch,
                     "response_body": response_body,
                     "usage": usage,
                     "provider_cost": provider_cost,

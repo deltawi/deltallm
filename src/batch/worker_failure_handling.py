@@ -81,6 +81,7 @@ class WorkerFailureHandlingMixin:
             last_error=str(exc),
             retryable=retryable,
             retry_delay_seconds=retry_delay,
+            claim_epoch=item.claim_epoch,
         )
         if not updated and retryable:
             retryable = False
@@ -101,6 +102,7 @@ class WorkerFailureHandlingMixin:
                 last_error=str(exc),
                 retryable=retryable,
                 retry_delay_seconds=retry_delay,
+                claim_epoch=item.claim_epoch,
             )
         if not updated:
             logger.warning(

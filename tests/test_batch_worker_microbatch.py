@@ -367,6 +367,7 @@ async def test_batch_retries_no_healthy_deployments_with_backoff(monkeypatch):
             "last_error": "No healthy deployments available for model 'text-embedding-3-small'",
             "retryable": True,
             "retry_delay_seconds": 5,
+            "claim_epoch": 0,
         }
     ]
 

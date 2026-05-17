@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 from datetime import UTC, datetime
 import logging
+from time import perf_counter
 from typing import Any, Awaitable
 
 from src.batch.endpoints import batch_call_type_for_endpoint
@@ -37,6 +38,23 @@ class WorkerPersistenceMixin:
                 status,
                 exc,
             )
+
+    def _observe_prepared_item_lease_lost(
+        self,
+        prepared: _PreparedEmbeddingItem | _PreparedChatItem,
+    ) -> None:
+        self._observe_item_execution_latency(
+            status="lease_lost",
+            latency_seconds=perf_counter() - prepared.started_at_monotonic,
+            reference=prepared.item.item_id,
+        )
+
+    def _observe_prepared_items_lease_lost(
+        self,
+        prepared_items: list[_PreparedEmbeddingItem] | list[_PreparedChatItem],
+    ) -> None:
+        for prepared in prepared_items:
+            self._observe_prepared_item_lease_lost(prepared)
 
     async def _acquire_prepared_policy_lease(self, *, prepared: _PreparedEmbeddingItem | _PreparedChatItem) -> None:
         if prepared.policy_lease is not None:

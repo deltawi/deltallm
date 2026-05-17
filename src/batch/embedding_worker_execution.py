@@ -483,6 +483,7 @@ class EmbeddingWorkerExecutionMixin:
                 claim_epoch=prepared.item.claim_epoch,
             ):
                 item_lease_lost.set()
+                self._observe_prepared_item_lease_lost(prepared)
                 logger.warning(
                     "batch embedding completion skipped after lease loss batch_id=%s item_id=%s",
                     job.batch_id,
@@ -524,6 +525,7 @@ class EmbeddingWorkerExecutionMixin:
                     reference=prepared.item.item_id,
                 )
         except BatchItemLeaseLostError as exc:
+            self._observe_prepared_item_lease_lost(prepared)
             logger.warning(
                 "batch embedding provider call cancelled after lease loss batch_id=%s item_id=%s error=%s",
                 job.batch_id,
@@ -620,6 +622,7 @@ class EmbeddingWorkerExecutionMixin:
                 item_ids,
                 exc,
             )
+            self._observe_prepared_items_lease_lost(prepared_items)
             await self._stop_heartbeat_tasks(item_heartbeats.values())
             item_heartbeats.clear()
             return
@@ -731,6 +734,7 @@ class EmbeddingWorkerExecutionMixin:
                     claim_epoch=prepared.item.claim_epoch,
                 ):
                     item_lease_lost.set()
+                    self._observe_prepared_items_lease_lost(prepared_items)
                     logger.warning(
                         "batch embedding microbatch completion skipped after lease loss batch_id=%s size=%s item_ids=%s",
                         batch_id,
