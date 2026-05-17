@@ -9,8 +9,12 @@ from src.batch.scheduling import (
     API_KEY_TENANT_SCOPE_PREFIX,
     ESTIMATOR_VERSION,
     MIXED_MODEL_GROUP,
+    advisory_lock_acquires_legacy,
+    advisory_lock_key,
+    advisory_lock_legacy_parts,
     build_scheduling_dimensions,
     estimate_request_work_units,
+    parse_advisory_lock_bool,
     parse_tenant_scope_preference,
     resolve_model_group,
 )
@@ -127,17 +131,49 @@ class BatchMaintenanceRepository:
         )
 
     async def _try_backfill_lock(self, prisma: Any) -> bool:
-        rows = await prisma.query_raw(
-            """
-            SELECT pg_try_advisory_xact_lock(hashtext($1), hashtext($2)) AS acquired
-            """,
+        lock_key = advisory_lock_key(_BACKFILL_LOCK_SCOPE, _BACKFILL_LOCK_NAME)
+        if not advisory_lock_acquires_legacy():
+            rows = await prisma.query_raw(
+                """
+                SELECT pg_try_advisory_xact_lock($1::bigint)::bool AS acquired
+                """,
+                lock_key,
+            )
+            if not rows:
+                return False
+            row = dict(rows[0])
+            return parse_advisory_lock_bool(row.get("acquired"))
+        legacy_first, legacy_second = advisory_lock_legacy_parts(
             _BACKFILL_LOCK_SCOPE,
             _BACKFILL_LOCK_NAME,
+        )
+        rows = await prisma.query_raw(
+            """
+            WITH legacy_lock AS (
+                SELECT pg_try_advisory_xact_lock(hashtext($1), hashtext($2))::bool AS acquired
+            ),
+            canonical_lock AS (
+                SELECT
+                    legacy_lock.acquired AS legacy_acquired,
+                    CASE
+                    WHEN legacy_lock.acquired THEN pg_try_advisory_xact_lock($3::bigint)::bool
+                    ELSE false
+                    END AS canonical_acquired
+                FROM legacy_lock
+            )
+            SELECT (legacy_acquired AND canonical_acquired)::bool AS acquired
+            FROM canonical_lock
+            """,
+            legacy_first,
+            legacy_second,
+            lock_key,
         )
         if not rows:
             return False
         row = dict(rows[0])
-        return bool(row.get("acquired") or row.get("pg_try_advisory_xact_lock"))
+        return parse_advisory_lock_bool(
+            row.get("acquired", row.get("pg_try_advisory_xact_lock"))
+        )
 
     async def _backfill_active_items(
         self,

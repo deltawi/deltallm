@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -23,10 +24,14 @@ from src.batch.repositories.mappers import job_from_row, parse_datetime
 from src.batch.scheduling import (
     API_KEY_TENANT_SCOPE_PREFIX,
     ESTIMATOR_VERSION,
+    advisory_lock_acquires_legacy,
+    advisory_lock_key,
+    advisory_lock_legacy_parts,
     build_flow_id,
     build_scheduling_dimensions,
     default_flow_weight,
     max_deficit_for_flow,
+    parse_advisory_lock_bool,
     quantum_for_weight,
     resolve_model_group,
     stable_tenant_scope_id,
@@ -46,6 +51,7 @@ from src.metrics import (
     observe_batch_scheduler_age_credit_work_units,
     observe_batch_scheduler_flow_wait,
     observe_batch_scheduler_job_rank,
+    observe_batch_scheduler_snapshot_read,
     observe_batch_queue_wait,
     observe_batch_time_to_first_claim,
     publish_batch_scheduler_flows,
@@ -53,9 +59,14 @@ from src.metrics import (
 
 logger = logging.getLogger(__name__)
 
+_SCOPE_LOCK_NAMESPACE = "batch_scope"
+_SCHEDULER_FLOW_LOCK_NAMESPACE = "batch_scheduler_flow"
+_MODEL_CAPACITY_LOCK_NAMESPACE = "batch_model_capacity"
+
 _SCHEDULER_FLOW_SKIP_REASONS = frozenset(
     {
         "empty_flow",
+        "flow_lock_busy",
         "flow_scan_limit_reached",
         "insufficient_deficit",
         "lock_busy",
@@ -129,6 +140,104 @@ def _scheduler_metric_mode(value: object) -> str:
     if normalized.endswith("_shadow"):
         return "fifo_v1"
     return normalized
+
+
+async def _acquire_dual_advisory_xact_lock(
+    db: Any,
+    *,
+    legacy_first: object,
+    legacy_second: object,
+    lock_key: int,
+) -> None:
+    first, second = advisory_lock_legacy_parts(legacy_first, legacy_second)
+    acquire_legacy = advisory_lock_acquires_legacy()
+    execute_raw = getattr(db, "execute_raw", None)
+    if callable(execute_raw):
+        if acquire_legacy:
+            await execute_raw(
+                """
+                SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))
+                """,
+                first,
+                second,
+            )
+        await execute_raw(
+            """
+            SELECT pg_advisory_xact_lock($1::bigint)
+            """,
+            lock_key,
+        )
+        return
+    if not acquire_legacy:
+        await db.query_raw(
+            """
+            WITH canonical_lock AS (
+                SELECT pg_advisory_xact_lock($1::bigint)
+            )
+            SELECT 1::int AS locked FROM canonical_lock
+            """,
+            lock_key,
+        )
+        return
+    await db.query_raw(
+        """
+        WITH legacy_lock AS (
+            SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))
+        ),
+        canonical_lock AS (
+            SELECT pg_advisory_xact_lock($3::bigint)
+            FROM legacy_lock
+        )
+        SELECT 1::int AS locked FROM canonical_lock
+        """,
+        first,
+        second,
+        lock_key,
+    )
+
+
+async def _try_acquire_dual_advisory_xact_lock(
+    db: Any,
+    *,
+    legacy_first: object,
+    legacy_second: object,
+    lock_key: int,
+) -> bool:
+    first, second = advisory_lock_legacy_parts(legacy_first, legacy_second)
+    if not advisory_lock_acquires_legacy():
+        rows = await db.query_raw(
+            """
+            SELECT pg_try_advisory_xact_lock($1::bigint)::bool AS locked
+            """,
+            lock_key,
+        )
+        if not rows:
+            return False
+        return parse_advisory_lock_bool(dict(rows[0]).get("locked"))
+    rows = await db.query_raw(
+        """
+        WITH legacy_lock AS (
+            SELECT pg_try_advisory_xact_lock(hashtext($1), hashtext($2))::bool AS locked
+        ),
+        canonical_lock AS (
+            SELECT
+                legacy_lock.locked AS legacy_locked,
+                CASE
+                WHEN legacy_lock.locked THEN pg_try_advisory_xact_lock($3::bigint)::bool
+                ELSE false
+                END AS canonical_locked
+            FROM legacy_lock
+        )
+        SELECT (legacy_locked AND canonical_locked)::bool AS locked
+        FROM canonical_lock
+        """,
+        first,
+        second,
+        lock_key,
+    )
+    if not rows:
+        return False
+    return parse_advisory_lock_bool(dict(rows[0]).get("locked"))
 
 
 def flow_from_row(row: Any) -> BatchSchedulerFlowRecord:
@@ -283,25 +392,12 @@ class BatchJobRepository:
     async def acquire_scope_advisory_lock(self, *, scope_type: str, scope_id: str) -> None:
         if self.prisma is None:
             return
-        executor = getattr(self.prisma, "execute_raw", None)
-        if callable(executor):
-            await executor(
-                """
-                SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))
-                """,
-                scope_type,
-                scope_id,
-            )
-            return
-        await self.prisma.query_raw(
-            """
-            WITH scope_lock AS (
-                SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))
-            )
-            SELECT 1::int AS locked FROM scope_lock
-            """,
-            scope_type,
-            scope_id,
+        lock_key = advisory_lock_key(_SCOPE_LOCK_NAMESPACE, scope_type, scope_id)
+        await _acquire_dual_advisory_xact_lock(
+            self.prisma,
+            legacy_first=scope_type,
+            legacy_second=scope_id,
+            lock_key=lock_key,
         )
 
     async def create_job(
@@ -1054,6 +1150,7 @@ class BatchJobRepository:
         max_age_credit_work_units: int = 1_000,
         min_large_job_claim_interval_seconds: int = 30,
         small_job_max_work_units: int = 100,
+        include_in_flight: bool = True,
     ) -> _SchedulerFlowRefreshSnapshot:
         normalized_service_tier = str(service_tier or "").strip()
         normalized_model_group = str(model_group or "").strip()
@@ -1128,8 +1225,43 @@ class BatchJobRepository:
                         created_at ASC,
                         batch_id ASC
             """
-        rows = await executor.query_raw(
-            f"""
+        if include_in_flight:
+            in_flight_cte_sql = f"""
+            in_flight AS (
+                SELECT
+                    COALESCE(NULLIF(j.service_tier, ''), 'standard') AS service_tier,
+                    COALESCE(NULLIF(i.scheduling_model_group, ''), NULLIF(j.scheduling_model_group, '')) AS model_group,
+                    COALESCE(NULLIF(j.tenant_scope_type, ''), 'anonymous') AS tenant_scope_type,
+                    COALESCE(NULLIF(j.tenant_scope_id, ''), 'anonymous') AS tenant_scope_id,
+                    COALESCE(SUM(GREATEST(COALESCE(i.estimated_work_units, 1), 1)), 0)::int
+                        AS in_flight_work_units
+                FROM deltallm_batch_item i
+                JOIN deltallm_batch_job j ON j.batch_id = i.batch_id
+                WHERE i.status = 'in_progress'
+                  AND (i.lease_expires_at IS NULL OR i.lease_expires_at > NOW())
+                  AND COALESCE(NULLIF(i.scheduling_model_group, ''), NULLIF(j.scheduling_model_group, '')) IS NOT NULL
+                  {model_filter_sql}
+                  {service_tier_filter_sql}
+                GROUP BY service_tier, model_group, tenant_scope_type, tenant_scope_id
+            )
+            """
+        else:
+            in_flight_cte_sql = """
+            in_flight AS (
+                SELECT
+                    NULL::text AS service_tier,
+                    NULL::text AS model_group,
+                    NULL::text AS tenant_scope_type,
+                    NULL::text AS tenant_scope_id,
+                    0::int AS in_flight_work_units
+                WHERE false
+            )
+            """
+        snapshot_kind = "full" if include_in_flight else "candidate"
+        snapshot_started = time.perf_counter()
+        try:
+            rows = await executor.query_raw(
+                f"""
             WITH base_jobs AS (
                 SELECT
                     j.batch_id,
@@ -1297,23 +1429,7 @@ class BatchJobRepository:
                  AND qc.tenant_scope_type = q.tenant_scope_type
                  AND qc.tenant_scope_id = q.tenant_scope_id
             ),
-            in_flight AS (
-                SELECT
-                    COALESCE(NULLIF(j.service_tier, ''), 'standard') AS service_tier,
-                    COALESCE(NULLIF(i.scheduling_model_group, ''), NULLIF(j.scheduling_model_group, '')) AS model_group,
-                    COALESCE(NULLIF(j.tenant_scope_type, ''), 'anonymous') AS tenant_scope_type,
-                    COALESCE(NULLIF(j.tenant_scope_id, ''), 'anonymous') AS tenant_scope_id,
-                    COALESCE(SUM(GREATEST(COALESCE(i.estimated_work_units, 1), 1)), 0)::int
-                        AS in_flight_work_units
-                FROM deltallm_batch_item i
-                JOIN deltallm_batch_job j ON j.batch_id = i.batch_id
-                WHERE i.status = 'in_progress'
-                  AND (i.lease_expires_at IS NULL OR i.lease_expires_at > NOW())
-                  AND COALESCE(NULLIF(i.scheduling_model_group, ''), NULLIF(j.scheduling_model_group, '')) IS NOT NULL
-                  {model_filter_sql}
-                  {service_tier_filter_sql}
-                GROUP BY service_tier, model_group, tenant_scope_type, tenant_scope_id
-            )
+            {in_flight_cte_sql}
             SELECT
                 COALESCE(q.service_tier, f.service_tier) AS service_tier,
                 COALESCE(q.model_group, f.model_group) AS model_group,
@@ -1344,8 +1460,13 @@ class BatchJobRepository:
                      COALESCE(q.tenant_scope_type, f.tenant_scope_type) ASC,
                      COALESCE(q.tenant_scope_id, f.tenant_scope_id) ASC
             """,
-            *params,
-        )
+                *params,
+            )
+        finally:
+            observe_batch_scheduler_snapshot_read(
+                kind=snapshot_kind,
+                latency_seconds=time.perf_counter() - snapshot_started,
+            )
         aggregates: dict[
             tuple[str, str, str, str],
             _SchedulerFlowRefreshAggregate,
@@ -1450,6 +1571,150 @@ class BatchJobRepository:
             legacy_api_key_scope_repairs=legacy_api_key_scope_repairs,
         )
 
+    async def _load_scheduler_flow_in_flight_snapshot(
+        self,
+        executor: Any,
+        *,
+        service_tier: str | None = None,
+        model_group: str | None = None,
+    ) -> _SchedulerFlowRefreshSnapshot:
+        normalized_service_tier = str(service_tier or "").strip()
+        normalized_model_group = str(model_group or "").strip()
+        params: list[Any] = []
+        model_filter_sql = ""
+        if normalized_model_group:
+            params.append(normalized_model_group)
+            model_filter_sql = (
+                "AND COALESCE(NULLIF(i.scheduling_model_group, ''), "
+                f"NULLIF(j.scheduling_model_group, '')) = ${len(params)}"
+            )
+        service_tier_filter_sql = ""
+        if normalized_service_tier:
+            params.append(normalized_service_tier)
+            service_tier_filter_sql = (
+                f"AND COALESCE(NULLIF(j.service_tier, ''), 'standard') = ${len(params)}"
+            )
+        snapshot_started = time.perf_counter()
+        try:
+            rows = await executor.query_raw(
+                f"""
+            SELECT
+                COALESCE(NULLIF(j.service_tier, ''), 'standard') AS service_tier,
+                COALESCE(NULLIF(i.scheduling_model_group, ''), NULLIF(j.scheduling_model_group, ''))
+                    AS model_group,
+                COALESCE(NULLIF(j.tenant_scope_type, ''), 'anonymous') AS tenant_scope_type,
+                COALESCE(NULLIF(j.tenant_scope_id, ''), 'anonymous') AS tenant_scope_id,
+                COALESCE(SUM(GREATEST(COALESCE(i.estimated_work_units, 1), 1)), 0)::int
+                    AS in_flight_work_units
+            FROM deltallm_batch_item i
+            JOIN deltallm_batch_job j ON j.batch_id = i.batch_id
+            WHERE i.status = 'in_progress'
+              AND (i.lease_expires_at IS NULL OR i.lease_expires_at > NOW())
+              AND COALESCE(NULLIF(i.scheduling_model_group, ''), NULLIF(j.scheduling_model_group, '')) IS NOT NULL
+              {model_filter_sql}
+              {service_tier_filter_sql}
+            GROUP BY service_tier, model_group, tenant_scope_type, tenant_scope_id
+            ORDER BY service_tier ASC, model_group ASC, tenant_scope_type ASC, tenant_scope_id ASC
+            """,
+                *params,
+            )
+        finally:
+            observe_batch_scheduler_snapshot_read(
+                kind="in_flight",
+                latency_seconds=time.perf_counter() - snapshot_started,
+            )
+        aggregates: dict[tuple[str, str, str, str], _SchedulerFlowRefreshAggregate] = {}
+        legacy_api_key_scope_repairs: dict[str, str] = {}
+        for row in rows:
+            row_dict = dict(row)
+            row_service_tier = str(row_dict.get("service_tier") or "").strip() or "standard"
+            row_model_group = str(row_dict.get("model_group") or "").strip()
+            if not row_model_group:
+                continue
+            raw_tenant_scope_type = str(row_dict.get("tenant_scope_type") or "anonymous").strip()
+            raw_tenant_scope_id = str(row_dict.get("tenant_scope_id") or "anonymous").strip()
+            tenant_scope_type, tenant_scope_id = _normalize_scheduler_tenant_scope(
+                tenant_scope_type=raw_tenant_scope_type,
+                tenant_scope_id=raw_tenant_scope_id,
+            )
+            if (
+                raw_tenant_scope_type == "api_key"
+                and raw_tenant_scope_id
+                and raw_tenant_scope_id != "anonymous"
+                and not raw_tenant_scope_id.startswith(API_KEY_TENANT_SCOPE_PREFIX)
+            ):
+                legacy_api_key_scope_repairs[raw_tenant_scope_id] = tenant_scope_id
+            key = (row_service_tier, row_model_group, tenant_scope_type, tenant_scope_id)
+            aggregate = aggregates.setdefault(
+                key,
+                _SchedulerFlowRefreshAggregate(
+                    service_tier=row_service_tier,
+                    model_group=row_model_group,
+                    tenant_scope_type=tenant_scope_type,
+                    tenant_scope_id=tenant_scope_id,
+                ),
+            )
+            aggregate.in_flight_work_units += max(
+                0,
+                int(row_dict.get("in_flight_work_units") or 0),
+            )
+        return _SchedulerFlowRefreshSnapshot(
+            service_tier=normalized_service_tier,
+            model_group=normalized_model_group,
+            aggregates=tuple(aggregates.values()),
+            legacy_api_key_scope_repairs=legacy_api_key_scope_repairs,
+        )
+
+    @staticmethod
+    def _merge_scheduler_flow_snapshots(
+        candidate_snapshot: _SchedulerFlowRefreshSnapshot,
+        in_flight_snapshot: _SchedulerFlowRefreshSnapshot,
+    ) -> _SchedulerFlowRefreshSnapshot:
+        merged: dict[tuple[str, str, str, str], _SchedulerFlowRefreshAggregate] = {}
+        for aggregate in candidate_snapshot.aggregates:
+            key = (
+                aggregate.service_tier,
+                aggregate.model_group,
+                aggregate.tenant_scope_type,
+                aggregate.tenant_scope_id,
+            )
+            merged[key] = replace(aggregate, in_flight_work_units=0)
+        for aggregate in in_flight_snapshot.aggregates:
+            key = (
+                aggregate.service_tier,
+                aggregate.model_group,
+                aggregate.tenant_scope_type,
+                aggregate.tenant_scope_id,
+            )
+            existing = merged.get(key)
+            if existing is None:
+                merged[key] = aggregate
+                continue
+            merged[key] = replace(
+                existing,
+                in_flight_work_units=max(0, int(aggregate.in_flight_work_units or 0)),
+            )
+        ordered = tuple(
+            sorted(
+                merged.values(),
+                key=lambda aggregate: (
+                    aggregate.oldest_queue_entered_at or datetime.max.replace(tzinfo=UTC),
+                    aggregate.model_group,
+                    aggregate.tenant_scope_type,
+                    aggregate.tenant_scope_id,
+                ),
+            )
+        )
+        return _SchedulerFlowRefreshSnapshot(
+            service_tier=candidate_snapshot.service_tier,
+            model_group=candidate_snapshot.model_group,
+            aggregates=ordered,
+            legacy_api_key_scope_repairs={
+                **candidate_snapshot.legacy_api_key_scope_repairs,
+                **in_flight_snapshot.legacy_api_key_scope_repairs,
+            },
+        )
+
     async def refresh_scheduler_flows(
         self,
         *,
@@ -1479,12 +1744,27 @@ class BatchJobRepository:
             min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
             small_job_max_work_units=small_job_max_work_units,
         )
+        return await self._refresh_scheduler_flows_from_snapshot(
+            snapshot=snapshot,
+            db=executor,
+            base_quantum_work_units=base_quantum_work_units,
+            max_deficit_multiplier=max_deficit_multiplier,
+        )
+
+    async def _refresh_scheduler_flows_from_snapshot(
+        self,
+        *,
+        snapshot: _SchedulerFlowRefreshSnapshot,
+        db: Any,
+        base_quantum_work_units: int = 16,
+        max_deficit_multiplier: int = 8,
+    ) -> list[BatchSchedulerFlowRecord]:
         normalized_service_tier = snapshot.service_tier
         normalized_model_group = snapshot.model_group
         active_flow_ids: list[str] = []
         refreshed: list[BatchSchedulerFlowRecord] = []
         await _repair_legacy_api_key_scope_ids_for_scheduler_refresh(
-            executor,
+            db,
             service_tier=normalized_service_tier,
             model_group=normalized_model_group,
             scope_repairs=snapshot.legacy_api_key_scope_repairs,
@@ -1506,7 +1786,7 @@ class BatchJobRepository:
             bounded_base_quantum = max(1, int(base_quantum_work_units or 1))
             bounded_max_deficit_multiplier = max(1, int(max_deficit_multiplier or 1))
             active = aggregate.queued_jobs > 0
-            upserted = await executor.query_raw(
+            upserted = await db.query_raw(
                 """
                 INSERT INTO deltallm_batch_scheduler_flow (
                     flow_id, service_tier, model_group, tenant_scope_type, tenant_scope_id,
@@ -1572,7 +1852,7 @@ class BatchJobRepository:
                 flow = flow_from_row(upserted[0])
                 refreshed.append(flow)
         deactivated = await self._deactivate_stale_scheduler_flows(
-            executor,
+            db,
             service_tier=normalized_service_tier or None,
             model_group=normalized_model_group or None,
             active_flow_ids=active_flow_ids,
@@ -1930,6 +2210,18 @@ class BatchJobRepository:
                 normalized_model_group,
             )
             return BatchFairShareClaimResult(claim=None, result="transaction_unavailable")
+        candidate_snapshot = await self._load_scheduler_flow_refresh_snapshot(
+            self.prisma,
+            service_tier=normalized_service_tier,
+            model_group=normalized_model_group,
+            max_candidate_jobs_per_flow=max_candidate_jobs_per_flow,
+            size_aware_scheduling_enabled=size_aware_scheduling_enabled,
+            aging_seconds_per_work_unit=aging_seconds_per_work_unit,
+            max_age_credit_work_units=max_age_credit_work_units,
+            min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
+            small_job_max_work_units=small_job_max_work_units,
+            include_in_flight=False,
+        )
         async with tx_factory() as tx:
             locked = await self._try_acquire_scheduler_flow_lock(
                 tx,
@@ -1937,23 +2229,25 @@ class BatchJobRepository:
                 model_group=normalized_model_group,
             )
             if not locked:
-                increment_batch_scheduler_flow_skip(reason="lock_busy")
-                return BatchFairShareClaimResult(claim=None, result="lock_busy")
+                increment_batch_scheduler_flow_skip(reason="flow_lock_busy")
+                return BatchFairShareClaimResult(claim=None, result="flow_lock_busy")
 
             empty_flow_ids: set[str] = set()
             rounds = max(1, int(max_deficit_multiplier))
-            flows = await self.refresh_scheduler_flows(
+            in_flight_snapshot = await self._load_scheduler_flow_in_flight_snapshot(
+                tx,
                 service_tier=normalized_service_tier,
                 model_group=normalized_model_group,
+            )
+            refresh_snapshot = self._merge_scheduler_flow_snapshots(
+                candidate_snapshot,
+                in_flight_snapshot,
+            )
+            flows = await self._refresh_scheduler_flows_from_snapshot(
+                snapshot=refresh_snapshot,
                 db=tx,
                 base_quantum_work_units=base_quantum_work_units,
                 max_deficit_multiplier=max_deficit_multiplier,
-                max_candidate_jobs_per_flow=max_candidate_jobs_per_flow,
-                size_aware_scheduling_enabled=size_aware_scheduling_enabled,
-                aging_seconds_per_work_unit=aging_seconds_per_work_unit,
-                max_age_credit_work_units=max_age_credit_work_units,
-                min_large_job_claim_interval_seconds=min_large_job_claim_interval_seconds,
-                small_job_max_work_units=small_job_max_work_units,
             )
             for _ in range(rounds):
                 flow_selection = self._select_scheduler_flow(
@@ -2323,19 +2617,17 @@ class BatchJobRepository:
         service_tier: str,
         model_group: str,
     ) -> bool:
-        rows = await db.query_raw(
-            """
-            SELECT pg_try_advisory_xact_lock(hashtext($1), hashtext($2))::bool AS locked
-            """,
-            model_group,
+        lock_key = advisory_lock_key(
+            _SCHEDULER_FLOW_LOCK_NAMESPACE,
             service_tier,
+            model_group,
         )
-        if not rows:
-            return False
-        value = dict(rows[0]).get("locked")
-        if isinstance(value, bool):
-            return value
-        return str(value or "").strip().lower() in {"t", "true", "1"}
+        return await _try_acquire_dual_advisory_xact_lock(
+            db,
+            legacy_first=model_group,
+            legacy_second=service_tier,
+            lock_key=lock_key,
+        )
 
     async def _record_scheduler_flow_skip_reasons(
         self,
@@ -3089,25 +3381,16 @@ class BatchJobRepository:
         model_group: str,
         service_tier: str,
     ) -> None:
-        execute_raw = getattr(db, "execute_raw", None)
-        if callable(execute_raw):
-            await execute_raw(
-                """
-                SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))
-                """,
-                model_group,
-                service_tier,
-            )
-            return
-        await db.query_raw(
-            """
-            WITH capacity_lock AS (
-                SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))
-            )
-            SELECT 1::int AS locked FROM capacity_lock
-            """,
-            model_group,
+        lock_key = advisory_lock_key(
+            _MODEL_CAPACITY_LOCK_NAMESPACE,
             service_tier,
+            model_group,
+        )
+        await _acquire_dual_advisory_xact_lock(
+            db,
+            legacy_first=model_group,
+            legacy_second=service_tier,
+            lock_key=lock_key,
         )
 
     async def _claim_next_work_with_client(

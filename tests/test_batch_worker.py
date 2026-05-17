@@ -6946,7 +6946,7 @@ async def test_batch_worker_size_aware_shadow_preserves_active_smart_policy(
 
 
 @pytest.mark.asyncio
-async def test_batch_worker_shadow_recommends_fair_share_without_claiming_it(
+async def test_batch_worker_redis_unavailable_shadow_recommends_fair_share_without_claiming_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from src.batch import worker as worker_module
@@ -6977,11 +6977,18 @@ async def test_batch_worker_shadow_recommends_fair_share_without_claiming_it(
         ),
     )
 
+    class _UnavailableRedis:
+        def __getattr__(self, name: str):
+            raise AssertionError(f"redis must not be required for batch scheduler shadow: {name}")
+
     class _ShadowRepo:
         def __init__(self) -> None:
             self.recommend_calls: list[dict] = []
             self.fair_share_claim_called = False
             self.claim_next_work_calls: list[dict] = []
+            self.loaded_item_ids: list[list[str]] = []
+            self.release_calls: list[dict] = []
+            self.refreshed_batches: list[list[str]] = []
 
         async def recommend_next_fair_share_flow(self, **kwargs):
             self.recommend_calls.append(kwargs)
@@ -7020,6 +7027,30 @@ async def test_batch_worker_shadow_recommends_fair_share_without_claiming_it(
                 lease_expires_at=now + timedelta(seconds=60),
             )
 
+        async def get_job(self, batch_id: str):
+            assert batch_id == "b-model"
+            return SimpleNamespace(
+                batch_id=batch_id,
+                status=BatchJobStatus.IN_PROGRESS,
+                cancel_requested_at=None,
+            )
+
+        async def load_claim_items(self, item_ids: list[str]):
+            self.loaded_item_ids.append(list(item_ids))
+            return [SimpleNamespace(item_id=item_id, claim_epoch=1) for item_id in item_ids]
+
+        async def release_claim_items(self, *, item_ids: list[str], worker_id: str) -> int:
+            self.release_calls.append({"item_ids": list(item_ids), "worker_id": worker_id})
+            return 0
+
+        async def refresh_jobs_after_claim(self, batch_ids: list[str]):
+            self.refreshed_batches.append(list(batch_ids))
+            return []
+
+        async def summarize_runtime_statuses(self, *, now):  # noqa: ANN001
+            del now
+            return {"queued": 0, "in_progress": 0, "finalizing": 0}
+
     class _CapacityResolver:
         def __init__(self) -> None:
             self.results: list[tuple[str, str]] = []
@@ -7050,7 +7081,7 @@ async def test_batch_worker_shadow_recommends_fair_share_without_claiming_it(
     repo = _ShadowRepo()
     resolver = _CapacityResolver()
     worker = BatchExecutorWorker(
-        app=SimpleNamespace(state=SimpleNamespace()),
+        app=SimpleNamespace(state=SimpleNamespace(redis=_UnavailableRedis())),
         repository=repo,  # type: ignore[arg-type]
         storage=_FakeStorage(),  # type: ignore[arg-type]
         config=BatchWorkerConfig(
@@ -7060,6 +7091,7 @@ async def test_batch_worker_shadow_recommends_fair_share_without_claiming_it(
             work_claim_max_work_units=9,
             model_capacity_enabled=True,
             scheduler_shadow_enabled=True,
+            finalization_first=False,
             tenant_fair_share_base_quantum_work_units=16,
             tenant_fair_share_max_deficit_multiplier=8,
             tenant_max_in_flight_work_units=32,
@@ -7067,11 +7099,21 @@ async def test_batch_worker_shadow_recommends_fair_share_without_claiming_it(
         model_capacity_resolver=resolver,
     )
 
-    claim = await worker._claim_next_work_slice()
+    processed: list[dict[str, object]] = []
+
+    async def _process_items(job, items):  # noqa: ANN001
+        processed.append({"batch_id": job.batch_id, "item_ids": [item.item_id for item in items]})
+
+    worker._process_items = _process_items  # type: ignore[method-assign]
+
+    did_work = await worker.process_once()
     await worker.drain_shadow_tasks()
 
-    assert claim is not None
-    assert claim.batch_id == "b-model"
+    assert did_work is True
+    assert processed == [{"batch_id": "b-model", "item_ids": ["item-1"]}]
+    assert repo.loaded_item_ids == [["item-1"]]
+    assert repo.release_calls == [{"item_ids": ["item-1"], "worker_id": "w1"}]
+    assert repo.refreshed_batches == [["b-model"]]
     assert repo.fair_share_claim_called is False
     assert repo.recommend_calls == [
         {
@@ -7704,7 +7746,7 @@ async def test_batch_worker_fair_share_falls_back_to_model_capacity(
 
 @pytest.mark.parametrize(
     "fair_share_result",
-    ["empty_flow", "flow_scan_limit_reached", "lock_busy", "tenant_in_flight_full"],
+    ["empty_flow", "flow_lock_busy", "flow_scan_limit_reached", "tenant_in_flight_full"],
 )
 @pytest.mark.asyncio
 async def test_batch_worker_fair_share_non_fallback_result_does_not_model_claim_same_group(
@@ -7799,6 +7841,81 @@ async def test_batch_worker_fair_share_non_fallback_result_does_not_model_claim_
         }
     ]
     assert resolver.results == [("model-a", fair_share_result), ("legacy", "claimed")]
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_flow_lock_busy_cooldown_skips_repeated_fair_share_snapshot() -> None:
+    class _LockBusyRepo:
+        def __init__(self) -> None:
+            self.fair_share_calls = 0
+            self.legacy_calls = 0
+
+        async def claim_next_fair_share_work(self, **kwargs):
+            del kwargs
+            self.fair_share_calls += 1
+            return SimpleNamespace(result="flow_lock_busy", claim=None)
+
+        async def claim_next_work(self, **kwargs):
+            assert kwargs.get("legacy_only") is True
+            self.legacy_calls += 1
+            return None
+
+    class _CapacityResolver:
+        def __init__(self) -> None:
+            self.results: list[tuple[str, str]] = []
+
+        async def select_model_groups(self, **kwargs):
+            assert kwargs == {"max_items": 4, "max_work_units": 9}
+            return [
+                SimpleNamespace(
+                    snapshot=SimpleNamespace(
+                        model_group="model-a",
+                        service_tier="standard",
+                        in_flight_items=0,
+                        available_in_flight_items=4,
+                        in_flight_work_units=0,
+                        tpm_remaining=16,
+                    ),
+                    max_items=4,
+                    max_work_units=9,
+                )
+            ]
+
+        def record_selection(self, snapshot):
+            assert snapshot.model_group == "model-a"
+
+        def record_claim_result(self, *, model_group: str, result: str) -> None:
+            self.results.append((model_group, result))
+
+    repo = _LockBusyRepo()
+    resolver = _CapacityResolver()
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(
+            worker_id="w1",
+            scheduler_claim_mode="work_slice",
+            poll_interval_seconds=1.0,
+            work_claim_max_items=4,
+            work_claim_max_work_units=9,
+            model_capacity_enabled=True,
+            tenant_fair_share_enabled=True,
+        ),
+        model_capacity_resolver=resolver,
+    )
+
+    assert await worker._claim_next_work_slice() is None
+    assert await worker._claim_next_work_slice() is None
+
+    assert repo.fair_share_calls == 1
+    assert repo.legacy_calls == 2
+    assert resolver.results == [
+        ("model-a", "flow_lock_busy"),
+        ("legacy", "empty"),
+        ("model-a", "flow_lock_busy"),
+        ("legacy", "empty"),
+    ]
 
 
 @pytest.mark.asyncio

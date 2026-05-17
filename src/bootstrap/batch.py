@@ -38,6 +38,7 @@ from src.batch.scheduling import (
     normalize_scheduler_shadow_mode,
     resolve_scheduler_modes_from_settings,
     scheduler_rollback_events,
+    set_advisory_lock_mode,
 )
 from src.batch.storage import LocalBatchArtifactStorage, S3BatchArtifactStorage
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
@@ -94,6 +95,10 @@ def _clear_model_capacity_snapshot_cache(resolver: Any) -> None:
         resolver._snapshot_cache = None
     with contextlib.suppress(AttributeError):
         resolver._snapshot_cache_expires_at = 0.0
+
+
+def _apply_batch_advisory_lock_mode(general: Any) -> None:
+    set_advisory_lock_mode(getattr(general, "embeddings_batch_advisory_lock_mode", "dual"))
 
 
 def _build_model_capacity_resolver(
@@ -231,6 +236,7 @@ def _apply_live_batch_scheduler_config(
     repository: BatchRepository,
 ) -> BatchSchedulerModes:
     general = cfg.general_settings
+    _apply_batch_advisory_lock_mode(general)
     scheduler_modes = resolve_scheduler_modes_from_settings(general)
     model_capacity_config = BatchModelCapacityConfig.from_settings(general)
     tenant_fair_share_config = BatchTenantFairShareConfig.from_settings(general)
@@ -494,6 +500,7 @@ def _build_create_session_promoter(
 async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) -> BatchRuntime:
     runtime = BatchRuntime()
     app.state.batch_runtime = runtime
+    _apply_batch_advisory_lock_mode(cfg.general_settings)
 
     if not cfg.general_settings.embeddings_batch_enabled:
         app.state.batch_storage = None

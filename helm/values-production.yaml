@@ -90,6 +90,7 @@ config:
     embeddings_batch_scheduler_max_deficit_multiplier: 8
     embeddings_batch_tenant_max_in_flight_work_units: 0
     embeddings_batch_tenant_max_queued_work_units: 0
+    embeddings_batch_advisory_lock_mode: dual
     embeddings_batch_scheduler_max_active_flows_per_decision: 100
     embeddings_batch_scheduler_max_candidate_jobs_per_flow: 50
     embeddings_batch_tenant_scope_preference: organization,team,api_key,user

@@ -26,6 +26,55 @@ This runbook covers the embeddings batch scheduler rollout modes and the checks 
     AND indexname = 'deltallm_batch_item_in_progress_capacity_idx';
   ```
 
+## Capacity Planning
+
+The scheduler keeps Postgres as the durable source of truth. Model capacity, queued work, in-flight
+work, and fair-share flow state are read from Postgres during worker claims; Redis remains an
+optional coordination/cache layer and is not required for claim correctness. This keeps degraded
+Redis behavior safe, but it means hot-model throughput is bounded by Postgres query latency,
+transaction latency, and available DB connections.
+
+Plan DB connections before increasing worker replicas:
+
+- Reserved pool pressure is driven by `db_pool_size`, not worker concurrency. In shared mode,
+  estimate `api_replicas * db_pool_size`. In split worker mode, add
+  `batchWorker.replicaCount * db_pool_size`. For example, eight worker pods with `db_pool_size=20`
+  can reserve up to 160 database connections.
+- Worker execution pressure is driven by `embeddings_batch_worker_concurrency`. Use it to size
+  batch throughput and provider pressure, but do not use it as the DB connection upper bound.
+- Add headroom for API requests, admin UI, completion outbox, cleanup, scheduler backfill,
+  transaction overhead, and migrations. Keep total expected connections below the database or pooler
+  limit with at least 20 percent spare capacity during canaries.
+
+For high-concurrency fair-share canaries, track:
+
+- p95 and p99 of `deltallm_batch_scheduler_decision_latency_seconds`.
+- `deltallm_batch_scheduler_flow_skips_total{reason="flow_lock_busy"}` divided by total work-claim
+  attempts or scheduler decisions. Total flow skips are useful as a diagnostic breakdown, but they
+  are not the lock-busy rate denominator.
+- `deltallm_batch_scheduler_snapshot_reads_total{kind="candidate"}` and
+  `deltallm_batch_scheduler_snapshot_latency_seconds{kind="candidate"}`. A high candidate snapshot
+  rate with high `flow_lock_busy` means workers are still spending DB read capacity on contenders.
+- `deltallm_batch_scheduler_fairness_deviation` for active tenants on the same model/tier.
+- `deltallm_batch_item_reclaims_total` divided by completed item rate.
+
+Consider Redis hot counters only after Postgres-backed canaries show sustained capacity-snapshot or
+flow-refresh pressure, and only as an optimization. Durable item ownership, completion, billing, and
+retry state must remain in Postgres.
+
+## Advisory Lock Compatibility
+
+This release acquires both the legacy two-argument Postgres advisory lock and the canonical
+namespaced 64-bit advisory lock for scheduler-flow, model-capacity, scope, and backfill locks. The
+legacy lock is acquired first, then the canonical lock, so rolling upgrades keep old and new workers
+coordinated. While dual locking is enabled, legacy `hashtext` collision risk is still present; the
+canonical lock exists to make the eventual canonical-only cutover deterministic and auditable.
+
+Do not remove the dual-lock compatibility path until every batch-worker pod has completed one full
+rollout on the canonical-lock version and no rollback to the legacy-lock version remains planned.
+After that point, operators may set `embeddings_batch_advisory_lock_mode=canonical` to stop acquiring
+the legacy `hashtext` lock. Keep the default `dual` during rolling upgrades.
+
 ## Modes
 
 Active mode controls real claims and leases. Shadow mode only computes recommendations and metrics.
@@ -125,6 +174,9 @@ Check Prometheus metrics:
 - `deltallm_batch_scheduler_oldest_wait_seconds`
 - `deltallm_batch_scheduler_fairness_deviation`
 - `deltallm_batch_scheduler_decision_latency_seconds`
+- `deltallm_batch_scheduler_flow_skips_total`
+- `deltallm_batch_item_reclaims_total`
+- `deltallm_batch_duplicate_completion_rejections_total`
 - `deltallm_batch_time_to_first_claim_seconds`
 - `deltallm_batch_completion_latency_seconds`
 - `deltallm_config_reload_events_total`
@@ -147,6 +199,8 @@ Prometheus checks for canary advancement:
 - Fairness deviation: `deltallm_batch_scheduler_fairness_deviation` should not trend upward for
   active tenants sharing the same model/tier.
 - Reclaims: `deltallm_batch_item_reclaims_total` should stay below 5 percent of item completion rate.
+- Duplicate completion rejections: `deltallm_batch_duplicate_completion_rejections_total` should not
+  increase during a healthy canary.
 
 Before advancing, verify:
 

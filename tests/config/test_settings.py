@@ -40,6 +40,18 @@ def test_master_key_validation_rejects_short_or_weak_values():
         Settings.model_validate({"master_key": "OnlyLettersMasterKeyWithoutDigitsLongEnough"})
 
 
+def test_batch_advisory_lock_mode_validation() -> None:
+    cfg = AppConfig.model_validate(
+        {"general_settings": {"embeddings_batch_advisory_lock_mode": "canonical"}}
+    )
+    assert cfg.general_settings.embeddings_batch_advisory_lock_mode == "canonical"
+
+    with pytest.raises(ValueError, match="embeddings_batch_advisory_lock_mode"):
+        AppConfig.model_validate(
+            {"general_settings": {"embeddings_batch_advisory_lock_mode": "legacy"}}
+        )
+
+
 def test_resolve_app_config_with_secrets_wraps_secret_resolution_errors():
     class BrokenResolver:
         def resolve_tree(self, value):
