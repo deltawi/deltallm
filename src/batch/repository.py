@@ -28,6 +28,7 @@ from src.batch.repositories import (
     BatchMaintenanceRepository,
 )
 from src.batch.scheduling import parse_tenant_scope_preference
+from src.metrics import increment_batch_duplicate_completion_rejection
 
 
 class BatchRepository:
@@ -817,6 +818,7 @@ class BatchRepository:
             outbox_item_ids = {record.item_id for record in existing_outbox}
             if completed_item_ids == set(item_ids) and outbox_item_ids == set(item_ids):
                 return "already_completed"
+            increment_batch_duplicate_completion_rejection(reason="not_owned", count=len(item_ids))
             return "not_owned"
 
         if self.prisma is not None and hasattr(self.prisma, "tx"):

@@ -80,6 +80,28 @@ deltallm_batch_item_reclaims_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_duplicate_completion_rejections_metric = Counter(
+    "deltallm_batch_duplicate_completion_rejections_total",
+    "Batch completion writes rejected after item ownership fencing",
+    ["reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_snapshot_reads_metric = Counter(
+    "deltallm_batch_scheduler_snapshot_reads_total",
+    "Batch scheduler snapshot reads by kind",
+    ["kind"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_scheduler_snapshot_latency_metric = Histogram(
+    "deltallm_batch_scheduler_snapshot_latency_seconds",
+    "Batch scheduler snapshot read latency by kind",
+    ["kind"],
+    buckets=[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_batch_item_retries_metric = Counter(
     "deltallm_batch_item_retries_total",
     "Batch item retries scheduled by retry category",
@@ -685,6 +707,20 @@ def increment_batch_repair_action(*, action: str, status: str) -> None:
 
 def increment_batch_item_reclaim() -> None:
     deltallm_batch_item_reclaims_metric.inc()
+
+
+def increment_batch_duplicate_completion_rejection(*, reason: str, count: int = 1) -> None:
+    deltallm_batch_duplicate_completion_rejections_metric.labels(reason=sanitize_label(reason)).inc(
+        max(0, int(count))
+    )
+
+
+def observe_batch_scheduler_snapshot_read(*, kind: str, latency_seconds: float) -> None:
+    sanitized_kind = sanitize_label(kind)
+    deltallm_batch_scheduler_snapshot_reads_metric.labels(kind=sanitized_kind).inc()
+    deltallm_batch_scheduler_snapshot_latency_metric.labels(kind=sanitized_kind).observe(
+        max(0.0, float(latency_seconds))
+    )
 
 
 def increment_batch_item_retry(*, category: str) -> None:

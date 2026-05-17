@@ -62,6 +62,8 @@ _FAIR_SHARE_MODEL_FALLBACK_RESULTS = frozenset(
 _IDLE_BACKOFF_MAX_MULTIPLIER = 8.0
 _IDLE_BACKOFF_MAX_SECONDS = 10.0
 _IDLE_BACKOFF_JITTER_FRACTION = 0.2
+_FLOW_LOCK_BUSY_BACKOFF_MAX_SECONDS = 2.0
+_FLOW_LOCK_BUSY_BACKOFF_JITTER_FRACTION = 0.2
 _SHADOW_FAIR_SHARE_NO_FLOW_RESULTS = frozenset(
     {
         "no_recommendation",
@@ -98,6 +100,8 @@ class BatchExecutorWorker:
         self.model_capacity_resolver = model_capacity_resolver
         self._running = False
         self._idle_backoff_attempts = 0
+        self._fair_share_flow_lock_busy_attempts: dict[tuple[str, str], int] = {}
+        self._fair_share_flow_lock_busy_until: dict[tuple[str, str], float] = {}
         self._shadow_tasks: set[asyncio.Task[None]] = set()
         self._artifact_finalizer = BatchArtifactFinalizer(
             repository=repository,
@@ -199,6 +203,50 @@ class BatchExecutorWorker:
         if upper <= lower:
             return lower
         return random.uniform(lower, upper)
+
+    @staticmethod
+    def _fair_share_flow_lock_key(*, service_tier: object, model_group: object) -> tuple[str, str]:
+        return (
+            str(service_tier or "standard").strip() or "standard",
+            str(model_group or "").strip(),
+        )
+
+    def _fair_share_flow_lock_busy_deferred(
+        self,
+        *,
+        service_tier: object,
+        model_group: object,
+    ) -> bool:
+        key = self._fair_share_flow_lock_key(service_tier=service_tier, model_group=model_group)
+        return time.monotonic() < self._fair_share_flow_lock_busy_until.get(key, 0.0)
+
+    def _record_fair_share_flow_lock_busy(
+        self,
+        *,
+        service_tier: object,
+        model_group: object,
+    ) -> None:
+        key = self._fair_share_flow_lock_key(service_tier=service_tier, model_group=model_group)
+        base_delay = max(0.05, min(1.0, float(self.config.poll_interval_seconds or 1.0)))
+        attempt = min(max(0, self._fair_share_flow_lock_busy_attempts.get(key, 0)), 8)
+        delay = min(_FLOW_LOCK_BUSY_BACKOFF_MAX_SECONDS, base_delay * (2**attempt))
+        jitter = delay * _FLOW_LOCK_BUSY_BACKOFF_JITTER_FRACTION
+        lower = max(0.0, delay - jitter)
+        upper = min(_FLOW_LOCK_BUSY_BACKOFF_MAX_SECONDS, delay + jitter)
+        self._fair_share_flow_lock_busy_attempts[key] = min(attempt + 1, 8)
+        self._fair_share_flow_lock_busy_until[key] = time.monotonic() + (
+            lower if upper <= lower else random.uniform(lower, upper)
+        )
+
+    def _reset_fair_share_flow_lock_busy(
+        self,
+        *,
+        service_tier: object,
+        model_group: object,
+    ) -> None:
+        key = self._fair_share_flow_lock_key(service_tier=service_tier, model_group=model_group)
+        self._fair_share_flow_lock_busy_attempts.pop(key, None)
+        self._fair_share_flow_lock_busy_until.pop(key, None)
 
     def _claim_limit(self) -> int:
         return max(
@@ -894,6 +942,17 @@ class BatchExecutorWorker:
                     snapshot.model_group
                 )
                 if active_uses_fair_share and fair_share_model_enabled:
+                    if self._fair_share_flow_lock_busy_deferred(
+                        service_tier=snapshot.service_tier,
+                        model_group=snapshot.model_group,
+                    ):
+                        claim = None
+                        result = "flow_lock_busy"
+                        resolver.record_claim_result(
+                            model_group=snapshot.model_group,
+                            result=result,
+                        )
+                        continue
                     fair_share_claim_holder: dict[str, Any | None] = {"claim": None}
                     fair_share_claim_ready = asyncio.Event()
                     fair_share_shadow_scheduled = False
@@ -955,6 +1014,16 @@ class BatchExecutorWorker:
                         )
                         claim = fair_share_result.claim
                         result = fair_share_result.result
+                        if result == "flow_lock_busy":
+                            self._record_fair_share_flow_lock_busy(
+                                service_tier=snapshot.service_tier,
+                                model_group=snapshot.model_group,
+                            )
+                        else:
+                            self._reset_fair_share_flow_lock_busy(
+                                service_tier=snapshot.service_tier,
+                                model_group=snapshot.model_group,
+                            )
                         if claim is None and result in _FAIR_SHARE_MODEL_FALLBACK_RESULTS:
                             claim = await self._claim_model_capacity_work_slice(
                                 snapshot=snapshot,

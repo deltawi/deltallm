@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -20,10 +21,12 @@ from src.batch.repositories.item_repository import BatchItemRepository
 from src.batch.repositories.job_repository import BatchJobRepository, flow_from_row
 from src.batch.repositories.mappers import job_from_row
 from src.batch.repositories import job_repository as job_repository_module
+import src.batch.scheduling.advisory_locks as advisory_locks_module
 from src.batch.scheduling import (
     API_KEY_TENANT_SCOPE_PREFIX,
     MIXED_MODEL_GROUP,
     BatchSizeAgingConfig,
+    advisory_lock_key,
     stable_tenant_scope_id,
 )
 
@@ -87,6 +90,101 @@ async def test_bulk_item_completion_requires_claim_epoch() -> None:
     assert prisma.calls == []
 
 
+@pytest.mark.asyncio
+async def test_complete_items_with_outbox_counts_not_owned_completion_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, int | str]] = []
+    monkeypatch.setattr(
+        "src.batch.repository.increment_batch_duplicate_completion_rejection",
+        lambda *, reason, count=1: calls.append({"reason": reason, "count": count}),
+    )
+
+    class _NotOwnedRepository(BatchRepository):
+        async def mark_items_completed_bulk(self, *, items, worker_id):  # noqa: ANN001
+            del items, worker_id
+            return False
+
+        async def list_items_by_ids(self, item_ids):  # noqa: ANN001
+            del item_ids
+            return []
+
+        async def list_completion_outbox_by_item_ids(self, item_ids):  # noqa: ANN001
+            del item_ids
+            return []
+
+    repository = _NotOwnedRepository()
+
+    result = await repository.complete_items_with_outbox_bulk(
+        items=[
+            {
+                "item_id": "item-1",
+                "claim_epoch": 1,
+                "response_body": {"ok": True},
+                "usage": {},
+                "provider_cost": 0.0,
+                "billed_cost": 0.0,
+                "outbox_payload": {"batch_id": "batch-1"},
+            },
+            {
+                "item_id": "item-2",
+                "claim_epoch": 1,
+                "response_body": {"ok": True},
+                "usage": {},
+                "provider_cost": 0.0,
+                "billed_cost": 0.0,
+                "outbox_payload": {"batch_id": "batch-1"},
+            },
+        ],
+        worker_id="worker-1",
+    )
+
+    assert result == "not_owned"
+    assert calls == [{"reason": "not_owned", "count": 2}]
+
+
+@pytest.mark.asyncio
+async def test_complete_items_with_outbox_does_not_count_idempotent_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, int | str]] = []
+    monkeypatch.setattr(
+        "src.batch.repository.increment_batch_duplicate_completion_rejection",
+        lambda *, reason, count=1: calls.append({"reason": reason, "count": count}),
+    )
+
+    class _AlreadyCompletedRepository(BatchRepository):
+        async def mark_items_completed_bulk(self, *, items, worker_id):  # noqa: ANN001
+            del items, worker_id
+            return False
+
+        async def list_items_by_ids(self, item_ids):  # noqa: ANN001
+            return [SimpleNamespace(item_id=item_id, status="completed") for item_id in item_ids]
+
+        async def list_completion_outbox_by_item_ids(self, item_ids):  # noqa: ANN001
+            return [SimpleNamespace(item_id=item_id) for item_id in item_ids]
+
+    repository = _AlreadyCompletedRepository()
+
+    result = await repository.complete_items_with_outbox_bulk(
+        items=[
+            {
+                "item_id": "item-1",
+                "claim_epoch": 1,
+                "response_body": {"ok": True},
+                "usage": {},
+                "provider_cost": 0.0,
+                "billed_cost": 0.0,
+                "outbox_payload": {"batch_id": "batch-1"},
+            }
+        ],
+        worker_id="worker-1",
+    )
+
+    assert result == "already_completed"
+    assert calls == []
+
+
 def _job_row(**overrides):
     row = {
         "batch_id": "batch-1",
@@ -144,6 +242,123 @@ def _scheduler_flow(**overrides) -> BatchSchedulerFlowRecord:
     }
     values.update(overrides)
     return BatchSchedulerFlowRecord(**values)
+
+
+def _scheduler_flow_snapshot():
+    return job_repository_module._SchedulerFlowRefreshSnapshot(
+        service_tier="standard",
+        model_group="model-a",
+        aggregates=(),
+        legacy_api_key_scope_repairs={},
+    )
+
+
+def test_scheduler_flow_snapshot_merge_uses_final_in_flight_state_for_selection() -> None:
+    now = datetime.now(tz=UTC)
+    candidate_snapshot = job_repository_module._SchedulerFlowRefreshSnapshot(
+        service_tier="standard",
+        model_group="model-a",
+        aggregates=(
+            job_repository_module._SchedulerFlowRefreshAggregate(
+                service_tier="standard",
+                model_group="model-a",
+                tenant_scope_type="team",
+                tenant_scope_id="team-a",
+                queued_jobs=1,
+                queued_work_units=1,
+                in_flight_work_units=0,
+                oldest_queue_entered_at=now,
+                next_item_work_units=1,
+                next_batch_id="batch-a",
+            ),
+        ),
+        legacy_api_key_scope_repairs={"sk-in-flight": "api_key:stable-in-flight"},
+    )
+    in_flight_snapshot = job_repository_module._SchedulerFlowRefreshSnapshot(
+        service_tier="standard",
+        model_group="model-a",
+        aggregates=(
+            job_repository_module._SchedulerFlowRefreshAggregate(
+                service_tier="standard",
+                model_group="model-a",
+                tenant_scope_type="team",
+                tenant_scope_id="team-a",
+                in_flight_work_units=32,
+            ),
+        ),
+        legacy_api_key_scope_repairs={},
+    )
+
+    merged = BatchJobRepository._merge_scheduler_flow_snapshots(
+        candidate_snapshot,
+        in_flight_snapshot,
+    )
+
+    assert len(merged.aggregates) == 1
+    aggregate = merged.aggregates[0]
+    assert aggregate.queued_jobs == 1
+    assert aggregate.next_batch_id == "batch-a"
+    assert aggregate.in_flight_work_units == 32
+    assert merged.legacy_api_key_scope_repairs == {
+        "sk-in-flight": "api_key:stable-in-flight",
+    }
+
+    flow = BatchJobRepository._preview_flow_from_refresh_aggregate(
+        aggregate,
+        existing=None,
+        base_quantum_work_units=16,
+        max_deficit_multiplier=8,
+        now=now,
+    )
+    selection = BatchJobRepository._select_scheduler_flow(
+        [flow],
+        max_work_units=1,
+        tenant_max_in_flight_work_units=32,
+        allow_deficit_bypass=False,
+    )
+
+    assert selection.selected is None
+    assert selection.skip_reasons == {flow.flow_id: "tenant_in_flight_full"}
+
+
+@pytest.mark.asyncio
+async def test_scheduler_flow_in_flight_snapshot_merges_legacy_api_key_scope_rows() -> None:
+    raw_api_key = "sk-legacy"
+    stable_api_key_scope = stable_tenant_scope_id(scope_type="api_key", scope_id=raw_api_key)
+
+    class _Db:
+        async def query_raw(self, sql: str, *params):
+            assert "i.status = 'in_progress'" in sql
+            assert params == ("model-a", "standard")
+            return [
+                {
+                    "service_tier": "standard",
+                    "model_group": "model-a",
+                    "tenant_scope_type": "api_key",
+                    "tenant_scope_id": raw_api_key,
+                    "in_flight_work_units": 3,
+                },
+                {
+                    "service_tier": "standard",
+                    "model_group": "model-a",
+                    "tenant_scope_type": "api_key",
+                    "tenant_scope_id": stable_api_key_scope,
+                    "in_flight_work_units": 5,
+                },
+            ]
+
+    snapshot = await BatchJobRepository()._load_scheduler_flow_in_flight_snapshot(
+        _Db(),
+        service_tier="standard",
+        model_group="model-a",
+    )
+
+    assert len(snapshot.aggregates) == 1
+    aggregate = snapshot.aggregates[0]
+    assert aggregate.tenant_scope_type == "api_key"
+    assert aggregate.tenant_scope_id == stable_api_key_scope
+    assert aggregate.in_flight_work_units == 8
+    assert snapshot.legacy_api_key_scope_repairs == {raw_api_key: stable_api_key_scope}
 
 
 def test_batch_repository_with_prisma_preserves_tenant_scope_preference() -> None:
@@ -440,7 +655,13 @@ async def test_claim_next_work_capacity_guard_rechecks_in_flight_under_model_loc
     claim_sql, claim_params = prisma.tx_client.calls[1]
     assert "pg_advisory_xact_lock" in lock_sql
     assert "SELECT 1::int AS locked" in lock_sql
-    assert lock_params == ("model-a", "standard")
+    assert "hashtext($1)" in lock_sql
+    assert "$3::bigint" in lock_sql
+    assert lock_params == (
+        "model-a",
+        "standard",
+        advisory_lock_key("batch_model_capacity", "standard", "model-a"),
+    )
     assert "capacity_lock AS" not in claim_sql
     assert "capacity_usage AS" in claim_sql
     assert "capacity_state AS" in claim_sql
@@ -464,12 +685,10 @@ async def test_claim_next_work_capacity_guard_rechecks_in_flight_under_model_loc
 async def test_model_capacity_lock_uses_execute_raw_to_avoid_void_deserialization() -> None:
     class _ExecPrisma:
         def __init__(self) -> None:
-            self.execute_sql = ""
-            self.execute_params: tuple[object, ...] = ()
+            self.execute_calls: list[tuple[str, tuple[object, ...]]] = []
 
         async def execute_raw(self, sql: str, *params):
-            self.execute_sql = sql
-            self.execute_params = params
+            self.execute_calls.append((sql, params))
             return 0
 
         async def query_raw(self, sql: str, *params):  # pragma: no cover
@@ -485,8 +704,15 @@ async def test_model_capacity_lock_uses_execute_raw_to_avoid_void_deserializatio
         service_tier="standard",
     )
 
-    assert "pg_advisory_xact_lock" in prisma.execute_sql
-    assert prisma.execute_params == ("model-a", "standard")
+    assert len(prisma.execute_calls) == 2
+    legacy_sql, legacy_params = prisma.execute_calls[0]
+    canonical_sql, canonical_params = prisma.execute_calls[1]
+    assert "pg_advisory_xact_lock(hashtext($1), hashtext($2))" in legacy_sql
+    assert legacy_params == ("model-a", "standard")
+    assert "pg_advisory_xact_lock($1::bigint)" in canonical_sql
+    assert canonical_params == (
+        advisory_lock_key("batch_model_capacity", "standard", "model-a"),
+    )
 
 
 @pytest.mark.asyncio
@@ -1512,7 +1738,15 @@ async def test_fair_share_claim_reports_tenant_in_flight_full_when_all_active_fl
             del db, kwargs
             return True
 
-        async def refresh_scheduler_flows(self, **kwargs):  # noqa: ANN003
+        async def _load_scheduler_flow_refresh_snapshot(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            del args, kwargs
+            return _scheduler_flow_snapshot()
+
+        async def _load_scheduler_flow_in_flight_snapshot(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            del args, kwargs
+            return _scheduler_flow_snapshot()
+
+        async def _refresh_scheduler_flows_from_snapshot(self, **kwargs):  # noqa: ANN003
             del kwargs
             return [flow]
 
@@ -1574,7 +1808,15 @@ async def test_fair_share_claim_retries_next_flow_after_empty_selected_flow() ->
             del db, kwargs
             return True
 
-        async def refresh_scheduler_flows(self, **kwargs):  # noqa: ANN003
+        async def _load_scheduler_flow_refresh_snapshot(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            del args, kwargs
+            return _scheduler_flow_snapshot()
+
+        async def _load_scheduler_flow_in_flight_snapshot(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            del args, kwargs
+            return _scheduler_flow_snapshot()
+
+        async def _refresh_scheduler_flows_from_snapshot(self, **kwargs):  # noqa: ANN003
             del kwargs
             return [empty_flow, next_flow]
 
@@ -1665,7 +1907,15 @@ async def test_fair_share_claim_reuses_refreshed_flows_after_deficit_refill() ->
             del db, kwargs
             return True
 
-        async def refresh_scheduler_flows(self, **kwargs):  # noqa: ANN003
+        async def _load_scheduler_flow_refresh_snapshot(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            del args, kwargs
+            return _scheduler_flow_snapshot()
+
+        async def _load_scheduler_flow_in_flight_snapshot(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            del args, kwargs
+            return _scheduler_flow_snapshot()
+
+        async def _refresh_scheduler_flows_from_snapshot(self, **kwargs):  # noqa: ANN003
             del kwargs
             self.refresh_calls += 1
             return [first_flow, second_flow]
@@ -2112,14 +2362,19 @@ async def test_fair_share_claim_publishes_updated_flow_without_extra_flow_scan(
 
 
 @pytest.mark.asyncio
-async def test_fair_share_claim_skips_model_when_scheduler_lock_busy() -> None:
+async def test_fair_share_claim_reports_flow_lock_busy_after_candidate_snapshot() -> None:
     class _TxPrisma:
         def __init__(self) -> None:
             self.tx_client = _PrismaSpy()
+            self.candidate_calls: list[tuple[str, tuple[object, ...]]] = []
 
         @asynccontextmanager
         async def tx(self):
             yield self.tx_client
+
+        async def query_raw(self, sql: str, *params):
+            self.candidate_calls.append((sql, params))
+            return []
 
     class _LockBusySpy(_PrismaSpy):
         async def query_raw(self, sql: str, *params):
@@ -2142,9 +2397,297 @@ async def test_fair_share_claim_skips_model_when_scheduler_lock_busy() -> None:
     )
 
     assert result.claim is None
-    assert result.result == "lock_busy"
+    assert result.result == "flow_lock_busy"
+    assert len(prisma.candidate_calls) == 1
+    assert "WITH base_jobs AS" in prisma.candidate_calls[0][0]
     assert "pg_try_advisory_xact_lock" in prisma.tx_client.sql
-    assert prisma.tx_client.params == ("model-a", "standard")
+    assert "hashtext($1)" in prisma.tx_client.sql
+    assert "$3::bigint" in prisma.tx_client.sql
+    assert prisma.tx_client.params == (
+        "model-a",
+        "standard",
+        advisory_lock_key("batch_scheduler_flow", "standard", "model-a"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_fair_share_claim_loads_candidates_outside_final_lock() -> None:
+    class _TxPrisma:
+        def __init__(self) -> None:
+            self.tx_clients = [object()]
+            self.tx_index = 0
+
+        @asynccontextmanager
+        async def tx(self):
+            client = self.tx_clients[self.tx_index]
+            self.tx_index += 1
+            yield client
+
+    class _Repository(BatchJobRepository):
+        def __init__(self, prisma_client) -> None:  # noqa: ANN001
+            super().__init__(prisma_client)
+            self.lock_dbs: list[object] = []
+            self.candidate_executor: object | None = None
+            self.in_flight_executor: object | None = None
+            self.refresh_snapshot: object | None = None
+
+        async def _try_acquire_scheduler_flow_lock(self, db, **kwargs):  # noqa: ANN001, ANN003
+            del kwargs
+            self.lock_dbs.append(db)
+            return True
+
+        async def _load_scheduler_flow_refresh_snapshot(self, executor, **kwargs):  # noqa: ANN001, ANN003
+            assert kwargs["include_in_flight"] is False
+            self.candidate_executor = executor
+            return _scheduler_flow_snapshot()
+
+        async def _load_scheduler_flow_in_flight_snapshot(self, executor, **kwargs):  # noqa: ANN001, ANN003
+            del kwargs
+            self.in_flight_executor = executor
+            return _scheduler_flow_snapshot()
+
+        async def _refresh_scheduler_flows_from_snapshot(self, **kwargs):  # noqa: ANN003
+            self.refresh_snapshot = kwargs["snapshot"]
+            return []
+
+    prisma = _TxPrisma()
+    repository = _Repository(prisma)
+
+    result = await repository.claim_next_fair_share_work(
+        worker_id="worker-1",
+        service_tier="standard",
+        model_group="model-a",
+        max_items=4,
+        max_work_units=16,
+        lease_seconds=120,
+    )
+
+    assert result.result == "no_active_flow"
+    assert repository.lock_dbs == [prisma.tx_clients[0]]
+    assert repository.candidate_executor is prisma
+    assert repository.in_flight_executor is prisma.tx_clients[0]
+    assert repository.refresh_snapshot is not None
+
+
+@pytest.mark.asyncio
+async def test_fair_share_claim_allows_concurrent_candidate_snapshots() -> None:
+    class _TxPrisma:
+        @asynccontextmanager
+        async def tx(self):
+            yield SimpleNamespace()
+
+    class _Repository(BatchJobRepository):
+        def __init__(self, prisma_client: _TxPrisma) -> None:
+            super().__init__(prisma_client)
+            self.both_snapshots_started = asyncio.Event()
+            self.release_snapshot = asyncio.Event()
+            self.snapshot_attempts = 0
+            self.snapshot_active = 0
+            self.max_snapshot_concurrency = 0
+
+        async def _try_acquire_scheduler_flow_lock(self, db, **kwargs):  # noqa: ANN001, ANN003
+            del db, kwargs
+            return True
+
+        async def _load_scheduler_flow_refresh_snapshot(self, executor, **kwargs):  # noqa: ANN001, ANN003
+            assert kwargs["include_in_flight"] is False
+            self.snapshot_attempts += 1
+            self.snapshot_active += 1
+            self.max_snapshot_concurrency = max(self.max_snapshot_concurrency, self.snapshot_active)
+            if self.snapshot_active == 2:
+                self.both_snapshots_started.set()
+            await self.release_snapshot.wait()
+            self.snapshot_active -= 1
+            return _scheduler_flow_snapshot()
+
+        async def _load_scheduler_flow_in_flight_snapshot(self, executor, **kwargs):  # noqa: ANN001, ANN003
+            del executor, kwargs
+            return _scheduler_flow_snapshot()
+
+        async def _refresh_scheduler_flows_from_snapshot(self, **kwargs):  # noqa: ANN003
+            del kwargs
+            return []
+
+    prisma = _TxPrisma()
+    repository = _Repository(prisma)
+
+    first_claim = asyncio.create_task(
+        repository.claim_next_fair_share_work(
+            worker_id="worker-0",
+            service_tier="standard",
+            model_group="model-a",
+            max_items=4,
+            max_work_units=16,
+            lease_seconds=120,
+        )
+    )
+    second_claim = asyncio.create_task(
+        repository.claim_next_fair_share_work(
+            worker_id="worker-1",
+            service_tier="standard",
+            model_group="model-a",
+            max_items=4,
+            max_work_units=16,
+            lease_seconds=120,
+        )
+    )
+    await repository.both_snapshots_started.wait()
+    repository.release_snapshot.set()
+    first_result, second_result = await asyncio.gather(first_claim, second_claim)
+
+    assert first_result.result == "no_active_flow"
+    assert second_result.result == "no_active_flow"
+    assert repository.snapshot_attempts == 2
+    assert repository.max_snapshot_concurrency == 2
+
+
+@pytest.mark.asyncio
+async def test_fair_share_claim_path_preserves_tenant_progress_under_hot_model_contention() -> None:
+    worker_count = 50
+
+    class _TxPrisma:
+        def __init__(self) -> None:
+            self.repository: _Repository | None = None
+
+        @asynccontextmanager
+        async def tx(self):
+            tx = SimpleNamespace(lock_acquired=False)
+            try:
+                yield tx
+            finally:
+                if tx.lock_acquired:
+                    assert self.repository is not None
+                    self.repository.flow_lock.release()
+
+    class _Repository(BatchJobRepository):
+        def __init__(self, prisma_client: _TxPrisma) -> None:
+            super().__init__(prisma_client)
+            self.remaining_tenants = {f"team-{index}" for index in range(worker_count)}
+            self.claimed_tenants: set[str] = set()
+            self.flow_lock = asyncio.Lock()
+            self.first_snapshot_barrier = asyncio.Event()
+            self.snapshot_attempts = 0
+            self.snapshot_active = 0
+            self.max_snapshot_concurrency = 0
+            self.flow_lock_busy_count = 0
+
+        async def _try_acquire_scheduler_flow_lock(self, db, **kwargs):  # noqa: ANN001, ANN003
+            del kwargs
+            if self.flow_lock.locked():
+                self.flow_lock_busy_count += 1
+                return False
+            await self.flow_lock.acquire()
+            db.lock_acquired = True
+            return True
+
+        async def _load_scheduler_flow_refresh_snapshot(self, executor, **kwargs):  # noqa: ANN001, ANN003
+            assert kwargs["include_in_flight"] is False
+            self.snapshot_attempts += 1
+            self.snapshot_active += 1
+            self.max_snapshot_concurrency = max(self.max_snapshot_concurrency, self.snapshot_active)
+            if self.snapshot_attempts == worker_count:
+                self.first_snapshot_barrier.set()
+            if self.snapshot_attempts <= worker_count:
+                await self.first_snapshot_barrier.wait()
+            self.snapshot_active -= 1
+            aggregates = tuple(
+                job_repository_module._SchedulerFlowRefreshAggregate(
+                    service_tier="standard",
+                    model_group="model-a",
+                    tenant_scope_type="team",
+                    tenant_scope_id=tenant,
+                    queued_jobs=1,
+                    queued_work_units=1,
+                    in_flight_work_units=0,
+                    oldest_queue_entered_at=datetime.now(tz=UTC),
+                    next_item_work_units=1,
+                    next_batch_id=f"batch-{tenant}",
+                )
+                for tenant in sorted(self.remaining_tenants)
+            )
+            return job_repository_module._SchedulerFlowRefreshSnapshot(
+                service_tier="standard",
+                model_group="model-a",
+                aggregates=aggregates,
+                legacy_api_key_scope_repairs={},
+            )
+
+        async def _load_scheduler_flow_in_flight_snapshot(self, executor, **kwargs):  # noqa: ANN001, ANN003
+            del executor, kwargs
+            return _scheduler_flow_snapshot()
+
+        async def _refresh_scheduler_flows_from_snapshot(self, **kwargs):  # noqa: ANN003
+            snapshot = kwargs["snapshot"]
+            await asyncio.sleep(0)
+            return [
+                _scheduler_flow(
+                    flow_id=f"flow-{aggregate.tenant_scope_id}",
+                    tenant_scope_id=aggregate.tenant_scope_id,
+                    queued_work_units=aggregate.queued_work_units,
+                    next_batch_id=aggregate.next_batch_id,
+                )
+                for aggregate in snapshot.aggregates
+            ]
+
+        async def _claim_scheduler_selected_flow(self, db, **kwargs):  # noqa: ANN001, ANN003
+            del db
+            flow = kwargs["flow"]
+            if flow.tenant_scope_id not in self.remaining_tenants:
+                return BatchFairShareClaimResult(claim=None, result="empty_flow", flow=flow)
+            self.remaining_tenants.remove(flow.tenant_scope_id)
+            self.claimed_tenants.add(flow.tenant_scope_id)
+            return BatchFairShareClaimResult(
+                result="claimed",
+                flow=flow,
+                claim=BatchWorkClaim(
+                    claim_id=f"claim-{flow.tenant_scope_id}",
+                    worker_id=str(kwargs["worker_id"]),
+                    batch_id=str(flow.next_batch_id),
+                    endpoint="/v1/embeddings",
+                    model_group=flow.model_group,
+                    tenant_scope_type=flow.tenant_scope_type,
+                    tenant_scope_id=flow.tenant_scope_id,
+                    service_tier=flow.service_tier,
+                    item_ids=[f"item-{flow.tenant_scope_id}"],
+                    claimed_work_units=1,
+                    lease_expires_at=datetime.now(tz=UTC),
+                ),
+            )
+
+    prisma = _TxPrisma()
+    repository = _Repository(prisma)
+    prisma.repository = repository
+
+    async def _claim_until_progress(worker_index: int) -> BatchFairShareClaimResult:
+        result = BatchFairShareClaimResult(claim=None, result="not_started")
+        for _ in range(worker_count * 2):
+            result = await repository.claim_next_fair_share_work(
+                worker_id=f"worker-{worker_index}",
+                service_tier="standard",
+                model_group="model-a",
+                max_items=1,
+                max_work_units=1,
+                lease_seconds=120,
+                base_quantum_work_units=1,
+                max_deficit_multiplier=4,
+            )
+            if result.claim is not None:
+                return result
+            assert result.result in {"flow_lock_busy", "empty_flow", "no_active_flow"}
+            await asyncio.sleep(0)
+        return result
+
+    results = await asyncio.gather(
+        *(_claim_until_progress(index) for index in range(worker_count))
+    )
+    claims = [result.claim for result in results if result.claim is not None]
+
+    assert len(claims) == worker_count
+    assert repository.claimed_tenants == {f"team-{index}" for index in range(worker_count)}
+    assert len({claim.batch_id for claim in claims}) == worker_count
+    assert len({item_id for claim in claims for item_id in claim.item_ids}) == worker_count
+    assert repository.max_snapshot_concurrency == worker_count
+    assert repository.flow_lock_busy_count > 0
 
 
 @pytest.mark.asyncio
@@ -2170,7 +2713,48 @@ async def test_fair_share_scheduler_lock_uses_capacity_lock_key_order() -> None:
 
     assert locked is True
     assert "pg_try_advisory_xact_lock" in prisma.sql
-    assert prisma.params == ("model-a", "standard")
+    assert "hashtext($1)" in prisma.sql
+    assert "$3::bigint" in prisma.sql
+    assert prisma.params == (
+        "model-a",
+        "standard",
+        advisory_lock_key("batch_scheduler_flow", "standard", "model-a"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_fair_share_scheduler_lock_can_skip_legacy_hashtext_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _LockPrisma:
+        def __init__(self) -> None:
+            self.sql = ""
+            self.params: tuple[object, ...] = ()
+
+        async def query_raw(self, sql: str, *params):
+            self.sql = sql
+            self.params = params
+            return [{"locked": True}]
+
+    del monkeypatch
+    advisory_locks_module.set_advisory_lock_mode("canonical")
+
+    try:
+        prisma = _LockPrisma()
+        repository = BatchJobRepository()
+
+        locked = await repository._try_acquire_scheduler_flow_lock(
+            prisma,
+            service_tier="standard",
+            model_group="model-a",
+        )
+
+        assert locked is True
+        assert "hashtext" not in prisma.sql
+        assert "pg_try_advisory_xact_lock($1::bigint)" in prisma.sql
+        assert prisma.params == (advisory_lock_key("batch_scheduler_flow", "standard", "model-a"),)
+    finally:
+        advisory_locks_module.set_advisory_lock_mode("dual")
 
 
 @pytest.mark.asyncio
@@ -2657,7 +3241,8 @@ async def test_acquire_scope_advisory_lock_uses_postgres_advisory_lock():
 
     assert "pg_advisory_xact_lock" in prisma.sql
     assert "hashtext($1)" in prisma.sql
-    assert "hashtext($2)" in prisma.sql
+    assert "$3::bigint" in prisma.sql
+    assert prisma.params == ("team", "team-1", advisory_lock_key("batch_scope", "team", "team-1"))
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ from src.bootstrap import BootstrapStatus
 from src.bootstrap import batch as batch_bootstrap
 from src.bootstrap.audit import init_audit_runtime, shutdown_audit_runtime
 from src.bootstrap.batch import _drain_worker_task, init_batch_runtime, shutdown_batch_runtime
+from src.batch.scheduling import advisory_lock_mode, set_advisory_lock_mode
 
 
 def _audit_config(*, enabled: bool, retention_enabled: bool) -> SimpleNamespace:
@@ -99,6 +100,7 @@ def _batch_config(
             embeddings_batch_scheduler_backfill_interval_seconds=60.0,
             embeddings_batch_scheduler_backfill_scan_limit=500,
             embeddings_batch_scheduler_claim_mode="job_fifo",
+            embeddings_batch_advisory_lock_mode="dual",
             embeddings_batch_work_claim_max_items=0,
             embeddings_batch_work_claim_max_work_units=0,
             embeddings_batch_work_claim_min_items_for_microbatch=4,
@@ -119,6 +121,23 @@ def test_batch_worker_id_is_cluster_unique_and_log_safe(monkeypatch: pytest.Monk
     worker_id = batch_bootstrap._batch_worker_id("batch executor")
 
     assert worker_id == "batch-executor-pod-name-with-spaces-12345-abc123def456"
+
+
+@pytest.mark.asyncio
+async def test_init_batch_runtime_applies_batch_advisory_lock_mode() -> None:
+    set_advisory_lock_mode("dual")
+    cfg = _batch_config(enabled=False, worker_enabled=False, gc_enabled=False)
+    cfg.general_settings.embeddings_batch_advisory_lock_mode = "canonical"
+
+    try:
+        await init_batch_runtime(
+            SimpleNamespace(state=SimpleNamespace()),
+            cfg,
+            repository=SimpleNamespace(),
+        )
+        assert advisory_lock_mode() == "canonical"
+    finally:
+        set_advisory_lock_mode("dual")
 
 
 def test_batch_creation_scheduler_active_includes_tenant_fair_share() -> None:

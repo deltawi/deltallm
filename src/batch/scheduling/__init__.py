@@ -27,6 +27,16 @@ from src.batch.scheduling.fair_share import (
     parse_tenant_scope_preference,
     quantum_for_weight,
 )
+from src.batch.scheduling.advisory_locks import (
+    AdvisoryLockMode,
+    advisory_lock_acquires_legacy,
+    advisory_lock_key,
+    advisory_lock_mode,
+    advisory_lock_legacy_parts,
+    advisory_lock_name,
+    parse_advisory_lock_bool,
+    set_advisory_lock_mode,
+)
 from src.batch.scheduling.size_aging import (
     BatchJobRankInput,
     BatchJobRankResult,
@@ -82,8 +92,16 @@ __all__ = [
     "MIXED_MODEL_GROUP",
     "SCHEDULER_MODES",
     "SCHEDULER_SHADOW_MODES",
+    "AdvisoryLockMode",
     "build_flow_id",
     "build_scheduling_dimensions",
+    "advisory_lock_acquires_legacy",
+    "advisory_lock_key",
+    "advisory_lock_mode",
+    "advisory_lock_legacy_parts",
+    "advisory_lock_name",
+    "parse_advisory_lock_bool",
+    "set_advisory_lock_mode",
     "calculate_size_aging_rank",
     "default_flow_weight",
     "display_tenant_scope_id",

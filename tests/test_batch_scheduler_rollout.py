@@ -271,6 +271,8 @@ class _SimResult:
     tenant_claims: Counter[str]
     duplicate_claims: int
     reclaim_count: int
+    lock_busy_count: int
+    flow_lock_busy_count: int
     decision_latencies: list[int]
     model_busy_ticks: Counter[str]
     elapsed_ticks: int
@@ -281,11 +283,25 @@ _SIM_METRIC_KEYS = {
     "time_to_first_claim",
     "completion_latency",
     "fairness_share",
+    "fairness_deviation",
     "model_utilization",
     "decision_latency",
+    "decision_latency_p95",
+    "decision_latency_p99",
+    "lock_busy_count",
+    "lock_busy_rate",
+    "flow_lock_busy_count",
     "duplicate_claims",
     "reclaim_count",
 }
+
+
+def _percentile(values: list[int], percentile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = min(len(ordered) - 1, max(0, int(round((len(ordered) - 1) * percentile))))
+    return float(ordered[index])
 
 
 def _simulate_rollout_scheduler(
@@ -312,7 +328,12 @@ def _simulate_rollout_scheduler(
     decision_latencies: list[int] = []
     duplicate_claims = 0
     reclaim_count = 0
+    lock_busy_count = 0
+    flow_lock_busy_count = 0
     elapsed_ticks = 0
+    scheduler_lock_until = -1.0
+    worker_next_ready_at = [0.0 for _ in range(workers)]
+    worker_lock_busy_attempts = [0 for _ in range(workers)]
 
     def _model_in_flight(model_group: str, tick: int) -> int:
         seeded = seed_in_flight.get(model_group, 0) if tick < seed_release_at else 0
@@ -369,6 +390,11 @@ def _simulate_rollout_scheduler(
             )
         return min(candidates, key=lambda job: (job.queued_at, job.batch_id))
 
+    def _record_lock_busy(worker_index: int, decision_started_at: float) -> None:
+        worker_lock_busy_attempts[worker_index] += 1
+        backoff_ticks = min(4.0, 1.0 * (2 ** min(worker_lock_busy_attempts[worker_index] - 1, 2)))
+        worker_next_ready_at[worker_index] = decision_started_at + backoff_ticks
+
     for tick in range(max_ticks):
         elapsed_ticks = tick + 1
         for job in state:
@@ -380,7 +406,11 @@ def _simulate_rollout_scheduler(
                 job.completed_at = tick
                 job.in_progress_until = None
 
-        for _ in range(workers):
+        for worker_index in range(workers):
+            worker_spacing = 1.0 / max(1, workers)
+            decision_started_at = float(tick) + (worker_index * worker_spacing)
+            if decision_started_at < worker_next_ready_at[worker_index]:
+                continue
             candidates = _eligible_jobs(tick)
             decision_latency = 1
             if not redis_available:
@@ -391,9 +421,21 @@ def _simulate_rollout_scheduler(
             if not candidates:
                 continue
             selected = _select_job(candidates, tick)
+            if (
+                postgres_contention
+                and mode in {"fair_share_v1", "smart_v1"}
+                and decision_started_at < scheduler_lock_until
+            ):
+                lock_busy_count += 1
+                flow_lock_busy_count += 1
+                _record_lock_busy(worker_index, decision_started_at)
+                continue
+            if postgres_contention and mode in {"fair_share_v1", "smart_v1"}:
+                scheduler_lock_until = decision_started_at + (worker_spacing * 1.1)
             if selected.in_progress_until is not None:
                 duplicate_claims += 1
                 continue
+            worker_lock_busy_attempts[worker_index] = 0
             if selected.first_claimed_at is None:
                 selected.first_claimed_at = tick
             selected.claim_count += 1
@@ -415,6 +457,18 @@ def _simulate_rollout_scheduler(
 
     jobs_by_id = {job.batch_id: job for job in state}
     total_claims = sum(tenant_claims.values())
+    tenant_set = sorted({job.tenant for job in state if not job.finalization_only})
+    fairness_share = (
+        {tenant: tenant_claims[tenant] / total_claims for tenant in tenant_set}
+        if total_claims
+        else {}
+    )
+    expected_fairness_share = 1.0 / float(len(tenant_set)) if tenant_set else 0.0
+    fairness_deviation = (
+        max(abs(share - expected_fairness_share) for share in fairness_share.values())
+        if fairness_share
+        else 0.0
+    )
     metrics: dict[str, object] = {
         "time_to_first_claim": {
             job.batch_id: None
@@ -428,11 +482,8 @@ def _simulate_rollout_scheduler(
             for job in state
             if not job.finalization_only
         },
-        "fairness_share": {
-            tenant: count / total_claims for tenant, count in tenant_claims.items()
-        }
-        if total_claims
-        else {},
+        "fairness_share": fairness_share,
+        "fairness_deviation": fairness_deviation,
         "model_utilization": {
             model_group: busy_ticks / elapsed_ticks
             for model_group, busy_ticks in model_busy_ticks.items()
@@ -441,6 +492,11 @@ def _simulate_rollout_scheduler(
             "max": max(decision_latencies) if decision_latencies else 0,
             "samples": len(decision_latencies),
         },
+        "decision_latency_p95": _percentile(decision_latencies, 0.95),
+        "decision_latency_p99": _percentile(decision_latencies, 0.99),
+        "lock_busy_count": lock_busy_count,
+        "lock_busy_rate": lock_busy_count / max(1, len(decision_latencies)),
+        "flow_lock_busy_count": flow_lock_busy_count,
         "duplicate_claims": duplicate_claims,
         "reclaim_count": reclaim_count,
     }
@@ -450,6 +506,8 @@ def _simulate_rollout_scheduler(
         tenant_claims=tenant_claims,
         duplicate_claims=duplicate_claims,
         reclaim_count=reclaim_count,
+        lock_busy_count=lock_busy_count,
+        flow_lock_busy_count=flow_lock_busy_count,
         decision_latencies=decision_latencies,
         model_busy_ticks=model_busy_ticks,
         elapsed_ticks=elapsed_ticks,
@@ -461,8 +519,15 @@ def _assert_simulation_metrics(result: _SimResult) -> None:
     assert _SIM_METRIC_KEYS <= result.metrics.keys()
     assert result.metrics["duplicate_claims"] == result.duplicate_claims
     assert result.metrics["reclaim_count"] == result.reclaim_count
+    assert result.metrics["lock_busy_count"] == result.lock_busy_count
+    assert result.metrics["flow_lock_busy_count"] == result.flow_lock_busy_count
+    assert result.metrics["lock_busy_rate"] == result.lock_busy_count / max(
+        1,
+        len(result.decision_latencies),
+    )
     decision_latency = _metric_dict(result, "decision_latency")
     assert decision_latency["samples"] == len(result.decision_latencies)
+    assert result.metrics["decision_latency_p95"] <= result.metrics["decision_latency_p99"]
 
 
 def _metric_dict(result: _SimResult, name: str) -> dict[str, object]:
@@ -510,6 +575,33 @@ def test_rollout_simulation_fair_share_limits_noisy_tenant_head_start() -> None:
     assert fair_share.jobs["quiet-1"].first_claimed_at < fifo.jobs["quiet-1"].first_claimed_at
     assert set(_metric_dict(fair_share, "fairness_share")) == {"team-noisy", "team-quiet"}
     assert fair_share.duplicate_claims == 0
+
+
+def test_rollout_simulation_hot_model_many_workers_preserves_tenant_progress() -> None:
+    jobs = [
+        _SimJob(f"team-{tenant}-job-{index}", f"team-{tenant}", "m1", "s", 1, 0)
+        for tenant in range(20)
+        for index in range(3)
+    ]
+
+    result = _simulate_rollout_scheduler(
+        "fair_share_v1",
+        jobs,
+        model_capacity={"m1": 20},
+        workers=64,
+        postgres_contention=True,
+        max_ticks=40,
+    )
+
+    _assert_simulation_metrics(result)
+    assert all(job.completed_at is not None for job in result.jobs.values())
+    assert set(result.tenant_claims) == {f"team-{tenant}" for tenant in range(20)}
+    assert result.duplicate_claims == 0
+    assert result.lock_busy_count > 0
+    assert result.flow_lock_busy_count == result.lock_busy_count
+    assert result.metrics["lock_busy_rate"] <= 0.8
+    assert result.metrics["fairness_deviation"] <= 0.01
+    assert result.metrics["decision_latency_p99"] <= 3.0
 
 
 def test_rollout_simulation_model_capacity_keeps_idle_model_work_conserving() -> None:
@@ -587,7 +679,7 @@ def test_rollout_simulation_worker_crash_reclaims_without_duplicate_completion()
     assert result.jobs["crashes-once"].completed_at is not None
 
 
-def test_rollout_simulation_redis_unavailable_preserves_db_backed_progress() -> None:
+def test_rollout_simulation_redis_unavailable_only_adds_latency_to_db_progress() -> None:
     jobs = [
         _SimJob("job-1", "team-a", "m1", "s", 1, 0),
         _SimJob("job-2", "team-b", "m1", "s", 1, 0),
@@ -630,6 +722,8 @@ def test_rollout_simulation_postgres_contention_serializes_parallel_workers() ->
 
     _assert_simulation_metrics(result)
     assert result.duplicate_claims == 0
+    assert result.lock_busy_count > 0
+    assert 0 < result.metrics["lock_busy_rate"] < 1
     assert len(result.claim_order) == len(set(result.claim_order)) == 8
     assert _metric_dict(result, "decision_latency")["max"] == 3
 

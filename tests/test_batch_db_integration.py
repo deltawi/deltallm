@@ -29,7 +29,11 @@ from src.batch.cleanup import BatchCleanupConfig, BatchRetentionCleanupWorker
 from src.batch.models import BATCH_JOB_STATUS_VALUES, BatchCompletionOutboxCreate, BatchItemCreate
 from src.batch.models import encode_operator_failed_reason
 from src.batch.repository import BatchRepository
-from src.batch.scheduling import stable_tenant_scope_id
+from src.batch.scheduling import (
+    BatchModelCapacitySelection,
+    BatchModelCapacitySnapshot,
+    stable_tenant_scope_id,
+)
 from src.batch.service import BatchService
 from src.batch.storage import LocalBatchArtifactStorage, S3BatchArtifactStorage
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
@@ -3118,6 +3122,243 @@ async def test_db_backed_fair_share_claim_rotates_between_tenants(batch_db) -> N
     assert first.claim is not None
     assert second.claim is not None
     assert {first.claim.tenant_scope_id, second.claim.tenant_scope_id} == {"team-a", "team-b"}
+
+
+@pytest.mark.asyncio
+async def test_db_backed_fair_share_concurrent_claims_do_not_duplicate_flow_or_item(
+    batch_db,
+) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    expected_tenants = {f"team-{index}" for index in range(4)}
+    for index, team_id in enumerate(sorted(expected_tenants), start=1):
+        job = await repository.create_job(
+            endpoint="/v1/embeddings",
+            input_file_id=input_file_id,
+            model="m1",
+            metadata=None,
+            created_by_api_key=f"key-{team_id}",
+            created_by_user_id=None,
+            created_by_team_id=team_id,
+            expires_at=None,
+        )
+        assert job is not None
+        assert await repository.create_items(
+            job.batch_id,
+            [
+                BatchItemCreate(
+                    line_number=1,
+                    custom_id=f"{team_id}-1",
+                    request_body={"model": "m1", "input": team_id},
+                    estimated_work_units=1,
+                )
+            ],
+        ) == 1
+        await repository.set_job_queued(job.batch_id, 1)
+
+    claim_dbs = []
+    try:
+        for _ in expected_tenants:
+            claim_dbs.append(await _connect_prisma())
+        claim_repositories = [BatchRepository(db) for db in claim_dbs]
+
+        async def _claim_with_retry(worker_index: int, claim_repository: BatchRepository):
+            result = None
+            for _ in range(12):
+                result = await claim_repository.claim_next_fair_share_work(
+                    worker_id=f"w{worker_index}",
+                    service_tier="standard",
+                    model_group="m1",
+                    max_items=1,
+                    max_work_units=1,
+                    lease_seconds=120,
+                    capacity_max_in_flight_items=10,
+                    capacity_max_in_flight_work_units=10,
+                    base_quantum_work_units=1,
+                    max_deficit_multiplier=8,
+                )
+                if result.claim is not None or result.result not in {
+                    "flow_lock_busy",
+                    "lock_busy",
+                    "empty_flow",
+                }:
+                    return result
+                await asyncio.sleep(0.01)
+            assert result is not None
+            return result
+
+        results = await asyncio.gather(
+            *(
+                _claim_with_retry(worker_index, claim_repository)
+                for worker_index, claim_repository in enumerate(claim_repositories, start=1)
+            )
+        )
+    finally:
+        await asyncio.gather(*(db.disconnect() for db in claim_dbs), return_exceptions=True)
+
+    claims = [result.claim for result in results if result.claim is not None]
+    assert len(claims) == len(expected_tenants)
+    assert {claim.tenant_scope_id for claim in claims} == expected_tenants
+
+    claimed_item_ids = [item_id for claim in claims for item_id in claim.item_ids]
+    assert len(claimed_item_ids) == len(expected_tenants)
+    assert len(set(claimed_item_ids)) == len(expected_tenants)
+
+    rows = await batch_db.query_raw(
+        """
+        SELECT tenant_scope_id, COUNT(*)::int AS in_flight_items
+        FROM deltallm_batch_job j
+        JOIN deltallm_batch_item i ON i.batch_id = j.batch_id
+        WHERE i.status = 'in_progress'
+        GROUP BY tenant_scope_id
+        ORDER BY tenant_scope_id ASC
+        """
+    )
+    assert {
+        str(row["tenant_scope_id"]): int(row["in_flight_items"])
+        for row in rows
+    } == {tenant: 1 for tenant in expected_tenants}
+    flow_rows = await batch_db.query_raw(
+        """
+        SELECT tenant_scope_id, skip_reason_summary
+        FROM deltallm_batch_scheduler_flow
+        WHERE service_tier = 'standard'
+          AND model_group = 'm1'
+        """
+    )
+    assert len(flow_rows) == len(expected_tenants)
+    for row in flow_rows:
+        skip_reasons = dict(row.get("skip_reason_summary") or {})
+        assert "empty_flow" not in skip_reasons
+
+
+@pytest.mark.asyncio
+async def test_db_backed_worker_redis_unavailable_shadow_stays_non_mutating(batch_db) -> None:
+    class _UnavailableRedis:
+        def __getattr__(self, name: str) -> Any:
+            raise ConnectionError(f"redis unavailable during {name}")
+
+    class _DbCapacityResolver:
+        def __init__(self) -> None:
+            self.selection_results: list[str] = []
+            self.claim_results: list[tuple[str, str]] = []
+
+        async def select_model_groups(
+            self,
+            *,
+            max_items: int,
+            max_work_units: int,
+        ) -> list[BatchModelCapacitySelection]:
+            snapshot = BatchModelCapacitySnapshot(
+                model_group="m1",
+                service_tier="standard",
+                max_in_flight_items=10,
+                max_claim_work_units=max_work_units,
+                available_in_flight_items=max_items,
+                available_work_units=max_work_units,
+                rpm_remaining=None,
+                tpm_remaining=max_work_units,
+                healthy_deployments=1,
+                backpressure_until=None,
+                reason=None,
+                capacity_source="test",
+                queued_jobs=1,
+                queued_work_units=1,
+            )
+            return [BatchModelCapacitySelection(snapshot=snapshot, max_items=1, max_work_units=1)]
+
+        def record_selection(self, snapshot: BatchModelCapacitySnapshot) -> None:
+            self.selection_results.append(snapshot.model_group)
+
+        def record_claim_result(self, *, model_group: str, result: str) -> None:
+            self.claim_results.append((model_group, result))
+
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-team-a",
+        created_by_user_id=None,
+        created_by_team_id="team-a",
+        expires_at=None,
+    )
+    assert job is not None
+    assert await repository.create_items(
+        job.batch_id,
+        [
+            BatchItemCreate(
+                line_number=1,
+                custom_id="team-a-1",
+                request_body={"model": "m1", "input": "hello"},
+                estimated_work_units=1,
+            )
+        ],
+    ) == 1
+    await repository.set_job_queued(job.batch_id, 1)
+    flow_rows_before = await batch_db.query_raw(
+        """
+        SELECT COUNT(*)::int AS flow_count
+        FROM deltallm_batch_scheduler_flow
+        WHERE service_tier = 'standard'
+          AND model_group = 'm1'
+        """
+    )
+    flow_count_before = int(flow_rows_before[0]["flow_count"])
+
+    resolver = _DbCapacityResolver()
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace(redis=_UnavailableRedis())),
+        repository=repository,
+        storage=SimpleNamespace(),
+        config=BatchWorkerConfig(
+            worker_id="db-redis-shadow",
+            scheduler_claim_mode="work_slice",
+            model_capacity_enabled=True,
+            scheduler_shadow_enabled=True,
+            finalization_first=False,
+            work_claim_max_items=1,
+            work_claim_max_work_units=1,
+            item_lease_seconds=120,
+        ),
+        model_capacity_resolver=resolver,
+    )
+    processed_custom_ids: list[str] = []
+
+    async def _process_items(process_job: Any, items: list[Any]) -> None:
+        assert process_job.batch_id == job.batch_id
+        processed_custom_ids.extend(str(item.custom_id) for item in items)
+
+    worker._process_items = _process_items  # type: ignore[method-assign]
+
+    assert await worker.process_once() is True
+    await worker.drain_shadow_tasks()
+
+    assert processed_custom_ids == ["team-a-1"]
+    assert resolver.selection_results == ["m1"]
+    assert resolver.claim_results == [("m1", "claimed")]
+
+    item_rows = await batch_db.query_raw(
+        """
+        SELECT status, locked_by
+        FROM deltallm_batch_item
+        WHERE batch_id = $1
+        """,
+        job.batch_id,
+    )
+    assert [dict(row) for row in item_rows] == [{"status": "pending", "locked_by": None}]
+
+    flow_rows = await batch_db.query_raw(
+        """
+        SELECT COUNT(*)::int AS flow_count
+        FROM deltallm_batch_scheduler_flow
+        WHERE service_tier = 'standard'
+          AND model_group = 'm1'
+        """
+    )
+    assert int(flow_rows[0]["flow_count"]) == flow_count_before
 
 
 @pytest.mark.asyncio

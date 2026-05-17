@@ -269,6 +269,10 @@
               "type": "string",
               "enum": ["job_fifo", "work_slice"]
             },
+            "embeddings_batch_advisory_lock_mode": {
+              "type": "string",
+              "enum": ["dual", "canonical"]
+            },
             "embeddings_batch_work_claim_max_items": { "type": "integer", "minimum": 0, "maximum": 200 },
             "embeddings_batch_work_claim_max_work_units": { "type": "integer", "minimum": 0 },
             "embeddings_batch_work_claim_min_items_for_microbatch": {

@@ -249,6 +249,7 @@ config:
     embeddings_batch_scheduler_backfill_interval_seconds: 60
     embeddings_batch_scheduler_backfill_scan_limit: 500
     embeddings_batch_scheduler_claim_mode: job_fifo
+    embeddings_batch_advisory_lock_mode: dual
     embeddings_batch_work_claim_max_items: 0
     embeddings_batch_work_claim_max_work_units: 0
     embeddings_batch_work_claim_min_items_for_microbatch: 4
