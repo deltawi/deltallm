@@ -25,6 +25,7 @@ from src.batch.scheduling import (
     resolve_scheduler_modes_from_settings,
     resolve_scheduler_version,
     resolve_tenant_scope,
+    scheduler_config_fingerprint,
     scheduler_rollback_events,
     scheduler_version_for_modes,
     tuned_claim_item_limit,
@@ -349,6 +350,7 @@ def test_live_scheduler_config_rolls_existing_worker_back_to_fifo() -> None:
     repository = _Repository()
     promoter = _Promoter()
     service = _Service()
+    applied_scheduler_configs: list[dict[str, object]] = []
     worker = SimpleNamespace(
         config=BatchWorkerConfig(
             worker_id="w1",
@@ -361,6 +363,7 @@ def test_live_scheduler_config_rolls_existing_worker_back_to_fifo() -> None:
             size_aware_scheduling_enabled=True,
         ),
         model_capacity_resolver=object(),
+        mark_scheduler_config_applied=lambda **kwargs: applied_scheduler_configs.append(kwargs),
     )
     runtime = BatchRuntime(
         model_capacity_resolver=object(),
@@ -409,12 +412,43 @@ def test_live_scheduler_config_rolls_existing_worker_back_to_fifo() -> None:
     assert promoter.scheduler_config["scheduler_shadow_mode"] == "none"
     assert service.scheduler_config["scheduler_enabled"] is False
     assert service.scheduler_config["scheduler_shadow_enabled"] is False
+    assert applied_scheduler_configs == [
+        {"general_settings": cfg.general_settings, "config_generation": None}
+    ]
     assert repository.tenant_scope_preference == (
         "organization",
         "team",
         "api_key",
         "user",
     )
+
+
+def test_scheduler_config_fingerprint_ignores_non_live_worker_loop_settings() -> None:
+    base = GeneralSettings(
+        embeddings_batch_scheduler_mode="fair_share_v1",
+        embeddings_batch_scheduler_shadow_mode="smart_v1",
+        embeddings_batch_model_capacity_enabled=True,
+        embeddings_batch_scheduler_claim_mode="work_slice",
+        embeddings_batch_tenant_fair_share_enabled=True,
+    )
+    operational_change = base.model_copy(
+        update={
+            "embeddings_batch_scheduler_backfill_enabled": True,
+            "embeddings_batch_scheduler_backfill_interval_seconds": 5.0,
+            "embeddings_batch_scheduler_backfill_scan_limit": 10,
+            "embeddings_batch_stale_lease_sweeper_enabled": False,
+            "embeddings_batch_stale_lease_sweeper_interval_seconds": 5.0,
+            "embeddings_batch_stale_lease_sweeper_failure_interval_seconds": 5.0,
+            "embeddings_batch_stale_lease_sweeper_page_size": 10,
+            "embeddings_batch_stale_lease_sweeper_max_rows_per_run": 10,
+        }
+    )
+    decision_change = base.model_copy(
+        update={"embeddings_batch_scheduler_max_active_flows_per_decision": 17}
+    )
+
+    assert scheduler_config_fingerprint(base) == scheduler_config_fingerprint(operational_change)
+    assert scheduler_config_fingerprint(base) != scheduler_config_fingerprint(decision_change)
 
 
 def test_legacy_size_aware_shadow_keeps_smart_active() -> None:

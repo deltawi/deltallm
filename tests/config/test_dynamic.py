@@ -325,6 +325,28 @@ async def test_dynamic_config_polling_reloads_db_changes_without_pubsub():
 
 
 @pytest.mark.asyncio
+async def test_dynamic_config_generation_tracks_applied_config_changes():
+    manager = DynamicConfigManager(db_client=FakeDB(), redis_client=None, file_config={})
+
+    await manager.initialize()
+    assert manager.get_config_generation() == 1
+
+    await manager.update_config(
+        {"router_settings": {"routing_strategy": "weighted"}},
+        updated_by="test",
+    )
+    assert manager.get_config_generation() == 2
+
+    await manager.update_config(
+        {"router_settings": {"routing_strategy": "weighted"}},
+        updated_by="test",
+    )
+    assert manager.get_config_generation() == 2
+
+    await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_dynamic_config_update_fails_closed_when_db_write_fails():
     db = FakeDB()
     redis = FakeRedis()

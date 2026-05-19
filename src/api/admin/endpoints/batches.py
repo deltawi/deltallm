@@ -27,6 +27,7 @@ from src.batch.scheduling import (
     SchedulerShadowMode,
     calculate_size_aging_rank,
     resolve_scheduler_modes_from_settings,
+    scheduler_config_fingerprint,
     scheduler_mode_uses_fair_share,
     scheduler_mode_uses_model_capacity,
     scheduler_mode_uses_size_aware,
@@ -239,6 +240,18 @@ def _dynamic_config_or_503(request: Request):  # noqa: ANN202
     return dynamic_config
 
 
+def _dynamic_config_generation(request: Request) -> int | None:
+    dynamic_config = getattr(request.app.state, "dynamic_config_manager", None)
+    get_config_generation = getattr(dynamic_config, "get_config_generation", None)
+    if not callable(get_config_generation):
+        return None
+    try:
+        return int(get_config_generation())
+    except Exception:
+        logger.debug("batch scheduler config generation status lookup failed", exc_info=True)
+        return None
+
+
 def _capacity_snapshot_response(snapshot) -> dict[str, Any]:  # noqa: ANN001
     return {
         "model_group": snapshot.model_group,
@@ -271,23 +284,43 @@ def _scheduler_status_response(request: Request) -> dict[str, Any]:
     model_capacity = BatchModelCapacityConfig.from_settings(general_settings)
     fair_share = BatchTenantFairShareConfig.from_settings(general_settings)
     size_aging = BatchSizeAgingConfig.from_settings(general_settings)
+    config_hash = scheduler_config_fingerprint(general_settings)
+    config_generation = _dynamic_config_generation(request)
     worker = getattr(getattr(request.app.state, "batch_runtime", None), "worker", None)
+    worker_id = None
     worker_active_mode = None
     worker_shadow_mode = None
+    worker_config_hash = None
+    worker_config_generation = None
     if worker is not None:
+        worker_id = getattr(getattr(worker, "config", None), "worker_id", None)
         worker_active_mode = worker._active_scheduler_mode()
         worker_shadow_mode = worker._shadow_scheduler_mode()
+        worker_config_hash = getattr(worker, "_scheduler_config_hash", lambda: "unknown")()
+        worker_config_generation = getattr(
+            worker,
+            "_scheduler_config_generation",
+            lambda: None,
+        )()
     return {
         "active_mode": modes.active_mode,
         "shadow_mode": modes.shadow_mode,
+        "config": {
+            "hash": config_hash,
+            "generation": config_generation,
+        },
         "local_worker": {
             "present": worker is not None,
+            "worker_id": worker_id,
             "active_mode": worker_active_mode,
             "shadow_mode": worker_shadow_mode,
+            "config_hash": worker_config_hash,
+            "config_generation": worker_config_generation,
             "matches_config": (
                 worker is not None
                 and worker_active_mode == modes.active_mode
                 and worker_shadow_mode == modes.shadow_mode
+                and worker_config_hash == config_hash
             ),
         },
         "effective": {

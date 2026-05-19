@@ -434,6 +434,11 @@ class GeneralSettings(BaseModel):
     embeddings_batch_scheduler_backfill_enabled: bool = False
     embeddings_batch_scheduler_backfill_interval_seconds: float = Field(default=60.0, gt=0.0)
     embeddings_batch_scheduler_backfill_scan_limit: int = Field(default=500, ge=1, le=5_000)
+    embeddings_batch_stale_lease_sweeper_enabled: bool = True
+    embeddings_batch_stale_lease_sweeper_interval_seconds: float = Field(default=60.0, gt=0.0)
+    embeddings_batch_stale_lease_sweeper_failure_interval_seconds: float = Field(default=30.0, gt=0.0)
+    embeddings_batch_stale_lease_sweeper_page_size: int = Field(default=100, ge=1, le=1_000)
+    embeddings_batch_stale_lease_sweeper_max_rows_per_run: int = Field(default=500, ge=1, le=5_000)
     embeddings_batch_scheduler_claim_mode: Literal["job_fifo", "work_slice"] = "job_fifo"
     embeddings_batch_advisory_lock_mode: Literal["dual", "canonical"] = "dual"
     embeddings_batch_work_claim_max_items: int = Field(default=0, ge=0, le=200)

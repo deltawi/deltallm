@@ -248,6 +248,11 @@ config:
     embeddings_batch_scheduler_backfill_enabled: false
     embeddings_batch_scheduler_backfill_interval_seconds: 60
     embeddings_batch_scheduler_backfill_scan_limit: 500
+    embeddings_batch_stale_lease_sweeper_enabled: true
+    embeddings_batch_stale_lease_sweeper_interval_seconds: 60
+    embeddings_batch_stale_lease_sweeper_failure_interval_seconds: 30
+    embeddings_batch_stale_lease_sweeper_page_size: 100
+    embeddings_batch_stale_lease_sweeper_max_rows_per_run: 500
     embeddings_batch_scheduler_claim_mode: job_fifo
     embeddings_batch_advisory_lock_mode: dual
     embeddings_batch_work_claim_max_items: 0

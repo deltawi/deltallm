@@ -61,6 +61,7 @@ class DynamicConfigManager:
         self._poll_task: asyncio.Task[None] | None = None
         self._stopping = False
         self._update_lock = asyncio.Lock()
+        self._config_generation = 0
         if poll_interval_seconds is None:
             self._poll_interval_seconds = 0.0
         else:
@@ -69,6 +70,7 @@ class DynamicConfigManager:
     async def initialize(self) -> None:
         self._db_config = await self._load_from_db(allow_stale_on_error=True)
         self._config = build_app_config(self.file_config, self._db_config, self.secret_resolver)
+        self._config_generation = 1
 
         if self.redis is not None:
             self._pubsub_task = asyncio.create_task(self._listen_for_changes())
@@ -100,6 +102,9 @@ class DynamicConfigManager:
 
     def get_app_config(self) -> AppConfig:
         return self._config.model_copy(deep=True)
+
+    def get_config_generation(self) -> int:
+        return self._config_generation
 
     async def update_config(self, config_update: dict[str, Any], updated_by: str) -> None:
         async with self._update_lock:
@@ -205,6 +210,7 @@ class DynamicConfigManager:
         if not any(changes.values()):
             return False
 
+        self._config_generation += 1
         self._record_scheduler_rollbacks(
             previous_config=previous_app_config,
             current_config=new_app_config,

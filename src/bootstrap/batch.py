@@ -17,6 +17,8 @@ from src.batch import (
     BatchRepository,
     BatchSchedulerBackfillConfig,
     BatchSchedulerBackfillWorker,
+    BatchStaleLeaseSweeperConfig,
+    BatchStaleLeaseSweeperWorker,
 )
 from src.batch.backpressure import BatchBackpressureCoordinator
 from src.batch.create.admin_service import BatchCreateSessionAdminService
@@ -95,6 +97,18 @@ def _clear_model_capacity_snapshot_cache(resolver: Any) -> None:
         resolver._snapshot_cache = None
     with contextlib.suppress(AttributeError):
         resolver._snapshot_cache_expires_at = 0.0
+
+
+def _dynamic_config_generation(app: Any) -> int | None:
+    dynamic_config_manager = getattr(getattr(app, "state", None), "dynamic_config_manager", None)
+    get_config_generation = getattr(dynamic_config_manager, "get_config_generation", None)
+    if not callable(get_config_generation):
+        return None
+    try:
+        return int(get_config_generation())
+    except Exception:
+        logger.debug("batch scheduler config generation lookup failed", exc_info=True)
+        return None
 
 
 def _apply_batch_advisory_lock_mode(general: Any) -> None:
@@ -280,6 +294,13 @@ def _apply_live_batch_scheduler_config(
         scheduler_modes=scheduler_modes,
         tenant_fair_share_config=tenant_fair_share_config,
     )
+    if worker is not None:
+        mark_scheduler_config_applied = getattr(worker, "mark_scheduler_config_applied", None)
+        if callable(mark_scheduler_config_applied):
+            mark_scheduler_config_applied(
+                general_settings=general,
+                config_generation=_dynamic_config_generation(app),
+            )
     return scheduler_modes
 
 
@@ -364,6 +385,8 @@ class BatchRuntime:
     create_session_cleanup_task: Task[None] | None = None
     scheduler_backfill_worker: BatchSchedulerBackfillWorker | None = None
     scheduler_backfill_task: Task[None] | None = None
+    stale_lease_sweeper_worker: BatchStaleLeaseSweeperWorker | None = None
+    stale_lease_sweeper_task: Task[None] | None = None
     statuses: tuple[BootstrapStatus, ...] = ()
 
 
@@ -421,6 +444,7 @@ def _build_batch_storage(cfg: Any, storage_registry: dict[str, Any]):
             return _build_s3_batch_storage(cfg)
         raise RuntimeError(f"Unsupported embeddings batch storage backend: {backend}")
     return storage
+
 
 def _build_create_session_staging_backend(
     cfg: Any,
@@ -513,6 +537,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         app.state.batch_create_session_admin_service = None
         app.state.batch_create_session_cleanup_worker = None
         app.state.batch_scheduler_backfill_worker = None
+        app.state.batch_stale_lease_sweeper_worker = None
         app.state.batch_backpressure = None
         app.state.batch_model_capacity_resolver = None
         app.state.batch_tenant_fair_share_config = None
@@ -532,6 +557,7 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
     app.state.batch_create_session_admin_service = None
     app.state.batch_create_session_cleanup_worker = None
     app.state.batch_scheduler_backfill_worker = None
+    app.state.batch_stale_lease_sweeper_worker = None
     model_group_resolver = getattr(app.state, "router", None)
     set_repository_resolver = getattr(repository, "set_model_group_resolver", None)
     if callable(set_repository_resolver):
@@ -661,6 +687,16 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         if runtime.model_capacity_resolver is not None:
             worker_kwargs["model_capacity_resolver"] = runtime.model_capacity_resolver
         runtime.worker = BatchExecutorWorker(**worker_kwargs)
+        mark_scheduler_config_applied = getattr(
+            runtime.worker,
+            "mark_scheduler_config_applied",
+            None,
+        )
+        if callable(mark_scheduler_config_applied):
+            mark_scheduler_config_applied(
+                general_settings=cfg.general_settings,
+                config_generation=_dynamic_config_generation(app),
+            )
         runtime.worker_task = create_task(runtime.worker.run())
 
     if cfg.general_settings.embeddings_batch_completion_outbox_worker_enabled:
@@ -711,6 +747,35 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         )
         app.state.batch_scheduler_backfill_worker = runtime.scheduler_backfill_worker
         runtime.scheduler_backfill_task = create_task(runtime.scheduler_backfill_worker.run())
+
+    if getattr(cfg.general_settings, "embeddings_batch_stale_lease_sweeper_enabled", True):
+        runtime.stale_lease_sweeper_worker = BatchStaleLeaseSweeperWorker(
+            repository=repository,
+            config=BatchStaleLeaseSweeperConfig(
+                interval_seconds=getattr(
+                    cfg.general_settings,
+                    "embeddings_batch_stale_lease_sweeper_interval_seconds",
+                    60.0,
+                ),
+                failure_interval_seconds=getattr(
+                    cfg.general_settings,
+                    "embeddings_batch_stale_lease_sweeper_failure_interval_seconds",
+                    30.0,
+                ),
+                page_size=getattr(
+                    cfg.general_settings,
+                    "embeddings_batch_stale_lease_sweeper_page_size",
+                    100,
+                ),
+                max_rows_per_run=getattr(
+                    cfg.general_settings,
+                    "embeddings_batch_stale_lease_sweeper_max_rows_per_run",
+                    500,
+                ),
+            ),
+        )
+        app.state.batch_stale_lease_sweeper_worker = runtime.stale_lease_sweeper_worker
+        runtime.stale_lease_sweeper_task = create_task(runtime.stale_lease_sweeper_worker.run())
 
     runtime.create_session_staging_backend = _build_create_session_staging_backend(
         cfg,
@@ -798,6 +863,10 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
             "ready" if runtime.scheduler_backfill_worker is not None else "disabled",
         ),
         BootstrapStatus(
+            "embeddings_batch_stale_lease_sweeper",
+            "ready" if runtime.stale_lease_sweeper_worker is not None else "disabled",
+        ),
+        BootstrapStatus(
             "embeddings_batch_create_session_admin",
             "ready" if runtime.create_session_admin_service is not None else "disabled",
         ),
@@ -873,6 +942,15 @@ async def shutdown_batch_runtime(runtime: BatchRuntime) -> None:
         await _drain_worker_task(
             runtime.scheduler_backfill_task,
             label="batch scheduler backfill worker",
+            timeout=5.0,
+        )
+
+    if runtime.stale_lease_sweeper_worker is not None:
+        runtime.stale_lease_sweeper_worker.stop()
+    if runtime.stale_lease_sweeper_task is not None:
+        await _drain_worker_task(
+            runtime.stale_lease_sweeper_task,
+            label="batch stale lease sweeper worker",
             timeout=5.0,
         )
 
