@@ -1,9 +1,20 @@
-FROM node:20-alpine AS frontend
+# syntax=docker/dockerfile:1.7
+
+# The UI output is static, so keep this stage on the native builder platform.
+FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend
 
 WORKDIR /app/ui
 
 COPY ui/package.json ui/package-lock.json* ./
-RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+ENV NPM_CONFIG_AUDIT=false \
+    NPM_CONFIG_FETCH_RETRIES=5 \
+    NPM_CONFIG_FETCH_RETRY_FACTOR=2 \
+    NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=20000 \
+    NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000 \
+    NPM_CONFIG_FETCH_TIMEOUT=600000 \
+    NPM_CONFIG_FUND=false
+RUN --mount=type=cache,target=/root/.npm \
+    if [ -f package-lock.json ]; then npm ci --prefer-offline; else npm install --prefer-offline; fi
 
 COPY ui/ ./
 RUN npm run build
