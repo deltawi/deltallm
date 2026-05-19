@@ -67,6 +67,7 @@ nav:
       - Guardrails: features/guardrails.md
       - Rate Limiting: features/rate-limiting.md
       - Budgets & Spend: features/budgets.md
+      - Batch API & Production Setup: features/batching.md
       - Audit Log: features/audit-log.md
       - Observability: features/observability.md
   - Admin UI:

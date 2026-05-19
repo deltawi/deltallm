@@ -1,6 +1,144 @@
-# Batch API
+# Batch API And Production Setup
 
 Process large volumes of embedding or non-streaming chat completion requests asynchronously. Upload a JSONL file, create a batch, and download results when the job completes. This is ideal when you have thousands of requests to run and don't need results in real time.
+
+This page is the main batch reference. It covers the public API, worker behavior, production configuration, scheduler sizing, monitoring, and troubleshooting.
+
+## Recommended Production Setup
+
+For production, run batch as dedicated worker pods with shared storage and distributed coordination. The API/UI/gateway pods should stay focused on synchronous traffic.
+
+Use this baseline unless your workload is explicitly single-instance or evaluation-only:
+
+```yaml
+config:
+  general_settings:
+    embeddings_batch_enabled: true
+
+    # Shared artifact storage. Required when API and worker pods are split.
+    embeddings_batch_storage_backend: s3
+    embeddings_batch_s3_bucket: deltallm-batch-artifacts
+    embeddings_batch_s3_region: us-east-1
+    embeddings_batch_s3_prefix: deltallm/batch-artifacts
+
+    # Production scheduler. Keeps claims small, respects model capacity,
+    # prevents tenant starvation, and favors short jobs without starving large jobs.
+    embeddings_batch_scheduler_mode: smart_v1
+    embeddings_batch_scheduler_shadow_mode: none
+    embeddings_batch_scheduler_claim_mode: work_slice
+    embeddings_batch_scheduler_strict_model_homogeneity_enabled: true
+    embeddings_batch_scheduler_backfill_enabled: true
+    embeddings_batch_stale_lease_sweeper_enabled: true
+
+    # Work-slice bounds.
+    embeddings_batch_work_claim_max_items: 50
+    embeddings_batch_work_claim_max_work_units: 200
+    embeddings_batch_work_claim_min_items_for_microbatch: 8
+
+    # Model capacity gate. Keep batch below synchronous gateway capacity.
+    embeddings_batch_model_capacity_fraction: 0.25
+    embeddings_batch_default_model_max_in_flight: 32
+    embeddings_batch_default_model_max_claim_work_units: 128
+    embeddings_batch_model_capacity_refresh_seconds: 5
+    embeddings_batch_model_capacity_fail_open: false
+
+    # Tenant fairness and size/age scheduling.
+    embeddings_batch_scheduler_base_quantum_work_units: 16
+    embeddings_batch_scheduler_max_deficit_multiplier: 8
+    embeddings_batch_tenant_max_in_flight_work_units: 2000
+    embeddings_batch_tenant_max_queued_work_units: 0
+    embeddings_batch_tenant_scope_preference: organization,team,api_key,user
+    embeddings_batch_scheduler_max_active_flows_per_decision: 100
+    embeddings_batch_scheduler_max_candidate_jobs_per_flow: 50
+    embeddings_batch_aging_seconds_per_work_unit: 30
+    embeddings_batch_max_age_credit_work_units: 1000
+    embeddings_batch_min_large_job_claim_interval_seconds: 30
+    embeddings_batch_small_job_fast_lane_enabled: false
+
+    # Retry and lease policy.
+    embeddings_batch_max_attempts: 5
+    embeddings_batch_retry_initial_seconds: 5
+    embeddings_batch_retry_max_seconds: 300
+    embeddings_batch_retry_multiplier: 2.0
+    embeddings_batch_retry_jitter: true
+    embeddings_batch_item_lease_seconds: 360
+    embeddings_batch_heartbeat_interval_seconds: 15
+    embeddings_batch_job_lease_seconds: 120
+
+    # Admission and retention.
+    embeddings_batch_max_pending_batches_per_scope: 50
+    embeddings_batch_max_items_per_batch: 50000
+    embeddings_batch_max_file_bytes: 209715200
+    batch_completed_artifact_retention_days: 30
+    batch_failed_artifact_retention_days: 14
+    batch_metadata_retention_days: 90
+
+batchWorker:
+  enabled: true
+  replicaCount: 3
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  config:
+    general_settings:
+      embeddings_batch_worker_concurrency: 8
+      embeddings_batch_item_claim_limit: 50
+```
+
+Production prerequisites:
+
+- PostgreSQL is the durable source of truth for jobs, items, leases, completion records, billing, and scheduler state.
+- Redis should be configured for distributed rate limits, max-parallel slots, runtime state, and shared model-group backpressure.
+- S3-compatible storage should be used for input, output, and error files whenever more than one pod can serve batch APIs or workers.
+- Prometheus should scrape both API and batch-worker pods. In split mode, the Helm chart can render worker-only metrics service discovery.
+- Secrets should come from environment variables or Kubernetes Secrets, not literal values in `config.yaml`.
+
+### Traffic-Based Sizing
+
+Start with the profile that matches the expected daily batch volume and provider capacity, then tune with metrics. The effective upstream batch concurrency is approximately:
+
+```text
+batchWorker.replicaCount * embeddings_batch_worker_concurrency
+```
+
+Keep that number below the provider concurrency you are willing to dedicate to batch. If the same model serves synchronous gateway traffic, reserve enough provider capacity for the gateway and keep `embeddings_batch_model_capacity_fraction` in the `0.10` to `0.25` range. For batch-dedicated models, `0.25` to `0.50` is usually a safer upper bound than letting batch consume the whole model.
+
+| Profile | Expected batch traffic | Worker starting point | Scheduler and capacity starting point | Infrastructure notes |
+|---------|------------------------|-----------------------|---------------------------------------|----------------------|
+| Small production | Occasional jobs, up to about 50k items/day | `replicaCount: 1`, concurrency `2`-`4`, claim `20` items | `work_claim_max_items: 20`, `work_claim_max_work_units: 80`, model max in-flight `16` | Split workers are still preferred if the API serves real-time traffic. |
+| Standard production | Regular team usage, about 50k-1M items/day | `replicaCount: 2`-`3`, concurrency `4`-`8`, claim `50` items | `work_claim_max_items: 50`, `work_claim_max_work_units: 200`, model max in-flight `32` | Use Redis, S3, Prometheus, and enough PostgreSQL connections for API plus workers. |
+| High throughput | Sustained multi-tenant traffic or more than 1M items/day | `replicaCount: 4`-`8`, concurrency `8`-`16`, claim `100` items | `work_claim_max_items: 100`, `work_claim_max_work_units: 400`, model max in-flight `64`-`128` | Use a DB pooler or managed proxy, HPA on queue age/depth, worker-only nodes if needed, and per-model capacity data. |
+
+PostgreSQL connection planning is based on process pools, not worker concurrency. A rough reservation is:
+
+```text
+(api replicas * db_pool_size) + (batchWorker replicas * db_pool_size) + admin/migration headroom
+```
+
+Keep at least 20 percent spare database capacity during normal operation. For example, three worker pods with `db_pool_size=20` reserve about 60 worker-side connections, not `3 * concurrency * 20`.
+
+### Scheduler Modes
+
+Use `smart_v1` for production batch scheduling. It composes:
+
+- work-slice claims, so workers claim bounded item slices instead of monopolizing one large job
+- model-capacity gating, so saturated models do not block idle models
+- tenant fair-share, so one tenant cannot dominate a hot model queue
+- size and age ranking, so small jobs get better latency while large jobs continue making progress
+
+Use `fifo_v1` only for local evaluation, very small single-tenant deployments, or emergency rollback. Use `slice_v1`, `model_capacity_v1`, and `fair_share_v1` when intentionally disabling part of the production scheduler for a constrained environment.
+
+### Leases, Retries, And Long Provider Calls
+
+`embeddings_batch_item_lease_seconds` should exceed the p99 provider call duration with margin. The default production value of `360` seconds works for most embedding and chat workloads. Keep `embeddings_batch_heartbeat_interval_seconds` well below the lease duration; `15` seconds renews the lease often enough without creating noisy database traffic.
+
+Use `embeddings_batch_max_attempts: 5` for production if provider hiccups are common. Keep retry jitter enabled so workers do not retry the same provider or model group at the same instant.
+
+The stale lease sweeper should stay enabled. It reclaims expired item and job leases even when no worker is currently scanning the affected model group.
 
 ## Quick Start
 
@@ -206,7 +344,7 @@ Operators also have admin endpoints for monitoring and repair. See [Admin Endpoi
 
 ## Configuration
 
-### Minimal setup
+### Minimal Single-Instance Setup
 
 The only required setting is the feature flag:
 
@@ -215,8 +353,8 @@ general_settings:
   embeddings_batch_enabled: true
 ```
 
-All other settings have sensible defaults that work for single-instance deployments with local storage.
-For Helm or Kubernetes deployments with more than one replica, configure S3-compatible storage before enabling batch.
+All other settings have defaults that work for single-instance deployments with local storage.
+For production, use the production setup above instead of the minimal setup.
 
 ### Storage Backend
 
@@ -286,6 +424,24 @@ The batch worker runs as a background loop that claims jobs and executes items.
 | `embeddings_batch_model_group_backpressure_min_seconds` | `5` | Minimum model-group deferral duration |
 | `embeddings_batch_model_group_backpressure_max_seconds` | `300` | Maximum model-group deferral duration |
 
+### Production Scheduler Settings
+
+| Setting | Recommended production value | Description |
+|---------|------------------------------|-------------|
+| `embeddings_batch_scheduler_mode` | `smart_v1` | Active scheduler mode for real claims |
+| `embeddings_batch_scheduler_shadow_mode` | `none` | Shadow-only scheduler mode; keep disabled in steady state |
+| `embeddings_batch_scheduler_claim_mode` | `work_slice` | Bounded item-slice claims instead of whole-job FIFO claims |
+| `embeddings_batch_scheduler_strict_model_homogeneity_enabled` | `true` | Reject mixed-model batches so capacity and fairness decisions are well-defined |
+| `embeddings_batch_scheduler_backfill_enabled` | `true` | Repair missing scheduler dimensions on older nonterminal jobs |
+| `embeddings_batch_work_claim_max_items` | Profile-dependent, usually `50` | Maximum items returned by one work-slice claim |
+| `embeddings_batch_work_claim_max_work_units` | Profile-dependent, usually `200` | Maximum estimated work units returned by one claim |
+| `embeddings_batch_model_capacity_fraction` | `0.10`-`0.25` for shared models, up to `0.50` for batch-dedicated models | Fraction of known model capacity available to batch |
+| `embeddings_batch_model_capacity_fail_open` | `false` | Keep capacity strict when model capacity is unknown; set `true` only when availability matters more than strict batch caps |
+| `embeddings_batch_tenant_max_in_flight_work_units` | `2000` as a standard starting point | Prevent one tenant from consuming all in-flight batch capacity |
+| `embeddings_batch_scheduler_max_active_flows_per_decision` | `100` | Bound fair-share flow scans per scheduler decision |
+| `embeddings_batch_scheduler_max_candidate_jobs_per_flow` | `50` | Bound candidate job reads per active flow |
+| `embeddings_batch_small_job_fast_lane_enabled` | `false` | Leave disabled unless rank-based `smart_v1` scheduling is not enough |
+
 #### Lease and heartbeat
 
 The worker holds leases on jobs and items to prevent duplicate work across instances.
@@ -296,6 +452,18 @@ The worker holds leases on jobs and items to prevent duplicate work across insta
 | `embeddings_batch_item_lease_seconds` | `360` | How long a worker holds exclusive access to an item |
 | `embeddings_batch_heartbeat_interval_seconds` | `15.0` | How often the worker renews its leases |
 | `embeddings_batch_finalization_retry_delay_seconds` | `60` | Delay between finalization attempts on failure |
+
+#### Stale lease sweeper
+
+The stale lease sweeper is a lightweight background worker that releases expired job leases and requeues expired in-progress item leases. It is intentionally separate from normal claims, so stale work can recover even when no worker is currently scanning that model group.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `embeddings_batch_stale_lease_sweeper_enabled` | `true` | Enable periodic stale lease reconciliation |
+| `embeddings_batch_stale_lease_sweeper_interval_seconds` | `60` | Normal sweep interval |
+| `embeddings_batch_stale_lease_sweeper_failure_interval_seconds` | `30` | Retry interval after a sweep error |
+| `embeddings_batch_stale_lease_sweeper_page_size` | `100` | Maximum rows touched per sweep page |
+| `embeddings_batch_stale_lease_sweeper_max_rows_per_run` | `500` | Maximum rows touched per sweep run |
 
 ### Retention and Cleanup
 
@@ -368,12 +536,9 @@ If a grouped upstream request returns a response shape that cannot be split safe
 
 When a model group has no healthy deployments, workers also create a short-lived backpressure deferral. With Redis available, this deferral is shared across worker instances so newly claimed items for that model group are quickly requeued without calling the router or upstream provider. If Redis is unavailable, the worker falls back to a local in-process deferral and still uses Postgres retry scheduling as the source of truth.
 
-### Rollout guidance
+### Production recommendation
 
-1. Leave `upstream_max_batch_inputs` unset or set to `1` to keep micro-batching disabled
-2. Start with a small value like `4` or `8`
-3. Monitor error rates and the micro-batching metrics (see below)
-4. Increase gradually after validating provider behavior
+For embedding providers with proven multi-input request support, set `upstream_max_batch_inputs` to `4` or `8` first. Use larger values only when provider latency, response shape, and per-item usage accounting stay correct under load. Leave it unset or set it to `1` for providers where multi-input behavior is unknown.
 
 ### Usage allocation
 
@@ -444,7 +609,22 @@ DeltaLLM exposes Prometheus metrics for batch processing on the configured metri
 | `deltallm_batch_jobs` | Gauge | Current job count by status |
 | `deltallm_batch_items` | Gauge | Current item count by status |
 | `deltallm_batch_oldest_item_age_seconds` | Gauge | Age of the oldest item by active status |
+| `deltallm_batch_queue_jobs` | Gauge | Current scheduler queue jobs by status, model group, tenant scope, service tier, and size class |
+| `deltallm_batch_queue_work_units` | Gauge | Current scheduler queue work units by status, model group, tenant scope, service tier, and size class |
+| `deltallm_batch_oldest_job_age_seconds` | Gauge | Age of the oldest batch job by scheduler dimensions |
 | `deltallm_batch_worker_saturation_ratio` | Gauge | Worker active/capacity ratio |
+
+### Scheduler health
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `deltallm_batch_scheduler_config_info` | Gauge | Active mode, shadow mode, and scheduler config hash reported by each process |
+| `deltallm_batch_scheduler_decision_latency_seconds` | Histogram | Scheduler decision latency by mode |
+| `deltallm_batch_scheduler_model_skips_total` | Counter | Model groups skipped by capacity or health reason |
+| `deltallm_batch_scheduler_flow_skips_total` | Counter | Fair-share flow skips such as lock contention or tenant caps |
+| `deltallm_batch_scheduler_fairness_deviation` | Gauge | Difference between actual and expected tenant share for active flows |
+| `deltallm_batch_work_claims_total` | Counter | Work-slice claim attempts by result |
+| `deltallm_batch_work_claim_latency_seconds` | Histogram | Work-slice claim latency |
 
 ### Latency
 
@@ -462,6 +642,9 @@ DeltaLLM exposes Prometheus metrics for batch processing on the configured metri
 | `deltallm_batch_artifact_failures_total` | Counter | Storage operation failures by operation and backend |
 | `deltallm_batch_completion_outbox_failures_total` | Counter | Completion outbox failures by bounded reason |
 | `deltallm_batch_item_reclaims_total` | Counter | Items reclaimed from expired leases |
+| `deltallm_batch_stale_lease_sweeper_runs_total` | Counter | Stale lease sweeper runs by status |
+| `deltallm_batch_stale_lease_sweeper_rows_total` | Counter | Rows reclaimed, released, skipped, or refreshed by the sweeper |
+| `deltallm_batch_stale_lease_sweeper_duration_seconds` | Histogram | Stale lease sweeper duration |
 | `deltallm_batch_repair_actions_total` | Counter | Admin repair actions by type and status |
 
 ### Gateway policy
@@ -496,12 +679,19 @@ DeltaLLM exposes Prometheus metrics for batch processing on the configured metri
 ### What to watch
 
 - **`deltallm_batch_oldest_item_age_seconds{status="pending"}`** growing indicates the worker can't keep up. Increase `worker_concurrency` or add instances.
+- **`deltallm_batch_oldest_job_age_seconds{status="queued"}`** growing for one model group indicates model capacity, provider health, or tenant fairness is constraining progress.
+- **`deltallm_batch_scheduler_config_info`** should show one active mode, shadow mode, and config hash across worker pods. More than one tuple after a config change means workers have not converged.
+- **`deltallm_batch_scheduler_decision_latency_seconds`** p95 should usually stay below `250ms`. Sustained higher latency means scheduler queries or database contention need attention.
+- **`deltallm_batch_scheduler_model_skips_total`** with `rpm_exhausted`, `tpm_exhausted`, `no_available_slots`, or `unknown_capacity` explains why a model group is not being claimed.
+- **`deltallm_batch_scheduler_flow_skips_total{reason="flow_lock_busy"}`** increasing means too many workers are competing for the same hot model/tier flow decision.
+- **`deltallm_batch_work_claims_total{result="empty"}`** increasing while queue depth is low usually means workers are over-provisioned for current traffic.
 - **`deltallm_batch_artifact_failures_total`** indicates storage issues. Check disk space (local) or S3 credentials/connectivity.
 - **`deltallm_batch_policy_rejected_total`** increasing usually means current auth, model access, budget, callback, or guardrail policy is rejecting batch items.
 - **`deltallm_batch_policy_retryable_failures_total`** increasing usually means batch workers are hitting distributed rate-limit or max-parallel pressure.
 - **`deltallm_batch_microbatch_isolation_fallback_total`** increasing after enabling micro-batching may indicate the provider doesn't handle multi-input requests well. Consider reducing `upstream_max_batch_inputs`.
 - **`deltallm_batch_chat_microbatch_fallbacks_total`** increasing after enabling chat `sync_microbatch` means items are being protected by compatibility checks or no executor is available.
 - **`deltallm_batch_model_group_deferrals_total`** increasing means workers are seeing temporary model-group unavailability. Check deployment health and router cooldown state.
+- **`deltallm_batch_stale_lease_sweeper_runs_total{status="error"}`** should stay at zero. Reclaimed rows should be rare in healthy steady state.
 
 ## Troubleshooting
 
@@ -538,7 +728,7 @@ Provider `Retry-After` hints are honored for retryable rate-limit failures, but 
 - Chat batch supports non-streaming `/v1/chat/completions` requests only
 - MCP tools are not supported in chat batch requests yet
 - Provider-native async chat batch APIs are not used in this release
-- Chat requests are executed with bounded concurrency; synchronous upstream chat micro-batching is planned separately
+- Chat requests default to bounded concurrent execution; synchronous upstream chat micro-batching requires an adapter that supports exact per-item results and usage
 - `list[str]` and `list[list[int]]` inputs are not eligible for micro-batching (they are processed individually)
 - Local storage is not safe for multi-instance deployments; use S3
 - Batch creation is not fully transactional when the database does not support interactive transactions
