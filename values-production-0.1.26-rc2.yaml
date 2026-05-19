@@ -1,0 +1,108 @@
+replicaCount: 3
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 12
+  targetCPUUtilizationPercentage: 65
+  targetMemoryUtilizationPercentage: 75
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: deltallm
+
+postgresql:
+  enabled: false
+
+redis:
+  enabled: false
+
+prometheus:
+  serviceMonitor:
+    enabled: true
+    interval: 15s
+    scrapeTimeout: 10s
+
+batchWorker:
+  # Enable this when production batch processing is required. Keep API pods
+  # worker-free so UI/gateway traffic can scale independently from batch load.
+  enabled: false
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+config:
+  general_settings:
+    cache_backend: redis
+    model_deployment_source: db_only
+    model_deployment_bootstrap_from_config: false
+    # Phase 6 scheduler rollout controls. Leave commented to preserve legacy
+    # boolean flag behavior; set explicitly for staged rollout or rollback.
+    # embeddings_batch_scheduler_mode: fifo_v1
+    # embeddings_batch_scheduler_shadow_mode: none
+    embeddings_batch_scheduler_shadow_decision_timeout_seconds: 0.5
+    embeddings_batch_scheduler_shadow_max_pending_decisions: 16
+    embeddings_batch_model_capacity_enabled: false
+    embeddings_batch_default_model_max_in_flight: 16
+    embeddings_batch_default_model_max_claim_work_units: 64
+    embeddings_batch_model_capacity_fraction: 0.25
+    embeddings_batch_model_capacity_refresh_seconds: 5
+    embeddings_batch_model_capacity_fail_open: false
+    embeddings_batch_stale_lease_sweeper_enabled: true
+    embeddings_batch_stale_lease_sweeper_interval_seconds: 60
+    embeddings_batch_stale_lease_sweeper_failure_interval_seconds: 30
+    embeddings_batch_stale_lease_sweeper_page_size: 100
+    embeddings_batch_stale_lease_sweeper_max_rows_per_run: 500
+    embeddings_batch_tenant_fair_share_enabled: false
+    embeddings_batch_scheduler_base_quantum_work_units: 16
+    embeddings_batch_scheduler_max_deficit_multiplier: 8
+    embeddings_batch_tenant_max_in_flight_work_units: 0
+    embeddings_batch_tenant_max_queued_work_units: 0
+    embeddings_batch_advisory_lock_mode: dual
+    embeddings_batch_scheduler_max_active_flows_per_decision: 100
+    embeddings_batch_scheduler_max_candidate_jobs_per_flow: 50
+    embeddings_batch_tenant_scope_preference: organization,team,api_key,user
+    embeddings_batch_tenant_fair_share_disabled_model_groups: []
+    embeddings_batch_size_aware_scheduling_enabled: false
+    embeddings_batch_aging_seconds_per_work_unit: 30
+    embeddings_batch_max_age_credit_work_units: 1000
+    embeddings_batch_min_large_job_claim_interval_seconds: 30
+    embeddings_batch_small_job_fast_lane_enabled: false
+    embeddings_batch_small_job_max_work_units: 100
