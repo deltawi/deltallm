@@ -20,9 +20,15 @@ from src.batch.models import (
     BatchWorkRecommendation,
     encode_operator_failed_reason,
 )
+from src.batch.scheduling import (
+    BatchModelCapacityConfig,
+    BatchTenantFairShareConfig,
+    scheduler_config_fingerprint,
+)
 from src.batch.service import BatchService
 from src.batch.worker import BatchArtifactValidationError, BatchExecutorWorker, BatchWorkerConfig
 from src.batch.worker_types import BatchItemLeaseLostError
+from src.config import GeneralSettings
 from src.db.repositories import KeyRecord
 from src.guardrails.exceptions import GuardrailViolationError
 from src.services.key_service import KeyService
@@ -154,6 +160,54 @@ class _FakeStorage:
     async def delete(self, storage_key: str) -> None:  # pragma: no cover
         del storage_key
         raise AssertionError("unexpected artifact delete in this test")
+
+
+def test_batch_worker_scheduler_config_hash_uses_applied_runtime_state() -> None:
+    general = GeneralSettings(
+        embeddings_batch_scheduler_mode="fair_share_v1",
+        embeddings_batch_scheduler_shadow_mode="smart_v1",
+        embeddings_batch_scheduler_claim_mode="work_slice",
+        embeddings_batch_model_capacity_enabled=True,
+        embeddings_batch_tenant_fair_share_enabled=True,
+    )
+    tenant_config = BatchTenantFairShareConfig.from_settings(general)
+    worker_config = BatchWorkerConfig(
+        worker_id="w1",
+        scheduler_mode="fair_share_v1",
+        scheduler_shadow_mode="smart_v1",
+        scheduler_claim_mode="work_slice",
+        model_capacity_enabled=True,
+        scheduler_shadow_enabled=True,
+        tenant_fair_share_enabled=True,
+        tenant_fair_share_base_quantum_work_units=tenant_config.base_quantum_work_units,
+        tenant_fair_share_max_deficit_multiplier=tenant_config.max_deficit_multiplier,
+        tenant_max_in_flight_work_units=tenant_config.tenant_max_in_flight_work_units,
+        tenant_fair_share_max_active_flows_per_decision=tenant_config.max_active_flows_per_decision,
+        tenant_fair_share_max_candidate_jobs_per_flow=tenant_config.max_candidate_jobs_per_flow,
+        tenant_fair_share_disabled_model_groups=tenant_config.disabled_model_groups,
+        size_aware_scheduling_enabled=True,
+    )
+    app = SimpleNamespace(state=SimpleNamespace(batch_tenant_fair_share_config=tenant_config))
+    worker = BatchExecutorWorker(
+        app=app,
+        repository=_FakeRepository(),  # type: ignore[arg-type]
+        storage=SimpleNamespace(),  # type: ignore[arg-type]
+        config=worker_config,
+        model_capacity_resolver=SimpleNamespace(
+            config=BatchModelCapacityConfig.from_settings(general)
+        ),
+    )
+
+    worker.mark_scheduler_config_applied(general_settings=general, config_generation=7)
+
+    desired_hash = scheduler_config_fingerprint(general)
+    assert worker._scheduler_config_hash() == desired_hash
+    assert worker._scheduler_config_generation() == 7
+
+    worker.config.work_claim_max_items = 17
+
+    assert worker._scheduler_config_hash() != desired_hash
+    assert worker._scheduler_config_generation() == 7
 
 
 def _valid_embedding_artifact_response_body() -> dict[str, object]:

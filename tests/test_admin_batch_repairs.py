@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 from prometheus_client import generate_latest
@@ -9,7 +10,7 @@ from src.api.admin.endpoints.common import AuthScope
 from src.audit.actions import AuditAction
 from src.batch.models import BatchJobRecord, BatchJobStatus, BatchSchedulerFlowRecord
 from src.batch.models import encode_operator_failed_reason
-from src.batch.scheduling import BatchTenantFairShareConfig
+from src.batch.scheduling import BatchTenantFairShareConfig, scheduler_config_fingerprint
 from src.config import AppConfig
 from src.config_runtime.dynamic import DynamicConfigPersistenceError, DynamicConfigValidationError
 from src.metrics import (
@@ -225,6 +226,7 @@ class _FakeBatchRepairRepository:
 class _FakeDynamicConfigManager:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
+        self.generation = 1
         self.update_calls: list[tuple[dict[str, object], str]] = []
         self.fail_update = False
         self.fail_validation = False
@@ -244,9 +246,13 @@ class _FakeDynamicConfigManager:
             else:
                 merged[section] = section_update
         self.config = AppConfig.model_validate(merged)
+        self.generation += 1
 
     def get_app_config(self) -> AppConfig:
         return self.config
+
+    def get_config_generation(self) -> int:
+        return self.generation
 
 
 @pytest.mark.asyncio
@@ -353,6 +359,7 @@ async def test_scheduler_status_includes_modes_and_metric_snapshot(client, test_
             }
         }
     )
+    test_app.state.dynamic_config_manager = _FakeDynamicConfigManager(test_app.state.app_config)
     increment_batch_scheduler_shadow_comparison(
         active_mode="model_capacity_v1",
         shadow_mode="fair_share_v1",
@@ -381,6 +388,10 @@ async def test_scheduler_status_includes_modes_and_metric_snapshot(client, test_
     payload = response.json()
     assert payload["active_mode"] == "model_capacity_v1"
     assert payload["shadow_mode"] == "fair_share_v1"
+    assert len(payload["config"]["hash"]) == 16
+    assert payload["config"]["generation"] == 1
+    assert payload["local_worker"]["present"] is False
+    assert payload["local_worker"]["config_hash"] is None
     assert payload["effective"]["shadow_tenant_fair_share"] is True
     assert payload["fair_share"]["enabled"] is True
     assert payload["metrics"]["scope"] == "process_local"
@@ -406,6 +417,94 @@ async def test_scheduler_status_includes_modes_and_metric_snapshot(client, test_
         and sample["value"] >= 1.0
         for sample in samples["counters"]["rollbacks"]
     )
+
+
+@pytest.mark.asyncio
+async def test_scheduler_status_reports_worker_config_mismatch(client, test_app, monkeypatch):
+    test_app.state.app_config = AppConfig.model_validate(
+        {
+            "general_settings": {
+                "embeddings_batch_scheduler_mode": "fair_share_v1",
+                "embeddings_batch_scheduler_shadow_mode": "smart_v1",
+            }
+        }
+    )
+    test_app.state.dynamic_config_manager = _FakeDynamicConfigManager(test_app.state.app_config)
+    test_app.state.batch_runtime = SimpleNamespace(
+        worker=SimpleNamespace(
+            config=SimpleNamespace(worker_id="worker-1"),
+            _active_scheduler_mode=lambda: "fair_share_v1",
+            _shadow_scheduler_mode=lambda: "smart_v1",
+            _scheduler_config_hash=lambda: "oldhash",
+            _scheduler_config_generation=lambda: 0,
+        )
+    )
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=True,
+            account_id="acct-1",
+        ),
+    )
+
+    response = await client.get(
+        "/ui/api/batches/scheduler/status",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    local_worker = response.json()["local_worker"]
+    assert local_worker["present"] is True
+    assert local_worker["worker_id"] == "worker-1"
+    assert local_worker["active_mode"] == "fair_share_v1"
+    assert local_worker["shadow_mode"] == "smart_v1"
+    assert local_worker["config_hash"] == "oldhash"
+    assert local_worker["config_generation"] == 0
+    assert local_worker["matches_config"] is False
+
+
+@pytest.mark.asyncio
+async def test_scheduler_status_ignores_global_generation_when_scheduler_config_matches(
+    client,
+    test_app,
+    monkeypatch,
+):
+    test_app.state.app_config = AppConfig.model_validate(
+        {
+            "general_settings": {
+                "embeddings_batch_scheduler_mode": "fair_share_v1",
+                "embeddings_batch_scheduler_shadow_mode": "smart_v1",
+            }
+        }
+    )
+    config_hash = scheduler_config_fingerprint(test_app.state.app_config.general_settings)
+    test_app.state.dynamic_config_manager = _FakeDynamicConfigManager(test_app.state.app_config)
+    test_app.state.batch_runtime = SimpleNamespace(
+        worker=SimpleNamespace(
+            config=SimpleNamespace(worker_id="worker-1"),
+            _active_scheduler_mode=lambda: "fair_share_v1",
+            _shadow_scheduler_mode=lambda: "smart_v1",
+            _scheduler_config_hash=lambda: config_hash,
+            _scheduler_config_generation=lambda: 0,
+        )
+    )
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=True,
+            account_id="acct-1",
+        ),
+    )
+
+    response = await client.get(
+        "/ui/api/batches/scheduler/status",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    local_worker = response.json()["local_worker"]
+    assert local_worker["config_generation"] == 0
+    assert local_worker["matches_config"] is True
 
 
 @pytest.mark.asyncio

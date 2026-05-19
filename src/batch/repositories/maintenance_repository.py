@@ -21,6 +21,8 @@ from src.batch.scheduling import (
 
 _BACKFILL_LOCK_SCOPE = "batch_scheduler"
 _BACKFILL_LOCK_NAME = "scheduler_dimensions_backfill"
+_LEASE_SWEEP_MAX_PAGE_SIZE = 1_000
+_LEASE_SWEEP_MAX_ROWS_PER_RUN = 5_000
 
 
 def _json_mapping(value: Any) -> dict[str, Any]:
@@ -102,6 +104,274 @@ class BatchMaintenanceRepository:
             """,
             batch_id,
         )
+
+    async def _count_active_item_leases(self, prisma: Any, *, now: datetime, limit: int) -> int:
+        rows = await prisma.query_raw(
+            """
+            SELECT COUNT(*)::int AS active_count
+            FROM (
+                SELECT item_id
+                FROM deltallm_batch_item
+                WHERE status = 'in_progress'
+                  AND locked_by IS NOT NULL
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at >= $1::timestamp
+                ORDER BY lease_expires_at ASC, item_id ASC
+                LIMIT $2
+            ) active_items
+            """,
+            now,
+            limit,
+        )
+        return int((rows[0] if rows else {}).get("active_count") or 0)
+
+    async def _count_active_job_leases(self, prisma: Any, *, now: datetime, limit: int) -> int:
+        rows = await prisma.query_raw(
+            """
+            SELECT COUNT(*)::int AS active_count
+            FROM (
+                SELECT batch_id
+                FROM deltallm_batch_job
+                WHERE status IN ('queued', 'in_progress', 'finalizing')
+                  AND locked_by IS NOT NULL
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at >= $1::timestamp
+                ORDER BY lease_expires_at ASC, batch_id ASC
+                LIMIT $2
+            ) active_jobs
+            """,
+            now,
+            limit,
+        )
+        return int((rows[0] if rows else {}).get("active_count") or 0)
+
+    async def _requeue_expired_item_leases(
+        self,
+        prisma: Any,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> tuple[int, set[str]]:
+        rows = await prisma.query_raw(
+            """
+            WITH candidate AS (
+                SELECT i.item_id, i.batch_id
+                FROM deltallm_batch_item i
+                JOIN deltallm_batch_job j ON j.batch_id = i.batch_id
+                WHERE j.status IN ('queued', 'in_progress', 'finalizing')
+                  AND i.status = 'in_progress'
+                  AND i.locked_by IS NOT NULL
+                  AND i.lease_expires_at IS NOT NULL
+                  AND i.lease_expires_at < $1::timestamp
+                ORDER BY i.lease_expires_at ASC, i.item_id ASC
+                FOR UPDATE OF i SKIP LOCKED
+                LIMIT $2
+            ),
+            updated AS (
+                UPDATE deltallm_batch_item i
+                SET status = 'pending',
+                    locked_by = NULL,
+                    lease_expires_at = NULL,
+                    not_before_at = NULL
+                FROM candidate c
+                WHERE i.item_id = c.item_id
+                  AND i.status = 'in_progress'
+                  AND i.locked_by IS NOT NULL
+                  AND i.lease_expires_at IS NOT NULL
+                  AND i.lease_expires_at < $1::timestamp
+                RETURNING i.item_id, i.batch_id
+            )
+            SELECT item_id, batch_id FROM updated
+            """,
+            now,
+            limit,
+        )
+        batch_ids = {str(row.get("batch_id") or "") for row in rows if row.get("batch_id")}
+        return len(rows), batch_ids
+
+    async def _release_expired_job_leases(self, prisma: Any, *, now: datetime, limit: int) -> int:
+        rows = await prisma.query_raw(
+            """
+            WITH candidate AS (
+                SELECT batch_id
+                FROM deltallm_batch_job
+                WHERE status IN ('queued', 'in_progress', 'finalizing')
+                  AND locked_by IS NOT NULL
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at < $1::timestamp
+                ORDER BY lease_expires_at ASC, batch_id ASC
+                FOR UPDATE SKIP LOCKED
+                LIMIT $2
+            ),
+            updated AS (
+                UPDATE deltallm_batch_job j
+                SET locked_by = NULL,
+                    lease_expires_at = NULL,
+                    status_last_updated_at = NOW()
+                FROM candidate c
+                WHERE j.batch_id = c.batch_id
+                  AND j.status IN ('queued', 'in_progress', 'finalizing')
+                  AND j.locked_by IS NOT NULL
+                  AND j.lease_expires_at IS NOT NULL
+                  AND j.lease_expires_at < $1::timestamp
+                RETURNING j.batch_id
+            )
+            SELECT batch_id FROM updated
+            """,
+            now,
+            limit,
+        )
+        return len(rows)
+
+    async def _refresh_job_progress_for_batches(
+        self,
+        prisma: Any,
+        *,
+        batch_ids: set[str],
+        limit: int,
+    ) -> int:
+        bounded_batch_ids = sorted(batch_id for batch_id in batch_ids if batch_id)[: max(0, limit)]
+        if not bounded_batch_ids:
+            return 0
+        rows = await prisma.query_raw(
+            """
+            WITH target AS (
+                SELECT UNNEST($1::text[]) AS batch_id
+            ),
+            locked_jobs AS (
+                SELECT j.batch_id
+                FROM deltallm_batch_job j
+                JOIN target t ON t.batch_id = j.batch_id
+                FOR UPDATE OF j SKIP LOCKED
+            ),
+            stats AS (
+                SELECT
+                    i.batch_id,
+                    COUNT(*)::int AS total_items,
+                    COUNT(*) FILTER (WHERE i.status = 'pending')::int AS pending_items,
+                    COUNT(*) FILTER (WHERE i.status = 'in_progress')::int AS in_progress_items,
+                    COUNT(*) FILTER (WHERE i.status = 'completed')::int AS completed_items,
+                    COUNT(*) FILTER (WHERE i.status = 'failed')::int AS failed_items,
+                    COUNT(*) FILTER (WHERE i.status = 'cancelled')::int AS cancelled_items,
+                    COALESCE(
+                        SUM(i.estimated_work_units) FILTER (
+                            WHERE i.status IN ('pending', 'in_progress')
+                        ),
+                        0
+                    )::int AS remaining_work_units
+                FROM deltallm_batch_item i
+                JOIN locked_jobs lj ON lj.batch_id = i.batch_id
+                GROUP BY i.batch_id
+            )
+            UPDATE deltallm_batch_job j
+            SET total_items = s.total_items,
+                in_progress_items = s.in_progress_items,
+                completed_items = s.completed_items,
+                failed_items = s.failed_items,
+                cancelled_items = s.cancelled_items,
+                remaining_work_units = s.remaining_work_units,
+                status = (
+                    CASE
+                    WHEN j.status IN ('completed', 'failed', 'cancelled', 'expired') THEN j.status
+                    WHEN s.pending_items = 0 AND s.in_progress_items = 0 THEN 'finalizing'
+                    WHEN s.in_progress_items > 0
+                      OR s.completed_items > 0
+                      OR s.failed_items > 0
+                      OR s.cancelled_items > 0 THEN 'in_progress'
+                    ELSE j.status
+                    END
+                )::"DeltaLLM_BatchJobStatus",
+                completed_at = CASE
+                    WHEN j.status IN ('completed', 'failed', 'cancelled', 'expired')
+                    THEN COALESCE(j.completed_at, NOW())
+                    ELSE NULL
+                END,
+                status_last_updated_at = NOW()
+            FROM stats s
+            WHERE j.batch_id = s.batch_id
+            RETURNING j.batch_id
+            """,
+            bounded_batch_ids,
+        )
+        return len(rows)
+
+    async def sweep_expired_batch_leases(
+        self,
+        *,
+        now: datetime,
+        page_size: int = 100,
+        max_rows_per_run: int = 500,
+    ) -> dict[str, int]:
+        if self.prisma is None:
+            return {
+                "items": 0,
+                "jobs": 0,
+                "refreshed_jobs": 0,
+                "skipped_active_items": 0,
+                "skipped_active_jobs": 0,
+            }
+        bounded_page_size = max(1, min(int(page_size or 1), _LEASE_SWEEP_MAX_PAGE_SIZE))
+        remaining = max(0, min(int(max_rows_per_run or 0), _LEASE_SWEEP_MAX_ROWS_PER_RUN))
+        result = {
+            "items": 0,
+            "jobs": 0,
+            "refreshed_jobs": 0,
+            "skipped_active_items": 0,
+            "skipped_active_jobs": 0,
+        }
+        affected_batch_ids: set[str] = set()
+        item_exhausted = remaining <= 0
+        job_exhausted = remaining <= 0
+        while remaining > 0 and not (item_exhausted and job_exhausted):
+            progressed = 0
+            if not item_exhausted:
+                item_limit = min(
+                    bounded_page_size,
+                    remaining if job_exhausted else max(1, (remaining + 1) // 2),
+                )
+                item_count, batch_ids = await self._requeue_expired_item_leases(
+                    self.prisma,
+                    now=now,
+                    limit=item_limit,
+                )
+                affected_batch_ids.update(batch_ids)
+                result["items"] += item_count
+                remaining -= item_count
+                progressed += item_count
+                item_exhausted = item_count < item_limit
+
+            if not job_exhausted and remaining > 0:
+                job_limit = min(bounded_page_size, remaining)
+                job_count = await self._release_expired_job_leases(
+                    self.prisma,
+                    now=now,
+                    limit=job_limit,
+                )
+                result["jobs"] += job_count
+                remaining -= job_count
+                progressed += job_count
+                job_exhausted = job_count < job_limit
+
+            if progressed == 0:
+                break
+
+        result["refreshed_jobs"] = await self._refresh_job_progress_for_batches(
+            self.prisma,
+            batch_ids=affected_batch_ids,
+            limit=min(_LEASE_SWEEP_MAX_ROWS_PER_RUN, len(affected_batch_ids)),
+        )
+
+        result["skipped_active_items"] = await self._count_active_item_leases(
+            self.prisma,
+            now=now,
+            limit=bounded_page_size,
+        )
+        result["skipped_active_jobs"] = await self._count_active_job_leases(
+            self.prisma,
+            now=now,
+            limit=bounded_page_size,
+        )
+        return result
 
     async def backfill_scheduler_dimensions(
         self,

@@ -1,5 +1,6 @@
 from src.batch.cleanup import BatchCleanupConfig, BatchRetentionCleanupWorker
 from src.batch.scheduler_backfill import BatchSchedulerBackfillConfig, BatchSchedulerBackfillWorker
+from src.batch.stale_lease_sweeper import BatchStaleLeaseSweeperConfig, BatchStaleLeaseSweeperWorker
 from src.batch.models import (
     BatchCompletionOutboxCreate,
     BatchCompletionOutboxRecord,
@@ -28,4 +29,6 @@ __all__ = [
     "BatchRetentionCleanupWorker",
     "BatchSchedulerBackfillConfig",
     "BatchSchedulerBackfillWorker",
+    "BatchStaleLeaseSweeperConfig",
+    "BatchStaleLeaseSweeperWorker",
 ]

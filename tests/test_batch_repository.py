@@ -19,6 +19,7 @@ from src.batch.models import (
 from src.batch.repository import BatchRepository
 from src.batch.repositories.item_repository import BatchItemRepository
 from src.batch.repositories.job_repository import BatchJobRepository, flow_from_row
+from src.batch.repositories.maintenance_repository import BatchMaintenanceRepository
 from src.batch.repositories.mappers import job_from_row
 from src.batch.repositories import job_repository as job_repository_module
 import src.batch.scheduling.advisory_locks as advisory_locks_module
@@ -44,6 +45,151 @@ class _PrismaSpy:
         self.queries.append(sql)
         self.calls.append((sql, params))
         return []
+
+
+class _LeaseSweepPrisma:
+    def __init__(
+        self,
+        *,
+        item_pages: list[int] | None = None,
+        job_pages: list[int] | None = None,
+        refresh_pages: list[int] | None = None,
+    ) -> None:
+        self.item_pages = list(item_pages or [])
+        self.job_pages = list(job_pages or [])
+        self.refresh_pages = list(refresh_pages or [])
+        self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def query_raw(self, sql: str, *params):
+        self.calls.append((sql, params))
+        if "active_items" in sql:
+            return [{"active_count": 3}]
+        if "active_jobs" in sql:
+            return [{"active_count": 4}]
+        if "WITH target AS" in sql and "UNNEST($1::text[])" in sql:
+            count = self.refresh_pages.pop(0) if self.refresh_pages else len(params[0])
+            return [{"batch_id": f"batch-{index}"} for index in range(count)]
+        if "UPDATE deltallm_batch_item i" in sql:
+            count = self.item_pages.pop(0) if self.item_pages else 0
+            return [
+                {"item_id": f"item-{index}", "batch_id": f"batch-{index}"}
+                for index in range(count)
+            ]
+        if "UPDATE deltallm_batch_job j" in sql:
+            count = self.job_pages.pop(0) if self.job_pages else 0
+            return [{"batch_id": f"batch-{index}"} for index in range(count)]
+        return []
+
+    @property
+    def item_release_calls(self) -> list[tuple[str, tuple[object, ...]]]:
+        return [(sql, params) for sql, params in self.calls if "UPDATE deltallm_batch_item i" in sql]
+
+    @property
+    def job_release_calls(self) -> list[tuple[str, tuple[object, ...]]]:
+        return [
+            (sql, params)
+            for sql, params in self.calls
+            if "UPDATE deltallm_batch_job j" in sql
+            and "status IN ('queued', 'in_progress', 'finalizing')" in sql
+        ]
+
+    @property
+    def job_refresh_calls(self) -> list[tuple[str, tuple[object, ...]]]:
+        return [
+            (sql, params)
+            for sql, params in self.calls
+            if "WITH target AS" in sql and "UNNEST($1::text[])" in sql
+        ]
+
+
+@pytest.mark.asyncio
+async def test_maintenance_sweep_expired_batch_leases_uses_bounded_skip_locked_queries() -> None:
+    prisma = _LeaseSweepPrisma(item_pages=[2, 0], job_pages=[1, 0])
+    repository = BatchMaintenanceRepository(prisma)
+    now = datetime.now(tz=UTC)
+
+    result = await repository.sweep_expired_batch_leases(
+        now=now,
+        page_size=10_000,
+        max_rows_per_run=10_000,
+    )
+
+    assert result == {
+        "items": 2,
+        "jobs": 1,
+        "refreshed_jobs": 2,
+        "skipped_active_items": 3,
+        "skipped_active_jobs": 4,
+    }
+    item_update = prisma.item_release_calls[0][0]
+    job_update = prisma.job_release_calls[0][0]
+    job_refresh = prisma.job_refresh_calls[0][0]
+    assert "FOR UPDATE OF i SKIP LOCKED" in item_update
+    assert "JOIN deltallm_batch_job j ON j.batch_id = i.batch_id" in item_update
+    assert "j.status IN ('queued', 'in_progress', 'finalizing')" in item_update
+    assert "locked_by IS NOT NULL" in item_update
+    assert "lease_expires_at < $1::timestamp" in item_update
+    assert "LIMIT $2" in item_update
+    assert "FOR UPDATE SKIP LOCKED" in job_update
+    assert "locked_by IS NOT NULL" in job_update
+    assert "lease_expires_at < $1::timestamp" in job_update
+    assert "LIMIT $2" in job_update
+    assert "FOR UPDATE OF j SKIP LOCKED" in job_refresh
+    assert prisma.calls[0][1][1] == 1_000
+    assert all(params[1] <= 1_000 for _, params in prisma.calls if len(params) > 1)
+
+
+@pytest.mark.asyncio
+async def test_maintenance_sweep_expired_batch_leases_respects_max_rows_per_run() -> None:
+    prisma = _LeaseSweepPrisma(item_pages=[1], job_pages=[1])
+    repository = BatchMaintenanceRepository(prisma)
+
+    result = await repository.sweep_expired_batch_leases(
+        now=datetime.now(tz=UTC),
+        page_size=100,
+        max_rows_per_run=1,
+    )
+
+    assert result["items"] == 1
+    assert result["jobs"] == 0
+    assert result["refreshed_jobs"] == 1
+    assert not prisma.job_release_calls
+
+
+@pytest.mark.asyncio
+async def test_maintenance_sweep_expired_batch_leases_uses_single_row_budget_for_jobs() -> None:
+    prisma = _LeaseSweepPrisma(item_pages=[0], job_pages=[1])
+    repository = BatchMaintenanceRepository(prisma)
+
+    result = await repository.sweep_expired_batch_leases(
+        now=datetime.now(tz=UTC),
+        page_size=100,
+        max_rows_per_run=1,
+    )
+
+    assert result["items"] == 0
+    assert result["jobs"] == 1
+    assert result["refreshed_jobs"] == 0
+    assert prisma.item_release_calls[0][1][1] == 1
+    assert prisma.job_release_calls[0][1][1] == 1
+
+
+@pytest.mark.asyncio
+async def test_maintenance_sweep_expired_batch_leases_splits_budget_between_items_and_jobs() -> None:
+    prisma = _LeaseSweepPrisma(item_pages=[5], job_pages=[5])
+    repository = BatchMaintenanceRepository(prisma)
+
+    result = await repository.sweep_expired_batch_leases(
+        now=datetime.now(tz=UTC),
+        page_size=100,
+        max_rows_per_run=10,
+    )
+
+    assert result["items"] == 5
+    assert result["jobs"] == 5
+    assert result["refreshed_jobs"] == 5
+    assert prisma.item_release_calls[0][1][1] == 5
+    assert prisma.job_release_calls[0][1][1] == 5
 
 
 @pytest.mark.asyncio

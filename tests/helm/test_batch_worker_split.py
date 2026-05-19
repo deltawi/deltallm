@@ -134,6 +134,17 @@ def test_helm_schema_allows_tenant_fair_share_settings() -> None:
         "fair_share_v1",
         "smart_v1",
     ]
+    assert general_settings["embeddings_batch_stale_lease_sweeper_enabled"] == {"type": "boolean"}
+    assert general_settings["embeddings_batch_stale_lease_sweeper_page_size"] == {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1000,
+    }
+    assert general_settings["embeddings_batch_stale_lease_sweeper_max_rows_per_run"] == {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 5000,
+    }
     assert general_settings["embeddings_batch_size_aware_scheduling_enabled"] == {"type": "boolean"}
     assert general_settings["embeddings_batch_aging_seconds_per_work_unit"]["minimum"] == 1
     assert general_settings["embeddings_batch_max_age_credit_work_units"]["minimum"] == 0
@@ -404,6 +415,7 @@ def test_split_mode_separates_api_and_worker_configs() -> None:
     assert api_general["embeddings_batch_gc_enabled"] is False
     assert api_general["embeddings_batch_create_session_cleanup_enabled"] is False
     assert api_general["embeddings_batch_scheduler_backfill_enabled"] is False
+    assert api_general["embeddings_batch_stale_lease_sweeper_enabled"] is False
     assert api_general["embeddings_batch_scheduler_claim_mode"] == "job_fifo"
 
     worker_general = worker_config["general_settings"]
@@ -412,6 +424,7 @@ def test_split_mode_separates_api_and_worker_configs() -> None:
     assert worker_general["embeddings_batch_gc_enabled"] is True
     assert worker_general["embeddings_batch_create_session_cleanup_enabled"] is True
     assert worker_general["embeddings_batch_scheduler_backfill_enabled"] is True
+    assert worker_general["embeddings_batch_stale_lease_sweeper_enabled"] is True
     assert worker_general["embeddings_batch_scheduler_claim_mode"] == "job_fifo"
     assert worker_general["embeddings_batch_worker_concurrency"] == 2
     assert worker_general["embeddings_batch_item_claim_limit"] == 10
@@ -622,6 +635,8 @@ def test_split_mode_worker_tuning_uses_shared_config_unless_role_overridden() ->
         "batchWorker.config.general_settings.embeddings_batch_worker_concurrency=3",
         "--set",
         "batchWorker.config.general_settings.embeddings_batch_scheduler_backfill_enabled=false",
+        "--set",
+        "batchWorker.config.general_settings.embeddings_batch_stale_lease_sweeper_enabled=false",
         "--show-only",
         "templates/configmap.yaml",
     )
@@ -637,6 +652,7 @@ def test_split_mode_worker_tuning_uses_shared_config_unless_role_overridden() ->
     assert shared_worker_general["embeddings_batch_item_claim_limit"] == 40
     assert role_worker_general["embeddings_batch_worker_concurrency"] == 3
     assert role_worker_general["embeddings_batch_scheduler_backfill_enabled"] is False
+    assert role_worker_general["embeddings_batch_stale_lease_sweeper_enabled"] is False
 
 
 def test_production_default_does_not_disable_batch_workers_without_worker_deployment() -> None:

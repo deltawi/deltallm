@@ -152,6 +152,7 @@ Expected fields:
 - `shadow_mode` matches the intended shadow stage or `none`.
 - `local_worker.matches_config=true` when the serving process owns a batch worker; split API pods
   usually report `local_worker.present=false`.
+- `config.hash` and `config.generation` match the current intended scheduler rollout config.
 - `effective.*` shows active and shadow capability flags.
 - `model_capacity.enabled`, `fair_share.enabled`, and `size_aging.enabled` match the selected active or shadow mode.
 - `metrics.scope=process_local` and `metrics.cluster_wide=false`.
@@ -171,20 +172,29 @@ Check Prometheus metrics:
 - `deltallm_batch_scheduler_shadow_better_choice_total`
 - `deltallm_batch_scheduler_rollbacks_total`
 - `deltallm_batch_scheduler_mode_info`
+- `deltallm_batch_scheduler_config_info`
 - `deltallm_batch_scheduler_oldest_wait_seconds`
 - `deltallm_batch_scheduler_fairness_deviation`
 - `deltallm_batch_scheduler_decision_latency_seconds`
 - `deltallm_batch_scheduler_flow_skips_total`
 - `deltallm_batch_item_reclaims_total`
 - `deltallm_batch_duplicate_completion_rejections_total`
+- `deltallm_batch_stale_lease_sweeper_runs_total`
+- `deltallm_batch_stale_lease_sweeper_rows_total`
+- `deltallm_batch_stale_lease_sweeper_duration_seconds`
 - `deltallm_batch_time_to_first_claim_seconds`
 - `deltallm_batch_completion_latency_seconds`
 - `deltallm_config_reload_events_total`
 
 Prometheus checks for canary advancement:
 
-- Config split-brain: `count by (active_mode, shadow_mode) (deltallm_batch_scheduler_mode_info)`.
-  All worker pods must report one intended active/shadow pair before evaluating scheduler behavior.
+- Config split-brain:
+  `count(count by (active_mode, shadow_mode, config_hash) (deltallm_batch_scheduler_config_info)) > 1`.
+  All worker pods must report one intended active/shadow/hash tuple before evaluating scheduler
+  behavior.
+- Config did not converge after an update:
+  `count(count by (config_hash) (deltallm_batch_scheduler_config_info)) > 1`.
+  Alert if this remains true for 10 minutes after a scheduler mode update.
 - Config propagation: `sum by (source, result) (rate(deltallm_config_reload_events_total[10m]))`.
   Pub/sub failures must be followed by `source="poll", result="applied"` or `unchanged` samples
   on every pod. Treat `source="poll", result="failed"` as a config convergence failure until DB
@@ -201,6 +211,12 @@ Prometheus checks for canary advancement:
 - Reclaims: `deltallm_batch_item_reclaims_total` should stay below 5 percent of item completion rate.
 - Duplicate completion rejections: `deltallm_batch_duplicate_completion_rejections_total` should not
   increase during a healthy canary.
+- Stale lease sweeper errors:
+  `sum(rate(deltallm_batch_stale_lease_sweeper_runs_total{status="error"}[10m]))` should stay at
+  zero during canaries.
+- Stale lease reclaim rate:
+  `sum(rate(deltallm_batch_stale_lease_sweeper_rows_total{result=~"reclaimed|released"}[10m]))`
+  should be near zero during healthy steady state and investigated when it spikes after a rollout.
 
 Before advancing, verify:
 
@@ -297,6 +313,10 @@ embeddings_batch_scheduler_shadow_mode: none
 ### Worker Crash Or Lease Expiry Causes Duplicate Work
 
 - Metrics: `deltallm_batch_item_reclaims_total`, `deltallm_batch_claim_empty_jobs_total`, `deltallm_batch_completion_latency_seconds`, `deltallm_batch_scheduler_decision_latency_seconds`.
+- Additional stale-lease sweeper metrics:
+  `deltallm_batch_stale_lease_sweeper_runs_total`,
+  `deltallm_batch_stale_lease_sweeper_rows_total`, and
+  `deltallm_batch_stale_lease_sweeper_duration_seconds`.
 - Admin endpoint: `/ui/api/batches/scheduler/status`.
 - Likely causes: item lease is shorter than provider latency, workers are terminated without graceful shutdown, or DB transactions are timing out under contention.
 - Config mitigations: increase `embeddings_batch_item_lease_seconds`, reduce worker concurrency, or scale DB pool capacity before retrying the rollout.
@@ -309,6 +329,9 @@ embeddings_batch_scheduler_shadow_mode: none
 - Likely causes: Redis outage, Redis latency, config pub/sub listener failure, lock TTL churn, or transient counter failures.
 - Config mitigations: verify the active stage still uses Postgres as source of truth, disable shadow mode if comparison logging amplifies error volume, and avoid enabling Redis-dependent optimizations until Redis is healthy.
 - Fallback check: dynamic config should still converge through the periodic DB poll; investigate pods that report `source="pubsub", result="listener_failed"` without later `source="poll"` samples.
+- Config convergence check:
+  `count(count by (config_hash) (deltallm_batch_scheduler_config_info))` should return `1` after
+  the poll interval plus propagation headroom.
 - Rollback threshold: claims stop or duplicate work appears during Redis degradation; otherwise keep the current stage if DB-backed progress continues.
 
 ### Postgres Contention Or Slow Scheduler Decisions

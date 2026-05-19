@@ -85,6 +85,11 @@ config:
     embeddings_batch_model_capacity_fraction: 0.25
     embeddings_batch_model_capacity_refresh_seconds: 5
     embeddings_batch_model_capacity_fail_open: false
+    embeddings_batch_stale_lease_sweeper_enabled: true
+    embeddings_batch_stale_lease_sweeper_interval_seconds: 60
+    embeddings_batch_stale_lease_sweeper_failure_interval_seconds: 30
+    embeddings_batch_stale_lease_sweeper_page_size: 100
+    embeddings_batch_stale_lease_sweeper_max_rows_per_run: 500
     embeddings_batch_tenant_fair_share_enabled: false
     embeddings_batch_scheduler_base_quantum_work_units: 16
     embeddings_batch_scheduler_max_deficit_multiplier: 8

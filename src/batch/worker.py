@@ -7,6 +7,7 @@ import inspect
 import logging
 import random
 import time
+from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable
 
@@ -19,6 +20,7 @@ from src.batch.scheduling.modes import (
     scheduler_mode_uses_model_capacity,
     scheduler_mode_uses_size_aware,
     scheduler_mode_uses_work_slice,
+    scheduler_worker_config_fingerprint,
 )
 from src.batch.storage import BatchArtifactStorage
 from src.batch.worker_artifacts import BatchArtifactFinalizer
@@ -45,6 +47,7 @@ from src.metrics import (
     observe_batch_work_claim_latency,
     observe_batch_work_claim_units,
     publish_batch_runtime_summary,
+    set_batch_scheduler_config_info,
     set_batch_scheduler_mode_info,
     set_batch_worker_saturation,
 )
@@ -103,6 +106,8 @@ class BatchExecutorWorker:
         self._fair_share_flow_lock_busy_attempts: dict[tuple[str, str], int] = {}
         self._fair_share_flow_lock_busy_until: dict[tuple[str, str], float] = {}
         self._shadow_tasks: set[asyncio.Task[None]] = set()
+        self._applied_scheduler_general_settings: Any | None = None
+        self._applied_scheduler_config_generation: int | None = None
         self._artifact_finalizer = BatchArtifactFinalizer(
             repository=repository,
             storage=storage,
@@ -128,6 +133,19 @@ class BatchExecutorWorker:
         self._execution_engine.app = self.app
         self._execution_engine.repository = self.repository
         self._execution_engine.config = self.config
+
+    def mark_scheduler_config_applied(
+        self,
+        *,
+        general_settings: Any,
+        config_generation: int | None,
+    ) -> None:
+        model_copy = getattr(general_settings, "model_copy", None)
+        if callable(model_copy):
+            self._applied_scheduler_general_settings = model_copy(deep=True)
+        else:
+            self._applied_scheduler_general_settings = deepcopy(general_settings)
+        self._applied_scheduler_config_generation = config_generation
 
     async def _call_execute_embedding(self, request, payload, deployment):  # noqa: ANN001, ANN201
         return await _execute_embedding(request, payload, deployment)
@@ -275,11 +293,39 @@ class BatchExecutorWorker:
             logger.debug("batch worker runtime metrics refresh failed", exc_info=True)
             return
 
+    def _scheduler_config_hash(self) -> str:
+        general = self._applied_scheduler_general_settings
+        if general is None:
+            return "unknown"
+        try:
+            app_state = getattr(self.app, "state", None)
+            return scheduler_worker_config_fingerprint(
+                self.config,
+                general_settings=general,
+                model_capacity_config=getattr(self.model_capacity_resolver, "config", None),
+                tenant_fair_share_config=getattr(
+                    app_state,
+                    "batch_tenant_fair_share_config",
+                    None,
+                ),
+            )
+        except Exception:
+            logger.debug("batch scheduler config fingerprint failed", exc_info=True)
+            return "unknown"
+
+    def _scheduler_config_generation(self) -> int | None:
+        return self._applied_scheduler_config_generation
+
     async def process_once(self) -> bool:
         self._reap_shadow_tasks()
         active_mode = self._active_scheduler_mode()
         shadow_mode = self._shadow_scheduler_mode()
         set_batch_scheduler_mode_info(active_mode=active_mode, shadow_mode=shadow_mode)
+        set_batch_scheduler_config_info(
+            active_mode=active_mode,
+            shadow_mode=shadow_mode,
+            config_hash=self._scheduler_config_hash(),
+        )
         if scheduler_mode_uses_work_slice(active_mode):
             return await self._process_once_work_slice()
         return await self._process_once_job_fifo()

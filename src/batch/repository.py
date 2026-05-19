@@ -848,6 +848,19 @@ class BatchRepository:
             model_group=model_group,
         )
 
+    async def sweep_expired_batch_leases(
+        self,
+        *,
+        now: datetime,
+        page_size: int = 100,
+        max_rows_per_run: int = 500,
+    ) -> dict[str, int]:
+        return await self.maintenance.sweep_expired_batch_leases(
+            now=now,
+            page_size=page_size,
+            max_rows_per_run=max_rows_per_run,
+        )
+
     async def list_expired_unreferenced_files(self, *, now: datetime, limit: int = 100) -> list[BatchFileRecord]:
         return await self.files.list_expired_unreferenced_files(now=now, limit=limit)
 

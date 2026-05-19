@@ -522,6 +522,206 @@ async def _seed_batch_file(repository: BatchRepository) -> str:
 
 
 @pytest.mark.asyncio
+async def test_db_backed_stale_lease_sweeper_releases_only_expired_owned_leases(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert job is not None
+    assert await repository.create_items(
+        job.batch_id,
+        [
+            BatchItemCreate(
+                line_number=1,
+                custom_id="active-lease",
+                request_body={"model": "m1", "input": "active"},
+                estimated_work_units=1,
+            ),
+            BatchItemCreate(
+                line_number=2,
+                custom_id="expired-lease",
+                request_body={"model": "m1", "input": "expired"},
+                estimated_work_units=1,
+            ),
+        ],
+    ) == 2
+    await repository.set_job_queued(job.batch_id, 2)
+    now = datetime.now(tz=UTC)
+    expired_at = now - timedelta(minutes=5)
+    active_until = now + timedelta(minutes=5)
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_item
+        SET status = 'in_progress',
+            locked_by = CASE custom_id
+                WHEN 'active-lease' THEN 'active-worker'
+                ELSE 'stale-worker'
+            END,
+            lease_expires_at = CASE custom_id
+                WHEN 'active-lease' THEN $2::timestamp
+                ELSE $3::timestamp
+            END,
+            claim_epoch = claim_epoch + 1
+        WHERE batch_id = $1
+        """,
+        job.batch_id,
+        active_until,
+        expired_at,
+    )
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_job
+        SET locked_by = 'stale-job-worker',
+            lease_expires_at = $2::timestamp
+        WHERE batch_id = $1
+        """,
+        job.batch_id,
+        expired_at,
+    )
+
+    result = await repository.sweep_expired_batch_leases(
+        now=now,
+        page_size=100,
+        max_rows_per_run=10,
+    )
+
+    assert result == {
+        "items": 1,
+        "jobs": 1,
+        "refreshed_jobs": 1,
+        "skipped_active_items": 1,
+        "skipped_active_jobs": 0,
+    }
+    item_rows = await batch_db.query_raw(
+        """
+        SELECT custom_id, status, locked_by, lease_expires_at
+        FROM deltallm_batch_item
+        WHERE batch_id = $1
+        ORDER BY custom_id ASC
+        """,
+        job.batch_id,
+    )
+    assert [
+        {
+            "custom_id": row["custom_id"],
+            "status": row["status"],
+            "locked_by": row["locked_by"],
+            "lease_expires_at": row["lease_expires_at"] is not None,
+        }
+        for row in item_rows
+    ] == [
+        {
+            "custom_id": "active-lease",
+            "status": "in_progress",
+            "locked_by": "active-worker",
+            "lease_expires_at": True,
+        },
+        {
+            "custom_id": "expired-lease",
+            "status": "pending",
+            "locked_by": None,
+            "lease_expires_at": False,
+        },
+    ]
+    job_rows = await batch_db.query_raw(
+        """
+        SELECT locked_by, lease_expires_at, in_progress_items
+        FROM deltallm_batch_job
+        WHERE batch_id = $1
+        """,
+        job.batch_id,
+    )
+    assert [dict(row) for row in job_rows] == [
+        {"locked_by": None, "lease_expires_at": None, "in_progress_items": 1}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_db_backed_stale_lease_sweeper_ignores_terminal_parent_items(batch_db) -> None:
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata=None,
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+        expires_at=None,
+    )
+    assert job is not None
+    assert await repository.create_items(
+        job.batch_id,
+        [
+            BatchItemCreate(
+                line_number=1,
+                custom_id="terminal-expired-lease",
+                request_body={"model": "m1", "input": "done"},
+                estimated_work_units=1,
+            )
+        ],
+    ) == 1
+    expired_at = datetime.now(tz=UTC) - timedelta(minutes=5)
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_job
+        SET status = 'completed'::"DeltaLLM_BatchJobStatus",
+            completed_at = NOW(),
+            locked_by = NULL,
+            lease_expires_at = NULL
+        WHERE batch_id = $1
+        """,
+        job.batch_id,
+    )
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_item
+        SET status = 'in_progress',
+            locked_by = 'stale-worker',
+            lease_expires_at = $2::timestamp,
+            claim_epoch = claim_epoch + 1
+        WHERE batch_id = $1
+        """,
+        job.batch_id,
+        expired_at,
+    )
+
+    result = await repository.sweep_expired_batch_leases(
+        now=datetime.now(tz=UTC),
+        page_size=100,
+        max_rows_per_run=10,
+    )
+
+    assert result == {
+        "items": 0,
+        "jobs": 0,
+        "refreshed_jobs": 0,
+        "skipped_active_items": 0,
+        "skipped_active_jobs": 0,
+    }
+    item_rows = await batch_db.query_raw(
+        """
+        SELECT status, locked_by
+        FROM deltallm_batch_item
+        WHERE batch_id = $1
+        """,
+        job.batch_id,
+    )
+    assert [dict(row) for row in item_rows] == [
+        {"status": "in_progress", "locked_by": "stale-worker"}
+    ]
+
+
+@pytest.mark.asyncio
 async def test_db_backed_backfill_repairs_complete_scheduler_aggregate_drift(batch_db) -> None:
     scheduler_column_rows = await batch_db.query_raw(
         """

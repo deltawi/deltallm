@@ -24,6 +24,8 @@ from src.metrics import (
     increment_batch_scheduler_shadow_decision,
     increment_batch_scheduler_shadow_record,
     increment_batch_scheduler_shadow_skip,
+    increment_batch_stale_lease_sweeper_rows,
+    increment_batch_stale_lease_sweeper_run,
     increment_batch_scheduler_deficit_refill,
     increment_batch_scheduler_flow_claim,
     increment_batch_scheduler_flow_skip,
@@ -47,6 +49,7 @@ from src.metrics import (
     observe_batch_scheduler_flow_wait,
     observe_batch_scheduler_job_rank,
     observe_batch_scheduler_shadow_share_ratio,
+    observe_batch_stale_lease_sweeper_duration,
     observe_batch_scheduler_model_selection_latency,
     observe_batch_work_claim_items,
     observe_batch_work_claim_latency,
@@ -63,6 +66,7 @@ from src.metrics import (
     set_batch_job_count,
     set_batch_oldest_item_age,
     set_batch_scheduler_mode_info,
+    set_batch_scheduler_config_info,
     set_batch_scheduler_oldest_wait,
     set_batch_worker_saturation,
 )
@@ -133,6 +137,14 @@ def test_batch_metrics_are_exported() -> None:
         to_mode="fifo_v1",
         reason="operator_config",
     )
+    set_batch_scheduler_config_info(
+        active_mode="fair_share_v1",
+        shadow_mode="smart_v1",
+        config_hash="abc123",
+    )
+    increment_batch_stale_lease_sweeper_run(status="success")
+    increment_batch_stale_lease_sweeper_rows(kind="items", result="reclaimed", count=2)
+    observe_batch_stale_lease_sweeper_duration(duration_seconds=0.05)
     increment_batch_microbatch_requeue(category="upstream_5xx", result="scheduled")
     increment_batch_work_claim(result="claimed", claim_mode="work_slice")
     increment_batch_finalization_claim(result="claimed")
@@ -278,6 +290,8 @@ def test_batch_metrics_are_exported() -> None:
     assert "deltallm_batch_scheduler_shadow_better_choice_total" in metrics_text
     assert "deltallm_batch_scheduler_rollbacks_total" in metrics_text
     assert "deltallm_batch_scheduler_mode_info" in metrics_text
+    assert "deltallm_batch_scheduler_config_info" in metrics_text
+    assert 'config_hash="abc123"' in metrics_text
     assert "deltallm_batch_scheduler_oldest_wait_seconds" in metrics_text
     assert "deltallm_batch_scheduler_fairness_deviation" in metrics_text
     assert "deltallm_batch_scheduler_decision_latency_seconds" in metrics_text
@@ -298,6 +312,9 @@ def test_batch_metrics_are_exported() -> None:
     assert "deltallm_batch_work_claim_latency_seconds" in metrics_text
     assert "deltallm_batch_finalization_claims_total" in metrics_text
     assert "deltallm_batch_claim_empty_jobs_total" in metrics_text
+    assert "deltallm_batch_stale_lease_sweeper_runs_total" in metrics_text
+    assert "deltallm_batch_stale_lease_sweeper_rows_total" in metrics_text
+    assert "deltallm_batch_stale_lease_sweeper_duration_seconds" in metrics_text
     assert 'result="scheduled"' in metrics_text
     assert "deltallm_batch_create_latency_seconds" in metrics_text
     assert "deltallm_batch_finalize_latency_seconds" in metrics_text
@@ -310,7 +327,24 @@ def test_batch_metrics_are_exported() -> None:
     assert scheduler_snapshot["cluster_wide"] is False
     assert "Prometheus" in scheduler_snapshot["warning"]
     assert scheduler_snapshot["metric_names"]["rollbacks"] == "deltallm_batch_scheduler_rollbacks_total"
+    assert (
+        scheduler_snapshot["metric_names"]["scheduler_config_info"]
+        == "deltallm_batch_scheduler_config_info"
+    )
+    assert (
+        scheduler_snapshot["metric_names"]["stale_lease_sweeper_runs"]
+        == "deltallm_batch_stale_lease_sweeper_runs_total"
+    )
     samples = scheduler_snapshot["process_local_samples"]
+    assert any(
+        sample["labels"] == {
+            "active_mode": "fair_share_v1",
+            "shadow_mode": "smart_v1",
+            "config_hash": "abc123",
+        }
+        and sample["value"] == 1.0
+        for sample in samples["gauges"]["scheduler_config_info"]
+    )
     assert any(
         sample["labels"] == {
             "from_mode": "smart_v1",
@@ -333,6 +367,15 @@ def test_batch_metrics_are_exported() -> None:
         sample["labels"] == {"mode": "smart_v1"} and sample["count"] >= 1.0
         for sample in samples["histograms"]["decision_latency"]
     )
+    assert any(
+        sample["labels"] == {"status": "success"} and sample["value"] >= 1.0
+        for sample in samples["counters"]["stale_lease_sweeper_runs"]
+    )
+    assert any(
+        sample["labels"] == {"kind": "items", "result": "reclaimed"} and sample["value"] >= 2.0
+        for sample in samples["counters"]["stale_lease_sweeper_rows"]
+    )
+    assert samples["histograms"]["stale_lease_sweeper_duration"][0]["count"] >= 1.0
 
 
 def test_batch_runtime_summary_oldest_job_age_uses_max_across_tenant_scopes() -> None:

@@ -616,6 +616,13 @@ deltallm_batch_scheduler_mode_info_metric = Gauge(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_scheduler_config_info_metric = Gauge(
+    "deltallm_batch_scheduler_config_info",
+    "Batch scheduler config convergence info gauge for the current worker process",
+    ["active_mode", "shadow_mode", "config_hash"],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_batch_scheduler_oldest_wait_seconds_metric = Gauge(
     "deltallm_batch_scheduler_oldest_wait_seconds",
     "Oldest queued batch wait seconds by scheduler dimensions",
@@ -656,6 +663,27 @@ deltallm_batch_scheduler_backfill_duration_metric = Histogram(
     "deltallm_batch_scheduler_backfill_duration_seconds",
     "Batch scheduler dimension backfill duration",
     buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_stale_lease_sweeper_runs_metric = Counter(
+    "deltallm_batch_stale_lease_sweeper_runs_total",
+    "Batch stale lease sweeper runs by status",
+    ["status"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_stale_lease_sweeper_rows_metric = Counter(
+    "deltallm_batch_stale_lease_sweeper_rows_total",
+    "Batch stale lease sweeper rows by lease kind and bounded result",
+    ["kind", "result"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_stale_lease_sweeper_duration_metric = Histogram(
+    "deltallm_batch_stale_lease_sweeper_duration_seconds",
+    "Batch stale lease sweeper run duration",
+    buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
     registry=get_prometheus_registry(),
 )
 
@@ -1353,6 +1381,23 @@ def _metric_counter_samples(metric: Any, sample_name: str) -> list[dict[str, Any
     ]
 
 
+def _metric_gauge_samples(metric: Any, sample_name: str) -> list[dict[str, Any]]:
+    samples: list[dict[str, Any]] = []
+    for family in metric.collect():
+        for sample in family.samples:
+            if sample.name != sample_name:
+                continue
+            samples.append(
+                {
+                    "labels": dict(sample.labels),
+                    "value": float(sample.value),
+                }
+            )
+    return sorted(samples, key=lambda item: tuple(sorted(item["labels"].items())))[
+        :SCHEDULER_STATUS_METRIC_SAMPLE_LIMIT
+    ]
+
+
 def _metric_histogram_count_sum(metric: Any, base_name: str) -> list[dict[str, Any]]:
     rows: dict[tuple[tuple[str, str], ...], dict[str, Any]] = {}
     for family in metric.collect():
@@ -1382,9 +1427,13 @@ def collect_batch_scheduler_status_metrics() -> dict[str, Any]:
             "shadow_comparisons": "deltallm_batch_scheduler_shadow_comparisons_total",
             "shadow_better_choice": "deltallm_batch_scheduler_shadow_better_choice_total",
             "rollbacks": "deltallm_batch_scheduler_rollbacks_total",
+            "scheduler_config_info": "deltallm_batch_scheduler_config_info",
             "decision_latency": "deltallm_batch_scheduler_decision_latency_seconds",
             "time_to_first_claim": "deltallm_batch_time_to_first_claim_seconds",
             "completion_latency": "deltallm_batch_completion_latency_seconds",
+            "stale_lease_sweeper_runs": "deltallm_batch_stale_lease_sweeper_runs_total",
+            "stale_lease_sweeper_rows": "deltallm_batch_stale_lease_sweeper_rows_total",
+            "stale_lease_sweeper_duration": "deltallm_batch_stale_lease_sweeper_duration_seconds",
         },
         "sample_limit": SCHEDULER_STATUS_METRIC_SAMPLE_LIMIT,
         "process_local_samples": {
@@ -1405,6 +1454,20 @@ def collect_batch_scheduler_status_metrics() -> dict[str, Any]:
                     deltallm_batch_scheduler_rollbacks_metric,
                     "deltallm_batch_scheduler_rollbacks_total",
                 ),
+                "stale_lease_sweeper_runs": _metric_counter_samples(
+                    deltallm_batch_stale_lease_sweeper_runs_metric,
+                    "deltallm_batch_stale_lease_sweeper_runs_total",
+                ),
+                "stale_lease_sweeper_rows": _metric_counter_samples(
+                    deltallm_batch_stale_lease_sweeper_rows_metric,
+                    "deltallm_batch_stale_lease_sweeper_rows_total",
+                ),
+            },
+            "gauges": {
+                "scheduler_config_info": _metric_gauge_samples(
+                    deltallm_batch_scheduler_config_info_metric,
+                    "deltallm_batch_scheduler_config_info",
+                ),
             },
             "histograms": {
                 "decision_latency": _metric_histogram_count_sum(
@@ -1419,6 +1482,10 @@ def collect_batch_scheduler_status_metrics() -> dict[str, Any]:
                     deltallm_batch_completion_latency_metric,
                     "deltallm_batch_completion_latency_seconds",
                 ),
+                "stale_lease_sweeper_duration": _metric_histogram_count_sum(
+                    deltallm_batch_stale_lease_sweeper_duration_metric,
+                    "deltallm_batch_stale_lease_sweeper_duration_seconds",
+                ),
             },
         },
     }
@@ -1430,6 +1497,21 @@ def set_batch_scheduler_mode_info(*, active_mode: str, shadow_mode: str) -> None
     deltallm_batch_scheduler_mode_info_metric.labels(
         active_mode=sanitize_label(active_mode, fallback="fifo_v1"),
         shadow_mode=sanitize_label(shadow_mode, fallback="none"),
+    ).set(1)
+
+
+def set_batch_scheduler_config_info(
+    *,
+    active_mode: str,
+    shadow_mode: str,
+    config_hash: str,
+) -> None:
+    with contextlib.suppress(AttributeError):
+        deltallm_batch_scheduler_config_info_metric.clear()
+    deltallm_batch_scheduler_config_info_metric.labels(
+        active_mode=sanitize_label(active_mode, fallback="fifo_v1"),
+        shadow_mode=sanitize_label(shadow_mode, fallback="none"),
+        config_hash=sanitize_label(config_hash, fallback="unknown"),
     ).set(1)
 
 
@@ -1479,6 +1561,21 @@ def increment_batch_scheduler_backfill_rows(*, kind: str, count: int) -> None:
 
 def observe_batch_scheduler_backfill_duration(*, duration_seconds: float) -> None:
     deltallm_batch_scheduler_backfill_duration_metric.observe(max(0.0, float(duration_seconds)))
+
+
+def increment_batch_stale_lease_sweeper_run(*, status: str) -> None:
+    deltallm_batch_stale_lease_sweeper_runs_metric.labels(status=sanitize_label(status)).inc()
+
+
+def increment_batch_stale_lease_sweeper_rows(*, kind: str, result: str, count: int) -> None:
+    deltallm_batch_stale_lease_sweeper_rows_metric.labels(
+        kind=sanitize_label(kind),
+        result=sanitize_label(result),
+    ).inc(max(0, int(count)))
+
+
+def observe_batch_stale_lease_sweeper_duration(*, duration_seconds: float) -> None:
+    deltallm_batch_stale_lease_sweeper_duration_metric.observe(max(0.0, float(duration_seconds)))
 
 
 def publish_batch_runtime_summary(summary: Mapping[str, Any]) -> None:

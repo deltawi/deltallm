@@ -265,6 +265,11 @@
             "embeddings_batch_scheduler_backfill_enabled": { "type": "boolean" },
             "embeddings_batch_scheduler_backfill_interval_seconds": { "type": "number", "exclusiveMinimum": 0 },
             "embeddings_batch_scheduler_backfill_scan_limit": { "type": "integer", "minimum": 1, "maximum": 5000 },
+            "embeddings_batch_stale_lease_sweeper_enabled": { "type": "boolean" },
+            "embeddings_batch_stale_lease_sweeper_interval_seconds": { "type": "number", "exclusiveMinimum": 0 },
+            "embeddings_batch_stale_lease_sweeper_failure_interval_seconds": { "type": "number", "exclusiveMinimum": 0 },
+            "embeddings_batch_stale_lease_sweeper_page_size": { "type": "integer", "minimum": 1, "maximum": 1000 },
+            "embeddings_batch_stale_lease_sweeper_max_rows_per_run": { "type": "integer", "minimum": 1, "maximum": 5000 },
             "embeddings_batch_scheduler_claim_mode": {
               "type": "string",
               "enum": ["job_fifo", "work_slice"]
