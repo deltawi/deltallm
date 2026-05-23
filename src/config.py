@@ -8,7 +8,7 @@ from typing import Any, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import yaml
-from pydantic import AliasChoices, BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.governance.access_groups import normalize_access_group_list
@@ -323,6 +323,9 @@ class GeneralSettings(BaseModel):
     budget_notifications_enabled: bool = False
     key_lifecycle_notifications_enabled: bool = False
     budget_alert_ttl_seconds: int = Field(default=3600, ge=60)
+    slack_alerting_enabled: bool = False
+    slack_webhook_url: SecretStr | None = None
+    slack_alert_kinds: list[str] = Field(default_factory=list)
     email_enabled: bool = False
     email_provider: Literal["smtp", "resend", "sendgrid"] = "smtp"
     email_from_address: str | None = None
@@ -556,6 +559,8 @@ class GeneralSettings(BaseModel):
             raise ValueError(
                 "batch scheduler shadow mode requires embeddings_batch_model_capacity_enabled=true"
             )
+        if self.slack_alerting_enabled and self.slack_webhook_url is None:
+            raise ValueError("slack_alerting_enabled requires slack_webhook_url to be set")
         return self
 
 

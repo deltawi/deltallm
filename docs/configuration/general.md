@@ -285,7 +285,10 @@ Governance notifications are opt-in and disabled by default.
 | `governance_notifications_enabled` | `false` | Master switch for governance emails |
 | `budget_notifications_enabled` | `false` | Enable soft-budget threshold emails |
 | `key_lifecycle_notifications_enabled` | `false` | Enable key create/regenerate/revoke/delete emails |
-| `budget_alert_ttl_seconds` | `3600` | Deduplication window for budget alert emails |
+| `budget_alert_ttl_seconds` | `3600` | Deduplication window for budget alerts (shared across all channels) |
+| `slack_alerting_enabled` | `false` | Send governance alerts to a Slack incoming webhook in addition to email |
+| `slack_webhook_url` | `null` | Slack incoming webhook URL (secret); required when `slack_alerting_enabled` is true |
+| `slack_alert_kinds` | `[]` | Alert types routed to Slack, e.g. `["budget_threshold"]`; empty routes nothing |
 
 ## Metrics Settings
 

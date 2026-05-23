@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.notifications.channels.email import EmailChannel
+from src.notifications.dispatcher import NotificationDispatcher
 from src.services.key_notifications import KeyNotificationRecord, KeyNotificationService
 
 
@@ -68,14 +70,28 @@ def _record(*, owner_account_id: str | None = "acct-owner") -> KeyNotificationRe
     )
 
 
+def _build_service(
+    *,
+    enabled: bool,
+    outbox: _FakeOutboxService,
+    emails: tuple[str, ...] = ("owner@example.com",),
+    audit: _FakeAuditService | None = None,
+) -> KeyNotificationService:
+    dispatcher = NotificationDispatcher(
+        channels=[EmailChannel(outbox_service=outbox)],
+        audit_service=audit,
+    )
+    return KeyNotificationService(
+        dispatcher=dispatcher,
+        recipient_resolver=_FakeRecipientResolver(emails),
+        config_getter=lambda: _config(enabled=enabled),
+    )
+
+
 @pytest.mark.asyncio
 async def test_key_lifecycle_notifications_are_opt_in() -> None:
     outbox = _FakeOutboxService()
-    service = KeyNotificationService(
-        outbox_service=outbox,
-        recipient_resolver=_FakeRecipientResolver(("owner@example.com",)),
-        config_getter=lambda: _config(enabled=False),
-    )
+    service = _build_service(enabled=False, outbox=outbox)
 
     await service.notify_lifecycle(
         event_kind="api_key_created",
@@ -90,12 +106,7 @@ async def test_key_lifecycle_notifications_are_opt_in() -> None:
 async def test_key_lifecycle_notifications_are_suppressed_for_owner_actor() -> None:
     outbox = _FakeOutboxService()
     audit = _FakeAuditService()
-    service = KeyNotificationService(
-        outbox_service=outbox,
-        recipient_resolver=_FakeRecipientResolver(("owner@example.com",)),
-        audit_service=audit,
-        config_getter=lambda: _config(enabled=True),
-    )
+    service = _build_service(enabled=True, outbox=outbox, audit=audit)
 
     await service.notify_lifecycle(
         event_kind="api_key_deleted",
@@ -105,16 +116,13 @@ async def test_key_lifecycle_notifications_are_suppressed_for_owner_actor() -> N
 
     assert outbox.calls == []
     assert audit.events[0].status == "skipped"
+    assert audit.events[0].metadata["reason"] == "actor_is_owner"
 
 
 @pytest.mark.asyncio
 async def test_key_lifecycle_notifications_enqueue_without_secret_values() -> None:
     outbox = _FakeOutboxService()
-    service = KeyNotificationService(
-        outbox_service=outbox,
-        recipient_resolver=_FakeRecipientResolver(("owner@example.com",)),
-        config_getter=lambda: _config(enabled=True),
-    )
+    service = _build_service(enabled=True, outbox=outbox)
 
     await service.notify_lifecycle(
         event_kind="api_key_regenerated",
@@ -133,12 +141,7 @@ async def test_key_lifecycle_notifications_enqueue_without_secret_values() -> No
 async def test_key_lifecycle_notifications_skip_cancelled_outbox_records() -> None:
     outbox = _FakeOutboxService(status="cancelled")
     audit = _FakeAuditService()
-    service = KeyNotificationService(
-        outbox_service=outbox,
-        recipient_resolver=_FakeRecipientResolver(("owner@example.com",)),
-        audit_service=audit,
-        config_getter=lambda: _config(enabled=True),
-    )
+    service = _build_service(enabled=True, outbox=outbox, audit=audit)
 
     await service.notify_lifecycle(
         event_kind="api_key_created",

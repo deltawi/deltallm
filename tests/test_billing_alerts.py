@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from src.billing.alerts import AlertConfig, AlertService
+from src.notifications.channels.email import EmailChannel
+from src.notifications.dispatcher import NotificationDispatcher
 
 
 class _FakeRedis:
@@ -79,16 +81,37 @@ def _config(*, enabled: bool) -> SimpleNamespace:
     )
 
 
+def _build_service(
+    *,
+    enabled: bool,
+    redis: _FakeRedis | None = None,
+    outbox: _FakeOutboxService | None = None,
+    recipients: tuple[str, ...] = ("owner@example.com",),
+    audit: _FakeAuditService | None = None,
+    extra_channels: list | None = None,
+) -> AlertService:
+    outbox = outbox if outbox is not None else _FakeOutboxService()
+    channels = [EmailChannel(outbox_service=outbox)]
+    if extra_channels:
+        channels.extend(extra_channels)
+    dispatcher = NotificationDispatcher(
+        channels=channels,
+        redis_client=redis,
+        audit_service=audit,
+        dedupe_ttl_seconds=60,
+    )
+    return AlertService(
+        config=AlertConfig(budget_alert_ttl=60),
+        dispatcher=dispatcher,
+        recipient_resolver=_FakeRecipientResolver(recipients),
+        config_getter=lambda: _config(enabled=enabled),
+    )
+
+
 @pytest.mark.asyncio
 async def test_budget_alert_notifications_are_opt_in() -> None:
     outbox = _FakeOutboxService()
-    service = AlertService(
-        config=AlertConfig(budget_alert_ttl=60),
-        redis_client=_FakeRedis(),
-        outbox_service=outbox,
-        recipient_resolver=_FakeRecipientResolver(("owner@example.com",)),
-        config_getter=lambda: _config(enabled=False),
-    )
+    service = _build_service(enabled=False, redis=_FakeRedis(), outbox=outbox)
 
     await service.send_budget_alert(
         entity_type="team",
@@ -106,14 +129,7 @@ async def test_budget_alert_enqueues_once_per_ttl_window() -> None:
     redis = _FakeRedis()
     outbox = _FakeOutboxService()
     audit = _FakeAuditService()
-    service = AlertService(
-        config=AlertConfig(budget_alert_ttl=60),
-        redis_client=redis,
-        outbox_service=outbox,
-        recipient_resolver=_FakeRecipientResolver(("owner@example.com",)),
-        audit_service=audit,
-        config_getter=lambda: _config(enabled=True),
-    )
+    service = _build_service(enabled=True, redis=redis, outbox=outbox, audit=audit)
 
     await service.send_budget_alert(
         entity_type="team",
@@ -140,13 +156,11 @@ async def test_budget_alert_enqueues_once_per_ttl_window() -> None:
 @pytest.mark.asyncio
 async def test_budget_alert_releases_slot_when_enqueue_fails() -> None:
     redis = _FakeRedis()
-    service = AlertService(
-        config=AlertConfig(budget_alert_ttl=60),
-        redis_client=redis,
-        outbox_service=_FakeOutboxService(fail=True),
-        recipient_resolver=_FakeRecipientResolver(("owner@example.com",)),
-        audit_service=_FakeAuditService(),
-        config_getter=lambda: _config(enabled=True),
+    service = _build_service(
+        enabled=True,
+        redis=redis,
+        outbox=_FakeOutboxService(fail=True),
+        audit=_FakeAuditService(),
     )
 
     await service.send_budget_alert(
@@ -164,13 +178,11 @@ async def test_budget_alert_releases_slot_when_enqueue_fails() -> None:
 async def test_budget_alert_releases_slot_when_outbox_cancels_email() -> None:
     redis = _FakeRedis()
     audit = _FakeAuditService()
-    service = AlertService(
-        config=AlertConfig(budget_alert_ttl=60),
-        redis_client=redis,
-        outbox_service=_FakeOutboxService(status="cancelled"),
-        recipient_resolver=_FakeRecipientResolver(("owner@example.com",)),
-        audit_service=audit,
-        config_getter=lambda: _config(enabled=True),
+    service = _build_service(
+        enabled=True,
+        redis=redis,
+        outbox=_FakeOutboxService(status="cancelled"),
+        audit=audit,
     )
 
     await service.send_budget_alert(
@@ -189,13 +201,11 @@ async def test_budget_alert_releases_slot_when_outbox_cancels_email() -> None:
 @pytest.mark.asyncio
 async def test_budget_alert_releases_slot_when_no_recipients() -> None:
     redis = _FakeRedis()
-    service = AlertService(
-        config=AlertConfig(budget_alert_ttl=60),
-        redis_client=redis,
-        outbox_service=_FakeOutboxService(),
-        recipient_resolver=_FakeRecipientResolver(()),
-        audit_service=_FakeAuditService(),
-        config_getter=lambda: _config(enabled=True),
+    service = _build_service(
+        enabled=True,
+        redis=redis,
+        recipients=(),
+        audit=_FakeAuditService(),
     )
 
     await service.send_budget_alert(
