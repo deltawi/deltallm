@@ -52,8 +52,10 @@ class AlertService:
         # Claim the shared dedupe slot before any recipient DB query so a
         # throttled alert does no extra work.
         alert_key = self._alert_key("budget", entity_type=entity_type, entity_id=entity_id)
-        if not await self.dispatcher.try_claim(alert_key):
-            increment_notification_enqueue(kind="budget_threshold", channel="all", status="throttled")
+        claim = await self.dispatcher.try_claim(alert_key)
+        if claim != "claimed":
+            status = "throttled" if claim == "held" else "dedupe_unavailable"
+            increment_notification_enqueue(kind="budget_threshold", channel="all", status=status)
             return
 
         # A notification failure must never surface to the inference request that

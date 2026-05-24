@@ -155,11 +155,11 @@ async def test_try_claim_throttles_repeat_within_window() -> None:
     redis = _FakeRedis()
     dispatcher = NotificationDispatcher(channels=[], redis_client=redis)
 
-    assert await dispatcher.try_claim("alert:budget:team:team-1") is True
-    assert await dispatcher.try_claim("alert:budget:team:team-1") is False
+    assert await dispatcher.try_claim("alert:budget:team:team-1") == "claimed"
+    assert await dispatcher.try_claim("alert:budget:team:team-1") == "held"
     await dispatcher.release("alert:budget:team:team-1")
     assert "alert:budget:team:team-1" in redis.deleted
-    assert await dispatcher.try_claim("alert:budget:team:team-1") is True
+    assert await dispatcher.try_claim("alert:budget:team:team-1") == "claimed"
 
 
 class _RaisingRedis:
@@ -174,8 +174,9 @@ class _RaisingRedis:
 async def test_try_claim_fails_closed_on_redis_error() -> None:
     dispatcher = NotificationDispatcher(channels=[], redis_client=_RaisingRedis())
 
-    # Must not raise into the caller; a Redis error means "skip the alert".
-    assert await dispatcher.try_claim("alert:budget:team:team-1") is False
+    # Must not raise into the caller; a Redis error means "skip the alert" and
+    # is reported distinctly from a genuine throttle.
+    assert await dispatcher.try_claim("alert:budget:team:team-1") == "unavailable"
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Sequence
+from typing import Any, Literal, Sequence
 
 from src.metrics import increment_notification_enqueue
 from src.notifications.preferences import GlobalConfigPreferenceResolver, NotificationPreferenceResolver
@@ -10,6 +10,8 @@ from src.services.audit_service import AuditEventInput, AuditService
 from src.services.notification_recipients import NotificationRecipients
 
 logger = logging.getLogger(__name__)
+
+ClaimOutcome = Literal["claimed", "held", "unavailable"]
 
 _METRIC_STATUS: dict[ChannelOutcome, str] = {
     "queued": "queued",
@@ -222,26 +224,28 @@ class NotificationDispatcher:
             critical=False,
         )
 
-    async def try_claim(self, key: str) -> bool:
-        """Claim a dedupe slot. Returns True if claimed, False if already held.
+    async def try_claim(self, key: str) -> ClaimOutcome:
+        """Claim a dedupe slot.
 
-        Fails closed: a Redis error returns False (skip the alert this round)
-        rather than raising, so a notification never breaks the request that
-        triggered it.
+        Returns "claimed" if the slot was taken, "held" if a live slot already
+        exists (genuine throttle), or "unavailable" if Redis errored. Fails
+        closed: an error never raises, so a notification can't break the request
+        that triggered it, and the caller can report the outage distinctly from
+        a normal throttle.
         """
         if self.redis is None:
-            return True
+            return "claimed"
         try:
             if hasattr(self.redis, "set"):
                 claimed = await self.redis.set(key, "1", ex=self.dedupe_ttl_seconds, nx=True)
-                return bool(claimed)
+                return "claimed" if claimed else "held"
             if await self.redis.exists(key):
-                return False
+                return "held"
             await self.redis.setex(key, self.dedupe_ttl_seconds, "1")
-            return True
+            return "claimed"
         except Exception:
             logger.warning("notification dedupe claim failed; skipping alert", extra={"key": key})
-            return False
+            return "unavailable"
 
     async def release(self, key: str) -> None:
         if self.redis is None or not hasattr(self.redis, "delete"):

@@ -61,7 +61,7 @@ def _config(*, enabled: bool) -> SimpleNamespace:
 
 def _record(*, owner_account_id: str | None = "acct-owner") -> KeyNotificationRecord:
     return KeyNotificationRecord(
-        token_hash="key-1",
+        token_hash="SECRET_HASH_DO_NOT_LEAK",
         key_name="Primary Key",
         team_id="team-1",
         team_alias="Team One",

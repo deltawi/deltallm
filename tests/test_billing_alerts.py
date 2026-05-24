@@ -325,16 +325,18 @@ async def test_budget_alert_keeps_slot_when_only_slack_delivers() -> None:
 
 class _ClaimRaisingRedis(_FakeRedis):
     async def set(self, key: str, value: str, *, ex: int | None = None, nx: bool | None = None):  # noqa: ANN201
+        self.set_calls.append((key, value, ex, nx))
         raise ConnectionError("redis down")
 
 
 @pytest.mark.asyncio
 async def test_budget_alert_skips_when_redis_claim_fails() -> None:
+    redis = _ClaimRaisingRedis()
     resolver = _FakeRecipientResolver(("owner@example.com",))
     outbox = _FakeOutboxService()
     service = _build_service(
         enabled=True,
-        redis=_ClaimRaisingRedis(),
+        redis=redis,
         outbox=outbox,
         resolver=resolver,
         audit=_FakeAuditService(),
@@ -350,5 +352,8 @@ async def test_budget_alert_skips_when_redis_claim_fails() -> None:
         hard_budget=20.0,
     )
 
+    # The claim was actually attempted (so the skip happened at the claim step,
+    # not an earlier short-circuit) and nothing downstream ran.
+    assert len(redis.set_calls) == 1
     assert resolver.calls == 0
     assert outbox.calls == []
