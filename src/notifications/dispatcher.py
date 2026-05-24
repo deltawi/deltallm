@@ -223,18 +223,30 @@ class NotificationDispatcher:
         )
 
     async def try_claim(self, key: str) -> bool:
-        """Claim a dedupe slot. Returns True if claimed, False if already held."""
+        """Claim a dedupe slot. Returns True if claimed, False if already held.
+
+        Fails closed: a Redis error returns False (skip the alert this round)
+        rather than raising, so a notification never breaks the request that
+        triggered it.
+        """
         if self.redis is None:
             return True
-        if hasattr(self.redis, "set"):
-            claimed = await self.redis.set(key, "1", ex=self.dedupe_ttl_seconds, nx=True)
-            return bool(claimed)
-        if await self.redis.exists(key):
+        try:
+            if hasattr(self.redis, "set"):
+                claimed = await self.redis.set(key, "1", ex=self.dedupe_ttl_seconds, nx=True)
+                return bool(claimed)
+            if await self.redis.exists(key):
+                return False
+            await self.redis.setex(key, self.dedupe_ttl_seconds, "1")
+            return True
+        except Exception:
+            logger.warning("notification dedupe claim failed; skipping alert", extra={"key": key})
             return False
-        await self.redis.setex(key, self.dedupe_ttl_seconds, "1")
-        return True
 
     async def release(self, key: str) -> None:
         if self.redis is None or not hasattr(self.redis, "delete"):
             return
-        await self.redis.delete(key)
+        try:
+            await self.redis.delete(key)
+        except Exception:
+            logger.warning("notification dedupe release failed", extra={"key": key})

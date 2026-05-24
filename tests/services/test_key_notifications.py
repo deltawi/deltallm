@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -124,19 +125,21 @@ async def test_key_lifecycle_notifications_enqueue_without_secret_values() -> No
     outbox = _FakeOutboxService()
     service = _build_service(enabled=True, outbox=outbox)
 
+    record = _record()
     await service.notify_lifecycle(
         event_kind="api_key_regenerated",
         actor_account_id="acct-actor",
-        record=_record(),
+        record=record,
     )
 
     assert outbox.calls[0]["template_key"] == "api_key_lifecycle"
     payload = outbox.calls[0]["payload_json"]
     assert payload["event_kind"] == "api_key_regenerated"
     assert payload["key_name"] == "Primary Key"
-    # the secret token hash must never reach the rendered/enqueued payload
+    # the secret token hash must never reach the rendered/enqueued payload,
+    # even nested or interpolated into another field
     assert "token_hash" not in payload
-    assert "key-1" not in payload.values()
+    assert record.token_hash not in json.dumps(payload, default=str)
 
 
 @pytest.mark.asyncio

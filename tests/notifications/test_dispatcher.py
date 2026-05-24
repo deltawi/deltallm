@@ -15,7 +15,7 @@ class _FakeRedis:
 
     async def set(self, key: str, value: str, *, ex: int | None = None, nx: bool | None = None):  # noqa: ANN201
         if nx and key in self.values:
-            return False
+            return None  # redis-py returns None when an nx claim fails
         self.values[key] = value
         return True
 
@@ -160,6 +160,30 @@ async def test_try_claim_throttles_repeat_within_window() -> None:
     await dispatcher.release("alert:budget:team:team-1")
     assert "alert:budget:team:team-1" in redis.deleted
     assert await dispatcher.try_claim("alert:budget:team:team-1") is True
+
+
+class _RaisingRedis:
+    async def set(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+        raise ConnectionError("redis down")
+
+    async def delete(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+        raise ConnectionError("redis down")
+
+
+@pytest.mark.asyncio
+async def test_try_claim_fails_closed_on_redis_error() -> None:
+    dispatcher = NotificationDispatcher(channels=[], redis_client=_RaisingRedis())
+
+    # Must not raise into the caller; a Redis error means "skip the alert".
+    assert await dispatcher.try_claim("alert:budget:team:team-1") is False
+
+
+@pytest.mark.asyncio
+async def test_release_swallows_redis_error() -> None:
+    dispatcher = NotificationDispatcher(channels=[], redis_client=_RaisingRedis())
+
+    # Must not raise into the caller.
+    await dispatcher.release("alert:budget:team:team-1")
 
 
 @pytest.mark.asyncio

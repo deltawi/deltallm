@@ -58,6 +58,7 @@ class AlertService:
 
         # A notification failure must never surface to the inference request that
         # triggered the budget check, so the whole send is isolated here.
+        organization_id: str | None = None
         try:
             percentage = (current_spend / hard_budget * 100.0) if hard_budget and hard_budget > 0 else 0.0
             base_payload = {
@@ -73,6 +74,7 @@ class AlertService:
             recipients = await self.recipient_resolver.resolve_budget_recipients(
                 entity_type=entity_type, entity_id=entity_id
             )
+            organization_id = recipients.organization_id
             message = NotificationMessage(
                 alert_type="budget_threshold",
                 metric_kind="budget_threshold",
@@ -105,7 +107,7 @@ class AlertService:
                 audit_action=AuditAction.SYSTEM_BUDGET_NOTIFICATION_ENQUEUE.value,
                 resource_type=entity_type,
                 resource_id=entity_id,
-                organization_id=None,
+                organization_id=organization_id,
                 error=str(exc),
             )
 
