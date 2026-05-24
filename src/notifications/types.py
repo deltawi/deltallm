@@ -7,6 +7,11 @@ from src.services.notification_recipients import NotificationRecipients
 
 ChannelOutcome = Literal["queued", "no_recipients", "undeliverable", "error"]
 
+# Routing keys a channel allowlist (e.g. Slack `slack_alert_kinds`) can target.
+# These are `alert_type` values, distinct from the granular `metric_kind`
+# (e.g. "api_key_created") used for metrics and audit.
+NOTIFICATION_ALERT_TYPES: frozenset[str] = frozenset({"budget_threshold", "api_key_lifecycle"})
+
 
 @dataclass(frozen=True)
 class NotificationMessage:

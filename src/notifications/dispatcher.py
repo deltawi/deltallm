@@ -32,10 +32,12 @@ _SKIP_REASON: dict[ChannelOutcome, str] = {
 class NotificationDispatcher:
     """Fans a notification out to every applicable channel.
 
-    A single Redis dedupe slot (when `dedupe_key` is supplied) is claimed
-    before fan-out so all channels share one silence window. The slot is
-    released only when no channel achieved delivery; a partial success
-    (e.g. email queued but Slack failed) keeps the slot claimed.
+    Dedupe is the producer's responsibility via `try_claim`/`release`: a budget
+    alert claims a single shared Redis slot before resolving recipients or
+    dispatching, so a throttled alert does no extra work. Any one channel
+    achieving delivery holds that one silence window for all channels (so a
+    Slack-only success with no email recipients keeps the slot claimed); the
+    producer releases the slot only when `dispatch` reports nothing delivered.
     """
 
     def __init__(
@@ -62,12 +64,13 @@ class NotificationDispatcher:
         resource_type: str,
         resource_id: str,
         organization_id: str | None = None,
-        dedupe_key: str | None = None,
-    ) -> None:
-        if dedupe_key is not None and not await self._claim_slot(dedupe_key):
-            increment_notification_enqueue(kind=message.metric_kind, channel="all", status="throttled")
-            return
+    ) -> bool:
+        """Fan a message out to every applicable channel.
 
+        Returns True if at least one channel achieved delivery. Emitting metrics
+        and audit rows for a channel must never abort the fan-out, so those are
+        isolated per channel.
+        """
         targets = self.preference_resolver.channels_for(
             alert_type=message.alert_type,
             recipients=recipients,
@@ -79,18 +82,19 @@ class NotificationDispatcher:
             result = await self._send_one(channel=channel, message=message, recipients=recipients)
             if result.outcome == "queued":
                 any_delivered = True
-            self._emit(
-                channel=channel.name,
-                message=message,
-                result=result,
-                audit_action=audit_action,
-                resource_type=resource_type,
-                resource_id=resource_id,
-                organization_id=organization_id,
-            )
-
-        if dedupe_key is not None and not any_delivered:
-            await self._release_slot(dedupe_key)
+            try:
+                self._emit(
+                    channel=channel.name,
+                    message=message,
+                    result=result,
+                    audit_action=audit_action,
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                    organization_id=organization_id,
+                )
+            except Exception:  # pragma: no cover - metrics/audit must never break fan-out
+                logger.exception("notification emit failed", extra={"channel": channel.name})
+        return any_delivered
 
     async def record_skip(
         self,
@@ -112,6 +116,33 @@ class NotificationDispatcher:
             organization_id=organization_id,
             status="skipped",
             metadata={"notification_kind": message.metric_kind, "reason": reason},
+        )
+
+    async def record_error(
+        self,
+        *,
+        metric_kind: str,
+        audit_action: str,
+        resource_type: str,
+        resource_id: str,
+        organization_id: str | None,
+        error: str,
+    ) -> None:
+        """Record a producer-level failure (e.g. recipient resolution raised).
+
+        Keeps notification failures off the caller's path: the producer catches
+        the exception, calls this, and swallows it so the originating request is
+        unaffected.
+        """
+        increment_notification_enqueue(kind=metric_kind, channel="none", status="error")
+        self._record_audit(
+            audit_action=audit_action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            organization_id=organization_id,
+            status="error",
+            metadata={"notification_kind": metric_kind, "reason": "exception"},
+            error=error,
         )
 
     async def _send_one(
@@ -191,7 +222,8 @@ class NotificationDispatcher:
             critical=False,
         )
 
-    async def _claim_slot(self, key: str) -> bool:
+    async def try_claim(self, key: str) -> bool:
+        """Claim a dedupe slot. Returns True if claimed, False if already held."""
         if self.redis is None:
             return True
         if hasattr(self.redis, "set"):
@@ -202,7 +234,7 @@ class NotificationDispatcher:
         await self.redis.setex(key, self.dedupe_ttl_seconds, "1")
         return True
 
-    async def _release_slot(self, key: str) -> None:
+    async def release(self, key: str) -> None:
         if self.redis is None or not hasattr(self.redis, "delete"):
             return
         await self.redis.delete(key)

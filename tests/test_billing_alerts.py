@@ -48,11 +48,22 @@ class _FakeOutboxService:
 
 
 class _FakeRecipientResolver:
-    def __init__(self, emails: tuple[str, ...], *, policy: str = "team_admins_and_org_admins") -> None:
+    def __init__(
+        self,
+        emails: tuple[str, ...],
+        *,
+        policy: str = "team_admins_and_org_admins",
+        raise_on_resolve: bool = False,
+    ) -> None:
         self.emails = emails
         self.policy = policy
+        self.raise_on_resolve = raise_on_resolve
+        self.calls = 0
 
     async def resolve_budget_recipients(self, *, entity_type: str, entity_id: str):  # noqa: ANN201
+        self.calls += 1
+        if self.raise_on_resolve:
+            raise RuntimeError("db unavailable")
         return SimpleNamespace(
             emails=self.emails,
             policy=self.policy,
@@ -89,6 +100,7 @@ def _build_service(
     recipients: tuple[str, ...] = ("owner@example.com",),
     audit: _FakeAuditService | None = None,
     extra_channels: list | None = None,
+    resolver: _FakeRecipientResolver | None = None,
 ) -> AlertService:
     outbox = outbox if outbox is not None else _FakeOutboxService()
     channels = [EmailChannel(outbox_service=outbox)]
@@ -103,7 +115,7 @@ def _build_service(
     return AlertService(
         config=AlertConfig(budget_alert_ttl=60),
         dispatcher=dispatcher,
-        recipient_resolver=_FakeRecipientResolver(recipients),
+        recipient_resolver=resolver or _FakeRecipientResolver(recipients),
         config_getter=lambda: _config(enabled=enabled),
     )
 
@@ -217,3 +229,86 @@ async def test_budget_alert_releases_slot_when_no_recipients() -> None:
     )
 
     assert "alert:budget:org:org-1" in redis.deleted
+
+
+@pytest.mark.asyncio
+async def test_budget_alert_swallows_recipient_resolution_errors() -> None:
+    redis = _FakeRedis()
+    audit = _FakeAuditService()
+    outbox = _FakeOutboxService()
+    service = _build_service(
+        enabled=True,
+        redis=redis,
+        outbox=outbox,
+        audit=audit,
+        resolver=_FakeRecipientResolver((), raise_on_resolve=True),
+    )
+
+    # Must not raise into the caller (the inference request that triggered the
+    # budget check).
+    await service.send_budget_alert(
+        entity_type="team",
+        entity_id="team-1",
+        current_spend=12.0,
+        soft_budget=10.0,
+        hard_budget=20.0,
+    )
+
+    assert outbox.calls == []
+    assert "alert:budget:team:team-1" in redis.deleted
+    assert audit.events[0].status == "error"
+    assert audit.events[0].metadata["reason"] == "exception"
+
+
+@pytest.mark.asyncio
+async def test_budget_alert_skips_recipient_query_when_throttled() -> None:
+    redis = _FakeRedis()
+    resolver = _FakeRecipientResolver(("owner@example.com",))
+    service = _build_service(enabled=True, redis=redis, resolver=resolver, audit=_FakeAuditService())
+
+    for _ in range(2):
+        await service.send_budget_alert(
+            entity_type="team",
+            entity_id="team-1",
+            current_spend=12.0,
+            soft_budget=10.0,
+            hard_budget=20.0,
+        )
+
+    # The second alert is throttled before any recipient DB query.
+    assert resolver.calls == 1
+
+
+class _DeliveringChannel:
+    name = "slack"
+
+    def supports(self, alert_type: str) -> bool:
+        return True
+
+    async def send(self, *, message, recipients):  # noqa: ANN001, ANN201
+        from src.notifications.types import ChannelResult
+
+        return ChannelResult(outcome="queued")
+
+
+@pytest.mark.asyncio
+async def test_budget_alert_keeps_slot_when_only_slack_delivers() -> None:
+    redis = _FakeRedis()
+    service = _build_service(
+        enabled=True,
+        redis=redis,
+        recipients=(),  # no email recipients
+        extra_channels=[_DeliveringChannel()],
+        audit=_FakeAuditService(),
+    )
+
+    await service.send_budget_alert(
+        entity_type="team",
+        entity_id="team-1",
+        current_spend=12.0,
+        soft_budget=10.0,
+        hard_budget=20.0,
+    )
+
+    # Slack delivered, so the shared silence window is retained.
+    assert "alert:budget:team:team-1" not in redis.deleted

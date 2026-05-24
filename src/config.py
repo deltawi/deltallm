@@ -561,6 +561,15 @@ class GeneralSettings(BaseModel):
             )
         if self.slack_alerting_enabled and self.slack_webhook_url is None:
             raise ValueError("slack_alerting_enabled requires slack_webhook_url to be set")
+        if self.slack_alerting_enabled:
+            from src.notifications.types import NOTIFICATION_ALERT_TYPES
+
+            unknown = [kind for kind in self.slack_alert_kinds if kind not in NOTIFICATION_ALERT_TYPES]
+            if unknown:
+                allowed = ", ".join(sorted(NOTIFICATION_ALERT_TYPES))
+                raise ValueError(
+                    f"slack_alert_kinds contains unknown alert types {unknown}; allowed values are: {allowed}"
+                )
         return self
 
 

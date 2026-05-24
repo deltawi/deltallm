@@ -21,6 +21,7 @@ from src.mcp import (
 from src.notifications.channels import EmailChannel, SlackChannel
 from src.notifications.dispatcher import NotificationDispatcher
 from src.notifications.types import NotificationChannel
+from src.notifications.webhook import close_shared_client
 from src.services.callable_target_grants import CallableTargetGrantService
 from src.services.governance_invalidation import GovernanceInvalidationService
 from src.services.key_notifications import KeyNotificationService
@@ -161,3 +162,4 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
 async def shutdown_runtime_services(runtime: RuntimeServicesRuntime) -> None:
     await runtime.governance_invalidation_service.close()
     await runtime.callback_manager.shutdown()
+    await close_shared_client()

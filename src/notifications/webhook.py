@@ -30,6 +30,14 @@ def _get_shared_client(timeout_seconds: float) -> httpx.AsyncClient:
     return _shared_client
 
 
+async def close_shared_client() -> None:
+    """Close the module-global webhook client on app shutdown."""
+    global _shared_client
+    if _shared_client is not None and not _shared_client.is_closed:
+        await _shared_client.aclose()
+    _shared_client = None
+
+
 async def post_webhook(
     *,
     url: SecretStr,

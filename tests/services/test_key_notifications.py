@@ -134,7 +134,9 @@ async def test_key_lifecycle_notifications_enqueue_without_secret_values() -> No
     payload = outbox.calls[0]["payload_json"]
     assert payload["event_kind"] == "api_key_regenerated"
     assert payload["key_name"] == "Primary Key"
-    assert "raw_key" not in payload
+    # the secret token hash must never reach the rendered/enqueued payload
+    assert "token_hash" not in payload
+    assert "key-1" not in payload.values()
 
 
 @pytest.mark.asyncio

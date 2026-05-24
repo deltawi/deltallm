@@ -59,14 +59,13 @@ def _recipients(emails: tuple[str, ...] = ("a@example.com",)) -> NotificationRec
     return NotificationRecipients(emails=emails, policy="test", organization_id="org-1")
 
 
-async def _dispatch(dispatcher: NotificationDispatcher, *, dedupe_key=None) -> None:
-    await dispatcher.dispatch(
+async def _dispatch(dispatcher: NotificationDispatcher) -> bool:
+    return await dispatcher.dispatch(
         message=_message(),
         recipients=_recipients(),
         audit_action="system.budget_notification.enqueue",
         resource_type="team",
         resource_id="team-1",
-        dedupe_key=dedupe_key,
     )
 
 
@@ -96,57 +95,71 @@ async def test_dispatch_skips_channel_when_alert_type_not_allowed() -> None:
 
 @pytest.mark.asyncio
 async def test_dispatch_isolates_channel_failures() -> None:
-    redis = _FakeRedis()
     email = _FakeChannel("email", outcome="queued")
     slack = _FakeChannel("slack", supports_types={"budget_threshold"}, raises=True)
     audit = _FakeAuditService()
-    dispatcher = NotificationDispatcher(channels=[email, slack], redis_client=redis, audit_service=audit)
+    dispatcher = NotificationDispatcher(channels=[email, slack], audit_service=audit)
 
-    await _dispatch(dispatcher, dedupe_key="alert:budget:team:team-1")
+    delivered = await _dispatch(dispatcher)
 
     assert len(email.calls) == 1
     assert len(slack.calls) == 1
-    # email delivered, so the dedupe slot is retained despite the slack failure
-    assert redis.deleted == []
+    # email delivered despite the slack failure, so dispatch reports delivery
+    assert delivered is True
     statuses = {event.metadata["channel"]: event.status for event in audit.events}
     assert statuses == {"email": "success", "slack": "error"}
 
 
 @pytest.mark.asyncio
-async def test_dispatch_slack_fires_when_email_has_no_recipients() -> None:
-    redis = _FakeRedis()
+async def test_dispatch_reports_delivery_when_only_slack_succeeds() -> None:
     email = _FakeChannel("email", outcome="no_recipients")
     slack = _FakeChannel("slack", supports_types={"budget_threshold"}, outcome="queued")
-    dispatcher = NotificationDispatcher(channels=[email, slack], redis_client=redis)
+    dispatcher = NotificationDispatcher(channels=[email, slack])
 
-    await _dispatch(dispatcher, dedupe_key="alert:budget:team:team-1")
+    delivered = await _dispatch(dispatcher)
 
     assert len(slack.calls) == 1
-    # slack delivered, so the slot stays claimed
-    assert redis.deleted == []
+    # slack delivered, so the producer keeps the shared dedupe slot claimed
+    assert delivered is True
 
 
 @pytest.mark.asyncio
-async def test_dispatch_releases_slot_when_no_channel_delivers() -> None:
-    redis = _FakeRedis()
+async def test_dispatch_reports_no_delivery_when_no_channel_delivers() -> None:
     email = _FakeChannel("email", outcome="no_recipients")
-    dispatcher = NotificationDispatcher(channels=[email], redis_client=redis)
+    dispatcher = NotificationDispatcher(channels=[email])
 
-    await _dispatch(dispatcher, dedupe_key="alert:budget:team:team-1")
+    delivered = await _dispatch(dispatcher)
 
-    assert "alert:budget:team:team-1" in redis.deleted
+    assert delivered is False
 
 
 @pytest.mark.asyncio
-async def test_dispatch_throttles_repeat_within_window() -> None:
-    redis = _FakeRedis()
-    email = _FakeChannel("email")
-    dispatcher = NotificationDispatcher(channels=[email], redis_client=redis)
+async def test_emit_failure_does_not_abort_fan_out_or_lose_delivery() -> None:
+    class _ExplodingAudit:
+        def record_event(self, event, *, payloads=None, critical=False):  # noqa: ANN001, ANN003
+            raise RuntimeError("audit down")
 
-    await _dispatch(dispatcher, dedupe_key="alert:budget:team:team-1")
-    await _dispatch(dispatcher, dedupe_key="alert:budget:team:team-1")
+    email = _FakeChannel("email", outcome="queued")
+    slack = _FakeChannel("slack", supports_types={"budget_threshold"}, outcome="queued")
+    dispatcher = NotificationDispatcher(channels=[email, slack], audit_service=_ExplodingAudit())
+
+    delivered = await _dispatch(dispatcher)
 
     assert len(email.calls) == 1
+    assert len(slack.calls) == 1
+    assert delivered is True
+
+
+@pytest.mark.asyncio
+async def test_try_claim_throttles_repeat_within_window() -> None:
+    redis = _FakeRedis()
+    dispatcher = NotificationDispatcher(channels=[], redis_client=redis)
+
+    assert await dispatcher.try_claim("alert:budget:team:team-1") is True
+    assert await dispatcher.try_claim("alert:budget:team:team-1") is False
+    await dispatcher.release("alert:budget:team:team-1")
+    assert "alert:budget:team:team-1" in redis.deleted
+    assert await dispatcher.try_claim("alert:budget:team:team-1") is True
 
 
 @pytest.mark.asyncio
