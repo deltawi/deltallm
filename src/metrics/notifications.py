@@ -6,14 +6,15 @@ from src.metrics.prometheus import get_prometheus_registry, sanitize_label
 
 deltallm_notification_enqueue_metric = Counter(
     "deltallm_notification_enqueue_total",
-    "Notification enqueue attempts by kind and status",
-    ["kind", "status"],
+    "Notification enqueue attempts by kind, channel and status",
+    ["kind", "channel", "status"],
     registry=get_prometheus_registry(),
 )
 
 
-def increment_notification_enqueue(*, kind: str, status: str) -> None:
+def increment_notification_enqueue(*, kind: str, status: str, channel: str = "email") -> None:
     deltallm_notification_enqueue_metric.labels(
         kind=sanitize_label(kind),
+        channel=sanitize_label(channel),
         status=sanitize_label(status),
     ).inc()

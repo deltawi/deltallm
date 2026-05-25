@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from src.billing.alerts import AlertConfig, AlertService
+from src.notifications.channels.email import EmailChannel
+from src.notifications.dispatcher import NotificationDispatcher
 
 
 class _FakeRedis:
@@ -23,7 +25,7 @@ class _FakeRedis:
     async def set(self, key: str, value: str, *, ex: int | None = None, nx: bool | None = None):  # noqa: ANN201
         self.set_calls.append((key, value, ex, nx))
         if nx and key in self.values:
-            return False
+            return None  # redis-py returns None when an nx claim fails
         self.values[key] = value
         return True
 
@@ -46,11 +48,22 @@ class _FakeOutboxService:
 
 
 class _FakeRecipientResolver:
-    def __init__(self, emails: tuple[str, ...], *, policy: str = "team_admins_and_org_admins") -> None:
+    def __init__(
+        self,
+        emails: tuple[str, ...],
+        *,
+        policy: str = "team_admins_and_org_admins",
+        raise_on_resolve: bool = False,
+    ) -> None:
         self.emails = emails
         self.policy = policy
+        self.raise_on_resolve = raise_on_resolve
+        self.calls = 0
 
     async def resolve_budget_recipients(self, *, entity_type: str, entity_id: str):  # noqa: ANN201
+        self.calls += 1
+        if self.raise_on_resolve:
+            raise RuntimeError("db unavailable")
         return SimpleNamespace(
             emails=self.emails,
             policy=self.policy,
@@ -79,16 +92,38 @@ def _config(*, enabled: bool) -> SimpleNamespace:
     )
 
 
+def _build_service(
+    *,
+    enabled: bool,
+    redis: _FakeRedis | None = None,
+    outbox: _FakeOutboxService | None = None,
+    recipients: tuple[str, ...] = ("owner@example.com",),
+    audit: _FakeAuditService | None = None,
+    extra_channels: list | None = None,
+    resolver: _FakeRecipientResolver | None = None,
+) -> AlertService:
+    outbox = outbox if outbox is not None else _FakeOutboxService()
+    channels = [EmailChannel(outbox_service=outbox)]
+    if extra_channels:
+        channels.extend(extra_channels)
+    dispatcher = NotificationDispatcher(
+        channels=channels,
+        redis_client=redis,
+        audit_service=audit,
+        dedupe_ttl_seconds=60,
+    )
+    return AlertService(
+        config=AlertConfig(budget_alert_ttl=60),
+        dispatcher=dispatcher,
+        recipient_resolver=resolver or _FakeRecipientResolver(recipients),
+        config_getter=lambda: _config(enabled=enabled),
+    )
+
+
 @pytest.mark.asyncio
 async def test_budget_alert_notifications_are_opt_in() -> None:
     outbox = _FakeOutboxService()
-    service = AlertService(
-        config=AlertConfig(budget_alert_ttl=60),
-        redis_client=_FakeRedis(),
-        outbox_service=outbox,
-        recipient_resolver=_FakeRecipientResolver(("owner@example.com",)),
-        config_getter=lambda: _config(enabled=False),
-    )
+    service = _build_service(enabled=False, redis=_FakeRedis(), outbox=outbox)
 
     await service.send_budget_alert(
         entity_type="team",
@@ -106,14 +141,7 @@ async def test_budget_alert_enqueues_once_per_ttl_window() -> None:
     redis = _FakeRedis()
     outbox = _FakeOutboxService()
     audit = _FakeAuditService()
-    service = AlertService(
-        config=AlertConfig(budget_alert_ttl=60),
-        redis_client=redis,
-        outbox_service=outbox,
-        recipient_resolver=_FakeRecipientResolver(("owner@example.com",)),
-        audit_service=audit,
-        config_getter=lambda: _config(enabled=True),
-    )
+    service = _build_service(enabled=True, redis=redis, outbox=outbox, audit=audit)
 
     await service.send_budget_alert(
         entity_type="team",
@@ -140,13 +168,11 @@ async def test_budget_alert_enqueues_once_per_ttl_window() -> None:
 @pytest.mark.asyncio
 async def test_budget_alert_releases_slot_when_enqueue_fails() -> None:
     redis = _FakeRedis()
-    service = AlertService(
-        config=AlertConfig(budget_alert_ttl=60),
-        redis_client=redis,
-        outbox_service=_FakeOutboxService(fail=True),
-        recipient_resolver=_FakeRecipientResolver(("owner@example.com",)),
-        audit_service=_FakeAuditService(),
-        config_getter=lambda: _config(enabled=True),
+    service = _build_service(
+        enabled=True,
+        redis=redis,
+        outbox=_FakeOutboxService(fail=True),
+        audit=_FakeAuditService(),
     )
 
     await service.send_budget_alert(
@@ -164,13 +190,11 @@ async def test_budget_alert_releases_slot_when_enqueue_fails() -> None:
 async def test_budget_alert_releases_slot_when_outbox_cancels_email() -> None:
     redis = _FakeRedis()
     audit = _FakeAuditService()
-    service = AlertService(
-        config=AlertConfig(budget_alert_ttl=60),
-        redis_client=redis,
-        outbox_service=_FakeOutboxService(status="cancelled"),
-        recipient_resolver=_FakeRecipientResolver(("owner@example.com",)),
-        audit_service=audit,
-        config_getter=lambda: _config(enabled=True),
+    service = _build_service(
+        enabled=True,
+        redis=redis,
+        outbox=_FakeOutboxService(status="cancelled"),
+        audit=audit,
     )
 
     await service.send_budget_alert(
@@ -189,13 +213,11 @@ async def test_budget_alert_releases_slot_when_outbox_cancels_email() -> None:
 @pytest.mark.asyncio
 async def test_budget_alert_releases_slot_when_no_recipients() -> None:
     redis = _FakeRedis()
-    service = AlertService(
-        config=AlertConfig(budget_alert_ttl=60),
-        redis_client=redis,
-        outbox_service=_FakeOutboxService(),
-        recipient_resolver=_FakeRecipientResolver(()),
-        audit_service=_FakeAuditService(),
-        config_getter=lambda: _config(enabled=True),
+    service = _build_service(
+        enabled=True,
+        redis=redis,
+        recipients=(),
+        audit=_FakeAuditService(),
     )
 
     await service.send_budget_alert(
@@ -207,3 +229,131 @@ async def test_budget_alert_releases_slot_when_no_recipients() -> None:
     )
 
     assert "alert:budget:org:org-1" in redis.deleted
+
+
+@pytest.mark.asyncio
+async def test_budget_alert_swallows_recipient_resolution_errors() -> None:
+    redis = _FakeRedis()
+    audit = _FakeAuditService()
+    outbox = _FakeOutboxService()
+    service = _build_service(
+        enabled=True,
+        redis=redis,
+        outbox=outbox,
+        audit=audit,
+        resolver=_FakeRecipientResolver((), raise_on_resolve=True),
+    )
+
+    # Must not raise into the caller (the inference request that triggered the
+    # budget check).
+    await service.send_budget_alert(
+        entity_type="team",
+        entity_id="team-1",
+        current_spend=12.0,
+        soft_budget=10.0,
+        hard_budget=20.0,
+    )
+
+    assert outbox.calls == []
+    assert "alert:budget:team:team-1" in redis.deleted
+    assert len(audit.events) == 1
+    assert audit.events[0].status == "error"
+    assert audit.events[0].metadata["reason"] == "exception"
+
+
+@pytest.mark.asyncio
+async def test_budget_alert_skips_recipient_query_when_throttled() -> None:
+    redis = _FakeRedis()
+    resolver = _FakeRecipientResolver(("owner@example.com",))
+    service = _build_service(enabled=True, redis=redis, resolver=resolver, audit=_FakeAuditService())
+
+    for _ in range(2):
+        await service.send_budget_alert(
+            entity_type="team",
+            entity_id="team-1",
+            current_spend=12.0,
+            soft_budget=10.0,
+            hard_budget=20.0,
+        )
+
+    # The second alert is throttled before any recipient DB query.
+    assert resolver.calls == 1
+
+
+class _DeliveringChannel:
+    name = "slack"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def supports(self, alert_type: str) -> bool:
+        return True
+
+    async def send(self, *, message, recipients):  # noqa: ANN001, ANN201
+        from src.notifications.types import ChannelResult
+
+        self.calls += 1
+        return ChannelResult(outcome="queued")
+
+
+@pytest.mark.asyncio
+async def test_budget_alert_keeps_slot_when_only_slack_delivers() -> None:
+    redis = _FakeRedis()
+    slack = _DeliveringChannel()
+    service = _build_service(
+        enabled=True,
+        redis=redis,
+        recipients=(),  # no email recipients
+        extra_channels=[slack],
+        audit=_FakeAuditService(),
+    )
+
+    await service.send_budget_alert(
+        entity_type="team",
+        entity_id="team-1",
+        current_spend=12.0,
+        soft_budget=10.0,
+        hard_budget=20.0,
+    )
+
+    # The slot was claimed and Slack actually delivered, so the shared silence
+    # window is retained (not released).
+    assert slack.calls == 1
+    assert "alert:budget:team:team-1" in redis.values
+    assert "alert:budget:team:team-1" not in redis.deleted
+
+
+class _ClaimRaisingRedis(_FakeRedis):
+    async def set(self, key: str, value: str, *, ex: int | None = None, nx: bool | None = None):  # noqa: ANN201
+        self.set_calls.append((key, value, ex, nx))
+        raise ConnectionError("redis down")
+
+
+@pytest.mark.asyncio
+async def test_budget_alert_skips_when_redis_claim_fails() -> None:
+    redis = _ClaimRaisingRedis()
+    resolver = _FakeRecipientResolver(("owner@example.com",))
+    outbox = _FakeOutboxService()
+    service = _build_service(
+        enabled=True,
+        redis=redis,
+        outbox=outbox,
+        resolver=resolver,
+        audit=_FakeAuditService(),
+    )
+
+    # Redis being down must not raise into the inference request that triggered
+    # the budget check; the alert is simply skipped (fail-closed).
+    await service.send_budget_alert(
+        entity_type="team",
+        entity_id="team-1",
+        current_spend=12.0,
+        soft_budget=10.0,
+        hard_budget=20.0,
+    )
+
+    # The claim was actually attempted (so the skip happened at the claim step,
+    # not an earlier short-circuit) and nothing downstream ran.
+    assert len(redis.set_calls) == 1
+    assert resolver.calls == 0
+    assert outbox.calls == []

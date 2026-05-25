@@ -18,6 +18,10 @@ from src.mcp import (
     MCPToolResultCache,
     StreamableHTTPMCPClient,
 )
+from src.notifications.channels import EmailChannel, SlackChannel
+from src.notifications.dispatcher import NotificationDispatcher
+from src.notifications.types import NotificationChannel
+from src.notifications.webhook import close_shared_client
 from src.services.callable_target_grants import CallableTargetGrantService
 from src.services.governance_invalidation import GovernanceInvalidationService
 from src.services.key_notifications import KeyNotificationService
@@ -99,21 +103,37 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
 
     general_settings = getattr(cfg, "general_settings", None)
     app.state.notification_recipient_resolver = NotificationRecipientResolver(app.state.prisma_manager.client)
-    app.state.key_notification_service = KeyNotificationService(
-        outbox_service=getattr(app.state, "email_outbox_service", None),
-        recipient_resolver=app.state.notification_recipient_resolver,
+    budget_alert_ttl = int(getattr(general_settings, "budget_alert_ttl_seconds", 3600) or 3600)
+
+    channels: list[NotificationChannel] = []
+    email_outbox_service = getattr(app.state, "email_outbox_service", None)
+    if email_outbox_service is not None:
+        channels.append(EmailChannel(outbox_service=email_outbox_service))
+    if getattr(general_settings, "slack_alerting_enabled", False) and getattr(general_settings, "slack_webhook_url", None):
+        channels.append(
+            SlackChannel(
+                webhook_url=general_settings.slack_webhook_url,
+                allowed_alert_types=set(getattr(general_settings, "slack_alert_kinds", []) or []),
+            )
+        )
+
+    notification_dispatcher = NotificationDispatcher(
+        channels=channels,
+        redis_client=app.state.redis,
         audit_service=getattr(app.state, "audit_service", None),
+        dedupe_ttl_seconds=budget_alert_ttl,
+    )
+    app.state.notification_dispatcher = notification_dispatcher
+    app.state.key_notification_service = KeyNotificationService(
+        dispatcher=notification_dispatcher,
+        recipient_resolver=app.state.notification_recipient_resolver,
         config_getter=lambda: getattr(app.state, "app_config", cfg),
     )
     app.state.alert_service = AlertService(
-        redis_client=app.state.redis,
-        outbox_service=getattr(app.state, "email_outbox_service", None),
+        dispatcher=notification_dispatcher,
         recipient_resolver=app.state.notification_recipient_resolver,
-        audit_service=getattr(app.state, "audit_service", None),
         config_getter=lambda: getattr(app.state, "app_config", cfg),
-        config=AlertConfig(
-            budget_alert_ttl=int(getattr(general_settings, "budget_alert_ttl_seconds", 3600) or 3600),
-        ),
+        config=AlertConfig(budget_alert_ttl=budget_alert_ttl),
     )
     app.state.spend_ledger_service = SpendLedgerService(app.state.prisma_manager.client)
     app.state.spend_tracking_service = SpendTrackingService(
@@ -142,3 +162,4 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
 async def shutdown_runtime_services(runtime: RuntimeServicesRuntime) -> None:
     await runtime.governance_invalidation_service.close()
     await runtime.callback_manager.shutdown()
+    await close_shared_client()

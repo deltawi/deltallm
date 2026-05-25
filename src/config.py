@@ -8,7 +8,7 @@ from typing import Any, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import yaml
-from pydantic import AliasChoices, BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.governance.access_groups import normalize_access_group_list
@@ -323,6 +323,9 @@ class GeneralSettings(BaseModel):
     budget_notifications_enabled: bool = False
     key_lifecycle_notifications_enabled: bool = False
     budget_alert_ttl_seconds: int = Field(default=3600, ge=60)
+    slack_alerting_enabled: bool = False
+    slack_webhook_url: SecretStr | None = None
+    slack_alert_kinds: list[str] = Field(default_factory=list)
     email_enabled: bool = False
     email_provider: Literal["smtp", "resend", "sendgrid"] = "smtp"
     email_from_address: str | None = None
@@ -556,6 +559,17 @@ class GeneralSettings(BaseModel):
             raise ValueError(
                 "batch scheduler shadow mode requires embeddings_batch_model_capacity_enabled=true"
             )
+        if self.slack_alerting_enabled and self.slack_webhook_url is None:
+            raise ValueError("slack_alerting_enabled requires slack_webhook_url to be set")
+        if self.slack_alerting_enabled:
+            from src.notifications.types import NOTIFICATION_ALERT_TYPES
+
+            unknown = [kind for kind in self.slack_alert_kinds if kind not in NOTIFICATION_ALERT_TYPES]
+            if unknown:
+                allowed = ", ".join(sorted(NOTIFICATION_ALERT_TYPES))
+                raise ValueError(
+                    f"slack_alert_kinds contains unknown alert types {unknown}; allowed values are: {allowed}"
+                )
         return self
 
 
