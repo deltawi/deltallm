@@ -27,6 +27,15 @@ def test_provider_supports_mode_unknown_is_permissive() -> None:
     assert provider_supports_mode("custom-gateway", "chat") is True
 
 
+def test_elevenlabs_supports_audio_modes_only() -> None:
+    assert provider_supports_mode("elevenlabs", "audio_speech") is True
+    assert provider_supports_mode("elevenlabs", "audio_transcription") is True
+    assert provider_supports_mode("elevenlabs", "chat") is False
+    assert provider_supports_mode("elevenlabs", "embedding") is False
+    assert provider_supports_mode("elevenlabs", "image_generation") is False
+    assert provider_supports_mode("elevenlabs", "rerank") is False
+
+
 def test_resolve_upstream_model_preserves_slash_prefixed_ids_for_groq() -> None:
     params = {"provider": "groq", "model": "openai/gpt-oss-120b"}
     assert resolve_upstream_model(params) == "openai/gpt-oss-120b"
@@ -42,10 +51,16 @@ def test_resolve_upstream_model_strips_anthropic_prefix_for_anthropic() -> None:
     assert resolve_upstream_model(params) == "claude-sonnet-4-20250514"
 
 
+def test_resolve_upstream_model_strips_elevenlabs_prefix_for_elevenlabs() -> None:
+    params = {"provider": "elevenlabs", "model": "elevenlabs/eleven_multilingual_v2"}
+    assert resolve_upstream_model(params) == "eleven_multilingual_v2"
+
+
 def test_openai_compatible_registry_contains_common_gateways() -> None:
     assert is_openai_compatible_provider("openrouter") is True
     assert is_openai_compatible_provider("groq") is True
     assert is_openai_compatible_provider("anthropic") is False
+    assert is_openai_compatible_provider("elevenlabs") is False
 
 
 def test_model_validation_rejects_unsupported_provider_mode_combo() -> None:

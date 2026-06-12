@@ -35,6 +35,7 @@ PROVIDER_MODEL_PREFIXES_TO_STRIP: dict[str, tuple[str, ...]] = {
     "azure_openai": ("azure/", "azure_openai/"),
     "gemini": ("gemini/",),
     "bedrock": ("bedrock/",),
+    "elevenlabs": ("elevenlabs/",),
 }
 
 PROVIDER_CAPABILITIES: dict[str, set[ModelMode]] = {
@@ -50,6 +51,7 @@ PROVIDER_CAPABILITIES: dict[str, set[ModelMode]] = {
     "perplexity": {"chat"},
     "gemini": {"chat", "audio_speech"},
     "bedrock": {"chat"},
+    "elevenlabs": {"audio_speech", "audio_transcription"},
     "vllm": {"chat", "embedding", "image_generation", "audio_speech", "audio_transcription"},
     "lmstudio": {"chat", "embedding"},
     "ollama": {"chat", "embedding"},
@@ -67,6 +69,7 @@ PROVIDER_PRESETS: dict[str, dict[str, str | None]] = {
     "perplexity": {"provider": "perplexity", "api_base": "https://api.perplexity.ai", "compat": "openai"},
     "gemini": {"provider": "gemini", "api_base": "https://generativelanguage.googleapis.com/v1beta", "compat": "native"},
     "bedrock": {"provider": "bedrock", "api_base": "https://bedrock-runtime.{region}.amazonaws.com", "compat": "native"},
+    "elevenlabs": {"provider": "elevenlabs", "api_base": "https://api.elevenlabs.io/v1", "compat": "native"},
     "vllm": {"provider": "vllm", "api_base": None, "compat": "openai"},
     "lmstudio": {"provider": "lmstudio", "api_base": None, "compat": "openai"},
     "ollama": {"provider": "ollama", "api_base": None, "compat": "openai"},

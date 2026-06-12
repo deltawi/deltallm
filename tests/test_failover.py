@@ -767,6 +767,74 @@ async def test_provider_health_check_defaults_unresolved_provider_to_openai():
 
 
 @pytest.mark.asyncio
+async def test_provider_health_check_supports_elevenlabs_with_default_base_url():
+    captured: dict[str, object] = {}
+
+    class FakeHTTPClient:
+        async def get(self, url, headers=None, timeout=None):  # noqa: ANN001, ANN201
+            captured["url"] = url
+            captured["headers"] = dict(headers or {})
+            captured["timeout"] = timeout
+            return httpx.Response(200, json={"models": []}, request=httpx.Request("GET", url))
+
+    result = await probe_provider_health(
+        FakeHTTPClient(),  # type: ignore[arg-type]
+        {"provider": "elevenlabs", "model": "elevenlabs/eleven_multilingual_v2", "api_key": "provider-key"},
+        default_openai_base_url="https://api.openai.com/v1",
+    )
+
+    assert result.healthy is True
+    assert result.status_code == 200
+    assert captured["url"] == "https://api.elevenlabs.io/v1/models"
+    assert captured["headers"] == {"xi-api-key": "provider-key"}
+    timeout = captured["timeout"]
+    assert getattr(timeout, "read") == 10.0
+
+
+@pytest.mark.asyncio
+async def test_provider_health_check_supports_elevenlabs_custom_base_url():
+    captured: dict[str, object] = {}
+
+    class FakeHTTPClient:
+        async def get(self, url, headers=None, timeout=None):  # noqa: ANN001, ANN201
+            captured["url"] = url
+            captured["headers"] = dict(headers or {})
+            del timeout
+            return httpx.Response(200, json={"models": []}, request=httpx.Request("GET", url))
+
+    result = await probe_provider_health(
+        FakeHTTPClient(),  # type: ignore[arg-type]
+        {
+            "provider": "elevenlabs",
+            "model": "elevenlabs/eleven_multilingual_v2",
+            "api_key": "provider-key",
+            "api_base": "https://elevenlabs-proxy.example/v1/",
+        },
+        default_openai_base_url="https://api.openai.com/v1",
+    )
+
+    assert result.healthy is True
+    assert captured["url"] == "https://elevenlabs-proxy.example/v1/models"
+    assert captured["headers"] == {"xi-api-key": "provider-key"}
+
+
+@pytest.mark.asyncio
+async def test_provider_health_check_marks_elevenlabs_missing_api_key_unhealthy():
+    class FakeHTTPClient:
+        async def get(self, url, headers=None, timeout=None):  # noqa: ANN001, ANN201
+            raise AssertionError("health check must not call upstream without an API key")
+
+    result = await probe_provider_health(
+        FakeHTTPClient(),  # type: ignore[arg-type]
+        {"provider": "elevenlabs", "model": "elevenlabs/eleven_multilingual_v2"},
+        default_openai_base_url="https://api.openai.com/v1",
+    )
+
+    assert result.healthy is False
+    assert result.error == "Provider API key is missing"
+
+
+@pytest.mark.asyncio
 async def test_background_health_checker_ignores_non_health_affecting_result():
     state = RedisStateBackend(redis=None)
     deployment = _deployment("dep-a")
