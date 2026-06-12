@@ -3,10 +3,12 @@ from __future__ import annotations
 import base64
 import json
 import wave
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from io import BytesIO
 from time import perf_counter
 from typing import Any
+from urllib.parse import quote, urlencode
 
 import httpx
 from fastapi import APIRouter, Depends, Request
@@ -60,6 +62,30 @@ AUDIO_CONTENT_TYPES = {
 
 SSE_USAGE_PROVIDERS = {"openai", "azure", "azure_openai"}
 GEMINI_SUPPORTED_RESPONSE_FORMATS = {"wav", "pcm"}
+ELEVENLABS_DEFAULT_OUTPUT_FORMAT = "mp3_44100_128"
+ELEVENLABS_RESPONSE_FORMAT_MAP = {
+    "mp3": "mp3_44100_128",
+    "opus": "opus_48000_128",
+    "wav": "wav_44100",
+    "pcm": "pcm_24000",
+}
+ELEVENLABS_REQUEST_DEFAULT_KEYS = {
+    "language_code",
+    "voice_settings",
+    "pronunciation_dictionary_locators",
+    "seed",
+    "previous_text",
+    "next_text",
+    "previous_request_ids",
+    "next_request_ids",
+    "apply_text_normalization",
+    "apply_language_text_normalization",
+    "use_pvc_as_ivc",
+}
+ELEVENLABS_QUERY_DEFAULT_KEYS = {
+    "enable_logging",
+    "optimize_streaming_latency",
+}
 
 
 async def _execute_tts(
@@ -76,6 +102,14 @@ async def _execute_tts(
     provider = resolve_provider(params)
     if provider == "gemini":
         return await _execute_gemini_tts(
+            request=request,
+            payload=payload,
+            deployment=deployment,
+            api_base=api_base,
+            api_key=str(api_key),
+        )
+    if provider == "elevenlabs":
+        return await _execute_elevenlabs_tts(
             request=request,
             payload=payload,
             deployment=deployment,
@@ -467,6 +501,60 @@ async def _execute_gemini_tts(
     }
 
 
+async def _execute_elevenlabs_tts(
+    *,
+    request: Request,
+    payload: AudioSpeechRequest,
+    deployment: Deployment,
+    api_base: str,
+    api_key: str,
+) -> dict[str, Any]:
+    defaults = _model_default_params(deployment.model_info)
+    voice_id = _resolve_elevenlabs_voice_id(payload=payload, default_params=defaults)
+    provider_output_format = _resolve_elevenlabs_output_format(
+        payload=payload, default_params=defaults
+    )
+    response_format = _elevenlabs_response_format(provider_output_format)
+    upstream_payload = _build_elevenlabs_tts_payload(
+        payload=payload,
+        default_params=defaults,
+        upstream_model=resolve_upstream_model(deployment.deltallm_params),
+    )
+    endpoint = f"{api_base}/text-to-speech/{quote(voice_id, safe='')}"
+    query = _build_elevenlabs_tts_query(
+        provider_output_format=provider_output_format, default_params=defaults
+    )
+    if query:
+        endpoint = f"{endpoint}?{query}"
+
+    upstream_start = perf_counter()
+    response = await request.app.state.http_client.post(
+        endpoint,
+        headers={"xi-api-key": api_key, "Content-Type": "application/json"},
+        json=upstream_payload,
+        timeout=build_upstream_request_timeout_for_request(
+            request,
+            configured_timeout_seconds(deployment.deltallm_params.get("timeout")),
+        ),
+    )
+    if response.status_code >= 400:
+        raise httpx.HTTPStatusError(
+            _format_elevenlabs_tts_error(response),
+            request=httpx.Request("POST", endpoint),
+            response=response,
+        )
+
+    return {
+        "_audio_bytes": response.content,
+        "_billing_payload": _extract_elevenlabs_billing_payload(response),
+        "_api_latency_ms": (perf_counter() - upstream_start) * 1000,
+        "_api_base": api_base,
+        "_deployment_model": deployment.deltallm_params.get("model"),
+        "_model_info": deployment.model_info,
+        "_response_format": response_format,
+    }
+
+
 def _should_force_tts_sse(*, model_info: dict[str, Any] | None, provider: str) -> bool:
     normalized_provider = (provider or "").strip().lower()
     if normalized_provider not in SSE_USAGE_PROVIDERS:
@@ -489,6 +577,142 @@ def _should_force_tts_sse(*, model_info: dict[str, Any] | None, provider: str) -
         for field in ("input_cost_per_character", "output_cost_per_character")
     )
     return has_token_or_second_pricing and not has_character_pricing
+
+
+def _model_default_params(model_info: dict[str, Any] | None) -> dict[str, Any]:
+    defaults = (model_info or {}).get("default_params")
+    return dict(defaults) if isinstance(defaults, Mapping) else {}
+
+
+def _resolve_elevenlabs_voice_id(
+    *,
+    payload: AudioSpeechRequest,
+    default_params: Mapping[str, Any],
+) -> str:
+    if "voice" in payload.model_fields_set:
+        voice_id = str(payload.voice or "").strip()
+    else:
+        voice_id = str(default_params.get("voice_id") or "").strip()
+
+    if not voice_id:
+        raise InvalidRequestError(
+            message="ElevenLabs TTS requires a request voice or model_info.default_params.voice_id"
+        )
+    return voice_id
+
+
+def _resolve_elevenlabs_output_format(
+    *,
+    payload: AudioSpeechRequest,
+    default_params: Mapping[str, Any],
+) -> str:
+    default_output_format = str(default_params.get("output_format") or "").strip().lower()
+    if "response_format" not in payload.model_fields_set:
+        return (
+            ELEVENLABS_RESPONSE_FORMAT_MAP.get(default_output_format)
+            or default_output_format
+            or ELEVENLABS_DEFAULT_OUTPUT_FORMAT
+        )
+
+    requested_format = str(payload.response_format or "mp3").strip().lower()
+    mapped_format = ELEVENLABS_RESPONSE_FORMAT_MAP.get(requested_format)
+    if mapped_format:
+        return mapped_format
+
+    raise InvalidRequestError(
+        message=(
+            "ElevenLabs TTS supports 'mp3', 'opus', 'wav', and 'pcm' response_format values. "
+            "Configure model_info.default_params.output_format for provider-specific formats."
+        )
+    )
+
+
+def _build_elevenlabs_tts_payload(
+    *,
+    payload: AudioSpeechRequest,
+    default_params: Mapping[str, Any],
+    upstream_model: str | None,
+) -> dict[str, Any]:
+    upstream_payload: dict[str, Any] = {"text": payload.input}
+    if upstream_model:
+        upstream_payload["model_id"] = upstream_model
+
+    for key in ELEVENLABS_REQUEST_DEFAULT_KEYS:
+        if key in default_params:
+            upstream_payload[key] = default_params[key]
+
+    if "speed" in payload.model_fields_set and payload.speed is not None:
+        voice_settings = upstream_payload.get("voice_settings")
+        if not isinstance(voice_settings, Mapping):
+            voice_settings = {}
+        upstream_payload["voice_settings"] = {**dict(voice_settings), "speed": payload.speed}
+
+    return upstream_payload
+
+
+def _build_elevenlabs_tts_query(
+    *,
+    provider_output_format: str,
+    default_params: Mapping[str, Any],
+) -> str:
+    query_params: dict[str, str] = {"output_format": provider_output_format}
+    for key in ELEVENLABS_QUERY_DEFAULT_KEYS:
+        if key not in default_params:
+            continue
+        value = default_params[key]
+        if value is None:
+            continue
+        query_params[key] = _elevenlabs_query_value(value)
+    return urlencode(query_params)
+
+
+def _elevenlabs_query_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return str(value).lower()
+    return str(value)
+
+
+def _elevenlabs_response_format(provider_output_format: str) -> str:
+    normalized = provider_output_format.strip().lower()
+    if normalized.startswith("mp3_"):
+        return "mp3"
+    if normalized.startswith("opus_"):
+        return "opus"
+    if normalized.startswith("wav_"):
+        return "wav"
+    if normalized.startswith(("pcm_", "ulaw_", "alaw_")):
+        return "pcm"
+    return "mp3"
+
+
+def _extract_elevenlabs_billing_payload(response: httpx.Response) -> dict[str, Any] | None:
+    character_count = _first_int(
+        response.headers.get("x-character-count"),
+        response.headers.get("x-characters-count"),
+        response.headers.get("character-count"),
+    )
+    if character_count is None:
+        return None
+    return {"input_characters": character_count}
+
+
+def _format_elevenlabs_tts_error(response: httpx.Response) -> str:
+    upstream_msg = response.text
+    try:
+        upstream_body = response.json()
+    except Exception:
+        upstream_body = None
+
+    if isinstance(upstream_body, Mapping):
+        detail = upstream_body.get("detail")
+        if isinstance(detail, Mapping):
+            upstream_msg = str(detail.get("message") or detail.get("detail") or upstream_msg)
+        elif detail:
+            upstream_msg = str(detail)
+        else:
+            upstream_msg = str(upstream_body.get("message") or upstream_msg)
+
+    return f"Upstream ElevenLabs TTS call failed with status {response.status_code}: {upstream_msg}"
 
 
 def _resolve_gemini_response_format(payload: AudioSpeechRequest) -> str:
@@ -637,6 +861,17 @@ def _extract_sse_audio_and_usage(payload: bytes) -> tuple[bytes, dict[str, Any] 
     if duration_seconds is not None and duration_seconds > 0:
         billing_payload["duration"] = duration_seconds
     return b"".join(audio_chunks), billing_payload or None
+
+
+def _first_int(*values: Any) -> int | None:
+    for value in values:
+        if value in (None, ""):
+            continue
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _parse_sse_events(payload: bytes) -> list[dict[str, Any]]:
