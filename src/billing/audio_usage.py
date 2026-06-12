@@ -32,9 +32,13 @@ def normalize_speech_usage(
     provider: str | None = None,
 ) -> dict[str, Any]:
     usage: dict[str, Any] = {"input_characters": len(request_text)}
+    if isinstance(response_payload, Mapping):
+        usage.update(_extract_speech_character_usage(response_payload))
+
     provider_usage = response_payload.get("usage") if isinstance(response_payload, Mapping) else None
     if isinstance(provider_usage, Mapping):
         usage.update(_extract_speech_token_usage(provider_usage))
+        usage.update(_extract_speech_character_usage(provider_usage))
 
     duration_seconds = (
         _extract_duration_seconds(response_payload, provider_usage)
@@ -96,6 +100,22 @@ def _extract_speech_token_usage(provider_usage: Mapping[str, Any]) -> dict[str, 
     return usage
 
 
+def _extract_speech_character_usage(payload: Mapping[str, Any]) -> dict[str, int]:
+    usage: dict[str, int] = {}
+    input_characters = _first_int(
+        payload.get("input_characters"),
+        payload.get("characters"),
+        payload.get("character_count"),
+    )
+    if input_characters is not None:
+        usage["input_characters"] = input_characters
+
+    output_characters = _first_int(payload.get("output_characters"))
+    if output_characters is not None:
+        usage["output_characters"] = output_characters
+    return usage
+
+
 def _extract_duration_seconds(
     response_payload: Mapping[str, Any],
     provider_usage: Mapping[str, Any] | None,
@@ -129,6 +149,17 @@ def _extract_duration_seconds(
         if duration_seconds is not None:
             return duration_seconds
 
+    return None
+
+
+def _first_int(*values: Any) -> int | None:
+    for value in values:
+        if value in (None, ""):
+            continue
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            continue
     return None
 
 
