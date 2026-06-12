@@ -191,6 +191,8 @@ def _allowed_fields_for_provider(provider: str) -> set[str]:
         return _API_KEY_PROVIDER_FIELDS
     if provider == "gemini":
         return _API_KEY_PROVIDER_FIELDS
+    if provider == "elevenlabs":
+        return _API_KEY_PROVIDER_FIELDS
     if supports_custom_openai_compatible_auth(provider):
         return _CUSTOM_AUTH_PROVIDER_FIELDS
     if is_openai_compatible_provider(provider):

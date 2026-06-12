@@ -1,4 +1,5 @@
 import anthropicLogo from '../assets/provider-logos/anthropic.svg';
+import elevenlabsLogo from '../assets/provider-logos/elevenlabs.svg';
 import fireworksLogo from '../assets/provider-logos/fireworks.svg';
 import geminiLogo from '../assets/provider-logos/gemini.svg';
 import groqLogo from '../assets/provider-logos/groq.svg';
@@ -16,6 +17,7 @@ export const PROVIDER_LOGOS: Record<string, string> = {
   fireworks: fireworksLogo,
   perplexity: perplexityLogo,
   gemini: geminiLogo,
+  elevenlabs: elevenlabsLogo,
   vllm: vllmLogo,
   ollama: ollamaLogo,
 };

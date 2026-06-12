@@ -222,6 +222,41 @@ async def test_named_credentials_create_accepts_custom_auth_header_fields(client
 
 
 @pytest.mark.asyncio
+async def test_named_credentials_create_accepts_elevenlabs_api_key_config(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    repository = _FakeNamedCredentialRepository()
+    test_app.state.named_credential_repository = repository
+
+    response = await client.post(
+        "/ui/api/named-credentials",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "name": "ElevenLabs Shared",
+            "provider": "elevenlabs",
+            "connection_config": {
+                "api_key": "elevenlabs-key",
+                "api_base": "https://api.elevenlabs.io/v1",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["provider"] == "elevenlabs"
+    assert payload["connection_config"]["api_key"] == "***REDACTED***"
+    assert payload["connection_config"]["api_base"] == "https://api.elevenlabs.io/v1"
+    assert payload["credentials_present"] is True
+
+    list_response = await client.get(
+        "/ui/api/named-credentials?provider=elevenlabs",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+    assert list_response.status_code == 200
+    listed = list_response.json()["data"]
+    assert [item["name"] for item in listed] == ["ElevenLabs Shared"]
+
+
+@pytest.mark.asyncio
 async def test_named_credentials_update_reloads_runtime_when_in_use_and_delete_blocks(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
     repository = _FakeNamedCredentialRepository()
@@ -316,6 +351,23 @@ async def test_named_credentials_validate_provider_specific_fields(client, test_
     )
     assert invalid_azure_custom_auth.status_code == 400
     assert "unsupported fields" in invalid_azure_custom_auth.text
+
+    invalid_elevenlabs_custom_auth = await client.post(
+        "/ui/api/named-credentials",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "name": "ElevenLabs Prod",
+            "provider": "elevenlabs",
+            "connection_config": {
+                "api_key": "provider-key",
+                "api_base": "https://api.elevenlabs.io/v1",
+                "auth_header_name": "Authorization",
+                "auth_header_format": "Bearer {api_key}",
+            },
+        },
+    )
+    assert invalid_elevenlabs_custom_auth.status_code == 400
+    assert "unsupported fields" in invalid_elevenlabs_custom_auth.text
 
     invalid_auth_format = await client.post(
         "/ui/api/named-credentials",
