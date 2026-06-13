@@ -1,0 +1,66 @@
+{
+  "provider": "elevenlabs",
+  "last_verified_at": "2026-06-13",
+  "source_type": "mixed",
+  "sources": [
+    {
+      "label": "ElevenLabs models",
+      "url": "https://elevenlabs.io/docs/models"
+    },
+    {
+      "label": "ElevenLabs list models API",
+      "url": "https://elevenlabs.io/docs/api-reference/models/list"
+    },
+    {
+      "label": "ElevenLabs API pricing",
+      "url": "https://elevenlabs.io/pricing/api"
+    }
+  ],
+  "models": [
+    {
+      "id": "eleven_v3",
+      "label": "Eleven v3",
+      "status": "active",
+      "supported_modes": ["audio_speech"],
+      "metadata": {
+        "input_cost_per_character": 0.0001
+      }
+    },
+    {
+      "id": "eleven_multilingual_v2",
+      "label": "Eleven Multilingual v2",
+      "status": "active",
+      "supported_modes": ["audio_speech"],
+      "metadata": {
+        "input_cost_per_character": 0.0001
+      }
+    },
+    {
+      "id": "eleven_flash_v2_5",
+      "label": "Eleven Flash v2.5",
+      "status": "active",
+      "supported_modes": ["audio_speech"],
+      "metadata": {
+        "input_cost_per_character": 0.00005
+      }
+    },
+    {
+      "id": "scribe_v2",
+      "label": "Scribe v2",
+      "status": "active",
+      "supported_modes": ["audio_transcription"],
+      "metadata": {
+        "input_cost_per_second": 0.0000611111111111
+      }
+    },
+    {
+      "id": "scribe_v1",
+      "label": "Scribe v1",
+      "status": "deprecated",
+      "supported_modes": ["audio_transcription"],
+      "metadata": {
+        "input_cost_per_second": 0.0000611111111111
+      }
+    }
+  ]
+}

@@ -10,6 +10,8 @@ from src.providers.resolution import PROVIDER_PRESETS, is_openai_compatible_prov
 from src.upstream_auth import build_openai_compatible_auth_headers
 from src.upstream_http import build_upstream_request_timeout
 
+_ELEVENLABS_BATCH_TRANSCRIPTION_MODELS = frozenset({"scribe_v1", "scribe_v2"})
+
 
 def _normalized_provider(provider: str | None) -> str:
     return canonical_catalog_provider(provider)
@@ -31,6 +33,23 @@ def _default_api_base(provider: str, *, default_openai_base_url: str) -> str | N
     return api_base or None
 
 
+def _provider_model_option(
+    *,
+    model_id: str,
+    label: str,
+    provider: str,
+    supported_modes: list[ModelMode] | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": model_id,
+        "label": label,
+        "provider": provider,
+        "source": "provider_api",
+        "supported_modes": list(supported_modes or []),
+        "known_metadata": catalog_model_metadata(provider, model_id),
+    }
+
+
 def _extract_openai_style_models(payload: Any, *, provider: str) -> list[dict[str, Any]]:
     items = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(items, list):
@@ -43,15 +62,13 @@ def _extract_openai_style_models(payload: Any, *, provider: str) -> list[dict[st
         model_id = str(item.get("id") or item.get("name") or "").strip()
         if not model_id:
             continue
+        label = str(item.get("display_name") or item.get("name") or model_id).strip() or model_id
         models.append(
-            {
-                "id": model_id,
-                "label": str(item.get("display_name") or item.get("name") or model_id).strip() or model_id,
-                "provider": provider,
-                "source": "provider_api",
-                "supported_modes": [],
-                "known_metadata": catalog_model_metadata(provider, model_id),
-            }
+            _provider_model_option(
+                model_id=model_id,
+                label=label,
+                provider=provider,
+            )
         )
     return models
 
@@ -70,14 +87,11 @@ def _extract_anthropic_models(payload: Any, *, provider: str) -> list[dict[str, 
             continue
         label = str(item.get("display_name") or item.get("name") or model_id).strip() or model_id
         models.append(
-            {
-                "id": model_id,
-                "label": label,
-                "provider": provider,
-                "source": "provider_api",
-                "supported_modes": [],
-                "known_metadata": catalog_model_metadata(provider, model_id),
-            }
+            _provider_model_option(
+                model_id=model_id,
+                label=label,
+                provider=provider,
+            )
         )
     return models
 
@@ -97,14 +111,64 @@ def _extract_gemini_models(payload: Any, *, provider: str) -> list[dict[str, Any
             continue
         label = str(item.get("displayName") or model_id).strip() or model_id
         models.append(
-            {
-                "id": model_id,
-                "label": label,
-                "provider": provider,
-                "source": "provider_api",
-                "supported_modes": [],
-                "known_metadata": catalog_model_metadata(provider, model_id),
-            }
+            _provider_model_option(
+                model_id=model_id,
+                label=label,
+                provider=provider,
+            )
+        )
+    return models
+
+
+def _elevenlabs_model_items(payload: Any) -> list[Any]:
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return []
+    for key in ("models", "data"):
+        items = payload.get(key)
+        if isinstance(items, list):
+            return items
+    return []
+
+
+def _truthy_provider_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes"}
+    return bool(value)
+
+
+def _extract_elevenlabs_supported_modes(item: dict[str, Any], *, model_id: str) -> list[ModelMode]:
+    modes: list[ModelMode] = []
+    normalized_id = model_id.strip().lower()
+    if _truthy_provider_flag(item.get("can_do_text_to_speech")):
+        modes.append("audio_speech")
+    if normalized_id in _ELEVENLABS_BATCH_TRANSCRIPTION_MODELS:
+        modes.append("audio_transcription")
+    return modes
+
+
+def _extract_elevenlabs_models(payload: Any, *, provider: str) -> list[dict[str, Any]]:
+    models: list[dict[str, Any]] = []
+    for item in _elevenlabs_model_items(payload):
+        if not isinstance(item, dict):
+            continue
+        model_id = str(item.get("model_id") or item.get("id") or item.get("name") or "").strip()
+        if not model_id:
+            continue
+        supported_modes = _extract_elevenlabs_supported_modes(item, model_id=model_id)
+        if not supported_modes:
+            continue
+        label = str(item.get("name") or item.get("display_name") or model_id).strip() or model_id
+        models.append(
+            _provider_model_option(
+                model_id=model_id,
+                label=label,
+                provider=provider,
+                supported_modes=supported_modes,
+            )
         )
     return models
 
@@ -185,6 +249,17 @@ async def _discover_live_models(
         )
         return _extract_gemini_models(payload, provider=response_provider)
 
+    if provider == "elevenlabs":
+        if not api_key:
+            return []
+        payload = await _load_json(
+            http_client,
+            url=f"{str(api_base or '').rstrip('/')}/models",
+            headers={"xi-api-key": api_key},
+            general_settings=general_settings,
+        )
+        return _extract_elevenlabs_models(payload, provider=response_provider)
+
     if not is_openai_compatible_provider(provider):
         return []
     if not api_key or not api_base:
@@ -207,6 +282,8 @@ async def _discover_live_models(
 def _merge_model_options(
     catalog_options: list[dict[str, Any]],
     live_options: list[dict[str, Any]],
+    *,
+    mode: ModelMode | None = None,
 ) -> list[dict[str, Any]]:
     merged: dict[tuple[str, str], dict[str, Any]] = {}
 
@@ -215,6 +292,9 @@ def _merge_model_options(
         model_id = str(option.get("id") or "").strip()
         if not provider or not model_id:
             continue
+        option_modes = list(option.get("supported_modes") or [])
+        if mode is not None and option_modes and mode not in option_modes:
+            continue
 
         key = (provider, model_id.lower())
         existing = merged.get(key)
@@ -222,7 +302,7 @@ def _merge_model_options(
             merged[key] = {
                 **option,
                 "known_metadata": dict(option.get("known_metadata") or {}) or None,
-                "supported_modes": list(option.get("supported_modes") or []),
+                "supported_modes": option_modes,
             }
             continue
 
@@ -297,6 +377,6 @@ async def discover_provider_models(
         warnings.append(str(exc))
 
     return {
-        "data": _merge_model_options(catalog_options, live_options),
+        "data": _merge_model_options(catalog_options, live_options, mode=mode),
         "warnings": warnings,
     }
