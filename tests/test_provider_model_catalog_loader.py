@@ -19,7 +19,7 @@ from src.providers.model_catalog_loader import (
 def test_provider_catalog_loader_returns_expected_providers() -> None:
     catalogs = reload_provider_catalogs()
 
-    assert {"openai", "anthropic", "groq", "gemini"}.issubset(catalogs.keys())
+    assert {"openai", "anthropic", "groq", "gemini", "elevenlabs"}.issubset(catalogs.keys())
     assert get_provider_catalog("openai") is not None
 
 
@@ -28,6 +28,8 @@ def test_provider_catalog_summary_includes_provenance() -> None:
 
     assert summary["openai"]["last_verified_at"] == "2026-04-01"
     assert summary["openai"]["model_count"] >= 10
+    assert summary["elevenlabs"]["last_verified_at"] == "2026-06-13"
+    assert summary["elevenlabs"]["model_count"] == 5
 
 
 def test_catalog_model_metadata_supports_aliases() -> None:
@@ -43,11 +45,39 @@ def test_catalog_models_for_provider_filters_by_mode() -> None:
     assert models == {"gemini-embedding-001"}
 
 
+def test_catalog_models_for_elevenlabs_filters_audio_modes() -> None:
+    speech_models = {item["id"] for item in catalog_models_for_provider("elevenlabs", mode="audio_speech")}
+    transcription_models = {
+        item["id"] for item in catalog_models_for_provider("elevenlabs", mode="audio_transcription")
+    }
+
+    assert speech_models == {"eleven_v3", "eleven_multilingual_v2", "eleven_flash_v2_5"}
+    assert transcription_models == {"scribe_v2", "scribe_v1"}
+
+
 def test_catalog_provider_sources_returns_official_urls() -> None:
     sources = catalog_provider_sources("openai")
 
     assert sources
     assert any(source["url"].startswith("https://developers.openai.com/") for source in sources)
+
+
+def test_elevenlabs_catalog_exposes_official_sources_and_metadata() -> None:
+    catalog = get_provider_catalog("elevenlabs")
+    assert catalog is not None
+
+    sources = catalog_provider_sources("elevenlabs")
+    speech_metadata = catalog_model_metadata("elevenlabs", "eleven_flash_v2_5")
+    transcription_metadata = catalog_model_metadata("elevenlabs", "scribe_v2")
+    model_statuses = {model.id: model.status for model in catalog.models}
+
+    assert any(source["url"].startswith("https://elevenlabs.io/docs/") for source in sources)
+    assert any(source["url"].startswith("https://elevenlabs.io/pricing/") for source in sources)
+    assert model_statuses["scribe_v1"] == "deprecated"
+    assert speech_metadata is not None
+    assert speech_metadata["input_cost_per_character"] == 0.00005
+    assert transcription_metadata is not None
+    assert transcription_metadata["input_cost_per_second"] == 0.0000611111111111
 
 
 def test_canonical_catalog_provider_maps_azure_alias() -> None:
