@@ -8,6 +8,8 @@ import httpx
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
 
+from src.audio.elevenlabs_stt import execute_elevenlabs_stt
+from src.audio.transcription_formats import render_srt, render_vtt
 from src.billing.audio_usage import billing_metadata, normalize_transcription_usage
 from src.billing.cost import compute_billing_result
 from src.callbacks import CallbackManager, build_standard_logging_payload
@@ -73,6 +75,22 @@ async def _execute_stt(
 
     api_base = params.get("api_base", request.app.state.settings.openai_base_url).rstrip("/")
     api_provider = resolve_provider(params)
+    if api_provider == "elevenlabs":
+        return await execute_elevenlabs_stt(
+            request=request,
+            file_content=file_content,
+            filename=filename,
+            content_type=content_type,
+            model=model,
+            language=language,
+            response_format=response_format,
+            temperature=temperature,
+            deployment=deployment,
+            api_base=api_base,
+            api_key=str(api_key),
+            timeout_seconds=_transcription_timeout_seconds(params),
+        )
+
     headers = build_openai_compatible_auth_headers(
         provider=api_provider,
         api_key=str(api_key),
@@ -486,64 +504,7 @@ def _reshape_transcription_response(
     if normalized_format == "text":
         return {"text": transcript_text}
     if normalized_format == "srt":
-        return {"text": _render_srt(response_payload)}
+        return {"text": render_srt(response_payload)}
     if normalized_format == "vtt":
-        return {"text": _render_vtt(response_payload)}
+        return {"text": render_vtt(response_payload)}
     return response_payload
-
-
-def _render_srt(response_payload: dict[str, Any]) -> str:
-    segments = response_payload.get("segments")
-    if not isinstance(segments, list) or not segments:
-        return str(response_payload.get("text") or "")
-
-    lines: list[str] = []
-    for index, segment in enumerate(segments, start=1):
-        if not isinstance(segment, dict):
-            continue
-        text = str(segment.get("text") or "").strip()
-        if not text:
-            continue
-        start = _format_timestamp(segment.get("start"), decimal_separator=",")
-        end = _format_timestamp(segment.get("end"), decimal_separator=",")
-        lines.extend([str(index), f"{start} --> {end}", text, ""])
-    return "\n".join(lines).strip()
-
-
-def _render_vtt(response_payload: dict[str, Any]) -> str:
-    segments = response_payload.get("segments")
-    if not isinstance(segments, list) or not segments:
-        transcript_text = str(response_payload.get("text") or "")
-        return f"WEBVTT\n\n{transcript_text}".strip()
-
-    lines = ["WEBVTT", ""]
-    for segment in segments:
-        if not isinstance(segment, dict):
-            continue
-        text = str(segment.get("text") or "").strip()
-        if not text:
-            continue
-        start = _format_timestamp(segment.get("start"), decimal_separator=".")
-        end = _format_timestamp(segment.get("end"), decimal_separator=".")
-        lines.extend([f"{start} --> {end}", text, ""])
-    return "\n".join(lines).strip()
-
-
-def _format_timestamp(value: Any, *, decimal_separator: str) -> str:
-    total_seconds = max(0.0, float(value or 0))
-    hours = int(total_seconds // 3600)
-    minutes = int((total_seconds % 3600) // 60)
-    seconds = int(total_seconds % 60)
-    milliseconds = int(round((total_seconds - int(total_seconds)) * 1000))
-
-    if milliseconds == 1000:
-        milliseconds = 0
-        seconds += 1
-    if seconds == 60:
-        seconds = 0
-        minutes += 1
-    if minutes == 60:
-        minutes = 0
-        hours += 1
-
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}{decimal_separator}{milliseconds:03d}"
