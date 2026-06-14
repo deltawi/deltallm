@@ -17,9 +17,15 @@ def normalize_transcription_usage(
         usage.update(_extract_token_usage(provider_usage))
 
     duration_seconds = _extract_duration_seconds(response_payload, provider_usage)
+    provider_billable_duration_seconds = _extract_billable_duration_seconds(response_payload)
+    if duration_seconds is None:
+        duration_seconds = provider_billable_duration_seconds
     if duration_seconds is not None and duration_seconds > 0:
         usage["duration_seconds"] = duration_seconds
-        billable_duration_seconds = _apply_stt_provider_billing_rules(duration_seconds, provider)
+        billable_duration_seconds = max(
+            _apply_stt_provider_billing_rules(duration_seconds, provider),
+            provider_billable_duration_seconds or 0.0,
+        )
         if billable_duration_seconds != duration_seconds:
             usage["billable_duration_seconds"] = billable_duration_seconds
     return usage
@@ -32,9 +38,13 @@ def normalize_speech_usage(
     provider: str | None = None,
 ) -> dict[str, Any]:
     usage: dict[str, Any] = {"input_characters": len(request_text)}
+    if isinstance(response_payload, Mapping):
+        usage.update(_extract_speech_character_usage(response_payload))
+
     provider_usage = response_payload.get("usage") if isinstance(response_payload, Mapping) else None
     if isinstance(provider_usage, Mapping):
         usage.update(_extract_speech_token_usage(provider_usage))
+        usage.update(_extract_speech_character_usage(provider_usage))
 
     duration_seconds = (
         _extract_duration_seconds(response_payload, provider_usage)
@@ -96,6 +106,22 @@ def _extract_speech_token_usage(provider_usage: Mapping[str, Any]) -> dict[str, 
     return usage
 
 
+def _extract_speech_character_usage(payload: Mapping[str, Any]) -> dict[str, int]:
+    usage: dict[str, int] = {}
+    input_characters = _first_int(
+        payload.get("input_characters"),
+        payload.get("characters"),
+        payload.get("character_count"),
+    )
+    if input_characters is not None:
+        usage["input_characters"] = input_characters
+
+    output_characters = _first_int(payload.get("output_characters"))
+    if output_characters is not None:
+        usage["output_characters"] = output_characters
+    return usage
+
+
 def _extract_duration_seconds(
     response_payload: Mapping[str, Any],
     provider_usage: Mapping[str, Any] | None,
@@ -129,6 +155,21 @@ def _extract_duration_seconds(
         if duration_seconds is not None:
             return duration_seconds
 
+    return None
+
+
+def _extract_billable_duration_seconds(response_payload: Mapping[str, Any]) -> float | None:
+    return _first_float(response_payload.get("_billing_billable_duration_seconds"))
+
+
+def _first_int(*values: Any) -> int | None:
+    for value in values:
+        if value in (None, ""):
+            continue
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            continue
     return None
 
 

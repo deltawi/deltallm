@@ -11,6 +11,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   perplexity: 'Perplexity',
   gemini: 'Google Gemini',
   bedrock: 'AWS Bedrock',
+  elevenlabs: 'ElevenLabs',
   vllm: 'vLLM',
   lmstudio: 'LM Studio',
   ollama: 'Ollama',

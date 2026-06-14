@@ -11,8 +11,9 @@ import {
   Sparkles,
   SquareCode,
   Triangle,
+  Volume2,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useState } from 'react';
 import { PROVIDER_LOGOS } from '../lib/providerLogos';
 import { normalizeProvider, providerDisplayName } from '../lib/providers';
 
@@ -35,6 +36,7 @@ const PROVIDER_STYLES: Record<string, ProviderStyle> = {
   perplexity: { Icon: Search, logoUrl: PROVIDER_LOGOS.perplexity, tone: 'bg-rose-50 text-rose-700 border-rose-100' },
   gemini: { Icon: Sparkles, logoUrl: PROVIDER_LOGOS.gemini, tone: 'bg-blue-50 text-blue-700 border-blue-100' },
   bedrock: { Icon: Triangle, tone: 'bg-stone-100 text-stone-700 border-stone-200' },
+  elevenlabs: { Icon: Volume2, logoUrl: PROVIDER_LOGOS.elevenlabs, tone: 'bg-neutral-100 text-neutral-800 border-neutral-200' },
   vllm: { Icon: Bot, logoUrl: PROVIDER_LOGOS.vllm, tone: 'bg-lime-50 text-lime-700 border-lime-100' },
   lmstudio: { Icon: Bot, tone: 'bg-slate-100 text-slate-700 border-slate-200' },
   ollama: { Icon: Bot, logoUrl: PROVIDER_LOGOS.ollama, tone: 'bg-teal-50 text-teal-700 border-teal-100' },
@@ -50,14 +52,11 @@ interface ProviderBadgeProps {
 export default function ProviderBadge({ provider, model, compact = false }: ProviderBadgeProps) {
   const key = normalizeProvider(provider, model);
   const style = PROVIDER_STYLES[key] || PROVIDER_STYLES.unknown;
-  const [logoFailed, setLogoFailed] = useState(false);
+  const [failedLogoKey, setFailedLogoKey] = useState<string | null>(null);
   const label = providerDisplayName(key);
   const FallbackIcon = style.Icon || Bot;
-  const shouldShowLogo = useMemo(() => Boolean(style.logoUrl && !logoFailed), [style.logoUrl, logoFailed]);
-
-  useEffect(() => {
-    setLogoFailed(false);
-  }, [key, style.logoUrl]);
+  const logoFailureKey = style.logoUrl ? `${key}:${style.logoUrl}` : null;
+  const shouldShowLogo = Boolean(style.logoUrl && failedLogoKey !== logoFailureKey);
 
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium ${style.tone}`}>
@@ -66,7 +65,7 @@ export default function ProviderBadge({ provider, model, compact = false }: Prov
           src={style.logoUrl}
           alt={`${label} logo`}
           className="h-3.5 w-3.5 rounded-sm object-contain"
-          onError={() => setLogoFailed(true)}
+          onError={() => setFailedLogoKey(logoFailureKey)}
           loading="lazy"
         />
       ) : (

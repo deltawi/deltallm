@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 import pytest
 
+from src.db.callable_targets import CallableTargetBindingRecord
 from src.providers.anthropic import AnthropicAdapter
 from src.providers.resolution import provider_presets, provider_supports_mode
 
@@ -102,6 +103,26 @@ def _install_mock_provider_post(test_app) -> None:  # noqa: ANN001
     test_app.state.anthropic_adapter = AnthropicAdapter(test_app.state.http_client)  # type: ignore[arg-type]
 
 
+async def _grant_smoke_model(test_app, model_name: str) -> None:  # noqa: ANN001
+    key_record = next(iter(test_app.state._test_repo.records.values()))
+    key_record.models = sorted({*(key_record.models or []), model_name})
+
+    grant_service = test_app.state.callable_target_grant_service
+    repository = getattr(grant_service, "repository", None)
+    bindings = getattr(repository, "bindings", None)
+    if isinstance(bindings, list):
+        bindings.append(
+            CallableTargetBindingRecord(
+                callable_target_binding_id=f"ctb-smoke-{model_name}",
+                callable_key=model_name,
+                scope_type="organization",
+                scope_id=key_record.organization_id or "org-default",
+                enabled=True,
+            )
+        )
+        await grant_service.reload()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("preset", provider_presets(), ids=lambda x: str(x["provider"]))
 async def test_provider_presets_chat_smoke(client, test_app, preset: dict[str, Any]):
@@ -125,7 +146,14 @@ async def test_provider_presets_chat_smoke(client, test_app, preset: dict[str, A
         headers={"Authorization": "Bearer mk-test"},
         json=_deployment_payload(model_name=model_name, provider=provider, mode="chat", upstream_model=upstream_model),
     )
+
+    if not provider_supports_mode(provider, "chat"):
+        assert create_response.status_code == 400
+        assert "does not support mode" in create_response.text
+        return
+
     assert create_response.status_code == 200, create_response.text
+    await _grant_smoke_model(test_app, model_name)
 
     response = await client.post(
         "/v1/chat/completions",
@@ -156,6 +184,7 @@ async def test_provider_presets_embedding_smoke_with_capability_gate(client, tes
 
     if provider_supports_mode(provider, "embedding"):
         assert create_response.status_code == 200, create_response.text
+        await _grant_smoke_model(test_app, model_name)
         response = await client.post(
             "/v1/embeddings",
             headers={"Authorization": f"Bearer {test_app.state._test_key}"},

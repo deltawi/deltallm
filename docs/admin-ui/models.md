@@ -43,6 +43,58 @@ For a simple first deployment:
 
 If you do not set a `deployment_id`, DeltaLLM creates one automatically.
 
+## ElevenLabs Audio Deployments
+
+ElevenLabs deployments use the same public DeltaLLM audio routes as other providers, but DeltaLLM calls the native ElevenLabs upstream APIs behind the scenes.
+
+For shared credentials and key rotation, create an ElevenLabs [Named Credential](named-credentials.md) with provider `elevenlabs`, the ElevenLabs API key, and the default API base `https://api.elevenlabs.io/v1`. Inline credentials also work for deployment-specific keys.
+
+### Text-to-Speech
+
+1. Open **AI Gateway > Models**
+2. Choose **Text-to-Speech**
+3. Set the public model name, for example `elevenlabs-tts`
+4. Choose provider **ElevenLabs**
+5. Set provider model to `eleven_multilingual_v2`, `eleven_v3`, or another ElevenLabs TTS model
+6. Select the ElevenLabs named credential, or choose **Inline Credentials** and enter the API key and API base
+7. Add default parameter `voice_id` when clients will not send a `voice` value
+8. Optionally add default parameter `output_format`, for example `mp3_44100_128`
+9. Save the deployment
+
+If the public request includes `voice`, that value is used as the ElevenLabs voice ID. If the public request omits `voice`, DeltaLLM uses `model_info.default_params.voice_id`. A TTS deployment without either value returns a request error instead of making an upstream call.
+
+### Speech-to-Text
+
+1. Open **AI Gateway > Models**
+2. Choose **Speech-to-Text**
+3. Set the public model name, for example `elevenlabs-stt`
+4. Choose provider **ElevenLabs**
+5. Set provider model to `scribe_v2` or `scribe_v1`
+6. Select the ElevenLabs named credential, or choose **Inline Credentials** and enter the API key and API base
+7. Optionally add safe default parameters such as `language_code`, `timestamps_granularity`, `diarize`, `num_speakers`, or `tag_audio_events`
+8. Save the deployment
+
+DeltaLLM maps public transcription fields such as `language` and `temperature` to the native ElevenLabs multipart fields. It does not send OpenAI-only fields such as `prompt` or `response_format` upstream to ElevenLabs.
+
+### ElevenLabs Default Parameters
+
+| Key | Mode | Use |
+|-----|------|-----|
+| `voice_id` | TTS | Fallback voice ID when the public request omits `voice` |
+| `output_format` | TTS | Native ElevenLabs output format such as `mp3_44100_128` |
+| `language_code` | STT | Default transcription language when the public request omits `language` |
+| `timestamps_granularity` | STT | Word or character timestamp granularity, when supported by the upstream model |
+| `diarize` | STT | Enables speaker diarization |
+| `num_speakers` | STT | Expected number of speakers for diarization |
+| `tag_audio_events` | STT | Controls audio-event tags in transcription results |
+
+### Troubleshooting
+
+- Missing voice ID: add `model_info.default_params.voice_id` or require clients to send `voice`
+- Auth failures: verify the named credential has `provider: elevenlabs`, a valid `api_key`, and no custom OpenAI auth fields
+- Output format errors: use public `response_format` values such as `mp3`, `opus`, `wav`, or `pcm`, or configure a valid ElevenLabs `output_format` default
+- STT duration billing: DeltaLLM derives billable duration from ElevenLabs timing metadata, then applies `input_cost_per_second` when configured
+
 ## Chat Batch Execution
 
 For chat deployments, the model form includes **Batch Execution** controls in

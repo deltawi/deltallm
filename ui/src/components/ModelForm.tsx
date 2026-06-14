@@ -44,13 +44,65 @@ function CollapsibleCard({ title, defaultOpen = false, children }: { title: stri
   );
 }
 
-function upstreamModelPlaceholder(mode: ModelMode): string {
+type DefaultParameterHint = {
+  description: string;
+  details?: string[];
+  keyPlaceholder: string;
+  valuePlaceholder: string;
+};
+
+const PROVIDER_MODEL_PLACEHOLDERS: Partial<Record<string, Partial<Record<ModelMode, string>>>> = {
+  elevenlabs: {
+    audio_speech: 'eleven_multilingual_v2',
+    audio_transcription: 'scribe_v2',
+  },
+};
+
+function normalizedProviderKey(provider: string | null | undefined): string {
+  return (provider || '').trim().toLowerCase();
+}
+
+function upstreamModelPlaceholder(mode: ModelMode, provider?: string): string {
+  const providerPlaceholder = PROVIDER_MODEL_PLACEHOLDERS[normalizedProviderKey(provider)]?.[mode];
+  if (providerPlaceholder) return providerPlaceholder;
   if (mode === 'image_generation') return 'gpt-image-1.5';
   if (mode === 'audio_speech') return 'gpt-4o-mini-tts';
   if (mode === 'audio_transcription') return 'gpt-4o-transcribe';
   if (mode === 'embedding') return 'text-embedding-3-large';
   if (mode === 'rerank') return 'rerank-english-v3.0';
   return 'gpt-5.4';
+}
+
+function defaultParameterHint(provider: string, mode: ModelMode): DefaultParameterHint {
+  const providerKey = normalizedProviderKey(provider);
+  if (providerKey === 'elevenlabs' && mode === 'audio_speech') {
+    return {
+      description: 'Default values injected into ElevenLabs TTS requests when callers omit them.',
+      details: [
+        'Use voice_id as the fallback voice when the public request does not include voice.',
+        'Use output_format for provider-native formats such as mp3_44100_128; public response_format still takes priority.',
+      ],
+      keyPlaceholder: 'Key (voice_id or output_format)',
+      valuePlaceholder: 'Value (voice ID or mp3_44100_128)',
+    };
+  }
+
+  if (providerKey === 'elevenlabs' && mode === 'audio_transcription') {
+    return {
+      description: 'Default values injected into ElevenLabs STT requests when callers omit them.',
+      details: [
+        'Common safe defaults include language_code, timestamps_granularity, diarize, num_speakers, and tag_audio_events.',
+      ],
+      keyPlaceholder: 'Key (e.g. timestamps_granularity)',
+      valuePlaceholder: 'Value (e.g. word)',
+    };
+  }
+
+  return {
+    description: 'Default values injected into provider requests when not specified by the caller (e.g. voice, response_format)',
+    keyPlaceholder: 'Key (e.g. voice)',
+    valuePlaceholder: 'Value (e.g. alloy)',
+  };
 }
 
 type MetadataAutofillField =
@@ -256,6 +308,7 @@ export default function ModelForm({
   const selectedModelOption = findProviderModelOption(modelOptions, form.model);
   const chatBatchingDisabled = form.chat_batching_mode === 'disabled';
   const chatBatchingSyncMicrobatch = form.chat_batching_mode === 'sync_microbatch';
+  const defaultParamHint = defaultParameterHint(form.provider, mode);
 
   const clearValidation = (field?: RequiredField) => {
     if (validationError) setValidationError(null);
@@ -540,7 +593,7 @@ export default function ModelForm({
                 list={modelSuggestionListId}
                 value={form.model}
                 onChange={(e) => updateModelValue(e.target.value)}
-                placeholder={upstreamModelPlaceholder(mode)}
+                placeholder={upstreamModelPlaceholder(mode, form.provider)}
                 className="min-w-0 flex-1 px-3 py-2 text-sm text-gray-900 focus:outline-none"
               />
             </div>
@@ -1048,7 +1101,12 @@ export default function ModelForm({
 
       <CollapsibleCard title="Default Parameters">
         <div className="space-y-3">
-          <p className="text-xs text-gray-400">Default values injected into provider requests when not specified by the caller (e.g. voice, response_format)</p>
+          <div className="space-y-1">
+            <p className="text-xs text-gray-400">{defaultParamHint.description}</p>
+            {defaultParamHint.details?.map((detail) => (
+              <p key={detail} className="text-xs text-gray-500">{detail}</p>
+            ))}
+          </div>
           {defaultParams.map((param, idx) => (
             <div key={idx} className="flex items-center gap-2">
               <input
@@ -1058,7 +1116,7 @@ export default function ModelForm({
                   updated[idx] = { ...updated[idx], key: e.target.value };
                   setDefaultParams(updated);
                 }}
-                placeholder="Key (e.g. voice)"
+                placeholder={defaultParamHint.keyPlaceholder}
                 className={`flex-1 ${inputClass}`}
               />
               <input
@@ -1068,7 +1126,7 @@ export default function ModelForm({
                   updated[idx] = { ...updated[idx], value: e.target.value };
                   setDefaultParams(updated);
                 }}
-                placeholder="Value (e.g. alloy)"
+                placeholder={defaultParamHint.valuePlaceholder}
                 className={`flex-1 ${inputClass}`}
               />
               <button

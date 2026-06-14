@@ -119,6 +119,32 @@ async def probe_provider_health(
         except httpx.HTTPError as exc:
             return HealthProbeResult(healthy=False, error=f"Gemini health check failed: {exc}")
 
+    if provider == "elevenlabs":
+        api_key = str(params.get("api_key") or "").strip()
+        if not api_key:
+            return HealthProbeResult(healthy=False, error="Provider API key is missing")
+        api_base = str(params.get("api_base") or "https://api.elevenlabs.io/v1").rstrip("/")
+        try:
+            response = await http_client.get(
+                f"{api_base}/models",
+                headers={"xi-api-key": api_key},
+                timeout=request_timeout,
+            )
+            if response.status_code >= 400:
+                return HealthProbeResult(
+                    healthy=False,
+                    error=_status_error("ElevenLabs health check", response.status_code),
+                    status_code=response.status_code,
+                )
+            return HealthProbeResult(healthy=True, status_code=response.status_code)
+        except httpx.PoolTimeout:
+            error = GatewayCapacityError()
+            return HealthProbeResult(healthy=False, error=error.message, affects_deployment_health=False)
+        except httpx.TimeoutException:
+            return HealthProbeResult(healthy=False, error="ElevenLabs health check timed out")
+        except httpx.HTTPError as exc:
+            return HealthProbeResult(healthy=False, error=f"ElevenLabs health check failed: {exc}")
+
     if provider == "bedrock":
         if not str(params.get("aws_access_key_id") or "").strip():
             return HealthProbeResult(healthy=False, error="AWS access key is missing")
