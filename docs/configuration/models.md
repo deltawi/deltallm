@@ -64,9 +64,10 @@ After the initial seed, set `model_deployment_bootstrap_from_config` back to `fa
 | Field | Status | What it means |
 |-------|--------|---------------|
 | `model_name` | Required | Public model name clients send in API requests |
+| `named_credential_id` | Optional | Shared provider credential to merge into this deployment |
 | `deltallm_params.provider` | Recommended for new config; required by the admin UI/API | Authoritative provider identity for routing visibility, dashboards, spend, callbacks, and metrics |
 | `deltallm_params.model` | Required | Upstream model ID sent to the provider; provider prefixes remain supported as legacy/import fallback |
-| `deltallm_params.api_key` | Required | Provider API key |
+| `deltallm_params.api_key` | Required unless supplied by `named_credential_id` | Provider API key |
 | `deltallm_params.api_base` | Optional | Custom provider base URL |
 | `deltallm_params.auth_header_name` | Optional | Custom upstream auth header key for supported OpenAI-compatible providers |
 | `deltallm_params.auth_header_format` | Optional | Custom upstream auth header value template, must include `{api_key}` |
@@ -167,6 +168,69 @@ model_list:
     model_info:
       mode: audio_transcription
 ```
+
+## ElevenLabs Audio Examples
+
+ElevenLabs is a native audio provider. Public clients still call the OpenAI-compatible DeltaLLM routes, while DeltaLLM translates upstream calls to ElevenLabs native endpoints with `xi-api-key` auth.
+
+Text-to-speech deployment with inline credentials:
+
+```yaml
+model_list:
+  - model_name: elevenlabs-tts
+    deltallm_params:
+      provider: elevenlabs
+      model: elevenlabs/eleven_multilingual_v2
+      api_key: os.environ/ELEVENLABS_API_KEY
+      api_base: https://api.elevenlabs.io/v1
+    model_info:
+      mode: audio_speech
+      default_params:
+        voice_id: 21m00Tcm4TlvDq8ikWAM
+        output_format: mp3_44100_128
+```
+
+Speech-to-text deployment with inline credentials:
+
+```yaml
+model_list:
+  - model_name: elevenlabs-stt
+    deltallm_params:
+      provider: elevenlabs
+      model: elevenlabs/scribe_v2
+      api_key: os.environ/ELEVENLABS_API_KEY
+      api_base: https://api.elevenlabs.io/v1
+    model_info:
+      mode: audio_transcription
+      default_params:
+        timestamps_granularity: word
+        diarize: true
+```
+
+Named-credential-backed deployments keep connection fields out of `deltallm_params`. Create the ElevenLabs named credential first, then reference it from each deployment:
+
+```yaml
+model_list:
+  - model_name: elevenlabs-tts
+    named_credential_id: cred-elevenlabs-prod
+    deltallm_params:
+      provider: elevenlabs
+      model: elevenlabs/eleven_multilingual_v2
+    model_info:
+      mode: audio_speech
+      default_params:
+        voice_id: 21m00Tcm4TlvDq8ikWAM
+
+  - model_name: elevenlabs-stt
+    named_credential_id: cred-elevenlabs-prod
+    deltallm_params:
+      provider: elevenlabs
+      model: elevenlabs/scribe_v2
+    model_info:
+      mode: audio_transcription
+```
+
+For TTS, request `voice` overrides `model_info.default_params.voice_id`. For STT, public `language` and `temperature` override matching provider defaults. Add pricing fields such as `input_cost_per_character` for TTS or `input_cost_per_second` for STT only when you want DeltaLLM spend estimates for those deployments.
 
 ## Access Groups and Routing Tags
 
@@ -349,6 +413,7 @@ For new deployments, set `deltallm_params.provider`. Provider prefixes in `delta
 | Perplexity | `perplexity/` | `perplexity/sonar` |
 | Gemini | `gemini/` | `gemini/gemini-2.0-flash` |
 | AWS Bedrock | `bedrock/` | `bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0` |
+| ElevenLabs | `elevenlabs/` | `elevenlabs/eleven_multilingual_v2` |
 | vLLM | `vllm/` | `vllm/meta-llama/Llama-3.1-8B-Instruct` |
 | LM Studio | `lmstudio/` | `lmstudio/qwen2.5-7b-instruct` |
 | Ollama | `ollama/` | `ollama/llama3.1` |
@@ -368,6 +433,7 @@ For new deployments, set `deltallm_params.provider`. Provider prefixes in `delta
 | Perplexity | Y | N | N | N | N | N |
 | Gemini | Y | N | N | N | N | N |
 | AWS Bedrock | Y | N | N | N | N | N |
+| ElevenLabs | N | N | N | Y | Y | N |
 | vLLM | Y | Y | Y | Y | Y | N |
 | LM Studio | Y | Y | N | N | N | N |
 | Ollama | Y | Y | N | N | N | N |

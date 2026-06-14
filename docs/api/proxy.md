@@ -139,6 +139,8 @@ POST /v1/audio/speech
 
 This endpoint returns audio bytes, not JSON.
 
+Public speech requests remain OpenAI-compatible even when the selected deployment is ElevenLabs. For ElevenLabs, DeltaLLM maps `input` to native `text`, resolves the ElevenLabs voice ID from request `voice` or deployment `model_info.default_params.voice_id`, and calls `POST /v1/text-to-speech/{voice_id}` upstream with `xi-api-key`.
+
 ```bash
 curl http://localhost:8000/v1/audio/speech \
   -H "Authorization: Bearer YOUR_API_KEY" \
@@ -152,6 +154,21 @@ curl http://localhost:8000/v1/audio/speech \
   --output speech.mp3
 ```
 
+Example using an ElevenLabs-backed public model:
+
+```bash
+curl http://localhost:8000/v1/audio/speech \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "elevenlabs-tts",
+    "input": "Hello from ElevenLabs through DeltaLLM",
+    "voice": "21m00Tcm4TlvDq8ikWAM",
+    "response_format": "mp3"
+  }' \
+  --output elevenlabs-speech.mp3
+```
+
 ### Audio Transcription
 
 ```text
@@ -160,12 +177,25 @@ POST /v1/audio/transcriptions
 
 This endpoint accepts multipart form data.
 
+Public transcription requests remain OpenAI-compatible even when the selected deployment is ElevenLabs. For ElevenLabs, DeltaLLM sends the uploaded audio to native `POST /v1/speech-to-text`, maps public `language` to `language_code`, maps `temperature`, and reshapes the provider response back into the requested public response format.
+
 ```bash
 curl http://localhost:8000/v1/audio/transcriptions \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -F "file=@sample.wav" \
   -F "model=whisper-large" \
   -F "response_format=json"
+```
+
+Example using an ElevenLabs-backed public model:
+
+```bash
+curl http://localhost:8000/v1/audio/transcriptions \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -F "file=@sample.wav" \
+  -F "model=elevenlabs-stt" \
+  -F "language=en" \
+  -F "response_format=verbose_json"
 ```
 
 ### Rerank
