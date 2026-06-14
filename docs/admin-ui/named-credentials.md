@@ -9,7 +9,7 @@ Use them when you want to:
 - avoid repeating inline `api_key`, `api_base`, and similar connection fields in every model
 - convert repeated inline credentials into a reusable shared object
 
-This is especially useful for providers such as OpenAI-compatible gateways, Groq, Anthropic, Gemini, Azure OpenAI, and Bedrock.
+This is especially useful for providers such as OpenAI-compatible gateways, Groq, Anthropic, Gemini, Azure OpenAI, Bedrock, and ElevenLabs.
 
 ## What a Named Credential Contains
 
@@ -63,6 +63,16 @@ Validation rules:
 - reserved header names such as `Content-Type` are rejected
 
 If you leave both fields unset, DeltaLLM keeps the default upstream behavior: `Authorization: Bearer {api_key}`.
+
+## ElevenLabs Credentials
+
+For ElevenLabs, create a named credential with:
+
+- `provider: elevenlabs`
+- `connection_config.api_key`
+- `connection_config.api_base`, usually `https://api.elevenlabs.io/v1`
+
+Do not set `auth_header_name` or `auth_header_format` for ElevenLabs. ElevenLabs is a native provider in DeltaLLM, and upstream calls use `xi-api-key` automatically instead of OpenAI-compatible bearer auth.
 
 ## UI Workflow
 
@@ -155,6 +165,22 @@ Example response shape:
   "credentials_present": true,
   "usage_count": 0
 }
+```
+
+Example ElevenLabs credential:
+
+```bash
+curl http://localhost:4002/ui/api/named-credentials \
+  -H "Authorization: Bearer $DELTALLM_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "ElevenLabs production",
+    "provider": "elevenlabs",
+    "connection_config": {
+      "api_key": "elevenlabs-key",
+      "api_base": "https://api.elevenlabs.io/v1"
+    }
+  }'
 ```
 
 ### 2. Create deployments that reference it
