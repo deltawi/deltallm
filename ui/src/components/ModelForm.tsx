@@ -1,6 +1,6 @@
 import { useId, useRef, useState } from 'react';
 import Card from './Card';
-import { ChevronDown, Plus, X } from 'lucide-react';
+import { ChevronDown, ExternalLink, Plus, X } from 'lucide-react';
 import AccessGroupTokenInput, { type AccessGroupTokenInputHandle } from './AccessGroupTokenInput';
 import ProviderBadge from './ProviderBadge';
 import { useApi } from '../lib/hooks';
@@ -23,6 +23,7 @@ import {
 } from './modelFormShared';
 
 let collapsibleIdCounter = 0;
+const MODEL_BATCH_CONFIG_DOCS_URL = 'https://deltallm.readthedocs.io/en/latest/admin-ui/models/#chat-batch-execution';
 
 function CollapsibleCard({ title, defaultOpen = false, children }: { title: string; defaultOpen?: boolean; children: React.ReactNode }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -191,6 +192,7 @@ function buildLiveDiscoveryRequestKey(payload: ProviderModelDiscoveryPayload): s
 interface ModelFormProps {
   initialValues?: ModelFormValues;
   initialDefaultParams?: { key: string; value: string }[];
+  initialModelInfo?: Record<string, unknown>;
   onSubmit: (payload: ModelPayload) => Promise<void>;
   onCancel: () => void;
   submitLabel?: string;
@@ -229,9 +231,19 @@ function validatePositiveInteger(value: string, label: string, minimum = 1): str
   return null;
 }
 
+function validateCapacityFraction(value: string): string | null {
+  if (!value.trim()) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 1) {
+    return 'Capacity Fraction must be greater than 0 and less than or equal to 1.';
+  }
+  return null;
+}
+
 export default function ModelForm({
   initialValues,
   initialDefaultParams,
+  initialModelInfo,
   onSubmit,
   onCancel,
   submitLabel = 'Create',
@@ -240,6 +252,7 @@ export default function ModelForm({
 }: ModelFormProps) {
   const [form, setForm] = useState<ModelFormValues>(initialValues || { ...EMPTY_FORM });
   const [defaultParams, setDefaultParams] = useState<{ key: string; value: string }[]>(initialDefaultParams || []);
+  const [initialModelInfoSnapshot] = useState<Record<string, unknown>>(() => ({ ...(initialModelInfo || {}) }));
   const [validationError, setValidationError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<RequiredField, string>>>({});
   const accessGroupInputRef = useRef<AccessGroupTokenInputHandle | null>(null);
@@ -308,6 +321,7 @@ export default function ModelForm({
   const selectedModelOption = findProviderModelOption(modelOptions, form.model);
   const chatBatchingDisabled = form.chat_batching_mode === 'disabled';
   const chatBatchingSyncMicrobatch = form.chat_batching_mode === 'sync_microbatch';
+  const supportsBatchCapacity = mode === 'chat' || mode === 'embedding';
   const defaultParamHint = defaultParameterHint(form.provider, mode);
 
   const clearValidation = (field?: RequiredField) => {
@@ -513,6 +527,17 @@ export default function ModelForm({
         }
       }
     }
+    if (supportsBatchCapacity) {
+      const batchCapacityErrors = [
+        validatePositiveInteger(form.batch_capacity_max_in_flight, 'Scheduler Max In-Flight'),
+        validatePositiveInteger(form.batch_capacity_max_claim_work_units, 'Scheduler Max Claim Work Units'),
+        validateCapacityFraction(form.batch_capacity_capacity_fraction),
+      ].filter(Boolean);
+      if (batchCapacityErrors.length > 0) {
+        setValidationError(batchCapacityErrors[0] || 'Fix the scheduler capacity settings before saving.');
+        return;
+      }
+    }
     setFieldErrors({});
     if (selectedProviderPreset && !selectedProviderPreset.supported_modes.includes(mode)) {
       const modeLabel = MODE_OPTIONS.find((m) => m.value === mode)?.label || mode;
@@ -535,9 +560,67 @@ export default function ModelForm({
         access_groups: accessGroupCommit?.value ?? form.access_groups,
       },
       defaultParams,
+      initialModelInfoSnapshot,
     );
     await onSubmit(payload);
   };
+
+  const batchCapacityFields = supportsBatchCapacity ? (
+    <div className="border-t border-gray-100 pt-4">
+      <h4 className="mb-3 text-sm font-medium text-gray-700">Scheduler Capacity</h4>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div>
+          <label className="mb-1 block text-sm font-medium text-gray-700">Scheduler Max In-Flight</label>
+          <input
+            type="number"
+            min="1"
+            step="1"
+            value={form.batch_capacity_max_in_flight}
+            onChange={(e) => {
+              setForm({ ...form, batch_capacity_max_in_flight: e.target.value });
+              clearValidation();
+            }}
+            placeholder="Optional, e.g. 4"
+            className={inputClass}
+          />
+          <p className="mt-1 text-xs text-gray-400">Slots this deployment contributes to batch scheduling.</p>
+        </div>
+        <div>
+          <label className="mb-1 block text-sm font-medium text-gray-700">Scheduler Max Claim Work Units</label>
+          <input
+            type="number"
+            min="1"
+            step="1"
+            value={form.batch_capacity_max_claim_work_units}
+            onChange={(e) => {
+              setForm({ ...form, batch_capacity_max_claim_work_units: e.target.value });
+              clearValidation();
+            }}
+            placeholder="Optional, e.g. 200"
+            className={inputClass}
+          />
+          <p className="mt-1 text-xs text-gray-400">Work-unit cap per scheduler claim.</p>
+        </div>
+        <div>
+          <label className="mb-1 block text-sm font-medium text-gray-700">Capacity Fraction</label>
+          <input
+            type="number"
+            min="0"
+            max="1"
+            step="any"
+            value={form.batch_capacity_capacity_fraction}
+            onChange={(e) => {
+              setForm({ ...form, batch_capacity_capacity_fraction: e.target.value });
+              clearValidation();
+            }}
+            placeholder="Optional, e.g. 0.25"
+            className={inputClass}
+          />
+          <p className="mt-1 text-xs text-gray-400">Only used when capacity is inferred from router limits.</p>
+        </div>
+      </div>
+    </div>
+  ) : null;
 
   return (
     <div className="space-y-6">
@@ -869,7 +952,18 @@ export default function ModelForm({
               </div>
             </div>
             <div className="border-t border-gray-100 pt-4">
-              <h4 className="text-sm font-medium text-gray-700 mb-3">Batch Execution</h4>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <h4 className="text-sm font-medium text-gray-700">Batch Execution</h4>
+                <a
+                  href={MODEL_BATCH_CONFIG_DOCS_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                >
+                  Batch config docs
+                  <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                </a>
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Mode</label>
@@ -939,41 +1033,45 @@ export default function ModelForm({
                 </div>
               </div>
             </div>
+            {batchCapacityFields}
           </div>
         </CollapsibleCard>
       )}
 
       {mode === 'embedding' && (
         <CollapsibleCard title="Embedding Settings">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Context Window</label>
-              <input type="number" value={form.max_context_window} onChange={(e) => setForm({ ...form, max_context_window: e.target.value })} placeholder="8192" className={inputClass} />
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Context Window</label>
+                <input type="number" value={form.max_context_window} onChange={(e) => setForm({ ...form, max_context_window: e.target.value })} placeholder="8192" className={inputClass} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Output Vector Size</label>
+                <input type="number" value={form.output_vector_size} onChange={(e) => setForm({ ...form, output_vector_size: e.target.value })} placeholder="1536" className={inputClass} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Batch Worker Upstream Max Inputs</label>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={form.upstream_max_batch_inputs}
+                  onChange={(e) => {
+                    setForm({ ...form, upstream_max_batch_inputs: e.target.value });
+                    clearValidation();
+                  }}
+                  placeholder="Optional, e.g. 8"
+                  className={inputClass}
+                />
+                <p className="text-xs text-gray-400 mt-1">
+                  Advanced. Only used for compatible async embedding batch jobs, not synchronous /v1/embeddings.
+                  Leave blank or use 1 to disable batch-worker micro-batching. Start small and increase only after
+                  validating provider behavior and throughput.
+                </p>
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Output Vector Size</label>
-              <input type="number" value={form.output_vector_size} onChange={(e) => setForm({ ...form, output_vector_size: e.target.value })} placeholder="1536" className={inputClass} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Batch Worker Upstream Max Inputs</label>
-              <input
-                type="number"
-                min="1"
-                step="1"
-                value={form.upstream_max_batch_inputs}
-                onChange={(e) => {
-                  setForm({ ...form, upstream_max_batch_inputs: e.target.value });
-                  clearValidation();
-                }}
-                placeholder="Optional, e.g. 8"
-                className={inputClass}
-              />
-              <p className="text-xs text-gray-400 mt-1">
-                Advanced. Only used for compatible async embedding batch jobs, not synchronous /v1/embeddings.
-                Leave blank or use 1 to disable batch-worker micro-batching. Start small and increase only after
-                validating provider behavior and throughput.
-              </p>
-            </div>
+            {batchCapacityFields}
           </div>
         </CollapsibleCard>
       )}

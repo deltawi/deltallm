@@ -71,6 +71,9 @@ export interface ModelFormValues {
   chat_batching_max_in_flight: string;
   chat_batching_upstream_max_batch_size: string;
   chat_batching_max_total_input_tokens: string;
+  batch_capacity_max_in_flight: string;
+  batch_capacity_max_claim_work_units: string;
+  batch_capacity_capacity_fraction: string;
   weight: string;
   priority: string;
   tags: string;
@@ -129,6 +132,9 @@ export const EMPTY_FORM: ModelFormValues = {
   chat_batching_max_in_flight: '',
   chat_batching_upstream_max_batch_size: '',
   chat_batching_max_total_input_tokens: '',
+  batch_capacity_max_in_flight: '',
+  batch_capacity_max_claim_work_units: '',
+  batch_capacity_capacity_fraction: '',
   weight: '',
   priority: '',
   tags: '',
@@ -164,6 +170,40 @@ function positiveIntOrUndef(val: string): number | undefined {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function objectRecordOrEmpty(val: unknown): Record<string, unknown> {
+  return val && typeof val === 'object' && !Array.isArray(val)
+    ? (val as Record<string, unknown>)
+    : {};
+}
+
+const FORM_MANAGED_MODEL_INFO_FIELDS = [
+  'mode',
+  'priority',
+  'tags',
+  'access_groups',
+  'weight',
+  'input_cost_per_token',
+  'output_cost_per_token',
+  'input_cost_per_token_cache_hit',
+  'output_cost_per_token_cache_hit',
+  'batch_input_cost_per_token',
+  'batch_output_cost_per_token',
+  'batch_price_multiplier',
+  'input_cost_per_character',
+  'output_cost_per_character',
+  'input_cost_per_second',
+  'output_cost_per_second',
+  'input_cost_per_image',
+  'input_cost_per_audio_token',
+  'output_cost_per_audio_token',
+  'output_vector_size',
+  'max_tokens',
+  'max_input_tokens',
+  'max_output_tokens',
+  'upstream_max_batch_inputs',
+  'default_params',
+] as const;
+
 function buildChatBatchingPayload(form: ModelFormValues): Record<string, unknown> | null {
   if (form.chat_batching_mode === 'disabled') {
     return { mode: 'disabled' };
@@ -189,6 +229,25 @@ function buildChatBatchingPayload(form: ModelFormValues): Record<string, unknown
   return null;
 }
 
+function buildBatchCapacityPayload(form: ModelFormValues): Record<string, unknown> | undefined {
+  const payload: Record<string, unknown> = {};
+  const maxInFlight = positiveIntOrUndef(form.batch_capacity_max_in_flight);
+  const maxClaimWorkUnits = positiveIntOrUndef(form.batch_capacity_max_claim_work_units);
+  const capacityFraction = numOrUndef(form.batch_capacity_capacity_fraction);
+
+  if (maxInFlight !== undefined) {
+    payload.max_in_flight = maxInFlight;
+  }
+  if (maxClaimWorkUnits !== undefined) {
+    payload.max_claim_work_units = maxClaimWorkUnits;
+  }
+  if (capacityFraction !== undefined) {
+    payload.capacity_fraction = capacityFraction;
+  }
+
+  return Object.keys(payload).length > 0 ? payload : undefined;
+}
+
 function commaSeparatedListOrUndef(val: string): string[] | undefined {
   const items = val.split(',').map((item) => item.trim()).filter(Boolean);
   return items.length > 0 ? items : undefined;
@@ -207,6 +266,7 @@ function toModelMode(value: unknown): ModelMode {
 export function buildModelPayload(
   form: ModelFormValues,
   defaultParams: { key: string; value: string }[],
+  existingModelInfo: Record<string, unknown> = {},
 ): ModelPayload {
   const useNamedCredential = form.credential_source === 'named';
   const supportsCustomAuth = supportsCustomUpstreamAuthProvider(form.provider, form.model);
@@ -240,13 +300,16 @@ export function buildModelPayload(
     deltallm_params.chat_batching = null;
   }
 
-  const model_info: Record<string, unknown> = {
-    mode: form.mode,
-    priority: numOrUndef(form.priority),
-    tags: form.tags ? commaSeparatedListOrUndef(form.tags) : undefined,
-    access_groups: form.access_groups ? commaSeparatedListOrUndef(form.access_groups) : undefined,
-    weight: numOrUndef(form.weight),
-  };
+  const model_info: Record<string, unknown> = { ...existingModelInfo };
+  for (const field of FORM_MANAGED_MODEL_INFO_FIELDS) {
+    delete model_info[field];
+  }
+
+  model_info.mode = form.mode;
+  model_info.priority = numOrUndef(form.priority);
+  model_info.tags = form.tags ? commaSeparatedListOrUndef(form.tags) : undefined;
+  model_info.access_groups = form.access_groups ? commaSeparatedListOrUndef(form.access_groups) : undefined;
+  model_info.weight = numOrUndef(form.weight);
 
   if (form.mode === 'chat') {
     model_info.input_cost_per_token = numOrUndef(form.input_cost_per_token);
@@ -282,6 +345,13 @@ export function buildModelPayload(
     model_info.batch_price_multiplier = numOrUndef(form.batch_price_multiplier);
     model_info.batch_input_cost_per_token = numOrUndef(form.batch_input_cost_per_token);
     model_info.batch_output_cost_per_token = numOrUndef(form.batch_output_cost_per_token);
+
+    const batchCapacity = buildBatchCapacityPayload(form);
+    if (batchCapacity) {
+      model_info.batch_capacity = batchCapacity;
+    } else {
+      delete model_info.batch_capacity;
+    }
   }
 
   const defaultParamsPayload: Record<string, string | number | boolean> = {};
@@ -308,11 +378,10 @@ export function buildModelPayload(
 export function formFromModel(
   model: ModelDeploymentDetail,
 ): { form: ModelFormValues; defaultParams: { key: string; value: string }[] } {
-  const lp = (model.deltallm_params || {}) as Record<string, unknown>;
-  const mi = (model.model_info || {}) as Record<string, unknown>;
-  const chatBatching = (lp.chat_batching && typeof lp.chat_batching === 'object'
-    ? lp.chat_batching
-    : {}) as Record<string, unknown>;
+  const lp = objectRecordOrEmpty(model.deltallm_params);
+  const mi = objectRecordOrEmpty(model.model_info);
+  const chatBatching = objectRecordOrEmpty(lp.chat_batching);
+  const batchCapacity = objectRecordOrEmpty(mi.batch_capacity);
   const explicitProvider = strOrEmpty(lp.provider).trim();
   const inferredProvider = normalizeProvider(undefined, strOrEmpty(lp.model));
   const provider = explicitProvider || (inferredProvider !== 'unknown' ? inferredProvider : '');
@@ -349,6 +418,9 @@ export function formFromModel(
     chat_batching_max_in_flight: strOrEmpty(chatBatching.max_in_flight),
     chat_batching_upstream_max_batch_size: strOrEmpty(chatBatching.upstream_max_batch_size),
     chat_batching_max_total_input_tokens: strOrEmpty(chatBatching.max_total_input_tokens),
+    batch_capacity_max_in_flight: strOrEmpty(batchCapacity.max_in_flight),
+    batch_capacity_max_claim_work_units: strOrEmpty(batchCapacity.max_claim_work_units),
+    batch_capacity_capacity_fraction: strOrEmpty(batchCapacity.capacity_fraction),
     weight: strOrEmpty(mi.weight ?? lp.weight),
     priority: strOrEmpty(mi.priority),
     tags: Array.isArray(mi.tags) ? mi.tags.join(', ') : '',

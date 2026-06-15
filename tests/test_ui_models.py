@@ -408,6 +408,70 @@ async def test_create_model_accepts_chat_batching_params(client, test_app):
 
 
 @pytest.mark.asyncio
+async def test_create_model_accepts_batch_capacity_metadata(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.post(
+        "/ui/api/models",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "model_name": "batch-capacity-model",
+            "deltallm_params": {
+                "provider": "vllm",
+                "model": "meta-llama/Llama-3.1-8B-Instruct",
+                "api_base": "https://vllm.example/v1",
+                "api_key": "provider-key",
+            },
+            "model_info": {
+                "mode": "chat",
+                "batch_capacity": {
+                    "max_in_flight": 4,
+                    "max_claim_work_units": 200,
+                    "capacity_fraction": 0.25,
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["model_info"]["batch_capacity"] == {
+        "max_in_flight": 4,
+        "max_claim_work_units": 200,
+        "capacity_fraction": 0.25,
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_model_rejects_invalid_batch_capacity_metadata(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.post(
+        "/ui/api/models",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "model_name": "invalid-batch-capacity-model",
+            "deltallm_params": {
+                "provider": "vllm",
+                "model": "meta-llama/Llama-3.1-8B-Instruct",
+                "api_base": "https://vllm.example/v1",
+                "api_key": "provider-key",
+            },
+            "model_info": {
+                "mode": "chat",
+                "batch_capacity": {
+                    "max_in_flight": True,
+                    "max_claim_work_units": 200,
+                    "capacity_fraction": 0.25,
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert "batch_capacity" in response.text
+
+
+@pytest.mark.asyncio
 async def test_create_model_rejects_invalid_chat_batching_params(client, test_app):
     setattr(test_app.state.settings, "master_key", "mk-test")
 

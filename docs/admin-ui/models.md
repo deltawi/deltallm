@@ -100,14 +100,22 @@ DeltaLLM maps public transcription fields such as `language` and `temperature` t
 For chat deployments, the model form includes **Batch Execution** controls in
 the Chat Settings section.
 
-- Leave **Mode** as **Default concurrent** for the standard behavior: one
-  upstream request per batch item, bounded by worker concurrency
-- Select **Concurrent** when you want to persist an explicit per-deployment
-  `max_in_flight` limit
-- Select **Sync microbatch** only for providers with a proven synchronous
-  microbatch API that returns one response and exact usage per input item
-- Select **Disabled** when the deployment should never use chat microbatch
-  grouping
+Most deployments should use the default behavior and leave numeric fields blank.
+Only set explicit limits when you know the provider or serving cluster capacity
+you want DeltaLLM to reserve for batch work.
+
+| Option | Stored as | What it does | Recommendation |
+|--------|-----------|--------------|----------------|
+| **Mode: Default concurrent** | No `deltallm_params.chat_batching` override | Sends one ordinary upstream request per batch item, bounded by the worker defaults. | Use this for most chat deployments, including vLLM and OpenAI-compatible providers with their own serving-side batching. |
+| **Mode: Concurrent** | `deltallm_params.chat_batching.mode: concurrent` | Keeps one upstream request per batch item, but persists deployment-specific chat batching settings such as **Max In-Flight**. | Use when this deployment needs a tighter or higher per-worker cap than the global worker setting. |
+| **Mode: Sync microbatch** | `deltallm_params.chat_batching.mode: sync_microbatch` | Groups compatible chat items into one synchronous upstream provider call when a matching executor is available. | Use only for provider adapters that are proven to return one result and exact usage per input item. Start with small batches such as `4` or `8`. |
+| **Mode: Disabled** | `deltallm_params.chat_batching.mode: disabled` | Prevents chat microbatch grouping for this deployment. | Use for providers or models where batch behavior is unknown, unsafe, or hard to bill correctly. |
+| **Max In-Flight** | `deltallm_params.chat_batching.max_in_flight` | Limits concurrent upstream chat requests for this deployment per worker replica. | Leave blank unless you need an explicit cap. Size it against provider limits, worker replica count, and serving capacity. |
+| **Upstream Max Size** | `deltallm_params.chat_batching.upstream_max_batch_size` | Maximum number of chat items in one sync microbatch. Required for **Sync microbatch** and must be at least `2`. | Set only with **Sync microbatch**. Start at `4` or `8`, then increase only after latency, response shape, and usage accounting look correct. |
+| **Max Total Input Tokens** | `deltallm_params.chat_batching.max_total_input_tokens` | Caps the combined input tokens in a sync microbatch chunk. | Set a conservative cap for sync microbatch providers so one large group does not exceed context or latency limits. Leave blank for concurrent modes. |
+| **Scheduler Max In-Flight** | `model_info.batch_capacity.max_in_flight` | Sets the batch scheduler capacity slots this model group can have in flight. This is separate from live request routing. | Leave blank to use scheduler defaults or inferred capacity. Set it when a model group needs a hard batch-specific cap. |
+| **Scheduler Max Claim Work Units** | `model_info.batch_capacity.max_claim_work_units` | Caps how much work the scheduler may claim for this model group at once. | Leave blank initially. Lower it when large jobs monopolize workers; raise it only after the model drains backlog without hurting latency. |
+| **Capacity Fraction** | `model_info.batch_capacity.capacity_fraction` | Fraction of router `max_in_flight` to use when scheduler capacity is inferred from chat batching limits. Must be greater than `0` and no more than `1`. | Leave blank unless you are sharing the deployment between live traffic and batch work. Use a conservative value such as `0.25` for shared capacity; reserve `1` for batch-dedicated capacity. |
 
 Blank numeric fields are treated as unset. For example, leaving **Max
 In-Flight** empty does not send `0`; it leaves that limit to the worker default.

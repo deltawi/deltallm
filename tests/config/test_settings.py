@@ -334,6 +334,39 @@ def test_model_info_rejects_non_positive_upstream_max_batch_inputs(value: int):
         ModelInfo.model_validate({"upstream_max_batch_inputs": value})
 
 
+def test_model_info_accepts_valid_batch_capacity():
+    info = ModelInfo.model_validate(
+        {
+            "batch_capacity": {
+                "max_in_flight": 4,
+                "max_claim_work_units": 200,
+                "capacity_fraction": 0.25,
+            }
+        }
+    )
+
+    assert info.batch_capacity is not None
+    assert info.batch_capacity.max_in_flight == 4
+    assert info.batch_capacity.max_claim_work_units == 200
+    assert info.batch_capacity.capacity_fraction == 0.25
+
+
+@pytest.mark.parametrize(
+    "batch_capacity",
+    [
+        {"max_in_flight": 0},
+        {"max_claim_work_units": 0},
+        {"capacity_fraction": 0},
+        {"capacity_fraction": 1.01},
+        {"max_in_flight": True},
+        {"max_claim_work_units": "4"},
+    ],
+)
+def test_model_info_rejects_invalid_batch_capacity(batch_capacity: dict[str, object]):
+    with pytest.raises(ValueError):
+        ModelInfo.model_validate({"batch_capacity": batch_capacity})
+
+
 def test_delta_llm_params_accepts_chat_batching_config():
     params = DeltaLLMParams.model_validate(
         {
