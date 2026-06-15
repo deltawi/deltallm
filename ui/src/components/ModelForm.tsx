@@ -1,6 +1,6 @@
 import { useId, useRef, useState } from 'react';
 import Card from './Card';
-import { ChevronDown, Plus, X } from 'lucide-react';
+import { ChevronDown, ExternalLink, Plus, X } from 'lucide-react';
 import AccessGroupTokenInput, { type AccessGroupTokenInputHandle } from './AccessGroupTokenInput';
 import ProviderBadge from './ProviderBadge';
 import { useApi } from '../lib/hooks';
@@ -23,6 +23,7 @@ import {
 } from './modelFormShared';
 
 let collapsibleIdCounter = 0;
+const MODEL_BATCH_CONFIG_DOCS_URL = 'https://deltallm.readthedocs.io/en/latest/admin-ui/models/';
 
 function CollapsibleCard({ title, defaultOpen = false, children }: { title: string; defaultOpen?: boolean; children: React.ReactNode }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -951,7 +952,18 @@ export default function ModelForm({
               </div>
             </div>
             <div className="border-t border-gray-100 pt-4">
-              <h4 className="text-sm font-medium text-gray-700 mb-3">Batch Execution</h4>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <h4 className="text-sm font-medium text-gray-700">Batch Execution</h4>
+                <a
+                  href={MODEL_BATCH_CONFIG_DOCS_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                >
+                  Batch config docs
+                  <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                </a>
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Mode</label>
