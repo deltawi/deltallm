@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import { useApi } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
-import { ApiError, models, type DeploymentHealth } from '../lib/api';
+import { ApiError, models, type DeploymentHealth, type ModelDeploymentDetail } from '../lib/api';
 import { modelEditPath } from '../lib/modelRoutes';
 import ModelUsageExamplesCard from '../components/ModelUsageExamplesCard';
 import { MODE_OPTIONS } from '../components/modelFormShared';
@@ -72,6 +72,13 @@ function formatCost(value: unknown): string | null {
   return `$${num.toFixed(6)}`;
 }
 
+function formatCapacityFraction(value: unknown): string | null {
+  if (value == null || value === '') return null;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return num.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
 function formatUnixTimestamp(value: number | null | undefined): string | null {
   if (!value) return null;
   const date = new Date(value * 1000);
@@ -87,9 +94,16 @@ function timeSince(ts: number | null | undefined): string | null {
   return `${Math.floor(secs / 3600)}h ago`;
 }
 
-function modeSpecificItems(mode: string, model: any): Array<{ label: string; value: string | null }> {
+function modeSpecificItems(mode: string, model: ModelDeploymentDetail): Array<{ label: string; value: string | null }> {
   const lp = model.deltallm_params || {};
   const mi = model.model_info || {};
+  const batchCapacity = mi.batch_capacity && typeof mi.batch_capacity === 'object' ? mi.batch_capacity : {};
+  const schedulerCapacityItems = [
+    { label: 'Scheduler Max In-Flight', value: formatInteger(batchCapacity.max_in_flight) },
+    { label: 'Scheduler Max Claim Work Units', value: formatInteger(batchCapacity.max_claim_work_units) },
+    { label: 'Capacity Fraction', value: formatCapacityFraction(batchCapacity.capacity_fraction) },
+  ];
+
   switch (mode) {
     case 'chat':
       return [
@@ -98,12 +112,14 @@ function modeSpecificItems(mode: string, model: any): Array<{ label: string; val
         { label: 'Max Output Tokens', value: formatInteger(mi.max_output_tokens) },
         { label: 'Per Request Cap',   value: formatInteger(lp.max_tokens) },
         { label: 'Stream Timeout',    value: formatDurationSeconds(lp.stream_timeout) },
+        ...schedulerCapacityItems,
       ];
     case 'embedding':
       return [
         { label: 'Context Window', value: formatInteger(mi.max_tokens) },
         { label: 'Vector Size',    value: formatInteger(mi.output_vector_size) },
         { label: 'Batch Worker Upstream Max Inputs', value: formatInteger(mi.upstream_max_batch_inputs) || '—' },
+        ...schedulerCapacityItems,
       ];
     case 'image_generation':
       return [{ label: 'Cost / Image', value: formatCost(mi.input_cost_per_image) }];
@@ -137,7 +153,7 @@ function formatDefaultParamValue(value: unknown): string {
   return String(value);
 }
 
-function primaryCost(mode: string, mi: Record<string, any>): string | null {
+function primaryCost(mode: string, mi: Record<string, unknown>): string | null {
   if (mode === 'image_generation') return formatCost(mi.input_cost_per_image);
   if (mode === 'audio_speech') {
     return (
@@ -193,7 +209,7 @@ const EMPTY_DEPLOYMENT_HEALTH: DeploymentHealth = {
   last_success_at: null,
 };
 
-function OverviewTab({ model }: { model: any }) {
+function OverviewTab({ model }: { model: ModelDeploymentDetail }) {
   const lp = model.deltallm_params || {};
   const connectionSummary = model.connection_summary || {};
   const health: DeploymentHealth = model.health || EMPTY_DEPLOYMENT_HEALTH;
@@ -232,7 +248,7 @@ function OverviewTab({ model }: { model: any }) {
   );
 }
 
-function RuntimeTab({ model }: { model: any }) {
+function RuntimeTab({ model }: { model: ModelDeploymentDetail }) {
   const lp = model.deltallm_params || {};
   const mi = model.model_info || {};
   const mode = model.mode || mi.mode || 'chat';
@@ -282,7 +298,7 @@ function RuntimeTab({ model }: { model: any }) {
   );
 }
 
-function RoutingTab({ model }: { model: any }) {
+function RoutingTab({ model }: { model: ModelDeploymentDetail }) {
   const lp = model.deltallm_params || {};
   const mi = model.model_info || {};
   const rpmLimit = lp.rpm ?? mi.rpm_limit;
@@ -361,7 +377,7 @@ function RoutingTab({ model }: { model: any }) {
   );
 }
 
-function CostsTab({ model }: { model: any }) {
+function CostsTab({ model }: { model: ModelDeploymentDetail }) {
   const mi = model.model_info || {};
   const rows = [
     { label: 'Input Cost / Token',        value: formatCost(mi.input_cost_per_token),           hint: 'Standard request' },
@@ -485,8 +501,8 @@ export default function ModelDetail() {
     try {
       await models.delete(deploymentId!);
       navigate('/models');
-    } catch (err: any) {
-      alert(err?.message || 'Failed to delete model');
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Failed to delete model');
     }
   };
 

@@ -41,8 +41,8 @@ export default function ModelEdit() {
     try {
       await models.update(deploymentId!, payload);
       navigate(modelDetailPath(deploymentId!));
-    } catch (err: any) {
-      setError(err?.message || 'Failed to update model');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to update model');
     } finally {
       setSaving(false);
     }
@@ -57,6 +57,7 @@ export default function ModelEdit() {
       <ModelForm
         initialValues={initialValues}
         initialDefaultParams={initialDefaultParams}
+        initialModelInfo={model.model_info}
         onSubmit={handleSubmit}
         onCancel={() => navigate(modelDetailPath(deploymentId!))}
         submitLabel="Save Changes"

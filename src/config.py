@@ -60,8 +60,8 @@ ChatBatchingMode = Literal["disabled", "concurrent", "sync_microbatch"]
 
 
 class BatchModelCapacityInfo(BaseModel):
-    max_in_flight: int | None = Field(default=None, ge=1)
-    max_claim_work_units: int | None = Field(default=None, ge=1)
+    max_in_flight: int | None = Field(default=None, ge=1, strict=True)
+    max_claim_work_units: int | None = Field(default=None, ge=1, strict=True)
     capacity_fraction: float | None = Field(default=None, gt=0.0, le=1.0)
 
 
