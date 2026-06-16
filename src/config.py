@@ -11,6 +11,7 @@ import yaml
 from pydantic import AliasChoices, BaseModel, Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src.auth.roles import TeamRole, validate_team_role
 from src.governance.access_groups import normalize_access_group_list
 from src.batch.create.defaults import (
     DEFAULT_CREATE_SESSION_CLEANUP_INTERVAL_SECONDS,
@@ -57,6 +58,7 @@ RoutingStrategyName = Literal[
 
 
 ChatBatchingMode = Literal["disabled", "concurrent", "sync_microbatch"]
+SelfRegistrationMode = Literal["sso_allowed_domain", "request_access"]
 
 
 class BatchModelCapacityInfo(BaseModel):
@@ -247,6 +249,127 @@ class DeltaLLMSettings(BaseModel):
     turn_off_message_logging: bool = False
 
 
+class SelfRegistrationLimitDefaults(BaseModel):
+    max_budget: float | None = Field(default=None, gt=0)
+    soft_budget: float | None = Field(default=None, gt=0)
+    rpm_limit: int | None = Field(default=None, gt=0)
+    tpm_limit: int | None = Field(default=None, gt=0)
+    rph_limit: int | None = Field(default=None, gt=0)
+    rpd_limit: int | None = Field(default=None, gt=0)
+    tpd_limit: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_soft_budget_ceiling(self) -> "SelfRegistrationLimitDefaults":
+        if (
+            self.max_budget is not None
+            and self.soft_budget is not None
+            and self.soft_budget > self.max_budget
+        ):
+            raise ValueError("soft_budget must be less than or equal to max_budget")
+        return self
+
+
+class SelfRegistrationDefaultOrg(SelfRegistrationLimitDefaults):
+    id: str | None = None
+    name: str | None = None
+
+    @field_validator("id", "name")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        return normalized or None
+
+
+class SelfRegistrationDefaultTeam(SelfRegistrationLimitDefaults):
+    id: str | None = None
+    alias: str | None = None
+    role: str = TeamRole.DEVELOPER
+    self_service_keys_enabled: bool = True
+    self_service_max_keys_per_user: int | None = Field(default=None, gt=0)
+    self_service_budget_ceiling: float | None = Field(default=None, gt=0)
+    self_service_require_expiry: bool = True
+    self_service_max_expiry_days: int | None = Field(default=None, gt=0)
+
+    @field_validator("id", "alias")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        return normalized or None
+
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, value: str) -> str:
+        return validate_team_role(value)
+
+
+class SelfRegistrationDefaultUser(SelfRegistrationLimitDefaults):
+    user_role: str = "internal_user"
+
+    @field_validator("user_role")
+    @classmethod
+    def normalize_user_role(cls, value: str) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("user_role cannot be blank")
+        return normalized
+
+
+class SelfRegistrationSettings(BaseModel):
+    enabled: bool = False
+    mode: SelfRegistrationMode = "sso_allowed_domain"
+    allowed_domains: list[str] = Field(default_factory=list)
+    require_email_verification: bool = True
+    require_admin_approval: bool = False
+    default_org: SelfRegistrationDefaultOrg = Field(default_factory=SelfRegistrationDefaultOrg)
+    default_team: SelfRegistrationDefaultTeam = Field(default_factory=SelfRegistrationDefaultTeam)
+    default_user: SelfRegistrationDefaultUser = Field(default_factory=SelfRegistrationDefaultUser)
+
+    @field_validator("allowed_domains", mode="before")
+    @classmethod
+    def normalize_allowed_domains_input(cls, value: object) -> list[object]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, list):
+            return value
+        raise ValueError("allowed_domains must be a list of domains")
+
+    @field_validator("allowed_domains")
+    @classmethod
+    def normalize_allowed_domains(cls, value: list[str]) -> list[str]:
+        normalized_domains: list[str] = []
+        seen: set[str] = set()
+        for raw_domain in value:
+            domain = str(raw_domain or "").strip().lower()
+            if not domain:
+                continue
+            if "@" in domain or "/" in domain or "\\" in domain or domain.startswith(".") or domain.endswith("."):
+                raise ValueError("allowed_domains entries must be bare email domains")
+            if domain not in seen:
+                normalized_domains.append(domain)
+                seen.add(domain)
+        return normalized_domains
+
+    @model_validator(mode="after")
+    def validate_enabled_defaults(self) -> "SelfRegistrationSettings":
+        if not self.enabled:
+            return self
+        if not self.default_org.id:
+            raise ValueError("self_registration.default_org.id is required when self-registration is enabled")
+        if not self.default_team.id:
+            raise ValueError("self_registration.default_team.id is required when self-registration is enabled")
+        if self.mode == "sso_allowed_domain" and not self.allowed_domains:
+            raise ValueError(
+                "self_registration.allowed_domains is required when mode is sso_allowed_domain"
+            )
+        return self
+
+
 def _validate_master_key_strength(value: str | None) -> str | None:
     if value is None:
         return None
@@ -307,6 +430,7 @@ class GeneralSettings(BaseModel):
     sso_admin_email_list: list[str] = Field(default_factory=list)
     sso_default_team_id: str | None = None
     sso_state_ttl_seconds: int = Field(default=600, ge=60, le=3600)
+    self_registration: SelfRegistrationSettings = Field(default_factory=SelfRegistrationSettings)
     enable_jwt_auth: bool = False
     jwt_public_key_url: str | None = None
     jwt_audience: str | None = None

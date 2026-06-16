@@ -14,6 +14,7 @@ from src.services.invitation_service import InvitationService
 from src.services.key_service import KeyService
 from src.services.limit_counter import LimitCounter
 from src.services.platform_identity_service import PlatformIdentityService
+from src.services.self_registration_provisioning import SelfRegistrationProvisioningService
 from src.services.sso_state_store import SSOStateStore
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,10 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
     await app.state.platform_identity_service.ensure_bootstrap_admin(
         email=cfg.general_settings.platform_bootstrap_admin_email,
         password=cfg.general_settings.platform_bootstrap_admin_password,
+    )
+    app.state.self_registration_provisioning_service = SelfRegistrationProvisioningService(
+        db_client=app.state.prisma_manager.client,
+        platform_identity_service=app.state.platform_identity_service,
     )
     app.state.limit_counter = LimitCounter(
         redis_client=app.state.redis,
