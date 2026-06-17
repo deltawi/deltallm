@@ -218,6 +218,8 @@ model DeltaLLM_OrganizationTable {
   created_at        DateTime @default(now())
   updated_at        DateTime @updatedAt
 
+  tier_assignments DeltaLLM_OrganizationTierAssignment[]
+
   @@map("deltallm_organizationtable")
 }
 
@@ -306,6 +308,7 @@ model DeltaLLM_PlatformAccount {
   sent_invitations    DeltaLLM_PlatformInvitation[] @relation("platform_invitation_inviter")
   email_tokens        DeltaLLM_EmailToken[] @relation("email_token_account")
   created_email_tokens DeltaLLM_EmailToken[] @relation("email_token_creator")
+  published_tier_versions DeltaLLM_TierVersion[] @relation("tier_version_publisher")
 
   @@map("deltallm_platformaccount")
 }
@@ -501,6 +504,125 @@ model DeltaLLM_Config {
   updated_at   DateTime @default(now())
 
   @@map("deltallm_config")
+}
+
+model DeltaLLM_Tier {
+  tier_id     String   @id @default(uuid())
+  tier_key    String   @unique(map: "deltallm_tier_tier_key_key")
+  name        String
+  description String?
+  enabled     Boolean  @default(true)
+  metadata    Json?
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  versions    DeltaLLM_TierVersion[]
+  assignments DeltaLLM_OrganizationTierAssignment[]
+
+  @@index([enabled], map: "deltallm_tier_enabled_idx")
+  @@map("deltallm_tier")
+}
+
+model DeltaLLM_TierVersion {
+  tier_version_id        String    @id @default(uuid())
+  tier_id                String
+  version_number         Int
+  status                 String    @default("draft")
+  published_at           DateTime?
+  published_by_account_id String?
+  metadata               Json?
+  created_at             DateTime  @default(now())
+  updated_at             DateTime  @updatedAt
+
+  tier          DeltaLLM_Tier @relation(fields: [tier_id], references: [tier_id], onDelete: Cascade)
+  published_by  DeltaLLM_PlatformAccount? @relation("tier_version_publisher", fields: [published_by_account_id], references: [account_id], onDelete: SetNull)
+  model_policies DeltaLLM_TierModelPolicy[]
+  capacity_pools DeltaLLM_TierCapacityPool[]
+  assignments    DeltaLLM_OrganizationTierAssignment[]
+
+  @@unique([tier_id, version_number], map: "deltallm_tierversion_tier_version_key")
+  @@index([tier_id, status], map: "deltallm_tierversion_tier_status_idx")
+  @@index([status], map: "deltallm_tierversion_status_idx")
+  @@index([published_by_account_id], map: "deltallm_tierversion_published_by_idx")
+  @@map("deltallm_tierversion")
+}
+
+model DeltaLLM_TierModelPolicy {
+  tier_model_policy_id String   @id @default(uuid())
+  tier_version_id      String
+  callable_key         String
+  enabled              Boolean  @default(true)
+  access_mode          String   @default("allow")
+  rpm_limit            Int?
+  tpm_limit            Int?
+  rph_limit            Int?
+  rpd_limit            Int?
+  tpd_limit            Int?
+  max_parallel_requests Int?
+  batch_rpm_limit      Int?
+  batch_tpm_limit      Int?
+  pricing              Json?
+  capacity_pool_key    String?
+  priority             Int      @default(0)
+  metadata             Json?
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  tier_version DeltaLLM_TierVersion @relation(fields: [tier_version_id], references: [tier_version_id], onDelete: Cascade)
+
+  @@unique([tier_version_id, callable_key], map: "deltallm_tiermodelpolicy_version_callable_key")
+  @@index([callable_key], map: "deltallm_tiermodelpolicy_callable_key_idx")
+  @@index([tier_version_id, enabled], map: "deltallm_tiermodelpolicy_version_enabled_idx")
+  @@index([capacity_pool_key], map: "deltallm_tiermodelpolicy_capacity_pool_idx")
+  @@map("deltallm_tiermodelpolicy")
+}
+
+model DeltaLLM_TierCapacityPool {
+  tier_capacity_pool_id String   @id @default(uuid())
+  tier_version_id       String
+  pool_key              String
+  callable_key          String
+  rpm_capacity          Int?
+  tpm_capacity          Int?
+  max_parallel_requests Int?
+  strategy              String   @default("hard_cap")
+  saturation_threshold  Float?
+  burst_multiplier      Float?
+  metadata              Json?
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
+
+  tier_version DeltaLLM_TierVersion @relation(fields: [tier_version_id], references: [tier_version_id], onDelete: Cascade)
+
+  @@unique([tier_version_id, pool_key, callable_key], map: "deltallm_tiercapacitypool_version_pool_callable_key")
+  @@index([tier_version_id, pool_key], map: "deltallm_tiercapacitypool_version_pool_idx")
+  @@index([callable_key], map: "deltallm_tiercapacitypool_callable_key_idx")
+  @@map("deltallm_tiercapacitypool")
+}
+
+model DeltaLLM_OrganizationTierAssignment {
+  assignment_id   String   @id @default(uuid())
+  organization_id String
+  tier_id         String
+  tier_version_id String?
+  assignment_type String   @default("primary")
+  enabled         Boolean  @default(true)
+  weight          Int      @default(1)
+  starts_at       DateTime?
+  ends_at         DateTime?
+  metadata        Json?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  organization DeltaLLM_OrganizationTable @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
+  tier         DeltaLLM_Tier @relation(fields: [tier_id], references: [tier_id], onDelete: Restrict)
+  tier_version DeltaLLM_TierVersion? @relation(fields: [tier_version_id], references: [tier_version_id], onDelete: SetNull)
+
+  @@index([organization_id, enabled], map: "deltallm_orgtierassignment_org_enabled_idx")
+  @@index([organization_id, assignment_type, enabled], map: "deltallm_orgtierassignment_org_type_enabled_idx")
+  @@index([tier_id, enabled], map: "deltallm_orgtierassignment_tier_enabled_idx")
+  @@index([tier_version_id], map: "deltallm_orgtierassignment_tier_version_idx")
+  @@map("deltallm_organizationtierassignment")
 }
 
 model DeltaLLM_NamedCredential {
