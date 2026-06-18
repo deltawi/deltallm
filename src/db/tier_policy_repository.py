@@ -196,6 +196,7 @@ class TierPolicyRepositoryMixin:
         tier_version_id: str,
         pools: list[TierCapacityPoolRecord],
     ) -> list[TierCapacityPoolRecord]:
+        _ensure_unique_capacity_pool_refs(pools)
         if self.prisma is None:
             return []
         self.require_transactions("replace_capacity_pools")
@@ -211,13 +212,6 @@ class TierPolicyRepositoryMixin:
         pools: list[TierCapacityPoolRecord],
     ) -> list[TierCapacityPoolRecord]:
         await self._ensure_draft_tier_version_for_mutation(tier_version_id)
-        await self.prisma.execute_raw(
-            """
-            DELETE FROM deltallm_tiercapacitypool
-            WHERE tier_version_id = $1
-            """,
-            tier_version_id,
-        )
         created: list[TierCapacityPoolRecord] = []
         for pool in pools:
             rows = await self.prisma.query_raw(
@@ -252,6 +246,16 @@ class TierPolicyRepositoryMixin:
                     NOW(),
                     NOW()
                 )
+                ON CONFLICT (tier_version_id, pool_key, callable_key)
+                DO UPDATE SET
+                    rpm_capacity = EXCLUDED.rpm_capacity,
+                    tpm_capacity = EXCLUDED.tpm_capacity,
+                    max_parallel_requests = EXCLUDED.max_parallel_requests,
+                    strategy = EXCLUDED.strategy,
+                    saturation_threshold = EXCLUDED.saturation_threshold,
+                    burst_multiplier = EXCLUDED.burst_multiplier,
+                    metadata = EXCLUDED.metadata,
+                    updated_at = NOW()
                 RETURNING
                     tier_capacity_pool_id,
                     tier_version_id,
@@ -280,7 +284,42 @@ class TierPolicyRepositoryMixin:
             )
             if rows:
                 created.append(to_capacity_pool_record(rows[0]))
+        await self._delete_omitted_capacity_pools(tier_version_id, pools)
         return created
+
+    async def _delete_omitted_capacity_pools(
+        self,
+        tier_version_id: str,
+        pools: list[TierCapacityPoolRecord],
+    ) -> None:
+        if not pools:
+            await self.prisma.execute_raw(
+                """
+                DELETE FROM deltallm_tiercapacitypool
+                WHERE tier_version_id = $1
+                """,
+                tier_version_id,
+            )
+            return
+
+        params: list[Any] = [tier_version_id]
+        keep_clauses: list[str] = []
+        for pool in pools:
+            params.extend([pool.pool_key, pool.callable_key])
+            pool_key_param = len(params) - 1
+            callable_key_param = len(params)
+            keep_clauses.append(
+                f"(pool_key = ${pool_key_param} AND callable_key = ${callable_key_param})"
+            )
+
+        await self.prisma.execute_raw(
+            f"""
+            DELETE FROM deltallm_tiercapacitypool
+            WHERE tier_version_id = $1
+              AND NOT ({" OR ".join(keep_clauses)})
+            """,
+            *params,
+        )
 
     async def _ensure_draft_tier_version_for_mutation(self, tier_version_id: str) -> None:
         rows = await self.prisma.query_raw(
@@ -297,3 +336,12 @@ class TierPolicyRepositoryMixin:
             raise ValueError("tier version does not exist")
         if str(rows[0].get("status") or "").strip().lower() != "draft":
             raise ValueError("tier version policies can only be changed while draft")
+
+
+def _ensure_unique_capacity_pool_refs(pools: list[TierCapacityPoolRecord]) -> None:
+    seen: set[tuple[str, str]] = set()
+    for pool in pools:
+        ref = (pool.pool_key, pool.callable_key)
+        if ref in seen:
+            raise ValueError("capacity pools must have unique pool_key and callable_key pairs")
+        seen.add(ref)
