@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 from time import perf_counter
 from typing import Any
@@ -29,6 +30,7 @@ from src.models.platform_auth import (
     ResetPasswordRequest,
     ResetPasswordTokenResponse,
 )
+from src.services.platform_identity_service import AccountInactiveError, LoginSessionCreationError
 from src.services.ui_authorization import build_ui_access, effective_permissions_for_context
 from src.services.sso_state_store import SSOStateStoreError
 
@@ -92,6 +94,306 @@ def _outbox_service_for_db(service: Any, db_client: Any) -> Any:
             feedback_repository=EmailFeedbackRepository(db_client),
         )
     return service
+
+
+def _normalized_email_domain(email: str) -> str | None:
+    local_part, separator, domain = str(email or "").strip().lower().rpartition("@")
+    if not separator or not local_part or not domain:
+        return None
+    return domain
+
+
+def _sso_provider_subject(response_payload: dict[str, Any], *, fallback_email: str) -> str:
+    for key in ("provider_subject", "subject", "user_id"):
+        subject = str(response_payload.get(key) or "").strip()
+        if subject:
+            return subject
+    return fallback_email
+
+
+def _sso_email_verified(response_payload: dict[str, Any]) -> bool | None:
+    value = response_payload.get("email_verified")
+    if isinstance(value, bool):
+        return value
+    return None
+
+
+def _is_self_registration_enabled(settings: Any) -> bool:
+    return bool(settings is not None and getattr(settings, "enabled", False))
+
+
+def _is_allowed_self_registration_domain(settings: Any, *, email: str) -> bool:
+    domain = _normalized_email_domain(email)
+    if domain is None:
+        return False
+    allowed_domains = {
+        str(item or "").strip().lower()
+        for item in (getattr(settings, "allowed_domains", None) or [])
+        if str(item or "").strip()
+    }
+    return domain in allowed_domains
+
+
+@dataclass(frozen=True)
+class _ExistingSSOAccountMatch:
+    account: dict[str, Any]
+    matched_by_identity: bool
+
+
+async def _emit_self_registration_blocked(
+    *,
+    request: Request,
+    request_start: float,
+    email: str,
+    provider: str,
+    reason: str,
+    detail: str,
+) -> None:
+    await emit_control_audit_event(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.AUTH_SELF_REGISTRATION_BLOCKED,
+        status="error",
+        resource_type="account",
+        request_payload={
+            "provider": provider,
+            "email": email,
+            "email_domain": _normalized_email_domain(email),
+            "reason": reason,
+        },
+        response_payload={"detail": detail},
+        critical=True,
+    )
+
+
+async def _enforce_self_registration_email_verified(
+    *,
+    request: Request,
+    request_start: float,
+    email: str,
+    provider: str,
+    email_verified: bool | None,
+    settings: Any,
+) -> None:
+    if not bool(getattr(settings, "require_email_verification", True)) or email_verified is True:
+        return
+
+    detail = "SSO email is not verified"
+    await _emit_self_registration_blocked(
+        request=request,
+        request_start=request_start,
+        email=email,
+        provider=provider,
+        reason="email_not_verified",
+        detail=detail,
+    )
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+
+async def _emit_self_registration_provisioning_failed(
+    *,
+    request: Request,
+    request_start: float,
+    email: str,
+    provider: str,
+    error: Exception,
+) -> None:
+    await emit_control_audit_event(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.AUTH_SELF_REGISTRATION_PROVISIONING_FAILED,
+        status="error",
+        resource_type="account",
+        request_payload={
+            "provider": provider,
+            "email": email,
+            "email_domain": _normalized_email_domain(email),
+        },
+        error=error,
+        critical=True,
+    )
+
+
+async def _existing_sso_account(
+    *,
+    identity_service: Any,
+    email: str,
+    provider: str,
+    subject: str,
+) -> _ExistingSSOAccountMatch | None:
+    if hasattr(identity_service, "get_account_by_sso_identity"):
+        account = await identity_service.get_account_by_sso_identity(provider=provider, subject=subject)
+        if account is not None:
+            return _ExistingSSOAccountMatch(account=dict(account), matched_by_identity=True)
+    if hasattr(identity_service, "get_account_by_email"):
+        account = await identity_service.get_account_by_email(email)
+        if account is not None:
+            return _ExistingSSOAccountMatch(account=dict(account), matched_by_identity=False)
+    return None
+
+
+async def _create_sso_login_for_existing_account(
+    *,
+    identity_service: Any,
+    account: dict[str, Any],
+    email: str,
+    provider: str,
+    subject: str,
+) -> Any:
+    account_id = str(account.get("account_id") or "").strip()
+    if not account_id:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to establish session")
+    if not bool(account.get("is_active", True)):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account is inactive")
+
+    try:
+        create_sso_login = getattr(identity_service, "create_sso_login_for_existing_account", None)
+        if not callable(create_sso_login):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Auth service unavailable",
+            )
+
+        login = await create_sso_login(
+            account_id=account_id,
+            email=email,
+            provider=provider,
+            subject=subject,
+        )
+        if login is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to establish session",
+            )
+        return login
+    except AccountInactiveError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account is inactive") from exc
+    except LoginSessionCreationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to establish session",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+
+async def _create_self_registered_sso_login(
+    *,
+    request: Request,
+    request_start: float,
+    email: str,
+    provider: str,
+    subject: str,
+    email_verified: bool | None,
+    settings: Any,
+) -> Any:
+    if getattr(settings, "mode", "sso_allowed_domain") != "sso_allowed_domain":
+        detail = "Self-registration approval workflow is not available"
+        await _emit_self_registration_blocked(
+            request=request,
+            request_start=request_start,
+            email=email,
+            provider=provider,
+            reason="unsupported_mode",
+            detail=detail,
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+    if bool(getattr(settings, "require_admin_approval", False)):
+        detail = "Self-registration requires admin approval"
+        await _emit_self_registration_blocked(
+            request=request,
+            request_start=request_start,
+            email=email,
+            provider=provider,
+            reason="admin_approval_required",
+            detail=detail,
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+    await _enforce_self_registration_email_verified(
+        request=request,
+        request_start=request_start,
+        email=email,
+        provider=provider,
+        email_verified=email_verified,
+        settings=settings,
+    )
+
+    if not _is_allowed_self_registration_domain(settings, email=email):
+        detail = "Email domain is not allowed for self-registration"
+        await _emit_self_registration_blocked(
+            request=request,
+            request_start=request_start,
+            email=email,
+            provider=provider,
+            reason="domain_not_allowed",
+            detail=detail,
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+    provisioner = getattr(request.app.state, "self_registration_provisioning_service", None)
+    if provisioner is None:
+        exc = RuntimeError("self-registration provisioning service unavailable")
+        await _emit_self_registration_provisioning_failed(
+            request=request,
+            request_start=request_start,
+            email=email,
+            provider=provider,
+            error=exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Self-registration service unavailable",
+        ) from exc
+
+    try:
+        sso_login = await provisioner.provision_sso_from_defaults(
+            email=email,
+            settings=settings,
+            provider=provider,
+            subject=subject,
+            is_active=True,
+        )
+        result = sso_login.provisioning
+        login = sso_login.login
+    except Exception as exc:
+        await _emit_self_registration_provisioning_failed(
+            request=request,
+            request_start=request_start,
+            email=email,
+            provider=provider,
+            error=exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to provision self-registration account",
+        ) from exc
+
+    await emit_control_audit_event(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.AUTH_SELF_REGISTRATION_ACCEPTED,
+        status="success",
+        actor_id=result.account_id,
+        organization_id=result.organization_id,
+        resource_type="account",
+        resource_id=result.account_id,
+        request_payload={
+            "provider": provider,
+            "email": email,
+            "email_domain": _normalized_email_domain(email),
+        },
+        response_payload={
+            "account_id": result.account_id,
+            "organization_id": result.organization_id,
+            "team_id": result.team_id,
+            "user_id": result.user_id,
+            "team_role": result.team_role,
+        },
+        critical=True,
+    )
+    return login
 
 
 async def _enforce_auth_rate_limit(
@@ -809,31 +1111,91 @@ async def auth_callback(request: Request, code: str = Query(default=""), state: 
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired SSO state")
 
         response_payload = await handler.handle_callback(code, code_verifier=code_verifier)
-        email = response_payload.get("email")
-        if not isinstance(email, str) or not email:
+        raw_email = response_payload.get("email")
+        if not isinstance(raw_email, str) or not raw_email.strip():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid SSO email")
 
         app_config = getattr(request.app.state, "app_config", None)
-        admins = set(getattr(getattr(app_config, "general_settings", None), "sso_admin_email_list", []) or [])
+        general_settings = getattr(app_config, "general_settings", None)
         identity_service = getattr(request.app.state, "platform_identity_service", None)
 
         if identity_service is None:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable")
 
-        provider = str(getattr(getattr(app_config, "general_settings", None), "sso_provider", "sso"))
-        subject = response_payload.get("user_id") or response_payload.get("email")
-        login = await identity_service.upsert_sso_account(
-            email=email,
-            is_platform_admin=email in admins,
-            provider=provider,
-            subject=str(subject) if subject else None,
-            team_id=response_payload.get("team_id"),
-            default_team_role=TeamRole.VIEWER,
+        normalized_email = (
+            identity_service.normalize_email(raw_email)
+            if hasattr(identity_service, "normalize_email")
+            else str(raw_email or "").strip().lower()
         )
+        if not normalized_email:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid SSO email")
+
+        admins = {
+            str(item or "").strip().lower()
+            for item in (getattr(general_settings, "sso_admin_email_list", []) or [])
+            if str(item or "").strip()
+        }
+        is_platform_admin = normalized_email in admins
+        provider = str(getattr(general_settings, "sso_provider", "sso") or "sso")
+        subject = _sso_provider_subject(response_payload, fallback_email=normalized_email)
+        email_verified = _sso_email_verified(response_payload)
+        self_registration_settings = getattr(general_settings, "self_registration", None)
+
+        if _is_self_registration_enabled(self_registration_settings) and not is_platform_admin:
+            existing_account = await _existing_sso_account(
+                identity_service=identity_service,
+                email=normalized_email,
+                provider=provider,
+                subject=subject,
+            )
+            if existing_account is None:
+                login = await _create_self_registered_sso_login(
+                    request=request,
+                    request_start=request_start,
+                    email=normalized_email,
+                    provider=provider,
+                    subject=subject,
+                    email_verified=email_verified,
+                    settings=self_registration_settings,
+                )
+            else:
+                if not existing_account.matched_by_identity:
+                    await _enforce_self_registration_email_verified(
+                        request=request,
+                        request_start=request_start,
+                        email=normalized_email,
+                        provider=provider,
+                        email_verified=email_verified,
+                        settings=self_registration_settings,
+                    )
+                login = await _create_sso_login_for_existing_account(
+                    identity_service=identity_service,
+                    account=existing_account.account,
+                    email=normalized_email,
+                    provider=provider,
+                    subject=subject,
+                )
+        else:
+            try:
+                login = await identity_service.upsert_sso_account(
+                    email=normalized_email,
+                    is_platform_admin=is_platform_admin,
+                    provider=provider,
+                    subject=subject,
+                    team_id=response_payload.get("team_id"),
+                    default_team_role=TeamRole.VIEWER,
+                )
+            except LoginSessionCreationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to establish session",
+                ) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
         if login is None:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to establish session")
 
-        ttl = int(getattr(getattr(app_config, "general_settings", None), "auth_session_ttl_hours", 12) * 3600)
+        ttl = int(getattr(general_settings, "auth_session_ttl_hours", 12) * 3600)
 
         response = RedirectResponse(url="/", status_code=302)
         _set_session_cookie(response, login.session_token, ttl)

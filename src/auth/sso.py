@@ -105,12 +105,16 @@ class SSOAuthHandler:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing access token")
 
         user_info = await self._get_userinfo(access_token)
-        email = user_info.get("email")
+        raw_email = user_info.get("email")
+        email = str(raw_email or "").strip().lower()
         if not email:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email not provided by SSO provider")
         await self._enforce_callback_rate_limit(email)
 
-        is_admin = email in (self.config.admin_email_list or [])
+        provider_subject = self._extract_provider_subject(user_info, fallback_email=email)
+        email_verified = self._extract_email_verified(user_info)
+        admin_emails = {str(item or "").strip().lower() for item in (self.config.admin_email_list or [])}
+        is_admin = email in admin_emails
         user = await self.users.get_or_create_by_email(
             email=email,
             defaults={
@@ -125,8 +129,35 @@ class SSOAuthHandler:
             "email": email,
             "role": user.user_role,
             "team_id": user.team_id,
+            "provider_subject": provider_subject,
+            "email_verified": email_verified,
             "token": self._generate_session_token(user),
         }
+
+    def _extract_provider_subject(self, user_info: dict[str, Any], *, fallback_email: str) -> str:
+        for key in ("sub", "id", "oid", "user_id"):
+            value = user_info.get(key)
+            subject = str(value or "").strip()
+            if subject:
+                return subject
+        return fallback_email
+
+    def _extract_email_verified(self, user_info: dict[str, Any]) -> bool | None:
+        for key in ("email_verified", "verified_email"):
+            if key not in user_info:
+                continue
+            value = user_info.get(key)
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                normalized = value.strip().lower()
+                if normalized in {"true", "1", "yes"}:
+                    return True
+                if normalized in {"false", "0", "no"}:
+                    return False
+            if isinstance(value, int):
+                return value == 1
+        return None
 
     async def _exchange_code(self, code: str, code_verifier: str | None = None) -> dict[str, Any]:
         payload = {

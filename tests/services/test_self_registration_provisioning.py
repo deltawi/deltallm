@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import copy
 import json
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -288,14 +290,125 @@ class FakeSelfRegistrationDB:
         return 1
 
 
+class TransactionalFakeSelfRegistrationDB(FakeSelfRegistrationDB):
+    def tx(self) -> "_FakeTransaction":
+        return _FakeTransaction(self)
+
+
+class _FakeTransaction:
+    def __init__(self, db: TransactionalFakeSelfRegistrationDB) -> None:
+        self.db = db
+        self.snapshot: dict[str, Any] = {}
+
+    async def __aenter__(self) -> TransactionalFakeSelfRegistrationDB:
+        self.snapshot = {
+            "accounts": copy.deepcopy(self.db.accounts),
+            "organizations": copy.deepcopy(self.db.organizations),
+            "teams": copy.deepcopy(self.db.teams),
+            "users": copy.deepcopy(self.db.users),
+            "organization_memberships": copy.deepcopy(self.db.organization_memberships),
+            "team_memberships": copy.deepcopy(self.db.team_memberships),
+        }
+        return self.db
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
+        if exc_type is not None:
+            self.db.accounts = self.snapshot["accounts"]
+            self.db.organizations = self.snapshot["organizations"]
+            self.db.teams = self.snapshot["teams"]
+            self.db.users = self.snapshot["users"]
+            self.db.organization_memberships = self.snapshot["organization_memberships"]
+            self.db.team_memberships = self.snapshot["team_memberships"]
+        return False
+
+
+class SuccessfulSSOIdentityService(PlatformIdentityService):
+    def __init__(self, *, db_client: Any, salt: str = "salt-key", session_ttl_hours: int = 12) -> None:
+        super().__init__(db_client=db_client, salt=salt, session_ttl_hours=session_ttl_hours)
+        self.identity_links: list[dict[str, str]] = []
+        self.last_logins: list[str] = []
+
+    def with_db(self, db_client: Any) -> "SuccessfulSSOIdentityService":
+        replacement = SuccessfulSSOIdentityService(
+            db_client=db_client,
+            salt=self.salt,
+            session_ttl_hours=self.session_ttl_hours,
+        )
+        replacement.identity_links = self.identity_links
+        replacement.last_logins = self.last_logins
+        return replacement
+
+    async def link_sso_identity(
+        self,
+        *,
+        account_id: str,
+        email: str,
+        provider: str = "sso",
+        subject: str | None = None,
+    ) -> None:
+        self.identity_links.append(
+            {
+                "account_id": account_id,
+                "email": self.normalize_email(email),
+                "provider": provider,
+                "subject": str(subject or email),
+            }
+        )
+
+    async def create_login_result_for_account(self, account_id: str):  # noqa: ANN201
+        return SimpleNamespace(
+            session_token=f"session-{account_id}",
+            context=SimpleNamespace(account_id=account_id),
+        )
+
+    async def mark_last_login(self, account_id: str) -> None:
+        self.last_logins.append(account_id)
+
+
+class LinkFailingSSOIdentityService(SuccessfulSSOIdentityService):
+    def with_db(self, db_client: Any) -> "LinkFailingSSOIdentityService":
+        return LinkFailingSSOIdentityService(
+            db_client=db_client,
+            salt=self.salt,
+            session_ttl_hours=self.session_ttl_hours,
+        )
+
+    async def link_sso_identity(
+        self,
+        *,
+        account_id: str,
+        email: str,
+        provider: str = "sso",
+        subject: str | None = None,
+    ) -> None:
+        del account_id, email, provider, subject
+        raise RuntimeError("identity link failed")
+
+
+class SessionFailingSSOIdentityService(SuccessfulSSOIdentityService):
+    def with_db(self, db_client: Any) -> "SessionFailingSSOIdentityService":
+        return SessionFailingSSOIdentityService(
+            db_client=db_client,
+            salt=self.salt,
+            session_ttl_hours=self.session_ttl_hours,
+        )
+
+    async def create_login_result_for_account(self, account_id: str):  # noqa: ANN201
+        del account_id
+        return None
+
+
 def _normalize_sql(query: str) -> str:
     return " ".join(query.lower().split())
 
 
-def _service(db: FakeSelfRegistrationDB) -> SelfRegistrationProvisioningService:
+def _service(
+    db: FakeSelfRegistrationDB,
+    identity_service: PlatformIdentityService | None = None,
+) -> SelfRegistrationProvisioningService:
     return SelfRegistrationProvisioningService(
         db_client=db,
-        platform_identity_service=PlatformIdentityService(db_client=db, salt="salt-key"),
+        platform_identity_service=identity_service or PlatformIdentityService(db_client=db, salt="salt-key"),
     )
 
 
@@ -412,6 +525,95 @@ async def test_provision_from_defaults_returns_existing_runtime_user_for_same_em
     assert "acct-1" not in db.users
     assert db.users["legacy-user"]["max_budget"] == 500
     assert db.users["legacy-user"]["team_id"] == "legacy-team"
+
+
+@pytest.mark.asyncio
+async def test_provision_sso_from_defaults_links_identity_and_creates_login_in_transaction() -> None:
+    db = TransactionalFakeSelfRegistrationDB()
+    identity_service = SuccessfulSSOIdentityService(db_client=db)
+    service = _service(db, identity_service)
+
+    result = await service.provision_sso_from_defaults(
+        email="Developer@Example.com",
+        settings=_enabled_settings(),
+        provider="oidc",
+        subject="provider-subject-1",
+    )
+
+    assert result.provisioning.account_id == "acct-1"
+    assert result.login.session_token == "session-acct-1"
+    assert identity_service.identity_links == [
+        {
+            "account_id": "acct-1",
+            "email": "developer@example.com",
+            "provider": "oidc",
+            "subject": "provider-subject-1",
+        }
+    ]
+    assert identity_service.last_logins == ["acct-1"]
+    assert db.accounts["acct-1"]["email"] == "developer@example.com"
+    assert ("acct-1", "team-self-serve") in db.team_memberships
+
+
+@pytest.mark.asyncio
+async def test_provision_sso_from_defaults_requires_transaction_support() -> None:
+    db = FakeSelfRegistrationDB()
+    service = _service(db, SuccessfulSSOIdentityService(db_client=db))
+
+    with pytest.raises(RuntimeError, match="transactions are required"):
+        await service.provision_sso_from_defaults(
+            email="developer@example.com",
+            settings=_enabled_settings(),
+            provider="oidc",
+            subject="provider-subject-1",
+        )
+
+    assert db.accounts == {}
+    assert db.organizations == {}
+    assert db.teams == {}
+    assert db.users == {}
+
+
+@pytest.mark.asyncio
+async def test_provision_sso_from_defaults_rolls_back_when_identity_link_fails() -> None:
+    db = TransactionalFakeSelfRegistrationDB()
+    service = _service(db, LinkFailingSSOIdentityService(db_client=db))
+
+    with pytest.raises(RuntimeError, match="identity link failed"):
+        await service.provision_sso_from_defaults(
+            email="developer@example.com",
+            settings=_enabled_settings(),
+            provider="oidc",
+            subject="provider-subject-1",
+        )
+
+    assert db.accounts == {}
+    assert db.organizations == {}
+    assert db.teams == {}
+    assert db.users == {}
+    assert db.organization_memberships == {}
+    assert db.team_memberships == {}
+
+
+@pytest.mark.asyncio
+async def test_provision_sso_from_defaults_rolls_back_when_login_session_creation_fails() -> None:
+    db = TransactionalFakeSelfRegistrationDB()
+    service = _service(db, SessionFailingSSOIdentityService(db_client=db))
+
+    with pytest.raises(RuntimeError, match="failed to establish self-registration session"):
+        await service.provision_sso_from_defaults(
+            email="developer@example.com",
+            settings=_enabled_settings(),
+            provider="oidc",
+            subject="provider-subject-1",
+        )
+
+    assert db.accounts == {}
+    assert db.organizations == {}
+    assert db.teams == {}
+    assert db.users == {}
+    assert db.organization_memberships == {}
+    assert db.team_memberships == {}
 
 
 @pytest.mark.asyncio
