@@ -23,6 +23,7 @@ from src.db.named_credentials import NamedCredentialRepository
 from src.db.prompt_registry import PromptRegistryRepository
 from src.db.repositories import ModelDeploymentRepository
 from src.db.route_groups import RouteGroupRepository
+from src.db.tiers import TierRepository
 from src.providers.anthropic import AnthropicAdapter
 from src.providers.bedrock import BedrockAdapter
 from src.providers.azure import AzureOpenAIAdapter
@@ -99,6 +100,7 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
     )
     app.state.callable_target_scope_policy_repository = CallableTargetScopePolicyRepository(prisma_manager.client)
     app.state.route_group_repository = RouteGroupRepository(prisma_manager.client)
+    app.state.tier_repository = TierRepository(prisma_manager.client)
     app.state.prompt_registry_repository = PromptRegistryRepository(prisma_manager.client)
     app.state.mcp_repository = MCPRepository(prisma_manager.client)
     app.state.mcp_scope_policy_repository = MCPScopePolicyRepository(prisma_manager.client)

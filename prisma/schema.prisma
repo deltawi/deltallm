@@ -540,6 +540,7 @@ model DeltaLLM_TierVersion {
   assignments    DeltaLLM_OrganizationTierAssignment[]
 
   @@unique([tier_id, version_number], map: "deltallm_tierversion_tier_version_key")
+  @@unique([tier_version_id, tier_id], map: "deltallm_tierversion_id_tier_key")
   @@index([tier_id, status], map: "deltallm_tierversion_tier_status_idx")
   @@index([status], map: "deltallm_tierversion_status_idx")
   @@index([published_by_account_id], map: "deltallm_tierversion_published_by_idx")
@@ -568,11 +569,13 @@ model DeltaLLM_TierModelPolicy {
   updated_at           DateTime @updatedAt
 
   tier_version DeltaLLM_TierVersion @relation(fields: [tier_version_id], references: [tier_version_id], onDelete: Cascade)
+  capacity_pool DeltaLLM_TierCapacityPool? @relation("tier_model_policy_capacity_pool", fields: [tier_version_id, capacity_pool_key, callable_key], references: [tier_version_id, pool_key, callable_key], onDelete: NoAction, onUpdate: Cascade, map: "deltallm_tiermodelpolicy_capacity_pool_fkey")
 
   @@unique([tier_version_id, callable_key], map: "deltallm_tiermodelpolicy_version_callable_key")
   @@index([callable_key], map: "deltallm_tiermodelpolicy_callable_key_idx")
   @@index([tier_version_id, enabled], map: "deltallm_tiermodelpolicy_version_enabled_idx")
   @@index([capacity_pool_key], map: "deltallm_tiermodelpolicy_capacity_pool_idx")
+  @@index([tier_version_id, capacity_pool_key, callable_key], map: "deltallm_tiermodelpolicy_capacity_pool_fk_idx")
   @@map("deltallm_tiermodelpolicy")
 }
 
@@ -592,6 +595,7 @@ model DeltaLLM_TierCapacityPool {
   updated_at            DateTime @updatedAt
 
   tier_version DeltaLLM_TierVersion @relation(fields: [tier_version_id], references: [tier_version_id], onDelete: Cascade)
+  model_policies DeltaLLM_TierModelPolicy[] @relation("tier_model_policy_capacity_pool")
 
   @@unique([tier_version_id, pool_key, callable_key], map: "deltallm_tiercapacitypool_version_pool_callable_key")
   @@index([tier_version_id, pool_key], map: "deltallm_tiercapacitypool_version_pool_idx")
@@ -615,7 +619,7 @@ model DeltaLLM_OrganizationTierAssignment {
 
   organization DeltaLLM_OrganizationTable @relation(fields: [organization_id], references: [organization_id], onDelete: Cascade)
   tier         DeltaLLM_Tier @relation(fields: [tier_id], references: [tier_id], onDelete: Restrict)
-  tier_version DeltaLLM_TierVersion? @relation(fields: [tier_version_id], references: [tier_version_id], onDelete: SetNull)
+  tier_version DeltaLLM_TierVersion? @relation(fields: [tier_version_id, tier_id], references: [tier_version_id, tier_id], onDelete: Restrict)
 
   @@index([organization_id, enabled], map: "deltallm_orgtierassignment_org_enabled_idx")
   @@index([organization_id, assignment_type, enabled], map: "deltallm_orgtierassignment_org_type_enabled_idx")
