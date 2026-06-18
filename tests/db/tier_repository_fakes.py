@@ -14,6 +14,7 @@ class _FakePrisma:
         version_lookup_status: str = "draft",
         unpinned_assignment_count: int = 0,
         pinned_assignment_count: int = 0,
+        active_assignment_count: int = 0,
         current_active_version_id: str | None = "ver-active",
         assignment_rows: dict[str, dict[str, object]] | None = None,
     ) -> None:
@@ -28,6 +29,7 @@ class _FakePrisma:
         self.version_lookup_status = version_lookup_status
         self.unpinned_assignment_count = unpinned_assignment_count
         self.pinned_assignment_count = pinned_assignment_count
+        self.active_assignment_count = active_assignment_count
         self.current_active_version_id = current_active_version_id
         self.assignment_rows = dict(assignment_rows or {})
         self.tx_clients: list[_FakePrisma] = []
@@ -58,6 +60,13 @@ class _FakePrisma:
             return [{"tier_id": params[0]}]
         if "SELECT COUNT(*)::int AS overlap_count" in sql:
             return [{"overlap_count": self.overlap_count}]
+        if (
+            "SELECT COUNT(*)::int AS count" in sql
+            and "FROM deltallm_organizationtierassignment" in sql
+        ):
+            if "enabled = TRUE" in sql:
+                return [{"count": self.active_assignment_count}]
+            return [{"count": len(self.assignment_rows)}]
         if "tier_version_id IS NULL" in sql:
             return [{"assignment_count": self.unpinned_assignment_count}]
         if "WHERE tier_version_id = $1" in sql and "enabled = TRUE" in sql:
@@ -220,6 +229,7 @@ class _FakeTxContext:
             version_lookup_status=self.root.version_lookup_status,
             unpinned_assignment_count=self.root.unpinned_assignment_count,
             pinned_assignment_count=self.root.pinned_assignment_count,
+            active_assignment_count=self.root.active_assignment_count,
             current_active_version_id=self.root.current_active_version_id,
             assignment_rows=self.root.assignment_rows,
         )
