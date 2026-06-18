@@ -30,6 +30,14 @@ class AccountAuthState:
     has_sso_identity: bool
 
 
+class AccountInactiveError(RuntimeError):
+    pass
+
+
+class LoginSessionCreationError(RuntimeError):
+    pass
+
+
 class PlatformIdentityService:
     def __init__(self, db_client: Any, salt: str, session_ttl_hours: int = 12) -> None:
         self.db = db_client
@@ -143,50 +151,101 @@ class PlatformIdentityService:
         if self.db is None:
             return None
 
-        role = PlatformRole.ADMIN if is_platform_admin else "org_user"
+        if hasattr(self.db, "tx"):
+            async with self.db.tx() as tx:
+                identity_service = self.with_db(tx)
+                return await identity_service._upsert_sso_account(
+                    email=email,
+                    is_platform_admin=is_platform_admin,
+                    provider=provider,
+                    subject=subject,
+                    team_id=team_id,
+                    default_team_role=default_team_role,
+                )
+
+        return await self._upsert_sso_account(
+            email=email,
+            is_platform_admin=is_platform_admin,
+            provider=provider,
+            subject=subject,
+            team_id=team_id,
+            default_team_role=default_team_role,
+        )
+
+    async def _upsert_sso_account(
+        self,
+        email: str,
+        is_platform_admin: bool,
+        provider: str,
+        subject: str | None,
+        team_id: str | None,
+        default_team_role: str,
+    ) -> LoginResult | None:
+        role = PlatformRole.ADMIN if is_platform_admin else PlatformRole.ORG_USER
         normalized_email = self.normalize_email(email)
-        await self.db.execute_raw(
-            """
-            INSERT INTO deltallm_platformaccount (
-                account_id, email, role, is_active, force_password_change,
-                mfa_enabled, created_at, updated_at
-            )
-            VALUES (gen_random_uuid(), $1, $2, true, false, false, NOW(), NOW())
-            ON CONFLICT (email)
-            DO UPDATE SET role = EXCLUDED.role, is_active = true, updated_at = NOW()
-            """,
-            normalized_email,
-            role,
+        if not normalized_email:
+            raise ValueError("email is required")
+        normalized_provider = str(provider or "sso").strip() or "sso"
+        normalized_subject = str(subject or normalized_email).strip()
+        if not normalized_subject:
+            raise ValueError("subject is required")
+
+        linked_account = await self.get_account_by_sso_identity(
+            provider=normalized_provider,
+            subject=normalized_subject,
         )
-        await self.db.execute_raw(
-            """
-            INSERT INTO deltallm_platformidentity (
-                identity_id, account_id, provider, subject, email, created_at, updated_at
+        if linked_account is not None:
+            linked_account_id = str(linked_account.get("account_id") or "").strip()
+            if not linked_account_id:
+                raise RuntimeError("linked SSO account is invalid")
+            await self._reconcile_sso_identity_for_account(
+                account_id=linked_account_id,
+                email=normalized_email,
+                provider=normalized_provider,
+                subject=normalized_subject,
+                role=role,
+                is_active=True,
             )
-            SELECT gen_random_uuid(), account_id, $2, $3, $1, NOW(), NOW()
-            FROM deltallm_platformaccount
-            WHERE lower(email) = lower($1)
-            ON CONFLICT (provider, subject)
-            DO UPDATE SET email = EXCLUDED.email, updated_at = NOW()
-            """,
-            normalized_email,
-            provider,
-            subject or normalized_email,
-        )
+            account_id = linked_account_id
+        else:
+            await self.db.execute_raw(
+                """
+                INSERT INTO deltallm_platformaccount (
+                    account_id, email, role, is_active, force_password_change,
+                    mfa_enabled, created_at, updated_at
+                )
+                VALUES (gen_random_uuid(), $1, $2, true, false, false, NOW(), NOW())
+                ON CONFLICT (email)
+                DO UPDATE SET role = EXCLUDED.role, is_active = true, updated_at = NOW()
+                """,
+                normalized_email,
+                role,
+            )
+            account = await self.get_account_by_email(normalized_email)
+            if account is None:
+                raise LoginSessionCreationError("Failed to establish session")
+            account_id = str(account.get("account_id") or "").strip()
+            if not account_id:
+                raise RuntimeError("failed to load SSO account")
+
+            await self.link_sso_identity(
+                account_id=account_id,
+                email=normalized_email,
+                provider=normalized_provider,
+                subject=normalized_subject,
+            )
         if not is_platform_admin and team_id:
             await self.db.execute_raw(
                 """
                 INSERT INTO deltallm_teammembership (membership_id, account_id, team_id, role, created_at, updated_at)
-                SELECT gen_random_uuid(), account_id, $2, $3, NOW(), NOW()
-                FROM deltallm_platformaccount
-                WHERE lower(email) = lower($1)
+                VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
                 ON CONFLICT (account_id, team_id)
                 DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
                 """,
-                    normalized_email,
-                    team_id,
-                    default_team_role,
-                )
+                account_id,
+                team_id,
+                default_team_role,
+            )
             org_rows = await self.db.query_raw(
                 "SELECT organization_id FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
                 team_id,
@@ -196,27 +255,168 @@ class PlatformIdentityService:
                 await self.db.execute_raw(
                     """
                     INSERT INTO deltallm_organizationmembership (membership_id, account_id, organization_id, role, created_at, updated_at)
-                    SELECT gen_random_uuid(), account_id, $2, $3, NOW(), NOW()
-                    FROM deltallm_platformaccount
-                    WHERE lower(email) = lower($1)
+                    VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
                     ON CONFLICT (account_id, organization_id)
                     DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()
                     """,
-                    normalized_email,
+                    account_id,
                     organization_id,
                     OrganizationRole.MEMBER,
                 )
 
-        token = await self._create_session_from_email(email=normalized_email, mfa_verified=False)
-        context = await self.get_context_for_session(token)
-        if context is None:
+        login = await self.create_login_result_for_account(account_id)
+        if login is None:
+            raise LoginSessionCreationError("Failed to establish session")
+        await self.mark_last_login(account_id)
+        return login
+
+    async def create_sso_login_for_existing_account(
+        self,
+        *,
+        account_id: str,
+        email: str,
+        provider: str = "sso",
+        subject: str | None = None,
+    ) -> LoginResult | None:
+        if self.db is None:
             return None
-        return LoginResult(
-            context=context,
-            session_token=token,
-            mfa_required=False,
-            mfa_prompt=not context.mfa_enabled,
+
+        if hasattr(self.db, "tx"):
+            async with self.db.tx() as tx:
+                identity_service = self.with_db(tx)
+                return await identity_service._create_sso_login_for_existing_account(
+                    account_id=account_id,
+                    email=email,
+                    provider=provider,
+                    subject=subject,
+                )
+
+        return await self._create_sso_login_for_existing_account(
+            account_id=account_id,
+            email=email,
+            provider=provider,
+            subject=subject,
         )
+
+    async def _create_sso_login_for_existing_account(
+        self,
+        *,
+        account_id: str,
+        email: str,
+        provider: str = "sso",
+        subject: str | None = None,
+    ) -> LoginResult:
+        normalized_account_id = str(account_id or "").strip()
+        if not normalized_account_id:
+            raise ValueError("account_id is required")
+
+        account = await self.get_account_by_id(normalized_account_id)
+        if account is None:
+            raise RuntimeError("SSO account not found")
+        if not bool(account.get("is_active", True)):
+            raise AccountInactiveError("Account is inactive")
+
+        await self._reconcile_sso_identity_for_account(
+            account_id=normalized_account_id,
+            email=email,
+            provider=provider,
+            subject=subject,
+        )
+        login = await self.create_login_result_for_account(normalized_account_id)
+        if login is None:
+            raise LoginSessionCreationError("Failed to establish session")
+        await self.mark_last_login(normalized_account_id)
+        return login
+
+    async def reconcile_sso_identity_for_account(
+        self,
+        *,
+        account_id: str,
+        email: str,
+        provider: str = "sso",
+        subject: str | None = None,
+        role: str | None = None,
+        is_active: bool | None = None,
+    ) -> dict[str, Any]:
+        if self.db is None:
+            return {
+                "account_id": str(account_id or "").strip(),
+                "email": self.normalize_email(email),
+                "role": role,
+                "is_active": is_active,
+            }
+
+        if hasattr(self.db, "tx"):
+            async with self.db.tx() as tx:
+                identity_service = self.with_db(tx)
+                return await identity_service._reconcile_sso_identity_for_account(
+                    account_id=account_id,
+                    email=email,
+                    provider=provider,
+                    subject=subject,
+                    role=role,
+                    is_active=is_active,
+                )
+
+        return await self._reconcile_sso_identity_for_account(
+            account_id=account_id,
+            email=email,
+            provider=provider,
+            subject=subject,
+            role=role,
+            is_active=is_active,
+        )
+
+    async def _reconcile_sso_identity_for_account(
+        self,
+        *,
+        account_id: str,
+        email: str,
+        provider: str = "sso",
+        subject: str | None = None,
+        role: str | None = None,
+        is_active: bool | None = None,
+    ) -> dict[str, Any]:
+        normalized_account_id = str(account_id or "").strip()
+        normalized_email = self.normalize_email(email)
+        normalized_provider = str(provider or "sso").strip() or "sso"
+        normalized_subject = str(subject or normalized_email).strip()
+        if not normalized_account_id:
+            raise ValueError("account_id is required")
+        if not normalized_email:
+            raise ValueError("email is required")
+        if not normalized_subject:
+            raise ValueError("subject is required")
+
+        email_account = await self.get_account_by_email(normalized_email)
+        email_account_id = str((email_account or {}).get("account_id") or "").strip()
+        if email_account_id and email_account_id != normalized_account_id:
+            raise ValueError("SSO email is already linked to another account")
+
+        await self.db.execute_raw(
+            """
+            UPDATE deltallm_platformaccount
+            SET email = $2,
+                role = COALESCE($3::text, role),
+                is_active = COALESCE($4::boolean, is_active),
+                updated_at = NOW()
+            WHERE account_id = $1
+            """,
+            normalized_account_id,
+            normalized_email,
+            role,
+            is_active,
+        )
+        await self.link_sso_identity(
+            account_id=normalized_account_id,
+            email=normalized_email,
+            provider=normalized_provider,
+            subject=normalized_subject,
+        )
+        account = await self.get_account_by_id(normalized_account_id)
+        if account is None:
+            raise RuntimeError("SSO account not found")
+        return account
 
     async def get_context_for_session(self, session_token: str) -> PlatformAuthContext | None:
         if self.db is None or not session_token:
@@ -434,6 +634,82 @@ class PlatformIdentityService:
             self.normalize_email(email),
         )
         return dict(rows[0]) if rows else None
+
+    async def get_account_by_sso_identity(self, *, provider: str, subject: str) -> dict[str, Any] | None:
+        if self.db is None:
+            return None
+        normalized_provider = str(provider or "sso").strip() or "sso"
+        normalized_subject = str(subject or "").strip()
+        if not normalized_subject:
+            return None
+        rows = await self.db.query_raw(
+            """
+            SELECT
+                a.account_id, a.email, a.password_hash, a.role, a.is_active, a.force_password_change,
+                a.mfa_enabled, a.created_at, a.updated_at, a.last_login_at
+            FROM deltallm_platformidentity identity_row
+            JOIN deltallm_platformaccount a ON a.account_id = identity_row.account_id
+            WHERE identity_row.provider = $1
+              AND identity_row.subject = $2
+            LIMIT 1
+            """,
+            normalized_provider,
+            normalized_subject,
+        )
+        return dict(rows[0]) if rows else None
+
+    async def link_sso_identity(
+        self,
+        *,
+        account_id: str,
+        email: str,
+        provider: str = "sso",
+        subject: str | None = None,
+    ) -> None:
+        normalized_account_id = str(account_id or "").strip()
+        normalized_email = self.normalize_email(email)
+        normalized_provider = str(provider or "sso").strip() or "sso"
+        normalized_subject = str(subject or normalized_email).strip()
+        if not normalized_account_id:
+            raise ValueError("account_id is required")
+        if not normalized_email:
+            raise ValueError("email is required")
+        if not normalized_subject:
+            raise ValueError("subject is required")
+        if self.db is None:
+            return
+
+        await self.db.execute_raw(
+            """
+            INSERT INTO deltallm_platformidentity (
+                identity_id, account_id, provider, subject, email, created_at, updated_at
+            )
+            VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW(), NOW())
+            ON CONFLICT (provider, subject)
+            DO UPDATE SET email = EXCLUDED.email, updated_at = NOW()
+            WHERE deltallm_platformidentity.account_id = EXCLUDED.account_id
+            """,
+            normalized_account_id,
+            normalized_provider,
+            normalized_subject,
+            normalized_email,
+        )
+        rows = await self.db.query_raw(
+            """
+            SELECT account_id
+            FROM deltallm_platformidentity
+            WHERE provider = $1
+              AND subject = $2
+            LIMIT 1
+            """,
+            normalized_provider,
+            normalized_subject,
+        )
+        if not rows:
+            raise RuntimeError("failed to link SSO identity")
+        linked_account_id = str(rows[0].get("account_id") or "").strip()
+        if linked_account_id != normalized_account_id:
+            raise ValueError("SSO identity is already linked to another account")
 
     async def get_account_by_id(self, account_id: str) -> dict[str, Any] | None:
         if self.db is None:

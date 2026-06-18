@@ -34,6 +34,12 @@ class SelfRegistrationProvisioningResult:
         }
 
 
+@dataclass(frozen=True)
+class SelfRegistrationSSOLoginResult:
+    provisioning: SelfRegistrationProvisioningResult
+    login: Any
+
+
 class SelfRegistrationProvisioningService:
     def __init__(
         self,
@@ -78,6 +84,73 @@ class SelfRegistrationProvisioningService:
             settings=settings,
             is_active=is_active,
         )
+
+    async def provision_sso_from_defaults(
+        self,
+        *,
+        email: str,
+        settings: SelfRegistrationSettings,
+        provider: str,
+        subject: str,
+        is_active: bool = True,
+    ) -> SelfRegistrationSSOLoginResult:
+        if not settings.enabled:
+            raise ValueError("self-registration is disabled")
+        if self.db is None:
+            raise RuntimeError("database is required for self-registration provisioning")
+
+        normalized_email = self.platform_identity_service.normalize_email(email)
+        normalized_provider = str(provider or "sso").strip() or "sso"
+        normalized_subject = str(subject or normalized_email).strip()
+        if not normalized_email:
+            raise ValueError("email is required")
+        if not normalized_subject:
+            raise ValueError("subject is required")
+
+        if not hasattr(self.db, "tx"):
+            raise RuntimeError("database transactions are required for SSO self-registration provisioning")
+
+        async with self.db.tx() as tx:
+            identity_service = self.platform_identity_service.with_db(tx)
+            return await self._provision_sso_with_dependencies(
+                db_client=tx,
+                identity_service=identity_service,
+                email=normalized_email,
+                settings=settings,
+                provider=normalized_provider,
+                subject=normalized_subject,
+                is_active=is_active,
+            )
+
+    async def _provision_sso_with_dependencies(
+        self,
+        *,
+        db_client: Any,
+        identity_service: PlatformIdentityService,
+        email: str,
+        settings: SelfRegistrationSettings,
+        provider: str,
+        subject: str,
+        is_active: bool,
+    ) -> SelfRegistrationSSOLoginResult:
+        provisioning = await self._provision_with_dependencies(
+            db_client=db_client,
+            identity_service=identity_service,
+            email=email,
+            settings=settings,
+            is_active=is_active,
+        )
+        await identity_service.link_sso_identity(
+            account_id=provisioning.account_id,
+            email=email,
+            provider=provider,
+            subject=subject,
+        )
+        login = await identity_service.create_login_result_for_account(provisioning.account_id)
+        if login is None:
+            raise RuntimeError("failed to establish self-registration session")
+        await identity_service.mark_last_login(provisioning.account_id)
+        return SelfRegistrationSSOLoginResult(provisioning=provisioning, login=login)
 
     async def _provision_with_dependencies(
         self,
