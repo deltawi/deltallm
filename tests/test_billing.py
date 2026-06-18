@@ -88,6 +88,38 @@ class OrgBudgetDB:
         return []
 
 
+class MultiEntityBudgetDB:
+    def __init__(self, *, exhausted_entity: str) -> None:
+        self.exhausted_entity = exhausted_entity
+
+    async def query_raw(self, query: str, *args):
+        normalized = " ".join(query.lower().split())
+        entity_type = None
+        if "from deltallm_verificationtoken" in normalized:
+            entity_type = "key"
+        elif "from deltallm_usertable" in normalized:
+            entity_type = "user"
+        elif "from deltallm_teamtable" in normalized:
+            entity_type = "team"
+        elif "from deltallm_organizationtable" in normalized:
+            entity_type = "org"
+        if entity_type is None:
+            return []
+
+        spend = 11.0 if entity_type == self.exhausted_entity else 1.0
+        return [
+            {
+                "entity_id": args[0],
+                "max_budget": 10.0,
+                "soft_budget": None,
+                "spend": spend,
+                "budget_duration": None,
+                "budget_reset_at": None,
+                "metadata": {},
+            }
+        ]
+
+
 class ResettingOrgBudgetDB:
     def __init__(self, *, update_count: int = 1, conflict_row: dict | None = None, metadata: dict | None = None) -> None:
         self.query_calls: list[tuple[str, tuple]] = []
@@ -244,6 +276,23 @@ async def test_spend_tracking_writes_normalized_event_and_team_model_counter():
     assert event_call[14] == "character"
     assert event_call[23] == 1200
     assert any("insert into deltallm_teammodelspend" in q.lower() for q, _ in db.calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exhausted_entity", ["key", "user", "team", "org"])
+async def test_sandbox_runtime_budget_enforcement_checks_all_scopes(exhausted_entity: str):
+    service = BudgetEnforcementService(db_client=MultiEntityBudgetDB(exhausted_entity=exhausted_entity))
+
+    with pytest.raises(BudgetExceeded) as exc_info:
+        await service.check_budgets(
+            api_key="key-sandbox",
+            user_id="acct-dev",
+            team_id="team-sandbox",
+            organization_id="org-sandbox",
+            model=None,
+        )
+
+    assert exc_info.value.entity_type == exhausted_entity
 
 
 @pytest.mark.asyncio

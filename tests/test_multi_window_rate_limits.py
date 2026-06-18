@@ -6,6 +6,8 @@ import time
 import pytest
 
 from src.models.errors import RateLimitError
+from src.models.responses import UserAPIKeyAuth
+from src.rate_limit_policy import build_rate_limit_checks
 from src.services.limit_counter import LimitCounter, RateLimitCheck, RateLimitResult
 from tests.conftest import FakeRedis
 
@@ -37,6 +39,69 @@ class TestRateLimitCheckWindowSeconds:
     def test_day_window(self):
         check = RateLimitCheck(scope="key_rpd", entity_id="k1", limit=1000, window_seconds=86400)
         assert check.window_seconds == 86400
+
+
+def test_sandbox_runtime_rate_limit_checks_include_all_scopes_and_windows():
+    auth = UserAPIKeyAuth(
+        api_key="key-sandbox",
+        user_id="acct-dev",
+        team_id="team-sandbox",
+        organization_id="org-sandbox",
+        key_rpm_limit=1,
+        key_tpm_limit=2,
+        key_rph_limit=3,
+        key_rpd_limit=4,
+        key_tpd_limit=5,
+        user_rpm_limit=6,
+        user_tpm_limit=7,
+        user_rph_limit=8,
+        user_rpd_limit=9,
+        user_tpd_limit=10,
+        team_rpm_limit=11,
+        team_tpm_limit=12,
+        team_rph_limit=13,
+        team_rpd_limit=14,
+        team_tpd_limit=15,
+        org_rpm_limit=16,
+        org_tpm_limit=17,
+        org_rph_limit=18,
+        org_rpd_limit=19,
+        org_tpd_limit=20,
+    )
+
+    checks = build_rate_limit_checks(auth=auth, tokens=123, model="gpt-4o-mini")
+    by_scope = {check.scope: check for check in checks}
+
+    assert set(by_scope) == {
+        "org_rpm",
+        "team_rpm",
+        "user_rpm",
+        "key_rpm",
+        "org_tpm",
+        "team_tpm",
+        "user_tpm",
+        "key_tpm",
+        "org_rph",
+        "team_rph",
+        "user_rph",
+        "key_rph",
+        "org_rpd",
+        "team_rpd",
+        "user_rpd",
+        "key_rpd",
+        "org_tpd",
+        "team_tpd",
+        "user_tpd",
+        "key_tpd",
+    }
+    assert by_scope["org_rpm"].entity_id == "org-sandbox"
+    assert by_scope["team_rpm"].entity_id == "team-sandbox"
+    assert by_scope["user_rpm"].entity_id == "acct-dev"
+    assert by_scope["key_rpm"].entity_id == "key-sandbox"
+    assert by_scope["key_tpm"].amount == 123
+    assert by_scope["key_rph"].window_seconds == 3600
+    assert by_scope["key_rpd"].window_seconds == 86400
+    assert by_scope["key_tpd"].window_seconds == 86400
 
 
 class TestMultiWindowAtomicRedis:

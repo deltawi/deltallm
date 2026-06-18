@@ -183,6 +183,13 @@ class SelfRegistrationProvisioningService:
         if not account_id:
             raise RuntimeError("failed to provision account")
 
+        user_id = await self._ensure_runtime_user(
+            db_client,
+            account_id=account_id,
+            email=email,
+            team_id=team_id,
+            settings=settings,
+        )
         await self._insert_org_membership(
             db_client,
             account_id=account_id,
@@ -193,13 +200,6 @@ class SelfRegistrationProvisioningService:
             account_id=account_id,
             team_id=team_id,
             role=settings.default_team.role,
-        )
-        user_id = await self._ensure_runtime_user(
-            db_client,
-            account_id=account_id,
-            email=email,
-            team_id=team_id,
-            settings=settings,
         )
 
         return SelfRegistrationProvisioningResult(
@@ -413,6 +413,9 @@ class SelfRegistrationProvisioningService:
         user_id = str(runtime_user.get("user_id") or "").strip()
         if not user_id:
             raise RuntimeError("failed to provision runtime user")
+        runtime_team_id = str(runtime_user.get("team_id") or "").strip()
+        if runtime_team_id != team_id:
+            raise RuntimeError("self-registration runtime user belongs to a different team")
         return user_id
 
     async def _get_runtime_user_by_account_or_email(

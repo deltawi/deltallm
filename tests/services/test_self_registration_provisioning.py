@@ -474,7 +474,7 @@ async def test_provision_from_defaults_preserves_existing_admin_changes() -> Non
         "user_id": "acct-existing",
         "user_email": "existing@example.com",
         "max_budget": 500,
-        "team_id": "custom-team",
+        "team_id": "team-self-serve",
     }
     db.organization_memberships[("acct-existing", "org-sandbox")] = {
         "account_id": "acct-existing",
@@ -500,19 +500,42 @@ async def test_provision_from_defaults_preserves_existing_admin_changes() -> Non
     assert db.teams["team-self-serve"]["team_alias"] == "Admin Edited Team"
     assert db.teams["team-self-serve"]["self_service_keys_enabled"] is False
     assert db.users["acct-existing"]["max_budget"] == 500
-    assert db.users["acct-existing"]["team_id"] == "custom-team"
+    assert db.users["acct-existing"]["team_id"] == "team-self-serve"
     assert db.organization_memberships[("acct-existing", "org-sandbox")]["role"] == "org_admin"
     assert db.team_memberships[("acct-existing", "team-self-serve")]["role"] == "team_admin"
 
 
 @pytest.mark.asyncio
-async def test_provision_from_defaults_returns_existing_runtime_user_for_same_email() -> None:
+async def test_provision_from_defaults_rejects_existing_runtime_user_outside_default_team() -> None:
     db = FakeSelfRegistrationDB()
     db.users["legacy-user"] = {
         "user_id": "legacy-user",
         "user_email": "developer@example.com",
         "max_budget": 500,
         "team_id": "legacy-team",
+    }
+
+    with pytest.raises(RuntimeError, match="runtime user belongs to a different team"):
+        await _service(db).provision_from_defaults(
+            email="developer@example.com",
+            settings=_enabled_settings(),
+        )
+
+    assert ("acct-1", "org-sandbox") not in db.organization_memberships
+    assert ("acct-1", "team-self-serve") not in db.team_memberships
+    assert "acct-1" not in db.users
+    assert db.users["legacy-user"]["max_budget"] == 500
+    assert db.users["legacy-user"]["team_id"] == "legacy-team"
+
+
+@pytest.mark.asyncio
+async def test_provision_from_defaults_returns_existing_runtime_user_in_default_team_for_same_email() -> None:
+    db = FakeSelfRegistrationDB()
+    db.users["legacy-user"] = {
+        "user_id": "legacy-user",
+        "user_email": "developer@example.com",
+        "max_budget": 500,
+        "team_id": "team-self-serve",
     }
 
     result = await _service(db).provision_from_defaults(
@@ -522,9 +545,10 @@ async def test_provision_from_defaults_returns_existing_runtime_user_for_same_em
 
     assert result.account_id == "acct-1"
     assert result.user_id == "legacy-user"
+    assert db.team_memberships[("acct-1", "team-self-serve")]["role"] == "team_developer"
     assert "acct-1" not in db.users
     assert db.users["legacy-user"]["max_budget"] == 500
-    assert db.users["legacy-user"]["team_id"] == "legacy-team"
+    assert db.users["legacy-user"]["team_id"] == "team-self-serve"
 
 
 @pytest.mark.asyncio
