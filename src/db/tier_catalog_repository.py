@@ -303,3 +303,20 @@ class TierCatalogRepositoryMixin:
             tier_id,
         )
         return int((rows[0] if rows else {}).get("count") or 0)
+
+    async def count_active_tier_assignments(self, tier_id: str) -> int:
+        if self.prisma is None:
+            return 0
+
+        rows = await self.prisma.query_raw(
+            """
+            SELECT COUNT(*)::int AS count
+            FROM deltallm_organizationtierassignment
+            WHERE tier_id = $1
+              AND enabled = TRUE
+              AND (starts_at IS NULL OR starts_at <= NOW())
+              AND (ends_at IS NULL OR ends_at > NOW())
+            """,
+            tier_id,
+        )
+        return int((rows[0] if rows else {}).get("count") or 0)
