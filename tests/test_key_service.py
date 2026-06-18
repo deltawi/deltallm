@@ -127,3 +127,70 @@ async def test_validate_key_preserves_key_and_team_model_scopes() -> None:
 
     assert auth.models == ["gpt-4o-mini", "text-embedding-3-small"]
     assert auth.team_models == ["gpt-4o-mini", "text-embedding-3-small"]
+
+
+@pytest.mark.asyncio
+async def test_validate_key_preserves_sandbox_budget_and_rate_limit_scope_ids() -> None:
+    salt = "test-salt"
+    raw_key = "sk-sandbox"
+    token_hash = hashlib.sha256(f"{salt}:{raw_key}".encode("utf-8")).hexdigest()
+    repo = InMemoryRepo(
+        {
+            token_hash: KeyRecord(
+                token=token_hash,
+                user_id="acct-dev",
+                team_id="team-sandbox",
+                organization_id="org-sandbox",
+                max_budget=5.0,
+                rpm_limit=1,
+                tpm_limit=2,
+                key_rph_limit=3,
+                key_rpd_limit=4,
+                key_tpd_limit=5,
+                user_rpm_limit=6,
+                user_tpm_limit=7,
+                user_rph_limit=8,
+                user_rpd_limit=9,
+                user_tpd_limit=10,
+                team_rpm_limit=11,
+                team_tpm_limit=12,
+                team_rph_limit=13,
+                team_rpd_limit=14,
+                team_tpd_limit=15,
+                org_rpm_limit=16,
+                org_tpm_limit=17,
+                org_rph_limit=18,
+                org_rpd_limit=19,
+                org_tpd_limit=20,
+                expires=datetime.now(tz=UTC) + timedelta(hours=1),
+            )
+        }
+    )
+    service = KeyService(repository=repo, salt=salt)
+
+    auth = await service.validate_key(raw_key)
+
+    assert auth.user_id == "acct-dev"
+    assert auth.team_id == "team-sandbox"
+    assert auth.organization_id == "org-sandbox"
+    assert auth.max_budget == 5.0
+    assert auth.key_rpm_limit == 1
+    assert auth.key_tpm_limit == 2
+    assert auth.key_rph_limit == 3
+    assert auth.key_rpd_limit == 4
+    assert auth.key_tpd_limit == 5
+    assert auth.user_rpm_limit == 6
+    assert auth.user_tpm_limit == 7
+    assert auth.user_rph_limit == 8
+    assert auth.user_rpd_limit == 9
+    assert auth.user_tpd_limit == 10
+    assert auth.team_rpm_limit == 11
+    assert auth.team_tpm_limit == 12
+    assert auth.team_rph_limit == 13
+    assert auth.team_rpd_limit == 14
+    assert auth.team_tpd_limit == 15
+    assert auth.org_rpm_limit == 16
+    assert auth.org_tpm_limit == 17
+    assert auth.org_rph_limit == 18
+    assert auth.org_rpd_limit == 19
+    assert auth.org_tpd_limit == 20

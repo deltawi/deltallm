@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-import secrets
+import hashlib
 import logging
+import math
+import secrets
+from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from typing import Any, Literal
 
@@ -22,6 +25,93 @@ from src.services.scoped_asset_access import apply_scope_asset_access, build_sco
 
 router = APIRouter(tags=["Admin Keys"])
 logger = logging.getLogger(__name__)
+_INT64_SIGN_BIT = 1 << 63
+_UINT64_MODULUS = 1 << 64
+_SELF_SERVICE_KEY_CREATE_LOCK_NAMESPACE = "self_service_key_create"
+_SELF_SERVICE_RATE_LIMIT_FIELDS = ("rpm_limit", "tpm_limit", "rph_limit", "rpd_limit", "tpd_limit")
+_ADMIN_KEY_LIST_PERMISSIONS = frozenset({Permission.KEY_UPDATE, Permission.KEY_REVOKE})
+_READ_KEY_LIST_PERMISSIONS = frozenset({Permission.KEY_READ})
+_OWNER_KEY_LIST_PERMISSIONS = frozenset({Permission.KEY_CREATE_SELF})
+
+
+def _normalize_lock_part(value: object) -> str:
+    normalized = str(value or "").strip() or "unknown"
+    return normalized.replace("\\", "\\\\").replace(":", "\\:")
+
+
+def _advisory_lock_key(namespace: str, *parts: object) -> int:
+    normalized_namespace = str(namespace or "").strip()
+    if not normalized_namespace:
+        raise ValueError("advisory lock namespace is required")
+    lock_name = ":".join([normalized_namespace, *(_normalize_lock_part(part) for part in parts)])
+    digest = hashlib.sha256(lock_name.encode("utf-8")).digest()
+    unsigned_value = int.from_bytes(digest[:8], byteorder="big", signed=False)
+    if unsigned_value >= _INT64_SIGN_BIT:
+        return unsigned_value - _UINT64_MODULUS
+    return unsigned_value
+
+
+async def _acquire_self_service_key_create_lock(db: Any, *, team_id: str, account_id: str) -> None:
+    await db.execute_raw(
+        "SELECT pg_advisory_xact_lock($1::bigint)",
+        _advisory_lock_key(_SELF_SERVICE_KEY_CREATE_LOCK_NAMESPACE, team_id, account_id),
+    )
+
+
+def _normalize_self_service_budget(max_budget: Any) -> float | None:
+    if max_budget is None:
+        return None
+    if isinstance(max_budget, bool):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="max_budget must be a valid number")
+    try:
+        budget_val = float(max_budget)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="max_budget must be a valid number")
+    if not math.isfinite(budget_val):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="max_budget must be a finite number")
+    return budget_val
+
+
+def _normalize_self_service_limit(value: Any, field_name: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be a positive integer")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, float):
+        if not value.is_integer():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be a positive integer")
+        parsed = int(value)
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            parsed = int(stripped)
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be a positive integer")
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be a positive integer")
+
+    if parsed <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be a positive integer")
+    return parsed
+
+
+def _parse_self_service_expiry(expires: str | None) -> datetime | None:
+    if expires is None:
+        return None
+    raw = expires.strip()
+    if not raw:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="expires must be a valid ISO 8601 datetime string")
+    try:
+        exp_dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="expires must be a valid ISO 8601 datetime string")
+    if exp_dt.tzinfo is None:
+        exp_dt = exp_dt.replace(tzinfo=UTC)
+    return exp_dt.astimezone(UTC)
 
 
 def _notification_record(row: dict[str, Any]) -> Any:
@@ -117,7 +207,7 @@ async def _validate_self_service_constraints(
     max_budget: Any,
     expires: str | None,
     **kwargs: Any,
-) -> None:
+) -> dict[str, Any]:
     if not policy.get("enabled"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -127,7 +217,13 @@ async def _validate_self_service_constraints(
     max_keys = policy.get("max_keys_per_user")
     if max_keys is not None:
         count_rows = await db.query_raw(
-            "SELECT COUNT(*) AS cnt FROM deltallm_verificationtoken WHERE team_id = $1 AND owner_account_id = $2",
+            """
+            SELECT COUNT(*) AS cnt
+            FROM deltallm_verificationtoken
+            WHERE team_id = $1
+              AND owner_account_id = $2
+              AND (expires IS NULL OR expires > NOW())
+            """,
             team_id,
             account_id,
         )
@@ -138,19 +234,15 @@ async def _validate_self_service_constraints(
                 detail=f"You have reached the maximum of {max_keys} self-service keys for this team",
             )
 
+    budget_val = _normalize_self_service_budget(max_budget)
+    if budget_val is not None and budget_val < 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="max_budget must be greater than or equal to 0")
     budget_ceiling = policy.get("budget_ceiling")
     if budget_ceiling is not None:
-        if max_budget is None:
+        if budget_val is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"A budget (max_budget) is required for self-service keys on this team (ceiling: ${budget_ceiling})",
-            )
-        try:
-            budget_val = float(max_budget)
-        except (TypeError, ValueError):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="max_budget must be a valid number",
             )
         if budget_val < 0 or budget_val > float(budget_ceiling):
             raise HTTPException(
@@ -158,27 +250,47 @@ async def _validate_self_service_constraints(
                 detail=f"Budget must be between $0 and ${budget_ceiling}",
             )
 
+    parsed_expiry = _parse_self_service_expiry(expires)
     require_expiry = policy.get("require_expiry", False)
     max_expiry_days = policy.get("max_expiry_days")
-    if require_expiry and not expires:
+    if require_expiry and parsed_expiry is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="An expiry date is required for self-service keys on this team",
         )
 
+    if parsed_expiry is not None:
+        now = datetime.now(tz=UTC)
+        if parsed_expiry <= now:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Expiry date must be in the future",
+            )
+        if max_expiry_days is not None:
+            max_allowed = now + timedelta(days=int(max_expiry_days))
+            if parsed_expiry > max_allowed:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Expiry date cannot be more than {max_expiry_days} days from now",
+                )
+
+    normalized_limits = {
+        limit_field: _normalize_self_service_limit(kwargs.get(limit_field), limit_field)
+        for limit_field in _SELF_SERVICE_RATE_LIMIT_FIELDS
+    }
     team_rows = await db.query_raw(
         "SELECT rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
         team_id,
     )
     if team_rows:
         team_limits = dict(team_rows[0])
-        for limit_field in ("rpm_limit", "tpm_limit", "rph_limit", "rpd_limit", "tpd_limit"):
+        for limit_field in _SELF_SERVICE_RATE_LIMIT_FIELDS:
             team_val = team_limits.get(limit_field)
             if team_val is not None:
-                from_payload = kwargs.get(limit_field)
+                from_payload = normalized_limits[limit_field]
                 if from_payload is not None:
                     try:
-                        if int(from_payload) > int(team_val):
+                        if from_payload > int(team_val):
                             raise HTTPException(
                                 status_code=status.HTTP_400_BAD_REQUEST,
                                 detail=f"{limit_field} ({from_payload}) cannot exceed team limit ({team_val})",
@@ -189,23 +301,55 @@ async def _validate_self_service_constraints(
                             detail=f"{limit_field} must be a valid integer",
                         )
 
-    if max_expiry_days is not None and expires:
-        from datetime import datetime, timedelta, timezone
-        try:
-            exp_dt = datetime.fromisoformat(expires.replace("Z", "+00:00"))
-            if exp_dt.tzinfo is None:
-                exp_dt = exp_dt.replace(tzinfo=timezone.utc)
-        except (ValueError, TypeError):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="expires must be a valid ISO 8601 datetime string",
-            )
-        max_allowed = datetime.now(timezone.utc) + timedelta(days=max_expiry_days)
-        if exp_dt > max_allowed:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Expiry date cannot be more than {max_expiry_days} days from now",
-            )
+    normalized_expiry = parsed_expiry.isoformat() if parsed_expiry is not None else None
+    return {"max_budget": budget_val, "expires": normalized_expiry, **normalized_limits}
+
+
+async def _resolve_required_self_service_runtime_user_id(
+    db: Any,
+    *,
+    team_id: str,
+    account_id: str,
+    email: str | None,
+) -> str:
+    normalized_email = str(email or "").strip() or None
+    rows = await db.query_raw(
+        """
+        SELECT user_id
+        FROM deltallm_usertable
+        WHERE user_id = $1
+          AND team_id = $2
+        LIMIT 1
+        """,
+        account_id,
+        team_id,
+    )
+    if not rows and normalized_email is not None:
+        rows = await db.query_raw(
+            """
+            SELECT user_id
+            FROM deltallm_usertable
+            WHERE lower(user_email) = lower($1)
+              AND team_id = $2
+            ORDER BY CASE WHEN user_id = $3 THEN 0 ELSE 1 END
+            LIMIT 1
+            """,
+            normalized_email,
+            team_id,
+            account_id,
+        )
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Self-service key creation requires a runtime user in this team",
+        )
+    user_id = str(rows[0].get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Self-service key creation requires a runtime user in this team",
+        )
+    return user_id
 
 
 def _is_self_service_only(scope: Any) -> bool:
@@ -240,6 +384,46 @@ def _scope_has_permission(
     return False
 
 
+def _target_scope_permission_sets(
+    scope: Any,
+    *,
+    organization_id: str | None,
+    team_id: str | None,
+) -> list[set[str]]:
+    permission_sets: list[set[str]] = []
+    team_permissions = getattr(scope, "team_permissions_by_id", {}) or {}
+    if team_id:
+        permission_sets.append(set(team_permissions.get(team_id) or set()))
+
+    org_permissions = getattr(scope, "org_permissions_by_id", {}) or {}
+    if organization_id:
+        permission_sets.append(set(org_permissions.get(organization_id) or set()))
+    return permission_sets
+
+
+def _resolve_key_read_access_mode(
+    scope: Any,
+    *,
+    organization_id: str | None,
+    team_id: str | None,
+) -> Literal["admin", "self_service"]:
+    if scope.is_platform_admin:
+        return "admin"
+
+    owner_only_read = False
+    for permissions in _target_scope_permission_sets(scope, organization_id=organization_id, team_id=team_id):
+        if permissions.intersection(_ADMIN_KEY_LIST_PERMISSIONS):
+            return "admin"
+        if Permission.KEY_READ in permissions and Permission.KEY_CREATE_SELF not in permissions:
+            return "admin"
+        if Permission.KEY_READ in permissions and Permission.KEY_CREATE_SELF in permissions:
+            owner_only_read = True
+
+    if owner_only_read:
+        return "self_service"
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+
+
 def _resolve_key_access_mode(
     scope: Any,
     *,
@@ -265,6 +449,109 @@ def _resolve_key_access_mode(
         return "self_service"
 
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+
+
+def _scope_ids_with_any_permission(
+    permissions_by_id: dict[str, set[str]],
+    required_permissions: frozenset[str],
+) -> list[str]:
+    scope_ids: list[str] = []
+    for scope_id, permissions in permissions_by_id.items():
+        normalized_scope_id = str(scope_id or "").strip()
+        if normalized_scope_id and required_permissions.intersection(set(permissions or set())):
+            scope_ids.append(normalized_scope_id)
+    return scope_ids
+
+
+def _append_in_predicate(column: str, values: list[str], params: list[Any]) -> str | None:
+    normalized_values = [str(value or "").strip() for value in values if str(value or "").strip()]
+    if not normalized_values:
+        return None
+    start = len(params) + 1
+    params.extend(normalized_values)
+    placeholders = ", ".join(f"${idx}" for idx in range(start, start + len(normalized_values)))
+    return f"{column} IN ({placeholders})"
+
+
+def _ordered_unique_scope_ids(*groups: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for group in groups:
+        for scope_id in group:
+            if scope_id not in seen:
+                seen.add(scope_id)
+                ordered.append(scope_id)
+    return ordered
+
+
+def _append_key_list_scope_clause(scope: Any, clauses: list[str], params: list[Any], *, my_keys: bool) -> bool:
+    owner_account_id = str(getattr(scope, "account_id", "") or "").strip() or None
+    owner_param_index: int | None = None
+    if my_keys:
+        if owner_account_id is None:
+            return False
+        params.append(owner_account_id)
+        owner_param_index = len(params)
+        clauses.append(f"vt.owner_account_id = ${owner_param_index}")
+
+    if scope.is_platform_admin:
+        return True
+
+    org_permissions = getattr(scope, "org_permissions_by_id", {}) or {}
+    team_permissions = getattr(scope, "team_permissions_by_id", {}) or {}
+
+    admin_org_ids = _scope_ids_with_any_permission(org_permissions, _ADMIN_KEY_LIST_PERMISSIONS)
+    admin_team_ids = _scope_ids_with_any_permission(team_permissions, _ADMIN_KEY_LIST_PERMISSIONS)
+    admin_org_id_set = set(admin_org_ids)
+    admin_team_id_set = set(admin_team_ids)
+    owner_org_ids = [
+        scope_id
+        for scope_id in _scope_ids_with_any_permission(org_permissions, _OWNER_KEY_LIST_PERMISSIONS)
+        if scope_id not in admin_org_id_set
+    ]
+    owner_team_ids = [
+        scope_id
+        for scope_id in _scope_ids_with_any_permission(team_permissions, _OWNER_KEY_LIST_PERMISSIONS)
+        if scope_id not in admin_team_id_set
+    ]
+    owner_org_id_set = set(owner_org_ids)
+    owner_team_id_set = set(owner_team_ids)
+    read_org_ids = [
+        scope_id
+        for scope_id in _scope_ids_with_any_permission(org_permissions, _READ_KEY_LIST_PERMISSIONS)
+        if scope_id not in owner_org_id_set
+    ]
+    read_team_ids = [
+        scope_id
+        for scope_id in _scope_ids_with_any_permission(team_permissions, _READ_KEY_LIST_PERMISSIONS)
+        if scope_id not in owner_team_id_set
+    ]
+    full_org_ids = _ordered_unique_scope_ids(admin_org_ids, read_org_ids)
+    full_team_ids = _ordered_unique_scope_ids(admin_team_ids, read_team_ids)
+
+    scope_parts: list[str] = []
+    full_org_predicate = _append_in_predicate("t.organization_id", full_org_ids, params)
+    if full_org_predicate is not None:
+        scope_parts.append(full_org_predicate)
+    full_team_predicate = _append_in_predicate("vt.team_id", full_team_ids, params)
+    if full_team_predicate is not None:
+        scope_parts.append(full_team_predicate)
+
+    if owner_account_id is not None and (owner_org_ids or owner_team_ids):
+        if owner_param_index is None:
+            params.append(owner_account_id)
+            owner_param_index = len(params)
+        owner_org_predicate = _append_in_predicate("t.organization_id", owner_org_ids, params)
+        if owner_org_predicate is not None:
+            scope_parts.append(f"({owner_org_predicate} AND vt.owner_account_id = ${owner_param_index})")
+        owner_team_predicate = _append_in_predicate("vt.team_id", owner_team_ids, params)
+        if owner_team_predicate is not None:
+            scope_parts.append(f"({owner_team_predicate} AND vt.owner_account_id = ${owner_param_index})")
+
+    if not scope_parts:
+        return False
+    clauses.append(f"({' OR '.join(scope_parts)})")
+    return True
 
 
 def _key_response_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -374,6 +661,47 @@ async def _validate_owner_references(
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="owner is required")
 
 
+async def _insert_key_row(
+    db: Any,
+    *,
+    token_hash: str,
+    key_name: str,
+    user_id: str | None,
+    team_id: str,
+    owner_account_id: str | None,
+    owner_service_account_id: str | None,
+    max_budget: Any,
+    rpm_limit: Any,
+    tpm_limit: Any,
+    rph_limit: Any,
+    rpd_limit: Any,
+    tpd_limit: Any,
+    expires: str | None,
+) -> None:
+    await db.execute_raw(
+        """
+        INSERT INTO deltallm_verificationtoken (
+            id, token, key_name, user_id, team_id, owner_account_id, owner_service_account_id,
+            spend, max_budget, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, expires, created_at, updated_at
+        )
+        VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13::timestamp, NOW(), NOW())
+        """,
+        token_hash,
+        key_name,
+        user_id,
+        team_id,
+        owner_account_id,
+        owner_service_account_id,
+        max_budget,
+        rpm_limit,
+        tpm_limit,
+        rph_limit,
+        rpd_limit,
+        tpd_limit,
+        expires,
+    )
+
+
 @router.get("/ui/api/keys")
 async def list_keys(
     request: Request,
@@ -387,32 +715,12 @@ async def list_keys(
 ) -> dict[str, Any]:
     scope = get_auth_scope(request, authorization, x_master_key, any_permission=[Permission.KEY_READ, Permission.KEY_CREATE_SELF])
     db = db_or_503(request)
-    self_service_only = _is_self_service_only(scope)
 
     clauses: list[str] = []
     params: list[Any] = []
 
-    if self_service_only or my_keys:
-        if scope.account_id:
-            params.append(scope.account_id)
-            clauses.append(f"vt.owner_account_id = ${len(params)}")
-        else:
-            return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
-
-    if not scope.is_platform_admin:
-        scope_parts: list[str] = []
-        if scope.org_ids:
-            ph = ", ".join(f"${len(params) + i + 1}" for i in range(len(scope.org_ids)))
-            params.extend(scope.org_ids)
-            scope_parts.append(f"t.organization_id IN ({ph})")
-        if scope.team_ids:
-            ph = ", ".join(f"${len(params) + i + 1}" for i in range(len(scope.team_ids)))
-            params.extend(scope.team_ids)
-            scope_parts.append(f"vt.team_id IN ({ph})")
-        if scope_parts:
-            clauses.append(f"({' OR '.join(scope_parts)})")
-        else:
-            return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
+    if not _append_key_list_scope_clause(scope, clauses, params, my_keys=my_keys):
+        return {"data": [], "pagination": {"total": 0, "limit": limit, "offset": offset, "has_more": False}}
 
     if search:
         params.append(f"%{search}%")
@@ -516,26 +824,15 @@ async def create_key(
     )
     self_service_only = access_mode == "self_service"
 
+    account_email: str | None = None
     if self_service_only:
+        if not scope.account_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Self-service key creation requires an account context")
         owner_account_id = scope.account_id
         owner_service_account_id = None
-        user_id = None
-
-        policy = await _get_self_service_policy(db, team_id)
-        await _validate_self_service_constraints(
-            db,
-            team_id=team_id,
-            account_id=scope.account_id,
-            policy=policy,
-            max_budget=max_budget,
-            expires=expires,
-            rpm_limit=rpm_limit,
-            tpm_limit=tpm_limit,
-            rph_limit=rph_limit,
-            rpd_limit=rpd_limit,
-            tpd_limit=tpd_limit,
-        )
-    if user_id:
+        ctx = get_platform_auth_context(request)
+        account_email = str(getattr(ctx, "email", "") or "").strip() or None
+    if user_id and not self_service_only:
         await _validate_runtime_user(db, user_id, team_id)
     if not self_service_only:
         owner_account_id, owner_service_account_id = await _validate_owner_references(
@@ -553,28 +850,76 @@ async def create_key(
     audit_action = AuditAction.ADMIN_KEY_SELF_CREATE if self_service_only else AuditAction.ADMIN_KEY_CREATE
 
     try:
-        await db.execute_raw(
-            """
-            INSERT INTO deltallm_verificationtoken (
-                id, token, key_name, user_id, team_id, owner_account_id, owner_service_account_id,
-                spend, max_budget, rpm_limit, tpm_limit, rph_limit, rpd_limit, tpd_limit, expires, created_at, updated_at
+        if self_service_only:
+            tx_factory = getattr(db, "tx", None)
+            if not callable(tx_factory):
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Database transactions are required for self-service key creation",
+                )
+
+            async with tx_factory() as tx:
+                await _acquire_self_service_key_create_lock(tx, team_id=team_id, account_id=scope.account_id)
+                policy = await _get_self_service_policy(tx, team_id)
+                normalized_self_service_values = await _validate_self_service_constraints(
+                    tx,
+                    team_id=team_id,
+                    account_id=scope.account_id,
+                    policy=policy,
+                    max_budget=max_budget,
+                    expires=expires,
+                    rpm_limit=rpm_limit,
+                    tpm_limit=tpm_limit,
+                    rph_limit=rph_limit,
+                    rpd_limit=rpd_limit,
+                    tpd_limit=tpd_limit,
+                )
+                user_id = await _resolve_required_self_service_runtime_user_id(
+                    tx,
+                    team_id=team_id,
+                    account_id=scope.account_id,
+                    email=account_email,
+                )
+                max_budget = normalized_self_service_values["max_budget"]
+                expires = normalized_self_service_values["expires"]
+                rpm_limit = normalized_self_service_values["rpm_limit"]
+                tpm_limit = normalized_self_service_values["tpm_limit"]
+                rph_limit = normalized_self_service_values["rph_limit"]
+                rpd_limit = normalized_self_service_values["rpd_limit"]
+                tpd_limit = normalized_self_service_values["tpd_limit"]
+                await _insert_key_row(
+                    tx,
+                    token_hash=token_hash,
+                    key_name=key_name,
+                    user_id=user_id,
+                    team_id=team_id,
+                    owner_account_id=owner_account_id,
+                    owner_service_account_id=owner_service_account_id,
+                    max_budget=max_budget,
+                    rpm_limit=rpm_limit,
+                    tpm_limit=tpm_limit,
+                    rph_limit=rph_limit,
+                    rpd_limit=rpd_limit,
+                    tpd_limit=tpd_limit,
+                    expires=expires,
+                )
+        else:
+            await _insert_key_row(
+                db,
+                token_hash=token_hash,
+                key_name=key_name,
+                user_id=user_id,
+                team_id=team_id,
+                owner_account_id=owner_account_id,
+                owner_service_account_id=owner_service_account_id,
+                max_budget=max_budget,
+                rpm_limit=rpm_limit,
+                tpm_limit=tpm_limit,
+                rph_limit=rph_limit,
+                rpd_limit=rpd_limit,
+                tpd_limit=tpd_limit,
+                expires=expires,
             )
-            VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13::timestamp, NOW(), NOW())
-            """,
-            token_hash,
-            key_name,
-            user_id,
-            team_id,
-            owner_account_id,
-            owner_service_account_id,
-            max_budget,
-            rpm_limit,
-            tpm_limit,
-            rph_limit,
-            rpd_limit,
-            tpd_limit,
-            expires,
-        )
 
         response = {
             "token": token_hash,
@@ -810,13 +1155,16 @@ async def _require_key_access(
     row = await _get_key_scope_row(db, token_hash)
     organization_id = str(row.get("organization_id") or "").strip() or None
     team_id = str(row.get("team_id") or "").strip() or None
-    access_mode = _resolve_key_access_mode(
-        scope,
-        organization_id=organization_id,
-        team_id=team_id,
-        admin_permission=admin_permission,
-        allow_self_service=allow_self_service,
-    )
+    if admin_permission == Permission.KEY_READ:
+        access_mode = _resolve_key_read_access_mode(scope, organization_id=organization_id, team_id=team_id)
+    else:
+        access_mode = _resolve_key_access_mode(
+            scope,
+            organization_id=organization_id,
+            team_id=team_id,
+            admin_permission=admin_permission,
+            allow_self_service=allow_self_service,
+        )
 
     if access_mode == "self_service":
         owner_rows = await db.query_raw(
