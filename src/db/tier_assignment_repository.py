@@ -166,8 +166,8 @@ class TierAssignmentRepositoryMixin:
                     assignment_type = $5,
                     enabled = $6,
                     weight = $7,
-                    starts_at = $8,
-                    ends_at = $9,
+                    starts_at = $8::timestamp,
+                    ends_at = $9::timestamp,
                     metadata = $10::jsonb,
                     updated_at = NOW()
                 WHERE assignment_id = $1
@@ -204,7 +204,20 @@ class TierAssignmentRepositoryMixin:
                 created_at,
                 updated_at
             )
-            VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, NOW(), NOW())
+            VALUES (
+                gen_random_uuid()::text,
+                $1,
+                $2,
+                $3,
+                $4,
+                $5,
+                $6,
+                $7::timestamp,
+                $8::timestamp,
+                $9::jsonb,
+                NOW(),
+                NOW()
+            )
             RETURNING assignment_id
             """,
             organization_id,

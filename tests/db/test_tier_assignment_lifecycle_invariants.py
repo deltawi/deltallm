@@ -269,7 +269,7 @@ async def test_assignment_trigger_revalidates_when_expired_assignment_becomes_no
             await db.execute_raw(
                 """
                 UPDATE deltallm_organizationtierassignment
-                SET ends_at = $2,
+                SET ends_at = $2::timestamp,
                     updated_at = NOW()
                 WHERE assignment_id = $1
                 """,

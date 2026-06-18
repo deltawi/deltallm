@@ -169,7 +169,7 @@ async def seed_assignment(
             created_at,
             updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $8, NOW(), NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, 1, $7::timestamp, $8::timestamp, NOW(), NOW())
         """,
         assignment_id,
         organization_id,
