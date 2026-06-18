@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, feature/org-tiers]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, feature/org-tiers]
 
 jobs:
   ui-build:
