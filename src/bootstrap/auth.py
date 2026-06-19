@@ -1,14 +1,31 @@
 from __future__ import annotations
 
+from asyncio import CancelledError, Task, create_task
 from dataclasses import dataclass
 import logging
+import os
+import socket
 from typing import Any
+from uuid import uuid4
 
 from src.bootstrap.status import BootstrapStatus
+from src.db.cache_invalidation_outbox import CacheInvalidationOutboxRepository
 from src.db.email_tokens import EmailTokenRepository
 from src.db.invitations import InvitationRepository
-from src.auth import CustomAuthManager, InMemoryUserRepository, JWTAuthHandler, SSOAuthHandler, SSOConfig, SSOProvider
+from src.auth import (
+    CustomAuthManager,
+    InMemoryUserRepository,
+    JWTAuthHandler,
+    SSOAuthHandler,
+    SSOConfig,
+    SSOProvider,
+)
 from src.db.repositories import KeyRepository
+from src.services.cache_invalidation import (
+    CacheInvalidationService,
+    CacheInvalidationWorker,
+    CacheInvalidationWorkerConfig,
+)
 from src.services.email_token_service import EmailTokenService
 from src.services.invitation_service import InvitationService
 from src.services.key_service import KeyService
@@ -18,12 +35,83 @@ from src.services.self_registration_provisioning import SelfRegistrationProvisio
 from src.services.sso_state_store import SSOStateStore
 
 logger = logging.getLogger(__name__)
+_AUTH_BOOT_ID = uuid4().hex[:12]
 
 
 @dataclass
 class AuthRuntime:
     initialized: bool = True
+    cache_invalidation_worker: CacheInvalidationWorker | None = None
+    cache_invalidation_task: Task[None] | None = None
     statuses: tuple[BootstrapStatus, ...] = ()
+
+
+def _safe_worker_id_part(value: object, *, fallback: str) -> str:
+    safe = "".join(
+        char if char.isascii() and (char.isalnum() or char in {"-", "_", "."}) else "-"
+        for char in str(value or "").strip()
+    ).strip("-._")
+    return safe or fallback
+
+
+def _cache_invalidation_worker_id() -> str:
+    return "-".join(
+        (
+            "cache-invalidation",
+            _safe_worker_id_part(socket.gethostname(), fallback="unknown-host"),
+            str(os.getpid()),
+            _AUTH_BOOT_ID,
+        )
+    )
+
+
+def _cache_invalidation_worker_config(general_settings: Any) -> CacheInvalidationWorkerConfig:
+    lease_seconds = int(
+        getattr(general_settings, "cache_invalidation_worker_lease_seconds", 60) or 60
+    )
+    configured_record_timeout_seconds = float(
+        getattr(general_settings, "cache_invalidation_worker_record_timeout_seconds", 10.0)
+        or 10.0
+    )
+    record_timeout_seconds = min(
+        max(0.001, configured_record_timeout_seconds),
+        max(0.001, float(lease_seconds) - 0.5),
+    )
+    return CacheInvalidationWorkerConfig(
+        poll_interval_seconds=float(
+            getattr(
+                general_settings,
+                "cache_invalidation_worker_poll_interval_seconds",
+                5.0,
+            )
+            or 5.0
+        ),
+        max_batch_size=int(
+            getattr(general_settings, "cache_invalidation_worker_batch_size", 25) or 25
+        ),
+        max_concurrency=int(
+            getattr(
+                general_settings,
+                "cache_invalidation_worker_max_concurrency",
+                4,
+            )
+            or 4
+        ),
+        lease_seconds=lease_seconds,
+        record_timeout_seconds=record_timeout_seconds,
+        max_attempts=int(getattr(general_settings, "cache_invalidation_max_attempts", 10) or 10),
+        retry_initial_seconds=int(
+            getattr(
+                general_settings,
+                "cache_invalidation_retry_initial_seconds",
+                5,
+            )
+            or 5
+        ),
+        retry_max_seconds=int(
+            getattr(general_settings, "cache_invalidation_retry_max_seconds", 300) or 300
+        ),
+    )
 
 
 async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
@@ -31,6 +119,7 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
         BootstrapStatus("key_service", "ready"),
         BootstrapStatus("platform_identity", "ready"),
     ]
+    runtime = AuthRuntime()
 
     app.state.key_service = KeyService(
         repository=KeyRepository(app.state.prisma_manager.client),
@@ -38,6 +127,44 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
         salt=app.state.salt_key,
         auth_cache_ttl_seconds=cfg.general_settings.api_key_auth_cache_ttl_seconds,
     )
+    cache_invalidation_repository = getattr(
+        app.state,
+        "cache_invalidation_outbox_repository",
+        CacheInvalidationOutboxRepository(app.state.prisma_manager.client),
+    )
+    app.state.cache_invalidation_outbox_repository = cache_invalidation_repository
+    app.state.cache_invalidation_service = CacheInvalidationService(
+        key_service=app.state.key_service,
+        repository=cache_invalidation_repository,
+        max_attempts=int(
+            getattr(cfg.general_settings, "cache_invalidation_max_attempts", 10) or 10
+        ),
+        immediate_timeout_seconds=float(
+            getattr(cfg.general_settings, "cache_invalidation_immediate_timeout_seconds", 0.5)
+            or 0.5
+        ),
+    )
+    statuses.append(BootstrapStatus("cache_invalidation_outbox", "ready"))
+
+    cache_invalidation_worker_enabled = bool(
+        getattr(cfg.general_settings, "cache_invalidation_worker_enabled", True)
+    )
+    if cache_invalidation_worker_enabled and app.state.redis is None:
+        app.state.cache_invalidation_worker = None
+        statuses.append(BootstrapStatus("cache_invalidation_worker", "degraded", "redis unavailable"))
+    elif cache_invalidation_worker_enabled:
+        runtime.cache_invalidation_worker = CacheInvalidationWorker(
+            repository=cache_invalidation_repository,
+            key_service=app.state.key_service,
+            worker_id=_cache_invalidation_worker_id(),
+            config=_cache_invalidation_worker_config(cfg.general_settings),
+        )
+        app.state.cache_invalidation_worker = runtime.cache_invalidation_worker
+        statuses.append(BootstrapStatus("cache_invalidation_worker", "ready"))
+    else:
+        app.state.cache_invalidation_worker = None
+        statuses.append(BootstrapStatus("cache_invalidation_worker", "disabled"))
+
     app.state.platform_identity_service = PlatformIdentityService(
         db_client=app.state.prisma_manager.client,
         salt=app.state.salt_key,
@@ -53,16 +180,26 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
     )
     app.state.limit_counter = LimitCounter(
         redis_client=app.state.redis,
-        degraded_mode=str(cfg.general_settings.redis_degraded_mode or app.state.settings.redis_degraded_mode),
+        degraded_mode=str(
+            cfg.general_settings.redis_degraded_mode or app.state.settings.redis_degraded_mode
+        ),
     )
     app.state.email_token_service = EmailTokenService(
-        repository=getattr(app.state, "email_token_repository", EmailTokenRepository(app.state.prisma_manager.client)),
+        repository=getattr(
+            app.state,
+            "email_token_repository",
+            EmailTokenRepository(app.state.prisma_manager.client),
+        ),
         salt=app.state.salt_key,
         config_getter=lambda: getattr(app.state, "app_config", cfg),
     )
     app.state.invitation_service = InvitationService(
         db_client=app.state.prisma_manager.client,
-        repository=getattr(app.state, "invitation_repository", InvitationRepository(app.state.prisma_manager.client)),
+        repository=getattr(
+            app.state,
+            "invitation_repository",
+            InvitationRepository(app.state.prisma_manager.client),
+        ),
         token_service=app.state.email_token_service,
         outbox_service=getattr(app.state, "email_outbox_service", None),
         platform_identity_service=app.state.platform_identity_service,
@@ -91,7 +228,9 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
                     ttl_seconds=getattr(cfg.general_settings, "sso_state_ttl_seconds", 600),
                 )
                 statuses.append(BootstrapStatus("sso_state_store", "ready"))
-                control_http_client = getattr(app.state, "control_http_client", app.state.http_client)
+                control_http_client = getattr(
+                    app.state, "control_http_client", app.state.http_client
+                )
                 app.state.sso_auth_handler = SSOAuthHandler(
                     config=SSOConfig(
                         provider=SSOProvider(cfg.general_settings.sso_provider),
@@ -112,7 +251,9 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
                 statuses.append(BootstrapStatus("sso_auth", "ready"))
         else:
             logger.warning("sso enabled but configuration is incomplete")
-            statuses.append(BootstrapStatus("sso_state_store", "degraded", "configuration incomplete"))
+            statuses.append(
+                BootstrapStatus("sso_state_store", "degraded", "configuration incomplete")
+            )
             statuses.append(BootstrapStatus("sso_auth", "degraded", "configuration incomplete"))
     else:
         statuses.append(BootstrapStatus("sso_state_store", "disabled"))
@@ -142,4 +283,21 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
     else:
         statuses.append(BootstrapStatus("custom_auth", "disabled"))
 
-    return AuthRuntime(statuses=tuple(statuses))
+    if runtime.cache_invalidation_worker is not None:
+        runtime.cache_invalidation_task = create_task(runtime.cache_invalidation_worker.run())
+
+    runtime.statuses = tuple(statuses)
+    return runtime
+
+
+async def shutdown_auth_runtime(runtime: AuthRuntime) -> None:
+    worker = getattr(runtime, "cache_invalidation_worker", None)
+    task = getattr(runtime, "cache_invalidation_task", None)
+    if worker is not None:
+        worker.stop()
+    if task is not None:
+        task.cancel()
+        try:
+            await task
+        except CancelledError:
+            pass

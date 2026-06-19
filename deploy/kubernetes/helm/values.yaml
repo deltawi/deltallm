@@ -227,6 +227,16 @@ config:
     health_check_model: gpt-3.5-turbo
     model_deployment_source: hybrid
     model_deployment_bootstrap_from_config: true
+    cache_invalidation_worker_enabled: true
+    cache_invalidation_worker_poll_interval_seconds: 5
+    cache_invalidation_worker_batch_size: 25
+    cache_invalidation_worker_max_concurrency: 4
+    cache_invalidation_worker_lease_seconds: 60
+    cache_invalidation_worker_record_timeout_seconds: 10
+    cache_invalidation_max_attempts: 10
+    cache_invalidation_retry_initial_seconds: 5
+    cache_invalidation_retry_max_seconds: 300
+    cache_invalidation_immediate_timeout_seconds: 0.5
     # Batch API defaults are safe for local/single-replica deployments.
     # If embeddings_batch_enabled is true and replicaCount > 1, configure
     # embeddings_batch_storage_backend: s3 so every pod can read/write artifacts.

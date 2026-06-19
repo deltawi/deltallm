@@ -1,5 +1,5 @@
 from src.bootstrap.audit import AuditRuntime, init_audit_runtime, shutdown_audit_runtime
-from src.bootstrap.auth import AuthRuntime, init_auth_runtime
+from src.bootstrap.auth import AuthRuntime, init_auth_runtime, shutdown_auth_runtime
 from src.bootstrap.batch import BatchRuntime, init_batch_runtime, shutdown_batch_runtime
 from src.bootstrap.email import EmailRuntime, init_email_runtime, shutdown_email_runtime
 from src.bootstrap.infrastructure import InfrastructureRuntime, init_infrastructure_runtime, shutdown_infrastructure_runtime
@@ -20,6 +20,7 @@ __all__ = [
     "format_bootstrap_summary",
     "init_audit_runtime",
     "init_auth_runtime",
+    "shutdown_auth_runtime",
     "shutdown_audit_runtime",
     "init_batch_runtime",
     "shutdown_batch_runtime",

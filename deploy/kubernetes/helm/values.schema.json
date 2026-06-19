@@ -262,6 +262,16 @@
             "batch_webhook_allow_http": { "type": "boolean" },
             "batch_webhook_delivery_retention_days": { "type": "integer", "minimum": 1 },
             "batch_webhook_cleanup_max_rows_per_run": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+            "cache_invalidation_worker_enabled": { "type": "boolean" },
+            "cache_invalidation_worker_poll_interval_seconds": { "type": "number", "exclusiveMinimum": 0 },
+            "cache_invalidation_worker_batch_size": { "type": "integer", "minimum": 1, "maximum": 500 },
+            "cache_invalidation_worker_max_concurrency": { "type": "integer", "minimum": 1, "maximum": 50 },
+            "cache_invalidation_worker_lease_seconds": { "type": "integer", "minimum": 5 },
+            "cache_invalidation_worker_record_timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 300 },
+            "cache_invalidation_max_attempts": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "cache_invalidation_retry_initial_seconds": { "type": "integer", "minimum": 1 },
+            "cache_invalidation_retry_max_seconds": { "type": "integer", "minimum": 1 },
+            "cache_invalidation_immediate_timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 30 },
             "embeddings_batch_scheduler_mode": {
               "type": "string",
               "enum": ["fifo_v1", "slice_v1", "model_capacity_v1", "fair_share_v1", "smart_v1"]

@@ -412,6 +412,29 @@ model DeltaLLM_EmailOutbox {
   @@map("deltallm_emailoutbox")
 }
 
+model DeltaLLM_CacheInvalidationOutbox {
+  invalidation_id  String    @id @default(uuid())
+  scope_type       String
+  scope_id         String
+  reason           String
+  metadata         Json?
+  status           String    @default("pending")
+  attempt_count    Int       @default(0)
+  max_attempts     Int       @default(10)
+  next_attempt_at  DateTime  @default(now())
+  last_error       String?
+  locked_by        String?
+  lease_expires_at DateTime?
+  created_at       DateTime  @default(now())
+  updated_at       DateTime  @updatedAt
+  processed_at     DateTime?
+
+  @@index([status, next_attempt_at], map: "deltallm_cacheinvalidationoutbox_status_next_attempt_idx")
+  @@index([lease_expires_at], map: "deltallm_cacheinvalidationoutbox_lease_expires_idx")
+  @@index([scope_type, scope_id], map: "deltallm_cacheinvalidationoutbox_scope_idx")
+  @@map("deltallm_cacheinvalidationoutbox")
+}
+
 model DeltaLLM_EmailWebhookEvent {
   webhook_event_id     String   @id
   provider             String

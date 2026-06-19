@@ -479,6 +479,7 @@ async def emit_admin_mutation_audit(
     request: Request,
     action: str | AuditAction,
     scope: AuthScope | None = None,
+    organization_id: str | None = None,
     resource_type: str,
     resource_id: str | None = None,
     organization_id: str | None = None,
@@ -486,26 +487,28 @@ async def emit_admin_mutation_audit(
     response_payload: dict[str, Any] | None = None,
     before: dict[str, Any] | None = None,
     after: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
     status: str = "success",
     error: Exception | None = None,
     request_start: float | None = None,
     transactional_audit_repository: AuditRepository | None = None,
 ) -> None:
-    metadata: dict[str, Any] = {}
+    audit_metadata = dict(metadata or {})
     if before is not None and after is not None:
-        metadata["changed_fields"] = changed_fields(before, after)
+        audit_metadata["changed_fields"] = changed_fields(before, after)
     await emit_control_audit_event(
         request=request,
         request_start=request_start if request_start is not None else perf_counter(),
         action=action,
         status=status,
+        organization_id=organization_id,
         resource_type=resource_type,
         resource_id=resource_id,
         organization_id=organization_id,
         request_payload=request_payload,
         response_payload=response_payload,
         scope=scope,
-        metadata=metadata,
+        metadata=audit_metadata,
         error=error,
         critical=True,
         transactional_repository=transactional_audit_repository,

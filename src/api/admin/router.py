@@ -15,6 +15,7 @@ from src.api.admin.endpoints import (
     mcp_router,
     models_router,
     named_credentials_router,
+    organization_tier_assignments_router,
     organizations_router,
     prompt_registry_router,
     rbac_router,
@@ -43,6 +44,7 @@ admin_router.include_router(service_accounts_router)
 admin_router.include_router(teams_router)
 admin_router.include_router(users_router)
 admin_router.include_router(organizations_router)
+admin_router.include_router(organization_tier_assignments_router)
 admin_router.include_router(batches_router)
 admin_router.include_router(batch_create_sessions_router)
 admin_router.include_router(rbac_router)

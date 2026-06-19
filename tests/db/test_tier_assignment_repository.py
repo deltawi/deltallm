@@ -10,6 +10,36 @@ from src.db.tiers import OrganizationTierAssignmentRecord, TierRepository
 from tests.db.tier_repository_fakes import _FakePrisma
 
 
+def _assignment_fields(*, organization_id: str = "org-1") -> dict[str, object]:
+    return {
+        "organization_id": organization_id,
+        "tier_id": "tier-1",
+        "tier_version_id": "ver-1",
+        "assignment_type": "primary",
+        "enabled": True,
+        "weight": 1,
+        "starts_at": None,
+        "ends_at": None,
+        "metadata": None,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("exists", "expected"), [(True, True), (False, False)])
+async def test_organization_exists_for_tier_assignment_queries_org_table(
+    exists: bool,
+    expected: bool,
+) -> None:
+    prisma = _FakePrisma(organization_exists=exists)
+    repository = TierRepository(prisma)
+
+    result = await repository.organization_exists_for_tier_assignment("org-1")
+
+    assert result is expected
+    assert "FROM deltallm_organizationtable" in prisma.calls[0][0]
+    assert prisma.calls[0][1] == ("org-1",)
+
+
 @pytest.mark.asyncio
 async def test_upsert_org_assignment_inserts_then_fetches_joined_assignment() -> None:
     prisma = _FakePrisma(enable_tx=True)
@@ -281,6 +311,26 @@ async def test_upsert_org_assignment_requires_transaction_support_for_enabled_pi
 
 
 @pytest.mark.asyncio
+async def test_upsert_org_assignment_in_current_transaction_uses_current_client() -> None:
+    prisma = _FakePrisma()
+    repository = TierRepository(prisma, use_transactions=False)
+
+    record = await repository.upsert_org_assignment_in_current_transaction(
+        organization_id="org-1",
+        tier_id="tier-1",
+        tier_version_id="ver-1",
+        assignment_type="primary",
+        enabled=True,
+    )
+
+    assert record is not None
+    assert record.assignment_id == "assign-1"
+    assert "FROM deltallm_tier" in prisma.calls[0][0]
+    assert "FOR UPDATE" in prisma.calls[0][0]
+    assert "INSERT INTO deltallm_organizationtierassignment" in prisma.calls[4][0]
+
+
+@pytest.mark.asyncio
 async def test_upsert_expired_enabled_pinned_addon_skips_active_version_preflight() -> None:
     prisma = _FakePrisma(assignment_version_status="archived")
     repository = TierRepository(prisma)
@@ -296,9 +346,10 @@ async def test_upsert_expired_enabled_pinned_addon_skips_active_version_prefligh
 
     assert record is not None
     assert prisma.tx_started == 0
-    assert "INSERT INTO deltallm_organizationtierassignment" in prisma.calls[0][0]
-    assert all("SELECT tier_id" not in sql for sql, _ in prisma.calls)
-    assert all("v.tier_id AS version_tier_id" not in sql for sql, _ in prisma.calls)
+    assert "FROM deltallm_tier" in prisma.calls[0][0]
+    assert "FOR UPDATE" not in prisma.calls[0][0]
+    assert "v.tier_id AS version_tier_id" in prisma.calls[1][0]
+    assert "INSERT INTO deltallm_organizationtierassignment" in prisma.calls[2][0]
     assert all("v.status = 'active'" not in sql for sql, _ in prisma.calls)
 
 
@@ -318,10 +369,69 @@ async def test_upsert_expired_enabled_unpinned_addon_skips_active_version_prefli
 
     assert record is not None
     assert prisma.tx_started == 0
-    assert "INSERT INTO deltallm_organizationtierassignment" in prisma.calls[0][0]
-    assert all("SELECT tier_id" not in sql for sql, _ in prisma.calls)
+    assert "FROM deltallm_tier" in prisma.calls[0][0]
+    assert "FOR UPDATE" not in prisma.calls[0][0]
+    assert "INSERT INTO deltallm_organizationtierassignment" in prisma.calls[1][0]
     assert all("v.tier_id AS version_tier_id" not in sql for sql, _ in prisma.calls)
     assert all("v.status = 'active'" not in sql for sql, _ in prisma.calls)
+
+
+@pytest.mark.asyncio
+async def test_disabled_assignment_rejects_missing_tier_before_write() -> None:
+    prisma = _FakePrisma(assignment_tier_exists=False)
+    repository = TierRepository(prisma)
+
+    with pytest.raises(ValueError, match="existing tier"):
+        await repository.upsert_org_assignment(
+            organization_id="org-1",
+            tier_id="tier-missing",
+            assignment_type="addon",
+            enabled=False,
+        )
+
+    assert prisma.tx_started == 0
+    assert "FROM deltallm_tier" in prisma.calls[0][0]
+    assert all("deltallm_organizationtierassignment" not in sql for sql, _ in prisma.calls)
+
+
+@pytest.mark.asyncio
+async def test_disabled_assignment_rejects_missing_version_before_write() -> None:
+    prisma = _FakePrisma(assignment_version_tier_id=None)
+    repository = TierRepository(prisma)
+
+    with pytest.raises(ValueError, match="existing tier version"):
+        await repository.upsert_org_assignment(
+            organization_id="org-1",
+            tier_id="tier-1",
+            tier_version_id="version-missing",
+            assignment_type="addon",
+            enabled=False,
+        )
+
+    assert prisma.tx_started == 0
+    assert "FROM deltallm_tier" in prisma.calls[0][0]
+    assert "v.tier_id AS version_tier_id" in prisma.calls[1][0]
+    assert all("deltallm_organizationtierassignment" not in sql for sql, _ in prisma.calls)
+
+
+@pytest.mark.asyncio
+async def test_disabled_assignment_rejects_cross_tier_version_before_write() -> None:
+    prisma = _FakePrisma(assignment_version_tier_id="tier-other")
+    repository = TierRepository(prisma)
+
+    with pytest.raises(ValueError, match="belong to tier_id"):
+        await repository.upsert_org_assignment(
+            organization_id="org-1",
+            tier_id="tier-1",
+            tier_version_id="version-other",
+            assignment_type="addon",
+            enabled=False,
+        )
+
+    assert prisma.tx_started == 0
+    assert "FROM deltallm_tier" in prisma.calls[0][0]
+    assert "v.tier_id AS version_tier_id" in prisma.calls[1][0]
+    assert all("deltallm_organizationtierassignment" not in sql for sql, _ in prisma.calls)
 
 
 @pytest.mark.asyncio
@@ -390,7 +500,10 @@ async def test_upsert_org_assignment_uses_transaction_client_when_available() ->
 
 @pytest.mark.asyncio
 async def test_upsert_org_assignment_updates_by_assignment_id() -> None:
-    prisma = _FakePrisma(current_active_version_id=None)
+    prisma = _FakePrisma(
+        current_active_version_id=None,
+        assignment_rows={"assign-existing": _assignment_fields()},
+    )
     repository = TierRepository(prisma)
 
     record = await repository.upsert_org_assignment(
@@ -406,8 +519,9 @@ async def test_upsert_org_assignment_updates_by_assignment_id() -> None:
 
     assert record is not None
     assert record.assignment_id == "assign-existing"
-    assert "UPDATE deltallm_organizationtierassignment" in prisma.calls[0][0]
-    assert prisma.calls[0][1][:7] == (
+    assert "FROM deltallm_tier" in prisma.calls[0][0]
+    assert "UPDATE deltallm_organizationtierassignment" in prisma.calls[1][0]
+    assert prisma.calls[1][1][:7] == (
         "assign-existing",
         "org-1",
         "tier-1",
@@ -416,8 +530,75 @@ async def test_upsert_org_assignment_updates_by_assignment_id() -> None:
         False,
         2,
     )
-    assert "FROM deltallm_organizationtierassignment a" in prisma.calls[1][0]
-    assert prisma.calls[1][1] == ("assign-existing",)
+    assert "AND organization_id = $2" in prisma.calls[1][0]
+    assert "FROM deltallm_organizationtierassignment a" in prisma.calls[2][0]
+    assert prisma.calls[2][1] == ("assign-existing",)
+
+
+@pytest.mark.asyncio
+async def test_get_org_assignment_for_update_locks_org_scoped_assignment() -> None:
+    prisma = _FakePrisma(assignment_rows={"assign-1": _assignment_fields()})
+    repository = TierRepository(prisma)
+
+    record = await repository.get_org_assignment_for_update(
+        assignment_id="assign-1",
+        organization_id="org-1",
+    )
+
+    assert record is not None
+    assert record.assignment_id == "assign-1"
+    assert record.organization_id == "org-1"
+    sql, params = prisma.calls[0]
+    assert "a.assignment_id = $1" in sql
+    assert "a.organization_id = $2" in sql
+    assert "FOR UPDATE OF a" in sql
+    assert params == ("assign-1", "org-1")
+
+
+@pytest.mark.asyncio
+async def test_get_org_assignment_for_update_rejects_cross_org_assignment() -> None:
+    prisma = _FakePrisma(assignment_rows={"assign-1": _assignment_fields(organization_id="org-2")})
+    repository = TierRepository(prisma)
+
+    record = await repository.get_org_assignment_for_update(
+        assignment_id="assign-1",
+        organization_id="org-1",
+    )
+
+    assert record is None
+    assert prisma.calls[0][1] == ("assign-1", "org-1")
+
+
+@pytest.mark.asyncio
+async def test_delete_org_assignment_for_org_constrains_delete_by_org() -> None:
+    prisma = _FakePrisma(assignment_rows={"assign-1": _assignment_fields()})
+    repository = TierRepository(prisma)
+
+    deleted = await repository.delete_org_assignment_for_org(
+        assignment_id="assign-1",
+        organization_id="org-1",
+    )
+
+    assert deleted is True
+    sql, params = prisma.calls[0]
+    assert "DELETE FROM deltallm_organizationtierassignment" in sql
+    assert "assignment_id = $1" in sql
+    assert "organization_id = $2" in sql
+    assert params == ("assign-1", "org-1")
+
+
+@pytest.mark.asyncio
+async def test_delete_org_assignment_for_org_rejects_cross_org_assignment() -> None:
+    prisma = _FakePrisma(assignment_rows={"assign-1": _assignment_fields(organization_id="org-2")})
+    repository = TierRepository(prisma)
+
+    deleted = await repository.delete_org_assignment_for_org(
+        assignment_id="assign-1",
+        organization_id="org-1",
+    )
+
+    assert deleted is False
+    assert prisma.calls[0][1] == ("assign-1", "org-1")
 
 
 @pytest.mark.asyncio
