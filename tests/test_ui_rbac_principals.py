@@ -395,9 +395,9 @@ def test_lower_runtime_email_lookup_migration_exists() -> None:
     )
     sql = migration.read_text(encoding="utf-8")
 
-    assert 'DROP INDEX CONCURRENTLY IF EXISTS "deltallm_usertable_lower_user_email_idx"' in sql
-    assert 'CREATE INDEX CONCURRENTLY "deltallm_usertable_lower_user_email_idx"' in sql
-    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS" not in sql
+    assert "CONCURRENTLY" not in sql
+    assert 'DROP INDEX IF EXISTS "deltallm_usertable_lower_user_email_idx"' in sql
+    assert 'CREATE INDEX IF NOT EXISTS "deltallm_usertable_lower_user_email_idx"' in sql
     assert '"deltallm_usertable_lower_user_email_idx"' in sql
     assert 'ON "deltallm_usertable" (lower("user_email"))' in sql
     assert 'WHERE "user_email" IS NOT NULL' in sql
