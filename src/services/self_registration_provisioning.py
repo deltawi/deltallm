@@ -10,6 +10,7 @@ from src.services.platform_identity_service import PlatformIdentityService
 
 
 _SELF_REGISTRATION_SOURCE = "self_registration"
+_ACCOUNT_METADATA_KEY = "self_registration"
 
 
 @dataclass(frozen=True)
@@ -201,6 +202,12 @@ class SelfRegistrationProvisioningService:
             team_id=team_id,
             role=settings.default_team.role,
         )
+        await self._mark_account_self_registered(
+            db_client,
+            account_id=account_id,
+            organization_id=organization_id,
+            team_id=team_id,
+        )
 
         return SelfRegistrationProvisioningResult(
             account_id=account_id,
@@ -355,6 +362,48 @@ class SelfRegistrationProvisioningService:
             account_id,
             team_id,
             role,
+        )
+
+    async def _mark_account_self_registered(
+        self,
+        db_client: Any,
+        *,
+        account_id: str,
+        organization_id: str,
+        team_id: str,
+    ) -> None:
+        await db_client.execute_raw(
+            """
+            UPDATE deltallm_platformaccount
+            SET metadata = NULLIF(
+                    CASE
+                        WHEN jsonb_typeof(metadata) = 'object'
+                        THEN metadata
+                        ELSE '{}'::jsonb
+                    END
+                    || jsonb_build_object(
+                        $2,
+                        CASE
+                            WHEN jsonb_typeof(metadata -> $2) = 'object'
+                            THEN metadata -> $2
+                            ELSE '{}'::jsonb
+                        END || $3::jsonb
+                    ),
+                    '{}'::jsonb
+                ),
+                updated_at = NOW()
+            WHERE account_id = $1
+            """,
+            account_id,
+            _ACCOUNT_METADATA_KEY,
+            json.dumps(
+                {
+                    "source": _SELF_REGISTRATION_SOURCE,
+                    "registered": True,
+                    "default_organization_id": organization_id,
+                    "default_team_id": team_id,
+                }
+            ),
         )
 
     async def _ensure_runtime_user(

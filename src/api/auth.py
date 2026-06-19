@@ -122,6 +122,22 @@ def _is_self_registration_enabled(settings: Any) -> bool:
     return bool(settings is not None and getattr(settings, "enabled", False))
 
 
+def _self_registration_sso_config(general_settings: Any, *, sso_enabled: bool) -> dict[str, Any]:
+    settings = getattr(general_settings, "self_registration", None)
+    enabled = bool(sso_enabled and _is_self_registration_enabled(settings))
+    mode = str(getattr(settings, "mode", "") or "").strip() if enabled else None
+    sandbox_access_enabled = bool(
+        enabled
+        and mode == "sso_allowed_domain"
+        and not getattr(settings, "require_admin_approval", False)
+    )
+    return {
+        "enabled": enabled,
+        "mode": mode,
+        "sandbox_access_enabled": sandbox_access_enabled,
+    }
+
+
 def _is_allowed_self_registration_domain(settings: Any, *, email: str) -> bool:
     domain = _normalized_email_domain(email)
     if domain is None:
@@ -1050,12 +1066,20 @@ async def reset_password(request: Request, payload: ResetPasswordRequest) -> dic
 
 @router.get("/sso-config")
 async def sso_config(request: Request):
+    app_config = getattr(request.app.state, "app_config", None)
+    general_settings = getattr(app_config, "general_settings", None)
     handler = getattr(request.app.state, "sso_auth_handler", None)
     if handler is None:
-        return {"sso_enabled": False}
-    app_config = getattr(request.app.state, "app_config", None)
-    provider = str(getattr(getattr(app_config, "general_settings", None), "sso_provider", "oidc"))
-    return {"sso_enabled": True, "provider": provider}
+        return {
+            "sso_enabled": False,
+            "self_registration": _self_registration_sso_config(general_settings, sso_enabled=False),
+        }
+    provider = str(getattr(general_settings, "sso_provider", "oidc"))
+    return {
+        "sso_enabled": True,
+        "provider": provider,
+        "self_registration": _self_registration_sso_config(general_settings, sso_enabled=True),
+    }
 
 
 @router.get("/login")

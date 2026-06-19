@@ -97,6 +97,47 @@ general_settings:
   sso_admin_email_list: []
   sso_default_team_id: null
   sso_state_ttl_seconds: 600
+  self_registration:
+    enabled: false
+    mode: sso_allowed_domain
+    allowed_domains: []
+    require_email_verification: true
+    require_admin_approval: false
+    default_org:
+      id: null
+      name: null
+      max_budget: null
+      soft_budget: null
+      rpm_limit: null
+      tpm_limit: null
+      rph_limit: null
+      rpd_limit: null
+      tpd_limit: null
+    default_team:
+      id: null
+      alias: null
+      role: team_developer
+      max_budget: null
+      soft_budget: null
+      rpm_limit: null
+      tpm_limit: null
+      rph_limit: null
+      rpd_limit: null
+      tpd_limit: null
+      self_service_keys_enabled: true
+      self_service_max_keys_per_user: null
+      self_service_budget_ceiling: null
+      self_service_require_expiry: true
+      self_service_max_expiry_days: null
+    default_user:
+      user_role: internal_user
+      max_budget: null
+      soft_budget: null
+      rpm_limit: null
+      tpm_limit: null
+      rph_limit: null
+      rpd_limit: null
+      tpd_limit: null
   embeddings_batch_enabled: false
   embeddings_batch_worker_enabled: true
   embeddings_batch_completion_outbox_worker_enabled: true
@@ -275,6 +316,71 @@ If `email_enabled: true`, `email_base_url` must be an absolute `http://` or `htt
 | `sso_state_ttl_seconds` | `600` | TTL for Redis-backed SSO callback state |
 
 SSO callback state is stored in Redis. If SSO is enabled but Redis is unavailable, DeltaLLM keeps SSO disabled instead of exposing a broken login flow.
+
+## Self-Registration Settings
+
+`self_registration` enables constrained self-service onboarding for first-time SSO users. It is intended for developer sandbox access, not unrestricted public signup.
+
+```yaml
+general_settings:
+  enable_sso: true
+  self_registration:
+    enabled: true
+    mode: sso_allowed_domain
+    allowed_domains:
+      - example.com
+    require_email_verification: true
+    require_admin_approval: false
+    default_org:
+      id: org-sandbox
+      name: Developer Sandbox
+      max_budget: 100
+      soft_budget: 80
+      rpm_limit: 300
+      tpm_limit: 500000
+      rph_limit: 2000
+      rpd_limit: 10000
+      tpd_limit: 5000000
+    default_team:
+      id: team-self-serve
+      alias: Self-Service Developers
+      role: team_developer
+      max_budget: 50
+      soft_budget: 40
+      rpm_limit: 150
+      tpm_limit: 250000
+      rph_limit: 1000
+      rpd_limit: 5000
+      tpd_limit: 2500000
+      self_service_keys_enabled: true
+      self_service_max_keys_per_user: 2
+      self_service_budget_ceiling: 5
+      self_service_require_expiry: true
+      self_service_max_expiry_days: 14
+    default_user:
+      max_budget: 10
+      soft_budget: 8
+      rpm_limit: 30
+      tpm_limit: 50000
+      rph_limit: 200
+      rpd_limit: 1000
+      tpd_limit: 500000
+```
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `self_registration.enabled` | `false` | Enable first-time SSO provisioning into the configured sandbox org/team |
+| `self_registration.mode` | `sso_allowed_domain` | Current supported production path for automatic provisioning |
+| `self_registration.allowed_domains` | `[]` | Bare email domains eligible for first-time SSO provisioning |
+| `self_registration.require_email_verification` | `true` | Require the identity provider to report a verified email before provisioning |
+| `self_registration.require_admin_approval` | `false` | Reserved approval gate. When true, automatic sandbox provisioning is blocked |
+| `self_registration.default_org.*` | — | Organization ID, display name, budgets, and rate limits to seed |
+| `self_registration.default_team.*` | — | Team ID, alias, role, budgets, rate limits, and self-service key policy to seed |
+| `self_registration.default_user.*` | — | Runtime user profile type, budget, and rate limits to seed |
+
+When enabled, `default_org.id`, `default_team.id`, and at least one `allowed_domains` entry are required for `sso_allowed_domain`.
+
+The config values seed records only during provisioning. DeltaLLM does not continuously reconcile those records, so platform admins can later edit the organization, team, memberships, asset access, budgets, and limits through the Admin UI or API without config reloads reverting those changes.
 
 ## Governance Notification Settings
 

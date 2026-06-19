@@ -60,6 +60,15 @@ def _enabled_settings() -> SelfRegistrationSettings:
     return cfg.general_settings.self_registration
 
 
+def _expected_account_self_registration_metadata() -> dict[str, Any]:
+    return {
+        "source": "self_registration",
+        "registered": True,
+        "default_organization_id": "org-sandbox",
+        "default_team_id": "team-self-serve",
+    }
+
+
 class FakeSelfRegistrationDB:
     def __init__(self) -> None:
         self.accounts: dict[str, dict[str, Any]] = {}
@@ -112,6 +121,8 @@ class FakeSelfRegistrationDB:
             return self._insert_team_membership(*params)
         if "insert into deltallm_usertable" in normalized:
             return self._insert_runtime_user(*params)
+        if "update deltallm_platformaccount" in normalized and "set metadata" in normalized:
+            return self._update_platform_account_metadata(*params)
         return 0
 
     def add_account(
@@ -121,6 +132,7 @@ class FakeSelfRegistrationDB:
         email: str,
         role: str = "org_user",
         is_active: bool = True,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         self.accounts[account_id] = {
             "account_id": account_id,
@@ -130,6 +142,7 @@ class FakeSelfRegistrationDB:
             "is_active": is_active,
             "force_password_change": False,
             "mfa_enabled": False,
+            "metadata": copy.deepcopy(metadata),
             "created_at": None,
             "updated_at": None,
             "last_login_at": None,
@@ -289,6 +302,18 @@ class FakeSelfRegistrationDB:
         }
         return 1
 
+    def _update_platform_account_metadata(self, account_id: str, metadata_key: str, metadata: str) -> int:
+        account = self.accounts.get(account_id)
+        if account is None:
+            return 0
+
+        account_metadata = account.get("metadata") if isinstance(account.get("metadata"), dict) else {}
+        current_value = account_metadata.get(metadata_key)
+        current_obj = dict(current_value) if isinstance(current_value, dict) else {}
+        account_metadata[metadata_key] = {**current_obj, **json.loads(metadata)}
+        account["metadata"] = account_metadata
+        return 1
+
 
 class TransactionalFakeSelfRegistrationDB(FakeSelfRegistrationDB):
     def tx(self) -> "_FakeTransaction":
@@ -444,6 +469,7 @@ async def test_provision_from_defaults_seeds_sandbox_records() -> None:
     assert db.users["acct-1"]["user_email"] == "developer@example.com"
     assert db.users["acct-1"]["max_budget"] == 10
     assert db.users["acct-1"]["team_id"] == "team-self-serve"
+    assert db.accounts["acct-1"]["metadata"]["self_registration"] == _expected_account_self_registration_metadata()
 
 
 @pytest.mark.asyncio
@@ -454,6 +480,7 @@ async def test_provision_from_defaults_preserves_existing_admin_changes() -> Non
         email="existing@example.com",
         role="platform_admin",
         is_active=False,
+        metadata={"external_id": "idp-user-1"},
     )
     db.organizations["org-sandbox"] = {
         "organization_id": "org-sandbox",
@@ -503,6 +530,11 @@ async def test_provision_from_defaults_preserves_existing_admin_changes() -> Non
     assert db.users["acct-existing"]["team_id"] == "team-self-serve"
     assert db.organization_memberships[("acct-existing", "org-sandbox")]["role"] == "org_admin"
     assert db.team_memberships[("acct-existing", "team-self-serve")]["role"] == "team_admin"
+    assert db.accounts["acct-existing"]["metadata"]["external_id"] == "idp-user-1"
+    assert (
+        db.accounts["acct-existing"]["metadata"]["self_registration"]
+        == _expected_account_self_registration_metadata()
+    )
 
 
 @pytest.mark.asyncio
@@ -526,6 +558,7 @@ async def test_provision_from_defaults_rejects_existing_runtime_user_outside_def
     assert "acct-1" not in db.users
     assert db.users["legacy-user"]["max_budget"] == 500
     assert db.users["legacy-user"]["team_id"] == "legacy-team"
+    assert "self_registration" not in (db.accounts["acct-1"].get("metadata") or {})
 
 
 @pytest.mark.asyncio
@@ -549,6 +582,7 @@ async def test_provision_from_defaults_returns_existing_runtime_user_in_default_
     assert "acct-1" not in db.users
     assert db.users["legacy-user"]["max_budget"] == 500
     assert db.users["legacy-user"]["team_id"] == "team-self-serve"
+    assert db.accounts["acct-1"]["metadata"]["self_registration"] == _expected_account_self_registration_metadata()
 
 
 @pytest.mark.asyncio

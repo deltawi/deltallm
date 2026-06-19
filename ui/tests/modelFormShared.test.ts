@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { ModelDeploymentDetail } from '../src/lib/api';
+import type { AuthSsoConfig, ModelDeploymentDetail, Principal } from '../src/lib/api';
 import { EMPTY_FORM, buildModelPayload, formFromModel, type ModelFormValues } from '../src/components/modelFormShared';
+import {
+  formatOptionalBudget,
+  formatOptionalLimit,
+  hasSandboxSelfRegistration,
+  isSelfRegisteredPrincipal,
+} from '../src/lib/selfRegistration';
 
 function chatForm(overrides: Partial<ModelFormValues> = {}): ModelFormValues {
   return {
@@ -126,4 +132,39 @@ test('buildModelPayload clears scheduler capacity when all scheduler fields are 
 
   assert.equal('batch_capacity' in payload.model_info, false);
   assert.deepEqual(payload.model_info.vendor_metadata, { owner: 'infra' });
+});
+
+test('self-registration helpers require enabled SSO sandbox access', () => {
+  const enabled: AuthSsoConfig = {
+    sso_enabled: true,
+    provider: 'oidc',
+    self_registration: {
+      enabled: true,
+      mode: 'sso_allowed_domain',
+      sandbox_access_enabled: true,
+    },
+  };
+
+  assert.equal(hasSandboxSelfRegistration(enabled), true);
+  assert.equal(hasSandboxSelfRegistration({ ...enabled, sso_enabled: false }), false);
+  assert.equal(
+    hasSandboxSelfRegistration({
+      ...enabled,
+      self_registration: { ...enabled.self_registration!, sandbox_access_enabled: false },
+    }),
+    false,
+  );
+});
+
+test('self-registration helpers identify principals and format optional limits', () => {
+  const principal = {
+    self_registration: { is_self_registered: true },
+  } as Principal;
+
+  assert.equal(isSelfRegisteredPrincipal(principal), true);
+  assert.equal(isSelfRegisteredPrincipal(null), false);
+  assert.equal(formatOptionalLimit(50000), '50,000');
+  assert.equal(formatOptionalLimit(null), 'No limit');
+  assert.equal(formatOptionalBudget(5), '$5');
+  assert.equal(formatOptionalBudget(null), 'No limit');
 });

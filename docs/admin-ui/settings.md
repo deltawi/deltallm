@@ -17,6 +17,8 @@ Settings control the global runtime behavior of the gateway.
 
 Use Settings for platform-wide defaults. Do not use it for per-group routing behavior; that belongs in [Route Groups](route-groups.md).
 
+Authentication and onboarding controls such as SSO, invitations, and self-registration sandbox defaults are configured in `general_settings`, not from this page. See [General Settings](../configuration/general.md#self-registration-settings) and [Authentication & SSO](../features/authentication.md#self-service-sandbox-registration) for the self-registration sandbox flow.
+
 ## Good operating pattern
 
 - Keep global defaults conservative

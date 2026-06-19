@@ -188,6 +188,45 @@ general_settings:
 !!! note
     SSO callback state is stored in Redis. If Redis is unavailable, DeltaLLM keeps SSO disabled instead of advertising a broken login flow.
 
+### Self-Service Sandbox Registration
+
+When SSO is enabled, DeltaLLM can provision first-time users from approved email domains into a constrained developer sandbox. This is not public signup: users must authenticate through the configured identity provider, pass the allowed-domain check, and land in the configured default organization and team.
+
+```yaml
+general_settings:
+  enable_sso: true
+  self_registration:
+    enabled: true
+    mode: sso_allowed_domain
+    allowed_domains:
+      - example.com
+    require_email_verification: true
+    default_org:
+      id: org-sandbox
+      max_budget: 100
+      rpm_limit: 300
+    default_team:
+      id: team-self-serve
+      role: team_developer
+      self_service_keys_enabled: true
+      self_service_max_keys_per_user: 2
+      self_service_budget_ceiling: 5
+      self_service_require_expiry: true
+      self_service_max_expiry_days: 14
+    default_user:
+      max_budget: 10
+      rpm_limit: 30
+```
+
+Provisioning creates or links:
+
+- a platform account with `org_user`
+- an organization membership in the default organization
+- a team membership in the default team
+- a runtime user row with the configured budget and rate limits
+
+The default organization, team, and runtime user values are applied once at provisioning time. Admin edits are not overwritten by config reloads.
+
 ### Auto-Assign Platform Admins
 
 Add emails to `sso_admin_email_list` to grant `platform_admin` on first SSO login.

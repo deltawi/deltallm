@@ -35,6 +35,8 @@ All limits are optional. Only configured limits are enforced. Team limits act as
 
 Teams can allow their developers to create their own API keys without admin involvement. New teams start with self-service enabled by default in the create form, and you can review or tighten the policy later in the Team Detail page under the **Self-Service Keys** card (visible to team admins and above).
 
+When SSO self-registration is enabled, the configured `self_registration.default_team` is created automatically the first time an eligible user is provisioned. Its self-service key policy is seeded from config once, then remains editable from the Team Detail page.
+
 ### Policy fields
 
 | Field | Description |
@@ -46,6 +48,8 @@ Teams can allow their developers to create their own API keys without admin invo
 | Max expiry days | Longest allowed key lifetime in days |
 
 When a developer creates a key through self-service, the backend enforces all of these constraints and rejects requests that violate any of them. See [API Keys: Self-Service Key Creation](api-keys.md#self-service-key-creation) for the full list of enforced constraints.
+
+For sandbox teams, keep the policy intentionally narrow: low key count, small key budget ceiling, required expiry, and a short maximum lifetime. These limits are enforced in addition to organization, team, runtime user, and key-level budgets and rate limits.
 
 ### Enabling self-service
 

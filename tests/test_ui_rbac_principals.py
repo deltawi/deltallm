@@ -1,8 +1,20 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
+
+
+def _account_self_registration_metadata() -> dict:
+    return {
+        "self_registration": {
+            "source": "self_registration",
+            "registered": True,
+            "default_organization_id": "org-1",
+            "default_team_id": "team-1",
+        }
+    }
 
 
 class FakeDB:
@@ -43,10 +55,52 @@ class FakeDB:
         }
         self.sessions: list[dict] = [{"account_id": "acct-1"}]
         self.identities: list[dict] = [{"account_id": "acct-1"}]
+        self.organizations: dict[str, dict] = {
+            "org-1": {
+                "organization_id": "org-1",
+                "organization_name": "Sandbox Org",
+                "metadata": {
+                    "source": "self_registration",
+                    "self_registration_default": "organization",
+                },
+            }
+        }
+        self.teams: dict[str, dict] = {
+            "team-1": {
+                "team_id": "team-1",
+                "team_alias": "Sandbox Team",
+                "organization_id": "org-1",
+                "self_service_keys_enabled": True,
+                "self_service_max_keys_per_user": 2,
+                "self_service_budget_ceiling": 5.0,
+                "self_service_require_expiry": True,
+                "self_service_max_expiry_days": 14,
+                "metadata": {
+                    "source": "self_registration",
+                    "self_registration_default": "team",
+                },
+            }
+        }
         self.runtime_users: dict[str, dict] = {
             "user-1": {
                 "user_id": "user-1",
                 "user_email": "alice@example.com",
+                "team_id": "team-1",
+                "max_budget": 10.0,
+                "soft_budget": 8.0,
+                "spend": 1.5,
+                "rpm_limit": 30,
+                "tpm_limit": 50000,
+                "rph_limit": 200,
+                "rpd_limit": 1000,
+                "tpd_limit": 500000,
+                "blocked": False,
+                "metadata": {
+                    "source": "self_registration",
+                    "self_registration_default": "user",
+                },
+                "created_at": now,
+                "updated_at": now,
             }
         }
 
@@ -63,9 +117,8 @@ class FakeDB:
                     return [row]
             return []
         if "FROM deltallm_teamtable WHERE team_id = $1" in query:
-            if str(params[0]) == "team-1":
-                return [{"team_id": "team-1", "organization_id": "org-1"}]
-            return []
+            row = self.teams.get(str(params[0]))
+            return [row] if row else []
         if "FROM deltallm_organizationmembership" in query and "WHERE account_id = $1 AND organization_id = $2" in query:
             account_id = str(params[0])
             organization_id = str(params[1])
@@ -73,27 +126,97 @@ class FakeDB:
                 if row["account_id"] == account_id and row["organization_id"] == organization_id:
                     return [row]
             return []
-        if "FROM deltallm_platformaccount pa" in query and "JOIN deltallm_usertable u ON lower(u.user_email) = lower(pa.email)" in query:
-            results = []
-            for account_id in params:
-                account = self.accounts.get(str(account_id))
-                if not account:
-                    continue
-                email = str(account.get("email") or "").lower()
-                for user in self.runtime_users.values():
-                    if str(user.get("user_email") or "").lower() == email:
-                        results.append({"account_id": str(account_id), "user_id": user["user_id"]})
-            return results
+        if "matched_runtime_users AS" in query:
+            return self._runtime_user_rows_for_principals(params)
         if "FROM deltallm_platformaccount" in query:
-            return list(self.accounts.values())
+            rows = []
+            for account in self.accounts.values():
+                row = dict(account)
+                if "metadata AS account_metadata" in query:
+                    row["account_metadata"] = row.pop("metadata", None)
+                rows.append(row)
+            return rows
         if "FROM deltallm_organizationmembership" in query and "WHERE membership_id = $1" in query:
             row = self.org_memberships.get(str(params[0]))
             return [row] if row else []
         if "FROM deltallm_organizationmembership" in query:
-            return list(self.org_memberships.values())
+            rows = []
+            for membership in self.org_memberships.values():
+                organization = self.organizations.get(str(membership.get("organization_id") or ""), {})
+                rows.append(
+                    {
+                        **membership,
+                        "organization_name": organization.get("organization_name"),
+                        "organization_metadata": organization.get("metadata"),
+                    }
+                )
+            return rows
         if "FROM deltallm_teammembership" in query:
-            return list(self.team_memberships.values())
+            rows = []
+            for membership in self.team_memberships.values():
+                team = self.teams.get(str(membership.get("team_id") or ""), {})
+                rows.append(
+                    {
+                        **membership,
+                        "team_alias": team.get("team_alias"),
+                        "organization_id": team.get("organization_id"),
+                        "self_service_keys_enabled": team.get("self_service_keys_enabled"),
+                        "self_service_max_keys_per_user": team.get("self_service_max_keys_per_user"),
+                        "self_service_budget_ceiling": team.get("self_service_budget_ceiling"),
+                        "self_service_require_expiry": team.get("self_service_require_expiry"),
+                        "self_service_max_expiry_days": team.get("self_service_max_expiry_days"),
+                        "team_metadata": team.get("metadata"),
+                    }
+                )
+            return rows
         return []
+
+    def _runtime_user_rows_for_principals(self, params: tuple[object, ...]) -> list[dict]:
+        results = []
+        for account_id, account_email in zip(params[::2], params[1::2], strict=False):
+            matched_user = self._matched_runtime_user(str(account_id), str(account_email))
+            if matched_user is None:
+                continue
+            team = self.teams.get(str(matched_user.get("team_id") or ""), {})
+            organization = self.organizations.get(str(team.get("organization_id") or ""), {})
+            results.append(
+                {
+                    **matched_user,
+                    "matched_account_id": str(account_id),
+                    "organization_id": team.get("organization_id"),
+                    "team_alias": team.get("team_alias"),
+                    "self_service_keys_enabled": team.get("self_service_keys_enabled"),
+                    "self_service_max_keys_per_user": team.get("self_service_max_keys_per_user"),
+                    "self_service_budget_ceiling": team.get("self_service_budget_ceiling"),
+                    "self_service_require_expiry": team.get("self_service_require_expiry"),
+                    "self_service_max_expiry_days": team.get("self_service_max_expiry_days"),
+                    "team_metadata": team.get("metadata"),
+                    "organization_name": organization.get("organization_name"),
+                    "organization_metadata": organization.get("metadata"),
+                    "user_metadata": matched_user.get("metadata"),
+                }
+            )
+        return results
+
+    def _matched_runtime_user(self, account_id: str, account_email: str) -> dict | None:
+        by_id = self.runtime_users.get(account_id)
+        if by_id is not None:
+            return by_id
+
+        for user in self.runtime_users.values():
+            if str(user.get("user_email") or "") == account_email:
+                return user
+
+        account_email_lower = account_email.lower()
+        lower_matches = [
+            user
+            for user in self.runtime_users.values()
+            if str(user.get("user_email") or "").lower() == account_email_lower
+            and str(user.get("user_email") or "") != account_email
+        ]
+        if not lower_matches:
+            return None
+        return sorted(lower_matches, key=lambda user: str(user.get("user_id") or ""))[0]
 
     async def execute_raw(self, query: str, *params):
         if "DELETE FROM deltallm_teammembership WHERE membership_id = $1" in query:
@@ -157,8 +280,127 @@ async def test_list_principals_returns_account_with_memberships(client, test_app
     assert payload["pagination"]["total"] == 1
     assert principals[0]["email"] == "alice@example.com"
     assert principals[0]["runtime_user_id"] == "user-1"
+    assert principals[0]["runtime_user"]["max_budget"] == 10.0
+    assert principals[0]["runtime_user"]["rpm_limit"] == 30
+    assert principals[0]["runtime_user"]["organization_name"] == "Sandbox Org"
+    assert principals[0]["self_registration"] == {
+        "is_self_registered": True,
+        "seeded_user": True,
+        "seeded_team": True,
+        "seeded_organization": True,
+        "sandbox_team_id": "team-1",
+        "sandbox_organization_id": "org-1",
+    }
+    assert principals[0]["self_service_policy"] == {
+        "team_id": "team-1",
+        "team_alias": "Sandbox Team",
+        "self_service_keys_enabled": True,
+        "self_service_max_keys_per_user": 2,
+        "self_service_budget_ceiling": 5.0,
+        "self_service_require_expiry": True,
+        "self_service_max_expiry_days": 14,
+    }
     assert len(principals[0]["organization_memberships"]) == 1
     assert len(principals[0]["team_memberships"]) == 1
+    assert principals[0]["organization_memberships"][0]["self_registration_default"] is True
+    assert principals[0]["team_memberships"][0]["self_registration_default"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_principals_uses_account_marker_for_reused_runtime_user(client, test_app):
+    fake_db = FakeDB()
+    fake_db.accounts["acct-1"]["metadata"] = _account_self_registration_metadata()
+    fake_db.runtime_users["legacy-user"] = {
+        **fake_db.runtime_users.pop("user-1"),
+        "user_id": "legacy-user",
+        "metadata": None,
+    }
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.get("/ui/api/principals", headers={"Authorization": "Bearer mk-test"})
+
+    assert response.status_code == 200
+    principal = response.json()["data"][0]
+    assert principal["runtime_user_id"] == "legacy-user"
+    assert "metadata" not in principal
+    assert "account_metadata" not in principal
+    assert principal["self_registration"] == {
+        "is_self_registered": True,
+        "seeded_user": False,
+        "seeded_team": True,
+        "seeded_organization": True,
+        "sandbox_team_id": "team-1",
+        "sandbox_organization_id": "org-1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_principals_matches_runtime_user_email_case_insensitively(client, test_app):
+    fake_db = FakeDB()
+    fake_db.runtime_users["user-1"]["user_email"] = "Alice@Example.COM"
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.get("/ui/api/principals", headers={"Authorization": "Bearer mk-test"})
+
+    assert response.status_code == 200
+    principal = response.json()["data"][0]
+    assert principal["runtime_user_id"] == "user-1"
+    assert principal["runtime_user"]["user_email"] == "Alice@Example.COM"
+
+
+@pytest.mark.asyncio
+async def test_list_principals_prefers_runtime_user_id_over_email_match(client, test_app):
+    fake_db = FakeDB()
+    fake_db.runtime_users["acct-1"] = {
+        **fake_db.runtime_users["user-1"],
+        "user_id": "acct-1",
+        "user_email": "other@example.com",
+    }
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.get("/ui/api/principals", headers={"Authorization": "Bearer mk-test"})
+
+    assert response.status_code == 200
+    principal = response.json()["data"][0]
+    assert principal["runtime_user_id"] == "acct-1"
+    assert principal["runtime_user"]["user_email"] == "other@example.com"
+
+
+@pytest.mark.asyncio
+async def test_list_principals_prefers_exact_email_over_lowercase_fallback(client, test_app):
+    fake_db = FakeDB()
+    fake_db.runtime_users["legacy-user"] = {
+        **fake_db.runtime_users["user-1"],
+        "user_id": "legacy-user",
+        "user_email": "Alice@Example.COM",
+    }
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.get("/ui/api/principals", headers={"Authorization": "Bearer mk-test"})
+
+    assert response.status_code == 200
+    principal = response.json()["data"][0]
+    assert principal["runtime_user_id"] == "user-1"
+    assert principal["runtime_user"]["user_email"] == "alice@example.com"
+
+
+def test_lower_runtime_email_lookup_migration_exists() -> None:
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "prisma/migrations/20260619120000_usertable_lower_email_lookup/migration.sql"
+    )
+    sql = migration.read_text(encoding="utf-8")
+
+    assert 'DROP INDEX CONCURRENTLY IF EXISTS "deltallm_usertable_lower_user_email_idx"' in sql
+    assert 'CREATE INDEX CONCURRENTLY "deltallm_usertable_lower_user_email_idx"' in sql
+    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS" not in sql
+    assert '"deltallm_usertable_lower_user_email_idx"' in sql
+    assert 'ON "deltallm_usertable" (lower("user_email"))' in sql
+    assert 'WHERE "user_email" IS NOT NULL' in sql
 
 
 @pytest.mark.asyncio

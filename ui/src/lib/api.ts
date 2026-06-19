@@ -1243,7 +1243,9 @@ export interface OrgMembership {
   membership_id: string;
   account_id: string;
   organization_id: string;
+  organization_name?: string | null;
   role: string;
+  self_registration_default?: boolean;
   created_at?: string;
   updated_at?: string;
 }
@@ -1252,13 +1254,54 @@ export interface TeamMembership {
   membership_id: string;
   account_id: string;
   team_id: string;
+  team_alias?: string | null;
+  organization_id?: string | null;
   role: string;
+  self_service_keys_enabled?: boolean;
+  self_service_max_keys_per_user?: number | null;
+  self_service_budget_ceiling?: number | null;
+  self_service_require_expiry?: boolean;
+  self_service_max_expiry_days?: number | null;
+  self_registration_default?: boolean;
   created_at?: string;
   updated_at?: string;
 }
 
+export interface RuntimeUserProfile {
+  user_id: string;
+  user_email?: string | null;
+  team_id?: string | null;
+  team_alias?: string | null;
+  organization_id?: string | null;
+  organization_name?: string | null;
+  max_budget?: number | null;
+  soft_budget?: number | null;
+  spend?: number | null;
+  rpm_limit?: number | null;
+  tpm_limit?: number | null;
+  rph_limit?: number | null;
+  rpd_limit?: number | null;
+  tpd_limit?: number | null;
+  blocked?: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+  self_registration_default?: boolean;
+}
+
+export interface PrincipalSelfRegistration {
+  is_self_registered: boolean;
+  seeded_user: boolean;
+  seeded_team: boolean;
+  seeded_organization: boolean;
+  sandbox_team_id?: string | null;
+  sandbox_organization_id?: string | null;
+}
+
 export interface Principal extends RBACAccount {
   runtime_user_id?: string | null;
+  runtime_user?: RuntimeUserProfile | null;
+  self_registration?: PrincipalSelfRegistration | null;
+  self_service_policy?: (SelfServicePolicy & { team_id?: string | null; team_alias?: string | null }) | null;
   organization_memberships: OrgMembership[];
   team_memberships: TeamMembership[];
 }
@@ -1355,6 +1398,18 @@ export const invitations = {
     apiFetch<{ cancelled: boolean; invitation_id: string }>(`/ui/api/invitations/${encodeURIComponent(invitationId)}/cancel`, { method: 'POST' }),
 };
 
+export interface SelfRegistrationPublicConfig {
+  enabled: boolean;
+  mode: string | null;
+  sandbox_access_enabled: boolean;
+}
+
+export interface AuthSsoConfig {
+  sso_enabled: boolean;
+  provider?: string;
+  self_registration?: SelfRegistrationPublicConfig;
+}
+
 export const auth = {
   me: () => apiFetch<any>('/auth/me', { headers: new Headers({ 'Content-Type': 'application/json' }) }),
   internalLogin: (payload: { email: string; password: string; mfa_code?: string }) =>
@@ -1371,7 +1426,7 @@ export const auth = {
     apiFetch<any>(`/auth/internal/reset-password/${encodeURIComponent(token)}`),
   resetPassword: (token: string, new_password: string) =>
     apiFetch<{ changed: boolean }>('/auth/internal/reset-password', { method: 'POST', json: { token, new_password } }),
-  ssoConfig: () => apiFetch<{ sso_enabled: boolean; provider?: string }>('/auth/sso-config'),
+  ssoConfig: () => apiFetch<AuthSsoConfig>('/auth/sso-config'),
   ssoLogin: (state: string) => apiFetch<{ authorize_url: string }>(`/auth/login?state=${encodeURIComponent(state)}`),
   mfaEnrollStart: () => apiFetch<{ secret: string; otpauth_url: string }>('/auth/mfa/enroll/start', { method: 'POST' }),
   mfaEnrollConfirm: (code: string) => apiFetch<{ mfa_enabled: boolean }>('/auth/mfa/enroll/confirm', { method: 'POST', json: { code } }),
