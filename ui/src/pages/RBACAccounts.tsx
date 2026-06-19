@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { invitations, organizations, rbac, teams, users, type Invitation, type Principal, type PrincipalSummary, type ScopedAssetAccess } from '../lib/api';
-import { Plus, UserCog, ShieldCheck, Search, Building2, UsersRound, Trash2, Mail } from 'lucide-react';
+import { Plus, UserCog, ShieldCheck, Search, Building2, UsersRound, Trash2, Mail, KeyRound, Gauge } from 'lucide-react';
+import { formatOptionalBudget, formatOptionalLimit, isSelfRegisteredPrincipal } from '../lib/selfRegistration';
 import Modal from '../components/Modal';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import { ContentCard, IndexShell } from '../components/admin/shells';
@@ -60,6 +61,85 @@ function MembershipCountBadge({ count, label }: { count: number; label: string }
       <span>{count}</span>
       <span>{label}</span>
     </span>
+  );
+}
+
+function SandboxAccessBadge() {
+  return (
+    <span className="inline-flex items-center rounded-full bg-cyan-50 px-2 py-0.5 text-xs font-medium text-cyan-700">
+      Sandbox access
+    </span>
+  );
+}
+
+function LimitStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white px-3 py-2">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400">{label}</p>
+      <p className="mt-1 text-sm font-semibold text-gray-900">{value}</p>
+    </div>
+  );
+}
+
+function RuntimeAccessSummary({ account }: { account: Principal }) {
+  const runtime = account.runtime_user;
+  if (!runtime) return null;
+
+  const sandbox = isSelfRegisteredPrincipal(account);
+  const policy = account.self_service_policy;
+  const runtimeTeam = runtime.team_alias || runtime.team_id || 'No team';
+  const runtimeOrg = runtime.organization_name || runtime.organization_id || 'No organization';
+
+  return (
+    <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h4 className="flex items-center gap-1.5 text-sm font-medium text-gray-800">
+            <Gauge className="h-4 w-4 text-blue-600" />
+            {sandbox ? 'Sandbox Runtime Limits' : 'Runtime Limits'}
+          </h4>
+          <p className="mt-1 text-xs text-gray-500">
+            {runtimeOrg} · {runtimeTeam}
+          </p>
+        </div>
+        {sandbox ? <SandboxAccessBadge /> : null}
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
+        <LimitStat label="Budget" value={formatOptionalBudget(runtime.max_budget)} />
+        <LimitStat label="Soft alert" value={formatOptionalBudget(runtime.soft_budget)} />
+        <LimitStat label="Spend" value={formatOptionalBudget(runtime.spend)} />
+        <LimitStat label="RPM" value={formatOptionalLimit(runtime.rpm_limit)} />
+        <LimitStat label="TPM" value={formatOptionalLimit(runtime.tpm_limit)} />
+        <LimitStat label="RPH" value={formatOptionalLimit(runtime.rph_limit)} />
+        <LimitStat label="RPD" value={formatOptionalLimit(runtime.rpd_limit)} />
+        <LimitStat label="TPD" value={formatOptionalLimit(runtime.tpd_limit)} />
+      </div>
+
+      {policy ? (
+        <div className="mt-4 rounded-lg border border-gray-200 bg-white px-3 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h5 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">
+              <KeyRound className="h-3.5 w-3.5" />
+              Self-Service Keys
+            </h5>
+            <span
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                policy.self_service_keys_enabled ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-600'
+              }`}
+            >
+              {policy.self_service_keys_enabled ? 'Enabled' : 'Disabled'}
+            </span>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-gray-600 md:grid-cols-4">
+            <span>Max keys: {formatOptionalLimit(policy.self_service_max_keys_per_user)}</span>
+            <span>Key budget: {formatOptionalBudget(policy.self_service_budget_ceiling)}</span>
+            <span>Expiry: {policy.self_service_require_expiry ? 'Required' : 'Optional'}</span>
+            <span>Max days: {formatOptionalLimit(policy.self_service_max_expiry_days)}</span>
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -682,6 +762,7 @@ export default function RBACAccounts() {
                                       Runtime linked
                                     </span>
                                   ) : null}
+                                  {isSelfRegisteredPrincipal(acct) ? <SandboxAccessBadge /> : null}
                                 </div>
                               </div>
                             </div>
@@ -827,6 +908,7 @@ export default function RBACAccounts() {
                     Runtime user linked
                   </span>
                 ) : null}
+                {isSelfRegisteredPrincipal(selectedAccount) ? <SandboxAccessBadge /> : null}
               </div>
               <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-gray-500 sm:grid-cols-2">
                 <span>ID: {selectedAccount.account_id}</span>
@@ -835,6 +917,8 @@ export default function RBACAccounts() {
                 {selectedAccount.runtime_user_id ? <span>Runtime user: {selectedAccount.runtime_user_id}</span> : null}
               </div>
             </div>
+
+            <RuntimeAccessSummary account={selectedAccount} />
 
             <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
               <div>
@@ -859,10 +943,11 @@ export default function RBACAccounts() {
                     {selectedAccount.organization_memberships.map((membership) => (
                       <div key={membership.membership_id} className="flex items-center justify-between rounded-xl border border-gray-200 bg-white px-3 py-2.5">
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-medium text-gray-900">{getOrgName(membership.organization_id)}</p>
+                          <p className="truncate text-sm font-medium text-gray-900">{membership.organization_name || getOrgName(membership.organization_id)}</p>
                           <p className="mt-0.5 text-[11px] text-gray-400">{membership.organization_id}</p>
                         </div>
                         <div className="flex items-center gap-2 pl-3">
+                          {membership.self_registration_default ? <SandboxAccessBadge /> : null}
                           <RoleBadge role={membership.role} />
                           <button
                             onClick={() => deleteOrgMembership(membership.membership_id)}
@@ -900,10 +985,11 @@ export default function RBACAccounts() {
                     {selectedAccount.team_memberships.map((membership) => (
                       <div key={membership.membership_id} className="flex items-center justify-between rounded-xl border border-gray-200 bg-white px-3 py-2.5">
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-medium text-gray-900">{getTeamName(membership.team_id)}</p>
+                          <p className="truncate text-sm font-medium text-gray-900">{membership.team_alias || getTeamName(membership.team_id)}</p>
                           <p className="mt-0.5 text-[11px] text-gray-400">{membership.team_id}</p>
                         </div>
                         <div className="flex items-center gap-2 pl-3">
+                          {membership.self_registration_default ? <SandboxAccessBadge /> : null}
                           <RoleBadge role={membership.role} />
                           <button
                             onClick={() => deleteTeamMembership(membership.membership_id)}

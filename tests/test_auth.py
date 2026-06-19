@@ -914,7 +914,36 @@ async def test_sso_config_reports_disabled_when_handler_is_unavailable(client, t
     response = await client.get("/auth/sso-config")
 
     assert response.status_code == 200
-    assert response.json() == {"sso_enabled": False}
+    assert response.json() == {
+        "sso_enabled": False,
+        "self_registration": {
+            "enabled": False,
+            "mode": None,
+            "sandbox_access_enabled": False,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_sso_config_reports_self_registration_sandbox_status(client, test_app):
+    test_app.state.sso_auth_handler = object()
+    test_app.state.app_config = _self_registration_app_config(
+        enabled=True,
+        allowed_domains=["example.com"],
+    )
+
+    response = await client.get("/auth/sso-config")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "sso_enabled": True,
+        "provider": "oidc",
+        "self_registration": {
+            "enabled": True,
+            "mode": "sso_allowed_domain",
+            "sandbox_access_enabled": True,
+        },
+    }
 
 
 @pytest.mark.asyncio

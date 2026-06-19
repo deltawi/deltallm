@@ -68,6 +68,8 @@ In restrict mode, a key can select direct callable targets and access groups tha
 
 Self-service keys follow the team's self-service policy and ownership rules. They still inherit the team asset boundary; admins can use the full key editor when a production integration needs explicit key-level narrowing.
 
+For self-registered sandbox users, the default team policy is the main guardrail for personal key creation. The key must stay within the sandbox team, the current user becomes the owner, and the requested key budget, expiry, and rate limits must satisfy the team's self-service policy. Runtime requests still pass through the normal organization, team, runtime user, and key-level budget and rate-limit checks.
+
 ## Important behavior
 
 - The raw key is shown once at creation time

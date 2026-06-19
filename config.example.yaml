@@ -146,6 +146,52 @@ general_settings:
   #   - admin@example.com
   # sso_default_team_id: team-123
   # sso_state_ttl_seconds: 600
+  #
+  # Optional self-service developer sandbox onboarding for first-time SSO users.
+  # Defaults are applied only when the account is first provisioned; admins can
+  # edit the seeded org, team, memberships, budgets, and limits later.
+  #
+  # self_registration:
+  #   enabled: true
+  #   mode: sso_allowed_domain
+  #   allowed_domains:
+  #     - example.com
+  #   require_email_verification: true
+  #   require_admin_approval: false
+  #   default_org:
+  #     id: org-sandbox
+  #     name: Developer Sandbox
+  #     max_budget: 100
+  #     soft_budget: 80
+  #     rpm_limit: 300
+  #     tpm_limit: 500000
+  #     rph_limit: 2000
+  #     rpd_limit: 10000
+  #     tpd_limit: 5000000
+  #   default_team:
+  #     id: team-self-serve
+  #     alias: Self-Service Developers
+  #     role: team_developer
+  #     max_budget: 50
+  #     soft_budget: 40
+  #     rpm_limit: 150
+  #     tpm_limit: 250000
+  #     rph_limit: 1000
+  #     rpd_limit: 5000
+  #     tpd_limit: 2500000
+  #     self_service_keys_enabled: true
+  #     self_service_max_keys_per_user: 2
+  #     self_service_budget_ceiling: 5
+  #     self_service_require_expiry: true
+  #     self_service_max_expiry_days: 14
+  #   default_user:
+  #     max_budget: 10
+  #     soft_budget: 8
+  #     rpm_limit: 30
+  #     tpm_limit: 50000
+  #     rph_limit: 200
+  #     rpd_limit: 1000
+  #     tpd_limit: 500000
 
   # Optional JWT bearer authentication for proxy requests.
   #
