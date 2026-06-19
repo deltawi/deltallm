@@ -10,6 +10,7 @@ class _FakePrisma:
         fail_on_sql: str | None = None,
         assignment_version_tier_id: str | None = "tier-1",
         assignment_version_status: str = "active",
+        assignment_tier_exists: bool = True,
         mutation_version_status: str = "draft",
         version_lookup_status: str = "draft",
         unpinned_assignment_count: int = 0,
@@ -17,6 +18,7 @@ class _FakePrisma:
         active_assignment_count: int = 0,
         current_active_version_id: str | None = "ver-active",
         assignment_rows: dict[str, dict[str, object]] | None = None,
+        organization_exists: bool = True,
     ) -> None:
         self.calls: list[tuple[str, tuple[object, ...]]] = []
         self.executions: list[tuple[str, tuple[object, ...]]] = []
@@ -25,6 +27,7 @@ class _FakePrisma:
         self.fail_on_sql = fail_on_sql
         self.assignment_version_tier_id = assignment_version_tier_id
         self.assignment_version_status = assignment_version_status
+        self.assignment_tier_exists = assignment_tier_exists
         self.mutation_version_status = mutation_version_status
         self.version_lookup_status = version_lookup_status
         self.unpinned_assignment_count = unpinned_assignment_count
@@ -32,6 +35,7 @@ class _FakePrisma:
         self.active_assignment_count = active_assignment_count
         self.current_active_version_id = current_active_version_id
         self.assignment_rows = dict(assignment_rows or {})
+        self.organization_exists = organization_exists
         self.tx_clients: list[_FakePrisma] = []
         self.tx_started = 0
         self.tx_committed = 0
@@ -56,8 +60,10 @@ class _FakePrisma:
             return [{"status": self.mutation_version_status}]
         if "pg_advisory_xact_lock" in sql:
             return [{"locked": None}]
-        if "FROM deltallm_tier\n" in sql and "FOR UPDATE" in sql:
-            return [{"tier_id": params[0]}]
+        if "FROM deltallm_tier\n" in sql and "WHERE tier_id = $1" in sql:
+            return [{"tier_id": params[0]}] if self.assignment_tier_exists else []
+        if "FROM deltallm_organizationtable" in sql and "WHERE organization_id = $1" in sql:
+            return [{"organization_id": params[0]}] if self.organization_exists else []
         if "SELECT COUNT(*)::int AS overlap_count" in sql:
             return [{"overlap_count": self.overlap_count}]
         if (
@@ -184,8 +190,15 @@ class _FakePrisma:
             return [{"assignment_id": assignment_id}]
         if "UPDATE deltallm_organizationtierassignment" in sql:
             assignment_id = str(params[0])
+            organization_id = str(params[1])
+            existing = self.assignment_rows.get(assignment_id)
+            if "AND organization_id = $2" in sql:
+                if existing is None:
+                    return []
+                if str(existing.get("organization_id") or "") != organization_id:
+                    return []
             self.assignment_rows[assignment_id] = _assignment_fields(
-                organization_id=str(params[1]),
+                organization_id=organization_id,
                 tier_id=str(params[2]),
                 tier_version_id=str(params[3]) if params[3] is not None else None,
                 assignment_type=str(params[4]),
@@ -196,12 +209,33 @@ class _FakePrisma:
                 metadata=params[9],
             )
             return [{"assignment_id": assignment_id}]
+        if "DELETE FROM deltallm_organizationtierassignment" in sql:
+            assignment_id = str(params[0])
+            existing = self.assignment_rows.get(assignment_id)
+            if existing is None:
+                return []
+            if "AND organization_id = $2" in sql:
+                organization_id = str(params[1])
+                if (
+                    existing is not None
+                    and str(existing.get("organization_id") or "") != organization_id
+                ):
+                    return []
+            self.assignment_rows.pop(assignment_id, None)
+            return [{"assignment_id": assignment_id}]
         if "FROM deltallm_organizationtierassignment a" in sql:
             assignment_id = str(params[0])
+            fields = self.assignment_rows.get(assignment_id)
+            if "FOR UPDATE OF a" in sql and fields is None:
+                return []
+            if "a.organization_id = $2" in sql:
+                organization_id = str(params[1])
+                if fields is not None and str(fields.get("organization_id") or "") != organization_id:
+                    return []
             return [
                 _assignment_row(
                     assignment_id=assignment_id,
-                    fields=self.assignment_rows.get(assignment_id),
+                    fields=fields,
                 )
             ]
         return []
@@ -225,6 +259,7 @@ class _FakeTxContext:
             fail_on_sql=self.root.fail_on_sql,
             assignment_version_tier_id=self.root.assignment_version_tier_id,
             assignment_version_status=self.root.assignment_version_status,
+            assignment_tier_exists=self.root.assignment_tier_exists,
             mutation_version_status=self.root.mutation_version_status,
             version_lookup_status=self.root.version_lookup_status,
             unpinned_assignment_count=self.root.unpinned_assignment_count,
@@ -232,6 +267,7 @@ class _FakeTxContext:
             active_assignment_count=self.root.active_assignment_count,
             current_active_version_id=self.root.current_active_version_id,
             assignment_rows=self.root.assignment_rows,
+            organization_exists=self.root.organization_exists,
         )
         self.root.tx_clients.append(self.client)
         return self.client

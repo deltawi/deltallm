@@ -12,6 +12,9 @@ from src.api.admin.endpoints.keys import router as keys_router
 from src.api.admin.endpoints.mcp import router as mcp_router
 from src.api.admin.endpoints.models import router as models_router
 from src.api.admin.endpoints.named_credentials import router as named_credentials_router
+from src.api.admin.endpoints.organization_tier_assignments import (
+    router as organization_tier_assignments_router,
+)
 from src.api.admin.endpoints.organizations import router as organizations_router
 from src.api.admin.endpoints.prompt_registry import router as prompt_registry_router
 from src.api.admin.endpoints.rbac import router as rbac_router
@@ -37,6 +40,7 @@ __all__ = [
     "mcp_router",
     "models_router",
     "named_credentials_router",
+    "organization_tier_assignments_router",
     "organizations_router",
     "prompt_registry_router",
     "rbac_router",

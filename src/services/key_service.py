@@ -9,9 +9,12 @@ from typing import Any
 from src.db.repositories import KeyRepository
 from src.models.errors import AuthenticationError
 from src.models.responses import UserAPIKeyAuth
+from src.services.cache_invalidation_errors import CacheInvalidationBackendUnavailable
 from src.services.runtime_scopes import annotate_auth_metadata
 
 logger = logging.getLogger(__name__)
+_CACHE_DELETE_BATCH_SIZE = 500
+_SCOPES_REQUIRING_TOKEN_DISCOVERY = {"organization", "team", "user"}
 
 
 class KeyService:
@@ -106,11 +109,22 @@ class KeyService:
     async def invalidate_keys_for_user(self, user_id: str) -> int:
         return await self._invalidate_keys_by_scope("user_id", user_id)
 
+    def require_cache_invalidation_backend(self, *, scope_type: str) -> None:
+        if self.redis is None:
+            raise CacheInvalidationBackendUnavailable("redis unavailable")
+        normalized_scope_type = str(scope_type or "").strip().lower()
+        if (
+            normalized_scope_type in _SCOPES_REQUIRING_TOKEN_DISCOVERY
+            and getattr(self.repository, "prisma", None) is None
+        ):
+            raise CacheInvalidationBackendUnavailable("database unavailable")
+
     async def _invalidate_keys_by_scope(self, scope_column: str, scope_value: str) -> int:
-        if self.redis is None or self.repository.prisma is None:
+        prisma = getattr(self.repository, "prisma", None)
+        if self.redis is None or prisma is None:
             return 0
         if scope_column == "organization_id":
-            rows = await self.repository.prisma.query_raw(
+            rows = await prisma.query_raw(
                 """
                 SELECT v.token FROM deltallm_verificationtoken v
                 LEFT JOIN deltallm_usertable u ON u.user_id = v.user_id
@@ -120,7 +134,7 @@ class KeyService:
                 scope_value,
             )
         elif scope_column == "team_id":
-            rows = await self.repository.prisma.query_raw(
+            rows = await prisma.query_raw(
                 """
                 SELECT v.token FROM deltallm_verificationtoken v
                 LEFT JOIN deltallm_usertable u ON u.user_id = v.user_id
@@ -129,16 +143,25 @@ class KeyService:
                 scope_value,
             )
         else:
-            rows = await self.repository.prisma.query_raw(
+            rows = await prisma.query_raw(
                 f"SELECT token FROM deltallm_verificationtoken WHERE {scope_column} = $1",
                 scope_value,
             )
-        count = 0
+        cache_keys: list[str] = []
         for row in (rows or []):
             token_hash = row.get("token")
             if token_hash:
-                await self.redis.delete(self._cache_key(token_hash))
-                count += 1
+                cache_keys.append(self._cache_key(token_hash))
+        return await self._delete_cache_keys(cache_keys)
+
+    async def _delete_cache_keys(self, cache_keys: list[str]) -> int:
+        if self.redis is None or not cache_keys:
+            return 0
+        count = 0
+        for start in range(0, len(cache_keys), _CACHE_DELETE_BATCH_SIZE):
+            batch = cache_keys[start : start + _CACHE_DELETE_BATCH_SIZE]
+            await self.redis.delete(*batch)
+            count += len(batch)
         return count
 
     @staticmethod
