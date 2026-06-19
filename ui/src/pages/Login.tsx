@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import type { FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
-import { auth as authApi } from '../lib/api';
+import { auth as authApi, type AuthSsoConfig } from '../lib/api';
+import { hasSandboxSelfRegistration } from '../lib/selfRegistration';
 import { Zap, Mail, KeyRound, Globe } from 'lucide-react';
 
 type Tab = 'credentials' | 'master_key' | 'sso';
@@ -13,6 +14,10 @@ const SSO_PROVIDER_LABELS: Record<string, string> = {
   okta: 'Okta',
   oidc: 'SSO',
 };
+
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback;
+}
 
 export default function Login() {
   const { loginWithCredentials, loginWithMasterKey, isLoading } = useAuth();
@@ -30,16 +35,19 @@ export default function Login() {
 
   const [ssoEnabled, setSsoEnabled] = useState(false);
   const [ssoProvider, setSsoProvider] = useState('oidc');
+  const [sandboxSelfRegistration, setSandboxSelfRegistration] = useState(false);
   const [ssoLoading, setSsoLoading] = useState(true);
 
   useEffect(() => {
     authApi.ssoConfig()
-      .then((cfg: { sso_enabled: boolean; provider?: string }) => {
+      .then((cfg: AuthSsoConfig) => {
         setSsoEnabled(cfg.sso_enabled);
+        setSandboxSelfRegistration(hasSandboxSelfRegistration(cfg));
         if (cfg.provider) setSsoProvider(cfg.provider);
       })
       .catch(() => {
         setSsoEnabled(false);
+        setSandboxSelfRegistration(false);
       })
       .finally(() => setSsoLoading(false));
   }, []);
@@ -62,8 +70,8 @@ export default function Login() {
     setError('');
     try {
       await loginWithCredentials(email.trim(), password.trim(), mfaCode.trim() || undefined);
-    } catch (err: any) {
-      const msg = err?.message || 'Login failed';
+    } catch (err: unknown) {
+      const msg = errorMessage(err, 'Login failed');
       if (msg.toLowerCase().includes('mfa') || msg.toLowerCase().includes('invalid credentials')) {
         if (!showMfa) setShowMfa(true);
       }
@@ -83,8 +91,8 @@ export default function Login() {
     setError('');
     try {
       await loginWithMasterKey(masterKey.trim());
-    } catch (err: any) {
-      setError(err?.message || 'Invalid master key');
+    } catch (err: unknown) {
+      setError(errorMessage(err, 'Invalid master key'));
     } finally {
       setLoading(false);
     }
@@ -97,8 +105,8 @@ export default function Login() {
       const state = crypto.randomUUID();
       const { authorize_url } = await authApi.ssoLogin(state);
       window.location.href = authorize_url;
-    } catch (err: any) {
-      setError(err?.message || 'Failed to start SSO login');
+    } catch (err: unknown) {
+      setError(errorMessage(err, 'Failed to start SSO login'));
       setLoading(false);
     }
   };
@@ -205,8 +213,15 @@ export default function Login() {
             {tab === 'sso' && (
               <div className="space-y-4">
                 <p className="text-sm text-gray-600 text-center">
-                  Sign in with your organization's {providerLabel} identity provider.
+                  {sandboxSelfRegistration
+                    ? `Sign in with your organization's ${providerLabel} identity provider for managed sandbox access.`
+                    : `Sign in with your organization's ${providerLabel} identity provider.`}
                 </p>
+                {sandboxSelfRegistration ? (
+                  <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                    Eligible first-time users are placed in an admin-managed developer sandbox with limited budgets, rate limits, and self-service key policy.
+                  </div>
+                ) : null}
                 <button
                   onClick={handleSsoLogin}
                   disabled={loading}

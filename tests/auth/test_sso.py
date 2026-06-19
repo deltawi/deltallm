@@ -11,10 +11,11 @@ from src.models.errors import RateLimitError
 
 
 class MockSSOHTTPClient:
-    def __init__(self) -> None:
+    def __init__(self, *, userinfo: dict[str, object] | None = None) -> None:
         self.post_calls = 0
         self.get_calls = 0
         self.last_post_data: dict[str, str] | None = None
+        self.userinfo = userinfo or {"email": "admin@example.com"}
 
     async def post(self, url: str, data: dict[str, str]):
         self.post_calls += 1
@@ -27,7 +28,7 @@ class MockSSOHTTPClient:
         self.get_calls += 1
         assert url == "https://sso.example.com/userinfo"
         assert headers["Authorization"] == "Bearer provider-access-token"
-        return httpx.Response(200, json={"email": "admin@example.com"})
+        return httpx.Response(200, json=self.userinfo)
 
 
 class AlwaysLimitedRateLimiter:
@@ -89,10 +90,62 @@ async def test_sso_callback_creates_user_and_returns_session_token():
     assert response["email"] == "admin@example.com"
     assert response["role"] == "proxy_admin"
     assert response["team_id"] == "default-team"
+    assert response["provider_subject"] == "admin@example.com"
+    assert response["email_verified"] is None
     assert response["token"].startswith("sso:")
     assert len(response["token"].split(":")[-1]) >= 43
     assert http_client.last_post_data is not None
     assert http_client.last_post_data["code_verifier"] == "pkce-verifier-123"
+
+
+@pytest.mark.asyncio
+async def test_sso_callback_returns_provider_subject_from_userinfo_sub():
+    handler = SSOAuthHandler(
+        config=SSOConfig(
+            provider=SSOProvider.OKTA,
+            client_id="client-id",
+            client_secret="client-secret",
+            authorize_url="https://sso.example.com/authorize",
+            token_url="https://sso.example.com/oauth/token",
+            userinfo_url="https://sso.example.com/userinfo",
+            redirect_uri="https://proxy.example.com/auth/callback",
+        ),
+        user_repository=InMemoryUserRepository(),
+        http_client=MockSSOHTTPClient(
+            userinfo={
+                "email": "User@Example.com",
+                "sub": "provider-subject-123",
+                "email_verified": True,
+            }
+        ),
+    )
+
+    response = await handler.handle_callback("authorization-code")
+
+    assert response["email"] == "user@example.com"
+    assert response["provider_subject"] == "provider-subject-123"
+    assert response["email_verified"] is True
+
+
+@pytest.mark.asyncio
+async def test_sso_callback_normalizes_string_email_verified_claim():
+    handler = SSOAuthHandler(
+        config=SSOConfig(
+            provider=SSOProvider.OKTA,
+            client_id="client-id",
+            client_secret="client-secret",
+            authorize_url="https://sso.example.com/authorize",
+            token_url="https://sso.example.com/oauth/token",
+            userinfo_url="https://sso.example.com/userinfo",
+            redirect_uri="https://proxy.example.com/auth/callback",
+        ),
+        user_repository=InMemoryUserRepository(),
+        http_client=MockSSOHTTPClient(userinfo={"email": "user@example.com", "verified_email": "false"}),
+    )
+
+    response = await handler.handle_callback("authorization-code")
+
+    assert response["email_verified"] is False
 
 
 def test_sso_pkce_pair_generation_format():

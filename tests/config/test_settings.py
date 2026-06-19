@@ -52,6 +52,154 @@ def test_batch_advisory_lock_mode_validation() -> None:
         )
 
 
+def test_self_registration_defaults_are_disabled() -> None:
+    settings = GeneralSettings()
+
+    assert settings.self_registration.enabled is False
+    assert settings.self_registration.allowed_domains == []
+    assert settings.self_registration.default_org.id is None
+    assert settings.self_registration.default_team.id is None
+    assert settings.self_registration.default_team.role == "team_developer"
+
+
+def test_self_registration_enabled_config_normalizes_values() -> None:
+    cfg = AppConfig.model_validate(
+        {
+            "general_settings": {
+                "self_registration": {
+                    "enabled": True,
+                    "mode": "sso_allowed_domain",
+                    "allowed_domains": ["Example.COM", "example.com", "Engineering.Internal"],
+                    "default_org": {
+                        "id": " org-sandbox ",
+                        "name": " Developer Sandbox ",
+                        "max_budget": 100,
+                        "soft_budget": 80,
+                        "rpm_limit": 300,
+                    },
+                    "default_team": {
+                        "id": " team-self-serve ",
+                        "alias": " Self Serve ",
+                        "role": "team_developer",
+                        "self_service_max_keys_per_user": 2,
+                        "self_service_budget_ceiling": 5,
+                        "self_service_require_expiry": True,
+                        "self_service_max_expiry_days": 14,
+                    },
+                    "default_user": {
+                        "max_budget": 10,
+                        "soft_budget": 8,
+                        "rpm_limit": 30,
+                        "tpm_limit": 50_000,
+                    },
+                }
+            }
+        }
+    )
+
+    registration = cfg.general_settings.self_registration
+    assert registration.enabled is True
+    assert registration.allowed_domains == ["example.com", "engineering.internal"]
+    assert registration.default_org.id == "org-sandbox"
+    assert registration.default_org.name == "Developer Sandbox"
+    assert registration.default_team.id == "team-self-serve"
+    assert registration.default_team.alias == "Self Serve"
+    assert registration.default_team.self_service_budget_ceiling == 5
+    assert registration.default_user.max_budget == 10
+
+
+def test_self_registration_enabled_requires_default_org_and_team() -> None:
+    with pytest.raises(ValueError, match="default_org.id"):
+        AppConfig.model_validate(
+            {
+                "general_settings": {
+                    "self_registration": {
+                        "enabled": True,
+                        "allowed_domains": ["example.com"],
+                        "default_team": {"id": "team-self-serve"},
+                    }
+                }
+            }
+        )
+
+    with pytest.raises(ValueError, match="default_team.id"):
+        AppConfig.model_validate(
+            {
+                "general_settings": {
+                    "self_registration": {
+                        "enabled": True,
+                        "allowed_domains": ["example.com"],
+                        "default_org": {"id": "org-sandbox"},
+                    }
+                }
+            }
+        )
+
+
+def test_self_registration_sso_allowed_domain_requires_domains() -> None:
+    with pytest.raises(ValueError, match="allowed_domains"):
+        AppConfig.model_validate(
+            {
+                "general_settings": {
+                    "self_registration": {
+                        "enabled": True,
+                        "mode": "sso_allowed_domain",
+                        "default_org": {"id": "org-sandbox"},
+                        "default_team": {"id": "team-self-serve"},
+                    }
+                }
+            }
+        )
+
+
+def test_self_registration_rejects_invalid_domains_and_limits() -> None:
+    with pytest.raises(ValueError, match="bare email domains"):
+        AppConfig.model_validate(
+            {
+                "general_settings": {
+                    "self_registration": {
+                        "enabled": True,
+                        "allowed_domains": ["@example.com"],
+                        "default_org": {"id": "org-sandbox"},
+                        "default_team": {"id": "team-self-serve"},
+                    }
+                }
+            }
+        )
+
+    with pytest.raises(ValueError, match="greater than 0"):
+        AppConfig.model_validate(
+            {
+                "general_settings": {
+                    "self_registration": {
+                        "enabled": True,
+                        "allowed_domains": ["example.com"],
+                        "default_org": {"id": "org-sandbox", "rpm_limit": 0},
+                        "default_team": {"id": "team-self-serve"},
+                    }
+                }
+            }
+        )
+
+    with pytest.raises(ValueError, match="soft_budget"):
+        AppConfig.model_validate(
+            {
+                "general_settings": {
+                    "self_registration": {
+                        "enabled": True,
+                        "allowed_domains": ["example.com"],
+                        "default_org": {
+                            "id": "org-sandbox",
+                            "max_budget": 10,
+                            "soft_budget": 12,
+                        },
+                        "default_team": {"id": "team-self-serve"},
+                    }
+                }
+            }
+        )
+
+
 def test_resolve_app_config_with_secrets_wraps_secret_resolution_errors():
     class BrokenResolver:
         def resolve_tree(self, value):

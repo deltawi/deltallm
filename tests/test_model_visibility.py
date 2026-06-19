@@ -8,11 +8,13 @@ from src.config import AppConfig, GeneralSettings, Settings
 from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRecord
 from src.db.callable_targets import CallableTargetBindingRecord
 from src.db.callable_target_policies import CallableTargetScopePolicyRecord
+from src.models.errors import PermissionDeniedError
 from src.models.responses import UserAPIKeyAuth
 from src.services.callable_target_grants import CallableTargetGrantService
 from src.services.callable_targets import CallableTarget, DuplicateCallableTargetError, build_callable_target_catalog
 from src.services.model_deployments import build_model_registry_from_config
 from src.services.model_visibility import (
+    ensure_model_allowed,
     filter_visible_models,
     resolve_effective_model_allowlist,
     resolve_model_allowlist_resolution,
@@ -255,6 +257,59 @@ async def test_effective_model_allowlist_does_not_narrow_user_scope_when_policy_
     )
 
     assert resolution.effective_allowlist == {"gpt-4o-mini", "text-embedding-3-small"}
+
+
+@pytest.mark.asyncio
+async def test_sandbox_key_model_allowlist_stays_inside_default_org_and_team_boundary() -> None:
+    auth = UserAPIKeyAuth(
+        api_key="key-sandbox",
+        user_id="acct-dev",
+        team_id="team-sandbox",
+        organization_id="org-sandbox",
+    )
+    service = CallableTargetGrantService(
+        repository=_FakeCallableTargetBindingRepository(
+            [
+                CallableTargetBindingRecord(
+                    callable_target_binding_id="ctb-sandbox-org",
+                    callable_key="gpt-4o-mini",
+                    scope_type="organization",
+                    scope_id="org-sandbox",
+                    enabled=True,
+                ),
+                CallableTargetBindingRecord(
+                    callable_target_binding_id="ctb-prod-org",
+                    callable_key="prod-model",
+                    scope_type="organization",
+                    scope_id="org-production",
+                    enabled=True,
+                ),
+                CallableTargetBindingRecord(
+                    callable_target_binding_id="ctb-sandbox-team",
+                    callable_key="gpt-4o-mini",
+                    scope_type="team",
+                    scope_id="team-sandbox",
+                    enabled=True,
+                ),
+            ]
+        ),
+        policy_repository=_FakeCallableTargetScopePolicyRepository(
+            [
+                CallableTargetScopePolicyRecord(
+                    callable_target_scope_policy_id="ctp-sandbox-team",
+                    scope_type="team",
+                    scope_id="team-sandbox",
+                    mode="restrict",
+                )
+            ]
+        ),
+    )
+    await service.reload()
+
+    assert resolve_effective_model_allowlist(auth, callable_target_grant_service=service) == {"gpt-4o-mini"}
+    ensure_model_allowed(auth, "gpt-4o-mini", callable_target_grant_service=service)
+    with pytest.raises(PermissionDeniedError):
+        ensure_model_allowed(auth, "prod-model", callable_target_grant_service=service)
 
 
 @pytest.mark.asyncio
@@ -720,6 +775,44 @@ async def test_v1_models_uses_explicit_callable_target_grants_when_present(clien
 
     assert response.status_code == 200
     assert [item["id"] for item in response.json()["data"]] == ["text-embedding-3-small"]
+
+
+@pytest.mark.asyncio
+async def test_v1_models_for_self_registered_sandbox_key_stays_inside_sandbox_org(client, test_app) -> None:
+    record = next(iter(test_app.state._test_repo.records.values()))
+    record.user_id = "acct-dev"
+    record.team_id = "team-sandbox"
+    record.organization_id = "org-sandbox"
+    test_app.state.model_registry["prod-model"] = [
+        {"deltallm_params": {"model": "openai/prod-model", "api_key": "provider-key"}}
+    ]
+    test_app.state.callable_target_grant_service = CallableTargetGrantService(
+        repository=_FakeCallableTargetBindingRepository(
+            [
+                CallableTargetBindingRecord(
+                    callable_target_binding_id="ctb-sandbox-1",
+                    callable_key="gpt-4o-mini",
+                    scope_type="organization",
+                    scope_id="org-sandbox",
+                    enabled=True,
+                ),
+                CallableTargetBindingRecord(
+                    callable_target_binding_id="ctb-production-1",
+                    callable_key="prod-model",
+                    scope_type="organization",
+                    scope_id="org-production",
+                    enabled=True,
+                ),
+            ]
+        )
+    )
+    await test_app.state.callable_target_grant_service.reload()
+
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    response = await client.get("/v1/models", headers=headers)
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["data"]] == ["gpt-4o-mini"]
 
 
 @pytest.mark.asyncio
