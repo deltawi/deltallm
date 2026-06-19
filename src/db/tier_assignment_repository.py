@@ -15,6 +15,21 @@ from src.services.tiers import positive_weight, validate_effective_window
 class TierAssignmentRepositoryMixin:
     prisma: Any | None
 
+    async def organization_exists_for_tier_assignment(self, organization_id: str) -> bool:
+        if self.prisma is None:
+            return False
+
+        rows = await self.prisma.query_raw(
+            """
+            SELECT organization_id
+            FROM deltallm_organizationtable
+            WHERE organization_id = $1
+            LIMIT 1
+            """,
+            organization_id,
+        )
+        return bool(rows)
+
     async def list_org_assignments(
         self,
         organization_id: str,
@@ -59,6 +74,28 @@ class TierAssignmentRepositoryMixin:
             LIMIT 1
             """,
             assignment_id,
+        )
+        return to_assignment_record(rows[0]) if rows else None
+
+    async def get_org_assignment_for_update(
+        self,
+        *,
+        assignment_id: str,
+        organization_id: str,
+    ) -> OrganizationTierAssignmentRecord | None:
+        if self.prisma is None:
+            return None
+
+        rows = await self.prisma.query_raw(
+            f"""
+            {assignment_select_sql()}
+            WHERE a.assignment_id = $1
+              AND a.organization_id = $2
+            LIMIT 1
+            FOR UPDATE OF a
+            """,
+            assignment_id,
+            organization_id,
         )
         return to_assignment_record(rows[0]) if rows else None
 
@@ -136,14 +173,23 @@ class TierAssignmentRepositoryMixin:
         requires_active_version_check: bool,
     ) -> OrganizationTierAssignmentRecord | None:
         if requires_active_version_check:
-            await self._lock_tier_for_assignment_version_check(tier_id)
+            await self._lock_existing_tier_for_assignment(tier_id)
             if tier_version_id is not None:
-                await self._ensure_active_tier_version_for_assignment(
+                await self._ensure_tier_version_for_assignment(
                     tier_id=tier_id,
                     tier_version_id=tier_version_id,
+                    require_active=True,
                 )
             else:
                 await self._ensure_tier_has_active_version_for_assignment(tier_id)
+        else:
+            await self._ensure_tier_exists_for_assignment(tier_id)
+            if tier_version_id is not None:
+                await self._ensure_tier_version_for_assignment(
+                    tier_id=tier_id,
+                    tier_version_id=tier_version_id,
+                    require_active=False,
+                )
 
         if self._should_check_primary_assignment(assignment_type=assignment_type, enabled=enabled):
             await self._lock_primary_assignment_namespace(organization_id)
@@ -171,6 +217,7 @@ class TierAssignmentRepositoryMixin:
                     metadata = $10::jsonb,
                     updated_at = NOW()
                 WHERE assignment_id = $1
+                  AND organization_id = $2
                 RETURNING assignment_id
                 """,
                 assignment_id,
@@ -234,6 +281,41 @@ class TierAssignmentRepositoryMixin:
             return None
         return await self.get_org_assignment(str(rows[0].get("assignment_id") or ""))
 
+    async def upsert_org_assignment_in_current_transaction(
+        self,
+        *,
+        organization_id: str,
+        tier_id: str,
+        tier_version_id: str | None = None,
+        assignment_id: str | None = None,
+        assignment_type: str = "primary",
+        enabled: bool = True,
+        weight: int = 1,
+        starts_at: datetime | None = None,
+        ends_at: datetime | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> OrganizationTierAssignmentRecord | None:
+        if self.prisma is None:
+            return None
+        starts_at, ends_at = validate_effective_window(starts_at, ends_at)
+        weight = positive_weight(weight)
+        return await self._upsert_org_assignment_in_tx(
+            organization_id=organization_id,
+            tier_id=tier_id,
+            tier_version_id=tier_version_id,
+            assignment_id=assignment_id,
+            assignment_type=assignment_type,
+            enabled=enabled,
+            weight=weight,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            metadata=metadata,
+            requires_active_version_check=self._should_check_active_assignment_version(
+                enabled=enabled,
+                ends_at=ends_at,
+            ),
+        )
+
     @staticmethod
     def _should_check_primary_assignment(*, assignment_type: str, enabled: bool) -> bool:
         return enabled and str(assignment_type or "").strip().lower() == "primary"
@@ -248,11 +330,12 @@ class TierAssignmentRepositoryMixin:
             return False
         return ends_at is None or ends_at > datetime.now(UTC)
 
-    async def _ensure_active_tier_version_for_assignment(
+    async def _ensure_tier_version_for_assignment(
         self,
         *,
         tier_id: str,
         tier_version_id: str,
+        require_active: bool,
     ) -> None:
         rows = await self.prisma.query_raw(
             """
@@ -272,16 +355,29 @@ class TierAssignmentRepositoryMixin:
         row = rows[0]
         if str(row.get("version_tier_id") or "") != tier_id:
             raise ValueError("tier_version_id must belong to tier_id")
-        if str(row.get("status") or "").strip().lower() != "active":
+        if require_active and str(row.get("status") or "").strip().lower() != "active":
             raise ValueError("tier_version_id must reference an active tier version")
 
-    async def _lock_tier_for_assignment_version_check(self, tier_id: str) -> None:
+    async def _lock_existing_tier_for_assignment(self, tier_id: str) -> None:
         rows = await self.prisma.query_raw(
             """
             SELECT tier_id
             FROM deltallm_tier
             WHERE tier_id = $1
             FOR UPDATE
+            """,
+            tier_id,
+        )
+        if not rows:
+            raise ValueError("tier_id must reference an existing tier")
+
+    async def _ensure_tier_exists_for_assignment(self, tier_id: str) -> None:
+        rows = await self.prisma.query_raw(
+            """
+            SELECT tier_id
+            FROM deltallm_tier
+            WHERE tier_id = $1
+            LIMIT 1
             """,
             tier_id,
         )
@@ -351,5 +447,26 @@ class TierAssignmentRepositoryMixin:
             RETURNING assignment_id
             """,
             assignment_id,
+        )
+        return bool(rows)
+
+    async def delete_org_assignment_for_org(
+        self,
+        *,
+        assignment_id: str,
+        organization_id: str,
+    ) -> bool:
+        if self.prisma is None:
+            return False
+
+        rows = await self.prisma.query_raw(
+            """
+            DELETE FROM deltallm_organizationtierassignment
+            WHERE assignment_id = $1
+              AND organization_id = $2
+            RETURNING assignment_id
+            """,
+            assignment_id,
+            organization_id,
         )
         return bool(rows)

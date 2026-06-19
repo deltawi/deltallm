@@ -19,10 +19,21 @@ class InMemoryRepo:
         return self.records.get(token_hash)
 
 
+class ScopedRepo:
+    def __init__(self, tokens: list[str]) -> None:
+        self.prisma = self
+        self.tokens = tokens
+
+    async def query_raw(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+        del args, kwargs
+        return [{"token": token} for token in self.tokens]
+
+
 class RecordingRedis:
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
         self.ttls: dict[str, int] = {}
+        self.delete_calls: list[tuple[str, ...]] = []
 
     async def get(self, key: str):
         return self.store.get(key)
@@ -32,6 +43,7 @@ class RecordingRedis:
         self.ttls[key] = ttl
 
     async def delete(self, *keys: str):
+        self.delete_calls.append(tuple(keys))
         for key in keys:
             self.store.pop(key, None)
             self.ttls.pop(key, None)
@@ -62,6 +74,21 @@ async def test_key_cache_invalidation_by_hash() -> None:
     await service.invalidate_key_cache_by_hash(token_hash)
     await service.validate_key(raw_key)
     assert repo.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_key_scope_invalidation_batches_redis_deletes() -> None:
+    tokens = [f"token-{index}" for index in range(501)]
+    repo = ScopedRepo(tokens)
+    redis = RecordingRedis()
+    service = KeyService(repository=repo, redis_client=redis)
+
+    invalidated = await service.invalidate_keys_for_org("org-1")
+
+    assert invalidated == 501
+    assert [len(call) for call in redis.delete_calls] == [500, 1]
+    assert redis.delete_calls[0][0] == "key:token-0"
+    assert redis.delete_calls[1][0] == "key:token-500"
 
 
 @pytest.mark.asyncio

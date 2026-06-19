@@ -1,17 +1,35 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
 
 from src.bootstrap import BootstrapStatus
-from src.bootstrap.auth import init_auth_runtime
+from src.bootstrap.auth import init_auth_runtime, shutdown_auth_runtime
 
 
-def _auth_config(*, enable_sso: bool, enable_jwt: bool, custom_auth: str | None, jwt_issuer: str | None = "issuer") -> SimpleNamespace:
+def _auth_config(
+    *,
+    enable_sso: bool,
+    enable_jwt: bool,
+    custom_auth: str | None,
+    jwt_issuer: str | None = "issuer",
+    cache_worker_enabled: bool = False,
+) -> SimpleNamespace:
     return SimpleNamespace(
         general_settings=SimpleNamespace(
             api_key_auth_cache_ttl_seconds=300,
+            cache_invalidation_worker_enabled=cache_worker_enabled,
+            cache_invalidation_worker_poll_interval_seconds=5.0,
+            cache_invalidation_worker_batch_size=25,
+            cache_invalidation_worker_max_concurrency=4,
+            cache_invalidation_worker_lease_seconds=60,
+            cache_invalidation_worker_record_timeout_seconds=10.0,
+            cache_invalidation_max_attempts=10,
+            cache_invalidation_retry_initial_seconds=5,
+            cache_invalidation_retry_max_seconds=300,
+            cache_invalidation_immediate_timeout_seconds=0.5,
             auth_session_ttl_hours=12,
             redis_degraded_mode="fail_open",
             platform_bootstrap_admin_email="admin@example.com",
@@ -55,11 +73,19 @@ async def test_init_auth_runtime_wires_enabled_handlers(monkeypatch: pytest.Monk
     monkeypatch.setattr("src.bootstrap.auth.KeyRepository", lambda client: ("key-repo", client))
     monkeypatch.setattr("src.bootstrap.auth.KeyService", lambda **kwargs: ("key-service", kwargs))
     monkeypatch.setattr("src.bootstrap.auth.PlatformIdentityService", FakePlatformIdentityService)
-    monkeypatch.setattr("src.bootstrap.auth.LimitCounter", lambda **kwargs: ("limit-counter", kwargs))
+    monkeypatch.setattr(
+        "src.bootstrap.auth.LimitCounter", lambda **kwargs: ("limit-counter", kwargs)
+    )
     monkeypatch.setattr("src.bootstrap.auth.InMemoryUserRepository", lambda: "user-repo")
-    monkeypatch.setattr("src.bootstrap.auth.SSOStateStore", lambda **kwargs: ("sso-state-store", kwargs))
-    monkeypatch.setattr("src.bootstrap.auth.SSOAuthHandler", lambda **kwargs: ("sso-handler", kwargs))
-    monkeypatch.setattr("src.bootstrap.auth.JWTAuthHandler", lambda **kwargs: ("jwt-handler", kwargs))
+    monkeypatch.setattr(
+        "src.bootstrap.auth.SSOStateStore", lambda **kwargs: ("sso-state-store", kwargs)
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.auth.SSOAuthHandler", lambda **kwargs: ("sso-handler", kwargs)
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.auth.JWTAuthHandler", lambda **kwargs: ("jwt-handler", kwargs)
+    )
 
     class FakeCustomAuthManager:
         def __init__(self) -> None:
@@ -81,7 +107,9 @@ async def test_init_auth_runtime_wires_enabled_handlers(monkeypatch: pytest.Monk
         )
     )
 
-    runtime = await init_auth_runtime(app, _auth_config(enable_sso=True, enable_jwt=True, custom_auth="module.handler"))
+    runtime = await init_auth_runtime(
+        app, _auth_config(enable_sso=True, enable_jwt=True, custom_auth="module.handler")
+    )
 
     assert app.state.key_service[0] == "key-service"
     assert created["platform_identity_service"].bootstrap_calls == [("admin@example.com", "secret")]
@@ -96,6 +124,8 @@ async def test_init_auth_runtime_wires_enabled_handlers(monkeypatch: pytest.Monk
     assert runtime.statuses == (
         BootstrapStatus("key_service", "ready"),
         BootstrapStatus("platform_identity", "ready"),
+        BootstrapStatus("cache_invalidation_outbox", "ready"),
+        BootstrapStatus("cache_invalidation_worker", "disabled"),
         BootstrapStatus("sso_state_store", "ready"),
         BootstrapStatus("sso_auth", "ready"),
         BootstrapStatus("jwt_auth", "ready"),
@@ -104,7 +134,9 @@ async def test_init_auth_runtime_wires_enabled_handlers(monkeypatch: pytest.Monk
 
 
 @pytest.mark.asyncio
-async def test_init_auth_runtime_leaves_optional_handlers_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_init_auth_runtime_leaves_optional_handlers_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class FakePlatformIdentityService:
         def __init__(self, **kwargs) -> None:  # noqa: ANN003
             self.kwargs = kwargs
@@ -117,14 +149,16 @@ async def test_init_auth_runtime_leaves_optional_handlers_disabled(monkeypatch: 
     app = SimpleNamespace(
         state=SimpleNamespace(
             prisma_manager=SimpleNamespace(client="db-client"),
-            redis=None,
+            redis="redis-client",
             salt_key="salt",
             settings=SimpleNamespace(redis_degraded_mode="fail_open"),
             http_client="http-client",
         )
     )
 
-    runtime = await init_auth_runtime(app, _auth_config(enable_sso=False, enable_jwt=False, custom_auth=None))
+    runtime = await init_auth_runtime(
+        app, _auth_config(enable_sso=False, enable_jwt=False, custom_auth=None)
+    )
 
     assert app.state.sso_auth_handler is None
     assert app.state.sso_state_store is None
@@ -133,6 +167,8 @@ async def test_init_auth_runtime_leaves_optional_handlers_disabled(monkeypatch: 
     assert runtime.statuses == (
         BootstrapStatus("key_service", "ready"),
         BootstrapStatus("platform_identity", "ready"),
+        BootstrapStatus("cache_invalidation_outbox", "ready"),
+        BootstrapStatus("cache_invalidation_worker", "disabled"),
         BootstrapStatus("sso_state_store", "disabled"),
         BootstrapStatus("sso_auth", "disabled"),
         BootstrapStatus("jwt_auth", "disabled"),
@@ -154,7 +190,7 @@ async def test_init_auth_runtime_requires_jwt_issuer(monkeypatch: pytest.MonkeyP
     app = SimpleNamespace(
         state=SimpleNamespace(
             prisma_manager=SimpleNamespace(client="db-client"),
-            redis=None,
+            redis="redis-client",
             salt_key="salt",
             settings=SimpleNamespace(redis_degraded_mode="fail_open"),
             http_client="http-client",
@@ -162,7 +198,9 @@ async def test_init_auth_runtime_requires_jwt_issuer(monkeypatch: pytest.MonkeyP
     )
 
     with pytest.raises(ValueError, match="JWT issuer must be configured"):
-        await init_auth_runtime(app, _auth_config(enable_sso=False, enable_jwt=True, custom_auth=None, jwt_issuer=None))
+        await init_auth_runtime(
+            app, _auth_config(enable_sso=False, enable_jwt=True, custom_auth=None, jwt_issuer=None)
+        )
 
 
 @pytest.mark.asyncio
@@ -193,7 +231,10 @@ async def test_init_auth_runtime_marks_incomplete_sso_degraded(
 
     runtime = await init_auth_runtime(app, cfg)
 
-    assert BootstrapStatus("sso_state_store", "degraded", "configuration incomplete") in runtime.statuses
+    assert (
+        BootstrapStatus("sso_state_store", "degraded", "configuration incomplete")
+        in runtime.statuses
+    )
     assert BootstrapStatus("sso_auth", "degraded", "configuration incomplete") in runtime.statuses
     assert "sso enabled but configuration is incomplete" in caplog.text
 
@@ -210,7 +251,9 @@ async def test_init_auth_runtime_keeps_sso_disabled_when_redis_missing(
             return None
 
     monkeypatch.setattr("src.bootstrap.auth.PlatformIdentityService", FakePlatformIdentityService)
-    monkeypatch.setattr("src.bootstrap.auth.SSOAuthHandler", lambda **kwargs: ("sso-handler", kwargs))
+    monkeypatch.setattr(
+        "src.bootstrap.auth.SSOAuthHandler", lambda **kwargs: ("sso-handler", kwargs)
+    )
 
     app = SimpleNamespace(
         state=SimpleNamespace(
@@ -222,9 +265,186 @@ async def test_init_auth_runtime_keeps_sso_disabled_when_redis_missing(
         )
     )
 
-    runtime = await init_auth_runtime(app, _auth_config(enable_sso=True, enable_jwt=False, custom_auth=None))
+    runtime = await init_auth_runtime(
+        app, _auth_config(enable_sso=True, enable_jwt=False, custom_auth=None)
+    )
 
     assert app.state.sso_state_store is None
     assert app.state.sso_auth_handler is None
     assert BootstrapStatus("sso_state_store", "degraded", "redis unavailable") in runtime.statuses
     assert BootstrapStatus("sso_auth", "degraded", "redis unavailable") in runtime.statuses
+
+
+@pytest.mark.asyncio
+async def test_init_auth_runtime_starts_and_stops_cache_invalidation_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakePlatformIdentityService:
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            self.kwargs = kwargs
+
+        async def ensure_bootstrap_admin(self, email: str | None, password: str | None) -> None:  # noqa: ARG002
+            return None
+
+    class FakeCacheInvalidationWorker:
+        instances: list["FakeCacheInvalidationWorker"] = []
+
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            self.kwargs = kwargs
+            self.started = False
+            self.stopped = False
+            FakeCacheInvalidationWorker.instances.append(self)
+
+        async def run(self) -> None:
+            self.started = True
+            await asyncio.sleep(3600)
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    monkeypatch.setattr("src.bootstrap.auth.PlatformIdentityService", FakePlatformIdentityService)
+    monkeypatch.setattr("src.bootstrap.auth.CacheInvalidationWorker", FakeCacheInvalidationWorker)
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            prisma_manager=SimpleNamespace(client="db-client"),
+            redis="redis-client",
+            salt_key="salt",
+            settings=SimpleNamespace(redis_degraded_mode="fail_open"),
+            http_client="http-client",
+        )
+    )
+
+    runtime = await init_auth_runtime(
+        app,
+        _auth_config(
+            enable_sso=False,
+            enable_jwt=False,
+            custom_auth=None,
+            cache_worker_enabled=True,
+        ),
+    )
+    await asyncio.sleep(0)
+
+    worker = FakeCacheInvalidationWorker.instances[0]
+    assert app.state.cache_invalidation_worker is worker
+    assert worker.started is True
+    assert worker.kwargs["config"].record_timeout_seconds == 10.0
+    assert BootstrapStatus("cache_invalidation_worker", "ready") in runtime.statuses
+
+    await shutdown_auth_runtime(runtime)
+
+    assert worker.stopped is True
+    assert runtime.cache_invalidation_task is not None
+    assert runtime.cache_invalidation_task.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_init_auth_runtime_does_not_start_cache_worker_when_redis_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakePlatformIdentityService:
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            self.kwargs = kwargs
+
+        async def ensure_bootstrap_admin(self, email: str | None, password: str | None) -> None:  # noqa: ARG002
+            return None
+
+    class FakeCacheInvalidationWorker:
+        instances: list["FakeCacheInvalidationWorker"] = []
+
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            self.kwargs = kwargs
+            FakeCacheInvalidationWorker.instances.append(self)
+
+        async def run(self) -> None:
+            await asyncio.sleep(3600)
+
+        def stop(self) -> None:
+            return None
+
+    monkeypatch.setattr("src.bootstrap.auth.PlatformIdentityService", FakePlatformIdentityService)
+    monkeypatch.setattr("src.bootstrap.auth.CacheInvalidationWorker", FakeCacheInvalidationWorker)
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            prisma_manager=SimpleNamespace(client="db-client"),
+            redis=None,
+            salt_key="salt",
+            settings=SimpleNamespace(redis_degraded_mode="fail_open"),
+            http_client="http-client",
+        )
+    )
+
+    runtime = await init_auth_runtime(
+        app,
+        _auth_config(
+            enable_sso=False,
+            enable_jwt=False,
+            custom_auth=None,
+            cache_worker_enabled=True,
+        ),
+    )
+
+    assert FakeCacheInvalidationWorker.instances == []
+    assert app.state.cache_invalidation_worker is None
+    assert runtime.cache_invalidation_task is None
+    assert (
+        BootstrapStatus("cache_invalidation_worker", "degraded", "redis unavailable")
+        in runtime.statuses
+    )
+
+
+@pytest.mark.asyncio
+async def test_init_auth_runtime_does_not_start_cache_worker_when_later_startup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakePlatformIdentityService:
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            self.kwargs = kwargs
+
+        async def ensure_bootstrap_admin(self, email: str | None, password: str | None) -> None:  # noqa: ARG002
+            return None
+
+    class FakeCacheInvalidationWorker:
+        instances: list["FakeCacheInvalidationWorker"] = []
+
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            self.kwargs = kwargs
+            self.started = False
+            FakeCacheInvalidationWorker.instances.append(self)
+
+        async def run(self) -> None:
+            self.started = True
+            await asyncio.sleep(3600)
+
+        def stop(self) -> None:
+            return None
+
+    monkeypatch.setattr("src.bootstrap.auth.PlatformIdentityService", FakePlatformIdentityService)
+    monkeypatch.setattr("src.bootstrap.auth.CacheInvalidationWorker", FakeCacheInvalidationWorker)
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            prisma_manager=SimpleNamespace(client="db-client"),
+            redis="redis-client",
+            salt_key="salt",
+            settings=SimpleNamespace(redis_degraded_mode="fail_open"),
+            http_client="http-client",
+        )
+    )
+
+    with pytest.raises(ValueError, match="JWT issuer must be configured"):
+        await init_auth_runtime(
+            app,
+            _auth_config(
+                enable_sso=False,
+                enable_jwt=True,
+                custom_auth=None,
+                jwt_issuer=None,
+                cache_worker_enabled=True,
+            ),
+        )
+
+    assert len(FakeCacheInvalidationWorker.instances) == 1
+    assert FakeCacheInvalidationWorker.instances[0].started is False

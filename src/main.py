@@ -19,6 +19,7 @@ from src.bootstrap import (
     init_runtime_services,
     init_routing_runtime,
     shutdown_audit_runtime,
+    shutdown_auth_runtime,
     shutdown_batch_runtime,
     shutdown_email_runtime,
     shutdown_infrastructure_runtime,
@@ -59,6 +60,7 @@ async def lifespan(app: FastAPI):
         exit_stack.push_async_callback(shutdown_email_runtime, email_runtime)
 
         auth_runtime = await init_auth_runtime(app, cfg)
+        exit_stack.push_async_callback(shutdown_auth_runtime, auth_runtime)
 
         routing_runtime = await init_routing_runtime(
             app,

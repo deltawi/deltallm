@@ -19,9 +19,14 @@ class TierAdminNotFoundError(TierAdminError):
     pass
 
 
+class TierAdminUnavailableError(TierAdminError):
+    pass
+
+
 __all__ = [
     "TierAdminConflictError",
     "TierAdminError",
     "TierAdminNotFoundError",
+    "TierAdminUnavailableError",
     "TierAdminValidationError",
 ]

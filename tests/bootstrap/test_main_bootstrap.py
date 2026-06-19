@@ -43,7 +43,13 @@ async def test_lifespan_initializes_and_shuts_down_in_reverse_order(
 
     async def _init_auth(app, cfg):  # noqa: ANN001, ANN202
         calls.append(f"init_auth:{cfg}")
-        return SimpleNamespace(statuses=(BootstrapStatus("auth", "ready"),))
+        return SimpleNamespace(
+            statuses=(BootstrapStatus("auth", "ready"),),
+            marker="auth-runtime",
+        )
+
+    async def _shutdown_auth(runtime):  # noqa: ANN001, ANN202
+        calls.append(f"shutdown_auth:{runtime.marker}")
 
     async def _init_email(app, cfg):  # noqa: ANN001, ANN202
         calls.append(f"init_email:{cfg}")
@@ -92,6 +98,7 @@ async def test_lifespan_initializes_and_shuts_down_in_reverse_order(
     monkeypatch.setattr("src.main.init_email_runtime", _init_email)
     monkeypatch.setattr("src.main.shutdown_email_runtime", _shutdown_email)
     monkeypatch.setattr("src.main.init_auth_runtime", _init_auth)
+    monkeypatch.setattr("src.main.shutdown_auth_runtime", _shutdown_auth)
     monkeypatch.setattr("src.main.init_routing_runtime", _init_routing)
     monkeypatch.setattr("src.main.shutdown_routing_runtime", _shutdown_routing)
     monkeypatch.setattr("src.main.init_runtime_services", _init_runtime_services)
@@ -104,7 +111,10 @@ async def test_lifespan_initializes_and_shuts_down_in_reverse_order(
     async with lifespan(app):
         calls.append("yield")
 
-    assert "startup: config=ready, audit=ready, email=ready, auth=ready, routing=ready, runtime_services=ready, batch=ready" in caplog.text
+    assert (
+        "startup: config=ready, audit=ready, email=ready, auth=ready, routing=ready, runtime_services=ready, batch=ready"
+        in caplog.text
+    )
     assert calls == [
         "init_infrastructure",
         "init_audit:cfg",
@@ -117,6 +127,7 @@ async def test_lifespan_initializes_and_shuts_down_in_reverse_order(
         "shutdown_batch:batch-runtime",
         "shutdown_runtime_services:runtime-services",
         "shutdown_routing:routing-runtime",
+        "shutdown_auth:auth-runtime",
         "shutdown_email:email-runtime",
         "shutdown_audit:audit-runtime",
         "shutdown_infrastructure:infrastructure-runtime",
@@ -155,7 +166,13 @@ async def test_lifespan_cleans_up_partial_startup_failure(monkeypatch: pytest.Mo
 
     async def _init_auth(app, cfg):  # noqa: ANN001, ANN202
         calls.append(f"init_auth:{cfg}")
-        return SimpleNamespace(statuses=(BootstrapStatus("auth", "ready"),))
+        return SimpleNamespace(
+            statuses=(BootstrapStatus("auth", "ready"),),
+            marker="auth-runtime",
+        )
+
+    async def _shutdown_auth(runtime):  # noqa: ANN001, ANN202
+        calls.append(f"shutdown_auth:{runtime.marker}")
 
     async def _init_email(app, cfg):  # noqa: ANN001, ANN202
         calls.append(f"init_email:{cfg}")
@@ -178,6 +195,7 @@ async def test_lifespan_cleans_up_partial_startup_failure(monkeypatch: pytest.Mo
     monkeypatch.setattr("src.main.init_email_runtime", _init_email)
     monkeypatch.setattr("src.main.shutdown_email_runtime", _shutdown_email)
     monkeypatch.setattr("src.main.init_auth_runtime", _init_auth)
+    monkeypatch.setattr("src.main.shutdown_auth_runtime", _shutdown_auth)
     monkeypatch.setattr("src.main.init_routing_runtime", _init_routing)
 
     app = SimpleNamespace(state=SimpleNamespace())
@@ -192,6 +210,7 @@ async def test_lifespan_cleans_up_partial_startup_failure(monkeypatch: pytest.Mo
         "init_email:cfg",
         "init_auth:cfg",
         "init_routing:cfg",
+        "shutdown_auth:auth-runtime",
         "shutdown_email:email-runtime",
         "shutdown_audit:audit-runtime",
         "shutdown_infrastructure:infrastructure-runtime",
