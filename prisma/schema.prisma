@@ -122,6 +122,7 @@ model DeltaLLM_UserTable {
   budget_duration String?
   budget_reset_at DateTime?
   models          String[]
+  blocked         Boolean  @default(false)
   tpm_limit       Int?
   rpm_limit       Int?
   rph_limit       Int?
