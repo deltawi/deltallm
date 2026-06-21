@@ -20,6 +20,8 @@ from src.metrics import (
 from src.models.responses import UserAPIKeyAuth
 from src.services.callable_target_grants import CallableTargetGrantService
 from src.services.model_visibility import CallableTargetPolicyMode
+from src.services.tier_model_access import TierPolicyMode
+from src.services.tier_policy_service import TierPolicyService
 
 if TYPE_CHECKING:
     from src.batch.create import BatchCreateSessionService
@@ -59,7 +61,10 @@ class BatchService:
         max_items_per_batch: int = 10_000,
         max_line_bytes: int = 1_048_576,
         callable_target_grant_service: CallableTargetGrantService | None = None,
+        tier_policy_service: TierPolicyService | None = None,
         callable_target_scope_policy_mode: CallableTargetPolicyMode | str = "enforce",
+        tier_policy_mode: TierPolicyMode | str = "disabled",
+        tier_policy_missing_service_mode: str = "fail_open",
         create_session_service: "BatchCreateSessionService" | None = None,
         model_group_resolver: Any | None = None,
     ) -> None:
@@ -77,7 +82,10 @@ class BatchService:
         self.max_items_per_batch = max_items_per_batch
         self.max_line_bytes = max_line_bytes
         self.callable_target_grant_service = callable_target_grant_service
+        self.tier_policy_service = tier_policy_service
         self.callable_target_scope_policy_mode = callable_target_scope_policy_mode
+        self.tier_policy_mode = tier_policy_mode
+        self.tier_policy_missing_service_mode = tier_policy_missing_service_mode
         self.create_session_service = create_session_service
         self.model_group_resolver = model_group_resolver
 
@@ -178,6 +186,9 @@ class BatchService:
             seen_custom_ids=seen_custom_ids,
             callable_target_grant_service=self.callable_target_grant_service,
             callable_target_scope_policy_mode=self.callable_target_scope_policy_mode,
+            tier_policy_service=self.tier_policy_service,
+            tier_policy_mode=self.tier_policy_mode,
+            tier_policy_missing_service_mode=self.tier_policy_missing_service_mode,
         )
         if parsed is None:
             return None, None

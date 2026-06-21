@@ -6,7 +6,12 @@ from fastapi import APIRouter, Depends, Request
 
 from src.middleware.auth import require_api_key
 from src.services.callable_targets import list_callable_target_ids
-from src.services.model_visibility import filter_visible_models, get_callable_target_policy_mode_from_app
+from src.services.model_visibility import (
+    filter_visible_models,
+    get_callable_target_policy_mode_from_app,
+    get_tier_policy_missing_service_mode_from_app,
+    get_tier_policy_mode_from_app,
+)
 
 router = APIRouter(prefix="/v1", tags=["models"])
 
@@ -28,7 +33,10 @@ async def models(request: Request) -> dict[str, object]:
             callable_ids,
             auth,
             callable_target_grant_service=getattr(request.app.state, "callable_target_grant_service", None),
+            tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
             policy_mode=get_callable_target_policy_mode_from_app(request.app),
+            tier_policy_mode=get_tier_policy_mode_from_app(request.app),
+            tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(request.app),
             emit_shadow_log=True,
         )
     )

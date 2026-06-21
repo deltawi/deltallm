@@ -57,6 +57,7 @@ logger = logging.getLogger(__name__)
 _WORKER_SHUTDOWN_DRAIN_TIMEOUT_SECONDS = 30.0
 _BATCH_WORKER_BOOT_ID = uuid4().hex[:12]
 _BATCH_SCHEDULER_MODE_STATE_KEY = "batch_scheduler_modes"
+_MISSING = object()
 
 
 def _safe_worker_id_part(value: object, *, fallback: str) -> str:
@@ -65,6 +66,24 @@ def _safe_worker_id_part(value: object, *, fallback: str) -> str:
         for char in str(value or "").strip()
     ).strip("-._")
     return safe or fallback
+
+
+def _batch_runtime_setting(app: Any, cfg: Any, field_name: str, *, default: Any) -> Any:
+    general_settings = getattr(cfg, "general_settings", None)
+    value = _explicit_general_setting(general_settings, field_name)
+    if value is not _MISSING:
+        return value
+    settings = getattr(getattr(app, "state", None), "settings", None)
+    return getattr(settings, field_name, default)
+
+
+def _explicit_general_setting(general_settings: Any, field_name: str) -> Any:
+    if general_settings is None:
+        return _MISSING
+    fields_set = getattr(general_settings, "model_fields_set", None)
+    if fields_set is not None and field_name not in fields_set:
+        return _MISSING
+    return getattr(general_settings, field_name, _MISSING)
 
 
 def _batch_worker_id(role: str) -> str:
@@ -591,6 +610,26 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
     app.state.batch_tenant_fair_share_config = tenant_fair_share_config
     app.state.batch_size_aging_config = size_aging_config
     app.state.batch_scheduler_modes = scheduler_modes
+    callable_target_scope_policy_mode = normalize_callable_target_policy_mode(
+        _batch_runtime_setting(
+            app,
+            cfg,
+            "callable_target_scope_policy_mode",
+            default="enforce",
+        )
+    )
+    tier_policy_mode = _batch_runtime_setting(
+        app,
+        cfg,
+        "tier_policy_mode",
+        default="disabled",
+    )
+    tier_policy_missing_service_mode = _batch_runtime_setting(
+        app,
+        cfg,
+        "tier_policy_missing_service_mode",
+        default="fail_open",
+    )
     app.state.batch_service = BatchService(
         repository=repository,
         storage=batch_storage,
@@ -601,9 +640,10 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         max_items_per_batch=cfg.general_settings.embeddings_batch_max_items_per_batch,
         max_line_bytes=cfg.general_settings.embeddings_batch_max_line_bytes,
         callable_target_grant_service=getattr(app.state, "callable_target_grant_service", None),
-        callable_target_scope_policy_mode=normalize_callable_target_policy_mode(
-            getattr(cfg.general_settings, "callable_target_scope_policy_mode", "enforce")
-        ),
+        tier_policy_service=getattr(app.state, "tier_policy_service", None),
+        callable_target_scope_policy_mode=callable_target_scope_policy_mode,
+        tier_policy_mode=tier_policy_mode,
+        tier_policy_missing_service_mode=tier_policy_missing_service_mode,
         model_group_resolver=model_group_resolver,
     )
 
@@ -812,9 +852,10 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
         storage_chunk_size=cfg.general_settings.embeddings_batch_storage_chunk_size,
         max_pending_batches_per_scope=cfg.general_settings.embeddings_batch_max_pending_batches_per_scope,
         callable_target_grant_service=getattr(app.state, "callable_target_grant_service", None),
-        callable_target_scope_policy_mode=normalize_callable_target_policy_mode(
-            getattr(cfg.general_settings, "callable_target_scope_policy_mode", "enforce")
-        ),
+        tier_policy_service=getattr(app.state, "tier_policy_service", None),
+        callable_target_scope_policy_mode=callable_target_scope_policy_mode,
+        tier_policy_mode=tier_policy_mode,
+        tier_policy_missing_service_mode=tier_policy_missing_service_mode,
         idempotency_enabled=cfg.general_settings.embeddings_batch_create_idempotency_enabled,
         model_group_resolver=model_group_resolver,
         scheduler_enabled=_batch_scheduler_active_enabled_for_creation(cfg.general_settings),

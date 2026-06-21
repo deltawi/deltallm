@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,6 +15,9 @@ from src.services.callable_targets import CallableTarget, DuplicateCallableTarge
 from src.services.model_deployments import build_model_registry_from_config
 from src.services.model_visibility import (
     filter_visible_models,
+    get_callable_target_policy_mode_from_app,
+    get_tier_policy_missing_service_mode_from_app,
+    get_tier_policy_mode_from_app,
     resolve_effective_model_allowlist,
     resolve_model_allowlist_resolution,
 )
@@ -93,6 +97,60 @@ def test_callable_target_policy_mode_accepts_legacy_config_alias(monkeypatch) ->
     monkeypatch.delenv("DELTALLM_SALT_KEY", raising=False)
     assert GeneralSettings(callable_target_scope_policy_mode="legacy").callable_target_scope_policy_mode == "legacy"
     assert Settings(callable_target_scope_policy_mode="legacy").callable_target_scope_policy_mode == "legacy"
+
+
+def test_policy_getters_use_settings_when_general_settings_omits_fields() -> None:
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            app_config=SimpleNamespace(
+                general_settings=SimpleNamespace(
+                    model_fields_set=set(),
+                    callable_target_scope_policy_mode="enforce",
+                    tier_policy_mode="disabled",
+                    tier_policy_missing_service_mode="fail_open",
+                )
+            ),
+            settings=SimpleNamespace(
+                callable_target_scope_policy_mode="shadow",
+                tier_policy_mode="enforce",
+                tier_policy_missing_service_mode="fail_closed",
+            ),
+            tier_policy_service=None,
+        )
+    )
+
+    assert get_callable_target_policy_mode_from_app(app) == "shadow"
+    assert get_tier_policy_mode_from_app(app) == "enforce"
+    assert get_tier_policy_missing_service_mode_from_app(app) == "fail_closed"
+
+
+def test_policy_getters_prefer_explicit_general_settings() -> None:
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            app_config=SimpleNamespace(
+                general_settings=SimpleNamespace(
+                    model_fields_set={
+                        "callable_target_scope_policy_mode",
+                        "tier_policy_mode",
+                        "tier_policy_missing_service_mode",
+                    },
+                    callable_target_scope_policy_mode="enforce",
+                    tier_policy_mode="shadow",
+                    tier_policy_missing_service_mode="fail_open",
+                )
+            ),
+            settings=SimpleNamespace(
+                callable_target_scope_policy_mode="shadow",
+                tier_policy_mode="enforce",
+                tier_policy_missing_service_mode="fail_closed",
+            ),
+            tier_policy_service=None,
+        )
+    )
+
+    assert get_callable_target_policy_mode_from_app(app) == "enforce"
+    assert get_tier_policy_mode_from_app(app) == "shadow"
+    assert get_tier_policy_missing_service_mode_from_app(app) == "fail_open"
 
 
 @pytest.mark.asyncio

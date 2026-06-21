@@ -87,6 +87,13 @@ deltallm_callable_target_policy_fallback_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_tier_policy_shadow_mismatch_metric = Counter(
+    "deltallm_tier_policy_shadow_mismatches_total",
+    "Tier policy shadow mismatches",
+    ["auth_source", "difference_type", "reason"],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_config_reload_events_metric = Counter(
     "deltallm_config_reload_events_total",
     "Dynamic config reload events by source and result",
@@ -226,5 +233,18 @@ def increment_callable_target_policy_fallback(
     deltallm_callable_target_policy_fallback_metric.labels(
         policy_mode=sanitize_label(policy_mode),
         auth_source=sanitize_label(auth_source),
+        reason=sanitize_label(reason, "none"),
+    ).inc()
+
+
+def increment_tier_policy_shadow_mismatch(
+    *,
+    auth_source: str | None,
+    difference_type: str,
+    reason: str | None,
+) -> None:
+    deltallm_tier_policy_shadow_mismatch_metric.labels(
+        auth_source=sanitize_label(auth_source),
+        difference_type=sanitize_label(difference_type),
         reason=sanitize_label(reason, "none"),
     ).inc()
