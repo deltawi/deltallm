@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 from src.bootstrap.status import BootstrapStatus
-from src.billing import AlertConfig, AlertService, BudgetEnforcementService, SpendLedgerService, SpendTrackingService
+from src.billing import (
+    AlertConfig,
+    AlertService,
+    BudgetEnforcementService,
+    SpendLedgerService,
+    SpendTrackingService,
+)
 from src.callbacks import CallbackManager
 from src.guardrails.middleware import GuardrailMiddleware
 from src.guardrails.registry import GuardrailRegistry
@@ -27,13 +34,41 @@ from src.services.governance_invalidation import GovernanceInvalidationService
 from src.services.key_notifications import KeyNotificationService
 from src.services.notification_recipients import NotificationRecipientResolver
 from src.services.prompt_registry import PromptRegistryService
+from src.services.tier_policy_service import TierPolicyService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
 class RuntimeServicesRuntime:
     callback_manager: CallbackManager
     governance_invalidation_service: GovernanceInvalidationService
+    tier_policy_service: Any | None = None
     statuses: tuple[BootstrapStatus, ...] = ()
+
+
+_MISSING = object()
+
+
+def _runtime_setting(
+    general_settings: Any,
+    settings: Any,
+    field_name: str,
+    default: Any,
+) -> Any:
+    value = _explicit_general_setting(general_settings, field_name)
+    if value is not _MISSING:
+        return value
+    return getattr(settings, field_name, default)
+
+
+def _explicit_general_setting(general_settings: Any, field_name: str) -> Any:
+    if general_settings is None:
+        return _MISSING
+    fields_set = getattr(general_settings, "model_fields_set", None)
+    if fields_set is not None and field_name not in fields_set:
+        return _MISSING
+    return getattr(general_settings, field_name, _MISSING)
 
 
 async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
@@ -44,6 +79,74 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
         callable_target_catalog_getter=lambda: getattr(app.state, "callable_target_catalog", None),
     )
     await app.state.callable_target_grant_service.reload()
+    general_settings = getattr(cfg, "general_settings", None)
+    settings = getattr(app.state, "settings", None)
+    tier_policy_mode = str(
+        _runtime_setting(general_settings, settings, "tier_policy_mode", "disabled")
+        or "disabled"
+    )
+    tier_policy_missing_service_mode = str(
+        _runtime_setting(
+            general_settings,
+            settings,
+            "tier_policy_missing_service_mode",
+            "fail_open",
+        )
+        or "fail_open"
+    )
+    app.state.tier_policy_service = TierPolicyService(
+        repository=getattr(app.state, "tier_repository", None),
+        mode=tier_policy_mode,
+        missing_service_mode=tier_policy_missing_service_mode,
+        refresh_interval_seconds=_runtime_setting(
+            general_settings,
+            settings,
+            "tier_policy_refresh_interval_seconds",
+            300.0,
+        ),
+        refresh_jitter_seconds=_runtime_setting(
+            general_settings,
+            settings,
+            "tier_policy_refresh_jitter_seconds",
+            1.0,
+        ),
+        transition_grace_seconds=_runtime_setting(
+            general_settings,
+            settings,
+            "tier_policy_transition_grace_seconds",
+            0.05,
+        ),
+        refresh_retry_delay_seconds=_runtime_setting(
+            general_settings,
+            settings,
+            "tier_policy_refresh_retry_delay_seconds",
+            5.0,
+        ),
+    )
+    resolved_tier_policy_mode = str(
+        getattr(app.state.tier_policy_service, "mode", tier_policy_mode) or "disabled"
+    )
+    resolved_tier_policy_missing_service_mode = str(
+        getattr(
+            app.state.tier_policy_service,
+            "missing_service_mode",
+            tier_policy_missing_service_mode,
+        )
+        or "fail_open"
+    )
+    tier_policy_status = "disabled"
+    if resolved_tier_policy_mode != "disabled":
+        try:
+            await app.state.tier_policy_service.reload()
+        except Exception:
+            if resolved_tier_policy_missing_service_mode != "fail_open":
+                raise
+            tier_policy_status = "degraded"
+            logger.exception(
+                "tier policy startup reload failed; continuing because fail_open is configured"
+            )
+        else:
+            tier_policy_status = "ready"
     app.state.prompt_registry_service = PromptRegistryService(
         repository=app.state.prompt_registry_repository,
         route_group_repository=app.state.route_group_repository,
@@ -77,6 +180,9 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
     app.state.governance_invalidation_service = GovernanceInvalidationService(
         redis_client=app.state.redis,
         callable_target_grant_service=app.state.callable_target_grant_service,
+        tier_policy_service=(
+            app.state.tier_policy_service if resolved_tier_policy_mode != "disabled" else None
+        ),
         mcp_registry_service=app.state.mcp_registry_service,
         mcp_governance_service=app.state.mcp_governance_service,
     )
@@ -101,15 +207,18 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
     app.state.callback_manager = callback_manager
     app.state.turn_off_message_logging = cfg.deltallm_settings.turn_off_message_logging
 
-    general_settings = getattr(cfg, "general_settings", None)
-    app.state.notification_recipient_resolver = NotificationRecipientResolver(app.state.prisma_manager.client)
+    app.state.notification_recipient_resolver = NotificationRecipientResolver(
+        app.state.prisma_manager.client
+    )
     budget_alert_ttl = int(getattr(general_settings, "budget_alert_ttl_seconds", 3600) or 3600)
 
     channels: list[NotificationChannel] = []
     email_outbox_service = getattr(app.state, "email_outbox_service", None)
     if email_outbox_service is not None:
         channels.append(EmailChannel(outbox_service=email_outbox_service))
-    if getattr(general_settings, "slack_alerting_enabled", False) and getattr(general_settings, "slack_webhook_url", None):
+    if getattr(general_settings, "slack_alerting_enabled", False) and getattr(
+        general_settings, "slack_webhook_url", None
+    ):
         channels.append(
             SlackChannel(
                 webhook_url=general_settings.slack_webhook_url,
@@ -145,11 +254,18 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
         alert_service=app.state.alert_service,
     )
 
+    if resolved_tier_policy_mode != "disabled":
+        start_tier_policy_service = getattr(app.state.tier_policy_service, "start", None)
+        if callable(start_tier_policy_service):
+            await start_tier_policy_service()
+
     return RuntimeServicesRuntime(
         callback_manager=callback_manager,
         governance_invalidation_service=app.state.governance_invalidation_service,
+        tier_policy_service=app.state.tier_policy_service,
         statuses=(
             BootstrapStatus("callable_target_grants", "ready"),
+            BootstrapStatus("tier_policy", tier_policy_status),
             BootstrapStatus("prompt_registry", "ready"),
             BootstrapStatus("mcp_runtime", "ready"),
             BootstrapStatus("guardrails", "ready"),
@@ -160,6 +276,9 @@ async def init_runtime_services(app: Any, cfg: Any) -> RuntimeServicesRuntime:
 
 
 async def shutdown_runtime_services(runtime: RuntimeServicesRuntime) -> None:
+    tier_policy_service = runtime.tier_policy_service
+    if tier_policy_service is not None and callable(getattr(tier_policy_service, "close", None)):
+        await tier_policy_service.close()
     await runtime.governance_invalidation_service.close()
     await runtime.callback_manager.shutdown()
     await close_shared_client()
