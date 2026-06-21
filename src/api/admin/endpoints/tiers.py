@@ -16,6 +16,7 @@ from src.api.admin.endpoints.tier_schemas import (
 from src.audit.actions import AuditAction
 from src.auth.roles import Permission
 from src.middleware.admin import require_admin_permission
+from src.services.tier_policy_invalidation import reload_tier_policy
 from src.middleware.platform_auth import get_platform_auth_context
 from src.services.tier_admin import (
     TierAdminConflictError,
@@ -62,6 +63,10 @@ def _payload(model: Any) -> dict[str, Any]:
 def _actor_account_id(request: Request) -> str | None:
     context = get_platform_auth_context(request)
     return str(context.account_id) if context is not None and context.account_id else None
+
+
+async def _reload_tier_policy_for_audit(request: Request) -> dict[str, Any]:
+    return (await reload_tier_policy(request)).to_dict()
 
 
 @router.get("/ui/api/tiers", dependencies=_PLATFORM_ADMIN_DEPENDENCY)
@@ -131,6 +136,7 @@ async def update_tier(
         raise _http_error(exc) from exc
 
     response = serialize_tier(updated)
+    tier_policy_invalidation = await _reload_tier_policy_for_audit(request)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -138,9 +144,10 @@ async def update_tier(
         resource_type="tier",
         resource_id=tier_id,
         request_payload=request_payload,
-        response_payload=response,
+        response_payload={**response, "tier_policy_invalidation": tier_policy_invalidation},
         before=before,
         after=response,
+        metadata={"tier_policy_invalidation": tier_policy_invalidation},
     )
     return response
 
@@ -155,15 +162,17 @@ async def delete_tier(request: Request, tier_id: str) -> dict[str, Any]:
     except TierAdminError as exc:
         raise _http_error(exc) from exc
 
+    tier_policy_invalidation = await _reload_tier_policy_for_audit(request)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
         action=AuditAction.ADMIN_TIER_DELETE,
         resource_type="tier",
         resource_id=tier_id,
-        response_payload=response,
+        response_payload={**response, "tier_policy_invalidation": tier_policy_invalidation},
         before=before,
         after=response,
+        metadata={"tier_policy_invalidation": tier_policy_invalidation},
     )
     return response
 
@@ -237,6 +246,7 @@ async def replace_tier_model_policies(
         raise _http_error(exc) from exc
 
     response = {"data": [serialize_model_policy(record) for record in records]}
+    tier_policy_invalidation = await _reload_tier_policy_for_audit(request)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -247,9 +257,13 @@ async def replace_tier_model_policies(
             "tier_id": tier_id,
             "policy_count": len(policies_payload),
         },
-        response_payload={"policy_count": len(response["data"])},
+        response_payload={
+            "policy_count": len(response["data"]),
+            "tier_policy_invalidation": tier_policy_invalidation,
+        },
         before={"policy_count": len(before_detail["model_policies"]) if before_detail else 0},
         after={"policy_count": len(response["data"])},
+        metadata={"tier_policy_invalidation": tier_policy_invalidation},
     )
     return response
 
@@ -280,6 +294,7 @@ async def replace_tier_capacity_pools(
         raise _http_error(exc) from exc
 
     response = {"data": [serialize_capacity_pool(record) for record in records]}
+    tier_policy_invalidation = await _reload_tier_policy_for_audit(request)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -287,9 +302,13 @@ async def replace_tier_capacity_pools(
         resource_type="tier_capacity_pool_set",
         resource_id=tier_version_id,
         request_payload={"tier_id": tier_id, "pool_count": len(pools_payload)},
-        response_payload={"pool_count": len(response["data"])},
+        response_payload={
+            "pool_count": len(response["data"]),
+            "tier_policy_invalidation": tier_policy_invalidation,
+        },
         before={"pool_count": len(before_detail["capacity_pools"]) if before_detail else 0},
         after={"pool_count": len(response["data"])},
+        metadata={"tier_policy_invalidation": tier_policy_invalidation},
     )
     return response
 
@@ -318,6 +337,7 @@ async def publish_tier_version(
         raise _http_error(exc) from exc
 
     response = serialize_tier_version(published)
+    tier_policy_invalidation = await _reload_tier_policy_for_audit(request)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -325,9 +345,10 @@ async def publish_tier_version(
         resource_type="tier_version",
         resource_id=tier_version_id,
         request_payload={"tier_id": tier_id},
-        response_payload=response,
+        response_payload={**response, "tier_policy_invalidation": tier_policy_invalidation},
         before=before,
         after=response,
+        metadata={"tier_policy_invalidation": tier_policy_invalidation},
     )
     return response
 
@@ -352,6 +373,7 @@ async def archive_tier_version(
         raise _http_error(exc) from exc
 
     response = serialize_tier_version(archived)
+    tier_policy_invalidation = await _reload_tier_policy_for_audit(request)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -359,8 +381,9 @@ async def archive_tier_version(
         resource_type="tier_version",
         resource_id=tier_version_id,
         request_payload={"tier_id": tier_id},
-        response_payload=response,
+        response_payload={**response, "tier_policy_invalidation": tier_policy_invalidation},
         before=before,
         after=response,
+        metadata={"tier_policy_invalidation": tier_policy_invalidation},
     )
     return response

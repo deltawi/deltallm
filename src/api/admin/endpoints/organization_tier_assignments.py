@@ -22,6 +22,7 @@ from src.services.tier_admin_errors import (
 )
 from src.services.tier_assignment_admin import TierAssignmentAdminService
 from src.services.tier_assignment_admin_serialization import serialize_tier_assignment
+from src.services.tier_policy_invalidation import reload_tier_policy
 
 router = APIRouter(tags=["Admin Organization Tier Assignments"])
 _PLATFORM_ADMIN_DEPENDENCY = [Depends(require_admin_permission(Permission.PLATFORM_ADMIN))]
@@ -60,6 +61,10 @@ def _http_error(exc: TierAdminError) -> HTTPException:
 
 def _payload(model: Any) -> dict[str, Any]:
     return model.model_dump(mode="python", exclude_unset=True)
+
+
+async def _reload_tier_policy_for_audit(request: Request) -> dict[str, Any]:
+    return (await reload_tier_policy(request)).to_dict()
 
 
 @router.get(
@@ -102,6 +107,7 @@ async def create_organization_tier_assignment(
     created = result.assignment
     response = serialize_tier_assignment(created)
     cache_invalidation_payload = result.cache_invalidation.to_dict()
+    tier_policy_invalidation = await _reload_tier_policy_for_audit(request)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -110,10 +116,17 @@ async def create_organization_tier_assignment(
         resource_type="organization_tier_assignment",
         resource_id=created.assignment_id,
         request_payload={"organization_id": organization_id, **request_payload},
-        response_payload={**response, "cache_invalidation": cache_invalidation_payload},
+        response_payload={
+            **response,
+            "cache_invalidation": cache_invalidation_payload,
+            "tier_policy_invalidation": tier_policy_invalidation,
+        },
         before=None,
         after=response,
-        metadata={"cache_invalidation": cache_invalidation_payload},
+        metadata={
+            "cache_invalidation": cache_invalidation_payload,
+            "tier_policy_invalidation": tier_policy_invalidation,
+        },
     )
     return response
 
@@ -144,6 +157,7 @@ async def update_organization_tier_assignment(
     updated = result.assignment
     response = serialize_tier_assignment(updated)
     cache_invalidation_payload = result.cache_invalidation.to_dict()
+    tier_policy_invalidation = await _reload_tier_policy_for_audit(request)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -152,10 +166,17 @@ async def update_organization_tier_assignment(
         resource_type="organization_tier_assignment",
         resource_id=assignment_id,
         request_payload={"organization_id": organization_id, **request_payload},
-        response_payload={**response, "cache_invalidation": cache_invalidation_payload},
+        response_payload={
+            **response,
+            "cache_invalidation": cache_invalidation_payload,
+            "tier_policy_invalidation": tier_policy_invalidation,
+        },
         before=before,
         after=response,
-        metadata={"cache_invalidation": cache_invalidation_payload},
+        metadata={
+            "cache_invalidation": cache_invalidation_payload,
+            "tier_policy_invalidation": tier_policy_invalidation,
+        },
     )
     return response
 
@@ -182,6 +203,7 @@ async def delete_organization_tier_assignment(
     before = serialize_tier_assignment(result.before)
     response = result.response
     cache_invalidation_payload = result.cache_invalidation.to_dict()
+    tier_policy_invalidation = await _reload_tier_policy_for_audit(request)
     await emit_admin_mutation_audit(
         request=request,
         request_start=request_start,
@@ -189,9 +211,16 @@ async def delete_organization_tier_assignment(
         organization_id=response["organization_id"],
         resource_type="organization_tier_assignment",
         resource_id=assignment_id,
-        response_payload={**response, "cache_invalidation": cache_invalidation_payload},
+        response_payload={
+            **response,
+            "cache_invalidation": cache_invalidation_payload,
+            "tier_policy_invalidation": tier_policy_invalidation,
+        },
         before=before,
         after=response,
-        metadata={"cache_invalidation": cache_invalidation_payload},
+        metadata={
+            "cache_invalidation": cache_invalidation_payload,
+            "tier_policy_invalidation": tier_policy_invalidation,
+        },
     )
     return response

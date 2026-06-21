@@ -655,6 +655,12 @@ class GeneralSettings(BaseModel):
     embeddings_batch_gc_interval_seconds: float = 86400.0
     embeddings_batch_gc_scan_limit: int = 200
     callable_target_scope_policy_mode: Literal["legacy", "shadow", "enforce"] = "enforce"
+    tier_policy_mode: Literal["disabled", "shadow", "enforce"] = "disabled"
+    tier_policy_missing_service_mode: Literal["fail_open", "fail_closed"] = "fail_open"
+    tier_policy_refresh_interval_seconds: float = Field(default=300.0, gt=0.0)
+    tier_policy_refresh_jitter_seconds: float = Field(default=1.0, ge=0.0)
+    tier_policy_transition_grace_seconds: float = Field(default=0.05, ge=0.0)
+    tier_policy_refresh_retry_delay_seconds: float = Field(default=5.0, gt=0.0)
     audit_enabled: bool = True
     audit_retention_worker_enabled: bool = True
     audit_retention_interval_seconds: float = 86400.0
@@ -827,6 +833,12 @@ class Settings(BaseSettings):
     redis_degraded_mode: Literal["fail_open", "fail_closed"] = "fail_open"
     salt_key: str | None = None
     callable_target_scope_policy_mode: Literal["legacy", "shadow", "enforce"] = "enforce"
+    tier_policy_mode: Literal["disabled", "shadow", "enforce"] = "disabled"
+    tier_policy_missing_service_mode: Literal["fail_open", "fail_closed"] = "fail_open"
+    tier_policy_refresh_interval_seconds: float = Field(default=300.0, gt=0.0)
+    tier_policy_refresh_jitter_seconds: float = Field(default=1.0, ge=0.0)
+    tier_policy_transition_grace_seconds: float = Field(default=0.05, ge=0.0)
+    tier_policy_refresh_retry_delay_seconds: float = Field(default=5.0, gt=0.0)
 
     @field_validator("master_key")
     @classmethod

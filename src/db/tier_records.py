@@ -132,6 +132,35 @@ class OrganizationTierAssignmentRecord:
     updated_at: datetime | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class TierPolicyAssignmentRecord:
+    assignment_id: str
+    organization_id: str
+    tier_id: str
+    tier_version_id: str | None
+    effective_tier_version_id: str
+    assignment_type: str = "primary"
+    enabled: bool = True
+    weight: int = 1
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    metadata: dict[str, Any] | None = None
+    tier_key: str | None = None
+    tier_name: str | None = None
+    tier_version_number: int | None = None
+    tier_version_status: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TierPolicyLoadResult:
+    assignments: tuple[TierPolicyAssignmentRecord, ...]
+    model_policies: tuple[TierModelPolicyRecord, ...]
+    capacity_pools: tuple[TierCapacityPoolRecord, ...]
+    next_transition_at: datetime | None = None
+
+
 def tier_version_select_sql() -> str:
     return """
         SELECT
@@ -285,6 +314,34 @@ def to_assignment_record(row: dict[str, Any]) -> OrganizationTierAssignmentRecor
         tier_version_id=str(row.get("tier_version_id"))
         if row.get("tier_version_id") is not None
         else None,
+        assignment_type=str(row.get("assignment_type") or "primary"),
+        enabled=bool(row.get("enabled", True)),
+        weight=int(row.get("weight") or 1),
+        starts_at=parse_datetime(row.get("starts_at")),
+        ends_at=parse_datetime(row.get("ends_at")),
+        metadata=parse_json_object(row.get("metadata"))
+        if row.get("metadata") is not None
+        else None,
+        tier_key=str(row.get("tier_key")) if row.get("tier_key") is not None else None,
+        tier_name=str(row.get("tier_name")) if row.get("tier_name") is not None else None,
+        tier_version_number=int_or_none(row.get("tier_version_number")),
+        tier_version_status=str(row.get("tier_version_status"))
+        if row.get("tier_version_status") is not None
+        else None,
+        created_at=parse_datetime(row.get("created_at")),
+        updated_at=parse_datetime(row.get("updated_at")),
+    )
+
+
+def to_tier_policy_assignment_record(row: dict[str, Any]) -> TierPolicyAssignmentRecord:
+    return TierPolicyAssignmentRecord(
+        assignment_id=str(row.get("assignment_id") or ""),
+        organization_id=str(row.get("organization_id") or ""),
+        tier_id=str(row.get("tier_id") or ""),
+        tier_version_id=str(row.get("tier_version_id"))
+        if row.get("tier_version_id") is not None
+        else None,
+        effective_tier_version_id=str(row.get("effective_tier_version_id") or ""),
         assignment_type=str(row.get("assignment_type") or "primary"),
         enabled=bool(row.get("enabled", True)),
         weight=int(row.get("weight") or 1),

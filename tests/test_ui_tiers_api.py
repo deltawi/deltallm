@@ -28,6 +28,23 @@ class _RecordingAuditService:
         del event, payloads, critical
 
 
+class _RecordingGovernanceInvalidationService:
+    def __init__(self, *, fail_local: bool = False, notify_result: bool = True) -> None:
+        self.fail_local = fail_local
+        self.notify_result = notify_result
+        self.local_targets: list[tuple[str, ...]] = []
+        self.notified_targets: list[tuple[str, ...]] = []
+
+    async def invalidate_local(self, *targets: str) -> None:
+        self.local_targets.append(tuple(targets))
+        if self.fail_local:
+            raise RuntimeError("tier policy reload unavailable")
+
+    async def notify(self, *targets: str) -> bool:
+        self.notified_targets.append(tuple(targets))
+        return self.notify_result
+
+
 class _FakeTierRepository:
     def __init__(self) -> None:
         self.tiers: dict[str, TierRecord] = {}
@@ -299,6 +316,15 @@ def _make_context(
     )
 
 
+def _audit_response_payloads(audit: _RecordingAuditService) -> list[dict[str, Any]]:
+    return [
+        payload.content_json
+        for _, payloads in audit.sync_calls
+        for payload in payloads
+        if payload.kind == "response" and payload.content_json is not None
+    ]
+
+
 @pytest.mark.asyncio
 async def test_tier_admin_create_list_detail_update_and_audit(client, test_app):
     repository = _FakeTierRepository()
@@ -390,8 +416,10 @@ async def test_tier_admin_version_policy_pool_publish_flow(client, test_app):
     repository = _FakeTierRepository()
     repository.seed_tier()
     audit = _RecordingAuditService()
+    governance_invalidation = _RecordingGovernanceInvalidationService()
     test_app.state.tier_repository = repository
     test_app.state.audit_service = audit
+    test_app.state.governance_invalidation_service = governance_invalidation
     headers = _headers(test_app)
 
     version_response = await client.post("/ui/api/tiers/tier-1/versions", headers=headers, json={})
@@ -455,6 +483,75 @@ async def test_tier_admin_version_policy_pool_publish_flow(client, test_app):
     assert AuditAction.ADMIN_TIER_CAPACITY_POOLS_REPLACE.value in actions
     assert AuditAction.ADMIN_TIER_MODEL_POLICIES_REPLACE.value in actions
     assert AuditAction.ADMIN_TIER_VERSION_PUBLISH.value in actions
+    assert governance_invalidation.local_targets == [
+        ("tier_policy",),
+        ("tier_policy",),
+        ("tier_policy",),
+    ]
+    assert governance_invalidation.notified_targets == [
+        ("tier_policy",),
+        ("tier_policy",),
+        ("tier_policy",),
+    ]
+    tier_policy_payloads = [
+        payload["tier_policy_invalidation"]
+        for payload in _audit_response_payloads(audit)
+        if "tier_policy_invalidation" in payload
+    ]
+    assert tier_policy_payloads == [
+        {
+            "attempted": True,
+            "reloaded": True,
+            "notified": True,
+            "reason": "reloaded_and_notified",
+        },
+        {
+            "attempted": True,
+            "reloaded": True,
+            "notified": True,
+            "reason": "reloaded_and_notified",
+        },
+        {
+            "attempted": True,
+            "reloaded": True,
+            "notified": True,
+            "reason": "reloaded_and_notified",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tier_admin_update_audits_non_fatal_tier_policy_reload_failure(
+    client,
+    test_app,
+) -> None:
+    repository = _FakeTierRepository()
+    repository.seed_tier()
+    audit = _RecordingAuditService()
+    governance_invalidation = _RecordingGovernanceInvalidationService(fail_local=True)
+    test_app.state.tier_repository = repository
+    test_app.state.audit_service = audit
+    test_app.state.governance_invalidation_service = governance_invalidation
+
+    response = await client.patch(
+        "/ui/api/tiers/tier-1",
+        headers=_headers(test_app),
+        json={"name": "Growth Plus"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "Growth Plus"
+    assert governance_invalidation.local_targets == [("tier_policy",)]
+    assert governance_invalidation.notified_targets == [("tier_policy",)]
+    event, _ = audit.sync_calls[-1]
+    invalidation = event.metadata["tier_policy_invalidation"]
+    assert invalidation["attempted"] is True
+    assert invalidation["reloaded"] is False
+    assert invalidation["notified"] is True
+    assert invalidation["reason"] == "local_reload_failed_remote_notified"
+    assert "tier policy reload unavailable" in invalidation["error"]
+    response_payload = _audit_response_payloads(audit)[-1]
+    assert response_payload["tier_policy_invalidation"] == invalidation
 
 
 @pytest.mark.asyncio

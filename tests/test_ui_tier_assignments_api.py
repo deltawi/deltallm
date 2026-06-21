@@ -56,6 +56,23 @@ class _RecordingCacheInvalidationOutboxRepository:
         return SimpleNamespace(invalidation_id=f"invalidation-{len(self.enqueues)}")
 
 
+class _RecordingGovernanceInvalidationService:
+    def __init__(self, *, fail_local: bool = False, notify_result: bool = True) -> None:
+        self.fail_local = fail_local
+        self.notify_result = notify_result
+        self.local_targets: list[tuple[str, ...]] = []
+        self.notified_targets: list[tuple[str, ...]] = []
+
+    async def invalidate_local(self, *targets: str) -> None:
+        self.local_targets.append(tuple(targets))
+        if self.fail_local:
+            raise RuntimeError("tier policy reload unavailable")
+
+    async def notify(self, *targets: str) -> bool:
+        self.notified_targets.append(tuple(targets))
+        return self.notify_result
+
+
 class _FakeTierAssignmentRepository:
     def __init__(self) -> None:
         self.organizations = {"org-1"}
@@ -336,6 +353,7 @@ def _install_assignment_services(
         repository=outbox_repository,
         immediate_timeout_seconds=immediate_timeout_seconds,
     )
+    test_app.state.governance_invalidation_service = _RecordingGovernanceInvalidationService()
     return audit, key_service
 
 
@@ -443,6 +461,17 @@ async def test_org_tier_assignment_create_list_update_delete_audit_and_cache(
 
     assert key_service.org_invalidation_attempts == ["org-1", "org-1", "org-1"]
     assert key_service.org_invalidations == ["org-1", "org-1", "org-1"]
+    governance_invalidation = test_app.state.governance_invalidation_service
+    assert governance_invalidation.local_targets == [
+        ("tier_policy",),
+        ("tier_policy",),
+        ("tier_policy",),
+    ]
+    assert governance_invalidation.notified_targets == [
+        ("tier_policy",),
+        ("tier_policy",),
+        ("tier_policy",),
+    ]
     assert repository.locked_assignment_reads == [
         (assignment_id, "org-1"),
         (assignment_id, "org-1"),
@@ -492,11 +521,52 @@ async def test_org_tier_assignment_create_list_update_delete_audit_and_cache(
         == expected_cache_invalidation
         for event in events
     )
+    assert all(
+        event.metadata["tier_policy_invalidation"]
+        == {
+            "attempted": True,
+            "reloaded": True,
+            "notified": True,
+            "reason": "reloaded_and_notified",
+        }
+        for event in events
+    )
     assert "assignment_type" in events[1].metadata["changed_fields"]
     actions = [event.action for event in events]
     assert AuditAction.ADMIN_ORGANIZATION_TIER_ASSIGNMENT_CREATE.value in actions
     assert AuditAction.ADMIN_ORGANIZATION_TIER_ASSIGNMENT_UPDATE.value in actions
     assert AuditAction.ADMIN_ORGANIZATION_TIER_ASSIGNMENT_DELETE.value in actions
+
+
+@pytest.mark.asyncio
+async def test_org_tier_assignment_create_audits_non_fatal_tier_policy_reload_failure(
+    client,
+    test_app,
+) -> None:
+    repository = _FakeTierAssignmentRepository()
+    audit, key_service = _install_assignment_services(test_app, repository)
+    governance_invalidation = _RecordingGovernanceInvalidationService(fail_local=True)
+    test_app.state.governance_invalidation_service = governance_invalidation
+
+    response = await client.post(
+        "/ui/api/organizations/org-1/tier-assignments",
+        headers=_headers(test_app),
+        json={"tier_id": "tier-1", "tier_version_id": "version-1"},
+    )
+
+    assert response.status_code == 200
+    assert key_service.org_invalidations == ["org-1"]
+    assert governance_invalidation.local_targets == [("tier_policy",)]
+    assert governance_invalidation.notified_targets == [("tier_policy",)]
+    event, _ = audit.sync_calls[-1]
+    invalidation = event.metadata["tier_policy_invalidation"]
+    assert invalidation["attempted"] is True
+    assert invalidation["reloaded"] is False
+    assert invalidation["notified"] is True
+    assert invalidation["reason"] == "local_reload_failed_remote_notified"
+    assert "tier policy reload unavailable" in invalidation["error"]
+    response_payload = _audit_response_payloads(audit)[-1]
+    assert response_payload["tier_policy_invalidation"] == invalidation
 
 
 @pytest.mark.asyncio
