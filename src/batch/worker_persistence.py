@@ -10,19 +10,55 @@ from typing import Any, Awaitable
 from src.batch.endpoints import batch_call_type_for_endpoint
 from src.batch.policy import acquire_batch_policy_lease, release_batch_policy_lease
 from src.batch.worker_types import BatchItemLeaseLostError, _PreparedChatItem, _PreparedEmbeddingItem
-from src.billing.cost import ModelPricing
+from src.billing.cost import completion_cost
+from src.billing.tier_pricing import PricingResolution, resolve_deployment_tier_pricing
 
 logger = logging.getLogger(__name__)
 
 
 class WorkerPersistenceMixin:
-    def _deployment_pricing(self, deployment) -> ModelPricing | None:  # noqa: ANN001
-        if deployment.input_cost_per_token or deployment.output_cost_per_token:
-            return ModelPricing(
-                input_cost_per_token=deployment.input_cost_per_token,
-                output_cost_per_token=deployment.output_cost_per_token,
-            )
-        return None
+    def _resolve_batch_item_pricing(
+        self,
+        *,
+        prepared: _PreparedEmbeddingItem | _PreparedChatItem,
+        served_deployment: Any,
+    ) -> PricingResolution:
+        return resolve_deployment_tier_pricing(
+            auth=prepared.policy_auth,
+            model=prepared.payload.model,
+            deployment=served_deployment,
+            tier_policy_service=getattr(self.app.state, "tier_policy_service", None),
+            mode="batch",
+        )
+
+    def _batch_item_costs(
+        self,
+        *,
+        prepared: _PreparedEmbeddingItem | _PreparedChatItem,
+        usage: dict[str, Any],
+        served_deployment: Any,
+    ) -> tuple[float, float, PricingResolution]:
+        pricing = self._resolve_batch_item_pricing(
+            prepared=prepared,
+            served_deployment=served_deployment,
+        )
+        billed_cost = completion_cost(
+            model=prepared.payload.model,
+            usage=usage,
+            cache_hit=False,
+            custom_pricing=pricing.customer_token_pricing,
+            pricing_tier="batch",
+            model_info=pricing.customer_model_info,
+        )
+        provider_cost = completion_cost(
+            model=prepared.payload.model,
+            usage=usage,
+            cache_hit=False,
+            custom_pricing=pricing.provider_token_pricing,
+            pricing_tier="sync",
+            model_info=pricing.provider_model_info,
+        )
+        return billed_cost, provider_cost, pricing
 
     def _observe_item_execution_latency(
         self, *, status: str, latency_seconds: float, reference: str
@@ -136,6 +172,7 @@ class WorkerPersistenceMixin:
         provider_cost: float,
         api_base: str | None,
         deployment_model: str | None,
+        pricing_metadata: dict[str, Any] | None = None,
         batch_execution_mode: str | None = None,
         microbatch_size: int | None = None,
         microbatch_id: str | None = None,
@@ -159,6 +196,8 @@ class WorkerPersistenceMixin:
             "execution_mode": job.execution_mode,
             "completed_at": datetime.now(tz=UTC).isoformat(),
         }
+        if pricing_metadata:
+            payload["pricing_metadata"] = dict(pricing_metadata)
         if batch_execution_mode is not None:
             payload["batch_execution_mode"] = batch_execution_mode
         if microbatch_size is not None:

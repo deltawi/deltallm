@@ -10,8 +10,9 @@ from fastapi.responses import JSONResponse
 
 from src.audio.elevenlabs_stt import execute_elevenlabs_stt
 from src.audio.transcription_formats import render_srt, render_vtt
-from src.billing.audio_usage import billing_metadata, normalize_transcription_usage
+from src.billing.audio_usage import normalize_transcription_usage
 from src.billing.cost import compute_billing_result
+from src.billing.tier_pricing import attach_pricing_metadata, resolve_deployment_tier_pricing
 from src.callbacks import CallbackManager, build_standard_logging_payload
 from src.middleware.auth import require_api_key
 from src.middleware.rate_limit import enforce_rate_limits
@@ -248,7 +249,7 @@ async def audio_transcriptions(
         api_latency_ms = data.pop("_api_latency_ms", 0)
         api_base = data.pop("_api_base", "")
         deployment_model = data.pop("_deployment_model", None)
-        model_info = data.pop("_model_info", {})
+        data.pop("_model_info", None)
         billing_payload = data.pop("_billing_payload", data)
 
         usage = normalize_transcription_usage(
@@ -262,15 +263,35 @@ async def audio_transcriptions(
             mode="audio_transcription",
             usage=usage,
         )
-        billing = compute_billing_result(mode="audio_transcription", usage=usage, model_info=model_info)
+        pricing = resolve_deployment_tier_pricing(
+            auth=auth,
+            model=model,
+            deployment=served_deployment,
+            tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
+            mode="sync",
+        )
+        billing = compute_billing_result(
+            mode="audio_transcription",
+            usage=usage,
+            model_info=pricing.customer_model_info,
+        )
+        provider_billing = compute_billing_result(
+            mode="audio_transcription",
+            usage=usage,
+            model_info=pricing.provider_model_info,
+        )
         request_cost = billing.cost
         spend_metadata = attach_route_decision(
-            {
-                "api_base": api_base,
-                "provider": api_provider,
-                "deployment_model": deployment_model,
-                "billing": billing_metadata(billing),
-            },
+            attach_pricing_metadata(
+                {
+                    "api_base": api_base,
+                    "provider": api_provider,
+                    "deployment_model": deployment_model,
+                },
+                pricing,
+                provider_cost=provider_billing.cost,
+                billing=billing,
+            ),
             request,
         )
         increment_request(

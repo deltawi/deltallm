@@ -8,7 +8,11 @@ from src.config import AppConfig
 from src.config_runtime.secrets import SecretResolver
 from src.db.named_credentials import NamedCredentialRecord
 from src.db.repositories import ModelDeploymentRecord
-from src.services.model_deployments import bootstrap_model_deployments_from_config, load_model_registry
+from src.services.model_deployments import (
+    bootstrap_model_deployments_from_config,
+    load_model_registry,
+    model_records_from_config,
+)
 
 
 class FakeModelRepository:
@@ -173,6 +177,25 @@ async def test_bootstrap_model_deployments_from_config_prepares_records():
     assert inserted is True
     assert [item.deployment_id for item in repo.bootstrap_payload] == ["dep-1", "gpt-4.1-mini-1"]
     assert [item.model_name for item in repo.bootstrap_payload] == ["gpt-4o-mini", "gpt-4.1-mini"]
+
+
+def test_model_records_from_config_preserves_request_pricing() -> None:
+    cfg = AppConfig.model_validate(
+        {
+            "model_list": [
+                {
+                    "model_name": "image-model",
+                    "deployment_id": "dep-1",
+                    "deltallm_params": {"model": "openai/gpt-image-1"},
+                    "model_info": {"mode": "image_generation", "cost_per_request": 0.75},
+                }
+            ]
+        }
+    )
+
+    records = model_records_from_config(cfg)
+
+    assert records[0].model_info["cost_per_request"] == 0.75
 
 
 @pytest.mark.asyncio

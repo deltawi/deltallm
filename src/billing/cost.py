@@ -79,8 +79,6 @@ def resolve_batch_pricing(
     sync_pricing: ModelPricing | None,
     model_info: Mapping[str, Any] | None = None,
 ) -> ModelPricing | None:
-    if sync_pricing is None:
-        return None
     info = dict(model_info or {})
     batch_input = info.get("batch_input_cost_per_token")
     batch_output = info.get("batch_output_cost_per_token")
@@ -88,14 +86,29 @@ def resolve_batch_pricing(
 
     if batch_input is not None or batch_output is not None:
         return ModelPricing(
-            input_cost_per_token=float(batch_input if batch_input is not None else sync_pricing.input_cost_per_token),
-            output_cost_per_token=float(batch_output if batch_output is not None else sync_pricing.output_cost_per_token),
-            input_cost_per_token_cache_hit=sync_pricing.input_cost_per_token_cache_hit,
-            output_cost_per_token_cache_hit=sync_pricing.output_cost_per_token_cache_hit,
-            cost_per_request=sync_pricing.cost_per_request,
-            context_window=sync_pricing.context_window,
-            max_output_tokens=sync_pricing.max_output_tokens,
+            input_cost_per_token=float(
+                batch_input
+                if batch_input is not None
+                else (sync_pricing.input_cost_per_token if sync_pricing is not None else 0.0)
+            ),
+            output_cost_per_token=float(
+                batch_output
+                if batch_output is not None
+                else (sync_pricing.output_cost_per_token if sync_pricing is not None else 0.0)
+            ),
+            input_cost_per_token_cache_hit=(
+                sync_pricing.input_cost_per_token_cache_hit if sync_pricing is not None else None
+            ),
+            output_cost_per_token_cache_hit=(
+                sync_pricing.output_cost_per_token_cache_hit if sync_pricing is not None else None
+            ),
+            cost_per_request=sync_pricing.cost_per_request if sync_pricing is not None else 0.0,
+            context_window=sync_pricing.context_window if sync_pricing is not None else 8192,
+            max_output_tokens=sync_pricing.max_output_tokens if sync_pricing is not None else None,
         )
+
+    if sync_pricing is None:
+        return None
 
     if multiplier is not None:
         factor = max(0.0, float(multiplier))
@@ -175,26 +188,31 @@ def compute_billing_result(
     model_info: Mapping[str, Any] | None = None,
 ) -> BillingResult:
     info = dict(model_info or {})
+    cost_per_request = _cost_per_request(info)
 
     if mode == "chat" or mode == "embedding" or mode == "rerank":
-        input_cost = float(info.get("input_cost_per_token") or 0)
-        output_cost = float(info.get("output_cost_per_token") or 0)
+        input_cost = _float_or_zero(info.get("input_cost_per_token"))
+        output_cost = _float_or_zero(info.get("output_cost_per_token"))
         prompt_tokens = max(0, int(usage.get("prompt_tokens", 0) or 0))
         completion_tokens = max(0, int(usage.get("completion_tokens", 0) or 0))
         return BillingResult(
-            cost=round(prompt_tokens * input_cost + completion_tokens * output_cost, 10),
-            billing_unit="token",
-            pricing_fields_used=("input_cost_per_token", "output_cost_per_token"),
+            cost=_rounded_cost(prompt_tokens * input_cost + completion_tokens * output_cost + cost_per_request),
+            billing_unit="request" if input_cost <= 0 and output_cost <= 0 and cost_per_request > 0 else "token",
+            pricing_fields_used=_pricing_fields(
+                "input_cost_per_token",
+                "output_cost_per_token",
+                cost_per_request=cost_per_request,
+            ),
             usage_snapshot={"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens},
         )
 
     if mode == "image_generation":
-        cost_per_image = float(info.get("input_cost_per_image") or 0)
+        cost_per_image = _float_or_zero(info.get("input_cost_per_image"))
         num_images = max(0, int(usage.get("images", 1) or 1))
         return BillingResult(
-            cost=round(num_images * cost_per_image, 10),
-            billing_unit="image",
-            pricing_fields_used=("input_cost_per_image",),
+            cost=_rounded_cost(num_images * cost_per_image + cost_per_request),
+            billing_unit="request" if cost_per_image <= 0 and cost_per_request > 0 else "image",
+            pricing_fields_used=_pricing_fields("input_cost_per_image", cost_per_request=cost_per_request),
             usage_snapshot={"images": num_images},
         )
 
@@ -212,6 +230,7 @@ def _compute_audio_speech_billing(
     usage: Mapping[str, Any],
     model_info: Mapping[str, Any],
 ) -> BillingResult:
+    cost_per_request = _cost_per_request(model_info)
     prompt_tokens = max(0, int(usage.get("prompt_tokens", 0) or 0))
     completion_tokens = max(0, int(usage.get("completion_tokens", 0) or 0))
     input_audio_tokens = max(0, int(usage.get("input_audio_tokens", usage.get("audio_tokens", 0)) or 0))
@@ -240,15 +259,17 @@ def _compute_audio_speech_billing(
             + completion_tokens * output_cost_per_token
             + input_audio_tokens * input_cost_per_audio_token
             + output_audio_tokens * output_cost_per_audio_token
+            + cost_per_request
         )
         return BillingResult(
-            cost=round(cost, 10),
+            cost=_rounded_cost(cost),
             billing_unit="token",
-            pricing_fields_used=(
+            pricing_fields_used=_pricing_fields(
                 "input_cost_per_token",
                 "output_cost_per_token",
                 "input_cost_per_audio_token",
                 "output_cost_per_audio_token",
+                cost_per_request=cost_per_request,
             ),
             usage_snapshot={
                 "prompt_tokens": prompt_tokens,
@@ -268,11 +289,16 @@ def _compute_audio_speech_billing(
         cost = (
             input_characters * input_cost_per_character
             + output_characters * output_cost_per_character
+            + cost_per_request
         )
         return BillingResult(
-            cost=round(cost, 10),
+            cost=_rounded_cost(cost),
             billing_unit="character",
-            pricing_fields_used=("input_cost_per_character", "output_cost_per_character"),
+            pricing_fields_used=_pricing_fields(
+                "input_cost_per_character",
+                "output_cost_per_character",
+                cost_per_request=cost_per_request,
+            ),
             usage_snapshot={
                 "input_characters": input_characters,
                 "output_characters": output_characters,
@@ -284,12 +310,32 @@ def _compute_audio_speech_billing(
     output_cost_per_second = _float_or_zero(model_info.get("output_cost_per_second"))
     has_second_pricing = input_cost_per_second > 0 or output_cost_per_second > 0
     if duration_seconds > 0 and has_second_pricing:
-        cost = duration_seconds * (input_cost_per_second + output_cost_per_second)
+        cost = duration_seconds * (input_cost_per_second + output_cost_per_second) + cost_per_request
         return BillingResult(
-            cost=round(cost, 10),
+            cost=_rounded_cost(cost),
             billing_unit="second",
-            pricing_fields_used=("input_cost_per_second", "output_cost_per_second"),
+            pricing_fields_used=_pricing_fields(
+                "input_cost_per_second",
+                "output_cost_per_second",
+                cost_per_request=cost_per_request,
+            ),
             usage_snapshot={"duration_seconds": duration_seconds},
+        )
+
+    if cost_per_request > 0:
+        return BillingResult(
+            cost=_rounded_cost(cost_per_request),
+            billing_unit="request",
+            pricing_fields_used=("cost_per_request",),
+            usage_snapshot=_compact_usage_snapshot(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                input_audio_tokens=input_audio_tokens,
+                output_audio_tokens=output_audio_tokens,
+                input_characters=input_characters,
+                output_characters=output_characters,
+                duration_seconds=duration_seconds,
+            ),
         )
 
     return BillingResult(
@@ -312,6 +358,7 @@ def _compute_audio_transcription_billing(
     usage: Mapping[str, Any],
     model_info: Mapping[str, Any],
 ) -> BillingResult:
+    cost_per_request = _cost_per_request(model_info)
     prompt_tokens = max(0, int(usage.get("prompt_tokens", 0) or 0))
     completion_tokens = max(0, int(usage.get("completion_tokens", 0) or 0))
     input_audio_tokens = max(0, int(usage.get("input_audio_tokens", usage.get("audio_tokens", 0)) or 0))
@@ -326,11 +373,17 @@ def _compute_audio_transcription_billing(
             prompt_tokens * input_cost_per_token
             + completion_tokens * output_cost_per_token
             + input_audio_tokens * input_cost_per_audio_token
+            + cost_per_request
         )
         return BillingResult(
-            cost=round(cost, 10),
+            cost=_rounded_cost(cost),
             billing_unit="token",
-            pricing_fields_used=("input_cost_per_token", "output_cost_per_token", "input_cost_per_audio_token"),
+            pricing_fields_used=_pricing_fields(
+                "input_cost_per_token",
+                "output_cost_per_token",
+                "input_cost_per_audio_token",
+                cost_per_request=cost_per_request,
+            ),
             usage_snapshot={
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
@@ -344,15 +397,32 @@ def _compute_audio_transcription_billing(
     output_cost_per_second = _float_or_zero(model_info.get("output_cost_per_second"))
     has_second_pricing = input_cost_per_second > 0 or output_cost_per_second > 0
     if duration_seconds > 0 and has_second_pricing:
-        cost = duration_seconds * (input_cost_per_second + output_cost_per_second)
+        cost = duration_seconds * (input_cost_per_second + output_cost_per_second) + cost_per_request
         usage_snapshot: dict[str, float | int] = {"duration_seconds": raw_duration_seconds or duration_seconds}
         if raw_duration_seconds > 0 and duration_seconds != raw_duration_seconds:
             usage_snapshot["billable_duration_seconds"] = duration_seconds
         return BillingResult(
-            cost=round(cost, 10),
+            cost=_rounded_cost(cost),
             billing_unit="second",
-            pricing_fields_used=("input_cost_per_second", "output_cost_per_second"),
+            pricing_fields_used=_pricing_fields(
+                "input_cost_per_second",
+                "output_cost_per_second",
+                cost_per_request=cost_per_request,
+            ),
             usage_snapshot=usage_snapshot,
+        )
+
+    if cost_per_request > 0:
+        return BillingResult(
+            cost=_rounded_cost(cost_per_request),
+            billing_unit="request",
+            pricing_fields_used=("cost_per_request",),
+            usage_snapshot=_compact_usage_snapshot(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                input_audio_tokens=input_audio_tokens,
+                duration_seconds=raw_duration_seconds or duration_seconds,
+            ),
         )
 
     return BillingResult(
@@ -369,6 +439,20 @@ def _compute_audio_transcription_billing(
 
 def _compact_usage_snapshot(**values: float | int) -> dict[str, float | int]:
     return {key: value for key, value in values.items() if value}
+
+
+def _pricing_fields(*fields: str, cost_per_request: float = 0.0) -> tuple[str, ...]:
+    if cost_per_request > 0:
+        return (*fields, "cost_per_request")
+    return fields
+
+
+def _rounded_cost(value: float) -> float:
+    return round(float(value), 10)
+
+
+def _cost_per_request(model_info: Mapping[str, Any]) -> float:
+    return _float_or_zero(model_info.get("cost_per_request"))
 
 
 def _float_or_zero(value: Any) -> float:
