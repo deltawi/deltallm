@@ -17,6 +17,7 @@ class _FakePrisma:
         pinned_assignment_count: int = 0,
         active_assignment_count: int = 0,
         current_active_version_id: str | None = "ver-active",
+        next_transition_at: object = None,
         assignment_rows: dict[str, dict[str, object]] | None = None,
         organization_exists: bool = True,
     ) -> None:
@@ -34,6 +35,7 @@ class _FakePrisma:
         self.pinned_assignment_count = pinned_assignment_count
         self.active_assignment_count = active_assignment_count
         self.current_active_version_id = current_active_version_id
+        self.next_transition_at = next_transition_at
         self.assignment_rows = dict(assignment_rows or {})
         self.organization_exists = organization_exists
         self.tx_clients: list[_FakePrisma] = []
@@ -64,6 +66,29 @@ class _FakePrisma:
             return [{"tier_id": params[0]}] if self.assignment_tier_exists else []
         if "FROM deltallm_organizationtable" in sql and "WHERE organization_id = $1" in sql:
             return [{"organization_id": params[0]}] if self.organization_exists else []
+        if "MIN(transition_at) AS next_transition_at" in sql:
+            return [{"next_transition_at": self.next_transition_at}]
+        if "resolved_version.tier_version_id AS effective_tier_version_id" in sql:
+            if self.current_active_version_id is None:
+                return []
+            row = _assignment_row(
+                assignment_id="assignment-active",
+                fields=_assignment_fields(
+                    organization_id="org-1",
+                    tier_id="tier-1",
+                    tier_version_id=None,
+                    assignment_type="primary",
+                    enabled=True,
+                    weight=1,
+                    starts_at=None,
+                    ends_at=None,
+                    metadata={"reason": "signup"},
+                ),
+            )
+            row["effective_tier_version_id"] = self.current_active_version_id
+            row["tier_version_number"] = 2
+            row["tier_version_status"] = "active"
+            return [row]
         if "SELECT COUNT(*)::int AS overlap_count" in sql:
             return [{"overlap_count": self.overlap_count}]
         if (
@@ -159,6 +184,21 @@ class _FakePrisma:
                     metadata=params[15],
                 )
             ]
+        if "FROM deltallm_tiermodelpolicy" in sql and "tier_version_id IN" in sql:
+            return [
+                _model_policy_row(
+                    tier_version_id=str(params[0]),
+                    callable_key="openai/gpt-4.1",
+                    enabled=True,
+                    access_mode="allow",
+                    rpm_limit=100,
+                    tpm_limit=10_000,
+                    pricing={"input_cost_per_token": 0.001},
+                    capacity_pool_key="shared",
+                    priority=10,
+                    metadata={"region": "us"},
+                )
+            ]
         if "INSERT INTO deltallm_tiercapacitypool" in sql:
             return [
                 _capacity_pool_row(
@@ -172,6 +212,21 @@ class _FakePrisma:
                     saturation_threshold=params[7],
                     burst_multiplier=params[8],
                     metadata=params[9],
+                )
+            ]
+        if "FROM deltallm_tiercapacitypool" in sql and "tier_version_id IN" in sql:
+            return [
+                _capacity_pool_row(
+                    tier_version_id=str(params[0]),
+                    pool_key="shared",
+                    callable_key="openai/gpt-4.1",
+                    rpm_capacity=1_000,
+                    tpm_capacity=500_000,
+                    max_parallel_requests=25,
+                    strategy="hard_cap",
+                    saturation_threshold=0.8,
+                    burst_multiplier=1.5,
+                    metadata={"region": "us"},
                 )
             ]
         if "INSERT INTO deltallm_organizationtierassignment" in sql:
@@ -266,6 +321,7 @@ class _FakeTxContext:
             pinned_assignment_count=self.root.pinned_assignment_count,
             active_assignment_count=self.root.active_assignment_count,
             current_active_version_id=self.root.current_active_version_id,
+            next_transition_at=self.root.next_transition_at,
             assignment_rows=self.root.assignment_rows,
             organization_exists=self.root.organization_exists,
         )

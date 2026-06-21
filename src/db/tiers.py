@@ -4,11 +4,16 @@ from typing import Any
 
 from src.db.tier_assignment_repository import TierAssignmentRepositoryMixin
 from src.db.tier_catalog_repository import TierCatalogRepositoryMixin
-from src.db.tier_policy_repository import TierPolicyRepositoryMixin
+from src.db.tier_policy_repository import (
+    TierPolicyRepositoryMixin,
+    TierPolicyRepositoryUnavailableError,
+)
 from src.db.tier_records import (
     OrganizationTierAssignmentRecord,
     TierCapacityPoolRecord,
     TierModelPolicyRecord,
+    TierPolicyAssignmentRecord,
+    TierPolicyLoadResult,
     TierRecord,
     TierVersionRecord,
 )
@@ -42,6 +47,9 @@ __all__ = [
     "OrganizationTierAssignmentRecord",
     "TierCapacityPoolRecord",
     "TierModelPolicyRecord",
+    "TierPolicyAssignmentRecord",
+    "TierPolicyLoadResult",
+    "TierPolicyRepositoryUnavailableError",
     "TierRecord",
     "TierRepository",
     "TierVersionRecord",
