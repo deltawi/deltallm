@@ -39,7 +39,12 @@ from src.routers.routing_decision import (
     update_served_route_decision,
 )
 from src.routers.utils import enforce_budget_if_configured, fire_and_forget
-from src.services.model_visibility import ensure_model_allowed, get_callable_target_policy_mode_from_app
+from src.services.model_visibility import (
+    ensure_model_allowed,
+    get_callable_target_policy_mode_from_app,
+    get_tier_policy_missing_service_mode_from_app,
+    get_tier_policy_mode_from_app,
+)
 from src.services.audit_service import AuditEventInput, AuditPayloadInput, AuditService
 from src.audit.actions import AuditAction
 from src.audit.errors import derive_audit_error_code
@@ -174,7 +179,10 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         auth,
         payload.model,
         callable_target_grant_service=getattr(request.app.state, "callable_target_grant_service", None),
+        tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
         policy_mode=get_callable_target_policy_mode_from_app(request.app),
+        tier_policy_mode=get_tier_policy_mode_from_app(request.app),
+        tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(request.app),
         emit_shadow_log=True,
     )
     await enforce_budget_if_configured(request, model=payload.model, auth=auth)

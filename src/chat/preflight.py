@@ -10,7 +10,12 @@ from src.chat.audit import emit_prompt_resolution_audit_event
 from src.models.errors import InvalidRequestError
 from src.models.requests import ChatCompletionRequest
 from src.routers.routing_decision import set_prompt_provenance
-from src.services.model_visibility import ensure_model_allowed, get_callable_target_policy_mode_from_app
+from src.services.model_visibility import (
+    ensure_model_allowed,
+    get_callable_target_policy_mode_from_app,
+    get_tier_policy_missing_service_mode_from_app,
+    get_tier_policy_mode_from_app,
+)
 from src.services.prompt_registry import apply_route_preferences_to_metadata, parse_prompt_reference
 
 
@@ -25,7 +30,10 @@ async def run_text_preflight(
         auth,
         payload.model,
         callable_target_grant_service=getattr(request.app.state, "callable_target_grant_service", None),
+        tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
         policy_mode=get_callable_target_policy_mode_from_app(request.app),
+        tier_policy_mode=get_tier_policy_mode_from_app(request.app),
+        tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(request.app),
         emit_shadow_log=True,
     )
 
