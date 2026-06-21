@@ -10,6 +10,7 @@ from fastapi import Request
 from src.models.errors import ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
 from src.providers.registry import resolve_chat_upstream
+from src.providers.resolution import is_openai_family_provider, resolve_provider
 from src.providers.signing import apply_request_signing
 from src.router.router import Deployment
 from src.router.usage import record_router_usage
@@ -25,6 +26,8 @@ class OpenedStream:
     deployment: Deployment
     params: dict[str, Any]
     api_base: str
+    client_stream_usage_requested: bool
+    internal_stream_usage_requested: bool
 
     async def close(self, exc: Exception | None = None) -> None:
         if exc is None:
@@ -49,12 +52,14 @@ async def execute_chat(
         upstream.headers,
         upstream.timeout,
     )
-    upstream_request = payload.model_copy(update={"metadata": None})
+    upstream_request = _upstream_chat_request(payload)
     upstream_payload = await adapter.translate_request(upstream_request, params)
 
     from src.routers.utils import apply_default_params
 
     apply_default_params(upstream_payload, deployment.model_info)
+    if not payload.stream:
+        upstream_payload.pop("stream_options", None)
 
     upstream_start = perf_counter()
     request_url = f"{api_base}{endpoint}"
@@ -117,12 +122,14 @@ async def open_stream_with_first_chunk(
         upstream.headers,
         upstream.timeout,
     )
-    upstream_request = payload.model_copy(update={"metadata": None})
+    upstream_request = _upstream_chat_request(payload)
+    client_stream_usage_requested = _client_stream_usage_requested(payload)
     upstream_payload = await adapter.translate_request(upstream_request, params)
 
     from src.routers.utils import apply_default_params
 
     apply_default_params(upstream_payload, deployment.model_info)
+    internal_stream_usage_requested = _request_stream_usage_when_supported(upstream_payload, params)
 
     request_url = f"{api_base}{endpoint}"
     signed_headers, body_override = apply_request_signing(
@@ -179,7 +186,38 @@ async def open_stream_with_first_chunk(
             deployment=deployment,
             params=params,
             api_base=api_base,
+            client_stream_usage_requested=client_stream_usage_requested,
+            internal_stream_usage_requested=internal_stream_usage_requested,
         )
     except Exception as exc:
         await context_manager.__aexit__(type(exc), exc, exc.__traceback__)
         raise
+
+
+def _request_stream_usage_when_supported(upstream_payload: dict[str, Any], params: dict[str, Any]) -> bool:
+    if not upstream_payload.get("stream"):
+        return False
+    if not is_openai_family_provider(resolve_provider(params)):
+        return False
+    stream_options = upstream_payload.get("stream_options")
+    if stream_options is None:
+        upstream_payload["stream_options"] = {"include_usage": True}
+        return True
+    if isinstance(stream_options, dict):
+        if stream_options.get("include_usage") is True:
+            return False
+        upstream_payload["stream_options"] = {**stream_options, "include_usage": True}
+        return True
+    return False
+
+
+def _client_stream_usage_requested(payload: ChatCompletionRequest) -> bool:
+    stream_options = payload.stream_options
+    return isinstance(stream_options, dict) and stream_options.get("include_usage") is True
+
+
+def _upstream_chat_request(payload: ChatCompletionRequest) -> ChatCompletionRequest:
+    updates: dict[str, Any] = {"metadata": None}
+    if not payload.stream:
+        updates["stream_options"] = None
+    return payload.model_copy(update=updates)

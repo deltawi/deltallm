@@ -9,7 +9,8 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from src.billing.cost import completion_cost
-from src.billing.pricing import pricing_from_model_info
+from src.billing.tier_pricing import attach_pricing_metadata, resolve_deployment_tier_pricing
+from src.cache.pricing import cache_pricing_snapshot_from_deployment
 from src.callbacks import CallbackManager, build_standard_logging_payload
 from src.middleware.auth import require_api_key
 from src.middleware.rate_limit import enforce_rate_limits
@@ -232,7 +233,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             primary_deployment_id=primary.deployment_id,
             served_deployment_id=served_deployment.deployment_id,
         )
-        request.state.cache_store_pricing = dict(served_deployment.model_info or {})
+        request.state.cache_store_pricing = cache_pricing_snapshot_from_deployment(served_deployment)
         request.state.cache_store_deployment_id = served_deployment.deployment_id
         request.state.cache_store_provider = resolve_provider(served_deployment.deltallm_params)
         request.state.cache_store_deployment_model = str(served_deployment.deltallm_params.get("model") or "") or None
@@ -251,16 +252,24 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             mode="embedding",
             usage=usage,
         )
-        _deploy_pricing = pricing_from_model_info(
-            served_deployment.model_info,
-            fallback_input_cost_per_token=served_deployment.input_cost_per_token,
-            fallback_output_cost_per_token=served_deployment.output_cost_per_token,
+        pricing = resolve_deployment_tier_pricing(
+            auth=auth,
+            model=payload.model,
+            deployment=served_deployment,
+            tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
+            mode="sync",
         )
         request_cost = completion_cost(
             model=payload.model,
             usage=usage,
             cache_hit=getattr(request.state, "cache_hit", False),
-            custom_pricing=_deploy_pricing,
+            custom_pricing=pricing.customer_token_pricing,
+        )
+        provider_cost = completion_cost(
+            model=payload.model,
+            usage=usage,
+            cache_hit=getattr(request.state, "cache_hit", False),
+            custom_pricing=pricing.provider_token_pricing,
         )
         increment_request(
             model=payload.model,
@@ -294,6 +303,11 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         }
         if route_meta is not None:
             spend_metadata["routing_decision"] = route_meta
+        spend_metadata = attach_pricing_metadata(
+            spend_metadata,
+            pricing,
+            provider_cost=provider_cost,
+        )
         fire_and_forget(
             request.app.state.spend_tracking_service.log_spend(
                 request_id=request_id or "",

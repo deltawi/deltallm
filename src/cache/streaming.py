@@ -4,6 +4,7 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -69,11 +70,7 @@ class _StreamAccumulator:
 
         usage = chunk.get("usage")
         if isinstance(usage, dict):
-            self.usage = {
-                "prompt_tokens": int(usage.get("prompt_tokens") or 0),
-                "completion_tokens": int(usage.get("completion_tokens") or 0),
-                "total_tokens": int(usage.get("total_tokens") or 0),
-            }
+            self.usage = _normalized_usage(usage)
 
         choices = chunk.get("choices") or []
         if not choices:
@@ -105,9 +102,10 @@ class _StreamAccumulator:
         self.buffered_bytes = next_buffered_bytes
         return None
 
-    def build_response(self, *, fallback_model: str) -> dict[str, Any] | None:
+    def build_response(self, *, fallback_model: str, usage: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
         if not self.saw_chunk or self.disabled_reason is not None:
             return None
+        resolved_usage = _normalized_usage(usage if usage is not None else self.usage)
 
         return {
             "id": self.response_id or f"chatcmpl-{uuid.uuid4().hex}",
@@ -121,7 +119,7 @@ class _StreamAccumulator:
                     "finish_reason": self.finish_reason,
                 }
             ],
-            "usage": dict(self.usage),
+            "usage": resolved_usage,
         }
 
 
@@ -152,10 +150,20 @@ class StreamingCacheHandler:
     def write_failures_total(self) -> int:
         return self._write_failures_total
 
-    def reconstruct_sse_stream(self, response: dict[str, Any]):
+    def reconstruct_sse_stream(self, response: dict[str, Any], *, include_usage: bool = False):
         async def generator():
             for chunk in self._response_to_chunks(response):
                 yield f"data: {json.dumps(chunk, separators=(',', ':'))}\n\n"
+            if include_usage:
+                usage_chunk = {
+                    "id": response.get("id"),
+                    "object": "chat.completion.chunk",
+                    "created": response.get("created"),
+                    "model": response.get("model"),
+                    "choices": [],
+                    "usage": _normalized_usage(response.get("usage") or {}),
+                }
+                yield f"data: {json.dumps(usage_chunk, separators=(',', ':'))}\n\n"
             yield "data: [DONE]\n\n"
 
         return generator()
@@ -192,12 +200,18 @@ class StreamingCacheHandler:
         if reason is not None:
             self._disable_stream(state, reason=reason)
 
-    async def finalize_and_store(self, stream_id: str, ctx: StreamWriteContext) -> None:
+    async def finalize_and_store(
+        self,
+        stream_id: str,
+        ctx: StreamWriteContext,
+        *,
+        usage: Mapping[str, Any] | None = None,
+    ) -> None:
         state = self._active_streams.pop(stream_id, None)
         if state is None:
             return
 
-        complete_response = state.build_response(fallback_model=ctx.model)
+        complete_response = state.build_response(fallback_model=ctx.model, usage=usage)
         if complete_response is None:
             return
 
@@ -261,3 +275,23 @@ class StreamingCacheHandler:
 
         chunks[-1]["choices"][0]["finish_reason"] = finish_reason
         return chunks
+
+
+def _normalized_usage(usage: Mapping[str, Any]) -> dict[str, int]:
+    prompt_tokens = _int_or_zero(usage.get("prompt_tokens"))
+    completion_tokens = _int_or_zero(usage.get("completion_tokens"))
+    total_tokens = _int_or_zero(usage.get("total_tokens"))
+    if total_tokens <= 0:
+        total_tokens = prompt_tokens + completion_tokens
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+    }
+
+
+def _int_or_zero(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0

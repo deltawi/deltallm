@@ -153,6 +153,7 @@ class ModelInfo(BaseModel):
     output_cost_per_image: float | None = None
     input_cost_per_audio_token: float | None = None
     output_cost_per_audio_token: float | None = None
+    cost_per_request: float | None = None
     output_vector_size: int | None = None
     rpm_limit: int | None = None
     tpm_limit: int | None = None

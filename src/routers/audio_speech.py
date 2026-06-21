@@ -14,8 +14,9 @@ import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 
-from src.billing.audio_usage import billing_metadata, normalize_speech_usage
+from src.billing.audio_usage import normalize_speech_usage
 from src.billing.cost import compute_billing_result
+from src.billing.tier_pricing import attach_pricing_metadata, resolve_deployment_tier_pricing
 from src.callbacks import CallbackManager, build_standard_logging_payload
 from src.middleware.auth import require_api_key
 from src.middleware.rate_limit import enforce_rate_limits
@@ -241,7 +242,7 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
         api_latency_ms = result["_api_latency_ms"]
         api_base = result["_api_base"]
         deployment_model = result["_deployment_model"]
-        model_info = result["_model_info"]
+        result.pop("_model_info", None)
         effective_format = result["_response_format"]
         billing_payload = result.get("_billing_payload")
 
@@ -256,15 +257,35 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
             mode="audio_speech",
             usage=usage,
         )
-        billing = compute_billing_result(mode="audio_speech", usage=usage, model_info=model_info)
+        pricing = resolve_deployment_tier_pricing(
+            auth=auth,
+            model=payload.model,
+            deployment=served_deployment,
+            tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
+            mode="sync",
+        )
+        billing = compute_billing_result(
+            mode="audio_speech",
+            usage=usage,
+            model_info=pricing.customer_model_info,
+        )
+        provider_billing = compute_billing_result(
+            mode="audio_speech",
+            usage=usage,
+            model_info=pricing.provider_model_info,
+        )
         request_cost = billing.cost
         spend_metadata = attach_route_decision(
-            {
-                "api_base": api_base,
-                "provider": api_provider,
-                "deployment_model": deployment_model,
-                "billing": billing_metadata(billing),
-            },
+            attach_pricing_metadata(
+                {
+                    "api_base": api_base,
+                    "provider": api_provider,
+                    "deployment_model": deployment_model,
+                },
+                pricing,
+                provider_cost=provider_billing.cost,
+                billing=billing,
+            ),
             request,
         )
         increment_request(
