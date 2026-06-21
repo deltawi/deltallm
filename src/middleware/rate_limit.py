@@ -3,6 +3,7 @@ from __future__ import annotations
 from email.parser import BytesParser
 from email.policy import default
 import json
+import logging
 import math
 import time
 from typing import Any
@@ -11,6 +12,8 @@ from urllib.parse import parse_qs
 from fastapi import Request
 
 from src.models.errors import InvalidRequestError, RateLimitError
+from src.rate_limit_lease_refresh import RateLimitLeaseRefresher
+from src.rate_limit_release_retry import get_rate_limit_release_retry_queue
 from src.rate_limit_policy import (
     RateLimitState,
     _model_limit as _model_limit,
@@ -18,10 +21,16 @@ from src.rate_limit_policy import (
     build_rate_limit_checks,
     compute_rate_limit_state,
     estimate_tokens,
+    release_rate_limit_controls,
 )
 from src.services.limit_counter import LimitCounter, RateLimitCheck
+from src.services.model_visibility import (
+    get_tier_policy_missing_service_mode_from_app,
+    get_tier_policy_mode_from_app,
+)
 
 _compute_rate_limit_state = compute_rate_limit_state
+logger = logging.getLogger(__name__)
 
 
 def _normalize_model(model: Any) -> str | None:
@@ -151,6 +160,24 @@ def _build_429_state(
     return state
 
 
+def _rate_limit_error_checks(exc: RateLimitError) -> list[RateLimitCheck] | None:
+    checks = getattr(exc, "rate_limit_checks", None)
+    if checks is None:
+        return None
+    try:
+        check_list = list(checks)
+    except TypeError:
+        return None
+    if not all(isinstance(check, RateLimitCheck) for check in check_list):
+        return None
+    return check_list
+
+
+def _rate_limit_error_state(exc: RateLimitError) -> RateLimitState | None:
+    state = getattr(exc, "rate_limit_state", None)
+    return state if isinstance(state, RateLimitState) else None
+
+
 def build_rate_limit_headers(state: RateLimitState) -> dict[str, str]:
     headers: dict[str, str] = {}
     if state.rpm_limit > 0 or state.tpm_limit > 0:
@@ -208,6 +235,9 @@ async def _check_and_acquire_rate_limits(request: Request) -> None:
 
     model = await _extract_model_from_request(request, body)
     request.state._rate_limit_model = model
+    tier_policy_service = getattr(request.app.state, "tier_policy_service", None)
+    tier_policy_mode = get_tier_policy_mode_from_app(request.app)
+    tier_policy_missing_service_mode = get_tier_policy_missing_service_mode_from_app(request.app)
 
     try:
         lease, rate_limit_state = await acquire_rate_limit_controls(
@@ -215,28 +245,75 @@ async def _check_and_acquire_rate_limits(request: Request) -> None:
             auth=auth,
             tokens=tokens,
             model=model,
+            tier_policy_service=tier_policy_service,
+            tier_policy_mode=tier_policy_mode,
+            tier_policy_missing_service_mode=tier_policy_missing_service_mode,
         )
         request.state._rate_limit_state = rate_limit_state
     except RateLimitError as exc:
-        checks = build_rate_limit_checks(auth=auth, tokens=tokens, model=model)
-        now = time.time()
-        min_window = min((c.window_seconds for c in checks), default=60)
-        window_reset_at = int((math.floor(now / min_window) + 1) * min_window)
-        state_429 = _build_429_state(checks, exc, window_reset_at)
+        state_429 = _rate_limit_error_state(exc)
+        if state_429 is None:
+            checks = _rate_limit_error_checks(exc)
+            if checks is None:
+                try:
+                    checks = build_rate_limit_checks(
+                        auth=auth,
+                        tokens=tokens,
+                        model=model,
+                        tier_policy_service=tier_policy_service,
+                        tier_policy_mode=tier_policy_mode,
+                        tier_policy_missing_service_mode=tier_policy_missing_service_mode,
+                    )
+                except Exception:
+                    checks = []
+            now = time.time()
+            min_window = min((c.window_seconds for c in checks), default=60)
+            window_reset_at = int((math.floor(now / min_window) + 1) * min_window)
+            state_429 = _build_429_state(checks, exc, window_reset_at)
         request.state._rate_limit_state = state_429
         raise
 
     request.state._rate_limit_checked = True
-    request.state._rate_limit_parallel_key = lease.parallel_entity_id
+    request.state._rate_limit_lease = lease
+    refresher = RateLimitLeaseRefresher(limiter=limiter, lease=lease)
+    if refresher.start():
+        request.state._rate_limit_lease_refresher = refresher
 
 
 async def _release_rate_limits(request: Request) -> None:
     if bool(getattr(request.state, "_rate_limit_released", False)):
         return
-    api_key = getattr(request.state, "_rate_limit_parallel_key", None)
-    if not api_key:
+    lease = getattr(request.state, "_rate_limit_lease", None)
+    if lease is None:
         request.state._rate_limit_released = True
         return
     limiter: LimitCounter = request.app.state.limit_counter
-    await limiter.release_parallel("key", api_key)
+    await _stop_rate_limit_lease_refresher(request)
+    try:
+        await release_rate_limit_controls(limiter=limiter, lease=lease)
+    except Exception as exc:
+        pending_count = len(lease.pending_parallel_acquisitions)
+        queued = False
+        if pending_count > 0:
+            queued = get_rate_limit_release_retry_queue(request.app).enqueue(
+                limiter=limiter,
+                lease=lease,
+            )
+        logger.warning(
+            "rate-limit release failed pending=%s queued=%s error=%s",
+            pending_count,
+            queued,
+            exc,
+            exc_info=True,
+        )
+        request.state._rate_limit_released = pending_count == 0
+        return
     request.state._rate_limit_released = True
+
+
+async def _stop_rate_limit_lease_refresher(request: Request) -> None:
+    refresher = getattr(request.state, "_rate_limit_lease_refresher", None)
+    if refresher is None:
+        return
+    request.state._rate_limit_lease_refresher = None
+    await refresher.stop()

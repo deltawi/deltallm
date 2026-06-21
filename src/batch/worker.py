@@ -317,6 +317,7 @@ class BatchExecutorWorker:
         return self._applied_scheduler_config_generation
 
     async def process_once(self) -> bool:
+        await self._execution_engine._drain_policy_lease_release_retries()
         self._reap_shadow_tasks()
         active_mode = self._active_scheduler_mode()
         shadow_mode = self._shadow_scheduler_mode()

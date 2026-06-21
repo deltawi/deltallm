@@ -157,17 +157,26 @@ async def acquire_batch_policy_lease(*, app: Any, payload: BaseModel, auth: User
         auth=auth,
         tokens=estimate_tokens(data),
         model=str(getattr(payload, "model", "") or ""),
+        tier_policy_service=getattr(app.state, "tier_policy_service", None),
+        tier_policy_mode=get_tier_policy_mode_from_app(app),
+        tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(app),
+        mode="batch",
     )
     return BatchPolicyLease(rate_limit_lease=lease)
 
 
-async def release_batch_policy_lease(*, app: Any, lease: BatchPolicyLease | None) -> None:
+async def release_batch_policy_lease(*, app: Any, lease: BatchPolicyLease | None) -> bool:
     if lease is None:
-        return
+        return True
+    if not lease.rate_limit_lease.pending_parallel_acquisitions:
+        return True
     limiter = getattr(app.state, "limit_counter", None)
     if limiter is None:
-        return
+        logger.warning("batch policy rate-limit release skipped because limit counter is unavailable")
+        return False
     try:
         await release_rate_limit_controls(limiter=limiter, lease=lease.rate_limit_lease)
     except Exception as exc:
         logger.warning("batch policy rate-limit release failed error=%s", exc, exc_info=True)
+        return False
+    return not bool(lease.rate_limit_lease.pending_parallel_acquisitions)

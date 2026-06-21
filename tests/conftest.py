@@ -52,12 +52,14 @@ class FakeRedis:
         self.store: dict[str, int | str] = {}
         self.hash_store: dict[str, dict[str, str]] = {}
         self.zset_store: dict[str, list[tuple[int, str]]] = {}
+        self.ttl_store: dict[str, int] = {}
 
     async def get(self, key: str):
         return self.store.get(key)
 
     async def setex(self, key: str, ttl: int, value: str):
         self.store[key] = value
+        self.ttl_store[key] = int(ttl)
 
     async def set(self, key: str, value: str, ex: int | None = None, nx: bool = False):
         del ex
@@ -69,6 +71,7 @@ class FakeRedis:
     async def getdel(self, key: str):
         value = self.store.get(key)
         self.store.pop(key, None)
+        self.ttl_store.pop(key, None)
         return value
 
     async def incr(self, key: str):
@@ -84,9 +87,13 @@ class FakeRedis:
         return int(self.store[key])
 
     async def expire(self, key: str, ttl: int):
+        if key in self.store or key in self.hash_store or key in self.zset_store:
+            self.ttl_store[key] = int(ttl)
         return True
 
     async def pexpire(self, key: str, ttl: int):
+        if key in self.store or key in self.hash_store or key in self.zset_store:
+            self.ttl_store[key] = max(1, int(ttl) // 1000)
         return True
 
     async def mget(self, keys):
@@ -97,6 +104,7 @@ class FakeRedis:
             self.store.pop(key, None)
             self.hash_store.pop(key, None)
             self.zset_store.pop(key, None)
+            self.ttl_store.pop(key, None)
 
     async def exists(self, key: str):
         return 1 if key in self.store else 0
@@ -140,10 +148,96 @@ class FakeRedis:
         return True
 
     async def eval(self, script: str, numkeys: int, *args):
-        del script
         keys = [str(item) for item in args[:numkeys]]
         argv = [str(item) for item in args[numkeys:]]
         n = len(keys)
+        if keys and all(key.startswith("parallel:") for key in keys):
+            key = keys[0]
+            if len(argv) == 2:
+                limit = int(argv[0])
+                ttl = int(argv[1])
+                current = max(0, int(self.store.get(key, 0)))
+                if current + 1 > limit:
+                    return [0, current]
+                self.store[key] = current + 1
+                self.ttl_store[key] = ttl
+                return [1, current + 1]
+
+            if len(argv) == 1:
+                ttl = int(argv[0])
+                current = int(self.store.get(key, 0))
+                if current <= 0:
+                    self.store.pop(key, None)
+                    self.ttl_store.pop(key, None)
+                    return [1, 0]
+                self.ttl_store[key] = ttl
+                return [1, current]
+
+            current = int(self.store.get(key, 0))
+            if current <= 1:
+                self.store.pop(key, None)
+                self.ttl_store.pop(key, None)
+                return [1, 0]
+            next_value = current - 1
+            self.store[key] = next_value
+            return [1, next_value]
+
+        if keys and all(key.startswith("parallel_lease:") for key in keys):
+            if "ZSCORE" in script:
+                tokens = argv[:n]
+                expires_at_values = [int(value) for value in argv[n : 2 * n]]
+                for idx, key in enumerate(keys):
+                    token = tokens[idx]
+                    if not any(member == token for _score, member in self.zset_store.get(key, [])):
+                        continue
+                    self.zset_store[key] = [
+                        (score, member)
+                        for score, member in self.zset_store.get(key, [])
+                        if member != token
+                    ]
+                    self.zset_store.setdefault(key, []).append((expires_at_values[idx], token))
+                    self.ttl_store[key] = max(1, (expires_at_values[idx] - int(argv[(2 * n)])) // 1000)
+                return [1, 0]
+
+            if len(argv) == n:
+                for idx, key in enumerate(keys):
+                    token = argv[idx]
+                    self.zset_store[key] = [
+                        (score, member)
+                        for score, member in self.zset_store.get(key, [])
+                        if member != token
+                    ]
+                    if not self.zset_store[key]:
+                        self.zset_store.pop(key, None)
+                        self.ttl_store.pop(key, None)
+                return [1, 0]
+
+            now_ms = int(argv[0])
+            expires_at_ms = int(argv[1])
+            limits = [int(argv[2 + i]) for i in range(n)]
+            requested_counts = [int(argv[2 + n + i]) for i in range(n)]
+            token_index = 2 + (2 * n)
+            for idx, key in enumerate(keys):
+                self.zset_store[key] = [
+                    (score, member)
+                    for score, member in self.zset_store.get(key, [])
+                    if score > now_ms
+                ]
+                if len(self.zset_store.get(key, [])) + requested_counts[idx] > limits[idx]:
+                    return [0, idx + 1]
+            for idx, key in enumerate(keys):
+                for _ in range(requested_counts[idx]):
+                    token = argv[token_index]
+                    token_index += 1
+                    self.zset_store[key] = [
+                        (score, member)
+                        for score, member in self.zset_store.get(key, [])
+                        if member != token
+                    ]
+                    self.zset_store.setdefault(key, []).append((expires_at_ms, token))
+                self.ttl_store[key] = max(1, (expires_at_ms - now_ms) // 1000)
+            return [1, 0]
+
         amounts = [int(argv[i]) for i in range(n)]
         limits = [int(argv[n + i]) for i in range(n)]
 
@@ -156,6 +250,7 @@ class FakeRedis:
         for idx, key in enumerate(keys):
             new_val = int(self.store.get(key, 0)) + amounts[idx]
             self.store[key] = new_val
+            self.ttl_store[key] = 60
             result.append(new_val)
 
         return result

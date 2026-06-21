@@ -301,7 +301,8 @@ def test_compile_snapshot_prebuilds_pricing_and_rate_limit_descriptors() -> None
     descriptor_by_scope = {descriptor.scope: descriptor for descriptor in descriptors}
     assert descriptor_by_scope["tier_org_model_rpm"].limit == 100
     assert descriptor_by_scope["tier_org_model_tpm"].amount_kind == "tokens"
-    assert descriptor_by_scope["tier_org_model_parallel"].window_seconds == 0
+    assert "tier_org_model_parallel" not in descriptor_by_scope
+    assert snapshot.org_model_policy[("org-1", "gpt-4o-mini")].limits.max_parallel_requests == 25
     assert descriptor_by_scope["tier_org_model_batch_tpm"].mode == "batch"
 
 
@@ -347,6 +348,12 @@ def test_compile_snapshot_merges_capacity_pools_conservatively() -> None:
     assert pool.saturation_threshold == 0.8
     assert pool.burst_multiplier == 1.5
     assert pool.source_tier_version_ids == ("version-1", "version-2")
+    descriptors = {descriptor.scope: descriptor for descriptor in pool.rate_limit_descriptors}
+    assert descriptors["tier_pool_model_rpm"].entity_id == "shared:gpt-4o-mini"
+    assert descriptors["tier_pool_model_rpm"].limit == 800
+    assert descriptors["tier_pool_model_rpm"].mode == "all"
+    assert descriptors["tier_pool_model_tpm"].limit == 500_000
+    assert descriptors["tier_pool_model_tpm"].amount_kind == "tokens"
 
 
 def test_compile_snapshot_etag_is_stable_for_same_logical_inputs() -> None:
