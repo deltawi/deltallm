@@ -1,18 +1,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 
 from src.db.mcp import MCPToolPolicyRecord
 from src.models.errors import RateLimitError
-from src.services.limit_counter import LimitCounter
+from src.services.limit_counter import LegacyParallelLease, LimitCounter
 
 from .exceptions import MCPRateLimitError
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class MCPToolPolicyLease:
-    scope: str
-    entity_id: str
+    parallel_lease: LegacyParallelLease
+
+    @property
+    def scope(self) -> str:
+        return self.parallel_lease.scope
+
+    @property
+    def entity_id(self) -> str:
+        return self.parallel_lease.entity_id
 
 
 class MCPToolPolicyEnforcer:
@@ -39,8 +49,13 @@ class MCPToolPolicyEnforcer:
             if policy.max_rpm is not None and policy.max_rpm > 0:
                 await self.rate_limiter.check_rate_limit("mcp_tool_rpm", entity_id, policy.max_rpm, 1)
             if policy.max_concurrency is not None and policy.max_concurrency > 0:
-                await self.rate_limiter.acquire_parallel("mcp_tool", entity_id, policy.max_concurrency)
-                return MCPToolPolicyLease(scope="mcp_tool", entity_id=entity_id)
+                parallel_lease = await self.rate_limiter.acquire_legacy_parallel_lease(
+                    "mcp_tool",
+                    entity_id,
+                    policy.max_concurrency,
+                )
+                if parallel_lease is not None:
+                    return MCPToolPolicyLease(parallel_lease=parallel_lease)
         except RateLimitError as exc:
             raise MCPRateLimitError(exc.message, retry_after=exc.retry_after) from exc
         return None
@@ -48,7 +63,17 @@ class MCPToolPolicyEnforcer:
     async def release(self, lease: MCPToolPolicyLease | None) -> None:
         if lease is None or self.rate_limiter is None:
             return
-        await self.rate_limiter.release_parallel(lease.scope, lease.entity_id)
+        try:
+            await self.rate_limiter.release_legacy_parallel_lease(lease.parallel_lease)
+        except Exception as exc:
+            logger.warning(
+                "mcp tool policy release failed scope=%s entity_id=%s backend=%s error=%s",
+                lease.scope,
+                lease.entity_id,
+                lease.parallel_lease.backend,
+                exc,
+                exc_info=True,
+            )
 
     @staticmethod
     def _entity_id(*, scope_type: str, scope_id: str, server_key: str, tool_name: str) -> str:
