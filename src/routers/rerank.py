@@ -8,7 +8,8 @@ import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from src.billing.cost import compute_cost
+from src.billing.cost import compute_billing_result
+from src.billing.tier_pricing import attach_pricing_metadata, resolve_deployment_tier_pricing
 from src.callbacks import CallbackManager, build_standard_logging_payload
 from src.middleware.auth import require_api_key
 from src.middleware.rate_limit import enforce_rate_limits
@@ -160,7 +161,7 @@ async def rerank(request: Request, payload: RerankRequest):
         api_latency_ms = data.pop("_api_latency_ms", 0)
         api_base = data.pop("_api_base", "")
         deployment_model = data.pop("_deployment_model", None)
-        model_info = data.pop("_model_info", {})
+        data.pop("_model_info", None)
 
         doc_count = len(payload.documents)
         query_tokens = len(payload.query.split())
@@ -171,7 +172,24 @@ async def rerank(request: Request, payload: RerankRequest):
             mode="rerank",
             usage={"rerank_units": doc_count},
         )
-        request_cost = compute_cost(mode="rerank", usage=usage, model_info=model_info)
+        pricing = resolve_deployment_tier_pricing(
+            auth=auth,
+            model=payload.model,
+            deployment=served_deployment,
+            tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
+            mode="sync",
+        )
+        billing = compute_billing_result(
+            mode="rerank",
+            usage=usage,
+            model_info=pricing.customer_model_info,
+        )
+        provider_billing = compute_billing_result(
+            mode="rerank",
+            usage=usage,
+            model_info=pricing.provider_model_info,
+        )
+        request_cost = billing.cost
         increment_request(
             model=payload.model, api_provider=api_provider,
             api_key=auth.api_key, user=auth.user_id, team=auth.team_id, status_code=200,
@@ -193,11 +211,16 @@ async def rerank(request: Request, payload: RerankRequest):
                 usage=usage,
                 cost=request_cost,
                 metadata=attach_route_decision(
-                    {
-                        "api_base": api_base,
-                        "provider": api_provider,
-                        "deployment_model": deployment_model,
-                    },
+                    attach_pricing_metadata(
+                        {
+                            "api_base": api_base,
+                            "provider": api_provider,
+                            "deployment_model": deployment_model,
+                        },
+                        pricing,
+                        provider_cost=provider_billing.cost,
+                        billing=billing,
+                    ),
                     request,
                 ),
                 cache_hit=False,

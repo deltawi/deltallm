@@ -68,6 +68,21 @@ def test_batch_cost_uses_batch_absolute_pricing_over_sync() -> None:
     assert cost == 8.0
 
 
+def test_batch_cost_uses_absolute_batch_pricing_without_sync_pricing() -> None:
+    cost = completion_cost(
+        model="custom-model",
+        usage={"prompt_tokens": 5, "completion_tokens": 2},
+        custom_pricing=None,
+        pricing_tier="batch",
+        model_info={
+            "batch_input_cost_per_token": 1.0,
+            "batch_output_cost_per_token": 1.5,
+        },
+    )
+
+    assert cost == 8.0
+
+
 def test_batch_cost_uses_multiplier_when_absolute_missing() -> None:
     pricing = ModelPricing(input_cost_per_token=2.0, output_cost_per_token=1.0)
     cost = completion_cost(
@@ -124,6 +139,62 @@ def test_audio_transcription_falls_back_to_second_pricing() -> None:
 
     assert result.cost == 13.5
     assert result.billing_unit == "second"
+
+
+def test_compute_billing_result_adds_request_fee_to_token_modes() -> None:
+    result = compute_billing_result(
+        mode="rerank",
+        usage={"prompt_tokens": 7, "completion_tokens": 0},
+        model_info={"input_cost_per_token": 0.3, "cost_per_request": 0.4},
+    )
+
+    assert result.cost == 2.5
+    assert result.billing_unit == "token"
+    assert result.pricing_fields_used == (
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "cost_per_request",
+    )
+
+
+def test_compute_billing_result_supports_request_only_image_pricing() -> None:
+    result = compute_billing_result(
+        mode="image_generation",
+        usage={"images": 2},
+        model_info={"cost_per_request": 0.75},
+    )
+
+    assert result.cost == 0.75
+    assert result.billing_unit == "request"
+    assert result.pricing_fields_used == ("input_cost_per_image", "cost_per_request")
+
+
+def test_compute_billing_result_adds_request_fee_to_audio_speech() -> None:
+    result = compute_billing_result(
+        mode="audio_speech",
+        usage={"input_characters": 1000},
+        model_info={"input_cost_per_character": 0.002, "cost_per_request": 0.5},
+    )
+
+    assert result.cost == 2.5
+    assert result.billing_unit == "character"
+    assert result.pricing_fields_used == (
+        "input_cost_per_character",
+        "output_cost_per_character",
+        "cost_per_request",
+    )
+
+
+def test_compute_billing_result_supports_request_only_audio_transcription_pricing() -> None:
+    result = compute_billing_result(
+        mode="audio_transcription",
+        usage={"duration_seconds": 30},
+        model_info={"cost_per_request": 0.6},
+    )
+
+    assert result.cost == 0.6
+    assert result.billing_unit == "request"
+    assert result.pricing_fields_used == ("cost_per_request",)
 
 
 def test_audio_transcription_applies_provider_billing_rules_to_duration() -> None:

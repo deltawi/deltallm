@@ -27,6 +27,7 @@ ALLOWED_METADATA_KEYS = {
     "output_cost_per_image",
     "input_cost_per_audio_token",
     "output_cost_per_audio_token",
+    "cost_per_request",
     "output_vector_size",
     "max_tokens",
     "max_input_tokens",

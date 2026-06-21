@@ -46,6 +46,7 @@ class ChatCompletionRequest(BaseModel):
     top_p: float | None = Field(default=1.0, ge=0, le=1)
     n: int | None = Field(default=1, ge=1, le=10)
     stream: bool | None = False
+    stream_options: dict[str, Any] | None = None
     stop: str | list[str] | None = None
     presence_penalty: float | None = Field(default=0, ge=-2, le=2)
     frequency_penalty: float | None = Field(default=0, ge=-2, le=2)

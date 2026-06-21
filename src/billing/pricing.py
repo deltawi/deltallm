@@ -16,6 +16,7 @@ def pricing_from_model_info(
     output_cost = _float_or_none(info.get("output_cost_per_token"))
     input_cost_cache_hit = _float_or_none(info.get("input_cost_per_token_cache_hit"))
     output_cost_cache_hit = _float_or_none(info.get("output_cost_per_token_cache_hit"))
+    cost_per_request = _float_or_none(info.get("cost_per_request"))
 
     if input_cost is None and fallback_input_cost_per_token is not None:
         input_cost = float(fallback_input_cost_per_token)
@@ -27,6 +28,7 @@ def pricing_from_model_info(
         and output_cost is None
         and input_cost_cache_hit is None
         and output_cost_cache_hit is None
+        and cost_per_request is None
     ):
         return None
 
@@ -35,6 +37,7 @@ def pricing_from_model_info(
         output_cost_per_token=float(output_cost or 0.0),
         input_cost_per_token_cache_hit=input_cost_cache_hit,
         output_cost_per_token_cache_hit=output_cost_cache_hit,
+        cost_per_request=float(cost_per_request or 0.0),
     )
 
 

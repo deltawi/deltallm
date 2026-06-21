@@ -25,7 +25,6 @@ from src.batch.worker_types import (
     _PreparedEmbeddingItem,
     _RequestShim,
 )
-from src.billing.cost import completion_cost
 from src.metrics import (
     increment_batch_chat_item_executed,
     increment_batch_chat_microbatch_fallback,
@@ -121,23 +120,10 @@ class ChatWorkerExecutionMixin:
         api_provider = resolve_provider(served_deployment.deltallm_params)
         api_base = served_deployment.deltallm_params.get("api_base")
         deployment_model = str(served_deployment.deltallm_params.get("model") or "") or None
-        deployment_pricing = self._deployment_pricing(served_deployment)
-        model_info = served_deployment.model_info or {}
-        billed_cost = completion_cost(
-            model=prepared.payload.model,
+        billed_cost, provider_cost, pricing = self._batch_item_costs(
+            prepared=prepared,
             usage=usage,
-            cache_hit=False,
-            custom_pricing=deployment_pricing,
-            pricing_tier="batch",
-            model_info=model_info,
-        )
-        provider_cost = completion_cost(
-            model=prepared.payload.model,
-            usage=usage,
-            cache_hit=False,
-            custom_pricing=deployment_pricing,
-            pricing_tier="sync",
-            model_info=model_info,
+            served_deployment=served_deployment,
         )
         return {
             "item_id": prepared.item.item_id,
@@ -155,6 +141,10 @@ class ChatWorkerExecutionMixin:
                 provider_cost=provider_cost,
                 api_base=api_base,
                 deployment_model=deployment_model,
+                pricing_metadata=pricing.spend_metadata(
+                    provider_cost=provider_cost,
+                    pricing_tier="batch",
+                ),
                 batch_execution_mode=batch_execution_mode,
                 microbatch_size=microbatch_size,
                 microbatch_id=microbatch_id,

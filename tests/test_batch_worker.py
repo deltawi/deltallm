@@ -47,6 +47,31 @@ class _AllowAllCallableTargetGrantService:
         return SimpleNamespace(allowlist=None, authoritative=True, fallback_reason=None)
 
 
+class _TierPricingService:
+    def __init__(self, pricing: dict[str, float], *, mode: str = "sync", service_mode: str = "enforce") -> None:
+        self.pricing = pricing
+        self.pricing_mode = mode
+        self.mode = service_mode
+
+    def get_pricing_policy(self, organization_id: str, callable_key: str, *, mode: str = "sync"):
+        if organization_id != "org-1" or callable_key != "m-1" or mode != self.pricing_mode:
+            return None
+        return SimpleNamespace(
+            mode=self.pricing_mode,
+            pricing=self.pricing,
+            source=SimpleNamespace(
+                assignment_id="assignment-batch",
+                tier_key="enterprise",
+                tier_version_id="version-batch",
+                tier_version_number=2,
+                model_policy_id="policy-batch",
+            ),
+        )
+
+    def get_snapshot(self):
+        return SimpleNamespace(org_tier_keys={"org-1": ("enterprise",)})
+
+
 @pytest.fixture(autouse=True)
 def _default_batch_policy_grants(monkeypatch):
     original_init = BatchExecutorWorker.__init__
@@ -251,6 +276,50 @@ def test_batch_worker_idle_poll_delay_jitters_and_backs_off(monkeypatch):
     worker._reset_idle_backoff()
 
     assert worker._idle_backoff_attempts == 0
+
+
+def test_batch_item_costs_use_tier_batch_pricing_and_provider_sync_cost() -> None:
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                tier_policy_service=_TierPricingService(
+                    {
+                        "input_cost_per_token": 10.0,
+                        "output_cost_per_token": 20.0,
+                        "batch_input_cost_per_token": 0.5,
+                        "batch_output_cost_per_token": 0.75,
+                    },
+                    mode="batch",
+                )
+            )
+        ),
+        repository=_FakeRepository(),  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(worker_id="w1"),
+    )
+    prepared = SimpleNamespace(
+        policy_auth=UserAPIKeyAuth(api_key="tok-1", organization_id="org-1"),
+        payload=SimpleNamespace(model="m-1"),
+    )
+    deployment = SimpleNamespace(
+        model_info={"input_cost_per_token": 1.0, "output_cost_per_token": 2.0},
+        input_cost_per_token=0.0,
+        output_cost_per_token=0.0,
+    )
+
+    billed_cost, provider_cost, pricing = worker._execution_engine._batch_item_costs(
+        prepared=prepared,  # type: ignore[arg-type]
+        usage={"prompt_tokens": 5, "completion_tokens": 2},
+        served_deployment=deployment,
+    )
+
+    assert billed_cost == 4.0
+    assert provider_cost == 9.0
+    metadata = pricing.spend_metadata(provider_cost=provider_cost, pricing_tier="batch")
+    assert metadata["pricing_source"] == "tier"
+    assert metadata["pricing_tier"] == "batch"
+    assert metadata["customer_tier_key"] == "enterprise"
+    assert metadata["tier_model_policy_id"] == "policy-batch"
 
 
 @pytest.mark.asyncio

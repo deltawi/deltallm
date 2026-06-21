@@ -199,6 +199,20 @@ class BatchCompletionOutboxWorker:
             if service is None:
                 service = SpendTrackingService(getattr(repository, "prisma", None))
             completed_at = _parse_datetime(payload.get("completed_at")) or datetime.now(tz=UTC)
+            pricing_metadata = payload.get("pricing_metadata")
+            if not isinstance(pricing_metadata, dict):
+                pricing_metadata = {}
+            spend_metadata = {
+                "api_base": payload.get("api_base"),
+                "provider": payload.get("api_provider"),
+                "deployment_model": payload.get("deployment_model"),
+                "batch_id": payload.get("batch_id"),
+                "batch_item_id": payload.get("item_id"),
+                "execution_mode": payload.get("execution_mode"),
+                "provider_cost": payload.get("provider_cost"),
+                "pricing_tier": "batch",
+            }
+            spend_metadata.update(pricing_metadata)
             outcome = await service.log_spend_once(
                 event_id=record.completion_id,
                 request_id=str(payload.get("request_id") or f"batch:{record.batch_id}:{record.item_id}"),
@@ -213,16 +227,7 @@ class BatchCompletionOutboxWorker:
                 call_type=str(payload.get("call_type") or "embedding_batch"),
                 usage=dict(payload.get("usage") or {}),
                 cost=float(payload.get("billed_cost") or 0.0),
-                metadata={
-                    "api_base": payload.get("api_base"),
-                    "provider": payload.get("api_provider"),
-                    "deployment_model": payload.get("deployment_model"),
-                    "batch_id": payload.get("batch_id"),
-                    "batch_item_id": payload.get("item_id"),
-                    "execution_mode": payload.get("execution_mode"),
-                    "provider_cost": payload.get("provider_cost"),
-                    "pricing_tier": "batch",
-                },
+                metadata=spend_metadata,
                 cache_hit=False,
                 start_time=completed_at,
                 end_time=completed_at,

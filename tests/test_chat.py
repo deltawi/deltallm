@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json as jsonlib
+from types import SimpleNamespace
+from typing import Any
 
 import httpx
 import pytest
@@ -75,6 +77,38 @@ class _SpendRecorder:
             exc = kwargs.get("exc")
             error_type = getattr(exc, "error_type", None) or (exc.__class__.__name__ if exc is not None else None)
         self.events.append({"status": "error", "cost": 0.0, "error_type": error_type, **kwargs})
+
+
+class _TierPricingService:
+    def __init__(self, pricing: dict[str, float], *, snapshot_stale: bool = False) -> None:
+        self.pricing = pricing
+        self.mode = "enforce"
+        self.snapshot_stale = snapshot_stale
+
+    def get_pricing_policy(self, organization_id: str, callable_key: str, *, mode: str = "sync"):
+        if organization_id != "org-default" or callable_key != "gpt-4o-mini" or mode != "sync":
+            return None
+        return SimpleNamespace(
+            mode="sync",
+            pricing=self.pricing,
+            source=SimpleNamespace(
+                assignment_id="assignment-stream",
+                tier_key="enterprise",
+                tier_version_id="version-stream",
+                tier_version_number=1,
+                model_policy_id="policy-stream",
+            ),
+        )
+
+    def get_snapshot(self):
+        return SimpleNamespace(org_tier_keys={"org-default": ("enterprise",)})
+
+    def resolve_unavailable_decision(self, organization_id: str):
+        return SimpleNamespace(
+            allowed=True,
+            reason="tier_policy_unavailable_fail_open",
+            explicit_tier_policy=organization_id == "org-default",
+        )
 
 
 class _ExplodingMCPGateway:
@@ -663,7 +697,7 @@ async def test_chat_completion_streaming_success(client, test_app):
     assert "data: [DONE]" in response.text
     deployment_id = str(response.headers["x-deltallm-route-deployment"])
     usage = await test_app.state.router_state_backend.get_usage(deployment_id)
-    assert usage == {"rpm": 1, "tpm": 0}
+    assert usage == {"rpm": 1, "tpm": 3}
 
 
 @pytest.mark.asyncio
@@ -912,6 +946,196 @@ class _StreamContext:
 
 
 @pytest.mark.asyncio
+async def test_chat_stream_billing_uses_provider_usage_when_present(client, test_app):
+    recorder = _SpendRecorder()
+    test_app.state.spend_tracking_service = recorder
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.model_info = {"input_cost_per_token": 1.0, "output_cost_per_token": 2.0}
+    captured_payloads: list[dict[str, Any]] = []
+
+    def stream(method: str, url: str, headers: dict[str, str], json: dict[str, Any], timeout: int):  # noqa: ANN001
+        del method, url, headers, timeout
+        captured_payloads.append(dict(json))
+        return _StreamContext(
+            status_code=200,
+            lines=[
+                'data: {"id":"chatcmpl-usage","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}',
+                'data: {"id":"chatcmpl-usage","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}',
+                'data: {"id":"chatcmpl-usage","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}',
+                "data: [DONE]",
+            ],
+        )
+
+    test_app.state.http_client.stream = stream
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": True}
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert response.status_code == 200
+    assert captured_payloads[-1]["stream_options"] == {"include_usage": True}
+    assert '"usage"' not in response.text
+    assert '"choices":[]' not in response.text
+    deployment_id = str(response.headers["x-deltallm-route-deployment"])
+    usage = await test_app.state.router_state_backend.get_usage(deployment_id)
+    assert usage == {"rpm": 1, "tpm": 14}
+    await asyncio.sleep(0.05)
+    assert recorder.events[-1]["usage"] == {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}
+    assert recorder.events[-1]["cost"] == 18.0
+    assert recorder.events[-1]["metadata"]["usage_source"] == "provider"
+    assert recorder.events[-1]["metadata"]["usage_estimated"] is False
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_default_usage_collection_does_not_expose_usage_chunk(client, test_app):
+    recorder = _SpendRecorder()
+    test_app.state.spend_tracking_service = recorder
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.model_info = {
+        "input_cost_per_token": 1.0,
+        "output_cost_per_token": 2.0,
+        "default_params": {"stream_options": {"include_usage": True}},
+    }
+    captured_payloads: list[dict[str, Any]] = []
+
+    def stream(method: str, url: str, headers: dict[str, str], json: dict[str, Any], timeout: int):  # noqa: ANN001
+        del method, url, headers, timeout
+        captured_payloads.append(dict(json))
+        return _StreamContext(
+            status_code=200,
+            lines=[
+                'data: {"id":"chatcmpl-default-usage","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}',
+                'data: {"id":"chatcmpl-default-usage","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}',
+                "data: [DONE]",
+            ],
+        )
+
+    test_app.state.http_client.stream = stream
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": True}
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert response.status_code == 200
+    assert captured_payloads[-1]["stream_options"] == {"include_usage": True}
+    assert '"usage"' not in response.text
+    assert '"choices":[]' not in response.text
+    await asyncio.sleep(0.05)
+    assert recorder.events[-1]["usage"] == {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}
+    assert recorder.events[-1]["cost"] == 18.0
+    assert recorder.events[-1]["metadata"]["usage_source"] == "provider"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_forwards_usage_chunk_when_client_requested_usage(client, test_app):
+    recorder = _SpendRecorder()
+    test_app.state.spend_tracking_service = recorder
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.model_info = {"input_cost_per_token": 1.0, "output_cost_per_token": 2.0}
+    captured_payloads: list[dict[str, Any]] = []
+
+    def stream(method: str, url: str, headers: dict[str, str], json: dict[str, Any], timeout: int):  # noqa: ANN001
+        del method, url, headers, timeout
+        captured_payloads.append(dict(json))
+        return _StreamContext(
+            status_code=200,
+            lines=[
+                'data: {"id":"chatcmpl-usage","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}',
+                'data: {"id":"chatcmpl-usage","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}',
+                "data: [DONE]",
+            ],
+        )
+
+    test_app.state.http_client.stream = stream
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert response.status_code == 200
+    assert captured_payloads[-1]["stream_options"] == {"include_usage": True}
+    assert '"usage"' in response.text
+    assert '"choices":[]' in response.text
+    await asyncio.sleep(0.05)
+    assert recorder.events[-1]["usage"] == {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}
+    assert recorder.events[-1]["metadata"]["usage_source"] == "provider"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_billing_estimates_missing_usage_and_applies_tier_pricing(client, test_app):
+    recorder = _SpendRecorder()
+    test_app.state.spend_tracking_service = recorder
+    test_app.state.tier_policy_service = _TierPricingService(
+        {"input_cost_per_token": 4.0, "output_cost_per_token": 10.0}
+    )
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.model_info = {"input_cost_per_token": 1.0, "output_cost_per_token": 2.0}
+
+    def stream(method: str, url: str, headers: dict[str, str], json: dict[str, Any], timeout: int):  # noqa: ANN001
+        del method, url, headers, json, timeout
+        return _StreamContext(
+            status_code=200,
+            lines=[
+                'data: {"id":"chatcmpl-est","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}',
+                'data: {"id":"chatcmpl-est","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"done"},"finish_reason":null}]}',
+                "data: [DONE]",
+            ],
+        )
+
+    test_app.state.http_client.stream = stream
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": True}
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert response.status_code == 200
+    deployment_id = str(response.headers["x-deltallm-route-deployment"])
+    usage = await test_app.state.router_state_backend.get_usage(deployment_id)
+    assert usage == {"rpm": 1, "tpm": 4}
+    await asyncio.sleep(0.05)
+    assert recorder.events[-1]["usage"] == {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}
+    assert recorder.events[-1]["cost"] == 22.0
+    assert recorder.events[-1]["metadata"]["provider_cost"] == 5.0
+    assert recorder.events[-1]["metadata"]["pricing_source"] == "tier"
+    assert recorder.events[-1]["metadata"]["customer_tier_key"] == "enterprise"
+    assert recorder.events[-1]["metadata"]["usage_source"] == "estimated"
+    assert recorder.events[-1]["metadata"]["usage_estimated"] is True
+
+
+@pytest.mark.asyncio
+async def test_chat_billing_uses_deployment_pricing_when_tier_snapshot_is_stale(client, test_app):
+    recorder = _SpendRecorder()
+    test_app.state.spend_tracking_service = recorder
+    test_app.state.tier_policy_service = _TierPricingService(
+        {"input_cost_per_token": 4.0, "output_cost_per_token": 10.0},
+        snapshot_stale=True,
+    )
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.model_info = {"input_cost_per_token": 1.0, "output_cost_per_token": 2.0}
+
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]}
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert response.status_code == 200
+    await asyncio.sleep(0.05)
+    assert recorder.events[-1]["usage"] == {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    assert recorder.events[-1]["cost"] == 3.0
+    assert recorder.events[-1]["metadata"]["provider_cost"] == 3.0
+    assert recorder.events[-1]["metadata"]["pricing_source"] == "deployment"
+    assert recorder.events[-1]["metadata"]["tier_snapshot_stale"] is True
+    assert recorder.events[-1]["metadata"]["tier_pricing_authoritative"] is False
+    assert recorder.events[-1]["metadata"]["tier_pricing_applied"] is False
+    assert recorder.events[-1]["metadata"]["tier_unavailable_reason"] == "tier_policy_unavailable_fail_open"
+
+
+@pytest.mark.asyncio
 async def test_stream_retries_before_first_token_with_failover(client, test_app):
     registry = test_app.state.router.deployment_registry["gpt-4o-mini"]
     registry.append(
@@ -1122,6 +1346,41 @@ async def test_chat_completion_does_not_forward_internal_metadata_upstream(clien
     }
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_does_not_forward_stream_options_for_non_stream_request(client, test_app):
+    captured_payloads: list[dict[str, Any]] = []
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.model_info = {"default_params": {"stream_options": {"include_usage": True}}}
+
+    async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
+        del url, headers, timeout
+        captured_payloads.append(dict(json))
+        payload = {
+            "id": "chatcmpl-no-stream-options",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": json["model"],
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+        return httpx.Response(200, json=payload)
+
+    test_app.state.http_client.post = post
+
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+        "stream_options": {"include_usage": True},
+    }
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert response.status_code == 200
+    assert captured_payloads
+    assert "stream_options" not in captured_payloads[-1]
 
 
 @pytest.mark.asyncio

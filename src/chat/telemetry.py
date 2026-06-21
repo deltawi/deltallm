@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import Request
 
 from src.billing.cost import completion_cost
-from src.billing.pricing import pricing_from_model_info
+from src.billing.tier_pricing import attach_pricing_metadata, resolve_deployment_tier_pricing
 from src.callbacks import build_standard_logging_payload
 from src.chat.audit import emit_text_audit_event
 from src.metrics import (
@@ -48,6 +48,38 @@ def _resolve_failure_fields(
     }
 
 
+def _resolve_completion_pricing_costs(
+    *,
+    request: Request,
+    auth: Any,
+    model: str,
+    served_deployment: Any,
+    usage: dict[str, Any] | None,
+    cache_hit: bool,
+):
+    usage_data = dict(usage or {})
+    pricing = resolve_deployment_tier_pricing(
+        auth=auth,
+        model=model,
+        deployment=served_deployment,
+        tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
+        mode="sync",
+    )
+    request_cost = completion_cost(
+        model=model,
+        usage=usage_data,
+        cache_hit=cache_hit,
+        custom_pricing=pricing.customer_token_pricing,
+    )
+    provider_cost = completion_cost(
+        model=model,
+        usage=usage_data,
+        cache_hit=cache_hit,
+        custom_pricing=pricing.provider_token_pricing,
+    )
+    return usage_data, pricing, request_cost, provider_cost
+
+
 async def emit_stream_success(
     *,
     request: Request,
@@ -66,8 +98,75 @@ async def emit_stream_success(
     served_deployment: Any,
     api_base: str,
     params: dict[str, Any],
+    usage: dict[str, Any] | None = None,
+    usage_metadata: dict[str, Any] | None = None,
 ) -> None:
     await request.app.state.passive_health_tracker.record_request_outcome(served_deployment.deployment_id, success=True)
+    api_provider = resolve_provider(params)
+    usage_data, pricing, request_cost, provider_cost = _resolve_completion_pricing_costs(
+        request=request,
+        auth=auth,
+        model=payload.model,
+        served_deployment=served_deployment,
+        usage=usage,
+        cache_hit=cache_hit,
+    )
+    increment_request(
+        model=payload.model,
+        api_provider=api_provider,
+        api_key=auth.api_key,
+        user=auth.user_id,
+        team=auth.team_id,
+        status_code=200,
+    )
+    increment_usage(
+        model=payload.model,
+        api_provider=api_provider,
+        api_key=auth.api_key,
+        user=auth.user_id,
+        team=auth.team_id,
+        prompt_tokens=int(usage_data.get("prompt_tokens", 0) or 0),
+        completion_tokens=int(usage_data.get("completion_tokens", 0) or 0),
+    )
+    increment_spend(
+        model=payload.model,
+        api_provider=api_provider,
+        api_key=auth.api_key,
+        user=auth.user_id,
+        team=auth.team_id,
+        spend=request_cost,
+    )
+    fire_and_forget(
+        request.app.state.spend_tracking_service.log_spend(
+            request_id=request_id or "",
+            api_key=auth.api_key,
+            user_id=auth.user_id,
+            team_id=auth.team_id,
+            organization_id=getattr(auth, "organization_id", None),
+            end_user_id=None,
+            model=payload.model,
+            call_type="completion",
+            usage=usage_data,
+            cost=request_cost,
+            metadata=_append_route_decision_metadata(
+                request,
+                attach_pricing_metadata(
+                    {
+                        "api_base": api_base,
+                        "provider": api_provider,
+                        "deployment_model": params.get("model"),
+                        "stream": True,
+                        **dict(usage_metadata or {}),
+                    },
+                    pricing,
+                    provider_cost=provider_cost,
+                ),
+            ),
+            cache_hit=cache_hit,
+            start_time=callback_start,
+            end_time=datetime.now(tz=UTC),
+        )
+    )
     callback_payload = build_standard_logging_payload(
         call_type="completion",
         request_id=request_id,
@@ -81,7 +180,8 @@ async def emit_stream_success(
         api_base=api_base,
         cache_hit=cache_hit,
         cache_key=cache_key,
-        api_provider=resolve_provider(params),
+        response_cost=request_cost,
+        api_provider=api_provider,
         turn_off_message_logging=bool(getattr(request.app.state, "turn_off_message_logging", False)),
     )
     callback_manager.dispatch_success_callbacks(callback_payload)
@@ -113,8 +213,9 @@ async def emit_stream_success(
                 "cache_hit": cache_hit,
                 "cache_key": cache_key,
                 "api_base": api_base,
-                "provider": resolve_provider(params),
+                "provider": api_provider,
                 "deployment_model": params.get("model"),
+                **dict(usage_metadata or {}),
             },
         ),
     )
@@ -262,17 +363,13 @@ async def emit_nonstream_success(
     await request.app.state.passive_health_tracker.record_request_outcome(served_deployment.deployment_id, success=True)
     api_provider = resolve_provider(served_deployment.deltallm_params)
     api_base = str(served_deployment.deltallm_params.get("api_base", request.app.state.settings.openai_base_url)).rstrip("/")
-    usage = payload_data.get("usage") or {}
-    deploy_pricing = pricing_from_model_info(
-        served_deployment.model_info,
-        fallback_input_cost_per_token=served_deployment.input_cost_per_token,
-        fallback_output_cost_per_token=served_deployment.output_cost_per_token,
-    )
-    request_cost = completion_cost(
+    usage, pricing, request_cost, provider_cost = _resolve_completion_pricing_costs(
+        request=request,
+        auth=auth,
         model=payload.model,
-        usage=usage,
+        served_deployment=served_deployment,
+        usage=payload_data.get("usage") if isinstance(payload_data.get("usage"), dict) else None,
         cache_hit=getattr(request.state, "cache_hit", False),
-        custom_pricing=deploy_pricing,
     )
     increment_request(
         model=payload.model,
@@ -313,11 +410,15 @@ async def emit_nonstream_success(
             cost=request_cost,
             metadata=_append_route_decision_metadata(
                 request,
-                {
-                    "api_base": api_base,
-                    "provider": api_provider,
-                    "deployment_model": served_deployment.deltallm_params.get("model"),
-                },
+                attach_pricing_metadata(
+                    {
+                        "api_base": api_base,
+                        "provider": api_provider,
+                        "deployment_model": served_deployment.deltallm_params.get("model"),
+                    },
+                    pricing,
+                    provider_cost=provider_cost,
+                ),
             ),
             cache_hit=cache_hit,
             start_time=callback_start,
