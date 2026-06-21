@@ -104,13 +104,6 @@ def compile_rate_limit_descriptors(
         _descriptor("tier_org_model_rpd", entity_id, limits.rpd_limit, "requests", 86400),
         _descriptor("tier_org_model_tpd", entity_id, limits.tpd_limit, "tokens", 86400),
         _descriptor(
-            "tier_org_model_parallel",
-            entity_id,
-            limits.max_parallel_requests,
-            "concurrency",
-            0,
-        ),
-        _descriptor(
             "tier_org_model_batch_rpm",
             entity_id,
             limits.batch_rpm_limit,
@@ -156,6 +149,12 @@ def compile_capacity_pools(
             source_tier_version_ids=(pool.tier_version_id,),
             source_pool_ids=(pool.tier_capacity_pool_id,),
             metadata=_freeze_metadata(pool.metadata),
+            rate_limit_descriptors=_compile_capacity_pool_rate_limit_descriptors(
+                pool_key=pool.pool_key,
+                callable_key=pool.callable_key,
+                rpm_capacity=pool.rpm_capacity,
+                tpm_capacity=pool.tpm_capacity,
+            ),
         )
         existing = compiled.get(key)
         compiled[key] = (
@@ -193,11 +192,13 @@ def _merge_capacity_pool(
         (left.strategy, right.strategy),
         key=lambda item: _CAPACITY_STRATEGY_RANK.get(item, 99),
     )
+    rpm_capacity = _min_optional_int(left.rpm_capacity, right.rpm_capacity)
+    tpm_capacity = _min_optional_int(left.tpm_capacity, right.tpm_capacity)
     return CompiledTierCapacityPoolPolicy(
         pool_key=left.pool_key,
         callable_key=left.callable_key,
-        rpm_capacity=_min_optional_int(left.rpm_capacity, right.rpm_capacity),
-        tpm_capacity=_min_optional_int(left.tpm_capacity, right.tpm_capacity),
+        rpm_capacity=rpm_capacity,
+        tpm_capacity=tpm_capacity,
         max_parallel_requests=_min_optional_int(
             left.max_parallel_requests,
             right.max_parallel_requests,
@@ -213,7 +214,28 @@ def _merge_capacity_pool(
         ),
         source_pool_ids=tuple(sorted(set(left.source_pool_ids) | set(right.source_pool_ids))),
         metadata=left.metadata or right.metadata,
+        rate_limit_descriptors=_compile_capacity_pool_rate_limit_descriptors(
+            pool_key=left.pool_key,
+            callable_key=left.callable_key,
+            rpm_capacity=rpm_capacity,
+            tpm_capacity=tpm_capacity,
+        ),
     )
+
+
+def _compile_capacity_pool_rate_limit_descriptors(
+    *,
+    pool_key: str,
+    callable_key: str,
+    rpm_capacity: int | None,
+    tpm_capacity: int | None,
+) -> tuple[CompiledTierRateLimitDescriptor, ...]:
+    entity_id = f"{pool_key}:{callable_key}"
+    descriptors = [
+        _descriptor("tier_pool_model_rpm", entity_id, rpm_capacity, "requests", 60, mode="all"),
+        _descriptor("tier_pool_model_tpm", entity_id, tpm_capacity, "tokens", 60, mode="all"),
+    ]
+    return tuple(descriptor for descriptor in descriptors if descriptor is not None)
 
 
 def _freeze_pricing(pricing: Mapping[str, Any] | None) -> Mapping[str, float]:
@@ -252,4 +274,3 @@ def _min_optional_float(left: float | None, right: float | None) -> float | None
     if right is None:
         return left
     return min(left, right)
-

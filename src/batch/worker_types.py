@@ -106,6 +106,7 @@ class _PreparedEmbeddingItem:
     execution_signature: _ExecutionSignature
     policy_auth: Any | None = None
     policy_lease: Any | None = None
+    policy_lease_refresher: Any | None = None
 
 
 @dataclass(slots=True)
@@ -121,3 +122,4 @@ class _PreparedChatItem:
     request_shim: _RequestShim
     policy_auth: Any | None = None
     policy_lease: Any | None = None
+    policy_lease_refresher: Any | None = None

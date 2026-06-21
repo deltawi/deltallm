@@ -80,6 +80,7 @@ class CompiledTierCapacityPoolPolicy:
     source_tier_version_ids: tuple[str, ...]
     source_pool_ids: tuple[str, ...]
     metadata: FrozenMetadata | None = None
+    rate_limit_descriptors: tuple[CompiledTierRateLimitDescriptor, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

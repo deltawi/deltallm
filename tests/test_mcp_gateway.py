@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -27,6 +28,38 @@ from src.mcp.result_cache import MCPToolResultCache
 from src.models.responses import UserAPIKeyAuth
 from src.services.limit_counter import LimitCounter
 from src.services.runtime_scopes import annotate_auth_metadata
+from tests.conftest import FakeRedis
+
+
+class _FailingOnceRedis(FakeRedis):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_next_eval = True
+
+    async def eval(self, script: str, numkeys: int, *args):  # noqa: ANN001, ANN201
+        if self.fail_next_eval:
+            self.fail_next_eval = False
+            raise RuntimeError("redis unavailable")
+        return await super().eval(script, numkeys, *args)
+
+
+class _ReleaseFailingRedis(FakeRedis):
+    def __init__(self, *, fail_release_count: int = 1) -> None:
+        super().__init__()
+        self.fail_release_count = fail_release_count
+
+    async def eval(self, script: str, numkeys: int, *args):  # noqa: ANN001, ANN201
+        keys = [str(item) for item in args[:numkeys]]
+        argv = args[numkeys:]
+        if (
+            self.fail_release_count > 0
+            and keys
+            and all(key.startswith("parallel:") for key in keys)
+            and not argv
+        ):
+            self.fail_release_count -= 1
+            raise RuntimeError("redis release unavailable")
+        return await super().eval(script, numkeys, *args)
 
 
 def _server(
@@ -689,6 +722,97 @@ async def test_gateway_service_uses_governance_snapshot_instead_of_registry_bind
         await gateway.call_tool(
             auth, namespaced_tool_name="docs.search", arguments={"query": "again"}
         )
+
+
+@pytest.mark.asyncio
+async def test_policy_enforcer_releases_fallback_concurrency_after_redis_recovery() -> None:
+    redis = _FailingOnceRedis()
+    limiter = LimitCounter(redis_client=redis, degraded_mode="fail_open")
+    enforcer = MCPToolPolicyEnforcer(limiter)
+    policy = MCPToolPolicyRecord(
+        "policy-team",
+        "srv-docs",
+        "search",
+        "team",
+        "team-ops",
+        True,
+        None,
+        None,
+        1,
+        None,
+        None,
+    )
+
+    lease = await enforcer.acquire(server_key="docs", tool_name="search", policy=policy)
+
+    assert lease is not None
+    assert lease.parallel_lease.backend == "fallback"
+    assert limiter._fallback_parallel["mcp_tool:team:team-ops:docs:search"] == 1  # noqa: SLF001
+
+    await enforcer.release(lease)
+
+    assert "mcp_tool:team:team-ops:docs:search" not in limiter._fallback_parallel  # noqa: SLF001
+    assert "parallel:mcp_tool:team:team-ops:docs:search" not in redis.store
+
+
+@pytest.mark.asyncio
+async def test_gateway_returns_tool_result_when_policy_release_backend_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    redis = _ReleaseFailingRedis()
+    limiter = LimitCounter(redis_client=redis, degraded_mode="fail_open")
+    transport = _FakeTransport()
+    registry = _FakeRegistry(
+        servers=[
+            _server(
+                "srv-docs",
+                "docs",
+                capabilities=[
+                    MCPToolSchema(
+                        name="search", description="Search docs", input_schema={"type": "object"}
+                    )
+                ],
+            )
+        ],
+        bindings=[MCPServerBindingRecord("bind-1", "srv-docs", "team", "team-ops", True, None)],
+        policies=[
+            MCPToolPolicyRecord(
+                "policy-1",
+                "srv-docs",
+                "search",
+                "team",
+                "team-ops",
+                True,
+                None,
+                None,
+                1,
+                None,
+                None,
+            )
+        ],
+    )
+    gateway = MCPGatewayService(
+        registry,
+        transport,
+        MCPToolPolicyEnforcer(limiter),
+    )  # type: ignore[arg-type]
+    auth = type(
+        "Auth",
+        (),
+        {"api_key": "sk-test", "team_id": "team-ops", "organization_id": None, "metadata": None},
+    )()
+    caplog.set_level(logging.WARNING, logger="src.mcp.policy")
+
+    result = await gateway.call_tool(
+        auth,
+        namespaced_tool_name="docs.search",
+        arguments={"query": "hello"},
+    )
+
+    assert result.structured_content["tool"] == "search"
+    assert transport.calls == [("docs", "search", None, {"query": "hello"})]
+    assert "mcp tool policy release failed" in caplog.text
+    assert "team:team-ops:docs:search" in caplog.text
 
 
 @pytest.mark.asyncio
