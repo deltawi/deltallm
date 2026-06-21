@@ -39,6 +39,8 @@ from src.batch.webhooks import (
 from src.models.responses import UserAPIKeyAuth
 from src.services.callable_target_grants import CallableTargetGrantService
 from src.services.model_visibility import CallableTargetPolicyMode, ensure_batch_model_allowed
+from src.services.tier_model_access import TierPolicyMode
+from src.services.tier_policy_service import TierPolicyService
 from src.metrics import increment_batch_artifact_failure, increment_batch_mixed_model_job
 
 logger = logging.getLogger(__name__)
@@ -71,7 +73,10 @@ class BatchCreateSessionService:
         storage_chunk_size: int,
         max_pending_batches_per_scope: int = 20,
         callable_target_grant_service: CallableTargetGrantService | None = None,
+        tier_policy_service: TierPolicyService | None = None,
         callable_target_scope_policy_mode: CallableTargetPolicyMode | str = "enforce",
+        tier_policy_mode: TierPolicyMode | str = "disabled",
+        tier_policy_missing_service_mode: str = "fail_open",
         idempotency_enabled: bool = False,
         model_group_resolver: Any | None = None,
         scheduler_enabled: bool = False,
@@ -97,7 +102,10 @@ class BatchCreateSessionService:
         self.storage_chunk_size = max(1, int(storage_chunk_size))
         self.max_pending_batches_per_scope = max(0, int(max_pending_batches_per_scope))
         self.callable_target_grant_service = callable_target_grant_service
+        self.tier_policy_service = tier_policy_service
         self.callable_target_scope_policy_mode = callable_target_scope_policy_mode
+        self.tier_policy_mode = tier_policy_mode
+        self.tier_policy_missing_service_mode = tier_policy_missing_service_mode
         self.idempotency_enabled = bool(idempotency_enabled)
         self.model_group_resolver = model_group_resolver
         self.scheduler_enabled = bool(scheduler_enabled)
@@ -514,6 +522,9 @@ class BatchCreateSessionService:
             seen_custom_ids=seen_custom_ids,
             callable_target_grant_service=self.callable_target_grant_service,
             callable_target_scope_policy_mode=self.callable_target_scope_policy_mode,
+            tier_policy_service=self.tier_policy_service,
+            tier_policy_mode=self.tier_policy_mode,
+            tier_policy_missing_service_mode=self.tier_policy_missing_service_mode,
             model_access_validator=ensure_batch_model_allowed,
         )
         if parsed is None:

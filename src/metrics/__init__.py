@@ -127,6 +127,7 @@ from src.metrics.counters import (
     increment_request,
     increment_request_failure,
     increment_spend,
+    increment_tier_policy_shadow_mismatch,
     increment_usage,
 )
 from src.metrics.gauges import (
@@ -261,6 +262,7 @@ __all__ = [
     "increment_cache_miss",
     "increment_callable_target_policy_shadow_mismatch",
     "increment_callable_target_policy_fallback",
+    "increment_tier_policy_shadow_mismatch",
     "increment_config_reload",
     "increment_prompt_cache_lookup",
     "increment_prompt_resolution",

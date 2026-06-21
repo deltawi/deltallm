@@ -94,8 +94,15 @@ async def initialize_batch_core(
         max_items_per_batch=general.embeddings_batch_max_items_per_batch,
         max_line_bytes=general.embeddings_batch_max_line_bytes,
         callable_target_grant_service=getattr(app.state, "callable_target_grant_service", None),
+        tier_policy_service=getattr(app.state, "tier_policy_service", None),
         callable_target_scope_policy_mode=normalize_callable_target_policy_mode(
             getattr(general, "callable_target_scope_policy_mode", "enforce")
+        ),
+        tier_policy_mode=getattr(general, "tier_policy_mode", "disabled"),
+        tier_policy_missing_service_mode=getattr(
+            general,
+            "tier_policy_missing_service_mode",
+            "fail_open",
         ),
         model_group_resolver=model_group_resolver,
     )

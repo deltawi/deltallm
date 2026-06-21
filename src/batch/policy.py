@@ -24,7 +24,12 @@ from src.metrics import (
     observe_batch_preflight_latency,
 )
 from src.models.responses import UserAPIKeyAuth
-from src.services.model_visibility import ensure_model_allowed, get_callable_target_policy_mode_from_app
+from src.services.model_visibility import (
+    ensure_model_allowed,
+    get_callable_target_policy_mode_from_app,
+    get_tier_policy_missing_service_mode_from_app,
+    get_tier_policy_mode_from_app,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +98,10 @@ async def run_batch_request_preflight(
             auth,
             str(getattr(payload, "model", "")),
             callable_target_grant_service=grant_service,
+            tier_policy_service=getattr(app.state, "tier_policy_service", None),
             policy_mode=get_callable_target_policy_mode_from_app(app),
+            tier_policy_mode=get_tier_policy_mode_from_app(app),
+            tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(app),
             emit_shadow_log=True,
         )
 

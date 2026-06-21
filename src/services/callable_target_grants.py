@@ -175,11 +175,19 @@ class CallableTargetGrantService:
                 authoritative=True,
             )
 
-        if scope_context.team_id is not None and self._get_scope_mode(snapshot, "team", scope_context.team_id) == "restrict":
+        if (
+            scope_context.team_id is not None
+            and self._get_scope_mode(snapshot, "team", scope_context.team_id) == "restrict"
+        ):
             effective.intersection_update(snapshot.enabled_by_scope.get(("team", scope_context.team_id), ()))
 
-        if scope_context.api_key_scope_id is not None and self._get_scope_mode(snapshot, "api_key", scope_context.api_key_scope_id) == "restrict":
-            effective.intersection_update(snapshot.enabled_by_scope.get(("api_key", scope_context.api_key_scope_id), ()))
+        if (
+            scope_context.api_key_scope_id is not None
+            and self._get_scope_mode(snapshot, "api_key", scope_context.api_key_scope_id) == "restrict"
+        ):
+            effective.intersection_update(
+                snapshot.enabled_by_scope.get(("api_key", scope_context.api_key_scope_id), ())
+            )
 
         user_scope = ("user", scope_context.user_id) if scope_context.user_id is not None else None
         if user_scope is not None and self._should_restrict_user_scope(snapshot, user_scope):
@@ -189,6 +197,41 @@ class CallableTargetGrantService:
             allowlist=frozenset(effective),
             authoritative=True,
         )
+
+    def resolve_direct_restrict_allowlist(self, auth: UserAPIKeyAuth) -> frozenset[str] | None:
+        scope_context = resolve_runtime_scope_context(auth)
+        if scope_context.is_master_key:
+            return None
+
+        snapshot = self._snapshot
+        restrict_allowlists: list[set[str]] = []
+        if (
+            scope_context.team_id is not None
+            and self._get_scope_mode(snapshot, "team", scope_context.team_id) == "restrict"
+        ):
+            restrict_allowlists.append(
+                set(snapshot.enabled_by_scope.get(("team", scope_context.team_id), ()))
+            )
+
+        if (
+            scope_context.api_key_scope_id is not None
+            and self._get_scope_mode(snapshot, "api_key", scope_context.api_key_scope_id) == "restrict"
+        ):
+            restrict_allowlists.append(
+                set(snapshot.enabled_by_scope.get(("api_key", scope_context.api_key_scope_id), ()))
+            )
+
+        user_scope = ("user", scope_context.user_id) if scope_context.user_id is not None else None
+        if user_scope is not None and self._should_restrict_user_scope(snapshot, user_scope):
+            restrict_allowlists.append(set(snapshot.enabled_by_scope.get(user_scope, ())))
+
+        if not restrict_allowlists:
+            return None
+
+        effective = set(restrict_allowlists[0])
+        for allowlist in restrict_allowlists[1:]:
+            effective.intersection_update(allowlist)
+        return frozenset(effective)
 
     def _resolve_base_allowlist(
         self,

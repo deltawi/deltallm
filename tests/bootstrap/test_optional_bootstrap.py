@@ -379,10 +379,15 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
             max_items_per_batch=10_000,  # noqa: ANN001
             max_line_bytes=1_048_576,  # noqa: ANN001
             callable_target_grant_service=None,  # noqa: ANN001
+            tier_policy_service=None,  # noqa: ANN001
             callable_target_scope_policy_mode="enforce",  # noqa: ANN001
+            tier_policy_mode="disabled",  # noqa: ANN001
+            tier_policy_missing_service_mode="fail_open",  # noqa: ANN001
             model_group_resolver=None,  # noqa: ANN001
+            **kwargs,  # noqa: ANN003
         ) -> None:
             del model_group_resolver
+            del kwargs, tier_policy_service, tier_policy_mode, tier_policy_missing_service_mode
             self.repository = repository
             self.storage = storage
             self.storage_registry = storage_registry
@@ -1043,6 +1048,78 @@ async def test_init_batch_runtime_builds_create_session_public_service(
 
 
 @pytest.mark.asyncio
+async def test_init_batch_runtime_uses_settings_fallback_for_policy_modes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: dict[str, object] = {}
+
+    class FakeBatchService:
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            del args
+            self.kwargs = kwargs
+            self.create_session_service = None
+            created["batch_service"] = self
+
+        def bind_create_session_service(self, create_session_service) -> None:  # noqa: ANN001
+            self.create_session_service = create_session_service
+
+    class FakeBatchCreateSessionService:
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            del args
+            self.kwargs = kwargs
+            created["create_session_service"] = self
+
+    monkeypatch.setattr("src.bootstrap.batch.LocalBatchArtifactStorage", lambda path: {"path": path})
+    monkeypatch.setattr("src.bootstrap.batch.BatchService", FakeBatchService)
+    monkeypatch.setattr("src.bootstrap.batch.BatchCreateSessionService", FakeBatchCreateSessionService)
+    monkeypatch.setattr(
+        "src.bootstrap.batch.BatchCreateArtifactStorageBackend",
+        lambda **kwargs: {"kind": "staging", **kwargs},
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch.BatchCreateSessionPromoter",
+        lambda **kwargs: {"kind": "promoter", **kwargs},
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch.BatchCreateSessionAdminService",
+        lambda **kwargs: {"kind": "admin-service", **kwargs},
+    )
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            settings=SimpleNamespace(
+                callable_target_scope_policy_mode="shadow",
+                tier_policy_mode="enforce",
+                tier_policy_missing_service_mode="fail_closed",
+            )
+        )
+    )
+    repository = SimpleNamespace(create_sessions=_FakeCreateSessionRepository())
+
+    runtime = await init_batch_runtime(
+        app,
+        _batch_config(
+            enabled=True,
+            worker_enabled=False,
+            gc_enabled=False,
+            completion_outbox_worker_enabled=False,
+        ),
+        repository=repository,
+    )
+
+    batch_kwargs = created["batch_service"].kwargs
+    create_session_kwargs = created["create_session_service"].kwargs
+    assert batch_kwargs["callable_target_scope_policy_mode"] == "shadow"
+    assert batch_kwargs["tier_policy_mode"] == "enforce"
+    assert batch_kwargs["tier_policy_missing_service_mode"] == "fail_closed"
+    assert create_session_kwargs["callable_target_scope_policy_mode"] == "shadow"
+    assert create_session_kwargs["tier_policy_mode"] == "enforce"
+    assert create_session_kwargs["tier_policy_missing_service_mode"] == "fail_closed"
+
+    await shutdown_batch_runtime(runtime)
+
+
+@pytest.mark.asyncio
 async def test_init_batch_runtime_selects_s3_storage(monkeypatch: pytest.MonkeyPatch) -> None:
     created: dict[str, object] = {}
 
@@ -1058,13 +1135,18 @@ async def test_init_batch_runtime_selects_s3_storage(monkeypatch: pytest.MonkeyP
             max_items_per_batch=10_000,
             max_line_bytes=1_048_576,
             callable_target_grant_service=None,
+            tier_policy_service=None,
             callable_target_scope_policy_mode="enforce",
+            tier_policy_mode="disabled",
+            tier_policy_missing_service_mode="fail_open",
             model_group_resolver=None,
+            **kwargs,
         ) -> None:  # noqa: ANN001
             del model_group_resolver
             del metadata_retention_days, storage_chunk_size, max_file_bytes
             del max_items_per_batch, max_line_bytes
             del callable_target_grant_service, callable_target_scope_policy_mode
+            del tier_policy_service, tier_policy_mode, tier_policy_missing_service_mode, kwargs
             self.repository = repository
             self.storage = storage
             self.storage_registry = storage_registry
