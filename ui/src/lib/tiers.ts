@@ -8,6 +8,29 @@ import type {
   TierRateLimitDescriptor,
   TierVersion,
 } from './api';
+import {
+  inferPricingProfileFromPricing,
+  TIER_PRICING_FIELDS,
+  type TierPricingProfile,
+} from './tierPricing';
+
+export {
+  advancedPricingFieldsForProfile,
+  formatPricingValue,
+  pricingEntries,
+  pricingFieldsForProfile,
+  pricingProfileForModelMode,
+  pricingProfileLabel,
+  summarizePricing,
+  TIER_PRICING_FIELDS,
+  TIER_PRICING_PROFILES,
+} from './tierPricing';
+export type {
+  PricingFieldGroup,
+  PricingFormField,
+  TierPricingFieldDefinition,
+  TierPricingProfile,
+} from './tierPricing';
 
 export type TierFormValues = {
   tier_key: string;
@@ -20,6 +43,7 @@ export type TierModelPolicyForm = {
   callable_key: string;
   enabled: boolean;
   access_mode: string;
+  pricing_profile: TierPricingProfile;
   rpm_limit: string;
   tpm_limit: string;
   rph_limit: string;
@@ -31,8 +55,19 @@ export type TierModelPolicyForm = {
   input_cost_per_token: string;
   output_cost_per_token: string;
   cached_input_cost_per_token: string;
+  cached_output_cost_per_token: string;
   batch_input_cost_per_token: string;
   batch_output_cost_per_token: string;
+  batch_price_multiplier: string;
+  input_cost_per_character: string;
+  output_cost_per_character: string;
+  input_cost_per_second: string;
+  output_cost_per_second: string;
+  input_cost_per_image: string;
+  output_cost_per_image: string;
+  input_cost_per_audio_token: string;
+  output_cost_per_audio_token: string;
+  cost_per_request: string;
   capacity_pool_key: string;
   priority: string;
 };
@@ -50,16 +85,10 @@ export type TierCapacityPoolForm = {
 
 export type TierCapacityPoolOption = Pick<TierCapacityPool, 'pool_key' | 'callable_key'>;
 
-const PRICING_FIELDS = [
-  ['input_cost_per_token', 'input_cost_per_token', 'Input price'],
-  ['output_cost_per_token', 'output_cost_per_token', 'Output price'],
-  ['cached_input_cost_per_token', 'input_cost_per_token_cache_hit', 'Cached input price'],
-  ['batch_input_cost_per_token', 'batch_input_cost_per_token', 'Batch input price'],
-  ['batch_output_cost_per_token', 'batch_output_cost_per_token', 'Batch output price'],
-] as const;
+const PRICING_FIELDS = TIER_PRICING_FIELDS;
 
 const EDITABLE_PRICING_PAYLOAD_FIELDS = new Set<string>(
-  PRICING_FIELDS.map(([, payloadField]) => payloadField),
+  PRICING_FIELDS.map((field) => field.payloadField),
 );
 
 const DECIMAL_PATTERN = /^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
@@ -130,11 +159,12 @@ export function pickEditableVersion(versions: TierVersion[]): TierVersion | null
     || null;
 }
 
-export function emptyModelPolicyForm(): TierModelPolicyForm {
+export function emptyModelPolicyForm(pricingProfile: TierPricingProfile = 'token'): TierModelPolicyForm {
   return {
     callable_key: '',
     enabled: true,
     access_mode: 'allow',
+    pricing_profile: pricingProfile,
     rpm_limit: '',
     tpm_limit: '',
     rph_limit: '',
@@ -146,19 +176,35 @@ export function emptyModelPolicyForm(): TierModelPolicyForm {
     input_cost_per_token: '',
     output_cost_per_token: '',
     cached_input_cost_per_token: '',
+    cached_output_cost_per_token: '',
     batch_input_cost_per_token: '',
     batch_output_cost_per_token: '',
+    batch_price_multiplier: '',
+    input_cost_per_character: '',
+    output_cost_per_character: '',
+    input_cost_per_second: '',
+    output_cost_per_second: '',
+    input_cost_per_image: '',
+    output_cost_per_image: '',
+    input_cost_per_audio_token: '',
+    output_cost_per_audio_token: '',
+    cost_per_request: '',
     capacity_pool_key: '',
     priority: '0',
   };
 }
 
-export function modelPolicyToForm(policy?: TierModelPolicy | null): TierModelPolicyForm {
+export function modelPolicyToForm(
+  policy?: TierModelPolicy | null,
+  pricingProfile?: TierPricingProfile | null,
+): TierModelPolicyForm {
   const pricing = policy?.pricing || {};
+  const resolvedPricingProfile = pricingProfile || inferPricingProfileFromPricing(pricing);
   return {
     callable_key: policy?.callable_key || '',
     enabled: policy?.enabled ?? true,
     access_mode: policy?.access_mode || 'allow',
+    pricing_profile: resolvedPricingProfile,
     rpm_limit: numberToInput(policy?.rpm_limit),
     tpm_limit: numberToInput(policy?.tpm_limit),
     rph_limit: numberToInput(policy?.rph_limit),
@@ -170,8 +216,19 @@ export function modelPolicyToForm(policy?: TierModelPolicy | null): TierModelPol
     input_cost_per_token: numberToInput(pricing.input_cost_per_token),
     output_cost_per_token: numberToInput(pricing.output_cost_per_token),
     cached_input_cost_per_token: numberToInput(pricing.input_cost_per_token_cache_hit),
+    cached_output_cost_per_token: numberToInput(pricing.output_cost_per_token_cache_hit),
     batch_input_cost_per_token: numberToInput(pricing.batch_input_cost_per_token),
     batch_output_cost_per_token: numberToInput(pricing.batch_output_cost_per_token),
+    batch_price_multiplier: numberToInput(pricing.batch_price_multiplier),
+    input_cost_per_character: numberToInput(pricing.input_cost_per_character),
+    output_cost_per_character: numberToInput(pricing.output_cost_per_character),
+    input_cost_per_second: numberToInput(pricing.input_cost_per_second),
+    output_cost_per_second: numberToInput(pricing.output_cost_per_second),
+    input_cost_per_image: numberToInput(pricing.input_cost_per_image),
+    output_cost_per_image: numberToInput(pricing.output_cost_per_image),
+    input_cost_per_audio_token: numberToInput(pricing.input_cost_per_audio_token),
+    output_cost_per_audio_token: numberToInput(pricing.output_cost_per_audio_token),
+    cost_per_request: numberToInput(pricing.cost_per_request),
     capacity_pool_key: policy?.capacity_pool_key || '',
     priority: numberToInput(policy?.priority ?? 0) || '0',
   };
@@ -396,12 +453,13 @@ function pricingFormToPayload(
     }
   }
 
-  for (const [formField, payloadField, label] of PRICING_FIELDS) {
-    if (!form[formField].trim()) {
+  for (const { formField, payloadField, label } of PRICING_FIELDS) {
+    const rawValue = String(form[formField] || '');
+    if (!rawValue.trim()) {
       delete pricing[payloadField];
       continue;
     }
-    const value = parseOptionalNonNegativeNumber(form[formField], label);
+    const value = parseOptionalNonNegativeNumber(rawValue, label);
     if (value != null) {
       pricing[payloadField] = value;
     }

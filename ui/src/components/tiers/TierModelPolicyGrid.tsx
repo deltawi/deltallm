@@ -9,14 +9,18 @@ import {
   modelPolicyFormToPayload,
   modelPolicyToForm,
   poolOptionsForCallable,
+  pricingProfileForModelMode,
+  summarizePricing,
   type TierCapacityPoolOption,
   type TierModelPolicyForm,
 } from '../../lib/tiers';
+import TierPricingFields from './TierPricingFields';
 
 type TierModelPolicyGridProps = {
   policies: TierModelPolicy[];
   poolOptions: TierCapacityPoolOption[];
   callableOptions?: string[];
+  callableModes?: Record<string, string>;
   readOnly: boolean;
   saving: boolean;
   error: string | null;
@@ -27,6 +31,7 @@ export default function TierModelPolicyGrid({
   policies,
   poolOptions,
   callableOptions = [],
+  callableModes = {},
   readOnly,
   saving,
   error,
@@ -35,7 +40,7 @@ export default function TierModelPolicyGrid({
   const [editingIndex, setEditingIndex] = useState<number | 'new' | null>(null);
   const [form, setForm] = useState<TierModelPolicyForm>(emptyModelPolicyForm());
   const [localError, setLocalError] = useState<string | null>(null);
-  const [bulk, setBulk] = useState({ rpm_limit: '', tpm_limit: '', input_cost_per_token: '', output_cost_per_token: '' });
+  const [bulk, setBulk] = useState({ rpm_limit: '', tpm_limit: '' });
   const locked = readOnly || saving;
   const inputClassName = 'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500';
 
@@ -47,6 +52,12 @@ export default function TierModelPolicyGrid({
     () => poolOptionsForCallable(poolOptions, form.callable_key),
     [form.callable_key, poolOptions],
   );
+  const inferredMode = form.callable_key ? callableModes[form.callable_key] || null : null;
+
+  const pricingProfileForCallable = (callableKey: string) => {
+    const mode = callableModes[callableKey];
+    return mode ? pricingProfileForModelMode(mode) : null;
+  };
 
   const openNew = () => {
     if (locked) return;
@@ -58,7 +69,7 @@ export default function TierModelPolicyGrid({
   const openEdit = (policy: TierModelPolicy) => {
     if (locked) return;
     setEditingIndex(policies.indexOf(policy));
-    setForm(modelPolicyToForm(policy));
+    setForm(modelPolicyToForm(policy, pricingProfileForCallable(policy.callable_key)));
     setLocalError(null);
   };
 
@@ -103,13 +114,11 @@ export default function TierModelPolicyGrid({
           ...policyForm,
           rpm_limit: bulk.rpm_limit.trim() ? bulk.rpm_limit : policyForm.rpm_limit,
           tpm_limit: bulk.tpm_limit.trim() ? bulk.tpm_limit : policyForm.tpm_limit,
-          input_cost_per_token: bulk.input_cost_per_token.trim() ? bulk.input_cost_per_token : policyForm.input_cost_per_token,
-          output_cost_per_token: bulk.output_cost_per_token.trim() ? bulk.output_cost_per_token : policyForm.output_cost_per_token,
         }, policy);
       });
       setLocalError(null);
       await onSave(next);
-      setBulk({ rpm_limit: '', tpm_limit: '', input_cost_per_token: '', output_cost_per_token: '' });
+      setBulk({ rpm_limit: '', tpm_limit: '' });
     } catch (err: unknown) {
       setLocalError(errorMessage(err, 'Failed to apply bulk policy updates.'));
     }
@@ -119,9 +128,11 @@ export default function TierModelPolicyGrid({
     if (locked) return;
     const matchingPools = poolOptionsForCallable(poolOptions, callableKey);
     const keepPool = matchingPools.some((option) => option.pool_key === form.capacity_pool_key);
+    const inferredPricingProfile = pricingProfileForCallable(callableKey);
     setForm({
       ...form,
       callable_key: callableKey,
+      pricing_profile: inferredPricingProfile || form.pricing_profile,
       capacity_pool_key: keepPool ? form.capacity_pool_key : '',
     });
   };
@@ -155,11 +166,9 @@ export default function TierModelPolicyGrid({
       {!readOnly && policies.length > 0 ? (
         <div className="m-4 rounded-xl border border-gray-100 bg-gray-50 p-3">
           <div className="mb-2 text-xs font-semibold uppercase text-gray-400">Bulk apply</div>
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
             <BulkInput label="RPM" value={bulk.rpm_limit} disabled={locked} onChange={(value) => setBulk({ ...bulk, rpm_limit: value })} />
             <BulkInput label="TPM" value={bulk.tpm_limit} disabled={locked} onChange={(value) => setBulk({ ...bulk, tpm_limit: value })} />
-            <BulkInput label="Input price" value={bulk.input_cost_per_token} disabled={locked} onChange={(value) => setBulk({ ...bulk, input_cost_per_token: value })} />
-            <BulkInput label="Output price" value={bulk.output_cost_per_token} disabled={locked} onChange={(value) => setBulk({ ...bulk, output_cost_per_token: value })} />
             <button
               type="button"
               onClick={applyBulk}
@@ -180,6 +189,7 @@ export default function TierModelPolicyGrid({
               <th className="px-4 py-2 text-left">Access</th>
               <th className="px-4 py-2 text-left">RPM</th>
               <th className="px-4 py-2 text-left">TPM</th>
+              <th className="px-4 py-2 text-left">Pricing</th>
               <th className="px-4 py-2 text-left">Pool</th>
               <th className="px-4 py-2 text-right">Actions</th>
             </tr>
@@ -187,7 +197,7 @@ export default function TierModelPolicyGrid({
           <tbody className="divide-y divide-gray-100">
             {sortedPolicies.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-sm text-gray-400">No model policies yet.</td>
+                <td colSpan={7} className="px-4 py-8 text-center text-sm text-gray-400">No model policies yet.</td>
               </tr>
             ) : sortedPolicies.map((policy) => (
               <tr key={`${policy.callable_key}:${policy.priority}`}>
@@ -195,6 +205,9 @@ export default function TierModelPolicyGrid({
                 <td className="px-4 py-3 text-xs font-semibold text-gray-700">{policy.access_mode}</td>
                 <td className="px-4 py-3 text-xs text-gray-600">{formatLimit(policy.rpm_limit)}</td>
                 <td className="px-4 py-3 text-xs text-gray-600">{formatLimit(policy.tpm_limit)}</td>
+                <td className="max-w-xs px-4 py-3 text-xs text-gray-600">
+                  {summarizePricing(policy.pricing, pricingProfileForCallable(policy.callable_key))}
+                </td>
                 <td className="px-4 py-3 text-xs text-gray-500">{policy.capacity_pool_key || '-'}</td>
                 <td className="px-4 py-3">
                   <div className="flex justify-end gap-1">
@@ -232,101 +245,117 @@ export default function TierModelPolicyGrid({
               <X className="h-4 w-4" />
             </button>
           </div>
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-5">
-            <Field label="Model or callable key">
-              <input
-                list="tier-policy-callables"
-                value={form.callable_key}
-                onChange={(event) => updateCallableKey(event.target.value)}
-                disabled={locked}
-                className={inputClassName}
-              />
-              <datalist id="tier-policy-callables">
-                {callableOptions.map((option) => <option key={option} value={option} />)}
-              </datalist>
-            </Field>
-            <Field label="Access">
-              <select
-                value={form.access_mode}
-                onChange={(event) => setForm({ ...form, access_mode: event.target.value })}
-                disabled={locked}
-                className={inputClassName}
-              >
-                <option value="allow">Allow</option>
-                <option value="deny">Deny</option>
-              </select>
-            </Field>
-            <Field label="Capacity pool">
-              <input
-                list="tier-policy-pools"
-                value={form.capacity_pool_key}
-                onChange={(event) => setForm({ ...form, capacity_pool_key: event.target.value })}
-                disabled={locked}
-                className={inputClassName}
-              />
-              <datalist id="tier-policy-pools">
-                {matchingPoolOptions.map((option) => (
-                  <option
-                    key={`${option.pool_key}:${option.callable_key}`}
-                    value={option.pool_key}
+          <div className="space-y-4">
+            <FormSection
+              title="Target and Access"
+              description="Choose the callable target and whether this tier allows or denies it."
+            >
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_120px_120px]">
+                <Field label="Model or callable key">
+                  <input
+                    list="tier-policy-callables"
+                    value={form.callable_key}
+                    onChange={(event) => updateCallableKey(event.target.value)}
+                    disabled={locked}
+                    className={inputClassName}
                   />
+                  <datalist id="tier-policy-callables">
+                    {callableOptions.map((option) => <option key={option} value={option} />)}
+                  </datalist>
+                </Field>
+                <Field label="Access">
+                  <select
+                    value={form.access_mode}
+                    onChange={(event) => setForm({ ...form, access_mode: event.target.value })}
+                    disabled={locked}
+                    className={inputClassName}
+                  >
+                    <option value="allow">Allow</option>
+                    <option value="deny">Deny</option>
+                  </select>
+                </Field>
+                <Field label="Priority">
+                  <input value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value })} disabled={locked} className={inputClassName} />
+                </Field>
+                <label className={`flex items-center justify-between rounded-lg border border-gray-200 bg-white px-3 py-2 ${locked ? 'cursor-not-allowed opacity-70' : ''}`}>
+                  <span className="text-xs font-semibold text-gray-500">Enabled</span>
+                  <input
+                    type="checkbox"
+                    checked={form.enabled}
+                    onChange={(event) => setForm({ ...form, enabled: event.target.checked })}
+                    disabled={locked}
+                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                </label>
+              </div>
+            </FormSection>
+
+            <FormSection
+              title="Capacity"
+              description="Attach this model policy to a shared pool when provider or GPU capacity is scarce."
+            >
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
+                <Field label="Capacity pool">
+                  <input
+                    list="tier-policy-pools"
+                    value={form.capacity_pool_key}
+                    onChange={(event) => setForm({ ...form, capacity_pool_key: event.target.value })}
+                    disabled={locked}
+                    className={inputClassName}
+                  />
+                  <datalist id="tier-policy-pools">
+                    {matchingPoolOptions.map((option) => (
+                      <option
+                        key={`${option.pool_key}:${option.callable_key}`}
+                        value={option.pool_key}
+                      />
+                    ))}
+                  </datalist>
+                </Field>
+                <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-500">
+                  {form.callable_key && matchingPoolOptions.length > 0
+                    ? `${matchingPoolOptions.length} compatible pool${matchingPoolOptions.length === 1 ? '' : 's'} for this model.`
+                    : form.callable_key
+                      ? 'No compatible pool is defined for this model. Leave empty or create a matching pool above.'
+                      : 'Select a model to see compatible pools.'}
+                </div>
+              </div>
+            </FormSection>
+
+            <FormSection
+              title="Rate Limits"
+              description="Set model-level limits for organizations assigned to this tier. Blank means unlimited at this tier layer."
+            >
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
+                {[
+                  ['RPM', 'rpm_limit'],
+                  ['TPM', 'tpm_limit'],
+                  ['RPH', 'rph_limit'],
+                  ['RPD', 'rpd_limit'],
+                  ['TPD', 'tpd_limit'],
+                  ['Parallel', 'max_parallel_requests'],
+                  ['Batch RPM', 'batch_rpm_limit'],
+                  ['Batch TPM', 'batch_tpm_limit'],
+                ].map(([label, key]) => (
+                  <Field key={key} label={label}>
+                    <input
+                      value={form[key as keyof TierModelPolicyForm] as string}
+                      onChange={(event) => setForm({ ...form, [key]: event.target.value })}
+                      disabled={locked}
+                      className={inputClassName}
+                    />
+                  </Field>
                 ))}
-              </datalist>
-            </Field>
-            <Field label="Priority">
-              <input value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value })} disabled={locked} className={inputClassName} />
-            </Field>
-            <label className={`flex items-center justify-between rounded-lg border border-gray-200 bg-white px-3 py-2 ${locked ? 'cursor-not-allowed opacity-70' : ''}`}>
-              <span className="text-xs font-semibold text-gray-500">Enabled</span>
-              <input
-                type="checkbox"
-                checked={form.enabled}
-                onChange={(event) => setForm({ ...form, enabled: event.target.checked })}
-                disabled={locked}
-                className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-            </label>
-          </div>
+              </div>
+            </FormSection>
 
-          <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
-            {[
-              ['RPM', 'rpm_limit'],
-              ['TPM', 'tpm_limit'],
-              ['RPH', 'rph_limit'],
-              ['RPD', 'rpd_limit'],
-              ['TPD', 'tpd_limit'],
-              ['Parallel', 'max_parallel_requests'],
-              ['Batch RPM', 'batch_rpm_limit'],
-              ['Batch TPM', 'batch_tpm_limit'],
-            ].map(([label, key]) => (
-              <Field key={key} label={label}>
-                <input
-                  value={form[key as keyof TierModelPolicyForm] as string}
-                  onChange={(event) => setForm({ ...form, [key]: event.target.value })}
-                  disabled={locked}
-                  className={inputClassName}
-                />
-              </Field>
-            ))}
-          </div>
-
-          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-5">
-            {[
-              ['Input price', 'input_cost_per_token'],
-              ['Output price', 'output_cost_per_token'],
-              ['Cached input', 'cached_input_cost_per_token'],
-              ['Batch input', 'batch_input_cost_per_token'],
-              ['Batch output', 'batch_output_cost_per_token'],
-            ].map(([label, key]) => (
-              <Field key={key} label={label}>
-                <input
-                  value={form[key as keyof TierModelPolicyForm] as string}
-                  onChange={(event) => setForm({ ...form, [key]: event.target.value })}
-                  disabled={locked}
-                  className={inputClassName}
-                />
-              </Field>
-            ))}
+            <TierPricingFields
+              form={form}
+              locked={locked}
+              inputClassName={inputClassName}
+              inferredMode={inferredMode}
+              onChange={setForm}
+            />
           </div>
 
           <div className="mt-4 flex justify-end">
@@ -342,6 +371,26 @@ export default function TierModelPolicyGrid({
           </div>
         </div>
       ) : null}
+    </section>
+  );
+}
+
+function FormSection({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="space-y-3 border-b border-gray-200 pb-4 last:border-b-0">
+      <div>
+        <h5 className="text-sm font-semibold text-gray-900">{title}</h5>
+        <p className="mt-0.5 text-xs text-gray-500">{description}</p>
+      </div>
+      {children}
     </section>
   );
 }

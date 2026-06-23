@@ -297,6 +297,8 @@ class _FakePrisma:
 
     async def execute_raw(self, sql: str, *params: object) -> int:
         self.executions.append((sql, params))
+        if "pg_advisory_xact_lock" in sql:
+            self.calls.append((sql, params))
         if self.fail_on_sql and self.fail_on_sql in sql:
             raise RuntimeError("simulated execute failure")
         return 1
