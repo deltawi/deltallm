@@ -22,6 +22,9 @@ from src.api.admin.endpoints.route_groups import router as route_groups_router
 from src.api.admin.endpoints.service_accounts import router as service_accounts_router
 from src.api.admin.endpoints.spend import router as spend_router
 from src.api.admin.endpoints.teams import router as teams_router
+from src.api.admin.endpoints.tier_policy_preview import (
+    router as tier_policy_preview_router,
+)
 from src.api.admin.endpoints.tiers import router as tiers_router
 from src.api.admin.endpoints.users import router as users_router
 
@@ -48,6 +51,7 @@ __all__ = [
     "service_accounts_router",
     "spend_router",
     "teams_router",
+    "tier_policy_preview_router",
     "tiers_router",
     "users_router",
 ]

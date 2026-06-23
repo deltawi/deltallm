@@ -134,7 +134,7 @@ def _build_tier_controls_from_service(
     request_mode: RateLimitMode,
 ) -> TierLimitControls:
     checks: list[RateLimitCheck] = []
-    descriptors = _select_rate_limit_descriptors(
+    descriptors = select_tier_rate_limit_descriptors(
         tier_policy_service.get_rate_limit_descriptors(organization_id, callable_key),
         request_mode=request_mode,
     )
@@ -186,7 +186,7 @@ def _capacity_pool_rate_limit_checks(
     tokens: int,
     request_mode: RateLimitMode,
 ) -> list[RateLimitCheck]:
-    descriptors = _select_rate_limit_descriptors(
+    descriptors = select_tier_rate_limit_descriptors(
         getattr(pool_policy, "rate_limit_descriptors", ()) if pool_policy is not None else (),
         request_mode=request_mode,
     )
@@ -201,7 +201,7 @@ def _capacity_pool_rate_limit_checks(
     return checks
 
 
-def _select_rate_limit_descriptors(
+def select_tier_rate_limit_descriptors(
     descriptors: Any,
     *,
     request_mode: RateLimitMode,

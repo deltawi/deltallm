@@ -45,8 +45,7 @@ class TierAssignmentAdminService:
         organization_id: str,
         enabled: bool | None,
     ) -> dict[str, Any]:
-        organization_id = self._normalize_organization_id(organization_id)
-        await self._require_organization(organization_id)
+        organization_id = await self.require_organization(organization_id)
         records = await self.repository.list_org_assignments(
             organization_id,
             enabled=enabled,
@@ -223,6 +222,11 @@ class TierAssignmentAdminService:
         if record is None or record.organization_id != organization_id:
             raise TierAdminNotFoundError("Tier assignment not found")
         return record
+
+    async def require_organization(self, organization_id: str) -> str:
+        organization_id = self._normalize_organization_id(organization_id)
+        await self._require_organization(organization_id)
+        return organization_id
 
     async def _require_organization(self, organization_id: str) -> None:
         exists = await self.repository.organization_exists_for_tier_assignment(organization_id)
