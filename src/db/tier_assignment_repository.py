@@ -400,12 +400,12 @@ class TierAssignmentRepositoryMixin:
             raise ValueError("enabled tier assignments require an active tier version")
 
     async def _lock_primary_assignment_namespace(self, organization_id: str) -> None:
-        await self.prisma.query_raw(
+        await self.prisma.execute_raw(
             """
             SELECT pg_advisory_xact_lock(
                 hashtext('tier-primary-assignment'),
                 hashtext($1::text)
-            ) AS locked
+            )
             """,
             organization_id,
         )

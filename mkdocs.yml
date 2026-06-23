@@ -75,6 +75,7 @@ nav:
       - Dashboard: admin-ui/dashboard.md
       - AI Gateway:
           - Models: admin-ui/models.md
+          - Tiers: admin-ui/tiers.md
           - Named Credentials: admin-ui/named-credentials.md
           - Route Groups: admin-ui/route-groups.md
           - Prompt Registry: admin-ui/prompt-registry.md

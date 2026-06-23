@@ -13,7 +13,10 @@ import {
   modelPolicyToPayload,
   parseNonNegativeIntegerInput,
   parsePositiveIntegerInput,
+  pricingEntries,
+  pricingProfileForModelMode,
   poolOptionsForCallable,
+  summarizePricing,
   summarizeSimulation,
   tierAssignmentRequiresActiveVersion,
 } from '../src/lib/tiers';
@@ -42,6 +45,60 @@ test('modelPolicyFormToPayload normalizes optional limits and pricing', () => {
   });
   assert.equal(payload.capacity_pool_key, 'shared-chat');
   assert.equal(payload.priority, 3);
+});
+
+test('modelPolicyFormToPayload supports full token pricing fields', () => {
+  const payload = modelPolicyFormToPayload({
+    ...emptyModelPolicyForm('token'),
+    callable_key: 'gpt-4o-mini',
+    input_cost_per_token: '0.01',
+    output_cost_per_token: '0.02',
+    cached_input_cost_per_token: '0.005',
+    cached_output_cost_per_token: '0.006',
+    batch_input_cost_per_token: '0.004',
+    batch_output_cost_per_token: '0.008',
+    batch_price_multiplier: '0.5',
+    cost_per_request: '0.001',
+  });
+
+  assert.deepEqual(payload.pricing, {
+    input_cost_per_token: 0.01,
+    output_cost_per_token: 0.02,
+    input_cost_per_token_cache_hit: 0.005,
+    output_cost_per_token_cache_hit: 0.006,
+    batch_input_cost_per_token: 0.004,
+    batch_output_cost_per_token: 0.008,
+    batch_price_multiplier: 0.5,
+    cost_per_request: 0.001,
+  });
+});
+
+test('modelPolicyFormToPayload supports image and audio pricing fields', () => {
+  const imagePayload = modelPolicyFormToPayload({
+    ...emptyModelPolicyForm('image_generation'),
+    callable_key: 'image-model',
+    input_cost_per_image: '0.25',
+    cost_per_request: '0.75',
+  });
+  const audioPayload = modelPolicyFormToPayload({
+    ...emptyModelPolicyForm('audio_speech'),
+    callable_key: 'tts-model',
+    input_cost_per_character: '0.002',
+    output_cost_per_second: '0.03',
+    input_cost_per_audio_token: '0.04',
+    output_cost_per_audio_token: '0.05',
+  });
+
+  assert.deepEqual(imagePayload.pricing, {
+    input_cost_per_image: 0.25,
+    cost_per_request: 0.75,
+  });
+  assert.deepEqual(audioPayload.pricing, {
+    input_cost_per_character: 0.002,
+    output_cost_per_second: 0.03,
+    input_cost_per_audio_token: 0.04,
+    output_cost_per_audio_token: 0.05,
+  });
 });
 
 test('model policy payload helpers preserve metadata and strip response-only fields', () => {
@@ -135,6 +192,38 @@ test('modelPolicyFormToPayload preserves all pricing during bulk-style limit edi
 
   assert.equal(payload.rpm_limit, 240);
   assert.deepEqual(payload.pricing, existing.pricing);
+});
+
+test('modelPolicyToForm infers non-token pricing profiles from existing pricing', () => {
+  assert.equal(modelPolicyToForm({
+    callable_key: 'image-model',
+    enabled: true,
+    access_mode: 'allow',
+    pricing: { input_cost_per_image: 0.25 },
+    priority: 0,
+  }).pricing_profile, 'image_generation');
+
+  assert.equal(modelPolicyToForm({
+    callable_key: 'tts-model',
+    enabled: true,
+    access_mode: 'allow',
+    pricing: { input_cost_per_character: 0.001 },
+    priority: 0,
+  }).pricing_profile, 'audio_speech');
+
+  assert.equal(pricingProfileForModelMode('audio_transcription'), 'audio_transcription');
+  assert.equal(pricingProfileForModelMode('embedding'), 'token');
+});
+
+test('pricing summaries use human labels and billing units', () => {
+  const pricing = {
+    input_cost_per_image: 0.25,
+    cost_per_request: 0.75,
+  };
+  const entries = pricingEntries(pricing);
+
+  assert.deepEqual(entries.map((entry) => entry.shortLabel), ['Image', 'Request']);
+  assert.equal(summarizePricing(pricing, 'image_generation'), 'Image 0.25 /image · Request 0.75 /request');
 });
 
 test('modelPolicyFormToPayload rejects partial or non-positive numeric limits', () => {

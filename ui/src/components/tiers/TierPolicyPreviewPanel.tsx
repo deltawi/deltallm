@@ -1,7 +1,14 @@
 import { AlertTriangle, CheckCircle2, Database, Gauge, Layers, Tag } from 'lucide-react';
 import type { ElementType } from 'react';
 import type { OrganizationTierPolicyPreview } from '../../lib/api';
-import { describeRateLimit, formatDateTime, formatLimit } from '../../lib/tiers';
+import {
+  describeRateLimit,
+  formatDateTime,
+  formatLimit,
+  formatPricingValue,
+  pricingEntries,
+  summarizePricing,
+} from '../../lib/tiers';
 
 type TierPolicyPreviewPanelProps = {
   preview: OrganizationTierPolicyPreview | null;
@@ -155,10 +162,11 @@ export default function TierPolicyPreviewPanel({
                       <p className="font-mono text-xs font-semibold text-gray-700">{policy.callable_key}</p>
                       <span className="text-xs font-medium text-gray-500">{policy.mode}</span>
                     </div>
+                    <p className="mt-1 text-xs text-gray-600">{summarizePricing(policy.pricing)}</p>
                     <div className="mt-2 flex flex-wrap gap-1.5">
-                      {Object.entries(policy.pricing).map(([key, value]) => (
-                        <span key={key} className="rounded bg-white px-2 py-0.5 text-[11px] text-gray-600">
-                          {key}: {value}
+                      {pricingEntries(policy.pricing).map((entry) => (
+                        <span key={entry.payloadField} className="rounded bg-white px-2 py-0.5 text-[11px] text-gray-600">
+                          {entry.shortLabel}: {formatPricingValue(entry.value, entry.unit)}
                         </span>
                       ))}
                     </div>

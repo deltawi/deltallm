@@ -5,8 +5,11 @@ import type { TierPolicySimulation, TierPolicySimulationPayload } from '../../li
 import {
   describeRateLimit,
   errorMessage,
+  formatPricingValue,
   parseNonNegativeIntegerInput,
   parsePositiveIntegerInput,
+  pricingEntries,
+  summarizePricing,
   summarizeSimulation,
 } from '../../lib/tiers';
 
@@ -160,10 +163,11 @@ export default function TierSimulationPanel({
               {simulation.pricing ? (
                 <div>
                   <p className="mb-2 text-xs font-semibold uppercase text-gray-400">Pricing</p>
+                  <p className="mb-2 text-xs text-gray-600">{summarizePricing(simulation.pricing.pricing)}</p>
                   <div className="flex flex-wrap gap-1.5">
-                    {Object.entries(simulation.pricing.pricing).map(([key, value]) => (
-                      <span key={key} className="rounded bg-white px-2 py-0.5 text-[11px] text-gray-600">
-                        {key}: {value}
+                    {pricingEntries(simulation.pricing.pricing).map((entry) => (
+                      <span key={entry.payloadField} className="rounded bg-white px-2 py-0.5 text-[11px] text-gray-600">
+                        {entry.shortLabel}: {formatPricingValue(entry.value, entry.unit)}
                       </span>
                     ))}
                   </div>

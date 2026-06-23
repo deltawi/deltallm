@@ -96,6 +96,24 @@ _RETURNING_COLUMNS = """
     processed_at
 """
 
+_RETURNING_COLUMNS_FROM_OUTBOX_ALIAS = """
+    o.invalidation_id,
+    o.scope_type,
+    o.scope_id,
+    o.reason,
+    o.metadata,
+    o.status,
+    o.attempt_count,
+    o.max_attempts,
+    o.next_attempt_at,
+    o.last_error,
+    o.locked_by,
+    o.lease_expires_at,
+    o.created_at,
+    o.updated_at,
+    o.processed_at
+"""
+
 
 @dataclass(frozen=True)
 class CacheInvalidationOutboxRecord:
@@ -226,7 +244,7 @@ class CacheInvalidationOutboxRepository:
                 updated_at = NOW()
             FROM due
             WHERE o.invalidation_id = due.invalidation_id
-            RETURNING {_RETURNING_COLUMNS}
+            RETURNING {_RETURNING_COLUMNS_FROM_OUTBOX_ALIAS}
             """,
             max(1, min(limit, 500)),
             str(worker_id or "").strip() or "cache-invalidation-worker",

@@ -10,6 +10,7 @@ import TierVersionOverview from '../components/tiers/TierVersionOverview';
 import { useToast } from '../components/ToastProvider';
 import {
   callableTargets,
+  models,
   tiers,
   type TierCapacityPool,
   type TierModelPolicy,
@@ -97,7 +98,22 @@ export default function TierDetail() {
     () => callableTargets.listAll({ target_type: 'model' }),
     [],
   );
+  const { data: modelPage } = useApi(
+    () => models.list({ limit: 500 }),
+    [],
+  );
   const callableOptions = (callablePage || []).map((item) => item.callable_key);
+  const callableModes = useMemo(() => {
+    const modes: Record<string, string> = {};
+    for (const item of modelPage?.data || []) {
+      const modelName = String(item.model_name || '').trim();
+      const mode = String(item.mode || item.model_info?.mode || '').trim();
+      if (modelName && mode && modes[modelName] === undefined) {
+        modes[modelName] = mode;
+      }
+    }
+    return modes;
+  }, [modelPage]);
   const currentVersionDetail = (
     versionDetail?.tier_version?.tier_version_id === selectedVersionId
     && versionDetail.tier_version?.tier_id === tierId
@@ -491,6 +507,7 @@ export default function TierDetail() {
                 policies={currentVersionDetail.model_policies}
                 poolOptions={poolOptions}
                 callableOptions={callableOptions}
+                callableModes={callableModes}
                 readOnly={!canEditVersion}
                 saving={isMutating}
                 error={policyError}
