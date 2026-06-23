@@ -50,6 +50,7 @@ def build_ui_access(
         "dashboard": can_view_dashboard,
         "models": authenticated,
         "model_admin": is_platform_admin,
+        "tiers": is_platform_admin,
         "route_groups": is_platform_admin,
         "prompts": is_platform_admin,
         "mcp_servers": authenticated and (is_platform_admin or Permission.KEY_READ in permissions),

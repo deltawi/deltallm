@@ -17,12 +17,14 @@ from src.db.tier_records import (
     TierRecord,
     TierVersionRecord,
 )
+from src.db.tier_version_clone_repository import TierVersionCloneRepositoryMixin
 from src.db.tier_version_repository import TierVersionRepositoryMixin
 
 
 class TierRepository(
     TierCatalogRepositoryMixin,
     TierVersionRepositoryMixin,
+    TierVersionCloneRepositoryMixin,
     TierPolicyRepositoryMixin,
     TierAssignmentRepositoryMixin,
 ):

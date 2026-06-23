@@ -220,6 +220,43 @@ async def get_tier_version(
         raise _http_error(exc) from exc
 
 
+@router.post(
+    "/ui/api/tiers/{tier_id}/versions/{tier_version_id}/clone",
+    dependencies=_PLATFORM_ADMIN_DEPENDENCY,
+)
+async def clone_tier_version(
+    request: Request,
+    tier_id: str,
+    tier_version_id: str,
+) -> dict[str, Any]:
+    request_start = perf_counter()
+    service = _tier_service(request)
+    try:
+        before = serialize_tier_version(
+            await service.require_version_for_tier(tier_id, tier_version_id)
+        )
+        cloned = await service.clone_tier_version(tier_id, tier_version_id)
+    except TierAdminError as exc:
+        raise _http_error(exc) from exc
+
+    response = serialize_tier_version(cloned)
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_TIER_VERSION_CLONE,
+        resource_type="tier_version",
+        resource_id=cloned.tier_version_id,
+        request_payload={
+            "tier_id": tier_id,
+            "source_tier_version_id": tier_version_id,
+        },
+        response_payload=response,
+        before=before,
+        after=response,
+    )
+    return response
+
+
 @router.put(
     "/ui/api/tiers/{tier_id}/versions/{tier_version_id}/model-policies",
     dependencies=_PLATFORM_ADMIN_DEPENDENCY,

@@ -213,6 +213,49 @@ class _FakeTierRepository:
         self.versions[tier_version_id] = record
         return record
 
+    async def clone_tier_version(
+        self,
+        *,
+        tier_id: str,
+        source_tier_version_id: str,
+    ) -> TierVersionRecord | None:
+        source = self.versions.get(source_tier_version_id)
+        if source is None or source.tier_id != tier_id:
+            return None
+        tier_versions = [version for version in self.versions.values() if version.tier_id == tier_id]
+        tier_version_id = f"version-{len(self.versions) + 1}"
+        cloned_policies = [
+            replace(
+                policy,
+                tier_model_policy_id=f"policy-cloned-{index + 1}",
+                tier_version_id=tier_version_id,
+            )
+            for index, policy in enumerate(self.model_policies.get(source_tier_version_id, []))
+        ]
+        cloned_pools = [
+            replace(
+                pool,
+                tier_capacity_pool_id=f"pool-cloned-{index + 1}",
+                tier_version_id=tier_version_id,
+            )
+            for index, pool in enumerate(self.capacity_pools.get(source_tier_version_id, []))
+        ]
+        record = TierVersionRecord(
+            tier_version_id=tier_version_id,
+            tier_id=tier_id,
+            version_number=max((version.version_number for version in tier_versions), default=0) + 1,
+            status="draft",
+            metadata=source.metadata,
+            model_policy_count=len(cloned_policies),
+            capacity_pool_count=len(cloned_pools),
+            created_at=datetime.now(tz=UTC),
+            updated_at=datetime.now(tz=UTC),
+        )
+        self.versions[tier_version_id] = record
+        self.model_policies[tier_version_id] = cloned_policies
+        self.capacity_pools[tier_version_id] = cloned_pools
+        return record
+
     async def publish_tier_version(
         self,
         tier_version_id: str,
@@ -518,6 +561,64 @@ async def test_tier_admin_version_policy_pool_publish_flow(client, test_app):
             "reason": "reloaded_and_notified",
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_tier_admin_clone_version_copies_policy_pool_and_metadata(client, test_app):
+    repository = _FakeTierRepository()
+    repository.seed_tier()
+    repository.seed_version(
+        tier_version_id="version-active",
+        version_number=3,
+        status="active",
+    )
+    repository.versions["version-active"] = replace(
+        repository.versions["version-active"],
+        metadata={"release": "stable"},
+    )
+    repository.capacity_pools["version-active"] = [
+        TierCapacityPoolRecord(
+            tier_capacity_pool_id="pool-1",
+            tier_version_id="version-active",
+            pool_key="shared",
+            callable_key="gpt-4o-mini",
+            rpm_capacity=1000,
+            metadata={"pool": "gold"},
+        )
+    ]
+    repository.model_policies["version-active"] = [
+        TierModelPolicyRecord(
+            tier_model_policy_id="policy-1",
+            tier_version_id="version-active",
+            callable_key="gpt-4o-mini",
+            rpm_limit=100,
+            pricing={"input_cost_per_token": 0.000001},
+            capacity_pool_key="shared",
+            metadata={"policy": "gold"},
+        )
+    ]
+    audit = _RecordingAuditService()
+    test_app.state.tier_repository = repository
+    test_app.state.audit_service = audit
+
+    response = await client.post(
+        "/ui/api/tiers/tier-1/versions/version-active/clone",
+        headers=_headers(test_app),
+    )
+
+    assert response.status_code == 200
+    cloned = response.json()
+    assert cloned["status"] == "draft"
+    assert cloned["version_number"] == 4
+    assert cloned["metadata"] == {"release": "stable"}
+    assert cloned["model_policy_count"] == 1
+    assert cloned["capacity_pool_count"] == 1
+    cloned_version_id = cloned["tier_version_id"]
+    assert repository.capacity_pools[cloned_version_id][0].metadata == {"pool": "gold"}
+    assert repository.model_policies[cloned_version_id][0].metadata == {"policy": "gold"}
+    event, _ = audit.sync_calls[-1]
+    assert event.action == AuditAction.ADMIN_TIER_VERSION_CLONE.value
+    assert event.resource_id == cloned_version_id
 
 
 @pytest.mark.asyncio
