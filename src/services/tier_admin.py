@@ -145,6 +145,27 @@ class TierAdminService:
                 ) from exc
             raise
 
+    async def clone_tier_version(
+        self,
+        tier_id: str,
+        source_tier_version_id: str,
+    ) -> TierVersionRecord:
+        await self.require_version_for_tier(tier_id, source_tier_version_id)
+        try:
+            cloned = await self.repository.clone_tier_version(
+                tier_id=tier_id,
+                source_tier_version_id=source_tier_version_id,
+            )
+        except Exception as exc:
+            if _looks_like_unique_violation(exc):
+                raise TierAdminConflictError(
+                    "A tier version with this number already exists"
+                ) from exc
+            raise
+        if cloned is None:
+            raise TierAdminNotFoundError("Tier version not found")
+        return cloned
+
     async def get_tier_version_detail(self, tier_id: str, tier_version_id: str) -> dict[str, Any]:
         version = await self.require_version_for_tier(tier_id, tier_version_id)
         policies = await self.repository.list_model_policies(tier_version_id)

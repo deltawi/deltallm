@@ -1069,9 +1069,319 @@ export const promptRegistry = {
     apiFetch<{ winner: any; candidates: any[] }>('/ui/api/prompt-registry/preview-resolution', { method: 'POST', json: payload }),
 };
 
+export interface Tier {
+  tier_id: string;
+  tier_key: string;
+  name: string;
+  description?: string | null;
+  enabled: boolean;
+  metadata?: Record<string, unknown> | null;
+  active_version_id?: string | null;
+  version_count: number;
+  assignment_count: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface TierCreatePayload {
+  tier_key: string;
+  name: string;
+  description?: string | null;
+  enabled?: boolean;
+  metadata?: Record<string, unknown> | null;
+}
+
+export type TierUpdatePayload = Partial<TierCreatePayload>;
+
+export interface TierVersion {
+  tier_version_id: string;
+  tier_id: string;
+  version_number: number;
+  status: 'draft' | 'active' | 'archived' | string;
+  published_at?: string | null;
+  published_by_account_id?: string | null;
+  metadata?: Record<string, unknown> | null;
+  model_policy_count: number;
+  capacity_pool_count: number;
+  assignment_count: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface TierVersionCreatePayload {
+  version_number?: number | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface TierModelPolicy {
+  tier_model_policy_id?: string;
+  tier_version_id?: string;
+  callable_key: string;
+  enabled: boolean;
+  access_mode: 'allow' | 'deny' | string;
+  rpm_limit?: number | null;
+  tpm_limit?: number | null;
+  rph_limit?: number | null;
+  rpd_limit?: number | null;
+  tpd_limit?: number | null;
+  max_parallel_requests?: number | null;
+  batch_rpm_limit?: number | null;
+  batch_tpm_limit?: number | null;
+  pricing?: Record<string, number> | null;
+  capacity_pool_key?: string | null;
+  priority: number;
+  metadata?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface TierModelPolicyPayload {
+  callable_key: string;
+  enabled: boolean;
+  access_mode: string;
+  rpm_limit?: number | null;
+  tpm_limit?: number | null;
+  rph_limit?: number | null;
+  rpd_limit?: number | null;
+  tpd_limit?: number | null;
+  max_parallel_requests?: number | null;
+  batch_rpm_limit?: number | null;
+  batch_tpm_limit?: number | null;
+  pricing?: Record<string, number> | null;
+  capacity_pool_key?: string | null;
+  priority: number;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface TierCapacityPool {
+  tier_capacity_pool_id?: string;
+  tier_version_id?: string;
+  pool_key: string;
+  callable_key: string;
+  rpm_capacity?: number | null;
+  tpm_capacity?: number | null;
+  max_parallel_requests?: number | null;
+  strategy: string;
+  saturation_threshold?: number | null;
+  burst_multiplier?: number | null;
+  metadata?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface TierCapacityPoolPayload {
+  pool_key: string;
+  callable_key: string;
+  rpm_capacity?: number | null;
+  tpm_capacity?: number | null;
+  max_parallel_requests?: number | null;
+  strategy: string;
+  saturation_threshold?: number | null;
+  burst_multiplier?: number | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface TierDetail {
+  tier: Tier;
+  versions: TierVersion[];
+}
+
+export interface TierVersionDetail {
+  tier_version: TierVersion;
+  model_policies: TierModelPolicy[];
+  capacity_pools: TierCapacityPool[];
+}
+
+export interface OrganizationTierAssignment {
+  assignment_id: string;
+  organization_id: string;
+  tier_id: string;
+  tier_key?: string | null;
+  tier_name?: string | null;
+  tier_version_id?: string | null;
+  tier_version_number?: number | null;
+  tier_version_status?: string | null;
+  assignment_type: 'primary' | 'addon' | 'override' | string;
+  enabled: boolean;
+  weight: number;
+  starts_at?: string | null;
+  ends_at?: string | null;
+  metadata?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface OrganizationTierAssignmentPayload {
+  tier_id: string;
+  tier_version_id?: string | null;
+  assignment_type: string;
+  enabled?: boolean;
+  weight?: number;
+  starts_at?: string | null;
+  ends_at?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface TierPolicySnapshotInfo {
+  etag: string;
+  generated_at: string;
+  org_count: number;
+  assignment_count: number;
+  model_policy_count: number;
+  capacity_pool_count: number;
+  next_transition_at?: string | null;
+  mode: string;
+  snapshot_stale: boolean;
+  last_reload_failed: boolean;
+  last_reload_error_at?: string | null;
+}
+
+export interface TierRateLimitDescriptor {
+  scope: string;
+  entity_id: string;
+  limit: number;
+  amount_kind: 'requests' | 'tokens' | string;
+  window_seconds: number;
+  mode: string;
+}
+
+export interface TierCompiledModelPolicy {
+  organization_id: string;
+  callable_key: string;
+  access_mode: string;
+  source: Record<string, unknown>;
+  limits: Record<string, number | null>;
+  pricing: Record<string, number>;
+  capacity_pool_key?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface TierCompiledPricingPolicy {
+  organization_id: string;
+  callable_key: string;
+  mode: string;
+  pricing: Record<string, number>;
+  source: Record<string, unknown>;
+}
+
+export interface TierCompiledCapacityPool {
+  pool_key: string;
+  callable_key: string;
+  rpm_capacity?: number | null;
+  tpm_capacity?: number | null;
+  max_parallel_requests?: number | null;
+  strategy: string;
+  saturation_threshold?: number | null;
+  burst_multiplier?: number | null;
+  source_tier_version_ids: string[];
+  source_pool_ids: string[];
+  metadata?: Record<string, unknown> | null;
+  rate_limit_descriptors: TierRateLimitDescriptor[];
+}
+
+export interface OrganizationTierPolicyPreview {
+  organization_id: string;
+  snapshot: TierPolicySnapshotInfo;
+  explicit_policy: boolean;
+  tier_keys: string[];
+  assignments: OrganizationTierAssignment[];
+  allowed_callable_keys: string[];
+  model_policies: TierCompiledModelPolicy[];
+  pricing_policies: TierCompiledPricingPolicy[];
+  rate_limits: TierRateLimitDescriptor[];
+  capacity_pools: TierCompiledCapacityPool[];
+}
+
+export interface TierPolicySimulation {
+  organization_id: string;
+  callable_key: string;
+  mode: string;
+  request: {
+    request_count: number;
+    prompt_tokens: number;
+    completion_tokens: number;
+    tokens_per_request: number;
+    aggregate_tokens: number;
+  };
+  access: {
+    allowed: boolean;
+    reason: string;
+    explicit_policy: boolean;
+    tier_keys: string[];
+  };
+  model_policy: TierCompiledModelPolicy | null;
+  pricing: TierCompiledPricingPolicy | null;
+  rate_limits: TierRateLimitDescriptor[];
+  capacity_pool: TierCompiledCapacityPool | null;
+  capacity_pool_rate_limits: TierRateLimitDescriptor[];
+  static_limit_checks: Array<TierRateLimitDescriptor & {
+    amount: number;
+    would_exceed_limit: boolean;
+    remaining_after_amount: number;
+  }>;
+  snapshot: TierPolicySnapshotInfo;
+}
+
+export interface TierPolicySimulationPayload {
+  callable_key: string;
+  mode?: string;
+  request_count?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+}
+
 export const settings = {
   get: () => apiFetch<any>('/ui/api/settings'),
   update: (payload: any) => apiFetch<any>('/ui/api/settings', { method: 'PUT', json: payload }),
+};
+
+export const tiers = {
+  list: (params?: { search?: string; enabled?: boolean | string; limit?: number; offset?: number }) =>
+    apiFetch<Paginated<Tier>>(withQuery('/ui/api/tiers', params)),
+  listAll: async (params?: { search?: string; enabled?: boolean | string }) => {
+    const limit = 200;
+    let offset = 0;
+    let items: Tier[] = [];
+    while (true) {
+      const page = await apiFetch<Paginated<Tier>>(
+        withQuery('/ui/api/tiers', { ...(params || {}), limit, offset }),
+      );
+      items = items.concat(page.data || []);
+      if (!page.pagination?.has_more) {
+        break;
+      }
+      offset += limit;
+    }
+    return items;
+  },
+  get: (tierId: string) =>
+    apiFetch<TierDetail>(`/ui/api/tiers/${encodeURIComponent(tierId)}`),
+  create: (payload: TierCreatePayload) =>
+    apiFetch<Tier>('/ui/api/tiers', { method: 'POST', json: payload }),
+  update: (tierId: string, payload: TierUpdatePayload) =>
+    apiFetch<Tier>(`/ui/api/tiers/${encodeURIComponent(tierId)}`, { method: 'PATCH', json: payload }),
+  delete: (tierId: string) =>
+    apiFetch<{ deleted: boolean; tier_id: string }>(`/ui/api/tiers/${encodeURIComponent(tierId)}`, { method: 'DELETE' }),
+  createVersion: (tierId: string, payload: TierVersionCreatePayload = {}) =>
+    apiFetch<TierVersion>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions`, { method: 'POST', json: payload }),
+  cloneVersion: (tierId: string, sourceVersionId: string) =>
+    apiFetch<TierVersion>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(sourceVersionId)}/clone`, { method: 'POST' }),
+  getVersion: (tierId: string, versionId: string) =>
+    apiFetch<TierVersionDetail>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}`),
+  replaceModelPolicies: (tierId: string, versionId: string, policies: TierModelPolicyPayload[]) =>
+    apiFetch<{ data: TierModelPolicy[] }>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/model-policies`, {
+      method: 'PUT',
+      json: { policies },
+    }),
+  replaceCapacityPools: (tierId: string, versionId: string, pools: TierCapacityPoolPayload[]) =>
+    apiFetch<{ data: TierCapacityPool[] }>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/capacity-pools`, {
+      method: 'PUT',
+      json: { pools },
+    }),
+  publishVersion: (tierId: string, versionId: string) =>
+    apiFetch<TierVersion>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/publish`, { method: 'POST' }),
+  archiveVersion: (tierId: string, versionId: string) =>
+    apiFetch<TierVersion>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/archive`, { method: 'POST' }),
 };
 
 export const organizations = {
@@ -1095,6 +1405,18 @@ export const organizations = {
     apiFetch<ScopedAssetAccess>(withQuery(`/ui/api/organizations/${encodeURIComponent(orgId)}/asset-access`, params as any)),
   updateAssetAccess: (orgId: string, payload: { mode?: string; selected_callable_keys: string[]; selected_access_group_keys?: string[]; select_all_selectable?: boolean }) =>
     apiFetch<ScopedAssetAccess>(`/ui/api/organizations/${encodeURIComponent(orgId)}/asset-access`, { method: 'PUT', json: payload }),
+  tierAssignments: (orgId: string, params?: { enabled?: boolean | string }) =>
+    apiFetch<{ data: OrganizationTierAssignment[] }>(withQuery(`/ui/api/organizations/${encodeURIComponent(orgId)}/tier-assignments`, params)),
+  createTierAssignment: (orgId: string, payload: OrganizationTierAssignmentPayload) =>
+    apiFetch<OrganizationTierAssignment>(`/ui/api/organizations/${encodeURIComponent(orgId)}/tier-assignments`, { method: 'POST', json: payload }),
+  updateTierAssignment: (orgId: string, assignmentId: string, payload: Partial<OrganizationTierAssignmentPayload>) =>
+    apiFetch<OrganizationTierAssignment>(`/ui/api/organizations/${encodeURIComponent(orgId)}/tier-assignments/${encodeURIComponent(assignmentId)}`, { method: 'PATCH', json: payload }),
+  deleteTierAssignment: (orgId: string, assignmentId: string) =>
+    apiFetch<{ deleted: boolean; assignment_id: string; organization_id: string }>(`/ui/api/organizations/${encodeURIComponent(orgId)}/tier-assignments/${encodeURIComponent(assignmentId)}`, { method: 'DELETE' }),
+  tierPolicyPreview: (orgId: string) =>
+    apiFetch<OrganizationTierPolicyPreview>(`/ui/api/organizations/${encodeURIComponent(orgId)}/tier-policy-preview`),
+  simulateTierPolicy: (orgId: string, payload: TierPolicySimulationPayload) =>
+    apiFetch<TierPolicySimulation>(`/ui/api/organizations/${encodeURIComponent(orgId)}/tier-policy/simulate`, { method: 'POST', json: payload }),
 };
 
 export interface SelfServicePolicy {

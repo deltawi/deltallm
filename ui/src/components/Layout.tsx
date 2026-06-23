@@ -4,6 +4,7 @@ import { useAuth } from '../lib/auth';
 import {
   LayoutDashboard,
   Box,
+  BadgeDollarSign,
   Activity,
   Key,
   KeyRound,
@@ -57,6 +58,7 @@ const navEntries: NavEntry[] = [
     icon: LayoutDashboard,
     children: [
       { type: 'item', to: '/models', icon: Box, label: 'Models', pageKey: 'models' },
+      { type: 'item', to: '/tiers', icon: BadgeDollarSign, label: 'Tiers', pageKey: 'tiers' },
       { type: 'item', to: '/named-credentials', icon: KeyRound, label: 'Named Credentials', pageKey: 'named_credentials' },
       { type: 'item', to: '/route-groups', icon: Workflow, label: 'Route Groups', pageKey: 'route_groups' },
       { type: 'item', to: '/prompts', icon: FileText, label: 'Prompt Registry', pageKey: 'prompts' },

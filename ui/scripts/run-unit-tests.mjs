@@ -11,6 +11,7 @@ const testSources = [
   'tests/modelFormShared.test.ts',
   'tests/batchDetailResource.test.ts',
   'tests/dashboardRange.test.ts',
+  'tests/tierHelpers.test.ts',
 ];
 
 await rm(outputDir, { recursive: true, force: true });

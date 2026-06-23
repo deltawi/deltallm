@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
-import { callableTargets, organizations } from '../lib/api';
+import {
+  callableTargets,
+  organizations,
+  type AssetAccessTarget,
+  type CallableTargetListItem,
+} from '../lib/api';
 import {
   assetAccessLoadErrorMessage,
   buildCatalogAccessGroups,
@@ -18,6 +23,7 @@ import {
 import Modal from '../components/Modal';
 import UserSearchSelect from '../components/UserSearchSelect';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
+import OrganizationTierPanel from '../components/tiers/OrganizationTierPanel';
 import {
   DetailMetricCard,
   EntityDetailShell,
@@ -63,9 +69,50 @@ const ROLE_LABELS: Record<string, { label: string; cls: string }> = {
   org_auditor: { label: 'Auditor', cls: 'bg-teal-100 text-teal-700' },
 };
 
-type TabId = 'overview' | 'teams' | 'members' | 'assets';
+type TabId = 'overview' | 'teams' | 'members' | 'assets' | 'tiers';
+
+type OrganizationTeamRow = {
+  team_id: string;
+  team_alias?: string | null;
+  member_count?: number | null;
+  max_budget?: number | null;
+  spend?: number | null;
+  rpm_limit?: number | null;
+};
+
+type OrganizationMemberRow = {
+  membership_id?: string | null;
+  account_id: string;
+  email?: string | null;
+  org_role: string;
+  team_count?: number | null;
+  teams?: string[];
+};
+
+type MemberCandidateOption = {
+  account_id: string;
+  email?: string | null;
+  organization_role?: string | null;
+  team_role?: string | null;
+  already_member?: boolean;
+};
 
 /* ─────────────── sub-components ─────────────── */
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message;
+  }
+  return fallback;
+}
+
+function isBudgetWarningTeam(
+  team: OrganizationTeamRow,
+): team is OrganizationTeamRow & { max_budget: number; spend: number } {
+  return Boolean(team.max_budget && team.spend && team.spend / team.max_budget >= 0.8);
+}
 
 function SpendBar({ spend, budget }: { spend: number; budget: number | null }) {
   if (!budget) return <span className="text-xs text-gray-400">No limit</span>;
@@ -97,10 +144,14 @@ export default function OrganizationDetail() {
 
   useEffect(() => {
     const hashTab = location.hash.replace('#', '');
-    if (hashTab === 'overview' || hashTab === 'teams' || hashTab === 'members' || hashTab === 'assets') {
+    if (hashTab === 'tiers' && !isPlatformAdmin) {
+      setTab('overview');
+      return;
+    }
+    if (hashTab === 'overview' || hashTab === 'teams' || hashTab === 'members' || hashTab === 'assets' || hashTab === 'tiers') {
       setTab(hashTab);
     }
-  }, [location.hash]);
+  }, [isPlatformAdmin, location.hash]);
 
   /* ── data ── */
   const { data: org, loading: orgLoading, refetch: refetchOrg } = useApi(
@@ -301,8 +352,8 @@ export default function OrganizationDetail() {
       await organizations.update(orgId!, payload);
       setIsEditingSettings(false);
       refetchOrg();
-    } catch (err: any) {
-      setOrgError(err?.message || 'Failed to update organization');
+    } catch (err: unknown) {
+      setOrgError(getErrorMessage(err, 'Failed to update organization'));
     } finally {
       setSaving(false);
     }
@@ -328,8 +379,8 @@ export default function OrganizationDetail() {
       refetchOrgAssetAccess();
       setIsEditingAssets(false);
       refetchOrg();
-    } catch (err: any) {
-      setOrgError(err?.message || 'Failed to update asset access');
+    } catch (err: unknown) {
+      setOrgError(getErrorMessage(err, 'Failed to update asset access'));
     } finally {
       setSaving(false);
     }
@@ -370,8 +421,8 @@ export default function OrganizationDetail() {
       setMemberForm({ account_id: '', role: 'org_member' });
       setMemberSearch('');
       refetchMembers();
-    } catch (err: any) {
-      setMemberError(err?.message || 'Failed to add member');
+    } catch (err: unknown) {
+      setMemberError(getErrorMessage(err, 'Failed to add member'));
     } finally {
       setSaving(false);
     }
@@ -384,16 +435,17 @@ export default function OrganizationDetail() {
     try {
       await organizations.removeMember(orgId!, membershipId);
       refetchMembers();
-    } catch (err: any) {
-      setPageError(err?.message || 'Failed to remove member');
+    } catch (err: unknown) {
+      setPageError(getErrorMessage(err, 'Failed to remove member'));
     } finally {
       setSaving(false);
     }
   };
 
   /* ── derived ── */
-  const teamList: any[] = orgTeams || [];
-  const memberList: any[] = orgMembers || [];
+  const teamList = (orgTeams || []) as OrganizationTeamRow[];
+  const memberList = (orgMembers || []) as OrganizationMemberRow[];
+  const memberCandidateList = (memberCandidates || []) as MemberCandidateOption[];
   const orgCapabilities = org?.capabilities || {};
   const canEditOrganization = Boolean(orgCapabilities.edit);
   const canAddTeam = Boolean(orgCapabilities.add_team);
@@ -403,13 +455,13 @@ export default function OrganizationDetail() {
   const budget = org?.max_budget ?? null;
   const spendPct = budget ? Math.min(100, Math.round((spend / budget) * 100)) : null;
   const orgAssetSummary = currentOrgAssetAccess?.summary;
-  const orgAccessibleTargets = currentOrgAssetTargetsFull?.effective_targets ?? [];
+  const orgAccessibleTargets: AssetAccessTarget[] = currentOrgAssetTargetsFull?.effective_targets ?? [];
   const assetPct = orgAssetSummary && orgAssetSummary.selectable_total > 0
     ? Math.round((orgAssetSummary.effective_total / orgAssetSummary.selectable_total) * 100)
     : null;
 
   const orgAssetTargets = buildCatalogAssetTargets(
-    (callableTargetPage?.data || []) as any[],
+    (callableTargetPage?.data || []) as CallableTargetListItem[],
     form.selected_callable_keys,
     currentOrgAssetAccess?.selected_callable_keys || [],
   );
@@ -429,10 +481,7 @@ export default function OrganizationDetail() {
     : null;
 
   /* teams over 80% of budget = "warning" for alert card */
-  const warningTeam = teamList.find((t: any) => {
-    if (!t.max_budget || !t.spend) return false;
-    return (t.spend / t.max_budget) >= 0.8;
-  });
+  const warningTeam = teamList.find(isBudgetWarningTeam);
 
   /* ── loading / not found ── */
   if (orgLoading) {
@@ -504,7 +553,7 @@ export default function OrganizationDetail() {
             icon={Building2}
             label="Teams"
             value={String(teamList.length)}
-            sub={`${teamList.filter((t: any) => (t.spend || 0) > 0).length} active`}
+            sub={`${teamList.filter((t) => (t.spend || 0) > 0).length} active`}
             tone="blue"
           />
           <DetailMetricCard
@@ -559,6 +608,7 @@ export default function OrganizationDetail() {
                 </>
               ),
             },
+            ...(isPlatformAdmin ? [{ id: 'tiers' as const, label: 'Tiers' }] : []),
             ...(canManageAssets ? [{ id: 'assets' as const, label: 'Asset Access' }] : []),
           ]}
         />
@@ -676,7 +726,7 @@ export default function OrganizationDetail() {
                   <>
                     <table className="w-full text-sm">
                       <tbody>
-                        {teamList.slice(0, 4).map((t: any, i: number) => (
+                        {teamList.slice(0, 4).map((t, i) => (
                           <tr
                             key={t.team_id}
                             onClick={() => navigate(`/teams/${t.team_id}`)}
@@ -1060,7 +1110,7 @@ export default function OrganizationDetail() {
                     </td>
                   </tr>
                 ) : (
-                  teamList.map((t: any, i: number) => (
+                  teamList.map((t, i) => (
                     <tr
                       key={t.team_id}
                       onClick={() => navigate(`/teams/${t.team_id}`)}
@@ -1160,8 +1210,10 @@ export default function OrganizationDetail() {
                     </td>
                   </tr>
                 ) : (
-                  memberList.map((m: any, idx: number) => {
+                  memberList.map((m, idx) => {
                     const role = ROLE_LABELS[m.org_role] ?? { label: m.org_role, cls: 'bg-gray-100 text-gray-700' };
+                    const memberTeams = m.teams || [];
+                    const membershipId = m.membership_id || null;
                     return (
                       <tr key={m.membership_id || m.account_id} className={`hover:bg-gray-50 ${idx < memberList.length - 1 ? 'border-b border-gray-100' : ''}`}>
                         <td className="px-5 py-3.5">
@@ -1182,14 +1234,14 @@ export default function OrganizationDetail() {
                           <span className="text-sm text-gray-600">
                             {m.team_count || 0} {(m.team_count || 0) === 1 ? 'team' : 'teams'}
                           </span>
-                          {m.teams?.length > 0 && (
-                            <p className="text-[10px] text-gray-400 mt-0.5">{m.teams.slice(0, 3).join(', ')}{m.teams.length > 3 ? ` +${m.teams.length - 3}` : ''}</p>
+                          {memberTeams.length > 0 && (
+                            <p className="text-[10px] text-gray-400 mt-0.5">{memberTeams.slice(0, 3).join(', ')}{memberTeams.length > 3 ? ` +${memberTeams.length - 3}` : ''}</p>
                           )}
                         </td>
                         <td className="px-5 py-3.5 text-right">
-                          {canManageMembers ? (
+                          {canManageMembers && membershipId ? (
                             <button
-                              onClick={() => handleRemoveMember(m.membership_id)}
+                              onClick={() => handleRemoveMember(membershipId)}
                               className="p-1.5 hover:bg-red-50 rounded-lg text-gray-300 hover:text-red-400 transition-colors"
                               title="Remove member"
                             >
@@ -1207,6 +1259,10 @@ export default function OrganizationDetail() {
         )}
 
         {/* ── ASSETS ── */}
+        {tab === 'tiers' && isPlatformAdmin && (
+          <OrganizationTierPanel organizationId={orgId!} canManage={isPlatformAdmin} />
+        )}
+
         {tab === 'assets' && canManageAssets && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
             <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 p-5">
@@ -1332,7 +1388,7 @@ export default function OrganizationDetail() {
                 <p className="text-sm text-gray-400 text-center py-8">No assets granted for this organization.</p>
               ) : (
                 <div className="space-y-2">
-                  {orgAccessibleTargets.map((t: any) => (
+                  {orgAccessibleTargets.map((t) => (
                     <div key={t.callable_key} className="flex items-center justify-between px-3 py-2.5 rounded-lg bg-gray-50 border border-gray-200 hover:bg-blue-50/50 transition-colors">
                       <div className="flex items-center gap-2.5">
                         <Shield className="w-3.5 h-3.5 text-green-500 shrink-0" />
@@ -1417,10 +1473,10 @@ export default function OrganizationDetail() {
             <UserSearchSelect
               search={memberSearch}
               onSearchChange={setMemberSearch}
-              options={(memberCandidates || []) as any[]}
+              options={memberCandidateList}
               loading={memberCandidatesLoading}
               selectedAccountId={memberForm.account_id}
-              onSelect={(a: any) => setMemberForm({ ...memberForm, account_id: a.account_id })}
+              onSelect={(a) => setMemberForm({ ...memberForm, account_id: a.account_id })}
               searchPlaceholder="Type full email or exact account ID"
               helperText="For privacy, only exact match (case-insensitive) results are shown."
               emptyText={memberSearch.trim() ? 'No exact account match found.' : 'Start typing a full user email or account ID.'}
