@@ -304,7 +304,7 @@ embeddings_batch_scheduler_shadow_mode: none
 
 ### Retry Storm Requeues Too Aggressively
 
-- Metrics: `deltallm_batch_item_retries_total`, `deltallm_batch_item_retry_delay_seconds`, `deltallm_batch_microbatch_requeues_total`, `deltallm_batch_scheduler_oldest_wait_seconds`.
+- Metrics: `deltallm_batch_item_retries_total`, `deltallm_batch_item_retry_delay_seconds`, `deltallm_batch_microbatch_requeues_total`, `deltallm_batch_scheduler_oldest_wait_seconds`, `deltallm_batch_claim_blocked_decisions_total{reason_category="deferred_retry"}`.
 - Admin endpoint: `/ui/api/batches/scheduler/status`.
 - Likely causes: retry `not_before_at` gates are ignored, transient provider errors are classified too broadly, or microbatch isolation is repeatedly requeueing the same work.
 - Config mitigations: keep active mode at the last stable stage, disable shadow if logs are noisy, and tune retry delay or microbatch isolation settings before re-enabling smart mode.
@@ -312,7 +312,7 @@ embeddings_batch_scheduler_shadow_mode: none
 
 ### Worker Crash Or Lease Expiry Causes Duplicate Work
 
-- Metrics: `deltallm_batch_item_reclaims_total`, `deltallm_batch_claim_empty_jobs_total`, `deltallm_batch_completion_latency_seconds`, `deltallm_batch_scheduler_decision_latency_seconds`.
+- Metrics: `deltallm_batch_item_reclaims_total`, `deltallm_batch_claim_empty_jobs_total`, `deltallm_batch_claim_blocked_decisions_total{reason_category="lease_wait"}`, `deltallm_batch_completion_latency_seconds`, `deltallm_batch_scheduler_decision_latency_seconds`.
 - Additional stale-lease sweeper metrics:
   `deltallm_batch_stale_lease_sweeper_runs_total`,
   `deltallm_batch_stale_lease_sweeper_rows_total`, and
@@ -324,7 +324,7 @@ embeddings_batch_scheduler_shadow_mode: none
 
 ### Redis Unavailable Or Degraded
 
-- Metrics: `deltallm_config_reload_events_total`, `deltallm_batch_scheduler_decision_latency_seconds`, `deltallm_batch_claim_empty_jobs_total`, Redis client error logs, and batch completion counters.
+- Metrics: `deltallm_config_reload_events_total`, `deltallm_batch_scheduler_decision_latency_seconds`, `deltallm_batch_claim_empty_jobs_total`, `deltallm_batch_claim_blocked_decisions_total`, Redis client error logs, and batch completion counters.
 - Admin endpoint: `/ui/api/batches/scheduler/status`.
 - Likely causes: Redis outage, Redis latency, config pub/sub listener failure, lock TTL churn, or transient counter failures.
 - Config mitigations: verify the active stage still uses Postgres as source of truth, disable shadow mode if comparison logging amplifies error volume, and avoid enabling Redis-dependent optimizations until Redis is healthy.
@@ -336,10 +336,11 @@ embeddings_batch_scheduler_shadow_mode: none
 
 ### Postgres Contention Or Slow Scheduler Decisions
 
-- Metrics: `deltallm_batch_scheduler_decision_latency_seconds`, DB pool saturation, transaction timeout logs, `deltallm_batch_claim_empty_jobs_total`.
+- Metrics: `deltallm_batch_scheduler_decision_latency_seconds`, DB pool saturation, transaction timeout logs, `deltallm_batch_claim_empty_jobs_total`, `deltallm_batch_claim_blocked_decisions_total`.
 - Admin endpoint: `/ui/api/batches/scheduler/status`.
+- Logs: `batch_work_claim_decision` includes representative `batch_id`, model group, tenant scope, head item work units, cap values, in-flight units, reason, and `diagnostic_source`. INFO logs are deduplicated; DB-backed diagnostic probes are throttled separately by `embeddings_batch_claim_diagnostic_interval_seconds` per worker process, with a short retry backoff after failed probes.
 - Likely causes: too many worker pods, high worker concurrency, broad fair-share scans, missing indexes for queue filters, long transactions, or finalization work competing with claim queries.
-- Config mitigations: reduce worker concurrency, scale the DB pool, lower `embeddings_batch_scheduler_max_active_flows_per_decision` or `embeddings_batch_scheduler_max_candidate_jobs_per_flow`, keep active mode at `model_capacity_v1`, and pause advancement to `fair_share_v1` or `smart_v1`.
+- Config mitigations: reduce worker concurrency, scale the DB pool, lower `embeddings_batch_scheduler_max_active_flows_per_decision` or `embeddings_batch_scheduler_max_candidate_jobs_per_flow`, increase `embeddings_batch_claim_diagnostic_interval_seconds` or set `embeddings_batch_claim_diagnostics_enabled=false`, keep active mode at `model_capacity_v1`, and pause advancement to `fair_share_v1` or `smart_v1`.
 - Rollback threshold: scheduler decision p95 is above 500 ms for 10 minutes, or DB transaction timeouts coincide with rising oldest queue wait.
 
 ### Finalization Backlog Blocks New Claims

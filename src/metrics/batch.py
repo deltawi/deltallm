@@ -552,6 +552,13 @@ deltallm_batch_claim_empty_jobs_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_batch_claim_blocked_decisions_metric = Counter(
+    "deltallm_batch_claim_blocked_decisions_total",
+    "Batch work-slice empty or blocked claim decisions by bounded reason",
+    ["claim_mode", "reason", "reason_category"],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_batch_mixed_model_jobs_metric = Counter(
     "deltallm_batch_mixed_model_jobs_total",
     "Batch jobs with mixed scheduler model dimensions by handling mode",
@@ -1289,6 +1296,19 @@ def increment_batch_finalization_claim(*, result: str) -> None:
 
 def increment_batch_claim_empty_job(*, reason: str) -> None:
     deltallm_batch_claim_empty_jobs_metric.labels(reason=sanitize_label(reason)).inc()
+
+
+def increment_batch_claim_blocked_decision(
+    *,
+    claim_mode: str,
+    reason: str,
+    reason_category: str,
+) -> None:
+    deltallm_batch_claim_blocked_decisions_metric.labels(
+        claim_mode=sanitize_label(claim_mode),
+        reason=sanitize_label(reason),
+        reason_category=sanitize_label(reason_category),
+    ).inc()
 
 
 def increment_batch_mixed_model_job(*, mode: str) -> None:

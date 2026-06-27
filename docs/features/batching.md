@@ -624,6 +624,7 @@ DeltaLLM exposes Prometheus metrics for batch processing on the configured metri
 | `deltallm_batch_scheduler_flow_skips_total` | Counter | Fair-share flow skips such as lock contention or tenant caps |
 | `deltallm_batch_scheduler_fairness_deviation` | Gauge | Difference between actual and expected tenant share for active flows |
 | `deltallm_batch_work_claims_total` | Counter | Work-slice claim attempts by result |
+| `deltallm_batch_claim_blocked_decisions_total` | Counter | Empty or blocked claim decisions by scheduler mode, bounded reason, and reason category |
 | `deltallm_batch_work_claim_latency_seconds` | Histogram | Work-slice claim latency |
 
 ### Latency
@@ -646,6 +647,19 @@ DeltaLLM exposes Prometheus metrics for batch processing on the configured metri
 | `deltallm_batch_stale_lease_sweeper_rows_total` | Counter | Rows reclaimed, released, skipped, or refreshed by the sweeper |
 | `deltallm_batch_stale_lease_sweeper_duration_seconds` | Histogram | Stale lease sweeper duration |
 | `deltallm_batch_repair_actions_total` | Counter | Admin repair actions by type and status |
+
+### Claim decision logs
+
+Batch workers emit structured `batch_work_claim_decision` records when a work-slice claim is empty or blocked by model capacity, tenant fair-share caps, oversized head items, deferred retries, or lease contention.
+
+The production log policy is intentionally bounded:
+
+- `DEBUG` contains every claim decision with the available diagnostic context.
+- `INFO` is deduplicated per decision key and includes `suppressed_count` and `window_seconds` when repeated equivalent decisions were suppressed.
+- DB-backed diagnostic probes are separately throttled per worker process before repository diagnostics run. Fresh probes set `diagnostic_source="db"`; suppressed probes reuse low-cardinality cached reason context with `diagnostic_source="cached"` or fall back to scheduler context. Failed diagnostic probes use a short retry backoff instead of consuming the full normal probe interval.
+- `WARNING` is reserved for diagnostic failures or invalid worker state, not ordinary capacity limits.
+
+Tune DB probe cost with `embeddings_batch_claim_diagnostics_enabled`, `embeddings_batch_claim_diagnostic_interval_seconds`, and `embeddings_batch_claim_diagnostic_max_keys`. Use `deltallm_batch_claim_blocked_decisions_total` for alerting and dashboards. Use structured log fields for high-cardinality context such as `batch_id`, `tenant_scope_id`, `head_item_work_units`, cap values, and in-flight units; high-cardinality fields are included only when fresh scheduler or DB context is available.
 
 ### Gateway policy
 
@@ -685,6 +699,7 @@ DeltaLLM exposes Prometheus metrics for batch processing on the configured metri
 - **`deltallm_batch_scheduler_model_skips_total`** with `rpm_exhausted`, `tpm_exhausted`, `no_available_slots`, or `unknown_capacity` explains why a model group is not being claimed.
 - **`deltallm_batch_scheduler_flow_skips_total{reason="flow_lock_busy"}`** increasing means too many workers are competing for the same hot model/tier flow decision.
 - **`deltallm_batch_work_claims_total{result="empty"}`** increasing while queue depth is low usually means workers are over-provisioned for current traffic.
+- **`deltallm_batch_claim_blocked_decisions_total`** breaks empty claims down by reason category such as `tenant_cap`, `model_cap`, `deferred_retry`, `lease_wait`, and `oversized_head_item`. Check `batch_work_claim_decision` logs for the representative batch, tenant, caps, and in-flight units.
 - **`deltallm_batch_artifact_failures_total`** indicates storage issues. Check disk space (local) or S3 credentials/connectivity.
 - **`deltallm_batch_policy_rejected_total`** increasing usually means current auth, model access, budget, callback, or guardrail policy is rejecting batch items.
 - **`deltallm_batch_policy_retryable_failures_total`** increasing usually means batch workers are hitting distributed rate-limit or max-parallel pressure.

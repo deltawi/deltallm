@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+from src.batch.claim_diagnostics import BatchClaimDecisionDiagnostic
 from src.batch.models import (
     BatchJobRecord,
     BatchJobStatus,
@@ -2290,7 +2291,15 @@ class BatchJobRepository:
                 terminal_result = self._terminal_empty_scheduler_flow_result(flow_selection)
                 if terminal_result is not None:
                     increment_batch_scheduler_flow_skip(reason=terminal_result)
-                    return BatchFairShareClaimResult(claim=None, result=terminal_result)
+                    return BatchFairShareClaimResult(
+                        claim=None,
+                        result=terminal_result,
+                        flow=self._representative_blocked_scheduler_flow(flows, flow_selection),
+                        active_flow_count=flow_selection.active_flow_count,
+                        total_in_flight_work_units=(
+                            self._total_scheduler_flow_in_flight_work_units(flows)
+                        ),
+                    )
                 refill_count = await self._refill_scheduler_flow_deficits(
                     tx,
                     service_tier=normalized_service_tier,
@@ -2324,7 +2333,15 @@ class BatchJobRepository:
                 if result is None:
                     result = "empty_flow" if empty_flow_ids else "no_active_flow"
                 increment_batch_scheduler_flow_skip(reason=result)
-                return BatchFairShareClaimResult(claim=None, result=result)
+                return BatchFairShareClaimResult(
+                    claim=None,
+                    result=result,
+                    flow=self._representative_blocked_scheduler_flow(flows, flow_selection),
+                    active_flow_count=flow_selection.active_flow_count,
+                    total_in_flight_work_units=(
+                        self._total_scheduler_flow_in_flight_work_units(flows)
+                    ),
+                )
             return await self._claim_scheduler_selected_flow(
                 tx,
                 flow=selected,
@@ -2688,6 +2705,32 @@ class BatchJobRepository:
         if flow_selection.scan_limit_reached:
             return "flow_scan_limit_reached"
         return None
+
+    @staticmethod
+    def _representative_blocked_scheduler_flow(
+        flows: list[BatchSchedulerFlowRecord],
+        flow_selection: _SchedulerFlowSelection,
+    ) -> BatchSchedulerFlowRecord | None:
+        if flow_selection.selected is not None:
+            return flow_selection.selected
+        skipped = set(flow_selection.skip_reasons)
+        candidates = [
+            flow
+            for flow in flows
+            if flow.active and flow.queued_jobs > 0 and flow.queued_work_units > 0
+        ]
+        if skipped:
+            candidates = [flow for flow in candidates if flow.flow_id in skipped]
+        if not candidates:
+            return None
+        return sorted(
+            candidates,
+            key=lambda flow: (
+                flow.last_selected_at or datetime.min.replace(tzinfo=UTC),
+                flow.oldest_queue_entered_at or datetime.max.replace(tzinfo=UTC),
+                flow.flow_id,
+            ),
+        )[0]
 
     @staticmethod
     def _tenant_remaining_work_units(
@@ -3934,17 +3977,52 @@ class BatchJobRepository:
         capacity_max_in_flight_items: int | None = None,
         capacity_max_in_flight_work_units: int | None = None,
     ) -> str:
+        return (
+            await self.diagnose_model_group_work_claim_empty_context(
+                model_group=model_group,
+                service_tier=service_tier,
+                max_work_units=max_work_units,
+                capacity_max_in_flight_items=capacity_max_in_flight_items,
+                capacity_max_in_flight_work_units=capacity_max_in_flight_work_units,
+            )
+        ).reason
+
+    async def diagnose_model_group_work_claim_empty_context(
+        self,
+        *,
+        model_group: str,
+        service_tier: str,
+        max_work_units: int,
+        capacity_max_in_flight_items: int | None = None,
+        capacity_max_in_flight_work_units: int | None = None,
+    ) -> BatchClaimDecisionDiagnostic:
         if self.prisma is None:
-            return "empty_after_selection"
+            return BatchClaimDecisionDiagnostic(reason="empty_after_selection")
         normalized_model_group = str(model_group or "").strip()
         normalized_service_tier = str(service_tier or "standard").strip() or "standard"
         bounded_max_work_units = max(1, int(max_work_units))
+        base = BatchClaimDecisionDiagnostic(
+            reason="empty_after_selection",
+            model_group=normalized_model_group or None,
+            service_tier=normalized_service_tier,
+            max_work_units=bounded_max_work_units,
+            capacity_max_in_flight_items=(
+                int(capacity_max_in_flight_items)
+                if capacity_max_in_flight_items is not None
+                else None
+            ),
+            capacity_max_in_flight_work_units=(
+                int(capacity_max_in_flight_work_units)
+                if capacity_max_in_flight_work_units is not None
+                else None
+            ),
+        )
         if not normalized_model_group:
-            return "empty_after_selection"
+            return base
         if capacity_max_in_flight_items is not None and int(capacity_max_in_flight_items) <= 0:
-            return "capacity_full_after_lock"
+            return base.with_overrides(reason="capacity_full_after_lock")
         if capacity_max_in_flight_work_units is not None and int(capacity_max_in_flight_work_units) <= 0:
-            return "capacity_work_units_full_after_lock"
+            return base.with_overrides(reason="capacity_work_units_full_after_lock")
 
         params: list[Any] = [normalized_model_group, normalized_service_tier, bounded_max_work_units]
         head_work_threshold_sql = "$3"
@@ -3973,17 +4051,38 @@ class BatchJobRepository:
                   ) = $1
                   AND COALESCE(NULLIF(j.service_tier, ''), 'standard') = $2
             ),
-            runnable_head_items AS (
-                SELECT DISTINCT ON (j.batch_id)
+            candidate_jobs AS (
+                SELECT
                     j.batch_id,
-                    GREATEST(COALESCE(i.estimated_work_units, 1), 1)::int AS estimated_work_units
+                    j.scheduling_model_group AS model_group,
+                    j.tenant_scope_type,
+                    j.tenant_scope_id,
+                    COALESCE(NULLIF(j.service_tier, ''), 'standard') AS service_tier,
+                    COALESCE(j.queue_entered_at, j.created_at) AS queue_entered_at,
+                    j.created_at
                 FROM deltallm_batch_job j
-                JOIN deltallm_batch_item i ON i.batch_id = j.batch_id
                 WHERE j.status IN ('queued', 'in_progress')
                   AND (j.locked_by IS NULL OR j.lease_expires_at IS NULL OR j.lease_expires_at < NOW())
                   AND j.scheduling_model_group = $1
                   AND COALESCE(NULLIF(j.service_tier, ''), 'standard') = $2
-                  AND (
+                ORDER BY COALESCE(j.queue_entered_at, j.created_at) ASC,
+                         j.created_at ASC,
+                         j.batch_id ASC
+                LIMIT 100
+            ),
+            runnable_head_items AS (
+                SELECT DISTINCT ON (candidate_jobs.batch_id)
+                    candidate_jobs.batch_id,
+                    candidate_jobs.model_group,
+                    candidate_jobs.tenant_scope_type,
+                    candidate_jobs.tenant_scope_id,
+                    candidate_jobs.service_tier,
+                    candidate_jobs.queue_entered_at,
+                    candidate_jobs.created_at,
+                    GREATEST(COALESCE(i.estimated_work_units, 1), 1)::int AS estimated_work_units
+                FROM candidate_jobs
+                JOIN deltallm_batch_item i ON i.batch_id = candidate_jobs.batch_id
+                WHERE (
                       (
                           i.status = 'pending'
                           AND (i.lease_expires_at IS NULL OR i.lease_expires_at < NOW())
@@ -3991,11 +4090,24 @@ class BatchJobRepository:
                       )
                       OR (i.status = 'in_progress' AND i.lease_expires_at < NOW())
                   )
-                ORDER BY j.batch_id ASC, i.line_number ASC
+                ORDER BY candidate_jobs.batch_id ASC, i.line_number ASC
+            ),
+            representative_head_item AS (
+                SELECT *
+                FROM runnable_head_items
+                ORDER BY queue_entered_at ASC, created_at ASC, batch_id ASC
+                LIMIT 1
             )
             SELECT
                 COALESCE((SELECT in_flight_items FROM in_flight), 0)::int AS in_flight_items,
                 COALESCE((SELECT in_flight_work_units FROM in_flight), 0)::int AS in_flight_work_units,
+                (SELECT batch_id FROM representative_head_item) AS batch_id,
+                (SELECT model_group FROM representative_head_item) AS model_group,
+                (SELECT tenant_scope_type FROM representative_head_item) AS tenant_scope_type,
+                (SELECT tenant_scope_id FROM representative_head_item) AS tenant_scope_id,
+                (SELECT service_tier FROM representative_head_item) AS service_tier,
+                (SELECT estimated_work_units FROM representative_head_item)::int
+                    AS head_item_work_units,
                 EXISTS (SELECT 1 FROM runnable_head_items) AS has_runnable_head_item,
                 EXISTS (
                     SELECT 1
@@ -4006,37 +4118,64 @@ class BatchJobRepository:
             *params,
         )
         row = dict(rows[0]) if rows else {}
+        in_flight_items = int(row.get("in_flight_items") or 0)
+        in_flight_work_units = int(row.get("in_flight_work_units") or 0)
         capacity_max = (
             int(capacity_max_in_flight_items)
             if capacity_max_in_flight_items is not None
             else None
         )
-        if capacity_max is not None and int(row.get("in_flight_items") or 0) >= capacity_max:
-            return "capacity_full_after_lock"
         capacity_work_units_max = (
             int(capacity_max_in_flight_work_units)
             if capacity_max_in_flight_work_units is not None
             else None
         )
+        diagnostic = base.with_overrides(
+            batch_id=_optional_text(row.get("batch_id")),
+            model_group=_optional_text(row.get("model_group")) or normalized_model_group,
+            service_tier=_optional_text(row.get("service_tier")) or normalized_service_tier,
+            tenant_scope_type=_optional_text(row.get("tenant_scope_type")),
+            tenant_scope_id=_optional_text(row.get("tenant_scope_id")),
+            head_item_work_units=_optional_int(row.get("head_item_work_units")),
+            in_flight_items=in_flight_items,
+            in_flight_work_units=in_flight_work_units,
+            available_in_flight_items=(
+                max(0, capacity_max - in_flight_items) if capacity_max is not None else None
+            ),
+            available_work_units=(
+                max(0, capacity_work_units_max - in_flight_work_units)
+                if capacity_work_units_max is not None
+                else None
+            ),
+        )
+        if capacity_max is not None and in_flight_items >= capacity_max:
+            return diagnostic.with_overrides(reason="capacity_full_after_lock")
         if (
             capacity_work_units_max is not None
-            and int(row.get("in_flight_work_units") or 0) >= capacity_work_units_max
+            and in_flight_work_units >= capacity_work_units_max
         ):
-            return "capacity_work_units_full_after_lock"
+            return diagnostic.with_overrides(reason="capacity_work_units_full_after_lock")
         if bool(row.get("has_runnable_head_item")) and not bool(row.get("has_fitting_head_item")):
-            return "oversized_head_item"
+            return diagnostic.with_overrides(reason="oversized_head_item")
         if not bool(row.get("has_runnable_head_item")):
-            return "no_runnable_items_after_selection"
-        return "empty_after_selection"
+            return diagnostic.with_overrides(reason="no_runnable_items_after_selection")
+        return diagnostic
 
     async def diagnose_empty_work_claim(self) -> str:
+        return (await self.diagnose_empty_work_claim_context()).reason
+
+    async def diagnose_empty_work_claim_context(self) -> BatchClaimDecisionDiagnostic:
         if self.prisma is None:
-            return "no_available_work"
+            return BatchClaimDecisionDiagnostic(reason="no_available_work")
         rows = await self.prisma.query_raw(
             """
             WITH candidate_jobs AS (
                 SELECT
                     j.batch_id,
+                    j.scheduling_model_group AS model_group,
+                    j.tenant_scope_type,
+                    j.tenant_scope_id,
+                    COALESCE(NULLIF(j.service_tier, ''), 'standard') AS service_tier,
                     j.locked_by,
                     j.lease_expires_at,
                     j.last_scheduled_at,
@@ -4055,6 +4194,108 @@ class BatchJobRepository:
                 WHERE locked_by IS NULL
                    OR lease_expires_at IS NULL
                    OR lease_expires_at < NOW()
+            ),
+            representative_unleased_job AS (
+                SELECT *
+                FROM unleased_jobs
+                ORDER BY last_scheduled_at ASC NULLS FIRST,
+                         COALESCE(queue_entered_at, created_at) ASC,
+                         created_at ASC,
+                         batch_id ASC
+                LIMIT 1
+            ),
+            representative_pending_item AS (
+                SELECT
+                    j.batch_id,
+                    j.model_group,
+                    j.tenant_scope_type,
+                    j.tenant_scope_id,
+                    j.service_tier,
+                    j.lease_expires_at AS job_lease_expires_at,
+                    i.lease_expires_at AS item_lease_expires_at,
+                    i.not_before_at,
+                    GREATEST(COALESCE(i.estimated_work_units, 1), 1)::int
+                        AS estimated_work_units
+                FROM unleased_jobs j
+                JOIN deltallm_batch_item i ON i.batch_id = j.batch_id
+                WHERE i.status IN ('pending', 'in_progress')
+                ORDER BY j.last_scheduled_at ASC NULLS FIRST,
+                         COALESCE(j.queue_entered_at, j.created_at) ASC,
+                         j.created_at ASC,
+                         i.line_number ASC
+                LIMIT 1
+            ),
+            representative_runnable_item AS (
+                SELECT
+                    j.batch_id,
+                    j.model_group,
+                    j.tenant_scope_type,
+                    j.tenant_scope_id,
+                    j.service_tier,
+                    j.lease_expires_at AS job_lease_expires_at,
+                    i.lease_expires_at AS item_lease_expires_at,
+                    i.not_before_at,
+                    GREATEST(COALESCE(i.estimated_work_units, 1), 1)::int
+                        AS estimated_work_units
+                FROM unleased_jobs j
+                JOIN deltallm_batch_item i ON i.batch_id = j.batch_id
+                WHERE (
+                    (
+                        i.status = 'pending'
+                        AND (i.lease_expires_at IS NULL OR i.lease_expires_at < NOW())
+                        AND (i.not_before_at IS NULL OR i.not_before_at <= NOW())
+                    )
+                    OR (i.status = 'in_progress' AND i.lease_expires_at < NOW())
+                )
+                ORDER BY j.last_scheduled_at ASC NULLS FIRST,
+                         COALESCE(j.queue_entered_at, j.created_at) ASC,
+                         j.created_at ASC,
+                         i.line_number ASC
+                LIMIT 1
+            ),
+            representative_future_pending_item AS (
+                SELECT
+                    j.batch_id,
+                    j.model_group,
+                    j.tenant_scope_type,
+                    j.tenant_scope_id,
+                    j.service_tier,
+                    j.lease_expires_at AS job_lease_expires_at,
+                    i.lease_expires_at AS item_lease_expires_at,
+                    i.not_before_at,
+                    GREATEST(COALESCE(i.estimated_work_units, 1), 1)::int
+                        AS estimated_work_units
+                FROM unleased_jobs j
+                JOIN deltallm_batch_item i ON i.batch_id = j.batch_id
+                WHERE i.status = 'pending'
+                  AND i.not_before_at IS NOT NULL
+                  AND i.not_before_at > NOW()
+                ORDER BY i.not_before_at ASC, j.batch_id ASC, i.line_number ASC
+                LIMIT 1
+            ),
+            diagnostic_context AS (
+                SELECT * FROM representative_runnable_item
+                UNION ALL
+                SELECT * FROM representative_future_pending_item
+                WHERE NOT EXISTS (SELECT 1 FROM representative_runnable_item)
+                UNION ALL
+                SELECT * FROM representative_pending_item
+                WHERE NOT EXISTS (SELECT 1 FROM representative_runnable_item)
+                  AND NOT EXISTS (SELECT 1 FROM representative_future_pending_item)
+                UNION ALL
+                SELECT
+                    j.batch_id,
+                    j.model_group,
+                    j.tenant_scope_type,
+                    j.tenant_scope_id,
+                    j.service_tier,
+                    j.lease_expires_at AS job_lease_expires_at,
+                    NULL::timestamp AS item_lease_expires_at,
+                    NULL::timestamp AS not_before_at,
+                    NULL::int AS estimated_work_units
+                FROM representative_unleased_job j
+                WHERE NOT EXISTS (SELECT 1 FROM representative_pending_item)
+                LIMIT 1
             ),
             claimable_probe AS (
                 SELECT i.item_id
@@ -4133,11 +4374,21 @@ class BatchJobRepository:
                     )
                     LIMIT 1
                 ) AS runnable_items,
-                EXISTS (SELECT 1 FROM claimable_probe) AS claimable_items
+                EXISTS (SELECT 1 FROM claimable_probe) AS claimable_items,
+                (SELECT batch_id FROM diagnostic_context) AS batch_id,
+                (SELECT model_group FROM diagnostic_context) AS model_group,
+                (SELECT tenant_scope_type FROM diagnostic_context) AS tenant_scope_type,
+                (SELECT tenant_scope_id FROM diagnostic_context) AS tenant_scope_id,
+                (SELECT service_tier FROM diagnostic_context) AS service_tier,
+                (SELECT estimated_work_units FROM diagnostic_context)::int
+                    AS head_item_work_units,
+                (SELECT job_lease_expires_at FROM diagnostic_context) AS job_lease_expires_at,
+                (SELECT item_lease_expires_at FROM diagnostic_context) AS item_lease_expires_at,
+                (SELECT not_before_at FROM diagnostic_context) AS item_not_before_at
             """
         )
         if not rows:
-            return "no_available_work"
+            return BatchClaimDecisionDiagnostic(reason="no_available_work")
         row = dict(rows[0])
         active_jobs = bool(row.get("active_jobs"))
         unleased_jobs = bool(row.get("unleased_jobs"))
@@ -4148,18 +4399,30 @@ class BatchJobRepository:
         future_pending_items = bool(row.get("future_pending_items"))
         runnable_items = bool(row.get("runnable_items"))
         claimable_items = bool(row.get("claimable_items"))
+        diagnostic = BatchClaimDecisionDiagnostic(
+            reason="no_available_work",
+            batch_id=_optional_text(row.get("batch_id")),
+            model_group=_optional_text(row.get("model_group")),
+            service_tier=_optional_text(row.get("service_tier")),
+            tenant_scope_type=_optional_text(row.get("tenant_scope_type")),
+            tenant_scope_id=_optional_text(row.get("tenant_scope_id")),
+            head_item_work_units=_optional_int(row.get("head_item_work_units")),
+            lease_expires_at=parse_datetime(row.get("item_lease_expires_at"))
+            or parse_datetime(row.get("job_lease_expires_at")),
+            deferred_until=parse_datetime(row.get("item_not_before_at")),
+        )
 
         if not active_jobs or not unleased_jobs:
-            return "job_terminal_or_leased"
+            return diagnostic.with_overrides(reason="job_terminal_or_leased")
         if not pending_or_in_progress_items:
-            return "no_pending_items"
+            return diagnostic.with_overrides(reason="no_pending_items")
         if not runnable_items:
             if pending_items and future_pending_items and not due_pending_items and not in_progress_items:
-                return "not_before_future"
-            return "all_items_locked"
+                return diagnostic.with_overrides(reason="not_before_future")
+            return diagnostic.with_overrides(reason="all_items_locked")
         if not claimable_items:
-            return "all_items_locked"
-        return "no_available_work"
+            return diagnostic.with_overrides(reason="all_items_locked")
+        return diagnostic
 
     async def renew_job_lease(self, *, batch_id: str, worker_id: str, lease_seconds: int) -> bool:
         if self.prisma is None:

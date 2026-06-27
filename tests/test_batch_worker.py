@@ -12,6 +12,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.callbacks import CallbackManager, CustomLogger
+from src.batch.claim_diagnostics import BatchClaimDecisionDiagnostic
 from src.batch.models import (
     BatchItemRecord,
     BatchJobRecord,
@@ -5715,6 +5716,9 @@ async def test_batch_worker_work_slice_mode_processes_claim_without_job_lease():
 @pytest.mark.asyncio
 async def test_batch_worker_work_slice_empty_claim_records_diagnostic_reason(monkeypatch):
     class _EmptyClaimRepo:
+        def __init__(self) -> None:
+            self.diagnostic_calls = 0
+
         async def claim_next_finalization(self, **kwargs):
             del kwargs
             return None
@@ -5743,6 +5747,110 @@ async def test_batch_worker_work_slice_empty_claim_records_diagnostic_reason(mon
 
     assert did_work is False
     assert recorded_reasons == ["not_before_future"]
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_work_slice_empty_claim_logs_structured_context(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _EmptyClaimRepo:
+        def __init__(self) -> None:
+            self.diagnostic_calls = 0
+
+        async def claim_next_finalization(self, **kwargs):
+            del kwargs
+            return None
+
+        async def claim_next_work(self, **kwargs):
+            del kwargs
+            return None
+
+        async def diagnose_empty_work_claim_context(self) -> BatchClaimDecisionDiagnostic:
+            self.diagnostic_calls += 1
+            return BatchClaimDecisionDiagnostic(
+                reason="not_before_future",
+                batch_id="batch-retry",
+                model_group="model-a",
+                service_tier="standard",
+                tenant_scope_type="team",
+                tenant_scope_id="team-1",
+                head_item_work_units=9,
+                deferred_until=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+
+    empty_reasons: list[str] = []
+    blocked_decisions: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        "src.batch.worker.increment_batch_claim_empty_job",
+        lambda *, reason: empty_reasons.append(reason),
+    )
+    monkeypatch.setattr(
+        "src.batch.worker.increment_batch_claim_blocked_decision",
+        lambda **kwargs: blocked_decisions.append(kwargs),
+    )
+
+    repo = _EmptyClaimRepo()
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(
+            worker_id="w1",
+            scheduler_claim_mode="work_slice",
+            work_claim_max_items=3,
+            work_claim_max_work_units=7,
+        ),
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="src.batch.worker"):
+        assert await worker.process_once() is False
+        assert await worker.process_once() is False
+
+    assert repo.diagnostic_calls == 1
+    assert empty_reasons == ["not_before_future", "not_before_future"]
+    assert blocked_decisions == [
+        {
+            "claim_mode": "slice_v1",
+            "reason": "not_before_future",
+            "reason_category": "deferred_retry",
+        },
+        {
+            "claim_mode": "slice_v1",
+            "reason": "not_before_future",
+            "reason_category": "deferred_retry",
+        },
+    ]
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", "") == "batch_work_claim_decision"
+    ]
+    info_records = [record for record in records if record.levelno == logging.INFO]
+    debug_records = [record for record in records if record.levelno == logging.DEBUG]
+    assert len(info_records) == 1
+    assert len(debug_records) == 2
+    record = debug_records[0]
+    assert record.decision == "empty"
+    assert record.reason == "not_before_future"
+    assert record.reason_category == "deferred_retry"
+    assert record.diagnostic_source == "db"
+    assert record.batch_id == "batch-retry"
+    assert record.model_group == "model-a"
+    assert record.tenant_scope_type == "team"
+    assert record.tenant_scope_id == "team-1"
+    assert record.head_item_work_units == 9
+    assert record.max_items == 3
+    assert record.max_work_units == 7
+    assert record.suppressed_count == 0
+    assert info_records[0].diagnostic_source == "db"
+    cached_record = debug_records[1]
+    assert cached_record.reason == "not_before_future"
+    assert cached_record.reason_category == "deferred_retry"
+    assert cached_record.diagnostic_source == "cached"
+    assert cached_record.diagnostic_probe_suppressed_count == 1
+    assert not hasattr(cached_record, "batch_id")
+    assert not hasattr(cached_record, "tenant_scope_id")
 
 
 @pytest.mark.asyncio
@@ -5775,6 +5883,144 @@ async def test_batch_worker_work_slice_empty_claim_diagnostic_failure_falls_back
     did_work = await worker.process_once()
 
     assert did_work is False
+    assert recorded_reasons == ["no_available_work"]
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_empty_claim_diagnostic_failure_uses_short_retry_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FailingDiagnosticRepo:
+        def __init__(self) -> None:
+            self.diagnostic_calls = 0
+
+        async def diagnose_empty_work_claim_context(self) -> BatchClaimDecisionDiagnostic:
+            self.diagnostic_calls += 1
+            raise RuntimeError("diagnostic unavailable")
+
+    now = 0.0
+    monkeypatch.setattr("src.batch.worker.time.monotonic", lambda: now)
+    repo = _FailingDiagnosticRepo()
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(
+            worker_id="w1",
+            claim_diagnostic_interval_seconds=60.0,
+        ),
+    )
+
+    first = await worker._empty_work_claim_diagnostic(active_mode="slice_v1")
+    now = 1.0
+    second = await worker._empty_work_claim_diagnostic(active_mode="slice_v1")
+    now = 5.0
+    third = await worker._empty_work_claim_diagnostic(active_mode="slice_v1")
+
+    assert repo.diagnostic_calls == 2
+    assert first.reason == "no_available_work"
+    assert first.diagnostic_source == "fallback"
+    assert second.reason == "no_available_work"
+    assert second.diagnostic_source == "fallback"
+    assert second.diagnostic_probe_suppressed_count == 1
+    assert third.reason == "no_available_work"
+    assert third.diagnostic_source == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_empty_claim_diagnostic_failure_reuses_cached_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FlakyDiagnosticRepo:
+        def __init__(self) -> None:
+            self.diagnostic_calls = 0
+
+        async def diagnose_empty_work_claim_context(self) -> BatchClaimDecisionDiagnostic:
+            self.diagnostic_calls += 1
+            if self.diagnostic_calls == 1:
+                return BatchClaimDecisionDiagnostic(
+                    reason="not_before_future",
+                    batch_id="batch-1",
+                    model_group="model-a",
+                    service_tier="standard",
+                    tenant_scope_id="tenant-1",
+                    head_item_work_units=20,
+                )
+            raise RuntimeError("diagnostic unavailable")
+
+    now = 0.0
+    monkeypatch.setattr("src.batch.worker.time.monotonic", lambda: now)
+    repo = _FlakyDiagnosticRepo()
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(
+            worker_id="w1",
+            claim_diagnostic_interval_seconds=60.0,
+        ),
+    )
+
+    fresh = await worker._empty_work_claim_diagnostic(active_mode="slice_v1")
+    now = 61.0
+    after_failed_refresh = await worker._empty_work_claim_diagnostic(active_mode="slice_v1")
+    now = 62.0
+    suppressed = await worker._empty_work_claim_diagnostic(active_mode="slice_v1")
+
+    assert repo.diagnostic_calls == 2
+    assert fresh.reason == "not_before_future"
+    assert fresh.diagnostic_source == "db"
+    assert fresh.batch_id == "batch-1"
+    assert after_failed_refresh.reason == "not_before_future"
+    assert after_failed_refresh.diagnostic_source == "cached"
+    assert after_failed_refresh.batch_id is None
+    assert after_failed_refresh.tenant_scope_id is None
+    assert suppressed.reason == "not_before_future"
+    assert suppressed.diagnostic_source == "cached"
+    assert suppressed.diagnostic_probe_suppressed_count == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_work_slice_empty_claim_can_disable_db_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _EmptyClaimRepo:
+        def __init__(self) -> None:
+            self.diagnostic_calls = 0
+
+        async def claim_next_finalization(self, **kwargs):
+            del kwargs
+            return None
+
+        async def claim_next_work(self, **kwargs):
+            del kwargs
+            return None
+
+        async def diagnose_empty_work_claim_context(self) -> BatchClaimDecisionDiagnostic:
+            self.diagnostic_calls += 1
+            return BatchClaimDecisionDiagnostic(reason="not_before_future")
+
+    recorded_reasons: list[str] = []
+    monkeypatch.setattr(
+        "src.batch.worker.increment_batch_claim_empty_job",
+        lambda *, reason: recorded_reasons.append(reason),
+    )
+
+    repo = _EmptyClaimRepo()
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(
+            worker_id="w1",
+            scheduler_claim_mode="work_slice",
+            claim_diagnostics_enabled=False,
+        ),
+    )
+
+    assert await worker.process_once() is False
+
+    assert repo.diagnostic_calls == 0
     assert recorded_reasons == ["no_available_work"]
 
 
@@ -6647,6 +6893,320 @@ async def test_batch_worker_capacity_claim_tries_next_model_after_empty_selectio
             "capacity_max_in_flight_work_units": 36,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_capacity_empty_claim_logs_structured_context(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    ) -> None:
+    class _CapacityRepo:
+        def __init__(self) -> None:
+            self.diagnostic_calls = 0
+
+        async def claim_next_work(self, **kwargs):
+            del kwargs
+            return None
+
+        async def diagnose_model_group_work_claim_empty_context(
+            self,
+            **kwargs,
+        ) -> BatchClaimDecisionDiagnostic:
+            self.diagnostic_calls += 1
+            assert kwargs == {
+                "model_group": "model-a",
+                "service_tier": "standard",
+                "max_work_units": 5,
+                "capacity_max_in_flight_items": 22,
+                "capacity_max_in_flight_work_units": 36,
+            }
+            return BatchClaimDecisionDiagnostic(
+                reason="oversized_head_item",
+                batch_id="batch-large",
+                model_group="model-a",
+                service_tier="standard",
+                tenant_scope_type="team",
+                tenant_scope_id="team-1",
+                head_item_work_units=99,
+                in_flight_items=6,
+                in_flight_work_units=11,
+            )
+
+    class _CapacityResolver:
+        def __init__(self) -> None:
+            self.results: list[tuple[str, str]] = []
+
+        async def select_model_groups(self, **kwargs):
+            assert kwargs == {"max_items": 2, "max_work_units": 5}
+            return [
+                SimpleNamespace(
+                    snapshot=SimpleNamespace(
+                        model_group="model-a",
+                        service_tier="standard",
+                        max_in_flight_items=99,
+                        max_claim_work_units=40,
+                        in_flight_items=6,
+                        available_in_flight_items=16,
+                        in_flight_work_units=11,
+                        available_work_units=29,
+                        queued_work_units=200,
+                        tpm_remaining=25,
+                    ),
+                    max_items=2,
+                    max_work_units=5,
+                )
+            ]
+
+        def record_selection(self, snapshot):
+            assert snapshot.model_group == "model-a"
+
+        def record_claim_result(self, *, model_group: str, result: str) -> None:
+            self.results.append((model_group, result))
+
+    blocked_decisions: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        "src.batch.worker.increment_batch_claim_blocked_decision",
+        lambda **kwargs: blocked_decisions.append(kwargs),
+    )
+
+    repo = _CapacityRepo()
+    resolver = _CapacityResolver()
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(
+            worker_id="w1",
+            scheduler_claim_mode="work_slice",
+            work_claim_max_items=2,
+            work_claim_max_work_units=5,
+            model_capacity_enabled=True,
+        ),
+        model_capacity_resolver=resolver,
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="src.batch.worker"):
+        assert await worker._claim_next_work_slice() is None
+        assert await worker._claim_next_work_slice() is None
+
+    assert repo.diagnostic_calls == 1
+    assert resolver.results == [
+        ("model-a", "oversized_head_item"),
+        ("legacy", "empty"),
+        ("model-a", "oversized_head_item"),
+        ("legacy", "empty"),
+    ]
+    assert blocked_decisions == [
+        {
+            "claim_mode": "model_capacity_v1",
+            "reason": "oversized_head_item",
+            "reason_category": "oversized_head_item",
+        },
+        {
+            "claim_mode": "model_capacity_v1",
+            "reason": "oversized_head_item",
+            "reason_category": "oversized_head_item",
+        },
+    ]
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", "") == "batch_work_claim_decision"
+    ]
+    info_records = [record for record in records if record.levelno == logging.INFO]
+    debug_records = [record for record in records if record.levelno == logging.DEBUG]
+    assert len(info_records) == 1
+    assert len(debug_records) == 2
+    record = debug_records[0]
+    assert record.decision == "blocked"
+    assert record.reason == "oversized_head_item"
+    assert record.diagnostic_source == "db"
+    assert record.batch_id == "batch-large"
+    assert record.model_group == "model-a"
+    assert record.tenant_scope_type == "team"
+    assert record.tenant_scope_id == "team-1"
+    assert record.head_item_work_units == 99
+    assert record.capacity_max_in_flight_items == 99
+    assert record.capacity_max_in_flight_work_units == 40
+    assert record.available_in_flight_items == 16
+    assert record.available_work_units == 29
+    assert record.in_flight_items == 6
+    assert record.in_flight_work_units == 11
+    assert record.queued_work_units == 200
+    assert info_records[0].diagnostic_source == "db"
+    cached_record = debug_records[1]
+    assert cached_record.reason == "oversized_head_item"
+    assert cached_record.diagnostic_source == "cached"
+    assert cached_record.diagnostic_probe_suppressed_count == 1
+    assert not hasattr(cached_record, "batch_id")
+    assert not hasattr(cached_record, "tenant_scope_id")
+    assert cached_record.available_in_flight_items == 16
+    assert cached_record.available_work_units == 29
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_capacity_empty_claim_probe_resumes_after_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _CapacityRepo:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def diagnose_model_group_work_claim_empty_context(
+            self,
+            **kwargs,
+        ) -> BatchClaimDecisionDiagnostic:
+            self.calls.append(kwargs)
+            return BatchClaimDecisionDiagnostic(
+                reason=(
+                    "oversized_head_item"
+                    if len(self.calls) == 1
+                    else "no_runnable_items_after_selection"
+                ),
+                batch_id=f"batch-{len(self.calls)}",
+                model_group="model-a",
+                service_tier="standard",
+                tenant_scope_id=f"tenant-{len(self.calls)}",
+                head_item_work_units=100 + len(self.calls),
+            )
+
+    now = 0.0
+    monkeypatch.setattr("src.batch.worker.time.monotonic", lambda: now)
+    repo = _CapacityRepo()
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(
+            worker_id="w1",
+            claim_diagnostic_interval_seconds=10.0,
+        ),
+    )
+    snapshot = SimpleNamespace(
+        model_group="model-a",
+        service_tier="standard",
+        max_in_flight_items=10,
+        max_claim_work_units=20,
+        in_flight_items=1,
+        available_in_flight_items=9,
+        in_flight_work_units=2,
+        available_work_units=18,
+    )
+
+    first = await worker._capacity_empty_claim_diagnostic(
+        snapshot=snapshot,
+        max_items=2,
+        max_work_units=5,
+    )
+    now = 1.0
+    second = await worker._capacity_empty_claim_diagnostic(
+        snapshot=snapshot,
+        max_items=2,
+        max_work_units=5,
+    )
+    now = 11.0
+    third = await worker._capacity_empty_claim_diagnostic(
+        snapshot=snapshot,
+        max_items=2,
+        max_work_units=5,
+    )
+
+    assert [call["model_group"] for call in repo.calls] == ["model-a", "model-a"]
+    assert first.reason == "oversized_head_item"
+    assert first.diagnostic_source == "db"
+    assert first.batch_id == "batch-1"
+    assert second.reason == "oversized_head_item"
+    assert second.diagnostic_source == "cached"
+    assert second.diagnostic_probe_suppressed_count == 1
+    assert second.batch_id is None
+    assert second.tenant_scope_id is None
+    assert third.reason == "no_runnable_items_after_selection"
+    assert third.diagnostic_source == "db"
+    assert third.diagnostic_probe_suppressed_count == 1
+    assert third.batch_id == "batch-2"
+
+
+@pytest.mark.asyncio
+async def test_batch_worker_capacity_empty_claim_diagnostic_failure_reuses_cached_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _CapacityRepo:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def diagnose_model_group_work_claim_empty_context(
+            self,
+            **kwargs,
+        ) -> BatchClaimDecisionDiagnostic:
+            del kwargs
+            self.calls += 1
+            if self.calls == 1:
+                return BatchClaimDecisionDiagnostic(
+                    reason="oversized_head_item",
+                    batch_id="batch-large",
+                    model_group="model-a",
+                    service_tier="standard",
+                    tenant_scope_id="tenant-1",
+                    head_item_work_units=101,
+                )
+            raise RuntimeError("diagnostic unavailable")
+
+    now = 0.0
+    monkeypatch.setattr("src.batch.worker.time.monotonic", lambda: now)
+    repo = _CapacityRepo()
+    worker = BatchExecutorWorker(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        repository=repo,  # type: ignore[arg-type]
+        storage=_FakeStorage(),  # type: ignore[arg-type]
+        config=BatchWorkerConfig(
+            worker_id="w1",
+            claim_diagnostic_interval_seconds=60.0,
+        ),
+    )
+    snapshot = SimpleNamespace(
+        model_group="model-a",
+        service_tier="standard",
+        max_in_flight_items=10,
+        max_claim_work_units=20,
+        in_flight_items=2,
+        available_in_flight_items=8,
+        in_flight_work_units=3,
+        available_work_units=17,
+        queued_work_units=200,
+    )
+
+    fresh = await worker._capacity_empty_claim_diagnostic(
+        snapshot=snapshot,
+        max_items=2,
+        max_work_units=5,
+    )
+    now = 61.0
+    after_failed_refresh = await worker._capacity_empty_claim_diagnostic(
+        snapshot=snapshot,
+        max_items=2,
+        max_work_units=5,
+    )
+    now = 62.0
+    suppressed = await worker._capacity_empty_claim_diagnostic(
+        snapshot=snapshot,
+        max_items=2,
+        max_work_units=5,
+    )
+
+    assert repo.calls == 2
+    assert fresh.reason == "oversized_head_item"
+    assert fresh.diagnostic_source == "db"
+    assert fresh.batch_id == "batch-large"
+    assert after_failed_refresh.reason == "oversized_head_item"
+    assert after_failed_refresh.diagnostic_source == "cached"
+    assert after_failed_refresh.batch_id is None
+    assert after_failed_refresh.tenant_scope_id is None
+    assert after_failed_refresh.capacity_max_in_flight_items == 10
+    assert after_failed_refresh.available_in_flight_items == 8
+    assert after_failed_refresh.queued_work_units == 200
+    assert suppressed.reason == "oversized_head_item"
+    assert suppressed.diagnostic_source == "cached"
+    assert suppressed.diagnostic_probe_suppressed_count == 1
 
 
 @pytest.mark.asyncio
