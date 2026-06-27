@@ -167,6 +167,15 @@ def _apply_worker_scheduler_config(
     config.work_claim_min_items_for_microbatch = (
         general.embeddings_batch_work_claim_min_items_for_microbatch
     )
+    config.claim_diagnostics_enabled = bool(
+        getattr(general, "embeddings_batch_claim_diagnostics_enabled", True)
+    )
+    config.claim_diagnostic_interval_seconds = (
+        getattr(general, "embeddings_batch_claim_diagnostic_interval_seconds", 60.0)
+    )
+    config.claim_diagnostic_max_keys = (
+        getattr(general, "embeddings_batch_claim_diagnostic_max_keys", 1024)
+    )
     config.model_capacity_enabled = model_capacity_config.enabled
     config.scheduler_shadow_enabled = scheduler_modes.shadow_mode != "none"
     config.tenant_fair_share_enabled = tenant_fair_share_config.enabled
@@ -648,6 +657,27 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
                 work_claim_max_work_units=cfg.general_settings.embeddings_batch_work_claim_max_work_units,
                 work_claim_min_items_for_microbatch=(
                     cfg.general_settings.embeddings_batch_work_claim_min_items_for_microbatch
+                ),
+                claim_diagnostics_enabled=(
+                    getattr(
+                        cfg.general_settings,
+                        "embeddings_batch_claim_diagnostics_enabled",
+                        True,
+                    )
+                ),
+                claim_diagnostic_interval_seconds=(
+                    getattr(
+                        cfg.general_settings,
+                        "embeddings_batch_claim_diagnostic_interval_seconds",
+                        60.0,
+                    )
+                ),
+                claim_diagnostic_max_keys=(
+                    getattr(
+                        cfg.general_settings,
+                        "embeddings_batch_claim_diagnostic_max_keys",
+                        1024,
+                    )
                 ),
                 model_capacity_enabled=model_capacity_config.enabled,
                 scheduler_shadow_enabled=scheduler_modes.shadow_mode != "none",

@@ -8,6 +8,7 @@ from src.metrics import (
     increment_batch_create_session_action,
     get_prometheus_registry,
     increment_batch_artifact_failure,
+    increment_batch_claim_blocked_decision,
     increment_batch_claim_empty_job,
     increment_batch_finalization_claim,
     increment_batch_finalization_retry,
@@ -149,6 +150,11 @@ def test_batch_metrics_are_exported() -> None:
     increment_batch_work_claim(result="claimed", claim_mode="work_slice")
     increment_batch_finalization_claim(result="claimed")
     increment_batch_claim_empty_job(reason="no_available_work")
+    increment_batch_claim_blocked_decision(
+        claim_mode="model_capacity_v1",
+        reason="tenant_in_flight_full",
+        reason_category="tenant_cap",
+    )
     observe_batch_create_latency(status="success", latency_seconds=0.25)
     observe_batch_finalize_latency(status="error", latency_seconds=0.5)
     observe_batch_item_execution_latency(status="success", latency_seconds=0.1)
@@ -312,6 +318,8 @@ def test_batch_metrics_are_exported() -> None:
     assert "deltallm_batch_work_claim_latency_seconds" in metrics_text
     assert "deltallm_batch_finalization_claims_total" in metrics_text
     assert "deltallm_batch_claim_empty_jobs_total" in metrics_text
+    assert "deltallm_batch_claim_blocked_decisions_total" in metrics_text
+    assert 'reason_category="tenant_cap"' in metrics_text
     assert "deltallm_batch_stale_lease_sweeper_runs_total" in metrics_text
     assert "deltallm_batch_stale_lease_sweeper_rows_total" in metrics_text
     assert "deltallm_batch_stale_lease_sweeper_duration_seconds" in metrics_text

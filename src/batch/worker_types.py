@@ -48,6 +48,9 @@ class BatchWorkerConfig:
     work_claim_max_items: int = 0
     work_claim_max_work_units: int = 0
     work_claim_min_items_for_microbatch: int = 4
+    claim_diagnostics_enabled: bool = True
+    claim_diagnostic_interval_seconds: float = 60.0
+    claim_diagnostic_max_keys: int = 1024
     model_capacity_enabled: bool = False
     scheduler_shadow_enabled: bool = False
     tenant_fair_share_enabled: bool = False

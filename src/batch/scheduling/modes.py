@@ -191,6 +191,9 @@ _SCHEDULER_SETTINGS_PAYLOAD_FIELDS: tuple[tuple[str, Any], ...] = (
     ("embeddings_batch_work_claim_max_items", None),
     ("embeddings_batch_work_claim_max_work_units", None),
     ("embeddings_batch_work_claim_min_items_for_microbatch", None),
+    ("embeddings_batch_claim_diagnostics_enabled", True),
+    ("embeddings_batch_claim_diagnostic_interval_seconds", 60.0),
+    ("embeddings_batch_claim_diagnostic_max_keys", 1024),
     ("embeddings_batch_default_model_max_in_flight", None),
     ("embeddings_batch_default_model_max_claim_work_units", None),
     ("embeddings_batch_model_capacity_fraction", None),
@@ -224,6 +227,12 @@ _WORKER_CONFIG_PAYLOAD_FIELDS: tuple[tuple[str, str], ...] = (
     ("embeddings_batch_work_claim_max_items", "work_claim_max_items"),
     ("embeddings_batch_work_claim_max_work_units", "work_claim_max_work_units"),
     ("embeddings_batch_work_claim_min_items_for_microbatch", "work_claim_min_items_for_microbatch"),
+    ("embeddings_batch_claim_diagnostics_enabled", "claim_diagnostics_enabled"),
+    (
+        "embeddings_batch_claim_diagnostic_interval_seconds",
+        "claim_diagnostic_interval_seconds",
+    ),
+    ("embeddings_batch_claim_diagnostic_max_keys", "claim_diagnostic_max_keys"),
     ("embeddings_batch_model_capacity_enabled", "model_capacity_enabled"),
     ("embeddings_batch_tenant_fair_share_enabled", "tenant_fair_share_enabled"),
     (

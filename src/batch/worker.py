@@ -11,6 +11,13 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable
 
+from src.batch.claim_diagnostics import (
+    BatchClaimDecisionDiagnostic,
+    ClaimDecisionDiagnosticProbeDecision,
+    ClaimDecisionDiagnosticProbeLimiter,
+    ClaimDecisionLogLimiter,
+    claim_decision_reason_category,
+)
 from src.batch.models import BatchJobStatus
 from src.batch.repository import BatchRepository
 from src.batch.scheduling.modes import (
@@ -34,6 +41,7 @@ from src.batch.worker_types import (
 )
 from src.chat.executor import execute_chat
 from src.metrics import (
+    increment_batch_claim_blocked_decision,
     increment_batch_claim_empty_job,
     increment_batch_finalization_claim,
     increment_batch_scheduler_shadow_decision,
@@ -67,6 +75,8 @@ _IDLE_BACKOFF_MAX_SECONDS = 10.0
 _IDLE_BACKOFF_JITTER_FRACTION = 0.2
 _FLOW_LOCK_BUSY_BACKOFF_MAX_SECONDS = 2.0
 _FLOW_LOCK_BUSY_BACKOFF_JITTER_FRACTION = 0.2
+_CLAIM_DECISION_INFO_WINDOW_SECONDS = 60.0
+_CLAIM_DECISION_INFO_MAX_KEYS = 1024
 _SHADOW_FAIR_SHARE_NO_FLOW_RESULTS = frozenset(
     {
         "no_recommendation",
@@ -84,6 +94,15 @@ __all__ = [
     "_PreparedChatItem",
     "_RequestShim",
 ]
+
+
+def _optional_worker_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class BatchExecutorWorker:
@@ -106,6 +125,20 @@ class BatchExecutorWorker:
         self._fair_share_flow_lock_busy_attempts: dict[tuple[str, str], int] = {}
         self._fair_share_flow_lock_busy_until: dict[tuple[str, str], float] = {}
         self._shadow_tasks: set[asyncio.Task[None]] = set()
+        self._claim_decision_log_limiter = ClaimDecisionLogLimiter(
+            window_seconds=_CLAIM_DECISION_INFO_WINDOW_SECONDS,
+            max_keys=_CLAIM_DECISION_INFO_MAX_KEYS,
+        )
+        self._claim_decision_diagnostic_probe_limiter_config = (
+            max(1.0, float(self.config.claim_diagnostic_interval_seconds or 60.0)),
+            max(1, int(self.config.claim_diagnostic_max_keys or 1024)),
+        )
+        self._claim_decision_diagnostic_probe_limiter = (
+            ClaimDecisionDiagnosticProbeLimiter(
+                window_seconds=self._claim_decision_diagnostic_probe_limiter_config[0],
+                max_keys=self._claim_decision_diagnostic_probe_limiter_config[1],
+            )
+        )
         self._applied_scheduler_general_settings: Any | None = None
         self._applied_scheduler_config_generation: int | None = None
         self._artifact_finalizer = BatchArtifactFinalizer(
@@ -265,6 +298,153 @@ class BatchExecutorWorker:
         key = self._fair_share_flow_lock_key(service_tier=service_tier, model_group=model_group)
         self._fair_share_flow_lock_busy_attempts.pop(key, None)
         self._fair_share_flow_lock_busy_until.pop(key, None)
+
+    def _claim_diagnostics_enabled(self) -> bool:
+        return bool(getattr(self.config, "claim_diagnostics_enabled", True))
+
+    def _sync_claim_decision_diagnostic_probe_limiter(self) -> None:
+        limiter_config = (
+            max(
+                1.0,
+                float(getattr(self.config, "claim_diagnostic_interval_seconds", 60.0) or 60.0),
+            ),
+            max(1, int(getattr(self.config, "claim_diagnostic_max_keys", 1024) or 1024)),
+        )
+        if limiter_config == self._claim_decision_diagnostic_probe_limiter_config:
+            return
+        self._claim_decision_diagnostic_probe_limiter_config = limiter_config
+        self._claim_decision_diagnostic_probe_limiter = ClaimDecisionDiagnosticProbeLimiter(
+            window_seconds=limiter_config[0],
+            max_keys=limiter_config[1],
+        )
+
+    def _claim_diagnostic_probe_decision(self, key: tuple[str, ...]):
+        self._sync_claim_decision_diagnostic_probe_limiter()
+        return self._claim_decision_diagnostic_probe_limiter.should_probe(
+            key,
+            now=time.monotonic(),
+        )
+
+    def _record_claim_diagnostic_probe_result(
+        self,
+        key: tuple[str, ...],
+        diagnostic: BatchClaimDecisionDiagnostic,
+    ) -> None:
+        self._claim_decision_diagnostic_probe_limiter.record_probe_result(key, diagnostic)
+
+    def _record_claim_diagnostic_probe_failure(self, key: tuple[str, ...]) -> None:
+        self._claim_decision_diagnostic_probe_limiter.record_probe_failure(
+            key,
+            now=time.monotonic(),
+        )
+
+    def _diagnostic_from_cached_probe(
+        self,
+        defaults: BatchClaimDecisionDiagnostic,
+        probe_decision: ClaimDecisionDiagnosticProbeDecision,
+    ) -> BatchClaimDecisionDiagnostic:
+        suppressed_count = probe_decision.suppressed_count or None
+        if probe_decision.cached_diagnostic is None:
+            return defaults.with_overrides(
+                diagnostic_probe_suppressed_count=suppressed_count,
+            )
+        return probe_decision.cached_diagnostic.with_defaults_from(defaults).with_overrides(
+            diagnostic_source="cached",
+            diagnostic_probe_suppressed_count=suppressed_count,
+        )
+
+    def _record_blocked_claim_decision(
+        self,
+        diagnostic: BatchClaimDecisionDiagnostic,
+        *,
+        active_mode: str,
+    ) -> None:
+        increment_batch_claim_blocked_decision(
+            claim_mode=active_mode,
+            reason=diagnostic.reason,
+            reason_category=diagnostic.reason_category
+            or claim_decision_reason_category(diagnostic.reason),
+        )
+
+    def _log_claim_decision(
+        self,
+        decision: str,
+        diagnostic: BatchClaimDecisionDiagnostic,
+        *,
+        active_mode: str,
+        latency_seconds: float | None = None,
+        decision_scope: str = "active",
+    ) -> None:
+        claim_mode = active_mode
+        scheduler_mode = active_mode
+        message = (
+            "batch work claim decision decision=%s reason=%s reason_category=%s "
+            "batch_id=%s model_group=%s service_tier=%s tenant_scope_type=%s "
+            "tenant_scope_id=%s head_item_work_units=%s"
+        )
+        args = (
+            decision,
+            diagnostic.reason,
+            diagnostic.reason_category,
+            diagnostic.batch_id,
+            diagnostic.model_group,
+            diagnostic.service_tier,
+            diagnostic.tenant_scope_type,
+            diagnostic.tenant_scope_id,
+            diagnostic.head_item_work_units,
+        )
+        extra = diagnostic.to_log_extra(
+            decision=decision,
+            worker_id=self.config.worker_id,
+            claim_mode=claim_mode,
+            scheduler_mode=scheduler_mode,
+            decision_scope=decision_scope,
+            claim_latency_seconds=latency_seconds,
+        )
+        logger.debug(message, *args, extra=extra)
+        should_emit, suppressed_count = self._claim_decision_log_limiter.should_emit(
+            diagnostic.log_key(
+                decision=decision,
+                claim_mode=claim_mode,
+                scheduler_mode=scheduler_mode,
+                decision_scope=decision_scope,
+            ),
+            now=time.monotonic(),
+        )
+        if not should_emit:
+            return
+        logger.info(
+            message,
+            *args,
+            extra=diagnostic.to_log_extra(
+                decision=decision,
+                worker_id=self.config.worker_id,
+                claim_mode=claim_mode,
+                scheduler_mode=scheduler_mode,
+                decision_scope=decision_scope,
+                suppressed_count=suppressed_count,
+                window_seconds=self._claim_decision_log_limiter.window_seconds,
+                claim_latency_seconds=latency_seconds,
+            ),
+        )
+
+    def _claim_success_log_extra(self, claim: Any, *, active_mode: str) -> dict[str, Any]:
+        return {
+            "event": "batch_work_claim_decision",
+            "decision": "claimed",
+            "decision_scope": "active",
+            "worker_id": self.config.worker_id,
+            "claim_mode": active_mode,
+            "scheduler_mode": active_mode,
+            "claim_id": getattr(claim, "claim_id", None),
+            "batch_id": getattr(claim, "batch_id", None),
+            "model_group": getattr(claim, "model_group", None),
+            "service_tier": getattr(claim, "service_tier", None),
+            "tenant_scope_type": getattr(claim, "tenant_scope_type", None),
+            "tenant_scope_id": getattr(claim, "tenant_scope_id", None),
+            "item_count": len(getattr(claim, "item_ids", []) or []),
+            "claimed_work_units": getattr(claim, "claimed_work_units", None),
+        }
 
     def _claim_limit(self) -> int:
         return max(
@@ -811,7 +991,15 @@ class BatchExecutorWorker:
             # multi-EXISTS query worth saving on every successful fallback.
             if not self.config.finalization_first and await self._try_process_finalization_claim():
                 return True
-            increment_batch_claim_empty_job(reason=await self._empty_work_claim_reason())
+            diagnostic = await self._empty_work_claim_diagnostic(active_mode=active_mode)
+            increment_batch_claim_empty_job(reason=diagnostic.reason)
+            self._record_blocked_claim_decision(diagnostic, active_mode=active_mode)
+            self._log_claim_decision(
+                "empty",
+                diagnostic,
+                active_mode=active_mode,
+                latency_seconds=claim_latency_seconds,
+            )
             return False
 
         increment_batch_work_claim(result="claimed", claim_mode=active_mode)
@@ -829,6 +1017,7 @@ class BatchExecutorWorker:
             claim.claim_id,
             len(claim.item_ids),
             claim.claimed_work_units,
+            extra=self._claim_success_log_extra(claim, active_mode=active_mode),
         )
 
         # Cancel branch already releases items explicitly; skip the redundant
@@ -953,6 +1142,13 @@ class BatchExecutorWorker:
         else:
             selection = await resolver.select_model_group(max_items=max_items, max_work_units=max_work_units)
             selections = [selection] if selection is not None else []
+        if not selections:
+            self._log_model_capacity_blocked_snapshots(
+                resolver=resolver,
+                max_items=max_items,
+                max_work_units=max_work_units,
+                active_mode=active_mode,
+            )
 
         shadow_claim_holder: dict[str, Any | None] = {"claim": None}
         shadow_claim_ready = asyncio.Event()
@@ -997,6 +1193,18 @@ class BatchExecutorWorker:
                         resolver.record_claim_result(
                             model_group=snapshot.model_group,
                             result=result,
+                        )
+                        diagnostic = self._capacity_snapshot_diagnostic(
+                            snapshot=snapshot,
+                            reason=result,
+                            max_items=selection.max_items,
+                            max_work_units=selection.max_work_units,
+                        )
+                        self._record_blocked_claim_decision(diagnostic, active_mode=active_mode)
+                        self._log_claim_decision(
+                            "blocked",
+                            diagnostic,
+                            active_mode=active_mode,
                         )
                         continue
                     fair_share_claim_holder: dict[str, Any | None] = {"claim": None}
@@ -1070,6 +1278,22 @@ class BatchExecutorWorker:
                                 service_tier=snapshot.service_tier,
                                 model_group=snapshot.model_group,
                             )
+                        if claim is None:
+                            diagnostic = self._fair_share_claim_diagnostic(
+                                result=fair_share_result,
+                                snapshot=snapshot,
+                                selection=selection,
+                                reason=result,
+                            )
+                            self._record_blocked_claim_decision(
+                                diagnostic,
+                                active_mode=active_mode,
+                            )
+                            self._log_claim_decision(
+                                "blocked",
+                                diagnostic,
+                                active_mode=active_mode,
+                            )
                         if claim is None and result in _FAIR_SHARE_MODEL_FALLBACK_RESULTS:
                             claim = await self._claim_model_capacity_work_slice(
                                 snapshot=snapshot,
@@ -1078,10 +1302,20 @@ class BatchExecutorWorker:
                                 capacity_max_in_flight_work_units=capacity_max_in_flight_work_units,
                             )
                             if claim is None:
-                                result = await self._capacity_empty_claim_result(
+                                diagnostic = await self._capacity_empty_claim_diagnostic(
                                     snapshot=snapshot,
                                     max_items=selection.max_items,
                                     max_work_units=selection.max_work_units,
+                                )
+                                result = diagnostic.reason
+                                self._record_blocked_claim_decision(
+                                    diagnostic,
+                                    active_mode=active_mode,
+                                )
+                                self._log_claim_decision(
+                                    "blocked",
+                                    diagnostic,
+                                    active_mode=active_mode,
                                 )
                             else:
                                 result = "claimed"
@@ -1121,10 +1355,17 @@ class BatchExecutorWorker:
                             fair_share_claim_ready.set()
                     result = "claimed"
                     if claim is None:
-                        result = await self._capacity_empty_claim_result(
+                        diagnostic = await self._capacity_empty_claim_diagnostic(
                             snapshot=snapshot,
                             max_items=selection.max_items,
                             max_work_units=selection.max_work_units,
+                        )
+                        result = diagnostic.reason
+                        self._record_blocked_claim_decision(diagnostic, active_mode=active_mode)
+                        self._log_claim_decision(
+                            "blocked",
+                            diagnostic,
+                            active_mode=active_mode,
                         )
                 else:
                     claim = await self._claim_model_capacity_work_slice(
@@ -1135,10 +1376,17 @@ class BatchExecutorWorker:
                     )
                     result = "claimed"
                     if claim is None:
-                        result = await self._capacity_empty_claim_result(
+                        diagnostic = await self._capacity_empty_claim_diagnostic(
                             snapshot=snapshot,
                             max_items=selection.max_items,
                             max_work_units=selection.max_work_units,
+                        )
+                        result = diagnostic.reason
+                        self._record_blocked_claim_decision(diagnostic, active_mode=active_mode)
+                        self._log_claim_decision(
+                            "blocked",
+                            diagnostic,
+                            active_mode=active_mode,
                         )
                     if (
                         shadow_uses_fair_share
@@ -1750,21 +1998,198 @@ class BatchExecutorWorker:
         )
         return in_flight_items + available_in_flight_items, work_unit_cap
 
-    async def _capacity_empty_claim_result(self, *, snapshot: Any, max_items: int, max_work_units: int) -> str:
+    def _capacity_snapshot_diagnostic(
+        self,
+        *,
+        snapshot: Any,
+        reason: str | None = None,
+        max_items: int | None = None,
+        max_work_units: int | None = None,
+    ) -> BatchClaimDecisionDiagnostic:
+        return BatchClaimDecisionDiagnostic(
+            reason=str(reason or getattr(snapshot, "reason", None) or "empty_after_selection"),
+            diagnostic_source="scheduler_context",
+            model_group=str(getattr(snapshot, "model_group", "") or "") or None,
+            service_tier=str(getattr(snapshot, "service_tier", "standard") or "standard"),
+            max_items=max_items,
+            max_work_units=max_work_units,
+            capacity_max_in_flight_items=_optional_worker_int(
+                getattr(snapshot, "max_in_flight_items", None)
+            ),
+            capacity_max_in_flight_work_units=_optional_worker_int(
+                getattr(snapshot, "max_claim_work_units", None)
+            ),
+            available_in_flight_items=_optional_worker_int(
+                getattr(snapshot, "available_in_flight_items", None)
+            ),
+            available_work_units=_optional_worker_int(getattr(snapshot, "available_work_units", None)),
+            in_flight_items=_optional_worker_int(getattr(snapshot, "in_flight_items", None)),
+            in_flight_work_units=_optional_worker_int(
+                getattr(snapshot, "in_flight_work_units", None)
+            ),
+            queued_work_units=_optional_worker_int(getattr(snapshot, "queued_work_units", None)),
+            rpm_remaining=_optional_worker_int(getattr(snapshot, "rpm_remaining", None)),
+            tpm_remaining=_optional_worker_int(getattr(snapshot, "tpm_remaining", None)),
+            healthy_deployments=_optional_worker_int(
+                getattr(snapshot, "healthy_deployments", None)
+            ),
+            capacity_source=str(getattr(snapshot, "capacity_source", "") or "") or None,
+            deferred_until=getattr(snapshot, "backpressure_until", None),
+        )
+
+    def _fair_share_claim_diagnostic(
+        self,
+        *,
+        result: Any,
+        snapshot: Any,
+        selection: Any,
+        reason: str,
+    ) -> BatchClaimDecisionDiagnostic:
+        base = self._capacity_snapshot_diagnostic(
+            snapshot=snapshot,
+            reason=reason,
+            max_items=getattr(selection, "max_items", None),
+            max_work_units=getattr(selection, "max_work_units", None),
+        )
+        flow = getattr(result, "flow", None)
+        if flow is None:
+            return base.with_overrides(
+                active_flow_count=_optional_worker_int(getattr(result, "active_flow_count", None)),
+                total_in_flight_work_units=_optional_worker_int(
+                    getattr(result, "total_in_flight_work_units", None)
+                ),
+                tenant_max_in_flight_work_units=(
+                    self.config.tenant_max_in_flight_work_units or None
+                ),
+            )
+        diagnostic = BatchClaimDecisionDiagnostic(
+            reason=reason,
+            batch_id=str(
+                getattr(result, "recommended_batch_id", None)
+                or getattr(flow, "next_batch_id", None)
+                or ""
+            )
+            or None,
+            model_group=str(getattr(flow, "model_group", "") or "") or None,
+            service_tier=str(getattr(flow, "service_tier", "standard") or "standard"),
+            tenant_scope_type=str(getattr(flow, "tenant_scope_type", "") or "") or None,
+            tenant_scope_id=str(getattr(flow, "tenant_scope_id", "") or "") or None,
+            head_item_work_units=_optional_worker_int(getattr(flow, "next_item_work_units", None)),
+            max_items=_optional_worker_int(getattr(selection, "max_items", None)),
+            max_work_units=_optional_worker_int(getattr(selection, "max_work_units", None)),
+            tenant_max_in_flight_work_units=(self.config.tenant_max_in_flight_work_units or None),
+            tenant_in_flight_work_units=_optional_worker_int(
+                getattr(flow, "in_flight_work_units", None)
+            ),
+            queued_work_units=_optional_worker_int(getattr(flow, "queued_work_units", None)),
+            active_flow_count=_optional_worker_int(getattr(result, "active_flow_count", None)),
+            total_in_flight_work_units=_optional_worker_int(
+                getattr(result, "total_in_flight_work_units", None)
+            ),
+        )
+        return diagnostic.with_defaults_from(base)
+
+    def _log_model_capacity_blocked_snapshots(
+        self,
+        *,
+        resolver: Any,
+        max_items: int,
+        max_work_units: int,
+        active_mode: str,
+    ) -> None:
+        snapshots: list[Any] = []
+        last_selection_snapshots = getattr(resolver, "last_selection_snapshots", None)
+        if callable(last_selection_snapshots):
+            snapshots = list(last_selection_snapshots() or [])
+        elif hasattr(resolver, "_last_selection_snapshots"):
+            snapshots = list(getattr(resolver, "_last_selection_snapshots") or [])
+        blocked = [
+            snapshot
+            for snapshot in snapshots
+            if not bool(getattr(snapshot, "eligible", False))
+            and max(0, _optional_worker_int(getattr(snapshot, "queued_jobs", 0)) or 0) > 0
+        ]
+        blocked = sorted(
+            blocked,
+            key=lambda snapshot: (
+                getattr(snapshot, "oldest_queue_entered_at", None)
+                or datetime.max.replace(tzinfo=UTC),
+                str(getattr(snapshot, "model_group", "") or ""),
+                str(getattr(snapshot, "service_tier", "") or ""),
+            ),
+        )[:5]
+        for snapshot in blocked:
+            diagnostic = self._capacity_snapshot_diagnostic(
+                snapshot=snapshot,
+                reason=str(getattr(snapshot, "reason", "") or "no_available_capacity"),
+                max_items=max_items,
+                max_work_units=max_work_units,
+            )
+            self._record_blocked_claim_decision(diagnostic, active_mode=active_mode)
+            self._log_claim_decision("blocked", diagnostic, active_mode=active_mode)
+
+    async def _capacity_empty_claim_diagnostic(
+        self,
+        *,
+        snapshot: Any,
+        max_items: int,
+        max_work_units: int,
+    ) -> BatchClaimDecisionDiagnostic:
+        base = self._capacity_snapshot_diagnostic(
+            snapshot=snapshot,
+            reason="empty_after_selection",
+            max_items=max_items,
+            max_work_units=max_work_units,
+        )
+        if not self._claim_diagnostics_enabled():
+            return base
+        model_group = str(getattr(snapshot, "model_group", "") or "").strip()
+        service_tier = str(getattr(snapshot, "service_tier", "standard") or "standard").strip()
+        service_tier = service_tier or "standard"
+        probe_key = ("model_capacity_empty", model_group, service_tier)
+        probe_decision = self._claim_diagnostic_probe_decision(probe_key)
+        if not probe_decision.should_probe:
+            return self._diagnostic_from_cached_probe(base, probe_decision)
+        diagnose_model_group_work_claim_empty_context = getattr(
+            self.repository,
+            "diagnose_model_group_work_claim_empty_context",
+            None,
+        )
+        capacity_max_in_flight_items, capacity_max_in_flight_work_units = self._capacity_claim_caps(
+            snapshot,
+            max_items=max_items,
+            max_work_units=max_work_units,
+        )
+        if callable(diagnose_model_group_work_claim_empty_context):
+            try:
+                diagnostic = await diagnose_model_group_work_claim_empty_context(
+                    model_group=snapshot.model_group,
+                    service_tier=snapshot.service_tier,
+                    max_work_units=max_work_units,
+                    capacity_max_in_flight_items=capacity_max_in_flight_items,
+                    capacity_max_in_flight_work_units=capacity_max_in_flight_work_units,
+                )
+                diagnostic = diagnostic.with_defaults_from(base).with_overrides(
+                    diagnostic_source="db",
+                    diagnostic_probe_suppressed_count=probe_decision.suppressed_count
+                    or None,
+                )
+                self._record_claim_diagnostic_probe_result(probe_key, diagnostic)
+                return diagnostic
+            except Exception:
+                self._record_claim_diagnostic_probe_failure(probe_key)
+                logger.warning("batch capacity empty claim diagnostic failed", exc_info=True)
+                return self._diagnostic_from_cached_probe(base, probe_decision)
+
         diagnose_model_group_work_claim_empty = getattr(
             self.repository,
             "diagnose_model_group_work_claim_empty",
             None,
         )
         if not callable(diagnose_model_group_work_claim_empty):
-            return "empty_after_selection"
-        capacity_max_in_flight_items, capacity_max_in_flight_work_units = self._capacity_claim_caps(
-            snapshot,
-            max_items=max_items,
-            max_work_units=max_work_units,
-        )
+            return base
         try:
-            return str(
+            reason = str(
                 await diagnose_model_group_work_claim_empty(
                     model_group=snapshot.model_group,
                     service_tier=snapshot.service_tier,
@@ -1774,9 +2199,26 @@ class BatchExecutorWorker:
                 )
                 or "empty_after_selection"
             )
+            diagnostic = base.with_overrides(
+                reason=reason,
+                diagnostic_source="db",
+                diagnostic_probe_suppressed_count=probe_decision.suppressed_count or None,
+            )
+            self._record_claim_diagnostic_probe_result(probe_key, diagnostic)
+            return diagnostic
         except Exception:
+            self._record_claim_diagnostic_probe_failure(probe_key)
             logger.warning("batch capacity empty claim diagnostic failed", exc_info=True)
-            return "empty_after_selection"
+            return self._diagnostic_from_cached_probe(base, probe_decision)
+
+    async def _capacity_empty_claim_result(self, *, snapshot: Any, max_items: int, max_work_units: int) -> str:
+        return (
+            await self._capacity_empty_claim_diagnostic(
+                snapshot=snapshot,
+                max_items=max_items,
+                max_work_units=max_work_units,
+            )
+        ).reason
 
     async def _claim_legacy_work_slice(
         self,
@@ -1801,16 +2243,62 @@ class BatchExecutorWorker:
         )
         return claim
 
-    async def _empty_work_claim_reason(self) -> str:
+    async def _empty_work_claim_diagnostic(self, *, active_mode: str) -> BatchClaimDecisionDiagnostic:
+        fallback = BatchClaimDecisionDiagnostic(
+            reason="no_available_work",
+            diagnostic_source="fallback",
+            max_items=self._work_claim_max_items(),
+            max_work_units=self._work_claim_max_work_units(),
+        )
+        if not self._claim_diagnostics_enabled():
+            return fallback
+        probe_key = ("empty", str(active_mode or self._active_scheduler_mode()))
+        probe_decision = self._claim_diagnostic_probe_decision(probe_key)
+        if not probe_decision.should_probe:
+            return self._diagnostic_from_cached_probe(fallback, probe_decision)
+        diagnose_empty_work_claim_context = getattr(
+            self.repository,
+            "diagnose_empty_work_claim_context",
+            None,
+        )
+        if callable(diagnose_empty_work_claim_context):
+            try:
+                diagnostic = await diagnose_empty_work_claim_context()
+                diagnostic = diagnostic.with_defaults_from(fallback).with_overrides(
+                    diagnostic_source="db",
+                    diagnostic_probe_suppressed_count=probe_decision.suppressed_count
+                    or None,
+                )
+                self._record_claim_diagnostic_probe_result(probe_key, diagnostic)
+                return diagnostic
+            except Exception:
+                self._record_claim_diagnostic_probe_failure(probe_key)
+                logger.warning("batch work claim empty diagnostic failed", exc_info=True)
+                return self._diagnostic_from_cached_probe(fallback, probe_decision)
+
         diagnose_empty_work_claim = getattr(self.repository, "diagnose_empty_work_claim", None)
         if not callable(diagnose_empty_work_claim):
-            return "no_available_work"
+            return fallback
         try:
             reason = await diagnose_empty_work_claim()
         except Exception:
+            self._record_claim_diagnostic_probe_failure(probe_key)
             logger.warning("batch work claim empty diagnostic failed", exc_info=True)
-            return "no_available_work"
-        return str(reason or "no_available_work")
+            return self._diagnostic_from_cached_probe(fallback, probe_decision)
+        diagnostic = fallback.with_overrides(
+            reason=str(reason or "no_available_work"),
+            diagnostic_source="db",
+            diagnostic_probe_suppressed_count=probe_decision.suppressed_count or None,
+        )
+        self._record_claim_diagnostic_probe_result(probe_key, diagnostic)
+        return diagnostic
+
+    async def _empty_work_claim_reason(self) -> str:
+        return (
+            await self._empty_work_claim_diagnostic(
+                active_mode=self._active_scheduler_mode(),
+            )
+        ).reason
 
     async def _prepare_item_for_execution(self, job, item) -> _PreparedEmbeddingItem | _PreparedChatItem:  # noqa: ANN001
         self._sync_dependencies()

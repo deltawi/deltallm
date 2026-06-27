@@ -2932,9 +2932,60 @@ async def test_diagnose_model_group_work_claim_empty_reports_oversized_head_item
     )
 
     assert reason == "oversized_head_item"
+    assert "candidate_jobs AS" in prisma.sql
     assert "runnable_head_items AS" in prisma.sql
+    assert "JOIN deltallm_batch_item i ON i.batch_id = candidate_jobs.batch_id" in prisma.sql
+    assert "LIMIT 100" in prisma.sql
     assert "estimated_work_units <= $3" in prisma.sql
     assert prisma.params == ("model-a", "standard", 5)
+
+
+@pytest.mark.asyncio
+async def test_diagnose_model_group_work_claim_empty_context_includes_claim_dimensions() -> None:
+    class _DiagnosticPrisma:
+        async def query_raw(self, sql: str, *params):
+            assert "candidate_jobs AS" in sql
+            assert "representative_head_item AS" in sql
+            assert "LIMIT 100" in sql
+            assert params == ("model-a", "standard", 5, 12)
+            return [
+                {
+                    "batch_id": "batch-large",
+                    "model_group": "model-a",
+                    "service_tier": "standard",
+                    "tenant_scope_type": "team",
+                    "tenant_scope_id": "team-1",
+                    "head_item_work_units": 99,
+                    "in_flight_items": 2,
+                    "in_flight_work_units": 8,
+                    "has_runnable_head_item": True,
+                    "has_fitting_head_item": False,
+                }
+            ]
+
+    repository = BatchRepository(prisma_client=_DiagnosticPrisma())
+
+    diagnostic = await repository.diagnose_model_group_work_claim_empty_context(
+        model_group="model-a",
+        service_tier="standard",
+        max_work_units=5,
+        capacity_max_in_flight_items=4,
+        capacity_max_in_flight_work_units=12,
+    )
+
+    assert diagnostic.reason == "oversized_head_item"
+    assert diagnostic.reason_category == "oversized_head_item"
+    assert diagnostic.batch_id == "batch-large"
+    assert diagnostic.model_group == "model-a"
+    assert diagnostic.tenant_scope_type == "team"
+    assert diagnostic.tenant_scope_id == "team-1"
+    assert diagnostic.head_item_work_units == 99
+    assert diagnostic.capacity_max_in_flight_items == 4
+    assert diagnostic.capacity_max_in_flight_work_units == 12
+    assert diagnostic.in_flight_items == 2
+    assert diagnostic.in_flight_work_units == 8
+    assert diagnostic.available_in_flight_items == 2
+    assert diagnostic.available_work_units == 4
 
 
 @pytest.mark.asyncio
@@ -3115,6 +3166,51 @@ async def test_diagnose_empty_work_claim_classifies_future_retry_delay() -> None
     repository = BatchRepository(prisma_client=_DiagnosticPrisma())
 
     assert await repository.diagnose_empty_work_claim() == "not_before_future"
+
+
+@pytest.mark.asyncio
+async def test_diagnose_empty_work_claim_context_reports_deferred_retry_details() -> None:
+    retry_at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+
+    class _DiagnosticPrisma:
+        async def query_raw(self, sql: str, *params):
+            del params
+            assert "diagnostic_context AS" in sql
+            return [
+                {
+                    "active_jobs": 1,
+                    "unleased_jobs": 1,
+                    "pending_or_in_progress_items": 1,
+                    "pending_items": 2,
+                    "in_progress_items": 0,
+                    "due_pending_items": 0,
+                    "future_pending_items": 2,
+                    "runnable_items": 0,
+                    "claimable_items": 0,
+                    "batch_id": "batch-retry",
+                    "model_group": "model-a",
+                    "service_tier": "standard",
+                    "tenant_scope_type": "team",
+                    "tenant_scope_id": "team-1",
+                    "head_item_work_units": 7,
+                    "job_lease_expires_at": None,
+                    "item_lease_expires_at": None,
+                    "item_not_before_at": retry_at,
+                }
+            ]
+
+    repository = BatchRepository(prisma_client=_DiagnosticPrisma())
+
+    diagnostic = await repository.diagnose_empty_work_claim_context()
+
+    assert diagnostic.reason == "not_before_future"
+    assert diagnostic.reason_category == "deferred_retry"
+    assert diagnostic.batch_id == "batch-retry"
+    assert diagnostic.model_group == "model-a"
+    assert diagnostic.tenant_scope_type == "team"
+    assert diagnostic.tenant_scope_id == "team-1"
+    assert diagnostic.head_item_work_units == 7
+    assert diagnostic.deferred_until == retry_at
 
 
 @pytest.mark.asyncio

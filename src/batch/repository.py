@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
+from src.batch.claim_diagnostics import BatchClaimDecisionDiagnostic
 from src.batch.create.session_repository import BatchCreateSessionRepository
 from src.batch.models import (
     BatchCompletionOutboxCreate,
@@ -479,6 +480,9 @@ class BatchRepository:
     async def diagnose_empty_work_claim(self) -> str:
         return await self.jobs.diagnose_empty_work_claim()
 
+    async def diagnose_empty_work_claim_context(self) -> BatchClaimDecisionDiagnostic:
+        return await self.jobs.diagnose_empty_work_claim_context()
+
     async def diagnose_model_group_work_claim_empty(
         self,
         *,
@@ -489,6 +493,23 @@ class BatchRepository:
         capacity_max_in_flight_work_units: int | None = None,
     ) -> str:
         return await self.jobs.diagnose_model_group_work_claim_empty(
+            model_group=model_group,
+            service_tier=service_tier,
+            max_work_units=max_work_units,
+            capacity_max_in_flight_items=capacity_max_in_flight_items,
+            capacity_max_in_flight_work_units=capacity_max_in_flight_work_units,
+        )
+
+    async def diagnose_model_group_work_claim_empty_context(
+        self,
+        *,
+        model_group: str,
+        service_tier: str,
+        max_work_units: int,
+        capacity_max_in_flight_items: int | None = None,
+        capacity_max_in_flight_work_units: int | None = None,
+    ) -> BatchClaimDecisionDiagnostic:
+        return await self.jobs.diagnose_model_group_work_claim_empty_context(
             model_group=model_group,
             service_tier=service_tier,
             max_work_units=max_work_units,

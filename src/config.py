@@ -571,6 +571,9 @@ class GeneralSettings(BaseModel):
     embeddings_batch_work_claim_max_items: int = Field(default=0, ge=0, le=200)
     embeddings_batch_work_claim_max_work_units: int = Field(default=0, ge=0)
     embeddings_batch_work_claim_min_items_for_microbatch: int = Field(default=4, ge=1, le=200)
+    embeddings_batch_claim_diagnostics_enabled: bool = True
+    embeddings_batch_claim_diagnostic_interval_seconds: float = Field(default=60.0, ge=1.0)
+    embeddings_batch_claim_diagnostic_max_keys: int = Field(default=1024, ge=1, le=100_000)
     embeddings_batch_model_capacity_enabled: bool = False
     embeddings_batch_default_model_max_in_flight: int = Field(default=16, ge=1)
     embeddings_batch_default_model_max_claim_work_units: int = Field(default=64, ge=1)

@@ -147,6 +147,7 @@ class BatchModelCapacityResolver:
         self._skip_reasons: dict[tuple[str, str], dict[str, int]] = {}
         self._snapshot_cache: list[BatchModelCapacitySnapshot] | None = None
         self._snapshot_cache_expires_at = 0.0
+        self._last_selection_snapshots: list[BatchModelCapacitySnapshot] = []
 
     async def select_model_group(
         self,
@@ -169,6 +170,7 @@ class BatchModelCapacityResolver:
         started = time.perf_counter()
         try:
             snapshots = await self.build_snapshots(force_refresh=True)
+            self._last_selection_snapshots = list(snapshots)
             eligible = [snapshot for snapshot in snapshots if snapshot.eligible]
             for snapshot in snapshots:
                 if snapshot.eligible:
@@ -197,6 +199,9 @@ class BatchModelCapacityResolver:
             observe_batch_scheduler_model_selection_latency(
                 latency_seconds=time.perf_counter() - started,
             )
+
+    def last_selection_snapshots(self) -> list[BatchModelCapacitySnapshot]:
+        return list(self._last_selection_snapshots)
 
     def record_selection(self, snapshot: BatchModelCapacitySnapshot) -> None:
         selected_at = datetime.now(tz=UTC)
