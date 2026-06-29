@@ -13,6 +13,7 @@ from src.services.ui_authorization import build_batch_create_session_capabilitie
 class FakeAuthorizationDB:
     def __init__(self) -> None:
         now = datetime.now(tz=UTC)
+        self.queries: list[tuple[str, tuple[object, ...]]] = []
         self.organizations = {
             "org-1": {
                 "organization_id": "org-1",
@@ -89,6 +90,7 @@ class FakeAuthorizationDB:
         self.batch_items = [
             {
                 "item_id": "item-1",
+                "batch_id": "batch-1",
                 "line_number": 1,
                 "custom_id": "req-1",
                 "status": "completed",
@@ -96,17 +98,39 @@ class FakeAuthorizationDB:
                 "provider_cost": 0.1,
                 "billed_cost": 0.125,
                 "last_error": None,
-                "request_body": {},
-                "response_body": {},
+                "request_body": {"model": "gpt-4o-mini", "input": "large prompt"},
+                "response_body": {"object": "embedding", "data": [{"embedding": [0.1]}]},
                 "error_body": None,
-                "usage": {},
+                "usage": {"prompt_tokens": 3, "total_tokens": 3},
                 "created_at": now,
                 "started_at": now,
                 "completed_at": now,
             },
         ]
+        for index in range(2, 5):
+            self.batch_items.append(
+                {
+                    "item_id": f"item-{index}",
+                    "batch_id": "batch-1",
+                    "line_number": index,
+                    "custom_id": f"req-{index}",
+                    "status": "pending",
+                    "attempts": 0,
+                    "provider_cost": 0.0,
+                    "billed_cost": 0.0,
+                    "last_error": None,
+                    "request_body": {"model": "gpt-4o-mini", "input": f"prompt-{index}"},
+                    "response_body": None,
+                    "error_body": None,
+                    "usage": None,
+                    "created_at": now,
+                    "started_at": None,
+                    "completed_at": None,
+                }
+            )
 
     async def query_raw(self, query: str, *params):
+        self.queries.append((query, params))
         if "COUNT(*) AS total FROM deltallm_teamtable" in query:
             return [{"total": 1}]
         if "FROM deltallm_teamtable t" in query and "SELECT" in query:
@@ -121,6 +145,16 @@ class FakeAuthorizationDB:
             return [{"total": 1}]
         if "COUNT(*) FILTER (WHERE status IN ('in_progress', 'finalizing')) AS in_progress" in query:
             return [{"total": 1, "queued": 0, "in_progress": 1, "completed": 0, "failed": 0, "cancelled": 0}]
+        if "FROM deltallm_batch_job" in query and "WHERE batch_id = $1" in query and "LEFT JOIN" not in query:
+            row = self.batches.get(str(params[0]))
+            if not row:
+                return []
+            return [{
+                "batch_id": row["batch_id"],
+                "status": row["status"],
+                "created_by_team_id": row["created_by_team_id"],
+                "created_by_organization_id": row["created_by_organization_id"],
+            }]
         if "FROM deltallm_batch_job j" in query and "LEFT JOIN deltallm_teamtable t" in query:
             if "WHERE j.batch_id = $1" in query:
                 row = self.batches.get(str(params[0]))
@@ -137,6 +171,44 @@ class FakeAuthorizationDB:
         if "SELECT COUNT(*) AS total FROM deltallm_batch_item" in query:
             return [{"total": len(self.batch_items)}]
         if "FROM deltallm_batch_item" in query:
+            if "WHERE batch_id = $1 AND item_id = $2" in query:
+                batch_id = str(params[0])
+                item_id = str(params[1])
+                return [
+                    item
+                    for item in self.batch_items
+                    if item.get("item_id") == item_id and self.batches.get(batch_id)
+                ]
+            if "request_body IS NOT NULL AS has_request_body" in query:
+                if "line_number > $2" in query:
+                    after_line_number = int(params[1])
+                    limit = int(params[2])
+                    page_items = [
+                        item
+                        for item in self.batch_items
+                        if int(item["line_number"]) > after_line_number
+                    ][:limit]
+                else:
+                    limit = int(params[1])
+                    offset = int(params[2])
+                    page_items = self.batch_items[offset : offset + limit]
+                return [
+                    {
+                        "item_id": item["item_id"],
+                        "line_number": item["line_number"],
+                        "custom_id": item["custom_id"],
+                        "status": item["status"],
+                        "attempts": item["attempts"],
+                        "provider_cost": item["provider_cost"],
+                        "billed_cost": item["billed_cost"],
+                        "last_error": item["last_error"],
+                        "has_request_body": item.get("request_body") is not None,
+                        "has_response_body": item.get("response_body") is not None,
+                        "has_error_body": item.get("error_body") is not None,
+                        "has_usage": item.get("usage") is not None,
+                    }
+                    for item in page_items
+                ]
             return list(self.batch_items)
         return []
 
@@ -410,6 +482,150 @@ async def test_list_batches_exposes_repair_capabilities_for_updating_scope(clien
         "requeue_stale": True,
         "mark_failed": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_get_batch_detail_returns_skinny_paginated_items(client, test_app, monkeypatch):
+    fake_db = FakeAuthorizationDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
+            is_platform_admin=False,
+            org_ids=[],
+            team_ids=["team-1"],
+            team_permissions_by_id={"team-1": {Permission.TEAM_READ, Permission.KEY_READ}},
+        ),
+    )
+
+    response = await client.get(
+        "/ui/api/batches/batch-1?items_limit=1&items_offset=0",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"]["pagination"] == {
+        "total": 4,
+        "limit": 1,
+        "offset": 0,
+        "has_more": True,
+        "after_line_number": None,
+        "next_after_line_number": 1,
+    }
+    item = payload["items"]["data"][0]
+    assert item["item_id"] == "item-1"
+    assert item["has_request_body"] is True
+    assert item["has_response_body"] is True
+    assert item["has_error_body"] is False
+    assert item["has_usage"] is True
+    assert "request_body" not in item
+    assert "response_body" not in item
+    assert "error_body" not in item
+    assert "usage" not in item
+    assert "metadata" not in payload
+    assert "total_billed_cost" not in payload
+    assert "total_provider_cost" not in payload
+    assert not any("COUNT(*) AS total FROM deltallm_batch_item" in query for query, _ in fake_db.queries)
+    assert not any("SUM(provider_cost)" in query for query, _ in fake_db.queries)
+
+
+@pytest.mark.asyncio
+async def test_get_batch_detail_supports_cursor_item_pagination(client, test_app, monkeypatch):
+    fake_db = FakeAuthorizationDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
+            is_platform_admin=False,
+            org_ids=[],
+            team_ids=["team-1"],
+            team_permissions_by_id={"team-1": {Permission.TEAM_READ, Permission.KEY_READ}},
+        ),
+    )
+
+    response = await client.get(
+        "/ui/api/batches/batch-1?items_limit=1&items_offset=1&after_line_number=1",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"]["data"][0]["item_id"] == "item-2"
+    assert payload["items"]["pagination"] == {
+        "total": 4,
+        "limit": 1,
+        "offset": 1,
+        "has_more": True,
+        "after_line_number": 1,
+        "next_after_line_number": 2,
+    }
+    assert any("line_number > $2" in query for query, _ in fake_db.queries)
+    assert not any("OFFSET $3" in query for query, _ in fake_db.queries)
+
+
+@pytest.mark.asyncio
+async def test_get_batch_costs_returns_totals_on_demand(client, test_app, monkeypatch):
+    fake_db = FakeAuthorizationDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
+            is_platform_admin=False,
+            org_ids=[],
+            team_ids=["team-1"],
+            team_permissions_by_id={"team-1": {Permission.TEAM_READ, Permission.KEY_READ}},
+        ),
+    )
+
+    response = await client.get(
+        "/ui/api/batches/batch-1/costs",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "batch_id": "batch-1",
+        "total_provider_cost": 0.2,
+        "total_billed_cost": 0.25,
+    }
+    assert any("SUM(provider_cost)" in query for query, _ in fake_db.queries)
+
+
+@pytest.mark.asyncio
+async def test_get_batch_item_returns_payload_on_demand(client, test_app, monkeypatch):
+    fake_db = FakeAuthorizationDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
+            is_platform_admin=False,
+            org_ids=[],
+            team_ids=["team-1"],
+            team_permissions_by_id={"team-1": {Permission.TEAM_READ, Permission.KEY_READ}},
+        ),
+    )
+
+    response = await client.get(
+        "/ui/api/batches/batch-1/items/item-1",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["batch_id"] == "batch-1"
+    assert payload["item_id"] == "item-1"
+    assert payload["request_body"] == {"model": "gpt-4o-mini", "input": "large prompt"}
+    assert payload["response_body"] == {"object": "embedding", "data": [{"embedding": [0.1]}]}
+    assert payload["usage"] == {"prompt_tokens": 3, "total_tokens": 3}
 
 
 @pytest.mark.asyncio
