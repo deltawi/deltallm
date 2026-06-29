@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
-import { batches, type BatchJobDetail, type BatchJobItem } from '../lib/api';
+import { batches, type BatchJobCosts, type BatchJobDetail, type BatchJobItem, type BatchJobItemDetail } from '../lib/api';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
 import { RecordDetailShell } from '../components/admin/shells';
-import { ArrowLeft, XCircle, Clock, DollarSign, Hash, ChevronDown, ChevronUp } from 'lucide-react';
+import { ArrowLeft, XCircle, Clock, DollarSign, Hash, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 import clsx from 'clsx';
 
 const STATUS_COLORS: Record<string, string> = {
@@ -32,6 +32,8 @@ const STATUS_LABELS: Record<string, string> = {
   pending: 'Pending',
 };
 
+const ITEMS_PAGE_SIZE = 50;
+
 function StatusBadge({ status }: { status: string }) {
   return (
     <span className={clsx('inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium', STATUS_COLORS[status] || 'bg-gray-100 text-gray-600')}>
@@ -56,6 +58,15 @@ function formatDuration(start: string | null | undefined, end: string | null | u
   if (mins < 60) return `${mins}m ${secs % 60}s`;
   const hrs = Math.floor(mins / 60);
   return `${hrs}h ${mins % 60}m`;
+}
+
+function formatCost(value: number | null | undefined, loading: boolean): string {
+  if (typeof value === 'number') return `$${value.toFixed(6)}`;
+  return loading ? 'Loading...' : '--';
+}
+
+function itemDetailKey(batchId: string, itemId: string): string {
+  return `${batchId}:${itemId}`;
 }
 
 function ProgressRing({ total, completed, failed, inProgress, cancelled }: {
@@ -125,16 +136,41 @@ function ProgressRing({ total, completed, failed, inProgress, cancelled }: {
 export default function BatchJobDetail() {
   const { batchId } = useParams<{ batchId: string }>();
   const navigate = useNavigate();
-  const [itemsOffset, setItemsOffset] = useState(0);
+  const activeBatchIdRef = useRef(batchId);
+  const [itemsPage, setItemsPage] = useState<{ offset: number; afterLineNumber: number | null }>({ offset: 0, afterLineNumber: null });
+  const [itemPageCursors, setItemPageCursors] = useState<Array<number | null>>([null]);
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
+  const [itemDetails, setItemDetails] = useState<Record<string, BatchJobItemDetail>>({});
+  const [itemDetailLoading, setItemDetailLoading] = useState<Record<string, boolean>>({});
+  const [itemDetailErrors, setItemDetailErrors] = useState<Record<string, string>>({});
+  const [costs, setCosts] = useState<BatchJobCosts | null>(null);
+  const [costsLoading, setCostsLoading] = useState(false);
+  const [costsError, setCostsError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
 
   const { data: job, loading, refetch } = useApi<BatchJobDetail | null>(
-    () => batches.get(batchId!, { items_limit: 50, items_offset: itemsOffset }),
-    [batchId, itemsOffset],
+    () => batches.get(batchId!, {
+      items_limit: ITEMS_PAGE_SIZE,
+      items_offset: itemsPage.offset,
+      after_line_number: itemsPage.afterLineNumber,
+    }),
+    [batchId, itemsPage.offset, itemsPage.afterLineNumber],
   );
 
-  if (loading || !job) {
+  useEffect(() => {
+    activeBatchIdRef.current = batchId;
+    setItemsPage({ offset: 0, afterLineNumber: null });
+    setItemPageCursors([null]);
+    setExpandedItem(null);
+    setItemDetails({});
+    setItemDetailLoading({});
+    setItemDetailErrors({});
+    setCosts(null);
+    setCostsLoading(false);
+    setCostsError(null);
+  }, [batchId]);
+
+  if (!job || job.batch_id !== batchId) {
     return (
       <div className="flex items-center justify-center py-24">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
@@ -155,6 +191,77 @@ export default function BatchJobDetail() {
     } finally {
       setCancelling(false);
     }
+  }
+
+  async function handleExpandItem(itemId: string) {
+    if (!batchId) return;
+    const detailKey = itemDetailKey(batchId, itemId);
+    if (expandedItem === itemId) {
+      setExpandedItem(null);
+      return;
+    }
+    setExpandedItem(itemId);
+    if (itemDetails[detailKey] || itemDetailLoading[detailKey]) return;
+
+    setItemDetailErrors((current) => {
+      const next = { ...current };
+      delete next[detailKey];
+      return next;
+    });
+    setItemDetailLoading((current) => ({ ...current, [detailKey]: true }));
+    try {
+      const detail = await batches.getItem(batchId, itemId);
+      if (activeBatchIdRef.current !== batchId) return;
+      setItemDetails((current) => ({ ...current, [detailKey]: detail }));
+    } catch (e: any) {
+      if (activeBatchIdRef.current !== batchId) return;
+      setItemDetailErrors((current) => ({
+        ...current,
+        [detailKey]: e?.message || 'Failed to load item payload',
+      }));
+    } finally {
+      if (activeBatchIdRef.current !== batchId) return;
+      setItemDetailLoading((current) => ({ ...current, [detailKey]: false }));
+    }
+  }
+
+  async function handleLoadCosts() {
+    if (!batchId || costsLoading) return;
+    setCostsLoading(true);
+    setCostsError(null);
+    try {
+      const result = await batches.costs(batchId);
+      if (activeBatchIdRef.current !== batchId) return;
+      setCosts(result);
+    } catch (e: any) {
+      if (activeBatchIdRef.current !== batchId) return;
+      setCostsError(e?.message || 'Failed to load costs');
+    } finally {
+      if (activeBatchIdRef.current !== batchId) return;
+      setCostsLoading(false);
+    }
+  }
+
+  function handleItemsNextPage() {
+    const nextAfterLineNumber = itemsPagination?.next_after_line_number;
+    if (nextAfterLineNumber == null) return;
+    const nextOffset = itemsPage.offset + ITEMS_PAGE_SIZE;
+    const nextIndex = Math.floor(nextOffset / ITEMS_PAGE_SIZE);
+    setExpandedItem(null);
+    setItemPageCursors((current) => {
+      const next = current.slice(0, nextIndex + 1);
+      next[nextIndex] = nextAfterLineNumber;
+      return next;
+    });
+    setItemsPage({ offset: nextOffset, afterLineNumber: nextAfterLineNumber });
+  }
+
+  function handleItemsPreviousPage() {
+    const previousOffset = Math.max(0, itemsPage.offset - ITEMS_PAGE_SIZE);
+    const previousIndex = Math.floor(previousOffset / ITEMS_PAGE_SIZE);
+    const previousAfterLineNumber = itemPageCursors[previousIndex] ?? null;
+    setExpandedItem(null);
+    setItemsPage({ offset: previousOffset, afterLineNumber: previousAfterLineNumber });
   }
 
   const itemsData = job.items?.data || [];
@@ -198,14 +305,19 @@ export default function BatchJobDetail() {
       header: '',
       render: (row: BatchJobItem) => (
         <button
-          onClick={(e) => { e.stopPropagation(); setExpandedItem(expandedItem === row.item_id ? null : row.item_id); }}
+          onClick={(e) => { e.stopPropagation(); handleExpandItem(row.item_id); }}
           className="p-1 hover:bg-gray-100 rounded"
+          title="View item payload"
         >
           {expandedItem === row.item_id ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
         </button>
       ),
     },
   ];
+
+  const expandedRow = expandedItem ? itemsData.find((item: BatchJobItem) => item.item_id === expandedItem) : null;
+  const expandedDetailKey = batchId && expandedItem ? itemDetailKey(batchId, expandedItem) : null;
+  const expandedDetail = expandedDetailKey ? itemDetails[expandedDetailKey] : null;
 
   return (
     <RecordDetailShell
@@ -271,7 +383,19 @@ export default function BatchJobDetail() {
 
         <Card>
           <div className="p-5 space-y-4">
-            <h3 className="text-sm font-semibold text-gray-900 mb-4">Timing & Cost</h3>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold text-gray-900">Timing & Cost</h3>
+              {!costs && (
+                <button
+                  onClick={handleLoadCosts}
+                  disabled={costsLoading}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:opacity-50"
+                >
+                  <RefreshCw className={clsx('h-3.5 w-3.5', costsLoading && 'animate-spin')} />
+                  {costsError ? 'Retry' : 'Load costs'}
+                </button>
+              )}
+            </div>
             <div className="space-y-3">
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-blue-50 rounded-lg">
@@ -288,7 +412,7 @@ export default function BatchJobDetail() {
                 </div>
                 <div>
                   <p className="text-xs text-gray-500">Billed Cost</p>
-                  <p className="text-sm font-semibold text-gray-900">${(job.total_billed_cost || 0).toFixed(6)}</p>
+                  <p className="text-sm font-semibold text-gray-900">{formatCost(costs?.total_billed_cost ?? job.total_billed_cost, costsLoading)}</p>
                 </div>
               </div>
               <div className="flex items-center gap-3">
@@ -297,9 +421,10 @@ export default function BatchJobDetail() {
                 </div>
                 <div>
                   <p className="text-xs text-gray-500">Provider Cost</p>
-                  <p className="text-sm font-semibold text-gray-900">${(job.total_provider_cost || 0).toFixed(6)}</p>
+                  <p className="text-sm font-semibold text-gray-900">{formatCost(costs?.total_provider_cost ?? job.total_provider_cost, costsLoading)}</p>
                 </div>
               </div>
+              {costsError && <p className="text-xs text-red-600">{costsError}</p>}
             </div>
             <div className="pt-3 border-t border-gray-100 space-y-1.5 text-xs text-gray-500">
               <div className="flex justify-between">
@@ -333,19 +458,60 @@ export default function BatchJobDetail() {
         <DataTable
           columns={itemColumns}
           data={itemsData}
+          loading={loading}
           emptyMessage="No items found"
           pagination={itemsPagination}
-          onPageChange={setItemsOffset}
+          onPreviousPage={handleItemsPreviousPage}
+          onNextPage={handleItemsNextPage}
         />
-        {expandedItem && itemsData.find((item: any) => item.item_id === expandedItem) && (
-          <ExpandedItemView item={itemsData.find((item: any) => item.item_id === expandedItem)!} />
+        {expandedItem && expandedRow && (
+          <ExpandedItemView
+            item={expandedDetail || expandedRow}
+            loading={Boolean(expandedDetailKey && itemDetailLoading[expandedDetailKey])}
+            error={expandedDetailKey ? itemDetailErrors[expandedDetailKey] : undefined}
+          />
         )}
       </Card>
     </RecordDetailShell>
   );
 }
 
-function ExpandedItemView({ item }: { item: any }) {
+function ExpandedItemView({
+  item,
+  loading,
+  error,
+}: {
+  item: BatchJobItem | BatchJobItemDetail;
+  loading?: boolean;
+  error?: string | null;
+}) {
+  if (loading) {
+    return (
+      <div className="border-t border-gray-100 bg-gray-50 p-4">
+        <div className="flex items-center gap-2 text-sm text-gray-500">
+          <div className="h-4 w-4 animate-spin rounded-full border-b-2 border-blue-600" />
+          Loading item payload...
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="border-t border-gray-100 bg-red-50 p-4 text-sm text-red-700">
+        {error}
+      </div>
+    );
+  }
+
+  if (!item.request_body && !item.response_body && !item.error_body && !item.usage) {
+    return (
+      <div className="border-t border-gray-100 bg-gray-50 p-4 text-sm text-gray-500">
+        No item payload available.
+      </div>
+    );
+  }
+
   return (
     <div className="border-t border-gray-100 bg-gray-50 p-4 space-y-3">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

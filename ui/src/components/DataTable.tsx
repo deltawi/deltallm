@@ -17,6 +17,8 @@ interface DataTableProps<T> {
   onRowClick?: (row: T) => void;
   pagination?: Pagination;
   onPageChange?: (offset: number) => void;
+  onPreviousPage?: () => void;
+  onNextPage?: () => void;
 }
 
 export default function DataTable<T extends Record<string, any>>({
@@ -27,6 +29,8 @@ export default function DataTable<T extends Record<string, any>>({
   onRowClick,
   pagination,
   onPageChange,
+  onPreviousPage,
+  onNextPage,
 }: DataTableProps<T>) {
   if (loading) {
     return (
@@ -40,6 +44,9 @@ export default function DataTable<T extends Record<string, any>>({
 
   const currentPage = pagination ? Math.floor(pagination.offset / pagination.limit) + 1 : 1;
   const totalPages = pagination ? Math.ceil(pagination.total / pagination.limit) : 1;
+  const canPage = Boolean(onPageChange || (onPreviousPage && onNextPage));
+  const goPrevious = onPreviousPage ?? (() => onPageChange?.(Math.max(0, (pagination?.offset || 0) - (pagination?.limit || 0))));
+  const goNext = onNextPage ?? (() => onPageChange?.((pagination?.offset || 0) + (pagination?.limit || 0)));
 
   return (
     <div>
@@ -88,7 +95,7 @@ export default function DataTable<T extends Record<string, any>>({
           </tbody>
         </table>
       </div>
-      {pagination && pagination.total > 0 && onPageChange && (
+      {pagination && pagination.total > 0 && canPage && (
         <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100">
           <span className="text-xs text-gray-500">
             Showing {pagination.offset + 1}–{Math.min(pagination.offset + pagination.limit, pagination.total)} of {pagination.total}
@@ -96,7 +103,7 @@ export default function DataTable<T extends Record<string, any>>({
           {totalPages > 1 && (
             <div className="flex items-center gap-1">
               <button
-                onClick={() => onPageChange(Math.max(0, pagination.offset - pagination.limit))}
+                onClick={goPrevious}
                 disabled={pagination.offset === 0}
                 className="p-1.5 rounded-lg hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed"
               >
@@ -106,7 +113,7 @@ export default function DataTable<T extends Record<string, any>>({
                 Page {currentPage} of {totalPages}
               </span>
               <button
-                onClick={() => onPageChange(pagination.offset + pagination.limit)}
+                onClick={goNext}
                 disabled={!pagination.has_more}
                 className="p-1.5 rounded-lg hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed"
               >

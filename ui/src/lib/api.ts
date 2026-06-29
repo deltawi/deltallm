@@ -73,6 +73,8 @@ export interface Pagination {
   limit: number;
   offset: number;
   has_more: boolean;
+  after_line_number?: number | null;
+  next_after_line_number?: number | null;
 }
 
 export interface Paginated<T> {
@@ -387,6 +389,12 @@ export interface BatchJobSummary {
   cancelled: number;
 }
 
+export interface BatchJobCosts {
+  batch_id: string;
+  total_provider_cost: number;
+  total_billed_cost: number;
+}
+
 export interface BatchJobItem {
   item_id: string;
   line_number: number;
@@ -396,10 +404,18 @@ export interface BatchJobItem {
   provider_cost?: number | null;
   billed_cost?: number | null;
   last_error?: string | null;
+  has_request_body?: boolean;
+  has_response_body?: boolean;
+  has_error_body?: boolean;
+  has_usage?: boolean;
   request_body?: Record<string, unknown> | null;
   response_body?: Record<string, unknown> | null;
   error_body?: Record<string, unknown> | null;
   usage?: Record<string, unknown> | null;
+}
+
+export interface BatchJobItemDetail extends BatchJobItem {
+  batch_id: string;
   created_at?: string | null;
   started_at?: string | null;
   completed_at?: string | null;
@@ -417,8 +433,8 @@ export interface BatchJobDetail {
   failed_items: number;
   cancelled_items: number;
   in_progress_items: number;
-  total_provider_cost: number;
-  total_billed_cost: number;
+  total_provider_cost?: number | null;
+  total_billed_cost?: number | null;
   created_by_api_key?: string | null;
   created_by_team_id?: string | null;
   team_alias?: string | null;
@@ -1132,8 +1148,12 @@ export const batches = {
   list: (params?: { search?: string; status?: string; limit?: number; offset?: number }) =>
     apiFetch<Paginated<BatchJobListItem>>(withQuery('/ui/api/batches', params as any)),
   summary: () => apiFetch<BatchJobSummary>('/ui/api/batches/summary'),
-  get: (batchId: string, params?: { items_limit?: number; items_offset?: number }) =>
+  get: (batchId: string, params?: { items_limit?: number; items_offset?: number; after_line_number?: number | null }) =>
     apiFetch<BatchJobDetail>(withQuery(`/ui/api/batches/${encodeURIComponent(batchId)}`, params as any)),
+  costs: (batchId: string) =>
+    apiFetch<BatchJobCosts>(`/ui/api/batches/${encodeURIComponent(batchId)}/costs`),
+  getItem: (batchId: string, itemId: string) =>
+    apiFetch<BatchJobItemDetail>(`/ui/api/batches/${encodeURIComponent(batchId)}/items/${encodeURIComponent(itemId)}`),
   cancel: (batchId: string) => apiFetch<{ batch_id: string; status: string }>(`/ui/api/batches/${encodeURIComponent(batchId)}/cancel`, { method: 'POST' }),
 };
 

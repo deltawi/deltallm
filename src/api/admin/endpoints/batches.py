@@ -15,7 +15,7 @@ from src.auth.roles import Permission
 from src.api.admin.endpoints.common import db_or_503, emit_admin_mutation_audit, to_json_value, get_auth_scope
 from src.audit.actions import AuditAction
 from src.batch.repository import BatchRepository
-from src.batch.models import BATCH_JOB_STATUS_SET, decode_operator_failed_reason, encode_operator_failed_reason
+from src.batch.models import BATCH_JOB_STATUS_SET, encode_operator_failed_reason
 from src.batch.scheduling import (
     API_KEY_TENANT_SCOPE_PREFIX,
     BatchJobRankInput,
@@ -962,6 +962,7 @@ async def get_batch(
     batch_id: str,
     items_limit: int = Query(default=50, ge=1, le=500),
     items_offset: int = Query(default=0, ge=0),
+    after_line_number: int | None = Query(default=None, ge=0),
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
 ) -> dict[str, Any]:
@@ -970,8 +971,13 @@ async def get_batch(
 
     rows = await db.query_raw(
         """
-        SELECT j.*, t.team_alias, t.organization_id
-        , COALESCE(j.created_by_organization_id, t.organization_id) AS organization_id
+        SELECT
+            j.batch_id, j.endpoint, j.status, j.model, j.execution_mode,
+            j.total_items, j.completed_items, j.failed_items, j.cancelled_items, j.in_progress_items,
+            j.created_by_api_key, j.created_by_team_id, j.created_by_organization_id,
+            j.created_at, j.started_at, j.completed_at, j.cancel_requested_at, j.expires_at,
+            t.team_alias,
+            COALESCE(j.created_by_organization_id, t.organization_id) AS organization_id
         FROM deltallm_batch_job j
         LEFT JOIN deltallm_teamtable t ON t.team_id = j.created_by_team_id
         WHERE j.batch_id = $1
@@ -984,44 +990,55 @@ async def get_batch(
 
     job = dict(rows[0])
     await _enforce_batch_update_scope(db=db, scope=scope, job=job)
-    size_aging_config = _batch_size_aging_config_or_default(request)
 
-    cost_rows = await db.query_raw(
-        """
-        SELECT COALESCE(SUM(provider_cost), 0) AS total_provider_cost,
-               COALESCE(SUM(billed_cost), 0) AS total_billed_cost
-        FROM deltallm_batch_item
-        WHERE batch_id = $1
-        """,
-        batch_id,
-    )
-    cost_row = dict(cost_rows[0]) if cost_rows else {}
-
-    items_count_rows = await db.query_raw(
-        "SELECT COUNT(*) AS total FROM deltallm_batch_item WHERE batch_id = $1",
-        batch_id,
-    )
-    items_total = int((items_count_rows[0] if items_count_rows else {}).get("total") or 0)
-
-    item_rows = await db.query_raw(
-        """
-        SELECT item_id, line_number, custom_id, status, attempts, provider_cost, billed_cost,
-               last_error, request_body, response_body, error_body, usage,
-               scheduling_model, scheduling_model_group, estimated_work_units, not_before_at,
-               last_scheduled_at,
-               created_at, started_at, completed_at
-        FROM deltallm_batch_item
-        WHERE batch_id = $1
-        ORDER BY line_number ASC
-        LIMIT $2 OFFSET $3
-        """,
-        batch_id,
-        items_limit,
-        items_offset,
+    items_total = int(job.get("total_items") or 0)
+    fetch_limit = items_limit + 1
+    if after_line_number is None:
+        item_rows = await db.query_raw(
+            """
+            SELECT item_id, line_number, custom_id, status, attempts, provider_cost, billed_cost,
+                   last_error,
+                   request_body IS NOT NULL AS has_request_body,
+                   response_body IS NOT NULL AS has_response_body,
+                   error_body IS NOT NULL AS has_error_body,
+                   usage IS NOT NULL AS has_usage
+            FROM deltallm_batch_item
+            WHERE batch_id = $1
+            ORDER BY line_number ASC
+            LIMIT $2 OFFSET $3
+            """,
+            batch_id,
+            fetch_limit,
+            items_offset,
+        )
+    else:
+        item_rows = await db.query_raw(
+            """
+            SELECT item_id, line_number, custom_id, status, attempts, provider_cost, billed_cost,
+                   last_error,
+                   request_body IS NOT NULL AS has_request_body,
+                   response_body IS NOT NULL AS has_response_body,
+                   error_body IS NOT NULL AS has_error_body,
+                   usage IS NOT NULL AS has_usage
+            FROM deltallm_batch_item
+            WHERE batch_id = $1
+              AND line_number > $2
+            ORDER BY line_number ASC
+            LIMIT $3
+            """,
+            batch_id,
+            after_line_number,
+            fetch_limit,
+        )
+    item_rows_page = [dict(r) for r in item_rows[:items_limit]]
+    has_more_items = len(item_rows) > items_limit
+    next_after_line_number = (
+        int(item_rows_page[-1].get("line_number"))
+        if has_more_items and item_rows_page and item_rows_page[-1].get("line_number") is not None
+        else None
     )
 
     masked_key = _mask_api_key(job.get("created_by_api_key"))
-    scheduler_policy_fields = _scheduler_policy_fields(job, size_aging_config=size_aging_config)
 
     return {
         "batch_id": job.get("batch_id"),
@@ -1029,34 +1046,11 @@ async def get_batch(
         "status": job.get("status"),
         "model": job.get("model"),
         "execution_mode": job.get("execution_mode"),
-        "metadata": to_json_value(job.get("metadata")),
-        "provider_error": decode_operator_failed_reason(job.get("provider_error")),
         "total_items": int(job.get("total_items") or 0),
         "completed_items": int(job.get("completed_items") or 0),
         "failed_items": int(job.get("failed_items") or 0),
         "cancelled_items": int(job.get("cancelled_items") or 0),
         "in_progress_items": int(job.get("in_progress_items") or 0),
-        "scheduler_version": job.get("scheduler_version"),
-        "scheduling_model": job.get("scheduling_model"),
-        "scheduling_model_group": job.get("scheduling_model_group"),
-        "scheduling_endpoint": job.get("scheduling_endpoint"),
-        "tenant_scope_type": job.get("tenant_scope_type"),
-        "tenant_scope_id": _display_tenant_scope_id(
-            scope_type=job.get("tenant_scope_type"),
-            scope_id=job.get("tenant_scope_id"),
-        ),
-        "service_tier": job.get("service_tier"),
-        "estimated_work_units": int(job.get("estimated_work_units") or 0),
-        "remaining_work_units": int(job.get("remaining_work_units") or 0),
-        "size_class": job.get("size_class"),
-        "queue_entered_at": to_json_value(job.get("queue_entered_at")),
-        "first_claimed_at": to_json_value(job.get("first_claimed_at")),
-        "last_claimed_at": to_json_value(job.get("last_claimed_at")),
-        "last_scheduled_at": to_json_value(job.get("last_scheduled_at")),
-        **scheduler_policy_fields,
-        "scheduler_debug": to_json_value(job.get("scheduler_debug")),
-        "total_provider_cost": float(cost_row.get("total_provider_cost") or 0),
-        "total_billed_cost": float(cost_row.get("total_billed_cost") or 0),
         "created_by_api_key": masked_key,
         "created_by_team_id": job.get("created_by_team_id"),
         "created_by_organization_id": job.get("created_by_organization_id") or job.get("organization_id"),
@@ -1068,15 +1062,76 @@ async def get_batch(
         "expires_at": to_json_value(job.get("expires_at")),
         "capabilities": build_batch_capabilities(scope, job),
         "items": {
-            "data": [to_json_value(dict(r)) for r in item_rows],
+            "data": [to_json_value(r) for r in item_rows_page],
             "pagination": {
                 "total": items_total,
                 "limit": items_limit,
                 "offset": items_offset,
-                "has_more": items_offset + items_limit < items_total,
+                "has_more": has_more_items,
+                "after_line_number": after_line_number,
+                "next_after_line_number": next_after_line_number,
             },
         },
     }
+
+
+@router.get("/ui/api/batches/{batch_id}/costs")
+async def get_batch_costs(
+    request: Request,
+    batch_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    db = db_or_503(request)
+    job = await _load_batch_scope_row(db, batch_id)
+    await _enforce_batch_update_scope(db=db, scope=scope, job=job)
+
+    rows = await db.query_raw(
+        """
+        SELECT COALESCE(SUM(provider_cost), 0) AS total_provider_cost,
+               COALESCE(SUM(billed_cost), 0) AS total_billed_cost
+        FROM deltallm_batch_item
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    row = dict(rows[0]) if rows else {}
+    return {
+        "batch_id": batch_id,
+        "total_provider_cost": float(row.get("total_provider_cost") or 0),
+        "total_billed_cost": float(row.get("total_billed_cost") or 0),
+    }
+
+
+@router.get("/ui/api/batches/{batch_id}/items/{item_id}")
+async def get_batch_item(
+    request: Request,
+    batch_id: str,
+    item_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    scope = get_auth_scope(request, authorization, x_master_key, required_permission=Permission.KEY_READ)
+    db = db_or_503(request)
+    job = await _load_batch_scope_row(db, batch_id)
+    await _enforce_batch_update_scope(db=db, scope=scope, job=job)
+
+    rows = await db.query_raw(
+        """
+        SELECT item_id, batch_id, line_number, custom_id, status, attempts, provider_cost, billed_cost,
+               last_error, request_body, response_body, error_body, usage,
+               created_at, started_at, completed_at
+        FROM deltallm_batch_item
+        WHERE batch_id = $1 AND item_id = $2
+        LIMIT 1
+        """,
+        batch_id,
+        item_id,
+    )
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch item not found")
+    return to_json_value(dict(rows[0]))
 
 
 @router.post("/ui/api/batches/{batch_id}/cancel")
