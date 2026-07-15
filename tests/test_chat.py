@@ -1197,3 +1197,76 @@ async def test_chat_completion_uses_bedrock_sigv4_headers(client, test_app):
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200
     assert response.json()["choices"][0]["message"]["content"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_bedrock_omits_implicit_sampling_defaults(client, test_app):
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.deltallm_params["provider"] = "bedrock"
+    deployment.deltallm_params["model"] = "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
+    deployment.deltallm_params["region"] = "us-east-1"
+    deployment.deltallm_params["aws_access_key_id"] = "AKIDEXAMPLE"
+    deployment.deltallm_params["aws_secret_access_key"] = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+    captured: dict[str, object] = {}
+
+    async def post(url, headers, json=None, content=None, timeout=0):  # noqa: ANN001, ANN201
+        del url, headers, json, timeout
+        assert content is not None
+        captured["payload"] = jsonlib.loads(content.decode("utf-8"))
+        payload = {
+            "requestId": "req_123",
+            "output": {"message": {"content": [{"text": "ok"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        }
+        return httpx.Response(200, json=payload)
+
+    test_app.state.http_client.post = post
+
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "stream": False},
+    )
+
+    assert response.status_code == 200
+    assert "inferenceConfig" not in captured["payload"]
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_bedrock_preserves_explicit_null_sampling_params(client, test_app):
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.deltallm_params["provider"] = "bedrock"
+    deployment.deltallm_params["model"] = "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
+    deployment.deltallm_params["region"] = "us-east-1"
+    deployment.deltallm_params["aws_access_key_id"] = "AKIDEXAMPLE"
+    deployment.deltallm_params["aws_secret_access_key"] = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+    captured: dict[str, object] = {}
+
+    async def post(url, headers, json=None, content=None, timeout=0):  # noqa: ANN001, ANN201
+        del url, headers, json, timeout
+        assert content is not None
+        captured["payload"] = jsonlib.loads(content.decode("utf-8"))
+        payload = {
+            "requestId": "req_123",
+            "output": {"message": {"content": [{"text": "ok"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        }
+        return httpx.Response(200, json=payload)
+
+    test_app.state.http_client.post = post
+
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": False,
+            "top_p": None,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "inferenceConfig" not in captured["payload"]

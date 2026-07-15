@@ -7,6 +7,13 @@ from src.models.errors import InvalidRequestError
 from src.models.requests import ChatCompletionRequest, CompletionsRequest, ResponsesRequest
 
 
+def _copy_explicit_fields(source: CompletionsRequest | ResponsesRequest, target: dict[str, Any], field_map: dict[str, str]) -> None:
+    fields_set = getattr(source, "model_fields_set", set())
+    for source_field, target_field in field_map.items():
+        if source_field in fields_set:
+            target[target_field] = getattr(source, source_field)
+
+
 def completions_to_chat_request(payload: CompletionsRequest) -> ChatCompletionRequest:
     if payload.echo:
         raise InvalidRequestError(message="`echo=true` is not supported on this gateway")
@@ -22,20 +29,27 @@ def completions_to_chat_request(payload: CompletionsRequest) -> ChatCompletionRe
     else:
         prompt_text = payload.prompt
 
-    return ChatCompletionRequest(
-        model=payload.model,
-        messages=[{"role": "user", "content": prompt_text}],
-        temperature=payload.temperature,
-        max_tokens=payload.max_tokens,
-        top_p=payload.top_p,
-        n=payload.n,
-        stream=payload.stream,
-        stop=payload.stop,
-        presence_penalty=payload.presence_penalty,
-        frequency_penalty=payload.frequency_penalty,
-        user=payload.user,
-        metadata=payload.metadata,
+    data: dict[str, Any] = {
+        "model": payload.model,
+        "messages": [{"role": "user", "content": prompt_text}],
+    }
+    _copy_explicit_fields(
+        payload,
+        data,
+        {
+            "temperature": "temperature",
+            "max_tokens": "max_tokens",
+            "top_p": "top_p",
+            "n": "n",
+            "stream": "stream",
+            "stop": "stop",
+            "presence_penalty": "presence_penalty",
+            "frequency_penalty": "frequency_penalty",
+            "user": "user",
+            "metadata": "metadata",
+        },
     )
+    return ChatCompletionRequest.model_validate(data)
 
 
 def responses_to_chat_request(payload: ResponsesRequest) -> ChatCompletionRequest:
@@ -67,18 +81,25 @@ def responses_to_chat_request(payload: ResponsesRequest) -> ChatCompletionReques
     if not messages:
         raise InvalidRequestError(message="Responses `input` could not be translated into chat messages")
 
-    return ChatCompletionRequest(
-        model=payload.model,
-        messages=messages,
-        temperature=payload.temperature,
-        max_tokens=payload.max_output_tokens,
-        top_p=payload.top_p,
-        stream=payload.stream,
-        tools=payload.tools,
-        tool_choice=payload.tool_choice,
-        user=payload.user,
-        metadata=payload.metadata,
+    data: dict[str, Any] = {
+        "model": payload.model,
+        "messages": messages,
+    }
+    _copy_explicit_fields(
+        payload,
+        data,
+        {
+            "temperature": "temperature",
+            "max_output_tokens": "max_tokens",
+            "top_p": "top_p",
+            "stream": "stream",
+            "tools": "tools",
+            "tool_choice": "tool_choice",
+            "user": "user",
+            "metadata": "metadata",
+        },
     )
+    return ChatCompletionRequest.model_validate(data)
 
 
 def chat_response_to_completions_response(chat_payload: dict[str, Any]) -> dict[str, Any]:

@@ -8,6 +8,7 @@ from fastapi import Request
 from src.callbacks import CallbackManager
 from src.chat.audit import emit_prompt_resolution_audit_event
 from src.models.errors import InvalidRequestError
+from src.models.request_serialization import dump_request_for_preflight
 from src.models.requests import ChatCompletionRequest
 from src.routers.routing_decision import set_prompt_provenance
 from src.services.model_visibility import ensure_model_allowed, get_callable_target_policy_mode_from_app
@@ -35,7 +36,7 @@ async def run_text_preflight(
 
     guardrail_middleware = request.app.state.guardrail_middleware
     callback_manager: CallbackManager = getattr(request.app.state, "callback_manager", CallbackManager())
-    data = request_data or payload.model_dump(exclude_none=True)
+    data = dict(request_data) if request_data is not None else dump_request_for_preflight(payload)
     metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
     explicit_prompt_ref = parse_prompt_reference(metadata.get("prompt_ref")) if isinstance(metadata, dict) else None
     prompt_variables: dict[str, Any] = {}

@@ -379,3 +379,58 @@ async def test_bedrock_adapter_translate_request_and_response() -> None:
         assert payload["usage"]["total_tokens"] == 6
     finally:
         await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_bedrock_adapter_only_sends_explicit_sampling_params() -> None:
+    adapter = BedrockAdapter(httpx.AsyncClient())
+    try:
+        base = {
+            "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "messages": [{"role": "user", "content": "Say hi"}],
+        }
+
+        omitted = await adapter.translate_request(ChatCompletionRequest.model_validate(base), {})
+        assert "inferenceConfig" not in omitted
+
+        temperature = await adapter.translate_request(
+            ChatCompletionRequest.model_validate({**base, "temperature": 0.7}),
+            {},
+        )
+        assert temperature["inferenceConfig"] == {"temperature": 0.7}
+
+        top_p = await adapter.translate_request(
+            ChatCompletionRequest.model_validate({**base, "top_p": 0.8}),
+            {},
+        )
+        assert top_p["inferenceConfig"] == {"topP": 0.8}
+
+        top_p_null = await adapter.translate_request(
+            ChatCompletionRequest.model_validate({**base, "top_p": None}),
+            {},
+        )
+        assert "inferenceConfig" not in top_p_null
+
+        both_explicit = await adapter.translate_request(
+            ChatCompletionRequest.model_validate({**base, "temperature": 0.5, "top_p": 0.8}),
+            {},
+        )
+        assert both_explicit["inferenceConfig"] == {"temperature": 0.5, "topP": 0.8}
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_bedrock_adapter_surfaces_provider_error_message() -> None:
+    adapter = BedrockAdapter(httpx.AsyncClient())
+    try:
+        response = httpx.Response(
+            400,
+            json={"message": "`temperature` and `top_p` cannot both be specified"},
+            request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/model/claude/converse"),
+        )
+        exc = httpx.HTTPStatusError("bad request", request=response.request, response=response)
+        mapped = adapter.map_error(exc)
+        assert str(mapped) == "`temperature` and `top_p` cannot both be specified"
+    finally:
+        await adapter.http_client.aclose()
