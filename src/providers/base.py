@@ -17,6 +17,30 @@ from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
 
 
+def provider_http_error_message(provider_error: httpx.HTTPStatusError, *, fallback: str) -> str:
+    response = provider_error.response
+    try:
+        payload = response.json()
+    except (AttributeError, ValueError):
+        payload = None
+
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            message = str(error.get("message") or "").strip()
+            if message:
+                return message
+        for key in ("message", "Message"):
+            message = str(payload.get(key) or "").strip()
+            if message:
+                return message
+
+    body = str(getattr(response, "text", "") or "").strip()
+    if body:
+        return body
+    return fallback
+
+
 def map_standard_provider_error(
     provider_error: Exception,
     *,

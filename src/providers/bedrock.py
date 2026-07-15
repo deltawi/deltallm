@@ -9,7 +9,7 @@ import httpx
 from src.models.errors import InvalidRequestError
 from src.models.requests import ChatCompletionRequest
 from src.models.responses import ChatCompletionResponse
-from src.providers.base import ProviderAdapter, map_standard_provider_error
+from src.providers.base import ProviderAdapter, map_standard_provider_error, provider_http_error_message
 from src.providers.healthcheck import is_provider_healthy
 
 
@@ -46,9 +46,10 @@ class BedrockAdapter(ProviderAdapter):
         inference_config: dict[str, Any] = {}
         if canonical_request.max_tokens is not None:
             inference_config["maxTokens"] = canonical_request.max_tokens
-        if canonical_request.temperature is not None:
+        fields_set = getattr(canonical_request, "model_fields_set", set())
+        if "temperature" in fields_set and canonical_request.temperature is not None:
             inference_config["temperature"] = canonical_request.temperature
-        if canonical_request.top_p is not None:
+        if "top_p" in fields_set and canonical_request.top_p is not None:
             inference_config["topP"] = canonical_request.top_p
         if canonical_request.stop:
             inference_config["stopSequences"] = canonical_request.stop if isinstance(canonical_request.stop, list) else [canonical_request.stop]
@@ -105,10 +106,15 @@ class BedrockAdapter(ProviderAdapter):
 
     def map_error(self, provider_error: Exception) -> Exception:
         status = provider_error.response.status_code if isinstance(provider_error, httpx.HTTPStatusError) else None
+        invalid_request_message = (
+            provider_http_error_message(provider_error, fallback=f"Provider rejected request: {status}")
+            if isinstance(provider_error, httpx.HTTPStatusError)
+            else f"Provider rejected request: {status}"
+        )
         return map_standard_provider_error(
             provider_error,
-            invalid_request_message=f"Provider rejected request: {status}",
-            rate_limit_message=f"Provider rate limited request: {status}",
+            invalid_request_message=invalid_request_message,
+            rate_limit_message=invalid_request_message if status == 429 else f"Provider rate limited request: {status}",
         )
 
     async def health_check(self, provider_config: dict[str, Any]) -> bool:

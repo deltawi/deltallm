@@ -14,6 +14,7 @@ from src.batch.endpoints import (
     SUPPORTED_BATCH_ENDPOINT_SET,
     supported_batch_endpoints_display,
 )
+from src.models.request_serialization import dump_request_for_preflight
 from src.models.requests import ChatCompletionRequest, EmbeddingRequest, MCPToolDefinition
 from src.models.responses import UserAPIKeyAuth
 from src.services.callable_target_grants import CallableTargetGrantService
@@ -106,7 +107,9 @@ def _validate_batch_request_body(
         if endpoint == BATCH_ENDPOINT_CHAT_COMPLETIONS:
             validated = ChatCompletionRequest.model_validate(body)
             _validate_batch_chat_request(validated, line_number=line_number)
-            return validated.model_dump(exclude_none=True), validated.model
+            request_body = dump_request_for_preflight(validated)
+            request_body.setdefault("stream", False)
+            return request_body, validated.model
     except ValidationError as exc:
         message = exc.errors()[0].get("msg") if exc.errors() else str(exc)
         raise HTTPException(

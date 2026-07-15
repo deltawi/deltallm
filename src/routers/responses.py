@@ -18,11 +18,9 @@ router = APIRouter(prefix="/v1", tags=["responses"])
 @router.post("/responses", dependencies=[Depends(require_api_key), Depends(enforce_rate_limits)])
 async def responses(request: Request, payload: ResponsesRequest):
     canonical = responses_to_chat_request(payload)
-    request_data = canonical.model_dump(exclude_none=True)
     return await handle_chat_like_request(
         request,
         canonical,
-        request_data=request_data,
         response_transform=chat_response_to_responses_response,
         stream_line_transform=stream_chat_to_responses_line,
         stream_response_object="response.output_text.delta",

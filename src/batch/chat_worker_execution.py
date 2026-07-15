@@ -35,6 +35,7 @@ from src.metrics import (
     set_batch_worker_saturation,
 )
 from src.models.errors import InvalidRequestError, ServiceUnavailableError
+from src.models.request_serialization import dump_request_for_preflight
 from src.models.requests import ChatCompletionRequest, MCPToolDefinition
 from src.providers.resolution import resolve_provider
 from src.router.health_policy import affects_deployment_health
@@ -65,7 +66,7 @@ class ChatWorkerExecutionMixin:
             app=self.app,
             job=job,
             payload=chat_request,
-            request_data=chat_request.model_dump(exclude_none=True),
+            request_data=dump_request_for_preflight(chat_request),
             call_type="completion",
         )
         chat_request = preflight.payload
