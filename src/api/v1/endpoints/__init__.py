@@ -10,6 +10,7 @@ from src.api.v1.endpoints.health import router as health_router
 from src.api.v1.endpoints.images import router as images_router
 from src.api.v1.endpoints.metrics import router as metrics_router
 from src.api.v1.endpoints.mcp import router as mcp_router
+from src.api.v1.endpoints.messages import router as messages_router
 from src.api.v1.endpoints.models import router as models_router
 from src.api.v1.endpoints.rerank import router as rerank_router
 from src.api.v1.endpoints.responses import router as responses_router
@@ -29,6 +30,7 @@ __all__ = [
     "images_router",
     "metrics_router",
     "mcp_router",
+    "messages_router",
     "models_router",
     "rerank_router",
     "responses_router",

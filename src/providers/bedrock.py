@@ -5,6 +5,7 @@ import time
 from typing import Any, AsyncIterator
 
 import httpx
+from botocore.eventstream import EventStreamBuffer
 
 from src.models.errors import InvalidRequestError
 from src.models.requests import ChatCompletionRequest
@@ -12,9 +13,19 @@ from src.models.responses import ChatCompletionResponse
 from src.providers.base import ProviderAdapter, map_standard_provider_error, provider_http_error_message
 from src.providers.healthcheck import is_provider_healthy
 
+_STOP_REASON_MAP = {
+    "end_turn": "stop",
+    "tool_use": "tool_calls",
+    "max_tokens": "length",
+    "stop_sequence": "stop",
+    "guardrail_intervened": "content_filter",
+    "content_filtered": "content_filter",
+}
+
 
 class BedrockAdapter(ProviderAdapter):
     provider_name = "bedrock"
+    stream_uses_bytes = True
 
     def __init__(self, http_client: httpx.AsyncClient) -> None:
         self.http_client = http_client
@@ -65,14 +76,7 @@ class BedrockAdapter(ProviderAdapter):
         contents = message.get("content") or []
         text = "".join(str(block.get("text", "")) for block in contents if isinstance(block, dict))
 
-        stop_reason_map = {
-            "end_turn": "stop",
-            "max_tokens": "length",
-            "stop_sequence": "stop",
-            "guardrail_intervened": "content_filter",
-            "content_filtered": "content_filter",
-        }
-        finish_reason = stop_reason_map.get(str(data.get("stopReason") or "end_turn"), "stop")
+        finish_reason = _STOP_REASON_MAP.get(str(data.get("stopReason") or "end_turn"), "stop")
 
         usage = data.get("usage") or {}
         prompt_tokens = int(usage.get("inputTokens") or 0)
@@ -99,10 +103,95 @@ class BedrockAdapter(ProviderAdapter):
         }
         return ChatCompletionResponse.model_validate(canonical)
 
-    async def translate_stream(self, provider_stream: AsyncIterator[str]) -> AsyncIterator[str]:
-        if False:
-            yield ""
-        raise InvalidRequestError(message="Bedrock streaming is not supported yet")
+    async def translate_stream(self, provider_stream: AsyncIterator[bytes]) -> AsyncIterator[str]:
+        stream_id = f"chatcmpl-bedrock-{int(time.time() * 1000)}"
+        created = int(time.time())
+        buffer = EventStreamBuffer()
+        sent_role = False
+        finish_reason = "stop"
+        usage: dict[str, int] = {}
+
+        def _chunk(delta: dict[str, Any], *, stop: str | None = None) -> str:
+            body: dict[str, Any] = {
+                "id": stream_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": "bedrock",
+                "choices": [{"index": 0, "delta": delta, "finish_reason": stop}],
+            }
+            return f"data: {json.dumps(body, separators=(',', ':'))}"
+
+        async for raw in provider_stream:
+            buffer.add_data(raw)
+            while True:
+                try:
+                    message = buffer.next()
+                except StopIteration:
+                    break
+
+                event_type = message.headers.get(":event-type")
+                try:
+                    event = json.loads(message.payload) if message.payload else {}
+                except json.JSONDecodeError:
+                    continue
+
+                if message.headers.get(":message-type") in ("exception", "error"):
+                    raise InvalidRequestError(
+                        message=str(event.get("message") or f"Bedrock stream error: {event_type}")
+                    )
+
+                if event_type == "messageStart":
+                    if not sent_role:
+                        yield _chunk({"role": "assistant", "content": ""})
+                        sent_role = True
+                elif event_type == "contentBlockStart":
+                    tool_use = (event.get("start") or {}).get("toolUse")
+                    if isinstance(tool_use, dict):
+                        index = int(event.get("contentBlockIndex") or 0)
+                        yield _chunk(
+                            {
+                                "tool_calls": [
+                                    {
+                                        "index": index,
+                                        "id": tool_use.get("toolUseId") or "",
+                                        "type": "function",
+                                        "function": {"name": tool_use.get("name") or "", "arguments": ""},
+                                    }
+                                ]
+                            }
+                        )
+                elif event_type == "contentBlockDelta":
+                    delta = event.get("delta") or {}
+                    text = delta.get("text")
+                    if isinstance(text, str) and text:
+                        yield _chunk({"content": text})
+                    tool_use_delta = delta.get("toolUse")
+                    if isinstance(tool_use_delta, dict):
+                        partial = tool_use_delta.get("input")
+                        if isinstance(partial, str) and partial:
+                            index = int(event.get("contentBlockIndex") or 0)
+                            yield _chunk({"tool_calls": [{"index": index, "function": {"arguments": partial}}]})
+                elif event_type == "messageStop":
+                    finish_reason = _STOP_REASON_MAP.get(str(event.get("stopReason") or "end_turn"), "stop")
+                elif event_type == "metadata":
+                    usage_data = event.get("usage") or {}
+                    usage = {
+                        "prompt_tokens": int(usage_data.get("inputTokens") or 0),
+                        "completion_tokens": int(usage_data.get("outputTokens") or 0),
+                        "total_tokens": int(usage_data.get("totalTokens") or 0),
+                    }
+
+        final: dict[str, Any] = {
+            "id": stream_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": "bedrock",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}],
+        }
+        if usage:
+            final["usage"] = usage
+        yield f"data: {json.dumps(final, separators=(',', ':'))}"
+        yield "data: [DONE]"
 
     def map_error(self, provider_error: Exception) -> Exception:
         status = provider_error.response.status_code if isinstance(provider_error, httpx.HTTPStatusError) else None

@@ -17,6 +17,8 @@ def audit_action_for_path(path: str) -> str:
         return "COMPLETION_REQUEST"
     if path == "/v1/responses":
         return "RESPONSES_REQUEST"
+    if path == "/v1/messages":
+        return "MESSAGES_REQUEST"
     return "TEXT_GENERATION_REQUEST"
 
 

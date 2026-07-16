@@ -89,6 +89,26 @@ class ResponsesRequest(BaseModel):
     tool_choice: Literal["auto", "none", "required"] | ToolChoice | None = "auto"
 
 
+class AnthropicMessage(BaseModel):
+    role: Literal["user", "assistant", "system"]
+    content: str | list[dict[str, Any]]
+
+
+class AnthropicMessagesRequest(BaseModel):
+    model: str
+    messages: list[AnthropicMessage]
+    system: str | list[dict[str, Any]] | None = None
+    max_tokens: int = Field(..., ge=1)
+    temperature: float | None = Field(default=None, ge=0, le=1)
+    top_p: float | None = Field(default=None, ge=0, le=1)
+    top_k: int | None = Field(default=None, ge=0)
+    stop_sequences: list[str] | None = None
+    stream: bool | None = False
+    tools: list[dict[str, Any]] | None = None
+    tool_choice: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
+
+
 class EmbeddingRequest(BaseModel):
     model: str
     input: str | list[str] | list[int] | list[list[int]]

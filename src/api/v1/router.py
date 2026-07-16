@@ -14,6 +14,7 @@ from src.api.v1.endpoints import (
     images_router,
     metrics_router,
     mcp_router,
+    messages_router,
     models_router,
     rerank_router,
     responses_router,
@@ -30,6 +31,7 @@ v1_router.include_router(batches_router)
 v1_router.include_router(chat_router)
 v1_router.include_router(completions_router)
 v1_router.include_router(responses_router)
+v1_router.include_router(messages_router)
 v1_router.include_router(embeddings_router)
 v1_router.include_router(images_router)
 v1_router.include_router(audio_speech_router)

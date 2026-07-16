@@ -73,14 +73,13 @@ def resolve_chat_upstream(
         )
 
     if provider == "bedrock":
-        if is_stream:
-            raise InvalidRequestError(message="Bedrock streaming is not supported yet")
         region = str(params.get("region") or "us-east-1")
         upstream_model = resolve_upstream_model(params)
+        endpoint_action = "converse-stream" if is_stream else "converse"
         return ChatUpstream(
             adapter=request.app.state.bedrock_adapter,
             api_base=str(params.get("api_base") or f"https://bedrock-runtime.{region}.amazonaws.com").rstrip("/"),
-            endpoint=f"/model/{upstream_model}/converse",
+            endpoint=f"/model/{upstream_model}/{endpoint_action}",
             headers={"Content-Type": "application/json"},
             timeout=timeout,
         )

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+import struct
+from binascii import crc32
+
 import httpx
 import pytest
 
@@ -14,6 +18,30 @@ from src.providers.openai import OpenAIAdapter
 async def _line_stream(lines: list[str]):
     for line in lines:
         yield line
+
+
+async def _byte_stream(chunks: list[bytes]):
+    for chunk in chunks:
+        yield chunk
+
+
+def _encode_eventstream_message(headers: dict[str, str], payload: dict) -> bytes:
+    """Encodes a single AWS binary event-stream frame, matching the format
+    botocore.eventstream.EventStreamBuffer expects (used by Bedrock's ConverseStream)."""
+    header_bytes = b""
+    for name, value in headers.items():
+        name_bytes = name.encode("utf-8")
+        value_bytes = value.encode("utf-8")
+        header_bytes += struct.pack("!B", len(name_bytes)) + name_bytes
+        header_bytes += struct.pack("!B", 7) + struct.pack("!H", len(value_bytes)) + value_bytes
+
+    payload_bytes = json.dumps(payload).encode("utf-8")
+    total_length = 12 + len(header_bytes) + len(payload_bytes) + 4
+    prelude_no_crc = struct.pack("!II", total_length, len(header_bytes))
+    prelude_crc = crc32(prelude_no_crc) & 0xFFFFFFFF
+    prelude_crc_bytes = struct.pack("!I", prelude_crc)
+    message_crc = crc32(prelude_crc_bytes + header_bytes + payload_bytes, prelude_crc) & 0xFFFFFFFF
+    return prelude_no_crc + prelude_crc_bytes + header_bytes + payload_bytes + struct.pack("!I", message_crc)
 
 
 @pytest.mark.asyncio
@@ -432,5 +460,64 @@ async def test_bedrock_adapter_surfaces_provider_error_message() -> None:
         exc = httpx.HTTPStatusError("bad request", request=response.request, response=response)
         mapped = adapter.map_error(exc)
         assert str(mapped) == "`temperature` and `top_p` cannot both be specified"
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_bedrock_adapter_translate_stream_to_openai_chunks() -> None:
+    adapter = BedrockAdapter(httpx.AsyncClient())
+    assert adapter.stream_uses_bytes is True
+    try:
+        frames = b"".join(
+            [
+                _encode_eventstream_message(
+                    {":message-type": "event", ":event-type": "messageStart"},
+                    {"role": "assistant"},
+                ),
+                _encode_eventstream_message(
+                    {":message-type": "event", ":event-type": "contentBlockDelta"},
+                    {"contentBlockIndex": 0, "delta": {"text": "Hello"}},
+                ),
+                _encode_eventstream_message(
+                    {":message-type": "event", ":event-type": "contentBlockDelta"},
+                    {"contentBlockIndex": 0, "delta": {"text": " world"}},
+                ),
+                _encode_eventstream_message(
+                    {":message-type": "event", ":event-type": "messageStop"},
+                    {"stopReason": "end_turn"},
+                ),
+                _encode_eventstream_message(
+                    {":message-type": "event", ":event-type": "metadata"},
+                    {"usage": {"inputTokens": 4, "outputTokens": 2, "totalTokens": 6}},
+                ),
+            ]
+        )
+        # Split arbitrarily mid-frame to make sure the parser buffers correctly
+        # across chunk boundaries, just like real HTTP reads would arrive.
+        split = len(frames) // 2
+        out = [line async for line in adapter.translate_stream(_byte_stream([frames[:split], frames[split:]]))]
+
+        assert any('"role":"assistant"' in line for line in out)
+        assert any('"content":"Hello"' in line for line in out)
+        assert any('"content":" world"' in line for line in out)
+        assert any('"finish_reason":"stop"' in line for line in out)
+        assert any('"total_tokens":6' in line for line in out)
+        assert out[-1] == "data: [DONE]"
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_bedrock_adapter_translate_stream_raises_on_exception_event() -> None:
+    adapter = BedrockAdapter(httpx.AsyncClient())
+    try:
+        frame = _encode_eventstream_message(
+            {":message-type": "exception", ":event-type": "validationException"},
+            {"message": "Malformed input request"},
+        )
+        with pytest.raises(Exception, match="Malformed input request"):
+            async for _ in adapter.translate_stream(_byte_stream([frame])):
+                pass
     finally:
         await adapter.http_client.aclose()
