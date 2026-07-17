@@ -6,6 +6,7 @@ Use this section when you are moving from local evaluation to a repeatable envir
 
 | Path | Best for | Start here |
 |------|----------|------------|
+| Railway | Managed one-click evaluation stack with hosted PostgreSQL and Redis | [Railway](railway.md) |
 | Docker Compose | Single instance, demos, small teams, simple self-hosting | [Docker](docker.md) |
 | Kubernetes | Multi-instance production, autoscaling, managed infrastructure | [Kubernetes](kubernetes.md) |
 | Batch production setup | Async embedding/chat workloads with dedicated workers and shared storage | [Batch API & Production Setup](../features/batching.md#recommended-production-setup) |
@@ -13,11 +14,12 @@ Use this section when you are moving from local evaluation to a repeatable envir
 
 ## Quick Path to Success
 
-1. Choose Docker if you want the fastest production-style setup
-2. Choose Kubernetes if you need replicas, ingress, and cluster-native operations
-3. Generate a valid `DELTALLM_MASTER_KEY` and `DELTALLM_SALT_KEY`
-4. Keep secrets in environment variables, not in `config.yaml`
-5. Verify `/health/liveliness` and `/health/readiness` after startup
+1. Choose Railway if you want the fastest managed evaluation deployment
+2. Choose Docker if you want a production-style setup on your own host
+3. Choose Kubernetes if you need replicas, ingress, and cluster-native operations
+4. Generate a valid `DELTALLM_MASTER_KEY` and `DELTALLM_SALT_KEY`
+5. Keep secrets in environment variables, not in `config.yaml`
+6. Verify `/health/liveliness` and `/health/readiness` after startup
 
 ## Shared Requirements
 
@@ -54,6 +56,7 @@ The application runs Prisma schema setup automatically during container startup.
 ## Next Steps
 
 - [Docker deployment guide](docker.md)
+- [Railway deployment guide](railway.md)
 - [Kubernetes deployment guide](kubernetes.md)
 - [Upstream HTTP tuning](upstream-http.md)
 - [Observability](../features/observability.md)

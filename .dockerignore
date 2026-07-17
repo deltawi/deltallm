@@ -1,0 +1,77 @@
+# Git and local metadata
+.git/
+.github/
+.codex/
+.claude/
+.agents/
+.worktree/
+.worktrees/
+worktrees/
+
+# Local environment and secret-bearing config
+.env
+.env.*
+!.env.example
+config.yaml
+config/config.yaml
+config/*.local.yaml
+
+# Python environments and caches
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyre/
+.pytype/
+.cache/
+.coverage
+.coverage.*
+htmlcov/
+cover/
+*.egg-info/
+build/
+dist/
+
+# Node dependencies and generated frontend output
+node_modules/
+ui/node_modules/
+ui/dist/
+admin-dashboard/dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.npm/
+.yarn/
+
+# Documentation builds and local generated artifacts
+site/
+docs/_build/
+docs/internal/
+artifacts/
+logs/
+*.log
+tmp/
+temp/
+
+# Local database and generated engine files
+*.db
+*.sqlite
+*.sqlite3
+*.rdb
+prisma-query-engine-*
+
+# OS and editor files
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Desktop.ini
+*.code-workspace
+.idea/
+.vscode/

@@ -98,6 +98,7 @@ nav:
       - Health & Metrics: api/health.md
   - Deployment:
       - deployment/index.md
+      - Railway: deployment/railway.md
       - Docker: deployment/docker.md
       - Governance Rollout: deployment/governance.md
       - Kubernetes: deployment/kubernetes.md
