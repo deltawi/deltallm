@@ -98,7 +98,12 @@ class GeminiAdapter(ProviderAdapter):
         }
         return ChatCompletionResponse.model_validate(canonical)
 
-    async def translate_stream(self, provider_stream: AsyncIterator[str]) -> AsyncIterator[str]:
+    async def translate_stream(
+        self,
+        provider_stream: AsyncIterator[str],
+        *,
+        model_name: str | None = None,
+    ) -> AsyncIterator[str]:
         # Native Gemini stream translation is not implemented in this phase.
         if False:
             yield ""

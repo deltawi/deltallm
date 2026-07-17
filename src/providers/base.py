@@ -80,6 +80,11 @@ def map_standard_provider_error(
 
 class ProviderAdapter(ABC):
     provider_name: str
+    # When True, the executor passes translate_stream the raw response bytes
+    # (response.aiter_bytes()) instead of decoded text lines (response.aiter_lines()).
+    # Needed for providers whose stream framing isn't line-delimited UTF-8 SSE,
+    # e.g. Bedrock's binary vnd.amazon.eventstream format.
+    stream_uses_bytes: bool = False
 
     @abstractmethod
     async def translate_request(
@@ -94,7 +99,12 @@ class ProviderAdapter(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def translate_stream(self, provider_stream: AsyncIterator[str]) -> AsyncIterator[str]:
+    async def translate_stream(
+        self,
+        provider_stream: AsyncIterator[Any],
+        *,
+        model_name: str | None = None,
+    ) -> AsyncIterator[str]:
         raise NotImplementedError
 
     @abstractmethod
