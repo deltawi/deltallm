@@ -65,7 +65,7 @@ DELTALLM_CONFIG_PATH=/app/config.example.yaml
 DATABASE_URL=${{Postgres.DATABASE_URL}}
 REDIS_URL=${{Redis.REDIS_URL}}
 DELTALLM_REDIS_URL=${{Redis.REDIS_URL}}
-DELTALLM_MASTER_KEY=sk-${{secret(32)}}A1
+DELTALLM_MASTER_KEY=<user input, 32+ characters with letters and digits>
 DELTALLM_SALT_KEY=${{secret(64)}}
 PLATFORM_BOOTSTRAP_ADMIN_EMAIL=<user input>
 PLATFORM_BOOTSTRAP_ADMIN_PASSWORD=<user input, 12+ characters>
@@ -74,7 +74,7 @@ OPENAI_API_KEY=<optional user input>
 
 Variable notes:
 
-- `DELTALLM_MASTER_KEY` must be at least 32 characters and include letters and digits. The `sk-${{secret(32)}}A1` shape satisfies the validator while keeping the value generated per deployment.
+- `DELTALLM_MASTER_KEY` must be supplied by the deployer, must be at least 32 characters, and must include letters and digits. This is the initial gateway credential for API calls.
 - `DELTALLM_SALT_KEY` must be unique and must not be `change-me`.
 - `PLATFORM_BOOTSTRAP_ADMIN_EMAIL` and `PLATFORM_BOOTSTRAP_ADMIN_PASSWORD` create the initial browser-login admin account.
 - Use an initial admin password with at least 12 characters so the first-login password-change flow can complete cleanly.
@@ -134,7 +134,7 @@ The bootstrap account may require a password change before you can use the rest 
 If `OPENAI_API_KEY` was supplied, verify the starter model:
 
 ```bash
-export DELTALLM_MASTER_KEY="<copy from the deltallm service variables>"
+export DELTALLM_MASTER_KEY="<the value you entered during template deploy>"
 curl "$APP_URL/v1/models" \
   -H "Authorization: Bearer $DELTALLM_MASTER_KEY"
 ```

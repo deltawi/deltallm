@@ -16,10 +16,11 @@ Set these when deploying the template:
 
 | Variable | Purpose |
 |----------|---------|
+| `DELTALLM_MASTER_KEY` | Initial gateway credential for API calls |
 | `PLATFORM_BOOTSTRAP_ADMIN_EMAIL` | Initial Admin UI login email |
 | `PLATFORM_BOOTSTRAP_ADMIN_PASSWORD` | Initial Admin UI password |
 
-The template generates `DELTALLM_MASTER_KEY` and `DELTALLM_SALT_KEY` per deployment. `OPENAI_API_KEY` is optional; when provided, the starter `gpt-4o-mini` deployment can be used immediately.
+`DELTALLM_MASTER_KEY` must be at least 32 characters and include letters and digits. The template generates `DELTALLM_SALT_KEY` per deployment. `OPENAI_API_KEY` is optional; when provided, the starter `gpt-4o-mini` deployment can be used immediately.
 
 ## After Deployment
 
