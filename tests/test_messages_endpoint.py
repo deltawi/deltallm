@@ -292,6 +292,173 @@ async def test_messages_missing_max_tokens_returns_anthropic_error_envelope(clie
     assert "max_tokens" in payload["error"]["message"]
 
 
+def test_anthropic_messages_rejects_unsupported_content_blocks() -> None:
+    from src.models.errors import InvalidRequestError
+
+    payload = AnthropicMessagesRequest.model_validate(
+        {
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 128,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "what is in this image?"},
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGk="}},
+                    ],
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(InvalidRequestError) as exc_info:
+        anthropic_messages_to_chat_request(payload)
+
+    assert "messages[0].content[1]" in exc_info.value.message
+    assert "'image'" in exc_info.value.message
+
+
+def test_anthropic_messages_rejects_thinking() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc_info:
+        AnthropicMessagesRequest.model_validate(
+            {
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 128,
+                "thinking": {"type": "enabled", "budget_tokens": 1024},
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        )
+
+    assert exc_info.value.errors()[0]["type"] == "extra_forbidden"
+
+
+def test_anthropic_messages_rejects_cache_control_on_content_block() -> None:
+    from src.models.errors import InvalidRequestError
+
+    payload = AnthropicMessagesRequest.model_validate(
+        {
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 128,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}],
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(InvalidRequestError) as exc_info:
+        anthropic_messages_to_chat_request(payload)
+
+    assert "cache_control" in exc_info.value.message
+
+
+def test_anthropic_messages_rejects_citations_on_content_block() -> None:
+    from src.models.errors import InvalidRequestError
+
+    payload = AnthropicMessagesRequest.model_validate(
+        {
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 128,
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi", "citations": []}]}],
+        }
+    )
+
+    with pytest.raises(InvalidRequestError) as exc_info:
+        anthropic_messages_to_chat_request(payload)
+
+    assert "citations" in exc_info.value.message
+
+
+def test_anthropic_messages_forwards_tool_result_is_error() -> None:
+    payload = AnthropicMessagesRequest.model_validate(
+        {
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 128,
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "toolu_1", "name": "docs.search", "input": {}}],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "boom", "is_error": True}
+                    ],
+                },
+            ],
+        }
+    )
+
+    canonical = anthropic_messages_to_chat_request(payload)
+
+    tool_message = next(message for message in canonical.messages if message.role == "tool")
+    assert tool_message.content == "Error: boom"
+
+
+def test_anthropic_messages_rejects_top_k() -> None:
+    from src.models.errors import InvalidRequestError
+
+    payload = AnthropicMessagesRequest.model_validate(
+        {
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 128,
+            "top_k": 40,
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+    )
+
+    with pytest.raises(InvalidRequestError) as exc_info:
+        anthropic_messages_to_chat_request(payload)
+
+    assert "top_k" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_messages_unsupported_block_returns_anthropic_error_envelope(client, test_app):
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "max_tokens": 128,
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGk="}}],
+            }
+        ],
+    }
+
+    response = await client.post("/v1/messages", headers=headers, json=body)
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["type"] == "error"
+    assert payload["error"]["type"] == "invalid_request_error"
+    assert "unsupported content block type 'image'" in payload["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_messages_top_k_returns_anthropic_error_envelope(client, test_app):
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "max_tokens": 128,
+        "top_k": 40,
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    response = await client.post("/v1/messages", headers=headers, json=body)
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["type"] == "error"
+    assert payload["error"]["type"] == "invalid_request_error"
+    assert "top_k" in payload["error"]["message"]
+
+
 @pytest.mark.asyncio
 async def test_messages_budget_exceeded_returns_429(client, test_app):
     from src.billing.budget import BudgetExceeded

@@ -32,6 +32,7 @@ curl http://localhost:8000/v1/chat/completions \
 | Endpoint | Purpose |
 |----------|---------|
 | `POST /v1/chat/completions` | Chat completions, including streaming |
+| `POST /v1/messages` | Anthropic Messages API-compatible subset, see [Anthropic Messages](messages.md) |
 | `POST /v1/completions` | Legacy prompt-style completions |
 | `POST /v1/responses` | Responses API compatible subset |
 | `POST /v1/embeddings` | Text embeddings |

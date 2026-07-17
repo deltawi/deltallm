@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, TypeAlias
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChatMessage(BaseModel):
@@ -90,11 +90,15 @@ class ResponsesRequest(BaseModel):
 
 
 class AnthropicMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     role: Literal["user", "assistant", "system"]
     content: str | list[dict[str, Any]]
 
 
 class AnthropicMessagesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     model: str
     messages: list[AnthropicMessage]
     system: str | list[dict[str, Any]] | None = None

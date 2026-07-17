@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from src.middleware.auth import require_api_key
 from src.middleware.rate_limit import enforce_rate_limits
+from src.models.errors import InvalidRequestError
 from src.models.requests import AnthropicMessagesRequest
 from src.routers.anthropic_adapters import (
     AnthropicStreamTranslator,
@@ -34,7 +35,13 @@ async def messages(request: Request):
     except ValidationError as exc:
         return _anthropic_validation_error_response(exc)
 
-    canonical = anthropic_messages_to_chat_request(payload)
+    try:
+        canonical = anthropic_messages_to_chat_request(payload)
+    except InvalidRequestError as exc:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"type": "error", "error": {"type": exc.error_type, "message": exc.message}},
+        )
     translator = AnthropicStreamTranslator(model=payload.model)
     return await handle_chat_like_request(
         request,

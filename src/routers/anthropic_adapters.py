@@ -4,6 +4,7 @@ import json
 import uuid
 from typing import Any
 
+from src.models.errors import InvalidRequestError
 from src.models.requests import AnthropicMessage, AnthropicMessagesRequest, ChatCompletionRequest
 
 _FINISH_REASON_TO_STOP_REASON = {
@@ -20,26 +21,53 @@ _REQUEST_FIELD_MAP = {
     "metadata": "metadata",
 }
 
+_TEXT_BLOCK_KEYS = {"type", "text"}
+_TOOL_USE_BLOCK_KEYS = {"type", "id", "name", "input"}
+_TOOL_RESULT_BLOCK_KEYS = {"type", "tool_use_id", "content", "is_error"}
 
-def _extract_text_blocks(content: list[dict[str, Any]]) -> str:
+
+def _unsupported_block_error(context: str, block_type: str) -> InvalidRequestError:
+    return InvalidRequestError(
+        message=f"{context}: unsupported content block type '{block_type}'; this endpoint only forwards text and tool blocks",
+        param=context,
+    )
+
+
+def _reject_unsupported_fields(block: dict[str, Any], allowed: set[str], *, context: str) -> None:
+    extra_keys = sorted(set(block) - allowed)
+    if extra_keys:
+        raise InvalidRequestError(
+            message=(
+                f"{context}: unsupported field(s) {', '.join(extra_keys)}; this endpoint does not support "
+                "extended thinking, prompt caching, citations, or other Anthropic beta block features"
+            ),
+            param=context,
+        )
+
+
+def _extract_text_blocks(content: list[dict[str, Any]], *, context: str) -> str:
     parts: list[str] = []
-    for block in content:
-        if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
-            parts.append(block["text"])
-        elif isinstance(block, str):
+    for index, block in enumerate(content):
+        if isinstance(block, str):
             parts.append(block)
+        elif isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
+            _reject_unsupported_fields(block, _TEXT_BLOCK_KEYS, context=f"{context}[{index}]")
+            parts.append(block["text"])
+        else:
+            block_type = block.get("type") if isinstance(block, dict) else type(block).__name__
+            raise _unsupported_block_error(f"{context}[{index}]", str(block_type))
     return "\n".join(parts)
 
 
-def _extract_tool_result_text(content: Any) -> str:
+def _extract_tool_result_text(content: Any, *, context: str) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return _extract_text_blocks(content)
+        return _extract_text_blocks(content, context=f"{context}.content")
     return ""
 
 
-def _anthropic_message_to_chat_messages(message: AnthropicMessage) -> list[dict[str, Any]]:
+def _anthropic_message_to_chat_messages(message: AnthropicMessage, *, context: str) -> list[dict[str, Any]]:
     role = message.role
     content = message.content
     if isinstance(content, str):
@@ -48,13 +76,16 @@ def _anthropic_message_to_chat_messages(message: AnthropicMessage) -> list[dict[
     text_parts: list[str] = []
     tool_calls: list[dict[str, Any]] = []
     tool_messages: list[dict[str, Any]] = []
-    for block in content:
+    for index, block in enumerate(content):
+        block_context = f"{context}.content[{index}]"
         if not isinstance(block, dict):
-            continue
-        block_type = block.get("type")
+            raise _unsupported_block_error(block_context, type(block).__name__)
+        block_type = str(block.get("type") or "")
         if block_type == "text" and isinstance(block.get("text"), str):
+            _reject_unsupported_fields(block, _TEXT_BLOCK_KEYS, context=block_context)
             text_parts.append(block["text"])
         elif block_type == "tool_use" and role == "assistant":
+            _reject_unsupported_fields(block, _TOOL_USE_BLOCK_KEYS, context=block_context)
             tool_calls.append(
                 {
                     "id": str(block.get("id") or ""),
@@ -66,13 +97,19 @@ def _anthropic_message_to_chat_messages(message: AnthropicMessage) -> list[dict[
                 }
             )
         elif block_type == "tool_result" and role == "user":
+            _reject_unsupported_fields(block, _TOOL_RESULT_BLOCK_KEYS, context=block_context)
+            result_text = _extract_tool_result_text(block.get("content"), context=block_context)
+            if block.get("is_error"):
+                result_text = f"Error: {result_text}" if result_text else "Error"
             tool_messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": str(block.get("tool_use_id") or ""),
-                    "content": _extract_tool_result_text(block.get("content")),
+                    "content": result_text,
                 }
             )
+        else:
+            raise _unsupported_block_error(block_context, block_type)
 
     messages: list[dict[str, Any]] = list(tool_messages)
     if text_parts or tool_calls:
@@ -108,13 +145,19 @@ def _anthropic_tool_choice_to_chat(tool_choice: dict[str, Any]) -> Any:
 
 
 def anthropic_messages_to_chat_request(payload: AnthropicMessagesRequest) -> ChatCompletionRequest:
+    if payload.top_k is not None:
+        raise InvalidRequestError(
+            message="top_k: not supported by this gateway; remove it from the request",
+            param="top_k",
+        )
+
     messages: list[dict[str, Any]] = []
     if payload.system:
-        system_text = payload.system if isinstance(payload.system, str) else _extract_text_blocks(payload.system)
+        system_text = payload.system if isinstance(payload.system, str) else _extract_text_blocks(payload.system, context="system")
         if system_text:
             messages.append({"role": "system", "content": system_text})
-    for message in payload.messages:
-        messages.extend(_anthropic_message_to_chat_messages(message))
+    for index, message in enumerate(payload.messages):
+        messages.extend(_anthropic_message_to_chat_messages(message, context=f"messages[{index}]"))
 
     data: dict[str, Any] = {
         "model": payload.model,

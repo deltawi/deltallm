@@ -7,6 +7,7 @@ from binascii import crc32
 import httpx
 import pytest
 
+from src.models.errors import InvalidRequestError, RateLimitError, ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
 from src.providers.anthropic import AnthropicAdapter
 from src.providers.azure import AzureOpenAIAdapter
@@ -316,6 +317,117 @@ async def test_anthropic_adapter_translate_request_and_response() -> None:
 
 
 @pytest.mark.asyncio
+async def test_anthropic_adapter_forwards_tools_and_tool_messages() -> None:
+    adapter = AnthropicAdapter(httpx.AsyncClient())
+    try:
+        req = ChatCompletionRequest.model_validate(
+            {
+                "model": "claude-3-5-sonnet-latest",
+                "max_tokens": 32,
+                "messages": [
+                    {"role": "user", "content": "search docs for delta"},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "toolu_1",
+                                "type": "function",
+                                "function": {"name": "docs.search", "arguments": json.dumps({"query": "delta"})},
+                            }
+                        ],
+                    },
+                    {"role": "tool", "tool_call_id": "toolu_1", "content": "delta docs result"},
+                ],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "docs.search",
+                            "description": "Search docs",
+                            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+                        },
+                    }
+                ],
+                "tool_choice": "required",
+            }
+        )
+        upstream = await adapter.translate_request(req, {})
+
+        assert upstream["tools"] == [
+            {
+                "name": "docs.search",
+                "description": "Search docs",
+                "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+            }
+        ]
+        assert upstream["tool_choice"] == {"type": "any"}
+        assert upstream["messages"][1] == {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_1", "name": "docs.search", "input": {"query": "delta"}}],
+        }
+        assert upstream["messages"][2] == {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "delta docs result"}],
+        }
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_adapter_translate_response_maps_tool_use_blocks() -> None:
+    adapter = AnthropicAdapter(httpx.AsyncClient())
+    try:
+        canonical = await adapter.translate_response(
+            {
+                "id": "msg_123",
+                "model": "claude-3-5-sonnet-latest",
+                "content": [
+                    {"type": "text", "text": "Checking."},
+                    {"type": "tool_use", "id": "toolu_1", "name": "docs.search", "input": {"query": "delta"}},
+                ],
+                "stop_reason": "tool_use",
+                "usage": {"input_tokens": 4, "output_tokens": 2},
+            },
+            model_name="anthropic/claude-3-5-sonnet-latest",
+        )
+        payload = canonical.model_dump(mode="json")
+        message = payload["choices"][0]["message"]
+        assert message["content"] == "Checking."
+        assert message["tool_calls"] == [
+            {
+                "id": "toolu_1",
+                "type": "function",
+                "function": {"name": "docs.search", "arguments": json.dumps({"query": "delta"})},
+            }
+        ]
+        assert payload["choices"][0]["finish_reason"] == "tool_calls"
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_adapter_translate_stream_emits_tool_call_chunks() -> None:
+    adapter = AnthropicAdapter(httpx.AsyncClient())
+    try:
+        lines = [
+            'data: {"type":"message_start","message":{"id":"msg_1","model":"claude-3-5-sonnet-latest"}}',
+            'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"docs.search","input":{}}}',
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"query\\":"}}',
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\\"delta\\"}"}}',
+            'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}',
+            'data: {"type":"message_stop"}',
+        ]
+        out = [line async for line in adapter.translate_stream(_line_stream(lines))]
+        assert any('"name":"docs.search"' in line for line in out)
+        assert any('"arguments":"{\\"query\\":"' in line for line in out)
+        assert any('"finish_reason":"tool_calls"' in line for line in out)
+        assert out[-1] == "data: [DONE]"
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_anthropic_adapter_translate_stream_to_openai_chunks() -> None:
     adapter = AnthropicAdapter(httpx.AsyncClient())
     try:
@@ -509,15 +621,144 @@ async def test_bedrock_adapter_translate_stream_to_openai_chunks() -> None:
 
 
 @pytest.mark.asyncio
+async def test_bedrock_adapter_forwards_tools_and_tool_messages() -> None:
+    adapter = BedrockAdapter(httpx.AsyncClient())
+    try:
+        req = ChatCompletionRequest.model_validate(
+            {
+                "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+                "max_tokens": 32,
+                "messages": [
+                    {"role": "user", "content": "search docs for delta"},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "toolu_1",
+                                "type": "function",
+                                "function": {"name": "docs.search", "arguments": json.dumps({"query": "delta"})},
+                            }
+                        ],
+                    },
+                    {"role": "tool", "tool_call_id": "toolu_1", "content": "delta docs result"},
+                ],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "docs.search",
+                            "description": "Search docs",
+                            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+                        },
+                    }
+                ],
+                "tool_choice": {"type": "function", "function": {"name": "docs.search"}},
+            }
+        )
+        upstream = await adapter.translate_request(req, {})
+
+        assert upstream["toolConfig"] == {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "name": "docs.search",
+                        "description": "Search docs",
+                        "inputSchema": {"json": {"type": "object", "properties": {"query": {"type": "string"}}}},
+                    }
+                }
+            ],
+            "toolChoice": {"tool": {"name": "docs.search"}},
+        }
+        assert upstream["messages"][1] == {
+            "role": "assistant",
+            "content": [{"toolUse": {"toolUseId": "toolu_1", "name": "docs.search", "input": {"query": "delta"}}}],
+        }
+        assert upstream["messages"][2] == {
+            "role": "user",
+            "content": [{"toolResult": {"toolUseId": "toolu_1", "content": [{"text": "delta docs result"}]}}],
+        }
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_bedrock_adapter_translate_response_maps_tool_use_blocks() -> None:
+    adapter = BedrockAdapter(httpx.AsyncClient())
+    try:
+        canonical = await adapter.translate_response(
+            {
+                "output": {
+                    "message": {
+                        "content": [
+                            {"text": "Checking."},
+                            {"toolUse": {"toolUseId": "toolu_1", "name": "docs.search", "input": {"query": "delta"}}},
+                        ]
+                    }
+                },
+                "stopReason": "tool_use",
+                "usage": {"inputTokens": 4, "outputTokens": 2, "totalTokens": 6},
+            },
+            model_name="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        )
+        payload = canonical.model_dump(mode="json")
+        message = payload["choices"][0]["message"]
+        assert message["content"] == "Checking."
+        assert message["tool_calls"] == [
+            {
+                "id": "toolu_1",
+                "type": "function",
+                "function": {"name": "docs.search", "arguments": json.dumps({"query": "delta"})},
+            }
+        ]
+        assert payload["choices"][0]["finish_reason"] == "tool_calls"
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_bedrock_adapter_translate_stream_raises_on_exception_event() -> None:
     adapter = BedrockAdapter(httpx.AsyncClient())
     try:
         frame = _encode_eventstream_message(
-            {":message-type": "exception", ":event-type": "validationException"},
+            {":message-type": "exception", ":exception-type": "validationException"},
             {"message": "Malformed input request"},
         )
-        with pytest.raises(Exception, match="Malformed input request"):
+        with pytest.raises(InvalidRequestError, match="Malformed input request"):
             async for _ in adapter.translate_stream(_byte_stream([frame])):
+                pass
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_bedrock_adapter_translate_stream_classifies_retryable_errors() -> None:
+    adapter = BedrockAdapter(httpx.AsyncClient())
+    try:
+        throttle_frame = _encode_eventstream_message(
+            {":message-type": "exception", ":exception-type": "throttlingException"},
+            {"message": "Too many requests"},
+        )
+        with pytest.raises(RateLimitError, match="Too many requests") as rate_limit_info:
+            async for _ in adapter.translate_stream(_byte_stream([throttle_frame])):
+                pass
+        assert rate_limit_info.value.affects_deployment_health is True
+
+        server_frame = _encode_eventstream_message(
+            {":message-type": "exception", ":exception-type": "internalServerException"},
+            {"message": "Internal failure"},
+        )
+        with pytest.raises(ServiceUnavailableError, match="Internal failure") as unavailable_info:
+            async for _ in adapter.translate_stream(_byte_stream([server_frame])):
+                pass
+        assert unavailable_info.value.affects_deployment_health is True
+
+        unknown_frame = _encode_eventstream_message(
+            {":message-type": "error", ":event-type": "somethingUnexpected"},
+            {"message": "mystery failure"},
+        )
+        with pytest.raises(ServiceUnavailableError, match="mystery failure"):
+            async for _ in adapter.translate_stream(_byte_stream([unknown_frame])):
                 pass
     finally:
         await adapter.http_client.aclose()

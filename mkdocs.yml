@@ -93,6 +93,7 @@ nav:
   - API Reference:
       - api/index.md
       - Proxy Endpoints: api/proxy.md
+      - Anthropic Messages: api/messages.md
       - MCP Gateway & Tooling: api/mcp.md
       - Admin Endpoints: api/admin.md
       - Health & Metrics: api/health.md
