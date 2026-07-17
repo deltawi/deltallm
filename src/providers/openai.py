@@ -49,7 +49,12 @@ class OpenAIAdapter(ProviderAdapter):
                     message["content"] = ""
         return ChatCompletionResponse.model_validate(data)
 
-    async def translate_stream(self, provider_stream: AsyncIterator[str]) -> AsyncIterator[str]:
+    async def translate_stream(
+        self,
+        provider_stream: AsyncIterator[str],
+        *,
+        model_name: str | None = None,
+    ) -> AsyncIterator[str]:
         async for chunk in provider_stream:
             yield chunk
 

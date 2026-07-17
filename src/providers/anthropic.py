@@ -181,9 +181,14 @@ class AnthropicAdapter(ProviderAdapter):
         }
         return ChatCompletionResponse.model_validate(canonical)
 
-    async def translate_stream(self, provider_stream: AsyncIterator[str]) -> AsyncIterator[str]:
+    async def translate_stream(
+        self,
+        provider_stream: AsyncIterator[str],
+        *,
+        model_name: str | None = None,
+    ) -> AsyncIterator[str]:
         stream_id = f"chatcmpl-anthropic-{int(time.time() * 1000)}"
-        model = "anthropic"
+        model = model_name or "anthropic"
         created = int(time.time())
         sent_role = False
         finish_reason: str | None = None

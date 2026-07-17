@@ -135,13 +135,24 @@ def _anthropic_tool_to_function_tool(tool: dict[str, Any]) -> dict[str, Any]:
 
 def _anthropic_tool_choice_to_chat(tool_choice: dict[str, Any]) -> Any:
     choice_type = tool_choice.get("type")
+    if choice_type == "auto":
+        return "auto"
     if choice_type == "any":
         return "required"
     if choice_type == "tool":
-        return {"type": "function", "function": {"name": str(tool_choice.get("name") or "")}}
+        name = str(tool_choice.get("name") or "").strip()
+        if not name:
+            raise InvalidRequestError(
+                message="tool_choice.name: required when tool_choice.type is 'tool'",
+                param="tool_choice.name",
+            )
+        return {"type": "function", "function": {"name": name}}
     if choice_type == "none":
         return "none"
-    return "auto"
+    raise InvalidRequestError(
+        message="tool_choice.type: must be one of 'auto', 'any', 'tool', or 'none'",
+        param="tool_choice.type",
+    )
 
 
 def anthropic_messages_to_chat_request(payload: AnthropicMessagesRequest) -> ChatCompletionRequest:

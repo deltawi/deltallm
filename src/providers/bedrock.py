@@ -201,20 +201,27 @@ class BedrockAdapter(ProviderAdapter):
         }
         return ChatCompletionResponse.model_validate(canonical)
 
-    async def translate_stream(self, provider_stream: AsyncIterator[bytes]) -> AsyncIterator[str]:
+    async def translate_stream(
+        self,
+        provider_stream: AsyncIterator[bytes],
+        *,
+        model_name: str | None = None,
+    ) -> AsyncIterator[str]:
         stream_id = f"chatcmpl-bedrock-{int(time.time() * 1000)}"
         created = int(time.time())
+        stream_model = model_name or "bedrock"
         buffer = EventStreamBuffer()
         sent_role = False
         finish_reason = "stop"
         usage: dict[str, int] = {}
+        tool_call_indexes: dict[int, int] = {}
 
         def _chunk(delta: dict[str, Any], *, stop: str | None = None) -> str:
             body: dict[str, Any] = {
                 "id": stream_id,
                 "object": "chat.completion.chunk",
                 "created": created,
-                "model": "bedrock",
+                "model": stream_model,
                 "choices": [{"index": 0, "delta": delta, "finish_reason": stop}],
             }
             return f"data: {json.dumps(body, separators=(',', ':'))}"
@@ -247,12 +254,13 @@ class BedrockAdapter(ProviderAdapter):
                 elif event_type == "contentBlockStart":
                     tool_use = (event.get("start") or {}).get("toolUse")
                     if isinstance(tool_use, dict):
-                        index = int(event.get("contentBlockIndex") or 0)
+                        block_index = int(event.get("contentBlockIndex") or 0)
+                        tool_index = tool_call_indexes.setdefault(block_index, len(tool_call_indexes))
                         yield _chunk(
                             {
                                 "tool_calls": [
                                     {
-                                        "index": index,
+                                        "index": tool_index,
                                         "id": tool_use.get("toolUseId") or "",
                                         "type": "function",
                                         "function": {"name": tool_use.get("name") or "", "arguments": ""},
@@ -269,8 +277,10 @@ class BedrockAdapter(ProviderAdapter):
                     if isinstance(tool_use_delta, dict):
                         partial = tool_use_delta.get("input")
                         if isinstance(partial, str) and partial:
-                            index = int(event.get("contentBlockIndex") or 0)
-                            yield _chunk({"tool_calls": [{"index": index, "function": {"arguments": partial}}]})
+                            block_index = int(event.get("contentBlockIndex") or 0)
+                            tool_index = tool_call_indexes.get(block_index)
+                            if tool_index is not None:
+                                yield _chunk({"tool_calls": [{"index": tool_index, "function": {"arguments": partial}}]})
                 elif event_type == "messageStop":
                     finish_reason = _STOP_REASON_MAP.get(str(event.get("stopReason") or "end_turn"), "stop")
                 elif event_type == "metadata":
@@ -285,7 +295,7 @@ class BedrockAdapter(ProviderAdapter):
             "id": stream_id,
             "object": "chat.completion.chunk",
             "created": created,
-            "model": "bedrock",
+            "model": stream_model,
             "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}],
         }
         if usage:

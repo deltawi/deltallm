@@ -103,6 +103,56 @@ def test_anthropic_tool_choice_any_maps_to_required() -> None:
     assert canonical.tool_choice.function == {"name": "docs.search"}
 
 
+@pytest.mark.parametrize(
+    ("tool_choice", "expected"),
+    [
+        ({"type": "auto"}, "auto"),
+        ({"type": "any"}, "required"),
+        ({"type": "none"}, "none"),
+    ],
+)
+def test_anthropic_tool_choice_modes_map_to_chat(tool_choice: dict[str, str], expected: str) -> None:
+    payload = AnthropicMessagesRequest.model_validate(
+        {
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 128,
+            "messages": [{"role": "user", "content": "hi"}],
+            "tool_choice": tool_choice,
+        }
+    )
+
+    canonical = anthropic_messages_to_chat_request(payload)
+
+    assert canonical.tool_choice == expected
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "bogus"},
+        {"type": "tool"},
+        {"type": "tool", "name": ""},
+        {"type": "tool", "name": "   "},
+    ],
+)
+def test_anthropic_messages_rejects_invalid_tool_choice(tool_choice: dict[str, str]) -> None:
+    from src.models.errors import InvalidRequestError
+
+    payload = AnthropicMessagesRequest.model_validate(
+        {
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 128,
+            "messages": [{"role": "user", "content": "hi"}],
+            "tool_choice": tool_choice,
+        }
+    )
+
+    with pytest.raises(InvalidRequestError) as exc_info:
+        anthropic_messages_to_chat_request(payload)
+
+    assert "tool_choice" in exc_info.value.message
+
+
 def test_chat_response_to_anthropic_response_maps_text_and_tool_calls() -> None:
     chat_payload = {
         "id": "chatcmpl-1",
@@ -290,6 +340,23 @@ async def test_messages_missing_max_tokens_returns_anthropic_error_envelope(clie
     assert payload["type"] == "error"
     assert payload["error"]["type"] == "invalid_request_error"
     assert "max_tokens" in payload["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_messages_malformed_json_returns_anthropic_error_envelope(client, test_app):
+    headers = {
+        "Authorization": f"Bearer {test_app.state._test_key}",
+        "Content-Type": "application/json",
+    }
+
+    response = await client.post("/v1/messages", headers=headers, content="{bad")
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload == {
+        "type": "error",
+        "error": {"type": "invalid_request_error", "message": "Invalid JSON body"},
+    }
 
 
 def test_anthropic_messages_rejects_unsupported_content_blocks() -> None:

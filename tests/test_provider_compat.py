@@ -45,6 +45,18 @@ def _encode_eventstream_message(headers: dict[str, str], payload: dict) -> bytes
     return prelude_no_crc + prelude_crc_bytes + header_bytes + payload_bytes + struct.pack("!I", message_crc)
 
 
+def _stream_json_payloads(lines: list[str]) -> list[dict]:
+    payloads: list[dict] = []
+    for line in lines:
+        if not line.startswith("data: "):
+            continue
+        payload = line[len("data: ") :]
+        if payload == "[DONE]":
+            continue
+        payloads.append(json.loads(payload))
+    return payloads
+
+
 @pytest.mark.asyncio
 async def test_openai_adapter_omits_tool_choice_without_tools() -> None:
     adapter = OpenAIAdapter(httpx.AsyncClient())
@@ -608,14 +620,67 @@ async def test_bedrock_adapter_translate_stream_to_openai_chunks() -> None:
         # Split arbitrarily mid-frame to make sure the parser buffers correctly
         # across chunk boundaries, just like real HTTP reads would arrive.
         split = len(frames) // 2
-        out = [line async for line in adapter.translate_stream(_byte_stream([frames[:split], frames[split:]]))]
+        out = [
+            line
+            async for line in adapter.translate_stream(
+                _byte_stream([frames[:split], frames[split:]]),
+                model_name="bedrock-public-model",
+            )
+        ]
+        payloads = _stream_json_payloads(out)
 
         assert any('"role":"assistant"' in line for line in out)
         assert any('"content":"Hello"' in line for line in out)
         assert any('"content":" world"' in line for line in out)
         assert any('"finish_reason":"stop"' in line for line in out)
         assert any('"total_tokens":6' in line for line in out)
+        assert all(payload["model"] == "bedrock-public-model" for payload in payloads)
         assert out[-1] == "data: [DONE]"
+    finally:
+        await adapter.http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_bedrock_adapter_translate_stream_uses_sequential_tool_call_indexes() -> None:
+    adapter = BedrockAdapter(httpx.AsyncClient())
+    try:
+        frames = b"".join(
+            [
+                _encode_eventstream_message(
+                    {":message-type": "event", ":event-type": "messageStart"},
+                    {"role": "assistant"},
+                ),
+                _encode_eventstream_message(
+                    {":message-type": "event", ":event-type": "contentBlockDelta"},
+                    {"contentBlockIndex": 0, "delta": {"text": "Let me check."}},
+                ),
+                _encode_eventstream_message(
+                    {":message-type": "event", ":event-type": "contentBlockStart"},
+                    {"contentBlockIndex": 1, "start": {"toolUse": {"toolUseId": "toolu_1", "name": "docs.search"}}},
+                ),
+                _encode_eventstream_message(
+                    {":message-type": "event", ":event-type": "contentBlockDelta"},
+                    {"contentBlockIndex": 1, "delta": {"toolUse": {"input": '{"query":"delta"}'}}},
+                ),
+                _encode_eventstream_message(
+                    {":message-type": "event", ":event-type": "messageStop"},
+                    {"stopReason": "tool_use"},
+                ),
+            ]
+        )
+
+        out = [line async for line in adapter.translate_stream(_byte_stream([frames]), model_name="bedrock-public-model")]
+        payloads = _stream_json_payloads(out)
+        tool_deltas = [
+            tool_call
+            for payload in payloads
+            for choice in payload.get("choices", [])
+            for tool_call in (choice.get("delta") or {}).get("tool_calls", [])
+        ]
+
+        assert tool_deltas[0]["index"] == 0
+        assert tool_deltas[1]["index"] == 0
+        assert all(payload["model"] == "bedrock-public-model" for payload in payloads)
     finally:
         await adapter.http_client.aclose()
 

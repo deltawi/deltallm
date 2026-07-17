@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from json import JSONDecodeError
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
@@ -18,29 +20,43 @@ from src.routers.chat import handle_chat_like_request
 router = APIRouter(prefix="/v1", tags=["messages"])
 
 
+def _anthropic_error_response(*, status_code: int, error_type: str, message: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"type": "error", "error": {"type": error_type, "message": message}},
+    )
+
+
 def _anthropic_validation_error_response(exc: ValidationError) -> JSONResponse:
     first_error = exc.errors()[0]
     field = ".".join(str(part) for part in first_error["loc"])
     message = f"{field}: {first_error['msg']}" if field else first_error["msg"]
-    return JSONResponse(
-        status_code=400,
-        content={"type": "error", "error": {"type": "invalid_request_error", "message": message}},
-    )
+    return _anthropic_error_response(status_code=400, error_type="invalid_request_error", message=message)
 
 
 @router.post("/messages", dependencies=[Depends(require_api_key), Depends(enforce_rate_limits)])
 async def messages(request: Request):
     try:
-        payload = AnthropicMessagesRequest.model_validate(await request.json())
+        request_body = await request.json()
+    except (JSONDecodeError, UnicodeDecodeError):
+        return _anthropic_error_response(
+            status_code=400,
+            error_type="invalid_request_error",
+            message="Invalid JSON body",
+        )
+
+    try:
+        payload = AnthropicMessagesRequest.model_validate(request_body)
     except ValidationError as exc:
         return _anthropic_validation_error_response(exc)
 
     try:
         canonical = anthropic_messages_to_chat_request(payload)
     except InvalidRequestError as exc:
-        return JSONResponse(
+        return _anthropic_error_response(
             status_code=exc.status_code,
-            content={"type": "error", "error": {"type": exc.error_type, "message": exc.message}},
+            error_type=exc.error_type,
+            message=exc.message,
         )
     translator = AnthropicStreamTranslator(model=payload.model)
     return await handle_chat_like_request(

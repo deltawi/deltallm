@@ -99,7 +99,12 @@ class ProviderAdapter(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def translate_stream(self, provider_stream: AsyncIterator[str]) -> AsyncIterator[str]:
+    async def translate_stream(
+        self,
+        provider_stream: AsyncIterator[Any],
+        *,
+        model_name: str | None = None,
+    ) -> AsyncIterator[str]:
         raise NotImplementedError
 
     @abstractmethod

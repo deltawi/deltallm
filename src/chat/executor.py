@@ -160,7 +160,7 @@ async def open_stream_with_first_chunk(
             raise adapter.map_error(status_exc)
 
         raw_stream = response.aiter_bytes() if adapter.stream_uses_bytes else response.aiter_lines()
-        translated_stream = adapter.translate_stream(raw_stream)
+        translated_stream = adapter.translate_stream(raw_stream, model_name=payload.model)
         first_line: str | None = None
         async for line in translated_stream:
             if line:
