@@ -256,3 +256,60 @@ jobs:
           fi
           git commit -m "Publish Helm chart ${CHART_VERSION}"
           git push origin gh-pages
+
+  railway-template:
+    runs-on: ubuntu-latest
+    needs: [docker, helm-repo]
+    env:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      RAILWAY_TEMPLATE_ID: ${{ vars.RAILWAY_TEMPLATE_ID }}
+      RAILWAY_TEMPLATE_WORKSPACE: ${{ vars.RAILWAY_TEMPLATE_WORKSPACE }}
+      RAILWAY_TEMPLATE_DEMO_PROJECT: ${{ vars.RAILWAY_TEMPLATE_DEMO_PROJECT }}
+      RAILWAY_TEMPLATE_README: deploy/railway/template.md
+
+    steps:
+      - name: Check Railway template publishing config
+        id: railway-template-config
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${RAILWAY_API_TOKEN}" || -z "${RAILWAY_TEMPLATE_ID}" ]]; then
+            echo "::notice::Skipping Railway template publish. Configure secrets.RAILWAY_API_TOKEN and vars.RAILWAY_TEMPLATE_ID to enable it."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - name: Check out repository
+        if: steps.railway-template-config.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        if: steps.railway-template-config.outputs.enabled == 'true'
+        run: npm install -g @railway/cli
+
+      - name: Publish Railway template metadata
+        if: steps.railway-template-config.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          args=(
+            templates publish "${RAILWAY_TEMPLATE_ID}"
+            --category "AI/ML"
+            --description "Deploy DeltaLLM with managed PostgreSQL and Redis on Railway."
+            --readme-file "${RAILWAY_TEMPLATE_README}"
+            --json
+          )
+
+          if [[ -n "${RAILWAY_TEMPLATE_WORKSPACE}" ]]; then
+            args+=(--workspace "${RAILWAY_TEMPLATE_WORKSPACE}")
+          fi
+
+          if [[ -n "${RAILWAY_TEMPLATE_DEMO_PROJECT}" ]]; then
+            args+=(--demo-project "${RAILWAY_TEMPLATE_DEMO_PROJECT}")
+          fi
+
+          railway "${args[@]}"

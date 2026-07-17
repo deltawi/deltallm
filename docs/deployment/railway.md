@@ -10,6 +10,14 @@ The durable deployment artifact is a Railway Template. After the template is pub
 
 Do not merge a README button with a placeholder URL.
 
+Railway's deploy button uses the published template code:
+
+```html
+<a href="https://railway.com/deploy/<template-code>?utm_medium=integration&utm_source=template&utm_campaign=deltallm">
+  <img src="https://railway.com/button.svg" alt="Deploy on Railway" height="40">
+</a>
+```
+
 ## Template Services
 
 Create the template with three services:
@@ -169,3 +177,27 @@ After the app is running:
 5. Re-run `/v1/models` and a chat completion check.
 
 For production-oriented deployments with dedicated batch workers, shared artifact storage, custom domains, and stricter operational controls, create a separate template rather than extending this evaluation template.
+
+## Release Automation
+
+The release workflow can publish or update the Railway template marketplace metadata after a GitHub Release is published.
+
+Configure these repository settings before enabling the README deploy button:
+
+| Setting | Type | Required | Notes |
+|---------|------|----------|-------|
+| `RAILWAY_API_TOKEN` | GitHub Actions secret | Yes | Railway account or workspace token with template publishing access |
+| `RAILWAY_TEMPLATE_ID` | GitHub Actions variable | Yes | Stable template ID returned by the initial Railway template creation |
+| `RAILWAY_TEMPLATE_WORKSPACE` | GitHub Actions variable | Optional | Workspace ID or name, useful when the token can access multiple workspaces |
+| `RAILWAY_TEMPLATE_DEMO_PROJECT` | GitHub Actions variable | Optional | Public demo project ID to show on the template page |
+
+The release workflow intentionally updates an existing reviewed template. It does not create a fresh template from a live smoke-test project on every release because that can accidentally copy test-only variables, source settings, or one-off infrastructure state.
+
+Before the first automated publish:
+
+1. Create the Railway template from a clean project whose `deltallm` service is connected to the public GitHub repository.
+2. Confirm the template has the service graph and variables documented above.
+3. Store the returned template ID in `RAILWAY_TEMPLATE_ID`.
+4. Add `RAILWAY_API_TOKEN` as a GitHub Actions secret.
+5. Run the next release workflow.
+6. Copy the published template URL into the README button.
