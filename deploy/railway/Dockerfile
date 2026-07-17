@@ -1,0 +1,76 @@
+# syntax=docker/dockerfile:1.7
+
+# Railway rejects portable BuildKit cache mounts unless their IDs use a
+# Railway-specific cache-key prefix, so this file mirrors the root Dockerfile
+# without the npm cache mount. Keep runtime behavior in sync with Dockerfile.
+
+# The UI output is static, so keep this stage on the native builder platform.
+FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend
+
+WORKDIR /app/ui
+
+COPY ui/package.json ui/package-lock.json* ./
+ENV NPM_CONFIG_AUDIT=false \
+    NPM_CONFIG_FETCH_RETRIES=5 \
+    NPM_CONFIG_FETCH_RETRY_FACTOR=2 \
+    NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=20000 \
+    NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000 \
+    NPM_CONFIG_FETCH_TIMEOUT=600000 \
+    NPM_CONFIG_FUND=false
+RUN if [ -f package-lock.json ]; then npm ci --prefer-offline; else npm install --prefer-offline; fi
+
+COPY ui/ ./
+RUN npm run build
+
+FROM python:3.11-slim AS builder
+
+WORKDIR /app
+ARG INSTALL_PRESIDIO=false
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc libpq-dev curl libatomic1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+RUN if [ "$INSTALL_PRESIDIO" = "true" ]; then \
+      pip install --no-cache-dir --user presidio-analyzer presidio-anonymizer; \
+    fi
+
+# `pip install --user` drops console scripts (like `prisma`) into /root/.local/bin,
+# which is not on PATH by default during the build stage.
+ENV PATH=/root/.local/bin:$PATH
+
+COPY pyproject.toml ./
+COPY src ./src
+COPY prisma ./prisma
+RUN prisma generate --schema=./prisma/schema.prisma
+RUN prisma py fetch
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libpq5 curl libatomic1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /root/.local /root/.local
+COPY --from=builder /root/.cache/prisma-python /root/.cache/prisma-python
+COPY --from=builder /app /app
+COPY --from=frontend /app/ui/dist ./ui/dist
+COPY config.example.yaml ./config.example.yaml
+
+ENV PATH=/root/.local/bin:$PATH
+ENV PYTHONUNBUFFERED=1
+ENV DELTALLM_CONFIG_PATH=/app/config/config.yaml
+ENV HOST=0.0.0.0
+ENV PORT=4000
+
+EXPOSE 4000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+  CMD curl -fsS "http://localhost:${PORT}/health/liveliness" || exit 1
+
+CMD ["sh", "-c", "python -m src.prisma_bootstrap --schema ./prisma/schema.prisma --max-attempts 30 --sleep-seconds 2 && exec uvicorn src.main:app --host ${HOST} --port ${PORT}"]

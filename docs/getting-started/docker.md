@@ -53,10 +53,10 @@ INSTALL_PRESIDIO=true docker compose --profile single up -d --build
 
 Run the command from the repository root so Compose can read the project `.env` file automatically.
 
-On startup, the DeltaLLM container applies the Prisma schema with:
+On startup, the DeltaLLM container applies migrations with:
 
 ```bash
-prisma db push --schema=./prisma/schema.prisma --accept-data-loss
+prisma migrate deploy --schema=./prisma/schema.prisma
 ```
 
 Then it starts the API server.
@@ -80,7 +80,7 @@ Run two DeltaLLM instances behind an Nginx load balancer:
 docker compose --profile ha up -d --build
 ```
 
-Each DeltaLLM container applies the Prisma schema with `prisma db push --schema=./prisma/schema.prisma --accept-data-loss` before starting the API.
+Each DeltaLLM container runs `prisma migrate deploy --schema=./prisma/schema.prisma` before starting the API.
 
 This starts:
 - 2 DeltaLLM instances (load balanced)
@@ -184,7 +184,7 @@ To build an image with the full Presidio engine:
 docker build --build-arg INSTALL_PRESIDIO=true -t deltallm .
 ```
 
-The image runs `prisma db push --schema=./prisma/schema.prisma --accept-data-loss` before starting `uvicorn`, so the target database must be reachable when the container starts.
+The image runs `prisma migrate deploy --schema=./prisma/schema.prisma` before starting `uvicorn`, so the target database must be reachable when the container starts.
 
 ## Health Check
 

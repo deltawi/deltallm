@@ -103,4 +103,4 @@ docker compose pull
 docker compose up -d --build
 ```
 
-The application container runs the shared database bootstrap script on startup before launching the API. It prefers `prisma migrate deploy` and falls back to `prisma db push` for legacy or unbaselined databases.
+The application container runs the shared database bootstrap script on startup before launching the API. The bootstrap runs strict `prisma migrate deploy` with database-connectivity retries; it does not run `prisma db push`.
