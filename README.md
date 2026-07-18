@@ -6,7 +6,7 @@
 [![Last Commit](https://img.shields.io/github/last-commit/deltawi/deltallm.svg)](https://github.com/deltawi/deltallm/commits/main)
 [![Stars](https://img.shields.io/github/stars/deltawi/deltallm.svg?style=social)](https://github.com/deltawi/deltallm/stargazers)
 
-
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/deltallm?utm_medium=integration&utm_source=template&utm_campaign=deltallm)
 
 ## What is DeltaLLM?
 
