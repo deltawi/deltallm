@@ -10,6 +10,7 @@ import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+HELM_CHART_DIR = REPO_ROOT / "deploy" / "kubernetes" / "helm"
 HELM = shutil.which("helm")
 
 
@@ -20,7 +21,7 @@ def _render(*args: str) -> list[dict[str, Any]]:
         HELM,
         "template",
         "deltallm",
-        "./helm",
+        str(HELM_CHART_DIR),
         "--set",
         "secret.values.masterKey=sk-testmasterkey1234567890A1",
         "--set",
@@ -38,7 +39,7 @@ def _render_error(*args: str) -> str:
         HELM,
         "template",
         "deltallm",
-        "./helm",
+        str(HELM_CHART_DIR),
         "--set",
         "secret.values.masterKey=sk-testmasterkey1234567890A1",
         "--set",
@@ -90,7 +91,7 @@ def _service_by_component(docs: list[dict[str, Any]], component: str | None) -> 
 
 
 def test_helm_schema_allows_active_batch_scheduler_flag() -> None:
-    schema = yaml.safe_load((REPO_ROOT / "helm" / "values.schema.json").read_text())
+    schema = yaml.safe_load((HELM_CHART_DIR / "values.schema.json").read_text())
     scheduler_enabled = schema["properties"]["config"]["properties"]["general_settings"]["properties"][
         "embeddings_batch_scheduler_enabled"
     ]
@@ -99,7 +100,7 @@ def test_helm_schema_allows_active_batch_scheduler_flag() -> None:
 
 
 def test_helm_schema_allows_tenant_fair_share_settings() -> None:
-    schema = yaml.safe_load((REPO_ROOT / "helm" / "values.schema.json").read_text())
+    schema = yaml.safe_load((HELM_CHART_DIR / "values.schema.json").read_text())
     general_settings = schema["properties"]["config"]["properties"]["general_settings"]["properties"]
 
     assert general_settings["embeddings_batch_tenant_fair_share_enabled"] == {"type": "boolean"}
@@ -658,7 +659,7 @@ def test_split_mode_worker_tuning_uses_shared_config_unless_role_overridden() ->
 def test_production_default_does_not_disable_batch_workers_without_worker_deployment() -> None:
     docs = _render(
         "-f",
-        "helm/values-production.yaml",
+        str(HELM_CHART_DIR / "values-production.yaml"),
         "--set",
         "secret.existingSecret=deltallm-app-secrets",
         "--show-only",

@@ -72,6 +72,7 @@ jobs:
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name }}
       CHART_REPO_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+      CHART_SOURCE_DIR: deploy/kubernetes/helm
 
     steps:
       - name: Check out repository
@@ -100,7 +101,7 @@ jobs:
         run: |
           helm repo add bitnami https://charts.bitnami.com/bitnami
           helm repo update
-          helm dependency build ./helm
+          helm dependency build "${CHART_SOURCE_DIR}"
 
       - name: Prepare versioned chart package
         shell: bash
@@ -108,7 +109,7 @@ jobs:
           set -euo pipefail
           rm -rf /tmp/deltallm-chart /tmp/deltallm-packages
           mkdir -p /tmp/deltallm-chart /tmp/deltallm-packages
-          cp -R helm/. /tmp/deltallm-chart/
+          cp -R "${CHART_SOURCE_DIR}/." /tmp/deltallm-chart/
 
           python3 - <<'PY'
           import os
@@ -145,22 +146,22 @@ jobs:
             --set secret.values.saltKey="${VALID_SALT_KEY}" \
             > /dev/null
           helm lint /tmp/deltallm-chart \
-            -f helm/values-eval.yaml \
+            -f /tmp/deltallm-chart/values-eval.yaml \
             --set secret.values.masterKey="${VALID_MASTER_KEY}" \
             --set secret.values.saltKey="${VALID_SALT_KEY}"
           helm template deltallm /tmp/deltallm-chart \
-            -f helm/values-eval.yaml \
+            -f /tmp/deltallm-chart/values-eval.yaml \
             --set secret.values.masterKey="${VALID_MASTER_KEY}" \
             --set secret.values.saltKey="${VALID_SALT_KEY}" \
             > /dev/null
           helm lint /tmp/deltallm-chart \
-            -f helm/values-production.yaml \
+            -f /tmp/deltallm-chart/values-production.yaml \
             --set secret.values.masterKey="${VALID_MASTER_KEY}" \
             --set secret.values.saltKey="${VALID_SALT_KEY}" \
             --set runtime.database.url="${VALID_DATABASE_URL}" \
             --set runtime.redis.url="${VALID_REDIS_URL}"
           helm template deltallm /tmp/deltallm-chart \
-            -f helm/values-production.yaml \
+            -f /tmp/deltallm-chart/values-production.yaml \
             --set secret.values.masterKey="${VALID_MASTER_KEY}" \
             --set secret.values.saltKey="${VALID_SALT_KEY}" \
             --set runtime.database.url="${VALID_DATABASE_URL}" \
@@ -175,7 +176,7 @@ jobs:
         env:
           GH_PAGES_DIR: /tmp/deltallm-gh-pages
           SOURCE_CHART_DIR: /tmp/deltallm-chart
-          SOURCE_VALUES_DIR: ${{ github.workspace }}/helm
+          SOURCE_VALUES_DIR: ${{ github.workspace }}/deploy/kubernetes/helm
         run: |
           set -euo pipefail
 
