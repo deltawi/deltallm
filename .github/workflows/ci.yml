@@ -92,6 +92,56 @@ jobs:
           DELTALLM_SALT_KEY: ci-salt-key-for-testing-only-do-not-use-in-production
         run: uv run pytest -v --ignore=tests/test_provider_presets_smoke.py
 
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Validate chart
+        run: |
+          set -euo pipefail
+
+          VALID_MASTER_KEY=sk-ci-validation-1234567890abcdeA1
+          VALID_SALT_KEY=ci-validation-salt-0123456789abcdef0123456789abcdef
+          VALID_DATABASE_URL=postgresql://deltallm:deltallm@postgres:5432/deltallm
+          VALID_REDIS_URL=redis://redis:6379/0
+
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo update
+          helm dependency build deploy/kubernetes/helm
+          helm lint deploy/kubernetes/helm \
+            --set secret.values.masterKey="${VALID_MASTER_KEY}" \
+            --set secret.values.saltKey="${VALID_SALT_KEY}"
+          helm template deltallm deploy/kubernetes/helm \
+            --set secret.values.masterKey="${VALID_MASTER_KEY}" \
+            --set secret.values.saltKey="${VALID_SALT_KEY}" \
+            > /dev/null
+          helm lint deploy/kubernetes/helm \
+            -f deploy/kubernetes/helm/values-eval.yaml \
+            --set secret.values.masterKey="${VALID_MASTER_KEY}" \
+            --set secret.values.saltKey="${VALID_SALT_KEY}"
+          helm template deltallm deploy/kubernetes/helm \
+            -f deploy/kubernetes/helm/values-eval.yaml \
+            --set secret.values.masterKey="${VALID_MASTER_KEY}" \
+            --set secret.values.saltKey="${VALID_SALT_KEY}" \
+            > /dev/null
+          helm lint deploy/kubernetes/helm \
+            -f deploy/kubernetes/helm/values-production.yaml \
+            --set secret.values.masterKey="${VALID_MASTER_KEY}" \
+            --set secret.values.saltKey="${VALID_SALT_KEY}" \
+            --set runtime.database.url="${VALID_DATABASE_URL}" \
+            --set runtime.redis.url="${VALID_REDIS_URL}"
+          helm template deltallm deploy/kubernetes/helm \
+            -f deploy/kubernetes/helm/values-production.yaml \
+            --set secret.values.masterKey="${VALID_MASTER_KEY}" \
+            --set secret.values.saltKey="${VALID_SALT_KEY}" \
+            --set runtime.database.url="${VALID_DATABASE_URL}" \
+            --set runtime.redis.url="${VALID_REDIS_URL}" \
+            > /dev/null
+
   lint:
     runs-on: ubuntu-latest
     steps:

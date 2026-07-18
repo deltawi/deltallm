@@ -134,7 +134,7 @@ config:
 Render before rollout:
 
 ```bash
-helm template deltallm ./helm --values helm/values-production.yaml
+helm template deltallm deploy/kubernetes/helm --values deploy/kubernetes/helm/values-production.yaml
 ```
 
 ## Verification

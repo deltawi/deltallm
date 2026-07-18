@@ -117,7 +117,7 @@ Use this path when you want to:
 
 - inspect the chart locally
 - test changes before opening a PR
-- install directly from `./helm`
+- install directly from `deploy/kubernetes/helm`
 
 Clone the repository first:
 
@@ -131,16 +131,16 @@ cd deltallm
 The chart uses Bitnami PostgreSQL and Redis as optional subcharts.
 
 ```bash
-helm dependency build ./helm
+helm dependency build deploy/kubernetes/helm
 ```
 
 ### Chart profiles
 
 The chart now ships with three value layers:
 
-- `helm/values.yaml`: safe baseline
-- `helm/values-eval.yaml`: quick-start with bundled PostgreSQL and Redis
-- `helm/values-production.yaml`: HA-oriented production defaults
+- `deploy/kubernetes/helm/values.yaml`: safe baseline
+- `deploy/kubernetes/helm/values-eval.yaml`: quick-start with bundled PostgreSQL and Redis
+- `deploy/kubernetes/helm/values-production.yaml`: HA-oriented production defaults
 
 By default, the app pod uses an init container to wait until the configured PostgreSQL and Redis endpoints accept TCP connections before DeltaLLM starts. This avoids the initial crash loop that can happen while bundled stateful dependencies are still coming up.
 
@@ -163,10 +163,10 @@ This path uses bundled PostgreSQL and Redis and generated control-plane secrets.
     `DELTALLM_SALT_KEY` must be a real secret value and must not be `change-me`.
 
 ```bash
-helm upgrade --install deltallm ./helm \
+helm upgrade --install deltallm deploy/kubernetes/helm \
   --namespace deltallm \
   --create-namespace \
-  -f helm/values-eval.yaml \
+  -f deploy/kubernetes/helm/values-eval.yaml \
   --set secret.values.masterKey="$DELTALLM_MASTER_KEY" \
   --set secret.values.saltKey="$DELTALLM_SALT_KEY"
 ```
@@ -412,8 +412,8 @@ If you use `values-production.yaml`, model management is database-only from the 
 - temporarily override during the initial install:
 
   ```bash
-  helm upgrade --install deltallm ./helm \
-    -f helm/values-production.yaml \
+  helm upgrade --install deltallm deploy/kubernetes/helm \
+    -f deploy/kubernetes/helm/values-production.yaml \
     --set config.general_settings.model_deployment_source=hybrid \
     --set config.general_settings.model_deployment_bootstrap_from_config=true
   ```
@@ -465,10 +465,10 @@ ingress:
 Use the production profile as the base:
 
 ```bash
-helm upgrade --install deltallm ./helm \
+helm upgrade --install deltallm deploy/kubernetes/helm \
   --namespace deltallm \
   --create-namespace \
-  -f helm/values-production.yaml \
+  -f deploy/kubernetes/helm/values-production.yaml \
   -f values-custom.yaml
 ```
 
@@ -589,11 +589,11 @@ If you enable `networkPolicy`, define ingress and egress rules that match your c
 Lint the chart before deploying:
 
 ```bash
-helm lint ./helm -f helm/values-eval.yaml \
+helm lint deploy/kubernetes/helm -f deploy/kubernetes/helm/values-eval.yaml \
   --set secret.values.masterKey=StrongMasterKey2026SecureValue99 \
   --set secret.values.saltKey=unique-salt-2026
 
-helm lint ./helm -f helm/values-production.yaml \
+helm lint deploy/kubernetes/helm -f deploy/kubernetes/helm/values-production.yaml \
   --set secret.existingSecret=deltallm-app-secrets \
   --set runtime.database.existingSecret.name=deltallm-runtime-secrets \
   --set runtime.redis.existingSecret.name=deltallm-runtime-secrets \
@@ -606,7 +606,7 @@ helm lint ./helm -f helm/values-production.yaml \
 If subchart dependencies are not present locally yet, run:
 
 ```bash
-helm dependency build ./helm
+helm dependency build deploy/kubernetes/helm
 ```
 
 ## Troubleshooting
