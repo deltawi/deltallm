@@ -32,6 +32,7 @@ Your application keeps its OpenAI request format. DeltaLLM handles provider cred
 - **Unified API** - Use one OpenAI-compatible endpoint across OpenAI, Anthropic, Azure OpenAI, Bedrock, Gemini, Groq, and other providers.
 - **Scoped API keys** - Issue virtual keys with model allowlists, rate limits, budgets, owners, and expiry.
 - **Routing and failover** - Route by strategy, retry failed deployments, and separate provider credentials from application code.
+- **Batch API** - Run embeddings and non-streaming chat completions asynchronously through OpenAI-compatible files and batches, even when upstream providers are synchronous.
 - **MCP gateway** - Register external MCP servers and expose approved tools through controlled gateway flows.
 - **Guardrails** - Detect PII and prompt injection before provider calls.
 - **Spend and usage** - Attribute cost by key, team, organization, model, and provider.
