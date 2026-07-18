@@ -3,6 +3,8 @@
 [![Latest Release](https://img.shields.io/github/v/release/deltawi/deltallm.svg?sort=semver)](https://github.com/deltawi/deltallm/releases)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Last Commit](https://img.shields.io/github/last-commit/deltawi/deltallm.svg)](https://github.com/deltawi/deltallm/commits/main)
+[![Stars](https://img.shields.io/github/stars/deltawi/deltallm.svg?style=social)](https://github.com/deltawi/deltallm/stargazers)
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/deltallm?utm_medium=integration&utm_source=template&utm_campaign=deltallm)
 
