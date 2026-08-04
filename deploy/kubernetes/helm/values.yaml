@@ -168,9 +168,13 @@ secret:
   keys:
     masterKey: master-key
     saltKey: salt-key
+    batchWebhookEncryptionKey: batch-webhook-encryption-key
   values:
     masterKey: ""
     saltKey: ""
+    # URL-safe base64 encoding of exactly 32 random bytes. Keep this stable
+    # for as long as pending webhook deliveries may need to be decrypted.
+    batchWebhookEncryptionKey: ""
 
 runtime:
   database:
@@ -229,6 +233,20 @@ config:
     embeddings_batch_enabled: false
     embeddings_batch_worker_enabled: true
     embeddings_batch_completion_outbox_worker_enabled: true
+    batch_webhook_enabled: false
+    batch_webhook_worker_enabled: true
+    batch_webhook_poll_interval_seconds: 1
+    batch_webhook_max_concurrency: 4
+    batch_webhook_lease_seconds: 30
+    batch_webhook_timeout_seconds: 10
+    batch_webhook_max_attempts: 8
+    batch_webhook_retry_initial_seconds: 5
+    batch_webhook_retry_max_seconds: 3600
+    batch_webhook_allowed_ports:
+      - 443
+    batch_webhook_allowed_private_cidrs: []
+    batch_webhook_allow_http: false
+    batch_webhook_delivery_retention_days: 30
     embeddings_batch_storage_backend: local
     embeddings_batch_storage_dir: .deltallm/batch-artifacts
     embeddings_batch_create_session_cleanup_enabled: true

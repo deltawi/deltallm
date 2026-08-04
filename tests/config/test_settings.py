@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+
 import pytest
 
 from src.config import (
@@ -49,6 +51,76 @@ def test_batch_advisory_lock_mode_validation() -> None:
     with pytest.raises(ValueError, match="embeddings_batch_advisory_lock_mode"):
         AppConfig.model_validate(
             {"general_settings": {"embeddings_batch_advisory_lock_mode": "legacy"}}
+        )
+
+
+def test_batch_webhook_defaults_are_safe() -> None:
+    settings = GeneralSettings()
+
+    assert settings.batch_webhook_enabled is False
+    assert settings.batch_webhook_worker_enabled is True
+    assert settings.batch_webhook_encryption_key is None
+    assert settings.batch_webhook_allowed_ports == [443]
+    assert settings.batch_webhook_allowed_private_cidrs == []
+    assert settings.batch_webhook_allow_http is False
+    assert settings.batch_webhook_delivery_retention_days == 30
+
+
+def test_batch_webhook_enabled_requires_valid_encryption_key() -> None:
+    with pytest.raises(ValueError, match="requires batch_webhook_encryption_key"):
+        GeneralSettings(batch_webhook_enabled=True)
+
+    with pytest.raises(ValueError, match="decode to exactly 32 bytes"):
+        GeneralSettings(
+            batch_webhook_enabled=True,
+            batch_webhook_encryption_key=base64.urlsafe_b64encode(b"too-short").decode(),
+        )
+
+    encoded_key = base64.urlsafe_b64encode(bytes(range(32))).decode("ascii")
+    settings = GeneralSettings(
+        batch_webhook_enabled=True,
+        batch_webhook_encryption_key=encoded_key,
+        batch_webhook_allowed_ports=[443, 8443, 443],
+        batch_webhook_allowed_private_cidrs=["10.0.0.1/8", "fd00::1/8"],
+    )
+
+    assert settings.batch_webhook_encryption_key is not None
+    assert settings.batch_webhook_encryption_key.get_secret_value() == encoded_key
+    assert settings.batch_webhook_allowed_ports == [443, 8443]
+    assert settings.batch_webhook_allowed_private_cidrs == ["10.0.0.0/8", "fd00::/8"]
+
+
+def test_batch_webhook_encryption_key_validation_hides_sensitive_input() -> None:
+    sensitive_key = "sensitive-invalid-encryption-key"
+    with pytest.raises(ValueError) as exc_info:
+        GeneralSettings(
+            batch_webhook_enabled=True,
+            batch_webhook_encryption_key=sensitive_key,
+        )
+
+    assert sensitive_key not in str(exc_info.value)
+    assert sensitive_key not in repr(exc_info.value)
+
+
+def test_batch_webhook_rejects_invalid_delivery_settings() -> None:
+    with pytest.raises(ValueError, match="retry_max_seconds"):
+        GeneralSettings(
+            batch_webhook_retry_initial_seconds=10,
+            batch_webhook_retry_max_seconds=5,
+        )
+
+    with pytest.raises(ValueError, match="lease_seconds"):
+        GeneralSettings(batch_webhook_lease_seconds=10, batch_webhook_timeout_seconds=10)
+
+    with pytest.raises(ValueError, match="valid IPv4 or IPv6 CIDRs"):
+        GeneralSettings(batch_webhook_allowed_private_cidrs=["not-a-network"])
+
+    encoded_key = base64.urlsafe_b64encode(bytes(range(32))).decode("ascii")
+    with pytest.raises(ValueError, match="at least one allowed webhook port"):
+        GeneralSettings(
+            batch_webhook_enabled=True,
+            batch_webhook_encryption_key=encoded_key,
+            batch_webhook_allowed_ports=[],
         )
 
 
@@ -206,8 +278,10 @@ def test_resolve_app_config_with_secrets_wraps_secret_resolution_errors():
             del value
             raise RuntimeError("secret backend exploded")
 
-    with pytest.raises(ValueError, match="Failed to resolve configuration secrets"):
+    with pytest.raises(ValueError, match="Failed to resolve configuration secrets") as exc_info:
         resolve_app_config_with_secrets({"general_settings": {"master_key": "StrongMasterKey2026SecureTokenABCD1234"}}, secret_resolver=BrokenResolver())
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
 
 
 def test_resolve_app_config_with_secrets_wraps_validation_errors():
@@ -215,8 +289,35 @@ def test_resolve_app_config_with_secrets_wraps_validation_errors():
         def resolve_tree(self, value):
             return value
 
-    with pytest.raises(ValueError, match="Resolved configuration is invalid"):
-        resolve_app_config_with_secrets({"general_settings": {"cache_ttl": "not-an-int"}}, secret_resolver=PassthroughResolver())
+    sensitive_key = "sensitive-invalid-encryption-key"
+    with pytest.raises(ValueError, match="Resolved configuration is invalid") as exc_info:
+        resolve_app_config_with_secrets(
+            {"general_settings": {"batch_webhook_encryption_key": sensitive_key}},
+            secret_resolver=PassthroughResolver(),
+        )
+    assert sensitive_key not in str(exc_info.value)
+    assert sensitive_key not in repr(exc_info.value)
+    assert "general_settings.batch_webhook_encryption_key" in str(exc_info.value)
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
+
+
+def test_resolve_app_config_with_secrets_preserves_safe_validation_diagnostics():
+    class PassthroughResolver:
+        def resolve_tree(self, value):
+            return value
+
+    with pytest.raises(ValueError) as exc_info:
+        resolve_app_config_with_secrets(
+            {"general_settings": {"cache_ttl": "not-an-integer"}},
+            secret_resolver=PassthroughResolver(),
+        )
+
+    rendered = str(exc_info.value)
+    assert "general_settings.cache_ttl" in rendered
+    assert "valid integer" in rendered
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
 
 
 def test_resolve_salt_key_uses_general_settings_value(monkeypatch):

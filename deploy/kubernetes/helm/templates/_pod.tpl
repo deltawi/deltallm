@@ -102,6 +102,12 @@
     secretKeyRef:
       name: {{ include "deltallm.appSecretName" $root }}
       key: {{ $root.Values.secret.keys.saltKey }}
+- name: DELTALLM_BATCH_WEBHOOK_ENCRYPTION_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "deltallm.appSecretName" $root }}
+      key: {{ $root.Values.secret.keys.batchWebhookEncryptionKey }}
+      optional: true
 {{- if $databaseEnv }}
 {{ $databaseEnv }}
 {{- end }}

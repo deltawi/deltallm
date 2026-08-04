@@ -203,6 +203,8 @@ async def test_create_session_repository_insert_and_lookup_contract() -> None:
                 "completed_at": None,
                 "last_attempt_at": None,
                 "expires_at": None,
+                "webhook_config_ciphertext": "v1.key.ciphertext",
+                "webhook_config_fingerprint": "a" * 64,
             }
         ]
     )
@@ -228,6 +230,8 @@ async def test_create_session_repository_insert_and_lookup_contract() -> None:
             created_by_user_id="user-1",
             created_by_team_id="team-1",
             created_by_organization_id="org-1",
+            webhook_config_ciphertext="v1.key.ciphertext",
+            webhook_config_fingerprint="a" * 64,
         )
     )
 
@@ -235,6 +239,10 @@ async def test_create_session_repository_insert_and_lookup_contract() -> None:
     assert record.status == BatchCreateSessionStatus.STAGED
     assert "INSERT INTO deltallm_batch_create_session" in prisma.sql
     assert "idempotency_scope_key" in prisma.sql
+    assert "webhook_config_ciphertext" in prisma.sql
+    assert record.webhook_config_ciphertext == "v1.key.ciphertext"
+    assert record.webhook_config_fingerprint == "a" * 64
+    assert prisma.params[-2:] == ("v1.key.ciphertext", "a" * 64)
     assert prisma.params[1] == "batch-1"
 
     prisma.rows = []

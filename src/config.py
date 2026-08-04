@@ -3,12 +3,22 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+from ipaddress import ip_network
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import yaml
-from pydantic import AliasChoices, BaseModel, Field, SecretStr, ValidationError, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.auth.roles import TeamRole, validate_team_role
@@ -28,6 +38,7 @@ from src.batch.scheduling.modes import (
     SchedulerShadowMode,
     resolve_scheduler_modes_from_settings,
 )
+from src.batch.webhooks.crypto import decode_batch_webhook_encryption_key
 from src.upstream_auth import (
     supports_custom_openai_compatible_auth,
     validate_auth_header_format,
@@ -386,6 +397,8 @@ def _validate_master_key_strength(value: str | None) -> str | None:
 
 
 class GeneralSettings(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     instance_name: str = "DeltaLLM"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     master_key: str | None = None
@@ -477,6 +490,20 @@ class GeneralSettings(BaseModel):
     embeddings_batch_enabled: bool = False
     embeddings_batch_worker_enabled: bool = True
     embeddings_batch_completion_outbox_worker_enabled: bool = True
+    batch_webhook_enabled: bool = False
+    batch_webhook_worker_enabled: bool = True
+    batch_webhook_encryption_key: SecretStr | None = None
+    batch_webhook_poll_interval_seconds: float = Field(default=1.0, gt=0.0)
+    batch_webhook_max_concurrency: int = Field(default=4, ge=1, le=100)
+    batch_webhook_lease_seconds: int = Field(default=30, ge=5)
+    batch_webhook_timeout_seconds: float = Field(default=10.0, gt=0.0)
+    batch_webhook_max_attempts: int = Field(default=8, ge=1, le=50)
+    batch_webhook_retry_initial_seconds: int = Field(default=5, ge=1)
+    batch_webhook_retry_max_seconds: int = Field(default=3_600, ge=1)
+    batch_webhook_allowed_ports: list[int] = Field(default_factory=lambda: [443])
+    batch_webhook_allowed_private_cidrs: list[str] = Field(default_factory=list)
+    batch_webhook_allow_http: bool = False
+    batch_webhook_delivery_retention_days: int = Field(default=30, ge=1)
     embeddings_batch_storage_backend: Literal["local", "s3"] = "local"
     embeddings_batch_storage_dir: str = ".deltallm/batch-artifacts"
     embeddings_batch_s3_bucket: str | None = None
@@ -629,12 +656,66 @@ class GeneralSettings(BaseModel):
     def validate_master_key(cls, value: str | None) -> str | None:
         return _validate_master_key_strength(value)
 
+    @field_validator("batch_webhook_encryption_key")
+    @classmethod
+    def validate_batch_webhook_encryption_key(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None or not value.get_secret_value().strip():
+            return None
+        decode_batch_webhook_encryption_key(value)
+        return value
+
+    @field_validator("batch_webhook_allowed_ports")
+    @classmethod
+    def validate_batch_webhook_allowed_ports(cls, value: list[int]) -> list[int]:
+        normalized: list[int] = []
+        seen: set[int] = set()
+        for raw_port in value:
+            port = int(raw_port)
+            if port < 1 or port > 65_535:
+                raise ValueError("batch_webhook_allowed_ports entries must be between 1 and 65535")
+            if port not in seen:
+                normalized.append(port)
+                seen.add(port)
+        return normalized
+
+    @field_validator("batch_webhook_allowed_private_cidrs")
+    @classmethod
+    def validate_batch_webhook_allowed_private_cidrs(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw_cidr in value:
+            try:
+                cidr = str(ip_network(str(raw_cidr or "").strip(), strict=False))
+            except ValueError as exc:
+                raise ValueError(
+                    "batch_webhook_allowed_private_cidrs entries must be valid IPv4 or IPv6 CIDRs"
+                ) from exc
+            if cidr not in seen:
+                normalized.append(cidr)
+                seen.add(cidr)
+        return normalized
+
     @model_validator(mode="after")
     def validate_upstream_http_pool(self) -> "GeneralSettings":
         if self.upstream_http_max_keepalive_connections > self.upstream_http_max_connections:
             raise ValueError(
                 "upstream_http_max_keepalive_connections must be less than or equal to "
                 "upstream_http_max_connections"
+            )
+        if self.batch_webhook_enabled and self.batch_webhook_encryption_key is None:
+            raise ValueError(
+                "batch_webhook_enabled requires batch_webhook_encryption_key to be set"
+            )
+        if self.batch_webhook_enabled and not self.batch_webhook_allowed_ports:
+            raise ValueError("batch_webhook_enabled requires at least one allowed webhook port")
+        if self.batch_webhook_retry_max_seconds < self.batch_webhook_retry_initial_seconds:
+            raise ValueError(
+                "batch_webhook_retry_max_seconds must be greater than or equal to "
+                "batch_webhook_retry_initial_seconds"
+            )
+        if self.batch_webhook_lease_seconds <= self.batch_webhook_timeout_seconds:
+            raise ValueError(
+                "batch_webhook_lease_seconds must be greater than batch_webhook_timeout_seconds"
             )
         scheduler_modes = resolve_scheduler_modes_from_settings(self)
         mode_control_explicit = (
@@ -701,7 +782,7 @@ class GeneralSettings(BaseModel):
 
 
 class AppConfig(BaseModel):
-    model_config = {"populate_by_name": True}
+    model_config = ConfigDict(populate_by_name=True, hide_input_in_errors=True)
 
     model_list: list[ModelDeployment] = Field(default_factory=list)
     router_settings: RouterSettings = Field(default_factory=RouterSettings)
@@ -804,22 +885,68 @@ def _resolve_env_token(value: Any) -> Any:
     return value
 
 
+_SENSITIVE_CONFIG_FIELD_MARKERS = ("key", "password", "secret", "token", "url")
+
+
+def _safe_config_validation_message(exc: ValidationError) -> str:
+    errors = exc.errors(
+        include_url=False,
+        include_context=False,
+        include_input=False,
+    )
+    details: list[str] = []
+    for error in errors[:10]:
+        location_parts = [str(part) for part in error.get("loc") or ()]
+        error_type = str(error.get("type") or "")
+        if error_type == "extra_forbidden":
+            parent = ".".join(location_parts[:-1])
+            location = f"{parent}.<unsupported-field>" if parent else "<unsupported-field>"
+            message = "unsupported configuration field"
+        else:
+            location = ".".join(location_parts) or "<configuration>"
+            is_sensitive = any(
+                marker in part.lower()
+                for part in location_parts
+                for marker in _SENSITIVE_CONFIG_FIELD_MARKERS
+            )
+            message = (
+                "invalid sensitive value"
+                if is_sensitive
+                else str(error.get("msg") or "invalid value")
+            )
+        details.append(f"{location}: {message}")
+
+    if len(errors) > len(details):
+        details.append(f"{len(errors) - len(details)} additional validation error(s)")
+    suffix = "; ".join(details) or "configuration validation failed"
+    return f"Resolved configuration is invalid. {suffix}"
+
+
 def resolve_app_config_with_secrets(raw_config: dict[str, Any], secret_resolver: Any | None = None) -> AppConfig:
     from src.config_runtime.secrets import SecretResolver
 
     resolver = secret_resolver or SecretResolver()
     resolved_input = _resolve_env_token(raw_config)
+    resolution_failed = False
     try:
         resolved = resolver.resolve_tree(resolved_input)
-    except Exception as exc:
+    except Exception:
+        resolution_failed = True
+
+    if resolution_failed:
         raise ValueError(
             "Failed to resolve configuration secrets. Check secret references and provider availability."
-        ) from exc
+        )
 
+    validation_message: str | None = None
     try:
         return AppConfig.model_validate(resolved)
     except ValidationError as exc:
-        raise ValueError("Resolved configuration is invalid. Check config values and resolved secrets.") from exc
+        validation_message = _safe_config_validation_message(exc)
+
+    if validation_message is None:  # pragma: no cover - model_validate either returns or raises
+        raise RuntimeError("resolved configuration validation failed")
+    raise ValueError(validation_message)
 
 
 def load_yaml_config(path: str | Path) -> AppConfig:
