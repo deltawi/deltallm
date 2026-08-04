@@ -20,6 +20,8 @@ from src.batch.webhooks.models import (
 _ENVELOPE_VERSION = "v1"
 _NONCE_BYTES = 12
 _AAD = b"deltallm:batch-webhook:v1"
+_KEY_ID_LENGTH = 12
+_LOWERCASE_HEX_CHARACTERS = frozenset("0123456789abcdef")
 
 
 class BatchWebhookCryptoError(ValueError):
@@ -56,7 +58,7 @@ class BatchWebhookCipher:
         if len(key) != 32:
             raise BatchWebhookCryptoError("batch webhook encryption key must be exactly 32 bytes")
         self._key = bytes(key)
-        self._key_id = hashlib.sha256(self._key).hexdigest()[:12]
+        self._key_id = hashlib.sha256(self._key).hexdigest()[:_KEY_ID_LENGTH]
         self._cipher = AESGCM(self._key)
 
     @classmethod
@@ -82,32 +84,46 @@ class BatchWebhookCipher:
             )
         )
 
-    def decrypt(self, envelope: str) -> BatchWebhookRequest:
+    def _try_decrypt(self, envelope: str) -> BatchWebhookRequest | None:
+        plaintext: bytes | None = None
+        decoded: object | None = None
         try:
             version, key_id, encoded_payload = str(envelope or "").split(".", 2)
-            if version != _ENVELOPE_VERSION or not hmac.compare_digest(key_id, self._key_id):
-                raise BatchWebhookCryptoError("batch webhook encrypted configuration is invalid")
-            try:
-                payload = _decode_urlsafe_base64(encoded_payload)
-            except BatchWebhookCryptoError as exc:
-                raise BatchWebhookCryptoError(
-                    "batch webhook encrypted configuration is invalid"
-                ) from exc
+            valid_key_id = (
+                len(key_id) == _KEY_ID_LENGTH
+                and key_id.isascii()
+                and all(character in _LOWERCASE_HEX_CHARACTERS for character in key_id)
+            )
+            if (
+                version != _ENVELOPE_VERSION
+                or not valid_key_id
+                or not hmac.compare_digest(key_id.encode("ascii"), self._key_id.encode("ascii"))
+            ):
+                return None
+            payload = _decode_urlsafe_base64(encoded_payload)
             if len(payload) < _NONCE_BYTES + 16:
-                raise BatchWebhookCryptoError("batch webhook encrypted configuration is invalid")
+                return None
             plaintext = self._cipher.decrypt(payload[:_NONCE_BYTES], payload[_NONCE_BYTES:], _AAD)
             decoded = json.loads(plaintext.decode("utf-8"))
             if not isinstance(decoded, dict):
-                raise BatchWebhookCryptoError("batch webhook encrypted configuration is invalid")
+                return None
             return parse_batch_webhook_request(decoded, allow_http=True, allowed_ports=None)
-        except BatchWebhookCryptoError:
-            raise
         except (
+            BatchWebhookCryptoError,
             InvalidTag,
             UnicodeDecodeError,
             json.JSONDecodeError,
+            RecursionError,
+            TypeError,
             ValueError,
-        ) as exc:
-            raise BatchWebhookCryptoError(
-                "batch webhook encrypted configuration is invalid"
-            ) from exc
+        ):
+            return None
+        finally:
+            plaintext = None
+            decoded = None
+
+    def decrypt(self, envelope: str) -> BatchWebhookRequest:
+        config = self._try_decrypt(envelope)
+        if config is None:
+            raise BatchWebhookCryptoError("batch webhook encrypted configuration is invalid")
+        return config
