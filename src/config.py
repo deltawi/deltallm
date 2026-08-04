@@ -885,24 +885,68 @@ def _resolve_env_token(value: Any) -> Any:
     return value
 
 
+_SENSITIVE_CONFIG_FIELD_MARKERS = ("key", "password", "secret", "token", "url")
+
+
+def _safe_config_validation_message(exc: ValidationError) -> str:
+    errors = exc.errors(
+        include_url=False,
+        include_context=False,
+        include_input=False,
+    )
+    details: list[str] = []
+    for error in errors[:10]:
+        location_parts = [str(part) for part in error.get("loc") or ()]
+        error_type = str(error.get("type") or "")
+        if error_type == "extra_forbidden":
+            parent = ".".join(location_parts[:-1])
+            location = f"{parent}.<unsupported-field>" if parent else "<unsupported-field>"
+            message = "unsupported configuration field"
+        else:
+            location = ".".join(location_parts) or "<configuration>"
+            is_sensitive = any(
+                marker in part.lower()
+                for part in location_parts
+                for marker in _SENSITIVE_CONFIG_FIELD_MARKERS
+            )
+            message = (
+                "invalid sensitive value"
+                if is_sensitive
+                else str(error.get("msg") or "invalid value")
+            )
+        details.append(f"{location}: {message}")
+
+    if len(errors) > len(details):
+        details.append(f"{len(errors) - len(details)} additional validation error(s)")
+    suffix = "; ".join(details) or "configuration validation failed"
+    return f"Resolved configuration is invalid. {suffix}"
+
+
 def resolve_app_config_with_secrets(raw_config: dict[str, Any], secret_resolver: Any | None = None) -> AppConfig:
     from src.config_runtime.secrets import SecretResolver
 
     resolver = secret_resolver or SecretResolver()
     resolved_input = _resolve_env_token(raw_config)
+    resolution_failed = False
     try:
         resolved = resolver.resolve_tree(resolved_input)
     except Exception:
+        resolution_failed = True
+
+    if resolution_failed:
         raise ValueError(
             "Failed to resolve configuration secrets. Check secret references and provider availability."
-        ) from None
+        )
 
+    validation_message: str | None = None
     try:
         return AppConfig.model_validate(resolved)
-    except ValidationError:
-        raise ValueError(
-            "Resolved configuration is invalid. Check config values and resolved secrets."
-        ) from None
+    except ValidationError as exc:
+        validation_message = _safe_config_validation_message(exc)
+
+    if validation_message is None:  # pragma: no cover - model_validate either returns or raises
+        raise RuntimeError("resolved configuration validation failed")
+    raise ValueError(validation_message)
 
 
 def load_yaml_config(path: str | Path) -> AppConfig:

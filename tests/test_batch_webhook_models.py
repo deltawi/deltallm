@@ -37,7 +37,11 @@ def test_webhook_request_normalizes_url_and_protects_secret() -> None:
 
     assert config.url == "https://example.com/callback?source=batch"
     assert config.signing_secret.get_secret_value() == SIGNING_SECRET
-    assert SIGNING_SECRET not in repr(config)
+    rendered = f"{config!r} {config!s} {config.model_dump()} {config.model_dump_json()}"
+    assert config.url not in rendered
+    assert SIGNING_SECRET not in rendered
+    assert config.model_dump() == {}
+    assert config.model_dump_json() == "{}"
 
 
 def test_webhook_request_defaults_path_and_rejects_unknown_fields() -> None:
@@ -74,6 +78,21 @@ def test_webhook_request_defaults_path_and_rejects_unknown_fields() -> None:
 def test_webhook_request_rejects_invalid_urls(url: str, error: str) -> None:
     with pytest.raises(ValidationError, match=error):
         BatchWebhookRequest.model_validate({"url": url, "signing_secret": SIGNING_SECRET})
+
+
+def test_webhook_request_enforces_dns_hostname_total_length() -> None:
+    maximum_hostname = ".".join(["a" * 63] * 3 + ["a" * 61])
+    config = BatchWebhookRequest.model_validate(
+        {"url": f"https://{maximum_hostname}/hook", "signing_secret": SIGNING_SECRET}
+    )
+
+    assert config.url == f"https://{maximum_hostname}/hook"
+
+    oversized_hostname = ".".join(["a" * 63] * 3 + ["a" * 62])
+    with pytest.raises(ValidationError, match="hostname is invalid"):
+        BatchWebhookRequest.model_validate(
+            {"url": f"https://{oversized_hostname}/hook", "signing_secret": SIGNING_SECRET}
+        )
 
 
 def test_webhook_request_requires_https_by_default() -> None:
@@ -156,6 +175,7 @@ def test_webhook_request_validation_errors_do_not_expose_inputs(
     assert sensitive_value not in rendered
     assert exc_info.value.code == expected_code
     assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
 
 
 def test_direct_webhook_model_validation_hides_sensitive_inputs() -> None:

@@ -281,6 +281,7 @@ def test_resolve_app_config_with_secrets_wraps_secret_resolution_errors():
     with pytest.raises(ValueError, match="Failed to resolve configuration secrets") as exc_info:
         resolve_app_config_with_secrets({"general_settings": {"master_key": "StrongMasterKey2026SecureTokenABCD1234"}}, secret_resolver=BrokenResolver())
     assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
 
 
 def test_resolve_app_config_with_secrets_wraps_validation_errors():
@@ -296,7 +297,27 @@ def test_resolve_app_config_with_secrets_wraps_validation_errors():
         )
     assert sensitive_key not in str(exc_info.value)
     assert sensitive_key not in repr(exc_info.value)
+    assert "general_settings.batch_webhook_encryption_key" in str(exc_info.value)
     assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
+
+
+def test_resolve_app_config_with_secrets_preserves_safe_validation_diagnostics():
+    class PassthroughResolver:
+        def resolve_tree(self, value):
+            return value
+
+    with pytest.raises(ValueError) as exc_info:
+        resolve_app_config_with_secrets(
+            {"general_settings": {"cache_ttl": "not-an-integer"}},
+            secret_resolver=PassthroughResolver(),
+        )
+
+    rendered = str(exc_info.value)
+    assert "general_settings.cache_ttl" in rendered
+    assert "valid integer" in rendered
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
 
 
 def test_resolve_salt_key_uses_general_settings_value(monkeypatch):

@@ -28,6 +28,13 @@ class _PrismaSpy:
         return self.execute_result
 
 
+class _BrokenSchemaPrisma(_PrismaSpy):
+    async def query_raw(self, sql: str, *params):
+        self.sql = sql
+        self.params = params
+        raise RuntimeError("column webhook_config_ciphertext does not exist")
+
+
 def _session_row(*, status: str, now: datetime) -> dict[str, object]:
     return {
         "session_id": "session-1",
@@ -61,6 +68,25 @@ def _session_row(*, status: str, now: datetime) -> dict[str, object]:
         "last_attempt_at": None,
         "expires_at": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_ensure_schema_ready_checks_webhook_columns() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchCreateSessionRepository(prisma)
+
+    await repository.ensure_schema_ready()
+
+    assert "webhook_config_ciphertext" in prisma.sql
+    assert "webhook_config_fingerprint" in prisma.sql
+
+
+@pytest.mark.asyncio
+async def test_ensure_schema_ready_rejects_missing_webhook_columns() -> None:
+    repository = BatchCreateSessionRepository(_BrokenSchemaPrisma())
+
+    with pytest.raises(RuntimeError, match="schema is unavailable"):
+        await repository.ensure_schema_ready()
 
 
 @pytest.mark.asyncio

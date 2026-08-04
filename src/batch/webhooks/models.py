@@ -6,7 +6,7 @@ from collections.abc import Collection
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
 
 
 BATCH_WEBHOOK_MAX_URL_LENGTH = 2_048
@@ -64,6 +64,8 @@ def _normalize_webhook_url(value: str) -> str:
         raise ValueError("webhook url must include a hostname")
     if ":" not in hostname:
         hostname = hostname.rstrip(".")
+        if len(hostname) > 253:
+            raise ValueError("webhook url hostname is invalid")
         labels = hostname.split(".")
         if not hostname or any(
             len(label) > 63
@@ -99,8 +101,8 @@ class BatchWebhookRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
-    url: str
-    signing_secret: SecretStr
+    url: str = Field(repr=False, exclude=True)
+    signing_secret: SecretStr = Field(repr=False, exclude=True)
 
     @field_validator("url")
     @classmethod
@@ -122,55 +124,62 @@ class BatchWebhookRequest(BaseModel):
         return value
 
 
+def _validate_batch_webhook_request(value: dict[str, Any]) -> BatchWebhookRequest:
+    safe_error: BatchWebhookValidationError | None = None
+    try:
+        return BatchWebhookRequest.model_validate(value)
+    except ValidationError as exc:
+        errors = exc.errors(
+            include_url=False,
+            include_context=False,
+            include_input=False,
+        )
+        first_error = errors[0] if errors else {}
+        location = first_error.get("loc") or ()
+        field = location[0] if location and location[0] in {"url", "signing_secret"} else None
+        error_type = str(first_error.get("type") or "")
+
+        if error_type == "extra_forbidden":
+            safe_error = BatchWebhookValidationError(
+                code="unsupported_field",
+                message="webhook configuration contains unsupported fields",
+            )
+        elif field == "url":
+            safe_error = BatchWebhookValidationError(
+                code="invalid_url",
+                message="webhook url is invalid",
+                field="url",
+            )
+        elif field == "signing_secret":
+            safe_error = BatchWebhookValidationError(
+                code="invalid_signing_secret",
+                message=(
+                    "webhook signing_secret must be between "
+                    f"{BATCH_WEBHOOK_MIN_SECRET_BYTES} and "
+                    f"{BATCH_WEBHOOK_MAX_SECRET_BYTES} UTF-8 bytes"
+                ),
+                field="signing_secret",
+            )
+        else:
+            safe_error = BatchWebhookValidationError(
+                code="invalid_config",
+                message="webhook configuration is invalid",
+            )
+
+    # Raising after the ValidationError handler prevents the original input-bearing
+    # exception from being retained as ``__context__``.
+    if safe_error is None:  # pragma: no cover - model_validate either returns or raises
+        raise RuntimeError("webhook configuration validation failed")
+    raise safe_error
+
+
 def parse_batch_webhook_request(
     value: BatchWebhookRequest | dict[str, Any],
     *,
     allow_http: bool = False,
     allowed_ports: Collection[int] | None = (443,),
 ) -> BatchWebhookRequest:
-    if isinstance(value, BatchWebhookRequest):
-        config = value
-    else:
-        try:
-            config = BatchWebhookRequest.model_validate(value)
-        except ValidationError as exc:
-            errors = exc.errors(
-                include_url=False,
-                include_context=False,
-                include_input=False,
-            )
-            first_error = errors[0] if errors else {}
-            location = first_error.get("loc") or ()
-            field = location[0] if location and location[0] in {"url", "signing_secret"} else None
-            error_type = str(first_error.get("type") or "")
-
-            if error_type == "extra_forbidden":
-                error = BatchWebhookValidationError(
-                    code="unsupported_field",
-                    message="webhook configuration contains unsupported fields",
-                )
-            elif field == "url":
-                error = BatchWebhookValidationError(
-                    code="invalid_url",
-                    message="webhook url is invalid",
-                    field="url",
-                )
-            elif field == "signing_secret":
-                error = BatchWebhookValidationError(
-                    code="invalid_signing_secret",
-                    message=(
-                        "webhook signing_secret must be between "
-                        f"{BATCH_WEBHOOK_MIN_SECRET_BYTES} and "
-                        f"{BATCH_WEBHOOK_MAX_SECRET_BYTES} UTF-8 bytes"
-                    ),
-                    field="signing_secret",
-                )
-            else:
-                error = BatchWebhookValidationError(
-                    code="invalid_config",
-                    message="webhook configuration is invalid",
-                )
-            raise error from None
+    config = value if isinstance(value, BatchWebhookRequest) else _validate_batch_webhook_request(value)
 
     if urlsplit(config.url).scheme == "http" and not allow_http:
         raise BatchWebhookValidationError(

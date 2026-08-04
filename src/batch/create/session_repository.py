@@ -68,7 +68,7 @@ class BatchCreateSessionRepository:
         try:
             await self.prisma.query_raw(
                 """
-                SELECT 1
+                SELECT webhook_config_ciphertext, webhook_config_fingerprint
                 FROM deltallm_batch_create_session
                 LIMIT 0
                 """
