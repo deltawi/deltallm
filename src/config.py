@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+from ipaddress import ip_network
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -28,6 +29,7 @@ from src.batch.scheduling.modes import (
     SchedulerShadowMode,
     resolve_scheduler_modes_from_settings,
 )
+from src.batch.webhooks.crypto import decode_batch_webhook_encryption_key
 from src.upstream_auth import (
     supports_custom_openai_compatible_auth,
     validate_auth_header_format,
@@ -477,6 +479,20 @@ class GeneralSettings(BaseModel):
     embeddings_batch_enabled: bool = False
     embeddings_batch_worker_enabled: bool = True
     embeddings_batch_completion_outbox_worker_enabled: bool = True
+    batch_webhook_enabled: bool = False
+    batch_webhook_worker_enabled: bool = True
+    batch_webhook_encryption_key: SecretStr | None = None
+    batch_webhook_poll_interval_seconds: float = Field(default=1.0, gt=0.0)
+    batch_webhook_max_concurrency: int = Field(default=4, ge=1, le=100)
+    batch_webhook_lease_seconds: int = Field(default=30, ge=5)
+    batch_webhook_timeout_seconds: float = Field(default=10.0, gt=0.0)
+    batch_webhook_max_attempts: int = Field(default=8, ge=1, le=50)
+    batch_webhook_retry_initial_seconds: int = Field(default=5, ge=1)
+    batch_webhook_retry_max_seconds: int = Field(default=3_600, ge=1)
+    batch_webhook_allowed_ports: list[int] = Field(default_factory=lambda: [443])
+    batch_webhook_allowed_private_cidrs: list[str] = Field(default_factory=list)
+    batch_webhook_allow_http: bool = False
+    batch_webhook_delivery_retention_days: int = Field(default=30, ge=1)
     embeddings_batch_storage_backend: Literal["local", "s3"] = "local"
     embeddings_batch_storage_dir: str = ".deltallm/batch-artifacts"
     embeddings_batch_s3_bucket: str | None = None
@@ -629,12 +645,66 @@ class GeneralSettings(BaseModel):
     def validate_master_key(cls, value: str | None) -> str | None:
         return _validate_master_key_strength(value)
 
+    @field_validator("batch_webhook_encryption_key")
+    @classmethod
+    def validate_batch_webhook_encryption_key(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None or not value.get_secret_value().strip():
+            return None
+        decode_batch_webhook_encryption_key(value)
+        return value
+
+    @field_validator("batch_webhook_allowed_ports")
+    @classmethod
+    def validate_batch_webhook_allowed_ports(cls, value: list[int]) -> list[int]:
+        normalized: list[int] = []
+        seen: set[int] = set()
+        for raw_port in value:
+            port = int(raw_port)
+            if port < 1 or port > 65_535:
+                raise ValueError("batch_webhook_allowed_ports entries must be between 1 and 65535")
+            if port not in seen:
+                normalized.append(port)
+                seen.add(port)
+        return normalized
+
+    @field_validator("batch_webhook_allowed_private_cidrs")
+    @classmethod
+    def validate_batch_webhook_allowed_private_cidrs(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw_cidr in value:
+            try:
+                cidr = str(ip_network(str(raw_cidr or "").strip(), strict=False))
+            except ValueError as exc:
+                raise ValueError(
+                    "batch_webhook_allowed_private_cidrs entries must be valid IPv4 or IPv6 CIDRs"
+                ) from exc
+            if cidr not in seen:
+                normalized.append(cidr)
+                seen.add(cidr)
+        return normalized
+
     @model_validator(mode="after")
     def validate_upstream_http_pool(self) -> "GeneralSettings":
         if self.upstream_http_max_keepalive_connections > self.upstream_http_max_connections:
             raise ValueError(
                 "upstream_http_max_keepalive_connections must be less than or equal to "
                 "upstream_http_max_connections"
+            )
+        if self.batch_webhook_enabled and self.batch_webhook_encryption_key is None:
+            raise ValueError(
+                "batch_webhook_enabled requires batch_webhook_encryption_key to be set"
+            )
+        if self.batch_webhook_enabled and not self.batch_webhook_allowed_ports:
+            raise ValueError("batch_webhook_enabled requires at least one allowed webhook port")
+        if self.batch_webhook_retry_max_seconds < self.batch_webhook_retry_initial_seconds:
+            raise ValueError(
+                "batch_webhook_retry_max_seconds must be greater than or equal to "
+                "batch_webhook_retry_initial_seconds"
+            )
+        if self.batch_webhook_lease_seconds <= self.batch_webhook_timeout_seconds:
+            raise ValueError(
+                "batch_webhook_lease_seconds must be greater than batch_webhook_timeout_seconds"
             )
         scheduler_modes = resolve_scheduler_modes_from_settings(self)
         mode_control_explicit = (

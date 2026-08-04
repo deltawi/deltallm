@@ -163,6 +163,8 @@ class BatchCreateSessionCreate:
     completed_at: datetime | None = None
     last_attempt_at: datetime | None = None
     expires_at: datetime | None = None
+    webhook_config_ciphertext: str | None = None
+    webhook_config_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         self.status = normalize_batch_create_session_status(self.status)
@@ -204,6 +206,8 @@ class BatchCreateSessionRecord:
     completed_at: datetime | None
     last_attempt_at: datetime | None
     expires_at: datetime | None
+    webhook_config_ciphertext: str | None = None
+    webhook_config_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         self.status = normalize_batch_create_session_status(self.status)

@@ -62,6 +62,56 @@ class BatchCompletionOutboxStatus:
     FAILED = "failed"
 
 
+class BatchWebhookEventType(StrEnum):
+    COMPLETED = "batch.completed"
+    FAILED = "batch.failed"
+    CANCELLED = "batch.cancelled"
+    EXPIRED = "batch.expired"
+
+
+class BatchWebhookDeliveryStatus(StrEnum):
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    RETRYING = "retrying"
+    DELIVERED = "delivered"
+    FAILED = "failed"
+
+
+BATCH_WEBHOOK_EVENT_TYPES = tuple(BatchWebhookEventType)
+BATCH_WEBHOOK_EVENT_TYPE_VALUES = tuple(event_type.value for event_type in BatchWebhookEventType)
+BATCH_WEBHOOK_DELIVERY_STATUSES = tuple(BatchWebhookDeliveryStatus)
+BATCH_WEBHOOK_DELIVERY_STATUS_VALUES = tuple(status.value for status in BatchWebhookDeliveryStatus)
+
+
+def normalize_batch_webhook_event_type(
+    event_type: str | BatchWebhookEventType,
+) -> BatchWebhookEventType:
+    if isinstance(event_type, BatchWebhookEventType):
+        return event_type
+    normalized = str(event_type or "").strip()
+    try:
+        return BatchWebhookEventType(normalized)
+    except ValueError as exc:
+        raise ValueError(
+            "batch webhook event type must be one of: " + ", ".join(BATCH_WEBHOOK_EVENT_TYPE_VALUES)
+        ) from exc
+
+
+def normalize_batch_webhook_delivery_status(
+    status: str | BatchWebhookDeliveryStatus,
+) -> BatchWebhookDeliveryStatus:
+    if isinstance(status, BatchWebhookDeliveryStatus):
+        return status
+    normalized = str(status or "").strip()
+    try:
+        return BatchWebhookDeliveryStatus(normalized)
+    except ValueError as exc:
+        raise ValueError(
+            "batch webhook delivery status must be one of: "
+            + ", ".join(BATCH_WEBHOOK_DELIVERY_STATUS_VALUES)
+        ) from exc
+
+
 OPERATOR_FAILED_PREFIX = "__operator_failed__:"
 
 
@@ -146,6 +196,8 @@ class BatchJobRecord:
     last_claimed_at: datetime | None = None
     last_scheduled_at: datetime | None = None
     scheduler_debug: dict[str, Any] | None = None
+    webhook_config_ciphertext: str | None = None
+    webhook_config_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         self.status = normalize_batch_job_status(self.status)
@@ -297,6 +349,50 @@ class BatchCompletionOutboxCreate:
     max_attempts: int = 5
     next_attempt_at: datetime | None = None
     last_error: str | None = None
+
+
+@dataclass
+class BatchWebhookOutboxRecord:
+    event_id: str
+    batch_id: str
+    event_type: BatchWebhookEventType
+    target_config_ciphertext: str
+    payload_json: dict[str, Any]
+    payload_sha256: str
+    status: BatchWebhookDeliveryStatus
+    attempt_count: int
+    max_attempts: int
+    next_attempt_at: datetime | None
+    last_status_code: int | None
+    last_error: str | None
+    locked_by: str | None
+    lease_expires_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    delivered_at: datetime | None
+
+    def __post_init__(self) -> None:
+        self.event_type = normalize_batch_webhook_event_type(self.event_type)
+        self.status = normalize_batch_webhook_delivery_status(self.status)
+
+
+@dataclass
+class BatchWebhookOutboxCreate:
+    batch_id: str
+    event_type: BatchWebhookEventType
+    target_config_ciphertext: str
+    payload_json: dict[str, Any]
+    payload_sha256: str
+    status: BatchWebhookDeliveryStatus = BatchWebhookDeliveryStatus.QUEUED
+    attempt_count: int = 0
+    max_attempts: int = 8
+    next_attempt_at: datetime | None = None
+    last_status_code: int | None = None
+    last_error: str | None = None
+
+    def __post_init__(self) -> None:
+        self.event_type = normalize_batch_webhook_event_type(self.event_type)
+        self.status = normalize_batch_webhook_delivery_status(self.status)
 
 
 @dataclass

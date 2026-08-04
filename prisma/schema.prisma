@@ -941,6 +941,8 @@ model DeltaLLM_BatchCreateSession {
   completed_at                DateTime?
   last_attempt_at             DateTime?
   expires_at                  DateTime?
+  webhook_config_ciphertext   String?
+  webhook_config_fingerprint  String?
 
   input_file                  DeltaLLM_BatchFile @relation("BatchCreateSessionInputFile", fields: [input_file_id], references: [file_id], onDelete: Restrict)
 
@@ -1003,6 +1005,8 @@ model DeltaLLM_BatchJob {
   last_claimed_at          DateTime?
   last_scheduled_at        DateTime?
   scheduler_debug          Json?
+  webhook_config_ciphertext String?
+  webhook_config_fingerprint String?
   created_by_api_key       String?
   created_by_user_id       String?
   created_by_team_id       String?
@@ -1113,4 +1117,30 @@ model DeltaLLM_BatchCompletionOutbox {
   @@index([lease_expires_at], map: "deltallm_batchcompletionoutbox_lease_expires_idx")
   @@index([batch_id, created_at], map: "deltallm_batchcompletionoutbox_batch_created_idx")
   @@map("deltallm_batch_completion_outbox")
+}
+
+model DeltaLLM_BatchWebhookOutbox {
+  event_id                 String   @id @default(uuid())
+  batch_id                 String
+  event_type               String
+  target_config_ciphertext String
+  payload_json             Json
+  payload_sha256           String
+  status                   String   @default("queued")
+  attempt_count            Int      @default(0)
+  max_attempts             Int      @default(8)
+  next_attempt_at          DateTime @default(now())
+  last_status_code         Int?
+  last_error               String?
+  locked_by                String?
+  lease_expires_at         DateTime?
+  created_at               DateTime @default(now())
+  updated_at               DateTime @updatedAt
+  delivered_at             DateTime?
+
+  @@unique([batch_id, event_type], map: "deltallm_batch_webhook_outbox_batch_event_key")
+  @@index([status, next_attempt_at], map: "deltallm_batch_webhook_outbox_due_idx")
+  @@index([lease_expires_at], map: "deltallm_batch_webhook_outbox_lease_idx")
+  @@index([batch_id, created_at], map: "deltallm_batch_webhook_outbox_batch_idx")
+  @@map("deltallm_batch_webhook_outbox")
 }

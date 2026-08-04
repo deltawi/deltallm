@@ -171,7 +171,8 @@
           "additionalProperties": false,
           "properties": {
             "masterKey": { "type": "string", "minLength": 1 },
-            "saltKey": { "type": "string", "minLength": 1 }
+            "saltKey": { "type": "string", "minLength": 1 },
+            "batchWebhookEncryptionKey": { "type": "string", "minLength": 1 }
           }
         },
         "values": {
@@ -179,7 +180,8 @@
           "additionalProperties": false,
           "properties": {
             "masterKey": { "type": "string" },
-            "saltKey": { "type": "string" }
+            "saltKey": { "type": "string" },
+            "batchWebhookEncryptionKey": { "type": "string" }
           }
         }
       }
@@ -238,6 +240,26 @@
             "upstream_http_max_connections": { "type": "integer", "minimum": 1 },
             "upstream_http_max_keepalive_connections": { "type": "integer", "minimum": 0 },
             "upstream_http_keepalive_expiry_seconds": { "type": "number", "minimum": 0 },
+            "batch_webhook_enabled": { "type": "boolean" },
+            "batch_webhook_worker_enabled": { "type": "boolean" },
+            "batch_webhook_encryption_key": { "type": "string" },
+            "batch_webhook_poll_interval_seconds": { "type": "number", "exclusiveMinimum": 0 },
+            "batch_webhook_max_concurrency": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "batch_webhook_lease_seconds": { "type": "integer", "minimum": 5 },
+            "batch_webhook_timeout_seconds": { "type": "number", "exclusiveMinimum": 0 },
+            "batch_webhook_max_attempts": { "type": "integer", "minimum": 1, "maximum": 50 },
+            "batch_webhook_retry_initial_seconds": { "type": "integer", "minimum": 1 },
+            "batch_webhook_retry_max_seconds": { "type": "integer", "minimum": 1 },
+            "batch_webhook_allowed_ports": {
+              "type": "array",
+              "items": { "type": "integer", "minimum": 1, "maximum": 65535 }
+            },
+            "batch_webhook_allowed_private_cidrs": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "batch_webhook_allow_http": { "type": "boolean" },
+            "batch_webhook_delivery_retention_days": { "type": "integer", "minimum": 1 },
             "embeddings_batch_scheduler_mode": {
               "type": "string",
               "enum": ["fifo_v1", "slice_v1", "model_capacity_v1", "fair_share_v1", "smart_v1"]

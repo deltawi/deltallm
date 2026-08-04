@@ -99,6 +99,51 @@ def test_helm_schema_allows_active_batch_scheduler_flag() -> None:
     assert scheduler_enabled == {"type": "boolean"}
 
 
+def test_helm_schema_exposes_batch_webhook_settings_and_secret_key() -> None:
+    schema = yaml.safe_load((HELM_CHART_DIR / "values.schema.json").read_text())
+    general = schema["properties"]["config"]["properties"]["general_settings"]["properties"]
+    secret = schema["properties"]["secret"]["properties"]
+
+    assert general["batch_webhook_enabled"] == {"type": "boolean"}
+    assert general["batch_webhook_max_concurrency"]["maximum"] == 100
+    assert general["batch_webhook_allowed_ports"]["items"]["maximum"] == 65535
+    assert general["batch_webhook_delivery_retention_days"]["minimum"] == 1
+    assert secret["keys"]["properties"]["batchWebhookEncryptionKey"]["minLength"] == 1
+    assert secret["values"]["properties"]["batchWebhookEncryptionKey"] == {"type": "string"}
+
+
+def test_batch_webhook_key_is_wired_only_through_secret_and_optional_env() -> None:
+    docs = _render(
+        "--set",
+        f"secret.values.batchWebhookEncryptionKey={'A' * 43}",
+        "--show-only",
+        "templates/secret.yaml",
+        "--show-only",
+        "templates/configmap.yaml",
+        "--show-only",
+        "templates/deployment.yaml",
+    )
+    secret = _by_kind_and_name(docs, "Secret", "deltallm-app")
+    config_map = _by_kind_and_name(docs, "ConfigMap", "deltallm-config")
+    deployment = _deployment_by_pod_component(docs, "api")
+    general = _config_yaml(config_map)["general_settings"]
+    env = deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+    webhook_env = next(
+        item for item in env if item["name"] == "DELTALLM_BATCH_WEBHOOK_ENCRYPTION_KEY"
+    )
+
+    assert secret["stringData"]["batch-webhook-encryption-key"] == "A" * 43
+    assert "A" * 43 not in config_map["data"]["config.yaml"]
+    assert general["batch_webhook_encryption_key"] == (
+        "os.environ/DELTALLM_BATCH_WEBHOOK_ENCRYPTION_KEY"
+    )
+    assert webhook_env["valueFrom"]["secretKeyRef"] == {
+        "name": "deltallm-app",
+        "key": "batch-webhook-encryption-key",
+        "optional": True,
+    }
+
+
 def test_helm_schema_allows_tenant_fair_share_settings() -> None:
     schema = yaml.safe_load((HELM_CHART_DIR / "values.schema.json").read_text())
     general_settings = schema["properties"]["config"]["properties"]["general_settings"]["properties"]
@@ -413,6 +458,7 @@ def test_split_mode_separates_api_and_worker_configs() -> None:
     api_general = api_config["general_settings"]
     assert api_general["embeddings_batch_worker_enabled"] is False
     assert api_general["embeddings_batch_completion_outbox_worker_enabled"] is False
+    assert api_general["batch_webhook_worker_enabled"] is False
     assert api_general["embeddings_batch_gc_enabled"] is False
     assert api_general["embeddings_batch_create_session_cleanup_enabled"] is False
     assert api_general["embeddings_batch_scheduler_backfill_enabled"] is False
@@ -422,6 +468,7 @@ def test_split_mode_separates_api_and_worker_configs() -> None:
     worker_general = worker_config["general_settings"]
     assert worker_general["embeddings_batch_worker_enabled"] is True
     assert worker_general["embeddings_batch_completion_outbox_worker_enabled"] is True
+    assert worker_general["batch_webhook_worker_enabled"] is True
     assert worker_general["embeddings_batch_gc_enabled"] is True
     assert worker_general["embeddings_batch_create_session_cleanup_enabled"] is True
     assert worker_general["embeddings_batch_scheduler_backfill_enabled"] is True
