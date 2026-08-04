@@ -6,14 +6,17 @@ import pytest
 from pydantic import ValidationError
 
 from src.batch.models import (
+    BATCH_WEBHOOK_LAST_ERROR_MAX_LENGTH,
     BatchWebhookDeliveryStatus,
     BatchWebhookEventType,
     BatchWebhookOutboxCreate,
     BatchWebhookOutboxRecord,
+    normalize_batch_webhook_last_error,
 )
 from src.batch.repositories.mappers import webhook_outbox_from_row
 from src.batch.webhooks.models import (
     BatchWebhookRequest,
+    BatchWebhookValidationError,
     batch_webhook_config_fingerprint,
     canonical_batch_webhook_config_bytes,
     parse_batch_webhook_request,
@@ -43,7 +46,7 @@ def test_webhook_request_defaults_path_and_rejects_unknown_fields() -> None:
     )
     assert config.url == "https://example.com/"
 
-    with pytest.raises(ValidationError, match="extra_forbidden"):
+    with pytest.raises(BatchWebhookValidationError, match="unsupported fields") as exc_info:
         parse_batch_webhook_request(
             {
                 "url": "https://example.com",
@@ -51,6 +54,10 @@ def test_webhook_request_defaults_path_and_rejects_unknown_fields() -> None:
                 "headers": {"Authorization": "not-supported"},
             }
         )
+    assert exc_info.value.as_detail() == {
+        "code": "unsupported_field",
+        "message": "webhook configuration contains unsupported fields",
+    }
 
 
 @pytest.mark.parametrize(
@@ -72,7 +79,7 @@ def test_webhook_request_rejects_invalid_urls(url: str, error: str) -> None:
 def test_webhook_request_requires_https_by_default() -> None:
     payload = {"url": "http://localhost:8080/hook", "signing_secret": SIGNING_SECRET}
 
-    with pytest.raises(ValueError, match="must use https"):
+    with pytest.raises(BatchWebhookValidationError, match="must use https"):
         parse_batch_webhook_request(payload)
 
     assert (
@@ -80,12 +87,12 @@ def test_webhook_request_requires_https_by_default() -> None:
         == "http://localhost:8080/hook"
     )
 
-    with pytest.raises(ValueError, match="port 8080 is not allowed"):
+    with pytest.raises(BatchWebhookValidationError, match="port 8080 is not allowed"):
         parse_batch_webhook_request(payload, allow_http=True)
 
 
 def test_webhook_request_enforces_signing_secret_byte_length() -> None:
-    with pytest.raises(ValidationError, match="at least 32 UTF-8 bytes"):
+    with pytest.raises(BatchWebhookValidationError, match="between 32 and 4096 UTF-8 bytes"):
         parse_batch_webhook_request(
             {"url": "https://example.com/hook", "signing_secret": "too-short"}
         )
@@ -116,7 +123,61 @@ def test_webhook_fingerprint_is_canonical_and_sensitive_to_secret() -> None:
     assert batch_webhook_config_fingerprint(first) == batch_webhook_config_fingerprint(equivalent)
     assert batch_webhook_config_fingerprint(first) != batch_webhook_config_fingerprint(changed)
     assert redact_batch_webhook_config(first) == {"configured": True}
-    assert redact_batch_webhook_config(None) == {"configured": False}
+    assert redact_batch_webhook_config(None) is None
+
+
+@pytest.mark.parametrize(
+    ("payload", "sensitive_value", "expected_code"),
+    [
+        (
+            {
+                "url": "https://example.com/hook?token=sensitive-url-token\nextra",
+                "signing_secret": SIGNING_SECRET,
+            },
+            "sensitive-url-token",
+            "invalid_url",
+        ),
+        (
+            {"url": "https://example.com/hook", "signing_secret": "sensitive-short-secret"},
+            "sensitive-short-secret",
+            "invalid_signing_secret",
+        ),
+    ],
+)
+def test_webhook_request_validation_errors_do_not_expose_inputs(
+    payload: dict[str, str],
+    sensitive_value: str,
+    expected_code: str,
+) -> None:
+    with pytest.raises(BatchWebhookValidationError) as exc_info:
+        parse_batch_webhook_request(payload)
+
+    rendered = f"{exc_info.value!s} {exc_info.value!r} {exc_info.value.as_detail()}"
+    assert sensitive_value not in rendered
+    assert exc_info.value.code == expected_code
+    assert exc_info.value.__cause__ is None
+
+
+def test_direct_webhook_model_validation_hides_sensitive_inputs() -> None:
+    sensitive_secret = "sensitive-invalid-secret"
+    with pytest.raises(ValidationError) as exc_info:
+        BatchWebhookRequest.model_validate(
+            {"url": "https://example.com/hook", "signing_secret": sensitive_secret}
+        )
+
+    assert sensitive_secret not in str(exc_info.value)
+    assert sensitive_secret not in repr(exc_info.value)
+
+
+def test_webhook_last_error_is_normalized_and_bounded() -> None:
+    raw_error = " delivery_timeout\n\t" + "x" * BATCH_WEBHOOK_LAST_ERROR_MAX_LENGTH
+    normalized = normalize_batch_webhook_last_error(raw_error)
+
+    assert normalized is not None
+    assert normalized.startswith("delivery_timeout x")
+    assert "\n" not in normalized
+    assert len(normalized) == BATCH_WEBHOOK_LAST_ERROR_MAX_LENGTH
+    assert normalize_batch_webhook_last_error(" \n\t ") is None
 
 
 def test_webhook_outbox_models_and_mapper_normalize_contract_values() -> None:

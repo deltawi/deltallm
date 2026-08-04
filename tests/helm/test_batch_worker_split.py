@@ -105,6 +105,7 @@ def test_helm_schema_exposes_batch_webhook_settings_and_secret_key() -> None:
     secret = schema["properties"]["secret"]["properties"]
 
     assert general["batch_webhook_enabled"] == {"type": "boolean"}
+    assert "batch_webhook_encryption_key" not in general
     assert general["batch_webhook_max_concurrency"]["maximum"] == 100
     assert general["batch_webhook_allowed_ports"]["items"]["maximum"] == 65535
     assert general["batch_webhook_delivery_retention_days"]["minimum"] == 1
@@ -142,6 +143,38 @@ def test_batch_webhook_key_is_wired_only_through_secret_and_optional_env() -> No
         "key": "batch-webhook-encryption-key",
         "optional": True,
     }
+
+
+@pytest.mark.parametrize(
+    "override_path",
+    [
+        "config.general_settings.batch_webhook_encryption_key",
+        "api.config.general_settings.batch_webhook_encryption_key",
+        "batchWorker.config.general_settings.batch_webhook_encryption_key",
+    ],
+)
+def test_batch_webhook_key_config_overrides_cannot_leak_into_configmaps(
+    override_path: str,
+) -> None:
+    literal_secret = "literal-webhook-key-that-must-not-render"
+    docs = _render(
+        "--set",
+        "batchWorker.enabled=true",
+        "--set-string",
+        f"{override_path}={literal_secret}",
+        "--show-only",
+        "templates/configmap.yaml",
+    )
+
+    config_maps = [doc for doc in docs if doc.get("kind") == "ConfigMap"]
+    assert len(config_maps) == 2
+    for config_map in config_maps:
+        rendered = config_map["data"]["config.yaml"]
+        general = _config_yaml(config_map)["general_settings"]
+        assert literal_secret not in rendered
+        assert general["batch_webhook_encryption_key"] == (
+            "os.environ/DELTALLM_BATCH_WEBHOOK_ENCRYPTION_KEY"
+        )
 
 
 def test_helm_schema_allows_tenant_fair_share_settings() -> None:

@@ -18,7 +18,7 @@ CREATE TABLE "deltallm_batch_webhook_outbox" (
     "max_attempts" INTEGER NOT NULL DEFAULT 8,
     "next_attempt_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "last_status_code" INTEGER,
-    "last_error" TEXT,
+    "last_error" VARCHAR(2048),
     "locked_by" TEXT,
     "lease_expires_at" TIMESTAMP(3),
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,

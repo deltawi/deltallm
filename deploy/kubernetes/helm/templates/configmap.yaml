@@ -1,6 +1,8 @@
 {{- define "deltallm.configYaml" -}}
 {{- $root := .root -}}
 {{- $cfg := .config -}}
+{{- $generalSettings := deepCopy (default (dict) $cfg.general_settings) -}}
+{{- $_ := set $generalSettings "batch_webhook_encryption_key" "os.environ/DELTALLM_BATCH_WEBHOOK_ENCRYPTION_KEY" -}}
 model_list:
 {{ toYaml $cfg.model_list | indent 2 }}
 
@@ -57,7 +59,7 @@ deltallm_settings:
     {{- end }}
 
 general_settings:
-{{ toYaml $cfg.general_settings | indent 2 }}
+{{ toYaml $generalSettings | indent 2 }}
 {{- end -}}
 {{- define "deltallm.apiConfigYaml" -}}
 {{- $apiConfig := deepCopy .Values.config -}}

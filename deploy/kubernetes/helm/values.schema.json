@@ -242,7 +242,6 @@
             "upstream_http_keepalive_expiry_seconds": { "type": "number", "minimum": 0 },
             "batch_webhook_enabled": { "type": "boolean" },
             "batch_webhook_worker_enabled": { "type": "boolean" },
-            "batch_webhook_encryption_key": { "type": "string" },
             "batch_webhook_poll_interval_seconds": { "type": "number", "exclusiveMinimum": 0 },
             "batch_webhook_max_concurrency": { "type": "integer", "minimum": 1, "maximum": 100 },
             "batch_webhook_lease_seconds": { "type": "integer", "minimum": 5 },

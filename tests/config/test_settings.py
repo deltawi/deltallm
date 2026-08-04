@@ -90,6 +90,18 @@ def test_batch_webhook_enabled_requires_valid_encryption_key() -> None:
     assert settings.batch_webhook_allowed_private_cidrs == ["10.0.0.0/8", "fd00::/8"]
 
 
+def test_batch_webhook_encryption_key_validation_hides_sensitive_input() -> None:
+    sensitive_key = "sensitive-invalid-encryption-key"
+    with pytest.raises(ValueError) as exc_info:
+        GeneralSettings(
+            batch_webhook_enabled=True,
+            batch_webhook_encryption_key=sensitive_key,
+        )
+
+    assert sensitive_key not in str(exc_info.value)
+    assert sensitive_key not in repr(exc_info.value)
+
+
 def test_batch_webhook_rejects_invalid_delivery_settings() -> None:
     with pytest.raises(ValueError, match="retry_max_seconds"):
         GeneralSettings(
@@ -266,8 +278,9 @@ def test_resolve_app_config_with_secrets_wraps_secret_resolution_errors():
             del value
             raise RuntimeError("secret backend exploded")
 
-    with pytest.raises(ValueError, match="Failed to resolve configuration secrets"):
+    with pytest.raises(ValueError, match="Failed to resolve configuration secrets") as exc_info:
         resolve_app_config_with_secrets({"general_settings": {"master_key": "StrongMasterKey2026SecureTokenABCD1234"}}, secret_resolver=BrokenResolver())
+    assert exc_info.value.__cause__ is None
 
 
 def test_resolve_app_config_with_secrets_wraps_validation_errors():
@@ -275,8 +288,15 @@ def test_resolve_app_config_with_secrets_wraps_validation_errors():
         def resolve_tree(self, value):
             return value
 
-    with pytest.raises(ValueError, match="Resolved configuration is invalid"):
-        resolve_app_config_with_secrets({"general_settings": {"cache_ttl": "not-an-int"}}, secret_resolver=PassthroughResolver())
+    sensitive_key = "sensitive-invalid-encryption-key"
+    with pytest.raises(ValueError, match="Resolved configuration is invalid") as exc_info:
+        resolve_app_config_with_secrets(
+            {"general_settings": {"batch_webhook_encryption_key": sensitive_key}},
+            secret_resolver=PassthroughResolver(),
+        )
+    assert sensitive_key not in str(exc_info.value)
+    assert sensitive_key not in repr(exc_info.value)
+    assert exc_info.value.__cause__ is None
 
 
 def test_resolve_salt_key_uses_general_settings_value(monkeypatch):

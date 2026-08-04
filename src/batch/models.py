@@ -81,6 +81,20 @@ BATCH_WEBHOOK_EVENT_TYPES = tuple(BatchWebhookEventType)
 BATCH_WEBHOOK_EVENT_TYPE_VALUES = tuple(event_type.value for event_type in BatchWebhookEventType)
 BATCH_WEBHOOK_DELIVERY_STATUSES = tuple(BatchWebhookDeliveryStatus)
 BATCH_WEBHOOK_DELIVERY_STATUS_VALUES = tuple(status.value for status in BatchWebhookDeliveryStatus)
+BATCH_WEBHOOK_LAST_ERROR_MAX_LENGTH = 2_048
+
+
+def normalize_batch_webhook_last_error(value: object | None) -> str | None:
+    """Normalize a safe categorical failure reason before it reaches persistence.
+
+    Callers must not pass response bodies, webhook URLs, or secret material. This
+    helper removes control/formatting whitespace and enforces the storage bound.
+    """
+
+    if value is None:
+        return None
+    normalized = " ".join(str(value).split())
+    return normalized[:BATCH_WEBHOOK_LAST_ERROR_MAX_LENGTH] or None
 
 
 def normalize_batch_webhook_event_type(
@@ -374,6 +388,7 @@ class BatchWebhookOutboxRecord:
     def __post_init__(self) -> None:
         self.event_type = normalize_batch_webhook_event_type(self.event_type)
         self.status = normalize_batch_webhook_delivery_status(self.status)
+        self.last_error = normalize_batch_webhook_last_error(self.last_error)
 
 
 @dataclass
@@ -393,6 +408,7 @@ class BatchWebhookOutboxCreate:
     def __post_init__(self) -> None:
         self.event_type = normalize_batch_webhook_event_type(self.event_type)
         self.status = normalize_batch_webhook_delivery_status(self.status)
+        self.last_error = normalize_batch_webhook_last_error(self.last_error)
 
 
 @dataclass

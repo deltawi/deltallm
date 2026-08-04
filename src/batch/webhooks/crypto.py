@@ -8,7 +8,7 @@ import os
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from pydantic import SecretStr, ValidationError
+from pydantic import SecretStr
 
 from src.batch.webhooks.models import (
     BatchWebhookRequest,
@@ -106,7 +106,6 @@ class BatchWebhookCipher:
             InvalidTag,
             UnicodeDecodeError,
             json.JSONDecodeError,
-            ValidationError,
             ValueError,
         ) as exc:
             raise BatchWebhookCryptoError(

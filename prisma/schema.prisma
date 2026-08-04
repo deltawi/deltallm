@@ -1131,7 +1131,7 @@ model DeltaLLM_BatchWebhookOutbox {
   max_attempts             Int      @default(8)
   next_attempt_at          DateTime @default(now())
   last_status_code         Int?
-  last_error               String?
+  last_error               String?   @db.VarChar(2048)
   locked_by                String?
   lease_expires_at         DateTime?
   created_at               DateTime @default(now())

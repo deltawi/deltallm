@@ -9,7 +9,16 @@ from typing import Any, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import yaml
-from pydantic import AliasChoices, BaseModel, Field, SecretStr, ValidationError, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.auth.roles import TeamRole, validate_team_role
@@ -388,6 +397,8 @@ def _validate_master_key_strength(value: str | None) -> str | None:
 
 
 class GeneralSettings(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     instance_name: str = "DeltaLLM"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     master_key: str | None = None
@@ -771,7 +782,7 @@ class GeneralSettings(BaseModel):
 
 
 class AppConfig(BaseModel):
-    model_config = {"populate_by_name": True}
+    model_config = ConfigDict(populate_by_name=True, hide_input_in_errors=True)
 
     model_list: list[ModelDeployment] = Field(default_factory=list)
     router_settings: RouterSettings = Field(default_factory=RouterSettings)
@@ -881,15 +892,17 @@ def resolve_app_config_with_secrets(raw_config: dict[str, Any], secret_resolver:
     resolved_input = _resolve_env_token(raw_config)
     try:
         resolved = resolver.resolve_tree(resolved_input)
-    except Exception as exc:
+    except Exception:
         raise ValueError(
             "Failed to resolve configuration secrets. Check secret references and provider availability."
-        ) from exc
+        ) from None
 
     try:
         return AppConfig.model_validate(resolved)
-    except ValidationError as exc:
-        raise ValueError("Resolved configuration is invalid. Check config values and resolved secrets.") from exc
+    except ValidationError:
+        raise ValueError(
+            "Resolved configuration is invalid. Check config values and resolved secrets."
+        ) from None
 
 
 def load_yaml_config(path: str | Path) -> AppConfig:

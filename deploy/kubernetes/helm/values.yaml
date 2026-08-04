@@ -235,7 +235,6 @@ config:
     embeddings_batch_completion_outbox_worker_enabled: true
     batch_webhook_enabled: false
     batch_webhook_worker_enabled: true
-    batch_webhook_encryption_key: os.environ/DELTALLM_BATCH_WEBHOOK_ENCRYPTION_KEY
     batch_webhook_poll_interval_seconds: 1
     batch_webhook_max_concurrency: 4
     batch_webhook_lease_seconds: 30

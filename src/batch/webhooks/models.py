@@ -6,12 +6,27 @@ from collections.abc import Collection
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError, field_validator
 
 
 BATCH_WEBHOOK_MAX_URL_LENGTH = 2_048
 BATCH_WEBHOOK_MIN_SECRET_BYTES = 32
 BATCH_WEBHOOK_MAX_SECRET_BYTES = 4_096
+
+
+class BatchWebhookValidationError(ValueError):
+    """Safe, stable validation error for the public webhook request boundary."""
+
+    def __init__(self, *, code: str, message: str, field: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.field = field
+
+    def as_detail(self) -> dict[str, str]:
+        detail = {"code": self.code, "message": str(self)}
+        if self.field is not None:
+            detail["field"] = self.field
+        return detail
 
 
 def _normalize_webhook_url(value: str) -> str:
@@ -82,7 +97,7 @@ class BatchWebhookRequest(BaseModel):
     without weakening the persisted contract.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     url: str
     signing_secret: SecretStr
@@ -113,17 +128,64 @@ def parse_batch_webhook_request(
     allow_http: bool = False,
     allowed_ports: Collection[int] | None = (443,),
 ) -> BatchWebhookRequest:
-    config = (
-        value
-        if isinstance(value, BatchWebhookRequest)
-        else BatchWebhookRequest.model_validate(value)
-    )
+    if isinstance(value, BatchWebhookRequest):
+        config = value
+    else:
+        try:
+            config = BatchWebhookRequest.model_validate(value)
+        except ValidationError as exc:
+            errors = exc.errors(
+                include_url=False,
+                include_context=False,
+                include_input=False,
+            )
+            first_error = errors[0] if errors else {}
+            location = first_error.get("loc") or ()
+            field = location[0] if location and location[0] in {"url", "signing_secret"} else None
+            error_type = str(first_error.get("type") or "")
+
+            if error_type == "extra_forbidden":
+                error = BatchWebhookValidationError(
+                    code="unsupported_field",
+                    message="webhook configuration contains unsupported fields",
+                )
+            elif field == "url":
+                error = BatchWebhookValidationError(
+                    code="invalid_url",
+                    message="webhook url is invalid",
+                    field="url",
+                )
+            elif field == "signing_secret":
+                error = BatchWebhookValidationError(
+                    code="invalid_signing_secret",
+                    message=(
+                        "webhook signing_secret must be between "
+                        f"{BATCH_WEBHOOK_MIN_SECRET_BYTES} and "
+                        f"{BATCH_WEBHOOK_MAX_SECRET_BYTES} UTF-8 bytes"
+                    ),
+                    field="signing_secret",
+                )
+            else:
+                error = BatchWebhookValidationError(
+                    code="invalid_config",
+                    message="webhook configuration is invalid",
+                )
+            raise error from None
+
     if urlsplit(config.url).scheme == "http" and not allow_http:
-        raise ValueError("webhook url must use https unless batch_webhook_allow_http is enabled")
+        raise BatchWebhookValidationError(
+            code="http_not_allowed",
+            message="webhook url must use https unless batch_webhook_allow_http is enabled",
+            field="url",
+        )
     parsed = urlsplit(config.url)
     effective_port = parsed.port or (443 if parsed.scheme == "https" else 80)
     if allowed_ports is not None and effective_port not in {int(port) for port in allowed_ports}:
-        raise ValueError(f"webhook url port {effective_port} is not allowed")
+        raise BatchWebhookValidationError(
+            code="port_not_allowed",
+            message=f"webhook url port {effective_port} is not allowed",
+            field="url",
+        )
     return config
 
 
@@ -144,5 +206,7 @@ def batch_webhook_config_fingerprint(config: BatchWebhookRequest) -> str:
     return hashlib.sha256(canonical_batch_webhook_config_bytes(config)).hexdigest()
 
 
-def redact_batch_webhook_config(config: object | None) -> dict[str, bool]:
-    return {"configured": config is not None}
+def redact_batch_webhook_config(config: object | None) -> dict[str, bool] | None:
+    if config is None:
+        return None
+    return {"configured": True}
