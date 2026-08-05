@@ -203,6 +203,7 @@ def test_webhook_last_error_is_normalized_and_bounded() -> None:
 def test_webhook_outbox_models_and_mapper_normalize_contract_values() -> None:
     now = datetime.now(tz=UTC)
     create = BatchWebhookOutboxCreate(
+        event_id="evt-1",
         batch_id="batch-1",
         event_type="batch.completed",  # type: ignore[arg-type]
         target_config_ciphertext="v1.key.ciphertext",
@@ -211,6 +212,7 @@ def test_webhook_outbox_models_and_mapper_normalize_contract_values() -> None:
     )
     assert create.event_type is BatchWebhookEventType.COMPLETED
     assert create.status is BatchWebhookDeliveryStatus.QUEUED
+    assert create.event_id == "evt-1"
 
     record = webhook_outbox_from_row(
         {
@@ -241,6 +243,7 @@ def test_webhook_outbox_models_and_mapper_normalize_contract_values() -> None:
 
     with pytest.raises(ValueError, match="event type"):
         BatchWebhookOutboxCreate(
+            event_id="evt-invalid",
             batch_id="batch-1",
             event_type="batch.unknown",  # type: ignore[arg-type]
             target_config_ciphertext="ciphertext",

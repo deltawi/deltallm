@@ -44,6 +44,7 @@ from src.batch.scheduling import (
 )
 from src.batch.storage import LocalBatchArtifactStorage, S3BatchArtifactStorage
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
+from src.batch.webhooks import BatchWebhookCipher
 from src.bootstrap.status import BootstrapStatus
 from src.metrics import increment_batch_scheduler_rollback
 from src.services.model_visibility import normalize_callable_target_policy_mode
@@ -827,6 +828,11 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
     )
     app.state.batch_create_session_admin_service = runtime.create_session_admin_service
 
+    batch_webhook_encryption_key = getattr(
+        cfg.general_settings,
+        "batch_webhook_encryption_key",
+        None,
+    )
     app.state.batch_create_session_service = BatchCreateSessionService(
         repository=repository,
         create_session_repository=session_repository,
@@ -855,6 +861,14 @@ async def init_batch_runtime(app: Any, cfg: Any, repository: BatchRepository) ->
             False,
         ),
         default_service_tier=getattr(cfg.general_settings, "embeddings_batch_scheduler_default_service_tier", "standard"),
+        webhook_enabled=getattr(cfg.general_settings, "batch_webhook_enabled", False),
+        webhook_cipher=(
+            BatchWebhookCipher.from_config(batch_webhook_encryption_key)
+            if batch_webhook_encryption_key is not None
+            else None
+        ),
+        webhook_allow_http=getattr(cfg.general_settings, "batch_webhook_allow_http", False),
+        webhook_allowed_ports=getattr(cfg.general_settings, "batch_webhook_allowed_ports", [443]),
     )
     app.state.batch_service.bind_create_session_service(app.state.batch_create_session_service)
 

@@ -102,7 +102,10 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
     app.state.prompt_registry_repository = PromptRegistryRepository(prisma_manager.client)
     app.state.mcp_repository = MCPRepository(prisma_manager.client)
     app.state.mcp_scope_policy_repository = MCPScopePolicyRepository(prisma_manager.client)
-    app.state.batch_repository = BatchRepository(prisma_manager.client)
+    app.state.batch_repository = BatchRepository(
+        prisma_manager.client,
+        webhook_max_attempts=getattr(cfg.general_settings, "batch_webhook_max_attempts", 8),
+    )
     app.state.email_outbox_repository = EmailOutboxRepository(prisma_manager.client)
     app.state.email_token_repository = EmailTokenRepository(prisma_manager.client)
     app.state.invitation_repository = InvitationRepository(prisma_manager.client)

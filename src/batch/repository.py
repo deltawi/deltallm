@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 from datetime import datetime
 from typing import Any, Literal
 
@@ -18,8 +19,12 @@ from src.batch.models import (
     BatchModelBacklogRecord,
     BatchModelInFlightRecord,
     BatchSchedulerFlowRecord,
+    BatchWebhookOutboxCreate,
+    BatchWebhookOutboxRecord,
+    BatchWebhookEventType,
     BatchWorkClaim,
     BatchWorkRecommendation,
+    normalize_batch_job_status,
 )
 from src.batch.repositories import (
     BatchCompletionOutboxRepository,
@@ -27,9 +32,42 @@ from src.batch.repositories import (
     BatchItemRepository,
     BatchJobRepository,
     BatchMaintenanceRepository,
+    BatchWebhookOutboxRepository,
 )
 from src.batch.scheduling import parse_tenant_scope_preference
+from src.batch.serialization import serialize_public_batch
+from src.batch.webhooks.events import (
+    batch_webhook_event_payload_sha256,
+    batch_webhook_event_type_for_status,
+    build_batch_webhook_event,
+)
 from src.metrics import increment_batch_duplicate_completion_rejection
+
+
+def _webhook_outbox_matches_terminal_job(
+    record: BatchWebhookOutboxRecord,
+    *,
+    job: BatchJobRecord,
+    event_type: BatchWebhookEventType,
+) -> bool:
+    payload = record.payload_json
+    data = payload.get("data") if isinstance(payload, dict) else None
+    batch = data.get("batch") if isinstance(data, dict) else None
+    return bool(
+        record.batch_id == job.batch_id
+        and record.event_type == event_type
+        and record.target_config_ciphertext == job.webhook_config_ciphertext
+        and isinstance(payload, dict)
+        and payload.get("id") == record.event_id
+        and payload.get("object") == "event"
+        and payload.get("type") == event_type.value
+        and isinstance(batch, dict)
+        and batch == serialize_public_batch(job)
+        and hmac.compare_digest(
+            record.payload_sha256,
+            batch_webhook_event_payload_sha256(payload),
+        )
+    )
 
 
 class BatchRepository:
@@ -41,15 +79,18 @@ class BatchRepository:
         *,
         model_group_resolver: Any | None = None,
         tenant_scope_preference: tuple[str, ...] | list[str] | str | None = None,
+        webhook_max_attempts: int = 8,
     ) -> None:
         self.prisma = prisma_client
         self.model_group_resolver = model_group_resolver
         self.tenant_scope_preference = parse_tenant_scope_preference(tenant_scope_preference)
+        self.webhook_max_attempts = max(1, int(webhook_max_attempts))
         self.create_sessions = BatchCreateSessionRepository(prisma_client)
         self.files = BatchFileRepository(prisma_client)
         self.jobs = BatchJobRepository(prisma_client, model_group_resolver=model_group_resolver)
         self.items = BatchItemRepository(prisma_client)
         self.completion_outbox = BatchCompletionOutboxRepository(prisma_client)
+        self.webhook_outbox = BatchWebhookOutboxRepository(prisma_client)
         self.maintenance = BatchMaintenanceRepository(
             prisma_client,
             model_group_resolver=model_group_resolver,
@@ -61,6 +102,7 @@ class BatchRepository:
             prisma_client,
             model_group_resolver=self.model_group_resolver,
             tenant_scope_preference=self.tenant_scope_preference,
+            webhook_max_attempts=self.webhook_max_attempts,
         )
 
     def set_model_group_resolver(self, model_group_resolver: Any | None) -> None:
@@ -135,6 +177,8 @@ class BatchRepository:
         size_class: str | None = None,
         queue_entered_at: datetime | None = None,
         scheduler_debug: dict[str, Any] | None = None,
+        webhook_config_ciphertext: str | None = None,
+        webhook_config_fingerprint: str | None = None,
         tenant_scope_preference: tuple[str, ...] | list[str] | None = None,
     ) -> BatchJobRecord | None:
         effective_tenant_scope_preference = (
@@ -168,11 +212,26 @@ class BatchRepository:
             size_class=size_class,
             queue_entered_at=queue_entered_at,
             scheduler_debug=scheduler_debug,
+            webhook_config_ciphertext=webhook_config_ciphertext,
+            webhook_config_fingerprint=webhook_config_fingerprint,
             tenant_scope_preference=effective_tenant_scope_preference,
         )
 
     async def get_job(self, batch_id: str) -> BatchJobRecord | None:
         return await self.jobs.get_job(batch_id)
+
+    async def set_job_webhook_config_if_unset(
+        self,
+        *,
+        batch_id: str,
+        webhook_config_ciphertext: str,
+        webhook_config_fingerprint: str,
+    ) -> BatchJobRecord | None:
+        return await self.jobs.set_webhook_config_if_unset(
+            batch_id=batch_id,
+            webhook_config_ciphertext=webhook_config_ciphertext,
+            webhook_config_fingerprint=webhook_config_fingerprint,
+        )
 
     async def acquire_scope_advisory_lock(self, *, scope_type: str, scope_id: str) -> None:
         await self.jobs.acquire_scope_advisory_lock(scope_type=scope_type, scope_id=scope_id)
@@ -751,13 +810,67 @@ class BatchRepository:
         final_status: str | BatchJobStatus,
         worker_id: str | None = None,
     ) -> BatchJobRecord | None:
-        return await self.jobs.attach_artifacts_and_finalize(
-            batch_id=batch_id,
-            output_file_id=output_file_id,
-            error_file_id=error_file_id,
-            final_status=final_status,
-            worker_id=worker_id,
-        )
+        normalized_final_status = normalize_batch_job_status(final_status)
+        event_type = batch_webhook_event_type_for_status(normalized_final_status)
+
+        async def _run_in_current_repo(repo: BatchRepository) -> BatchJobRecord | None:
+            finalized = await repo.jobs.attach_artifacts_and_finalize(
+                batch_id=batch_id,
+                output_file_id=output_file_id,
+                error_file_id=error_file_id,
+                final_status=normalized_final_status,
+                worker_id=worker_id,
+            )
+            if finalized is None:
+                return None
+
+            ciphertext = finalized.webhook_config_ciphertext
+            fingerprint = finalized.webhook_config_fingerprint
+            if ciphertext is None and fingerprint is None:
+                return finalized
+            if ciphertext is None or fingerprint is None:
+                raise RuntimeError("batch webhook configuration is incomplete")
+
+            event = build_batch_webhook_event(finalized)
+            inserted = await repo.webhook_outbox.insert_event(
+                BatchWebhookOutboxCreate(
+                    event_id=event.event_id,
+                    batch_id=finalized.batch_id,
+                    event_type=event.event_type,
+                    target_config_ciphertext=ciphertext,
+                    payload_json=event.payload_json,
+                    payload_sha256=event.payload_sha256,
+                    max_attempts=repo.webhook_max_attempts,
+                )
+            )
+            if inserted is None:
+                inserted = await repo.webhook_outbox.get_by_batch_and_event_type(
+                    batch_id=finalized.batch_id,
+                    event_type=event_type,
+                )
+                if inserted is None or not _webhook_outbox_matches_terminal_job(
+                    inserted,
+                    job=finalized,
+                    event_type=event_type,
+                ):
+                    raise RuntimeError("batch webhook event conflicts with terminal outcome")
+            return finalized
+
+        if self.prisma is not None and hasattr(self.prisma, "tx"):
+            async with self.prisma.tx() as tx:
+                finalized = await _run_in_current_repo(self.with_prisma(tx))
+        else:
+            existing = await self.get_job(batch_id)
+            if existing is not None and (
+                existing.webhook_config_ciphertext is not None
+                or existing.webhook_config_fingerprint is not None
+            ):
+                raise RuntimeError("batch webhook finalization requires transaction support")
+            finalized = await _run_in_current_repo(self)
+
+        if finalized is not None:
+            self.jobs.observe_finalization(finalized)
+        return finalized
 
     async def retry_finalization_now(self, batch_id: str) -> BatchJobRecord | None:
         return await self.jobs.retry_finalization_now(batch_id)

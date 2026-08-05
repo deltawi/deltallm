@@ -366,6 +366,33 @@ class BatchCreateSessionPromoter:
                 )
 
             if existing_job is not None:
+                session_webhook = (
+                    session.webhook_config_ciphertext,
+                    session.webhook_config_fingerprint,
+                )
+                job_webhook = (
+                    existing_job.webhook_config_ciphertext,
+                    existing_job.webhook_config_fingerprint,
+                )
+                if job_webhook != session_webhook:
+                    if (
+                        job_webhook == (None, None)
+                        and session.webhook_config_ciphertext is not None
+                        and session.webhook_config_fingerprint is not None
+                    ):
+                        existing_job = await tx_repository.set_job_webhook_config_if_unset(
+                            batch_id=existing_job.batch_id,
+                            webhook_config_ciphertext=session.webhook_config_ciphertext,
+                            webhook_config_fingerprint=session.webhook_config_fingerprint,
+                        )
+                    else:
+                        existing_job = None
+                    if existing_job is None:
+                        raise BatchCreatePromotionError(
+                            f"Existing batch '{session.target_batch_id}' has inconsistent webhook configuration",
+                            code="webhook_config_mismatch",
+                            retryable=False,
+                        )
                 completed = await tx_repository.create_sessions.mark_session_completed(
                     session.session_id,
                     completed_at=datetime.now(tz=UTC),
@@ -434,6 +461,8 @@ class BatchCreateSessionPromoter:
                     "mixed_model": scheduling_summary.mixed_model,
                     "strict_model_homogeneity_enabled": self.strict_model_homogeneity_enabled,
                 },
+                webhook_config_ciphertext=session.webhook_config_ciphertext,
+                webhook_config_fingerprint=session.webhook_config_fingerprint,
                 tenant_scope_preference=self.tenant_scope_preference,
             )
             if job is None:

@@ -160,6 +160,19 @@ def test_job_to_response_sets_expired_at_for_expired_batches() -> None:
     assert response["failed_at"] is None
 
 
+def test_job_to_response_only_exposes_webhook_configured_indicator() -> None:
+    job = _batch_job(status=BatchJobStatus.QUEUED)
+    job.webhook_config_ciphertext = "v1.key.secret-ciphertext"
+    job.webhook_config_fingerprint = "a" * 64
+
+    response = _service().job_to_response(job)
+
+    assert response["webhook"] == {"configured": True}
+    rendered = str(response)
+    assert "secret-ciphertext" not in rendered
+    assert "a" * 64 not in rendered
+
+
 class _FakeCallableTargetBindingRepository:
     def __init__(self, bindings: list[CallableTargetBindingRecord]) -> None:
         self.bindings = list(bindings)

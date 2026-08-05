@@ -393,6 +393,7 @@ class BatchWebhookOutboxRecord:
 
 @dataclass
 class BatchWebhookOutboxCreate:
+    event_id: str
     batch_id: str
     event_type: BatchWebhookEventType
     target_config_ciphertext: str

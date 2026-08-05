@@ -429,6 +429,8 @@ class BatchJobRepository:
         size_class: str | None = None,
         queue_entered_at: datetime | None = None,
         scheduler_debug: dict[str, Any] | None = None,
+        webhook_config_ciphertext: str | None = None,
+        webhook_config_fingerprint: str | None = None,
         tenant_scope_preference: tuple[str, ...] | list[str] | None = None,
     ) -> BatchJobRecord | None:
         if self.prisma is None:
@@ -474,7 +476,8 @@ class BatchJobRepository:
                 scheduling_endpoint, tenant_scope_type, tenant_scope_id, service_tier,
                 estimated_work_units, remaining_work_units, size_class, queue_entered_at,
                 scheduler_debug, created_by_api_key, created_by_user_id, created_by_team_id,
-                created_by_organization_id, expires_at
+                created_by_organization_id, expires_at, webhook_config_ciphertext,
+                webhook_config_fingerprint
             )
             VALUES (
                 $1,
@@ -501,7 +504,9 @@ class BatchJobRepository:
                 $22,
                 $23,
                 $24,
-                $25::timestamp
+                $25::timestamp,
+                $26,
+                $27
             )
             RETURNING *
             """,
@@ -530,6 +535,8 @@ class BatchJobRepository:
             created_by_team_id,
             created_by_organization_id,
             expires_at,
+            webhook_config_ciphertext,
+            webhook_config_fingerprint,
         )
         if not rows:
             return None
@@ -550,6 +557,33 @@ class BatchJobRepository:
             LIMIT 1
             """,
             batch_id,
+        )
+        if not rows:
+            return None
+        return job_from_row(rows[0])
+
+    async def set_webhook_config_if_unset(
+        self,
+        *,
+        batch_id: str,
+        webhook_config_ciphertext: str,
+        webhook_config_fingerprint: str,
+    ) -> BatchJobRecord | None:
+        if self.prisma is None:
+            return None
+        rows = await self.prisma.query_raw(
+            """
+            UPDATE deltallm_batch_job
+            SET webhook_config_ciphertext = $2,
+                webhook_config_fingerprint = $3
+            WHERE batch_id = $1
+              AND webhook_config_ciphertext IS NULL
+              AND webhook_config_fingerprint IS NULL
+            RETURNING *
+            """,
+            batch_id,
+            webhook_config_ciphertext,
+            webhook_config_fingerprint,
         )
         if not rows:
             return None
@@ -4545,16 +4579,37 @@ class BatchJobRepository:
         if worker_id is None:
             rows = await self.prisma.query_raw(
                 """
-                UPDATE deltallm_batch_job
+                WITH stats AS (
+                    SELECT
+                        COUNT(*)::int AS total_items,
+                        COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_items,
+                        COUNT(*) FILTER (WHERE status = 'in_progress')::int AS in_progress_items,
+                        COUNT(*) FILTER (WHERE status = 'completed')::int AS completed_items,
+                        COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_items,
+                        COUNT(*) FILTER (WHERE status = 'cancelled')::int AS cancelled_items
+                    FROM deltallm_batch_item
+                    WHERE batch_id = $1
+                )
+                UPDATE deltallm_batch_job j
                 SET output_file_id = $2,
                     error_file_id = $3,
                     status = $4::"DeltaLLM_BatchJobStatus",
+                    total_items = stats.total_items,
+                    in_progress_items = stats.in_progress_items,
+                    completed_items = stats.completed_items,
+                    failed_items = stats.failed_items,
+                    cancelled_items = stats.cancelled_items,
+                    remaining_work_units = 0,
                     completed_at = COALESCE(completed_at, NOW()),
                     lease_expires_at = NULL,
                     locked_by = NULL,
                     status_last_updated_at = NOW()
-                WHERE batch_id = $1
-                RETURNING *
+                FROM stats
+                WHERE j.batch_id = $1
+                  AND j.status = 'finalizing'
+                  AND stats.pending_items = 0
+                  AND stats.in_progress_items = 0
+                RETURNING j.*
                 """,
                 batch_id,
                 output_file_id,
@@ -4564,18 +4619,38 @@ class BatchJobRepository:
         else:
             rows = await self.prisma.query_raw(
                 """
-                UPDATE deltallm_batch_job
+                WITH stats AS (
+                    SELECT
+                        COUNT(*)::int AS total_items,
+                        COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_items,
+                        COUNT(*) FILTER (WHERE status = 'in_progress')::int AS in_progress_items,
+                        COUNT(*) FILTER (WHERE status = 'completed')::int AS completed_items,
+                        COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_items,
+                        COUNT(*) FILTER (WHERE status = 'cancelled')::int AS cancelled_items
+                    FROM deltallm_batch_item
+                    WHERE batch_id = $1
+                )
+                UPDATE deltallm_batch_job j
                 SET output_file_id = $3,
                     error_file_id = $4,
                     status = $5::"DeltaLLM_BatchJobStatus",
+                    total_items = stats.total_items,
+                    in_progress_items = stats.in_progress_items,
+                    completed_items = stats.completed_items,
+                    failed_items = stats.failed_items,
+                    cancelled_items = stats.cancelled_items,
+                    remaining_work_units = 0,
                     completed_at = COALESCE(completed_at, NOW()),
                     lease_expires_at = NULL,
                     locked_by = NULL,
                     status_last_updated_at = NOW()
-                WHERE batch_id = $1
-                  AND locked_by = $2
-                  AND status = 'finalizing'
-                RETURNING *
+                FROM stats
+                WHERE j.batch_id = $1
+                  AND j.locked_by = $2
+                  AND j.status = 'finalizing'
+                  AND stats.pending_items = 0
+                  AND stats.in_progress_items = 0
+                RETURNING j.*
                 """,
                 batch_id,
                 worker_id,
@@ -4585,7 +4660,9 @@ class BatchJobRepository:
             )
         if not rows:
             return None
-        record = job_from_row(rows[0])
+        return job_from_row(rows[0])
+
+    def observe_finalization(self, record: BatchJobRecord) -> None:
         latency_start = record.queue_entered_at or record.created_at
         latency_end = record.completed_at or datetime.now(tz=UTC)
         observe_batch_completion_latency(
@@ -4595,7 +4672,6 @@ class BatchJobRepository:
             size_class=record.size_class,
             latency_seconds=max(0.0, (latency_end - latency_start).total_seconds()),
         )
-        return record
 
     async def retry_finalization_now(self, batch_id: str) -> BatchJobRecord | None:
         if self.prisma is None:

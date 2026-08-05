@@ -27,10 +27,16 @@ async def create_batch(request: Request, payload: dict[str, Any]):
     endpoint = str(payload.get("endpoint") or "").strip()
     completion_window = payload.get("completion_window")
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else None
+    webhook = payload.get("webhook")
+    webhook_configured = webhook is not None
     idempotency_key = str(request.headers.get("Idempotency-Key") or "").strip() or None
     try:
         service = _batch_service_or_404(request)
-        audit_metadata = {"route": request.url.path, "idempotency_key_present": bool(idempotency_key)}
+        audit_metadata = {
+            "route": request.url.path,
+            "idempotency_key_present": bool(idempotency_key),
+            "webhook_configured": webhook_configured,
+        }
         create_batch_result = getattr(service, "create_batch_result", None) or service.create_embeddings_batch_result
         result = await create_batch_result(
             auth=auth,
@@ -39,6 +45,7 @@ async def create_batch(request: Request, payload: dict[str, Any]):
             metadata=metadata,
             completion_window=completion_window,
             idempotency_key=idempotency_key,
+            webhook=webhook,
         )
         created = result.response
         audit_metadata.update(result.audit_metadata)
@@ -59,6 +66,7 @@ async def create_batch(request: Request, payload: dict[str, Any]):
                 "completion_window": completion_window,
                 "metadata": metadata,
                 "idempotency_key_present": bool(idempotency_key),
+                "webhook_configured": webhook_configured,
             },
             response_payload=created if isinstance(created, dict) else None,
             metadata=audit_metadata,
@@ -81,9 +89,14 @@ async def create_batch(request: Request, payload: dict[str, Any]):
                 "completion_window": completion_window,
                 "metadata": metadata,
                 "idempotency_key_present": bool(idempotency_key),
+                "webhook_configured": webhook_configured,
             },
             error=exc,
-            metadata={"route": request.url.path, "idempotency_key_present": bool(idempotency_key)},
+            metadata={
+                "route": request.url.path,
+                "idempotency_key_present": bool(idempotency_key),
+                "webhook_configured": webhook_configured,
+            },
         )
         raise
 

@@ -3559,7 +3559,8 @@ async def test_create_job_defaults_to_queued_status() -> None:
 
     assert '::"DeltaLLM_BatchJobStatus"' in prisma.sql
     assert prisma.params[2] == BatchJobStatus.QUEUED.value
-    assert len(prisma.params) == 25
+    assert len(prisma.params) == 27
+    assert prisma.params[-2:] == (None, None)
     assert "scheduler_version, scheduling_model, scheduling_model_group" in prisma.sql
 
 

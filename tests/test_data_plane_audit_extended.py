@@ -324,6 +324,40 @@ async def test_batch_create_audit_marks_idempotency_key_presence(client, test_ap
 
 
 @pytest.mark.asyncio
+async def test_batch_create_audit_redacts_webhook_configuration(client, test_app):
+    audit = _RecordingAuditService()
+    test_app.state.audit_service = audit
+    test_app.state.batch_service = _FakeBatchService()
+    test_app.state.batch_repository = _FakeBatchRepository()
+    secret = "customer-secret-that-must-not-appear"
+    url = "https://customer.example/webhooks/deltallm"
+
+    response = await client.post(
+        "/v1/batches",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "input_file_id": "file-1",
+            "endpoint": "/v1/embeddings",
+            "completion_window": "24h",
+            "webhook": {"url": url, "signing_secret": secret},
+        },
+    )
+
+    assert response.status_code == 200
+    batch_create_records = [
+        record for record in audit.records if record[0].action == "BATCH_CREATE_REQUEST"
+    ]
+    assert len(batch_create_records) == 1
+    event, payloads, _critical = batch_create_records[0]
+    assert event.metadata["webhook_configured"] is True
+    rendered = str((event, payloads))
+    assert url not in rendered
+    assert secret not in rendered
+    assert payloads[0].content_json["webhook_configured"] is True
+    assert "webhook" not in payloads[0].content_json
+
+
+@pytest.mark.asyncio
 async def test_spend_routes_emit_audit_success(client, test_app):
     audit = _RecordingAuditService()
     test_app.state.audit_service = audit
