@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hmac
+import logging
 from datetime import datetime
 from typing import Any, Literal
 
@@ -18,8 +20,13 @@ from src.batch.models import (
     BatchModelBacklogRecord,
     BatchModelInFlightRecord,
     BatchSchedulerFlowRecord,
+    BatchWebhookOutboxCreate,
+    BatchWebhookOutboxRecord,
+    BatchWebhookEventType,
+    BatchWebhookConfigurationConflictError,
     BatchWorkClaim,
     BatchWorkRecommendation,
+    normalize_batch_job_status,
 )
 from src.batch.repositories import (
     BatchCompletionOutboxRepository,
@@ -27,9 +34,55 @@ from src.batch.repositories import (
     BatchItemRepository,
     BatchJobRepository,
     BatchMaintenanceRepository,
+    BatchWebhookOutboxRepository,
 )
 from src.batch.scheduling import parse_tenant_scope_preference
+from src.batch.webhooks.events import (
+    batch_webhook_event_payload_sha256,
+    batch_webhook_event_type_for_status,
+    build_batch_webhook_event,
+)
 from src.metrics import increment_batch_duplicate_completion_rejection
+
+logger = logging.getLogger(__name__)
+
+
+def _prisma_client_is_transaction(client: object | None) -> bool:
+    detector = getattr(client, "is_transaction", None)
+    return bool(detector()) if callable(detector) else False
+
+
+def _webhook_outbox_matches_terminal_job(
+    record: BatchWebhookOutboxRecord,
+    *,
+    job: BatchJobRecord,
+    event_type: BatchWebhookEventType,
+) -> bool:
+    """Verify the stored snapshot without comparing mutable post-terminal fields."""
+    payload = record.payload_json
+    data = payload.get("data") if isinstance(payload, dict) else None
+    batch = data.get("batch") if isinstance(data, dict) else None
+    webhook = batch.get("webhook") if isinstance(batch, dict) else None
+    return bool(
+        record.batch_id == job.batch_id
+        and record.event_type == event_type
+        and record.target_config_ciphertext == job.webhook_config_ciphertext
+        and isinstance(payload, dict)
+        and payload.get("id") == record.event_id
+        and payload.get("object") == "event"
+        and payload.get("type") == event_type.value
+        and type(payload.get("created_at")) is int
+        and isinstance(batch, dict)
+        and batch.get("id") == job.batch_id
+        and batch.get("object") == "batch"
+        and batch.get("status") == job.status.value
+        and isinstance(webhook, dict)
+        and webhook.get("configured") is True
+        and hmac.compare_digest(
+            record.payload_sha256,
+            batch_webhook_event_payload_sha256(payload),
+        )
+    )
 
 
 class BatchRepository:
@@ -41,15 +94,18 @@ class BatchRepository:
         *,
         model_group_resolver: Any | None = None,
         tenant_scope_preference: tuple[str, ...] | list[str] | str | None = None,
+        webhook_max_attempts: int = 8,
     ) -> None:
         self.prisma = prisma_client
         self.model_group_resolver = model_group_resolver
         self.tenant_scope_preference = parse_tenant_scope_preference(tenant_scope_preference)
+        self.webhook_max_attempts = max(1, int(webhook_max_attempts))
         self.create_sessions = BatchCreateSessionRepository(prisma_client)
         self.files = BatchFileRepository(prisma_client)
         self.jobs = BatchJobRepository(prisma_client, model_group_resolver=model_group_resolver)
         self.items = BatchItemRepository(prisma_client)
         self.completion_outbox = BatchCompletionOutboxRepository(prisma_client)
+        self.webhook_outbox = BatchWebhookOutboxRepository(prisma_client)
         self.maintenance = BatchMaintenanceRepository(
             prisma_client,
             model_group_resolver=model_group_resolver,
@@ -61,6 +117,7 @@ class BatchRepository:
             prisma_client,
             model_group_resolver=self.model_group_resolver,
             tenant_scope_preference=self.tenant_scope_preference,
+            webhook_max_attempts=self.webhook_max_attempts,
         )
 
     def set_model_group_resolver(self, model_group_resolver: Any | None) -> None:
@@ -135,6 +192,8 @@ class BatchRepository:
         size_class: str | None = None,
         queue_entered_at: datetime | None = None,
         scheduler_debug: dict[str, Any] | None = None,
+        webhook_config_ciphertext: str | None = None,
+        webhook_config_fingerprint: str | None = None,
         tenant_scope_preference: tuple[str, ...] | list[str] | None = None,
     ) -> BatchJobRecord | None:
         effective_tenant_scope_preference = (
@@ -168,11 +227,29 @@ class BatchRepository:
             size_class=size_class,
             queue_entered_at=queue_entered_at,
             scheduler_debug=scheduler_debug,
+            webhook_config_ciphertext=webhook_config_ciphertext,
+            webhook_config_fingerprint=webhook_config_fingerprint,
             tenant_scope_preference=effective_tenant_scope_preference,
         )
 
     async def get_job(self, batch_id: str) -> BatchJobRecord | None:
         return await self.jobs.get_job(batch_id)
+
+    async def get_job_for_update(self, batch_id: str) -> BatchJobRecord | None:
+        return await self.jobs.get_job_for_update(batch_id)
+
+    async def set_job_webhook_config_if_unset(
+        self,
+        *,
+        batch_id: str,
+        webhook_config_ciphertext: str,
+        webhook_config_fingerprint: str,
+    ) -> BatchJobRecord | None:
+        return await self.jobs.set_webhook_config_if_unset(
+            batch_id=batch_id,
+            webhook_config_ciphertext=webhook_config_ciphertext,
+            webhook_config_fingerprint=webhook_config_fingerprint,
+        )
 
     async def acquire_scope_advisory_lock(self, *, scope_type: str, scope_id: str) -> None:
         await self.jobs.acquire_scope_advisory_lock(scope_type=scope_type, scope_id=scope_id)
@@ -742,6 +819,172 @@ class BatchRepository:
     async def fail_nonterminal_items(self, *, batch_id: str, reason: str) -> int:
         return await self.items.fail_nonterminal_items(batch_id=batch_id, reason=reason)
 
+    async def _enqueue_webhook_for_terminal_job_in_current_transaction(
+        self,
+        job: BatchJobRecord,
+    ) -> None:
+        ciphertext = job.webhook_config_ciphertext
+        fingerprint = job.webhook_config_fingerprint
+        if ciphertext is None and fingerprint is None:
+            return
+        if ciphertext is None or fingerprint is None:
+            raise BatchWebhookConfigurationConflictError(
+                "batch webhook configuration is incomplete"
+            )
+
+        event_type = batch_webhook_event_type_for_status(job.status)
+        event = build_batch_webhook_event(job)
+        inserted = await self.webhook_outbox.insert_event(
+            BatchWebhookOutboxCreate(
+                event_id=event.event_id,
+                batch_id=job.batch_id,
+                event_type=event.event_type,
+                target_config_ciphertext=ciphertext,
+                payload_json=event.payload_json,
+                payload_sha256=event.payload_sha256,
+                max_attempts=self.webhook_max_attempts,
+            )
+        )
+        if inserted is None:
+            inserted = await self.webhook_outbox.get_by_batch_and_event_type(
+                batch_id=job.batch_id,
+                event_type=event_type,
+            )
+            if inserted is None or not _webhook_outbox_matches_terminal_job(
+                inserted,
+                job=job,
+                event_type=event_type,
+            ):
+                raise BatchWebhookConfigurationConflictError(
+                    "batch webhook event conflicts with terminal outcome"
+                )
+
+    async def _attach_artifacts_and_enqueue_webhook_in_current_transaction(
+        self,
+        *,
+        batch_id: str,
+        output_file_id: str | None,
+        error_file_id: str | None,
+        final_status: BatchJobStatus,
+        worker_id: str | None,
+        terminal_provider_error: str | None,
+    ) -> BatchJobRecord | None:
+        finalized = await self.jobs.attach_artifacts_and_finalize(
+            batch_id=batch_id,
+            output_file_id=output_file_id,
+            error_file_id=error_file_id,
+            final_status=final_status,
+            worker_id=worker_id,
+            terminal_provider_error=terminal_provider_error,
+        )
+        if finalized is None:
+            return None
+        await self._enqueue_webhook_for_terminal_job_in_current_transaction(finalized)
+        return finalized
+
+    async def _reconcile_job_webhook_config_in_current_transaction(
+        self,
+        *,
+        batch_id: str,
+        webhook_config_ciphertext: str | None,
+        webhook_config_fingerprint: str | None,
+    ) -> BatchJobRecord | None:
+        expected = (webhook_config_ciphertext, webhook_config_fingerprint)
+        if (webhook_config_ciphertext is None) != (webhook_config_fingerprint is None):
+            raise BatchWebhookConfigurationConflictError(
+                "batch webhook configuration is incomplete"
+            )
+
+        job = await self.get_job_for_update(batch_id)
+        if job is None:
+            return None
+        current = (
+            job.webhook_config_ciphertext,
+            job.webhook_config_fingerprint,
+        )
+        if current != expected:
+            if current != (None, None) or expected == (None, None):
+                raise BatchWebhookConfigurationConflictError(
+                    "batch webhook configuration conflicts with existing job"
+                )
+            updated = await self.set_job_webhook_config_if_unset(
+                batch_id=batch_id,
+                webhook_config_ciphertext=str(webhook_config_ciphertext),
+                webhook_config_fingerprint=str(webhook_config_fingerprint),
+            )
+            if updated is None:
+                raise BatchWebhookConfigurationConflictError(
+                    "batch webhook configuration conflicts with existing job"
+                )
+            job = updated
+
+        if job.status in {
+            BatchJobStatus.COMPLETED,
+            BatchJobStatus.FAILED,
+            BatchJobStatus.CANCELLED,
+            BatchJobStatus.EXPIRED,
+        }:
+            await self._enqueue_webhook_for_terminal_job_in_current_transaction(job)
+        return job
+
+    async def reconcile_job_webhook_config(
+        self,
+        *,
+        batch_id: str,
+        webhook_config_ciphertext: str | None,
+        webhook_config_fingerprint: str | None,
+    ) -> BatchJobRecord | None:
+        """Reconcile staged webhook state and heal a missing terminal event."""
+        if _prisma_client_is_transaction(self.prisma):
+            return await self._reconcile_job_webhook_config_in_current_transaction(
+                batch_id=batch_id,
+                webhook_config_ciphertext=webhook_config_ciphertext,
+                webhook_config_fingerprint=webhook_config_fingerprint,
+            )
+        if self.prisma is not None and hasattr(self.prisma, "tx"):
+            async with self.prisma.tx() as tx:
+                transactional_repository = self.with_prisma(tx)
+                return await (
+                    transactional_repository._reconcile_job_webhook_config_in_current_transaction(
+                        batch_id=batch_id,
+                        webhook_config_ciphertext=webhook_config_ciphertext,
+                        webhook_config_fingerprint=webhook_config_fingerprint,
+                    )
+                )
+
+        existing = await self.get_job(batch_id)
+        expected = (webhook_config_ciphertext, webhook_config_fingerprint)
+        if existing is None:
+            return None
+        current = (
+            existing.webhook_config_ciphertext,
+            existing.webhook_config_fingerprint,
+        )
+        if current != expected:
+            raise RuntimeError("batch webhook reconciliation requires transaction support")
+        if (
+            existing.status
+            in {
+                BatchJobStatus.COMPLETED,
+                BatchJobStatus.FAILED,
+                BatchJobStatus.CANCELLED,
+                BatchJobStatus.EXPIRED,
+            }
+            and existing.webhook_config_ciphertext is not None
+        ):
+            raise RuntimeError("batch webhook reconciliation requires transaction support")
+        return existing
+
+    def publish_finalization_metric_after_commit(self, finalized: BatchJobRecord) -> None:
+        try:
+            self.jobs.observe_finalization(finalized)
+        except Exception:
+            logger.warning(
+                "batch finalization metric publish failed batch_id=%s",
+                finalized.batch_id,
+                exc_info=True,
+            )
+
     async def attach_artifacts_and_finalize(
         self,
         *,
@@ -750,14 +993,60 @@ class BatchRepository:
         error_file_id: str | None,
         final_status: str | BatchJobStatus,
         worker_id: str | None = None,
+        terminal_provider_error: str | None = None,
     ) -> BatchJobRecord | None:
-        return await self.jobs.attach_artifacts_and_finalize(
-            batch_id=batch_id,
-            output_file_id=output_file_id,
-            error_file_id=error_file_id,
-            final_status=final_status,
-            worker_id=worker_id,
-        )
+        """Commit terminal state and its webhook event as one aggregate operation.
+
+        When this repository already wraps a transaction client, the caller owns
+        the outer commit and must publish the returned record's metric afterward.
+        """
+        normalized_final_status = normalize_batch_job_status(final_status)
+        batch_webhook_event_type_for_status(normalized_final_status)
+        reusing_transaction = _prisma_client_is_transaction(self.prisma)
+
+        if reusing_transaction:
+            finalized = await self._attach_artifacts_and_enqueue_webhook_in_current_transaction(
+                batch_id=batch_id,
+                output_file_id=output_file_id,
+                error_file_id=error_file_id,
+                final_status=normalized_final_status,
+                worker_id=worker_id,
+                terminal_provider_error=terminal_provider_error,
+            )
+        elif self.prisma is not None and hasattr(self.prisma, "tx"):
+            async with self.prisma.tx() as tx:
+                transactional_repository = self.with_prisma(tx)
+                finalized = (
+                    await transactional_repository._attach_artifacts_and_enqueue_webhook_in_current_transaction(
+                        batch_id=batch_id,
+                        output_file_id=output_file_id,
+                        error_file_id=error_file_id,
+                        final_status=normalized_final_status,
+                        worker_id=worker_id,
+                        terminal_provider_error=terminal_provider_error,
+                    )
+                )
+        else:
+            existing = await self.get_job(batch_id)
+            if existing is not None and (
+                existing.webhook_config_ciphertext is not None
+                or existing.webhook_config_fingerprint is not None
+            ):
+                raise RuntimeError("batch webhook finalization requires transaction support")
+            finalized = await self._attach_artifacts_and_enqueue_webhook_in_current_transaction(
+                batch_id=batch_id,
+                output_file_id=output_file_id,
+                error_file_id=error_file_id,
+                final_status=normalized_final_status,
+                worker_id=worker_id,
+                terminal_provider_error=terminal_provider_error,
+            )
+
+        # An outer transaction owns the commit when this repository already wraps
+        # a transaction client. Its caller must publish after that commit succeeds.
+        if finalized is not None and not reusing_transaction:
+            self.publish_finalization_metric_after_commit(finalized)
+        return finalized
 
     async def retry_finalization_now(self, batch_id: str) -> BatchJobRecord | None:
         return await self.jobs.retry_finalization_now(batch_id)

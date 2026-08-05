@@ -28,6 +28,14 @@ from src.batch.scopes import (
     batch_pending_scope_target_for_auth,
 )
 from src.batch.storage import BatchArtifactLineTooLongError, BatchArtifactStorage
+from src.batch.webhooks import (
+    BatchWebhookCipher,
+    BatchWebhookCryptoError,
+    BatchWebhookRequest,
+    BatchWebhookValidationError,
+    batch_webhook_config_fingerprint,
+    parse_batch_webhook_request,
+)
 from src.models.responses import UserAPIKeyAuth
 from src.services.callable_target_grants import CallableTargetGrantService
 from src.services.model_visibility import CallableTargetPolicyMode, ensure_batch_model_allowed
@@ -40,6 +48,12 @@ logger = logging.getLogger(__name__)
 class BatchCreateSessionServiceResult:
     job: BatchJobRecord
     audit_metadata: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class _ValidatedBatchWebhook:
+    config: BatchWebhookRequest
+    fingerprint: str
 
 
 class BatchCreateSessionService:
@@ -64,6 +78,10 @@ class BatchCreateSessionService:
         scheduler_shadow_enabled: bool = False,
         strict_model_homogeneity_enabled: bool = False,
         default_service_tier: str = "standard",
+        webhook_enabled: bool = False,
+        webhook_cipher: BatchWebhookCipher | None = None,
+        webhook_allow_http: bool = False,
+        webhook_allowed_ports: tuple[int, ...] | list[int] | None = (443,),
     ) -> None:
         self.repository = repository
         self.create_sessions = create_session_repository
@@ -86,6 +104,14 @@ class BatchCreateSessionService:
         self.scheduler_shadow_enabled = bool(scheduler_shadow_enabled)
         self.strict_model_homogeneity_enabled = bool(strict_model_homogeneity_enabled)
         self.default_service_tier = str(default_service_tier or "standard").strip() or "standard"
+        self.webhook_enabled = bool(webhook_enabled)
+        self.webhook_cipher = webhook_cipher
+        self.webhook_allow_http = bool(webhook_allow_http)
+        self.webhook_allowed_ports = (
+            tuple(int(port) for port in webhook_allowed_ports)
+            if webhook_allowed_ports is not None
+            else None
+        )
 
     def configure_scheduler(
         self,
@@ -109,6 +135,7 @@ class BatchCreateSessionService:
         metadata: dict[str, Any] | None,
         completion_window: str | None,
         idempotency_key: str | None = None,
+        webhook: object | None = None,
     ) -> BatchCreateSessionServiceResult:
         return await self.create_batch(
             auth=auth,
@@ -117,6 +144,7 @@ class BatchCreateSessionService:
             metadata=metadata,
             completion_window=completion_window,
             idempotency_key=idempotency_key,
+            webhook=webhook,
         )
 
     async def create_batch(
@@ -128,6 +156,7 @@ class BatchCreateSessionService:
         metadata: dict[str, Any] | None,
         completion_window: str | None,
         idempotency_key: str | None = None,
+        webhook: object | None = None,
     ) -> BatchCreateSessionServiceResult:
         endpoint = str(endpoint or "").strip()
         if endpoint not in SUPPORTED_BATCH_ENDPOINT_SET:
@@ -138,6 +167,8 @@ class BatchCreateSessionService:
         self._validate_completion_window(completion_window)
 
         normalized_metadata = self._normalize_metadata(metadata)
+        validated_webhook = self._validate_webhook(webhook)
+        webhook_fingerprint = validated_webhook.fingerprint if validated_webhook is not None else None
         idem_scope_key, idem_key = self._idempotency_pair(auth=auth, idempotency_key=idempotency_key)
 
         if idem_scope_key is not None and idem_key is not None:
@@ -152,12 +183,15 @@ class BatchCreateSessionService:
                     input_file_id=input_file_id,
                     endpoint=endpoint,
                     metadata=normalized_metadata,
+                    webhook_config_fingerprint=webhook_fingerprint,
                     resolution="existing",
                     idempotency_key_present=True,
                 )
 
         file_record = await self._load_authorized_input_file(auth=auth, input_file_id=input_file_id)
         await self._precheck_pending_batch_capacity(auth=auth)
+        webhook_ciphertext = self._encrypt_webhook(validated_webhook)
+        validated_webhook = None
 
         try:
             created_session = await self._stage_new_session(
@@ -165,6 +199,8 @@ class BatchCreateSessionService:
                 file_record=file_record,
                 endpoint=endpoint,
                 metadata=normalized_metadata,
+                webhook_config_ciphertext=webhook_ciphertext,
+                webhook_config_fingerprint=webhook_fingerprint,
                 idempotency_scope_key=idem_scope_key,
                 idempotency_key=idem_key,
             )
@@ -181,6 +217,7 @@ class BatchCreateSessionService:
                         input_file_id=input_file_id,
                         endpoint=endpoint,
                         metadata=normalized_metadata,
+                        webhook_config_fingerprint=webhook_fingerprint,
                         resolution="race_resolved",
                         idempotency_key_present=True,
                     )
@@ -199,6 +236,8 @@ class BatchCreateSessionService:
         file_record: Any,
         endpoint: str,
         metadata: dict[str, Any] | None,
+        webhook_config_ciphertext: str | None,
+        webhook_config_fingerprint: str | None,
         idempotency_scope_key: str | None,
         idempotency_key: str | None,
     ) -> BatchCreateSessionRecord:
@@ -264,6 +303,8 @@ class BatchCreateSessionService:
                 expected_item_count=expected_item_count,
                 inferred_model=inferred_model,
                 metadata=metadata,
+                webhook_config_ciphertext=webhook_config_ciphertext,
+                webhook_config_fingerprint=webhook_config_fingerprint,
                 effective_service_tier=self.default_service_tier,
                 scheduling_scope_key=self._session_scope_key(auth),
                 priority_quota_scope_key=self._session_scope_key(auth),
@@ -289,6 +330,7 @@ class BatchCreateSessionService:
         input_file_id: str,
         endpoint: str,
         metadata: dict[str, Any] | None,
+        webhook_config_fingerprint: str | None,
         resolution: str,
         idempotency_key_present: bool,
     ) -> BatchCreateSessionServiceResult:
@@ -307,6 +349,7 @@ class BatchCreateSessionService:
             input_file_id=input_file_id,
             endpoint=endpoint,
             metadata=metadata,
+            webhook_config_fingerprint=webhook_config_fingerprint,
         ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -360,6 +403,7 @@ class BatchCreateSessionService:
                 "idempotency_key_present": idempotency_key_present,
                 "idempotency_resolution": resolution if idempotency_key_present else "not_requested",
                 "promotion_result": "promoted" if promotion.promoted else "existing_batch",
+                "webhook_configured": job.webhook_config_ciphertext is not None,
             },
         )
 
@@ -505,6 +549,73 @@ class BatchCreateSessionService:
             return None
         return dict(metadata) or None
 
+    def _validate_webhook(self, webhook: object | None) -> _ValidatedBatchWebhook | None:
+        if webhook is None:
+            return None
+        if not self.webhook_enabled:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "batch_webhook_disabled",
+                    "message": "Batch webhooks are not enabled",
+                },
+            )
+        if self.webhook_cipher is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "batch_webhook_unavailable",
+                    "message": "Batch webhook encryption is unavailable",
+                },
+            )
+        if not isinstance(webhook, (dict, BatchWebhookRequest)):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "invalid_config",
+                    "message": "webhook configuration must be an object or null",
+                    "field": "webhook",
+                },
+            )
+        try:
+            config = parse_batch_webhook_request(
+                webhook,
+                allow_http=self.webhook_allow_http,
+                allowed_ports=self.webhook_allowed_ports,
+            )
+        except BatchWebhookValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=exc.as_detail(),
+            ) from None
+        return _ValidatedBatchWebhook(
+            config=config,
+            fingerprint=batch_webhook_config_fingerprint(config),
+        )
+
+    def _encrypt_webhook(self, webhook: _ValidatedBatchWebhook | None) -> str | None:
+        if webhook is None:
+            return None
+        cipher = self.webhook_cipher
+        if cipher is None:  # pragma: no cover - guarded during validation
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "batch_webhook_unavailable",
+                    "message": "Batch webhook encryption is unavailable",
+                },
+            )
+        try:
+            return cipher.encrypt(webhook.config)
+        except BatchWebhookCryptoError:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "batch_webhook_unavailable",
+                    "message": "Batch webhook encryption is unavailable",
+                },
+            ) from None
+
     def _request_matches_session(
         self,
         session: BatchCreateSessionRecord,
@@ -512,11 +623,21 @@ class BatchCreateSessionService:
         input_file_id: str,
         endpoint: str,
         metadata: dict[str, Any] | None,
+        webhook_config_fingerprint: str | None,
     ) -> bool:
+        session_webhook_pair_is_valid = (
+            session.webhook_config_ciphertext is None
+            and session.webhook_config_fingerprint is None
+        ) or (
+            session.webhook_config_ciphertext is not None
+            and session.webhook_config_fingerprint is not None
+        )
         return (
-            session.input_file_id == input_file_id
+            session_webhook_pair_is_valid
+            and session.input_file_id == input_file_id
             and session.endpoint == endpoint
             and self._normalize_metadata(session.metadata) == self._normalize_metadata(metadata)
+            and session.webhook_config_fingerprint == webhook_config_fingerprint
         )
 
     def _http_exception_for_promotion_error(self, exc: BatchCreatePromotionError) -> HTTPException:

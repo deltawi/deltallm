@@ -19,6 +19,45 @@ def _batch_service_or_404(request: Request):
     return service
 
 
+def _batch_create_audit_request_payload(
+    *,
+    input_file_id: str,
+    endpoint: str,
+    completion_window: object,
+    metadata: dict[str, Any] | None,
+    idempotency_key_present: bool,
+    webhook_configured: bool,
+) -> dict[str, Any]:
+    return {
+        "input_file_id": input_file_id,
+        "endpoint": endpoint,
+        "completion_window": completion_window,
+        "metadata_present": bool(metadata),
+        "idempotency_key_present": idempotency_key_present,
+        "webhook_configured": webhook_configured,
+    }
+
+
+def _batch_audit_response_payload(batch: object) -> dict[str, Any] | None:
+    if not isinstance(batch, dict):
+        return None
+    webhook = batch.get("webhook")
+    return {
+        "id": batch.get("id"),
+        "object": batch.get("object"),
+        "endpoint": batch.get("endpoint"),
+        "status": batch.get("status"),
+        "input_file_id": batch.get("input_file_id"),
+        "output_file_id": batch.get("output_file_id"),
+        "error_file_id": batch.get("error_file_id"),
+        "request_counts": batch.get("request_counts"),
+        "metadata_present": bool(batch.get("metadata")),
+        "webhook_configured": bool(
+            isinstance(webhook, dict) and webhook.get("configured") is True
+        ),
+    }
+
+
 @router.post("/batches", dependencies=[Depends(require_api_key)])
 async def create_batch(request: Request, payload: dict[str, Any]):
     request_start = perf_counter()
@@ -27,10 +66,24 @@ async def create_batch(request: Request, payload: dict[str, Any]):
     endpoint = str(payload.get("endpoint") or "").strip()
     completion_window = payload.get("completion_window")
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else None
+    webhook = payload.get("webhook")
+    webhook_configured = webhook is not None
     idempotency_key = str(request.headers.get("Idempotency-Key") or "").strip() or None
+    audit_request_payload = _batch_create_audit_request_payload(
+        input_file_id=input_file_id,
+        endpoint=endpoint,
+        completion_window=completion_window,
+        metadata=metadata,
+        idempotency_key_present=bool(idempotency_key),
+        webhook_configured=webhook_configured,
+    )
     try:
         service = _batch_service_or_404(request)
-        audit_metadata = {"route": request.url.path, "idempotency_key_present": bool(idempotency_key)}
+        audit_metadata = {
+            "route": request.url.path,
+            "idempotency_key_present": bool(idempotency_key),
+            "webhook_configured": webhook_configured,
+        }
         create_batch_result = getattr(service, "create_batch_result", None) or service.create_embeddings_batch_result
         result = await create_batch_result(
             auth=auth,
@@ -39,6 +92,7 @@ async def create_batch(request: Request, payload: dict[str, Any]):
             metadata=metadata,
             completion_window=completion_window,
             idempotency_key=idempotency_key,
+            webhook=webhook,
         )
         created = result.response
         audit_metadata.update(result.audit_metadata)
@@ -53,14 +107,8 @@ async def create_batch(request: Request, payload: dict[str, Any]):
             api_key=auth.api_key,
             resource_type="batch",
             resource_id=created.get("id") if isinstance(created, dict) else None,
-            request_payload={
-                "input_file_id": input_file_id,
-                "endpoint": endpoint,
-                "completion_window": completion_window,
-                "metadata": metadata,
-                "idempotency_key_present": bool(idempotency_key),
-            },
-            response_payload=created if isinstance(created, dict) else None,
+            request_payload=audit_request_payload,
+            response_payload=_batch_audit_response_payload(created),
             metadata=audit_metadata,
         )
         return created
@@ -75,15 +123,13 @@ async def create_batch(request: Request, payload: dict[str, Any]):
             organization_id=getattr(auth, "organization_id", None),
             api_key=auth.api_key,
             resource_type="batch",
-            request_payload={
-                "input_file_id": input_file_id,
-                "endpoint": endpoint,
-                "completion_window": completion_window,
-                "metadata": metadata,
-                "idempotency_key_present": bool(idempotency_key),
-            },
+            request_payload=audit_request_payload,
             error=exc,
-            metadata={"route": request.url.path, "idempotency_key_present": bool(idempotency_key)},
+            metadata={
+                "route": request.url.path,
+                "idempotency_key_present": bool(idempotency_key),
+                "webhook_configured": webhook_configured,
+            },
         )
         raise
 
@@ -107,7 +153,7 @@ async def get_batch(request: Request, batch_id: str):
             resource_type="batch",
             resource_id=batch_id,
             request_payload={"batch_id": batch_id},
-            response_payload=batch if isinstance(batch, dict) else None,
+            response_payload=_batch_audit_response_payload(batch),
             metadata={"route": request.url.path},
         )
         return batch
@@ -189,7 +235,7 @@ async def cancel_batch(request: Request, batch_id: str):
             resource_type="batch",
             resource_id=batch_id,
             request_payload={"batch_id": batch_id},
-            response_payload=result if isinstance(result, dict) else None,
+            response_payload=_batch_audit_response_payload(result),
             metadata={"route": request.url.path},
         )
         return result

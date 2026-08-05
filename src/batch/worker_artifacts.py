@@ -17,7 +17,11 @@ from src.metrics import (
     observe_batch_finalize_latency,
 )
 
-from src.batch.worker_types import BatchArtifactValidationError, BatchWorkerConfig
+from src.batch.worker_types import (
+    BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR,
+    BatchArtifactValidationError,
+    BatchWorkerConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,11 +101,12 @@ class BatchArtifactFinalizer:
             token_value = normalized_usage.get(token_field)
             if type(token_value) is not int:
                 raise BatchArtifactValidationError(
-                    f"completed batch item embedding response usage has invalid {token_field}={token_value!r}"
+                    "completed batch item embedding response usage has invalid "
+                    f"{token_field} type={type(token_value).__name__}"
                 )
             if token_value < 0:
                 raise BatchArtifactValidationError(
-                    f"completed batch item embedding response usage has negative {token_field}={token_value!r}"
+                    f"completed batch item embedding response usage has negative {token_field}"
                 )
 
         return normalized_usage
@@ -128,9 +133,7 @@ class BatchArtifactFinalizer:
         if object_type is None:
             sanitized["object"] = "list"
         elif object_type != "list":
-            raise BatchArtifactValidationError(
-                f"completed batch item has invalid embedding response object={object_type!r}"
-            )
+            raise BatchArtifactValidationError("completed batch item has invalid embedding response object")
 
         data_rows = sanitized.get("data")
         if not isinstance(data_rows, list):
@@ -155,7 +158,7 @@ class BatchArtifactFinalizer:
                 normalized_row["object"] = "embedding"
             elif row_object != "embedding":
                 raise BatchArtifactValidationError(
-                    f"completed batch item embedding response row {row_number} has invalid object={row_object!r}"
+                    f"completed batch item embedding response row {row_number} has invalid object"
                 )
 
             response_index = normalized_row.get("index")
@@ -163,7 +166,8 @@ class BatchArtifactFinalizer:
                 normalized_row["index"] = row_number
             elif type(response_index) is not int:
                 raise BatchArtifactValidationError(
-                    f"completed batch item embedding response row {row_number} has invalid index={response_index!r}"
+                    "completed batch item embedding response row "
+                    f"{row_number} has invalid index type={type(response_index).__name__}"
                 )
             normalized_rows.append(normalized_row)
 
@@ -211,11 +215,12 @@ class BatchArtifactFinalizer:
                 continue
             if type(token_value) is not int:
                 raise BatchArtifactValidationError(
-                    f"completed batch item chat response usage has invalid {token_field}={token_value!r}"
+                    "completed batch item chat response usage has invalid "
+                    f"{token_field} type={type(token_value).__name__}"
                 )
             if token_value < 0:
                 raise BatchArtifactValidationError(
-                    f"completed batch item chat response usage has negative {token_field}={token_value!r}"
+                    f"completed batch item chat response usage has negative {token_field}"
                 )
         return normalized_usage
 
@@ -229,9 +234,7 @@ class BatchArtifactFinalizer:
         if object_type is None:
             sanitized["object"] = "chat.completion"
         elif object_type != "chat.completion":
-            raise BatchArtifactValidationError(
-                f"completed batch item has invalid chat response object={object_type!r}"
-            )
+            raise BatchArtifactValidationError("completed batch item has invalid chat response object")
 
         choices = sanitized.get("choices")
         if not isinstance(choices, list):
@@ -309,28 +312,16 @@ class BatchArtifactFinalizer:
             return BatchJobStatus.FAILED
         return BatchJobStatus.COMPLETED
 
-    async def _persist_permanent_finalization_failure(self, job, *, reason: str) -> bool:
+    async def _persist_permanent_finalization_failure(self, job) -> bool:  # noqa: ANN001
         finalized = await self.repository.attach_artifacts_and_finalize(
             batch_id=job.batch_id,
             output_file_id=None,
             error_file_id=None,
             final_status=BatchJobStatus.FAILED,
             worker_id=self.config.worker_id,
+            terminal_provider_error=BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR,
         )
-        if finalized is None:
-            return False
-        try:
-            await self.repository.set_provider_error(
-                batch_id=job.batch_id,
-                provider_error=f"artifact_validation_failed: {reason}",
-            )
-        except Exception:
-            logger.warning(
-                "batch finalization failed to persist permanent failure reason batch_id=%s",
-                job.batch_id,
-                exc_info=True,
-            )
-        return True
+        return finalized is not None
 
     async def _schedule_finalization_retry(self, job) -> None:
         rescheduled = await self.repository.reschedule_finalization(
@@ -364,13 +355,13 @@ class BatchArtifactFinalizer:
             return
         except BatchArtifactValidationError as exc:
             logger.warning(
-                "batch finalization permanently failed batch_id=%s error=%s",
+                "batch finalization permanently failed batch_id=%s error_code=%s reason=%s",
                 job.batch_id,
+                BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR,
                 exc,
-                exc_info=True,
             )
             try:
-                persisted = await self._persist_permanent_finalization_failure(job, reason=str(exc))
+                persisted = await self._persist_permanent_finalization_failure(job)
             except Exception:
                 logger.warning(
                     "batch finalization permanent-failure persistence failed batch_id=%s",
@@ -533,7 +524,7 @@ class BatchArtifactFinalizer:
         logger.info(
             "batch finalized id=%s status=%s completed=%s failed=%s",
             job.batch_id,
-            final_status,
+            finalized.status,
             job.completed_items,
             job.failed_items,
         )

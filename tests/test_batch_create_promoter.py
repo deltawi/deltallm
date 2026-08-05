@@ -5,10 +5,20 @@ import pytest
 
 from src.batch.create.models import BatchCreateSessionRecord, BatchCreateSessionStatus, BatchCreateStagedRequest
 from src.batch.create.promoter import BatchCreatePromotionError, BatchCreateSessionPromoter
-from src.batch.models import BatchJobRecord
+from src.batch.models import (
+    BatchJobRecord,
+    BatchJobStatus,
+    BatchWebhookConfigurationConflictError,
+)
 
 
-def _session(*, status: str, expected_item_count: int = 1) -> BatchCreateSessionRecord:
+def _session(
+    *,
+    status: str,
+    expected_item_count: int = 1,
+    webhook_config_ciphertext: str | None = None,
+    webhook_config_fingerprint: str | None = None,
+) -> BatchCreateSessionRecord:
     now = datetime.now(tz=UTC)
     return BatchCreateSessionRecord(
         session_id="session-1",
@@ -41,6 +51,8 @@ def _session(*, status: str, expected_item_count: int = 1) -> BatchCreateSession
         completed_at=now if status == BatchCreateSessionStatus.COMPLETED else None,
         last_attempt_at=None,
         expires_at=None,
+        webhook_config_ciphertext=webhook_config_ciphertext,
+        webhook_config_fingerprint=webhook_config_fingerprint,
     )
 
 
@@ -144,6 +156,9 @@ class _FakeRepository:
         self._active_jobs = active_jobs
         self._tenant_queued_work_units = tenant_queued_work_units
         self.lock_calls: list[tuple[str, str]] = []
+        self.webhook_repair_calls: list[dict[str, str]] = []
+        self.webhook_reconcile_calls: list[dict[str, str | None]] = []
+        self.terminal_webhook_event_jobs: list[str] = []
         self.prisma = _FakePrisma(object()) if tx_repository is None else None
         if tx_repository is not None:
             self.prisma = _FakePrisma(tx_repository)
@@ -158,6 +173,66 @@ class _FakeRepository:
 
     async def acquire_scope_advisory_lock(self, *, scope_type: str, scope_id: str) -> None:
         self.lock_calls.append((scope_type, scope_id))
+
+    async def set_job_webhook_config_if_unset(
+        self,
+        *,
+        batch_id: str,
+        webhook_config_ciphertext: str,
+        webhook_config_fingerprint: str,
+    ) -> BatchJobRecord | None:
+        self.webhook_repair_calls.append(
+            {
+                "batch_id": batch_id,
+                "webhook_config_ciphertext": webhook_config_ciphertext,
+                "webhook_config_fingerprint": webhook_config_fingerprint,
+            }
+        )
+        if self._job is None:
+            return None
+        self._job.webhook_config_ciphertext = webhook_config_ciphertext
+        self._job.webhook_config_fingerprint = webhook_config_fingerprint
+        return self._job
+
+    async def reconcile_job_webhook_config(
+        self,
+        *,
+        batch_id: str,
+        webhook_config_ciphertext: str | None,
+        webhook_config_fingerprint: str | None,
+    ) -> BatchJobRecord | None:
+        self.webhook_reconcile_calls.append(
+            {
+                "batch_id": batch_id,
+                "webhook_config_ciphertext": webhook_config_ciphertext,
+                "webhook_config_fingerprint": webhook_config_fingerprint,
+            }
+        )
+        if self._job is None or self._job.batch_id != batch_id:
+            return None
+        expected = (webhook_config_ciphertext, webhook_config_fingerprint)
+        current = (
+            self._job.webhook_config_ciphertext,
+            self._job.webhook_config_fingerprint,
+        )
+        if current != expected:
+            if current != (None, None) or expected == (None, None):
+                raise BatchWebhookConfigurationConflictError(
+                    "webhook configuration conflict"
+                )
+            await self.set_job_webhook_config_if_unset(
+                batch_id=batch_id,
+                webhook_config_ciphertext=str(webhook_config_ciphertext),
+                webhook_config_fingerprint=str(webhook_config_fingerprint),
+            )
+        if self._job.status in {
+            BatchJobStatus.COMPLETED,
+            BatchJobStatus.FAILED,
+            BatchJobStatus.CANCELLED,
+            BatchJobStatus.EXPIRED,
+        } and self._job.webhook_config_ciphertext is not None:
+            self.terminal_webhook_event_jobs.append(batch_id)
+        return self._job
 
     async def count_active_jobs_for_scope(self, *, created_by_api_key=None, created_by_team_id=None) -> int:  # noqa: ANN001
         del created_by_api_key, created_by_team_id
@@ -325,7 +400,11 @@ async def test_promote_session_short_circuits_before_staging_when_soft_precheck_
 
 @pytest.mark.asyncio
 async def test_promote_session_uses_configured_tx_timings_and_locked_recheck() -> None:
-    session = _session(status=BatchCreateSessionStatus.STAGED)
+    session = _session(
+        status=BatchCreateSessionStatus.STAGED,
+        webhook_config_ciphertext="v1.key.ciphertext",
+        webhook_config_fingerprint="a" * 64,
+    )
     tx_repository = _SuccessfulTxRepository(session_repo=_TxSessionRepo(session), active_jobs=0)
     repository = _FakeRepository(
         session_repo=_SessionRepo(session),
@@ -368,6 +447,8 @@ async def test_promote_session_uses_configured_tx_timings_and_locked_recheck() -
     assert tx_repository.created_jobs[0]["estimated_work_units"] == 1
     assert tx_repository.created_jobs[0]["remaining_work_units"] == 1
     assert tx_repository.created_jobs[0]["size_class"] == "xs"
+    assert tx_repository.created_jobs[0]["webhook_config_ciphertext"] == "v1.key.ciphertext"
+    assert tx_repository.created_jobs[0]["webhook_config_fingerprint"] == "a" * 64
 
 
 @pytest.mark.asyncio
@@ -408,6 +489,130 @@ async def test_promote_session_locks_configured_tenant_scope_before_queued_work_
         "api_key",
         "user",
     )
+
+
+@pytest.mark.asyncio
+async def test_promote_session_repairs_missing_job_webhook_config_during_recovery() -> None:
+    session = _session(
+        status=BatchCreateSessionStatus.STAGED,
+        webhook_config_ciphertext="v1.key.ciphertext",
+        webhook_config_fingerprint="a" * 64,
+    )
+    existing_job = _job()
+    tx_repository = _FakeRepository(
+        session_repo=_TxSessionRepo(session),
+        job=existing_job,
+    )
+    repository = _FakeRepository(
+        session_repo=_SessionRepo(session),
+        tx_repository=tx_repository,
+    )
+    staging = _FakeStaging(
+        records=[
+            BatchCreateStagedRequest(
+                line_number=1,
+                custom_id="req-1",
+                request_body={"model": "m1", "input": "hello"},
+            )
+        ]
+    )
+
+    result = await BatchCreateSessionPromoter(
+        repository=repository,
+        staging=staging,
+    ).promote_session(session.session_id)
+
+    assert result.promoted is False
+    assert result.job is existing_job
+    assert tx_repository.webhook_repair_calls == [
+        {
+            "batch_id": "batch-1",
+            "webhook_config_ciphertext": "v1.key.ciphertext",
+            "webhook_config_fingerprint": "a" * 64,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_promote_completed_session_repairs_webhook_and_heals_terminal_event() -> None:
+    session = _session(
+        status=BatchCreateSessionStatus.COMPLETED,
+        webhook_config_ciphertext="v1.key.ciphertext",
+        webhook_config_fingerprint="a" * 64,
+    )
+    existing_job = _job()
+    existing_job.status = BatchJobStatus.COMPLETED
+    repository = _FakeRepository(
+        session_repo=_SessionRepo(session),
+        job=existing_job,
+    )
+    staging = _FakeStaging()
+
+    result = await BatchCreateSessionPromoter(
+        repository=repository,
+        staging=staging,
+    ).promote_session(session.session_id)
+
+    assert result.promoted is False
+    assert result.job is existing_job
+    assert existing_job.webhook_config_ciphertext == "v1.key.ciphertext"
+    assert existing_job.webhook_config_fingerprint == "a" * 64
+    assert repository.terminal_webhook_event_jobs == [existing_job.batch_id]
+    assert staging.read_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_promote_completed_session_rejects_webhook_configuration_conflict() -> None:
+    session = _session(
+        status=BatchCreateSessionStatus.COMPLETED,
+        webhook_config_ciphertext="v1.key.expected",
+        webhook_config_fingerprint="a" * 64,
+    )
+    existing_job = _job()
+    existing_job.webhook_config_ciphertext = "v1.key.different"
+    existing_job.webhook_config_fingerprint = "b" * 64
+    repository = _FakeRepository(
+        session_repo=_SessionRepo(session),
+        job=existing_job,
+    )
+
+    with pytest.raises(BatchCreatePromotionError) as exc:
+        await BatchCreateSessionPromoter(
+            repository=repository,
+            staging=_FakeStaging(),
+        ).promote_session(session.session_id)
+
+    assert exc.value.code == "webhook_config_mismatch"
+    assert exc.value.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_promote_completed_session_treats_reconciliation_failure_as_retryable() -> None:
+    session = _session(
+        status=BatchCreateSessionStatus.COMPLETED,
+        webhook_config_ciphertext="v1.key.expected",
+        webhook_config_fingerprint="a" * 64,
+    )
+    existing_job = _job()
+
+    class _UnavailableRepository(_FakeRepository):
+        async def reconcile_job_webhook_config(self, **kwargs):  # noqa: ANN003, ANN201
+            del kwargs
+            raise RuntimeError("database unavailable")
+
+    repository = _UnavailableRepository(
+        session_repo=_SessionRepo(session),
+        job=existing_job,
+    )
+
+    with pytest.raises(BatchCreatePromotionError) as exc:
+        await BatchCreateSessionPromoter(
+            repository=repository,
+            staging=_FakeStaging(),
+        ).promote_session(session.session_id)
+
+    assert exc.value.code == "webhook_reconciliation_failed"
+    assert exc.value.retryable is True
 
 
 @pytest.mark.asyncio

@@ -80,6 +80,27 @@ def test_webhook_request_rejects_invalid_urls(url: str, error: str) -> None:
         BatchWebhookRequest.model_validate({"url": url, "signing_secret": SIGNING_SECRET})
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.com/\ud800",
+        "https://example.com/hook?value=\udfff",
+    ],
+)
+def test_webhook_request_rejects_non_utf8_url_without_exposing_it(url: str) -> None:
+    with pytest.raises(BatchWebhookValidationError) as exc_info:
+        parse_batch_webhook_request({"url": url, "signing_secret": SIGNING_SECRET})
+
+    assert exc_info.value.as_detail() == {
+        "code": "invalid_url",
+        "message": "webhook url is invalid",
+        "field": "url",
+    }
+    rendered = f"{exc_info.value!s} {exc_info.value!r} {exc_info.value.as_detail()}"
+    assert repr(url) not in rendered
+    assert SIGNING_SECRET not in rendered
+
+
 def test_webhook_request_enforces_dns_hostname_total_length() -> None:
     maximum_hostname = ".".join(["a" * 63] * 3 + ["a" * 61])
     config = BatchWebhookRequest.model_validate(
@@ -203,6 +224,7 @@ def test_webhook_last_error_is_normalized_and_bounded() -> None:
 def test_webhook_outbox_models_and_mapper_normalize_contract_values() -> None:
     now = datetime.now(tz=UTC)
     create = BatchWebhookOutboxCreate(
+        event_id="evt-1",
         batch_id="batch-1",
         event_type="batch.completed",  # type: ignore[arg-type]
         target_config_ciphertext="v1.key.ciphertext",
@@ -211,6 +233,7 @@ def test_webhook_outbox_models_and_mapper_normalize_contract_values() -> None:
     )
     assert create.event_type is BatchWebhookEventType.COMPLETED
     assert create.status is BatchWebhookDeliveryStatus.QUEUED
+    assert create.event_id == "evt-1"
 
     record = webhook_outbox_from_row(
         {
@@ -241,6 +264,7 @@ def test_webhook_outbox_models_and_mapper_normalize_contract_values() -> None:
 
     with pytest.raises(ValueError, match="event type"):
         BatchWebhookOutboxCreate(
+            event_id="evt-invalid",
             batch_id="batch-1",
             event_type="batch.unknown",  # type: ignore[arg-type]
             target_config_ciphertext="ciphertext",
