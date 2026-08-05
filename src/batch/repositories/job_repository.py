@@ -19,6 +19,7 @@ from src.batch.models import (
     BatchSchedulerFlowRecord,
     BatchWorkClaim,
     BatchWorkRecommendation,
+    OPERATOR_FAILED_PREFIX,
     normalize_batch_job_status,
 )
 from src.batch.repositories.mappers import job_from_row, parse_datetime
@@ -555,6 +556,22 @@ class BatchJobRepository:
             FROM deltallm_batch_job
             WHERE batch_id = $1
             LIMIT 1
+            """,
+            batch_id,
+        )
+        if not rows:
+            return None
+        return job_from_row(rows[0])
+
+    async def get_job_for_update(self, batch_id: str) -> BatchJobRecord | None:
+        if self.prisma is None:
+            return None
+        rows = await self.prisma.query_raw(
+            """
+            SELECT *
+            FROM deltallm_batch_job
+            WHERE batch_id = $1
+            FOR UPDATE
             """,
             batch_id,
         )
@@ -4594,7 +4611,20 @@ class BatchJobRepository:
                 UPDATE deltallm_batch_job j
                 SET output_file_id = $2,
                     error_file_id = $3,
-                    status = $4::"DeltaLLM_BatchJobStatus",
+                    status = (
+                        CASE
+                        WHEN j.cancel_requested_at IS NOT NULL OR $4 = 'cancelled'
+                            THEN 'cancelled'
+                        WHEN $4 = 'expired'
+                            THEN 'expired'
+                        WHEN $4 = 'failed'
+                          OR $5 IS NOT NULL
+                          OR LEFT(COALESCE(j.provider_error, ''), LENGTH($6)) = $6
+                          OR (stats.completed_items = 0 AND stats.failed_items > 0)
+                            THEN 'failed'
+                        ELSE 'completed'
+                        END
+                    )::"DeltaLLM_BatchJobStatus",
                     provider_error = COALESCE($5, j.provider_error),
                     total_items = stats.total_items,
                     in_progress_items = stats.in_progress_items,
@@ -4618,6 +4648,7 @@ class BatchJobRepository:
                 error_file_id,
                 normalized_final_status.value,
                 terminal_provider_error,
+                OPERATOR_FAILED_PREFIX,
             )
         else:
             rows = await self.prisma.query_raw(
@@ -4636,7 +4667,20 @@ class BatchJobRepository:
                 UPDATE deltallm_batch_job j
                 SET output_file_id = $3,
                     error_file_id = $4,
-                    status = $5::"DeltaLLM_BatchJobStatus",
+                    status = (
+                        CASE
+                        WHEN j.cancel_requested_at IS NOT NULL OR $5 = 'cancelled'
+                            THEN 'cancelled'
+                        WHEN $5 = 'expired'
+                            THEN 'expired'
+                        WHEN $5 = 'failed'
+                          OR $6 IS NOT NULL
+                          OR LEFT(COALESCE(j.provider_error, ''), LENGTH($7)) = $7
+                          OR (stats.completed_items = 0 AND stats.failed_items > 0)
+                            THEN 'failed'
+                        ELSE 'completed'
+                        END
+                    )::"DeltaLLM_BatchJobStatus",
                     provider_error = COALESCE($6, j.provider_error),
                     total_items = stats.total_items,
                     in_progress_items = stats.in_progress_items,
@@ -4662,6 +4706,7 @@ class BatchJobRepository:
                 error_file_id,
                 normalized_final_status.value,
                 terminal_provider_error,
+                OPERATOR_FAILED_PREFIX,
             )
         if not rows:
             return None

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 from src.services.prompt_registry import PromptProvenance, PromptRenderOutput
 
@@ -47,6 +48,9 @@ class _FakeBatchService:
         response: dict
         audit_metadata: dict
 
+    def __init__(self, *, default_metadata: dict | None = None) -> None:
+        self.default_metadata = default_metadata
+
     async def create_file(self, auth, upload, purpose):  # noqa: ANN001, ANN201
         del auth, upload, purpose
         return {"id": "file-1", "object": "file", "status": "processed"}
@@ -65,7 +69,11 @@ class _FakeBatchService:
     async def create_embeddings_batch_result(self, **kwargs):  # noqa: ANN003, ANN201
         idempotency_key = kwargs.get("idempotency_key")
         return self._CreateResult(
-            response=self._batch_response("validating"),
+            response=self._batch_response(
+                "validating",
+                metadata=kwargs.get("metadata"),
+                webhook_configured=kwargs.get("webhook") is not None,
+            ),
             audit_metadata={
                 "create_path": "create_session",
                 "idempotency_key_present": bool(idempotency_key),
@@ -75,18 +83,24 @@ class _FakeBatchService:
 
     async def get_batch(self, **kwargs):  # noqa: ANN003, ANN201
         del kwargs
-        return self._batch_response("in_progress")
+        return self._batch_response("in_progress", metadata=self.default_metadata)
 
     async def list_batches(self, **kwargs):  # noqa: ANN003, ANN201
         del kwargs
-        return [self._batch_response("in_progress")]
+        return [self._batch_response("in_progress", metadata=self.default_metadata)]
 
     async def cancel_batch(self, **kwargs):  # noqa: ANN003, ANN201
         del kwargs
-        return self._batch_response("cancelled")
+        return self._batch_response("cancelled", metadata=self.default_metadata)
 
-    def _batch_response(self, status: str) -> dict:
-        return {
+    def _batch_response(
+        self,
+        status: str,
+        *,
+        metadata: dict | None = None,
+        webhook_configured: bool = False,
+    ) -> dict:
+        response = {
             "id": "batch-1",
             "object": "batch",
             "endpoint": "/v1/embeddings",
@@ -103,8 +117,11 @@ class _FakeBatchService:
             "expired_at": None,
             "errors": None,
             "request_counts": {"total": 1, "completed": 0, "failed": 0, "cancelled": 0, "in_progress": 0},
-            "metadata": {},
+            "metadata": metadata or {},
         }
+        if webhook_configured:
+            response["webhook"] = {"configured": True}
+        return response
 
 
 class _SpendQueryDB:
@@ -331,6 +348,7 @@ async def test_batch_create_audit_redacts_webhook_configuration(client, test_app
     test_app.state.batch_repository = _FakeBatchRepository()
     secret = "customer-secret-that-must-not-appear"
     url = "https://customer.example/webhooks/deltallm"
+    metadata_marker = "customer-metadata-that-must-not-appear"
 
     response = await client.post(
         "/v1/batches",
@@ -339,11 +357,14 @@ async def test_batch_create_audit_redacts_webhook_configuration(client, test_app
             "input_file_id": "file-1",
             "endpoint": "/v1/embeddings",
             "completion_window": "24h",
+            "metadata": {"sensitive": metadata_marker},
             "webhook": {"url": url, "signing_secret": secret},
         },
     )
 
     assert response.status_code == 200
+    assert response.json()["metadata"] == {"sensitive": metadata_marker}
+    assert response.json()["webhook"] == {"configured": True}
     batch_create_records = [
         record for record in audit.records if record[0].action == "BATCH_CREATE_REQUEST"
     ]
@@ -353,8 +374,84 @@ async def test_batch_create_audit_redacts_webhook_configuration(client, test_app
     rendered = str((event, payloads))
     assert url not in rendered
     assert secret not in rendered
+    assert metadata_marker not in rendered
+    assert event.metadata["webhook_configured"] is True
     assert payloads[0].content_json["webhook_configured"] is True
+    assert payloads[0].content_json["metadata_present"] is True
+    assert payloads[1].content_json["webhook_configured"] is True
+    assert payloads[1].content_json["metadata_present"] is True
     assert "webhook" not in payloads[0].content_json
+    assert "metadata" not in payloads[0].content_json
+    assert "webhook" not in payloads[1].content_json
+    assert "metadata" not in payloads[1].content_json
+
+
+@pytest.mark.asyncio
+async def test_batch_create_error_audit_redacts_caller_metadata(client, test_app):
+    class _FailingBatchService(_FakeBatchService):
+        async def create_embeddings_batch_result(self, **kwargs):  # noqa: ANN003, ANN201
+            del kwargs
+            raise HTTPException(status_code=400, detail="simulated create failure")
+
+    audit = _RecordingAuditService()
+    test_app.state.audit_service = audit
+    test_app.state.batch_service = _FailingBatchService()
+    metadata_marker = "failed-request-metadata-that-must-not-appear"
+
+    response = await client.post(
+        "/v1/batches",
+        headers={"Authorization": f"Bearer {test_app.state._test_key}"},
+        json={
+            "input_file_id": "file-1",
+            "endpoint": "/v1/embeddings",
+            "completion_window": "24h",
+            "metadata": {"sensitive": metadata_marker},
+        },
+    )
+
+    assert response.status_code == 400
+    batch_create_records = [
+        record for record in audit.records if record[0].action == "BATCH_CREATE_REQUEST"
+    ]
+    assert len(batch_create_records) == 1
+    event, payloads, _critical = batch_create_records[0]
+    assert event.status == "error"
+    assert metadata_marker not in str((event, payloads))
+    assert payloads[0].content_json["metadata_present"] is True
+    assert "metadata" not in payloads[0].content_json
+
+
+@pytest.mark.asyncio
+async def test_batch_read_list_and_cancel_audits_redact_caller_metadata(client, test_app):
+    audit = _RecordingAuditService()
+    metadata_marker = "stored-batch-metadata-that-must-not-appear"
+    test_app.state.audit_service = audit
+    test_app.state.batch_service = _FakeBatchService(
+        default_metadata={"sensitive": metadata_marker}
+    )
+
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    read_response = await client.get("/v1/batches/batch-1", headers=headers)
+    list_response = await client.get("/v1/batches", headers=headers)
+    cancel_response = await client.post("/v1/batches/batch-1/cancel", headers=headers)
+
+    assert read_response.json()["metadata"] == {"sensitive": metadata_marker}
+    assert list_response.json()[0]["metadata"] == {"sensitive": metadata_marker}
+    assert cancel_response.json()["metadata"] == {"sensitive": metadata_marker}
+    batch_records = [
+        record
+        for record in audit.records
+        if record[0].action
+        in {"BATCH_READ_REQUEST", "BATCH_LIST_REQUEST", "BATCH_CANCEL_REQUEST"}
+    ]
+    assert len(batch_records) == 3
+    assert metadata_marker not in str(batch_records)
+    for event, payloads, _critical in batch_records:
+        if event.action == "BATCH_LIST_REQUEST":
+            assert payloads[1].content_json == {"count": 1}
+            continue
+        assert payloads[1].content_json["metadata_present"] is True
+        assert "metadata" not in payloads[1].content_json
 
 
 @pytest.mark.asyncio

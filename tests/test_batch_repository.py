@@ -15,6 +15,7 @@ from src.batch.models import (
     BatchJobStatus,
     BatchSchedulerFlowRecord,
     BatchWorkClaim,
+    OPERATOR_FAILED_PREFIX,
 )
 from src.batch.repository import BatchRepository
 from src.batch.repositories.item_repository import BatchItemRepository
@@ -22,6 +23,7 @@ from src.batch.repositories.job_repository import BatchJobRepository, flow_from_
 from src.batch.repositories.maintenance_repository import BatchMaintenanceRepository
 from src.batch.repositories.mappers import job_from_row
 from src.batch.repositories import job_repository as job_repository_module
+from src.batch.worker_types import BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR
 import src.batch.scheduling.advisory_locks as advisory_locks_module
 from src.batch.scheduling import (
     API_KEY_TENANT_SCOPE_PREFIX,
@@ -4521,14 +4523,17 @@ async def test_attach_artifacts_and_finalize_casts_status_parameter_to_enum() ->
         output_file_id="out-1",
         error_file_id="err-1",
         final_status="completed",
-        terminal_provider_error="artifact_validation_failed: invalid artifact",
+        terminal_provider_error=BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR,
     )
 
     assert finalized is None
-    assert 'status = $4::"DeltaLLM_BatchJobStatus"' in prisma.sql
+    assert 'status = (' in prisma.sql
+    assert "j.cancel_requested_at IS NOT NULL OR $4 = 'cancelled'" in prisma.sql
+    assert "LEFT(COALESCE(j.provider_error, ''), LENGTH($6)) = $6" in prisma.sql
     assert "provider_error = COALESCE($5, j.provider_error)" in prisma.sql
     assert prisma.params[3] == BatchJobStatus.COMPLETED.value
-    assert prisma.params[4] == "artifact_validation_failed: invalid artifact"
+    assert prisma.params[4] == BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR
+    assert prisma.params[5] == OPERATOR_FAILED_PREFIX
 
 
 @pytest.mark.asyncio

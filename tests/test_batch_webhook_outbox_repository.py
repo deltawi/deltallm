@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -15,7 +15,11 @@ from src.batch.models import (
 )
 from src.batch.repositories.webhook_outbox_repository import BatchWebhookOutboxRepository
 from src.batch.repository import BatchRepository
-from src.batch.webhooks.events import build_batch_webhook_event
+from src.batch.webhooks.events import (
+    batch_webhook_event_payload_sha256,
+    build_batch_webhook_event,
+)
+from src.batch.worker_types import BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR
 
 
 def _job(*, configured: bool = True) -> BatchJobRecord:
@@ -144,6 +148,18 @@ class _TransactionManager:
             self.committed = True
 
 
+class _CurrentTransactionClient:
+    def __init__(self) -> None:
+        self.tx_called = False
+
+    def is_transaction(self) -> bool:
+        return True
+
+    def tx(self):  # noqa: ANN201
+        self.tx_called = True
+        raise AssertionError("an existing transaction must not open a nested transaction")
+
+
 class _JobRepository:
     def __init__(
         self,
@@ -155,9 +171,32 @@ class _JobRepository:
         self.observe_error = observe_error
         self.calls: list[dict[str, object]] = []
         self.observed: list[str] = []
+        self.locked: list[str] = []
 
     async def attach_artifacts_and_finalize(self, **kwargs):  # noqa: ANN003, ANN201
         self.calls.append(kwargs)
+        return self.job
+
+    async def get_job_for_update(self, batch_id: str) -> BatchJobRecord | None:
+        self.locked.append(batch_id)
+        return self.job if self.job is not None and self.job.batch_id == batch_id else None
+
+    async def set_webhook_config_if_unset(
+        self,
+        *,
+        batch_id: str,
+        webhook_config_ciphertext: str,
+        webhook_config_fingerprint: str,
+    ) -> BatchJobRecord | None:
+        if self.job is None or self.job.batch_id != batch_id:
+            return None
+        if (
+            self.job.webhook_config_ciphertext is not None
+            or self.job.webhook_config_fingerprint is not None
+        ):
+            return None
+        self.job.webhook_config_ciphertext = webhook_config_ciphertext
+        self.job.webhook_config_fingerprint = webhook_config_fingerprint
         return self.job
 
     def observe_finalization(self, job: BatchJobRecord) -> None:
@@ -198,11 +237,10 @@ def _aggregate_repository(
 ) -> tuple[BatchRepository, _TransactionManager, _JobRepository, _JobRepository]:
     transaction_manager = _TransactionManager()
     transactional_jobs = _JobRepository(job)
-    transactional_repository = SimpleNamespace(
-        jobs=transactional_jobs,
-        webhook_outbox=outbox,
-        webhook_max_attempts=8,
-    )
+    transactional_repository = BatchRepository()
+    transactional_repository.jobs = transactional_jobs  # type: ignore[assignment]
+    transactional_repository.webhook_outbox = outbox  # type: ignore[assignment]
+    transactional_repository.webhook_max_attempts = 8
     repository = BatchRepository()
     repository.prisma = transaction_manager
     observed_jobs = _JobRepository(None, observe_error=observe_error)
@@ -225,7 +263,7 @@ async def test_atomic_finalization_enqueues_configured_event_then_publishes_metr
         error_file_id=None,
         final_status=BatchJobStatus.COMPLETED,
         worker_id="worker-1",
-        terminal_provider_error="artifact_validation_failed: invalid artifact",
+        terminal_provider_error=BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR,
     )
 
     assert finalized is not None
@@ -243,9 +281,35 @@ async def test_atomic_finalization_enqueues_configured_event_then_publishes_metr
             "error_file_id": None,
             "final_status": BatchJobStatus.COMPLETED,
             "worker_id": "worker-1",
-            "terminal_provider_error": "artifact_validation_failed: invalid artifact",
+            "terminal_provider_error": BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_atomic_finalization_uses_authoritative_returned_status_for_event() -> None:
+    job = _job()
+    job.status = BatchJobStatus.CANCELLED
+    outbox = _OutboxRepository()
+    repository, transaction, observed_jobs, _ = _aggregate_repository(
+        job=job,
+        outbox=outbox,
+    )
+
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id=job.batch_id,
+        output_file_id=job.output_file_id,
+        error_file_id=job.error_file_id,
+        final_status=BatchJobStatus.COMPLETED,
+        worker_id="worker-1",
+    )
+
+    assert finalized is job
+    assert transaction.committed is True
+    assert observed_jobs.observed == [job.batch_id]
+    assert len(outbox.events) == 1
+    assert outbox.events[0].event_type.value == "batch.cancelled"
+    assert outbox.events[0].payload_json["data"]["batch"]["status"] == "cancelled"
 
 
 @pytest.mark.asyncio
@@ -273,6 +337,80 @@ async def test_atomic_finalization_ignores_metric_failure_after_commit(
     assert len(outbox.events) == 1
     assert observed_jobs.observed == ["batch-1"]
     assert "batch finalization metric publish failed batch_id=batch-1" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_atomic_finalization_reuses_current_transaction_and_defers_metric() -> None:
+    job = _job()
+    outbox = _OutboxRepository()
+    jobs = _JobRepository(job)
+    transaction_client = _CurrentTransactionClient()
+    repository = BatchRepository()
+    repository.prisma = transaction_client
+    repository.jobs = jobs  # type: ignore[assignment]
+    repository.webhook_outbox = outbox  # type: ignore[assignment]
+
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id=job.batch_id,
+        output_file_id=job.output_file_id,
+        error_file_id=job.error_file_id,
+        final_status=job.status,
+        worker_id="worker-1",
+    )
+
+    assert finalized is job
+    assert transaction_client.tx_called is False
+    assert len(outbox.events) == 1
+    assert jobs.observed == []
+
+    repository.publish_finalization_metric_after_commit(finalized)
+
+    assert jobs.observed == [job.batch_id]
+
+
+@pytest.mark.asyncio
+async def test_webhook_reconciliation_repairs_terminal_job_and_enqueues_in_current_transaction() -> None:
+    job = _job(configured=False)
+    jobs = _JobRepository(job)
+    outbox = _OutboxRepository()
+    transaction_client = _CurrentTransactionClient()
+    repository = BatchRepository(transaction_client)
+    repository.jobs = jobs  # type: ignore[assignment]
+    repository.webhook_outbox = outbox  # type: ignore[assignment]
+
+    reconciled = await repository.reconcile_job_webhook_config(
+        batch_id=job.batch_id,
+        webhook_config_ciphertext="v1.key.recovered",
+        webhook_config_fingerprint="b" * 64,
+    )
+
+    assert reconciled is job
+    assert transaction_client.tx_called is False
+    assert jobs.locked == [job.batch_id]
+    assert job.webhook_config_ciphertext == "v1.key.recovered"
+    assert job.webhook_config_fingerprint == "b" * 64
+    assert len(outbox.events) == 1
+    assert outbox.events[0].event_type.value == "batch.completed"
+    assert outbox.events[0].target_config_ciphertext == "v1.key.recovered"
+
+
+@pytest.mark.asyncio
+async def test_webhook_reconciliation_rejects_conflicting_job_configuration() -> None:
+    job = _job()
+    jobs = _JobRepository(job)
+    outbox = _OutboxRepository(error=AssertionError("outbox must not be called"))
+    repository = BatchRepository(_CurrentTransactionClient())
+    repository.jobs = jobs  # type: ignore[assignment]
+    repository.webhook_outbox = outbox  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeError, match="conflicts with existing job"):
+        await repository.reconcile_job_webhook_config(
+            batch_id=job.batch_id,
+            webhook_config_ciphertext="v1.other.ciphertext",
+            webhook_config_fingerprint="c" * 64,
+        )
+
+    assert outbox.events == []
 
 
 @pytest.mark.asyncio
@@ -355,11 +493,46 @@ async def test_atomic_finalization_accepts_verified_existing_logical_event() -> 
     assert observed_jobs.observed == ["batch-1"]
 
 
+@pytest.mark.parametrize(
+    "terminal_status",
+    [BatchJobStatus.FAILED, BatchJobStatus.EXPIRED],
+)
+@pytest.mark.asyncio
+async def test_webhook_reconciliation_accepts_immutable_terminal_snapshot_after_timestamp_drift(
+    terminal_status: BatchJobStatus,
+) -> None:
+    job = _job()
+    job.status = terminal_status
+    job.completed_items = 0
+    job.failed_items = 1 if terminal_status is BatchJobStatus.FAILED else 0
+    existing = _outbox_record(job)
+    snapshot_timestamp = existing.payload_json["data"]["batch"][f"{terminal_status.value}_at"]
+    job.status_last_updated_at += timedelta(hours=1)
+    outbox = _OutboxRepository(inserted=None, existing=existing)
+    jobs = _JobRepository(job)
+    repository = BatchRepository(_CurrentTransactionClient())
+    repository.jobs = jobs  # type: ignore[assignment]
+    repository.webhook_outbox = outbox  # type: ignore[assignment]
+
+    reconciled = await repository.reconcile_job_webhook_config(
+        batch_id=job.batch_id,
+        webhook_config_ciphertext=str(job.webhook_config_ciphertext),
+        webhook_config_fingerprint=str(job.webhook_config_fingerprint),
+    )
+
+    assert reconciled is job
+    assert jobs.locked == [job.batch_id]
+    assert len(outbox.events) == 1
+    assert existing.payload_json["data"]["batch"][f"{terminal_status.value}_at"] == snapshot_timestamp
+    assert snapshot_timestamp != int(job.status_last_updated_at.timestamp())
+
+
 @pytest.mark.asyncio
 async def test_atomic_finalization_rejects_conflicting_existing_event() -> None:
     job = _job()
     existing = _outbox_record(job)
     existing.payload_json["data"]["batch"]["status"] = "failed"
+    existing.payload_sha256 = batch_webhook_event_payload_sha256(existing.payload_json)
     outbox = _OutboxRepository(inserted=None, existing=existing)
     repository, transaction, observed_jobs, _ = _aggregate_repository(job=job, outbox=outbox)
 
@@ -369,6 +542,39 @@ async def test_atomic_finalization_rejects_conflicting_existing_event() -> None:
             output_file_id="file-output",
             error_file_id=None,
             final_status=BatchJobStatus.COMPLETED,
+            worker_id="worker-1",
+        )
+
+    assert transaction.rolled_back is True
+    assert observed_jobs.observed == []
+
+
+@pytest.mark.parametrize(
+    "conflict",
+    ["target", "batch_identity", "payload_hash"],
+)
+@pytest.mark.asyncio
+async def test_atomic_finalization_rejects_invalid_existing_event_identity_or_integrity(
+    conflict: str,
+) -> None:
+    job = _job()
+    existing = _outbox_record(job)
+    if conflict == "target":
+        existing.target_config_ciphertext = "v1.other.ciphertext"
+    elif conflict == "batch_identity":
+        existing.payload_json["data"]["batch"]["id"] = "batch-other"
+        existing.payload_sha256 = batch_webhook_event_payload_sha256(existing.payload_json)
+    else:
+        existing.payload_json["data"]["batch"]["metadata"] = {"tampered": True}
+    outbox = _OutboxRepository(inserted=None, existing=existing)
+    repository, transaction, observed_jobs, _ = _aggregate_repository(job=job, outbox=outbox)
+
+    with pytest.raises(RuntimeError, match="conflicts with terminal outcome"):
+        await repository.attach_artifacts_and_finalize(
+            batch_id=job.batch_id,
+            output_file_id=job.output_file_id,
+            error_file_id=job.error_file_id,
+            final_status=job.status,
             worker_id="worker-1",
         )
 

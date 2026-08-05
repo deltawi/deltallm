@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 import json
+import logging
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -44,6 +45,8 @@ from src.batch.service import BatchService
 from src.batch.serialization import serialize_public_batch
 from src.batch.storage import LocalBatchArtifactStorage, S3BatchArtifactStorage
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
+from src.batch.worker_artifacts import BatchArtifactFinalizer
+from src.batch.worker_types import BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR
 from src.batch.webhooks import BatchWebhookCipher
 from src.batch.webhooks.events import batch_webhook_event_payload_sha256
 from src.auth.roles import Permission
@@ -1449,6 +1452,58 @@ async def _seed_finalizing_webhook_job(
     return repository, job.batch_id, "worker-1"
 
 
+async def _reset_finalizing_webhook_job_item_to_pending(batch_db, *, batch_id: str) -> None:
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_item
+        SET status = 'pending',
+            completed_at = NULL
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_job
+        SET total_items = 1,
+            completed_items = 0,
+            failed_items = 0,
+            in_progress_items = 0,
+            cancelled_items = 0
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+
+
+async def _seed_terminal_job_without_webhook(
+    batch_db,
+) -> tuple[BatchRepository, str]:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.COMPLETED,
+    )
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_job
+        SET webhook_config_ciphertext = NULL,
+            webhook_config_fingerprint = NULL
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id=batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.COMPLETED,
+        worker_id=worker_id,
+    )
+    assert finalized is not None
+    assert finalized.status is BatchJobStatus.COMPLETED
+    return repository, batch_id
+
+
 @pytest.mark.parametrize(
     ("final_status", "event_type"),
     [
@@ -1513,6 +1568,354 @@ async def test_db_backed_terminal_transition_atomically_enqueues_one_webhook_eve
 
 
 @pytest.mark.asyncio
+async def test_db_backed_terminal_webhook_reconciliation_preserves_snapshot_after_timestamp_drift(
+    batch_db,
+) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.FAILED,
+    )
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id=batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.FAILED,
+        worker_id=worker_id,
+    )
+    assert finalized is not None
+    before_rows = await batch_db.query_raw(
+        """
+        SELECT event_id, payload_json, payload_sha256
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert len(before_rows) == 1
+    before = dict(before_rows[0])
+
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_job
+        SET status_last_updated_at = status_last_updated_at + INTERVAL '1 hour'
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    drifted = await repository.get_job(batch_id)
+    assert drifted is not None
+    assert before["payload_json"]["data"]["batch"]["failed_at"] != serialize_public_batch(
+        drifted
+    )["failed_at"]
+
+    reconciled = await repository.reconcile_job_webhook_config(
+        batch_id=batch_id,
+        webhook_config_ciphertext="v1.key.ciphertext",
+        webhook_config_fingerprint="a" * 64,
+    )
+
+    assert reconciled is not None
+    assert reconciled.status is BatchJobStatus.FAILED
+    after_rows = await batch_db.query_raw(
+        """
+        SELECT event_id, payload_json, payload_sha256
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert [dict(row) for row in after_rows] == [before]
+    assert before["payload_sha256"] == batch_webhook_event_payload_sha256(
+        before["payload_json"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_db_backed_late_cancellation_controls_terminal_status_and_webhook_event(
+    batch_db,
+) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.COMPLETED,
+    )
+    cancellation = await repository.request_cancel(batch_id)
+    assert cancellation is not None
+    assert cancellation.status is BatchJobStatus.FINALIZING
+    assert cancellation.cancel_requested_at is not None
+
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id=batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.COMPLETED,
+        worker_id=worker_id,
+    )
+
+    assert finalized is not None
+    assert finalized.status is BatchJobStatus.CANCELLED
+    rows = await batch_db.query_raw(
+        """
+        SELECT event_type, payload_json
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert len(rows) == 1
+    event = dict(rows[0])
+    assert event["event_type"] == BatchWebhookEventType.CANCELLED.value
+    assert event["payload_json"]["data"]["batch"] == serialize_public_batch(finalized)
+
+
+@pytest.mark.asyncio
+async def test_db_backed_late_operator_failure_controls_terminal_status_and_webhook_event(
+    batch_db,
+) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.COMPLETED,
+    )
+    updated = await repository.set_provider_error(
+        batch_id=batch_id,
+        provider_error=encode_operator_failed_reason("manual stop"),
+    )
+    assert updated is not None
+
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id=batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.COMPLETED,
+        worker_id=worker_id,
+    )
+
+    assert finalized is not None
+    assert finalized.status is BatchJobStatus.FAILED
+    rows = await batch_db.query_raw(
+        """
+        SELECT event_type, payload_json
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert len(rows) == 1
+    event = dict(rows[0])
+    assert event["event_type"] == BatchWebhookEventType.FAILED.value
+    assert event["payload_json"]["data"]["batch"] == serialize_public_batch(finalized)
+
+
+@pytest.mark.asyncio
+async def test_db_backed_terminal_webhook_reconciliation_repairs_config_and_event_once(
+    batch_db,
+) -> None:
+    repository, batch_id = await _seed_terminal_job_without_webhook(batch_db)
+
+    first = await repository.reconcile_job_webhook_config(
+        batch_id=batch_id,
+        webhook_config_ciphertext="v1.key.recovered",
+        webhook_config_fingerprint="b" * 64,
+    )
+    second = await repository.reconcile_job_webhook_config(
+        batch_id=batch_id,
+        webhook_config_ciphertext="v1.key.recovered",
+        webhook_config_fingerprint="b" * 64,
+    )
+
+    assert first is not None
+    assert second is not None
+    assert first.webhook_config_ciphertext == "v1.key.recovered"
+    assert second.webhook_config_fingerprint == "b" * 64
+    rows = await batch_db.query_raw(
+        """
+        SELECT event_type, target_config_ciphertext, payload_json
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert len(rows) == 1
+    event = dict(rows[0])
+    assert event["event_type"] == BatchWebhookEventType.COMPLETED.value
+    assert event["target_config_ciphertext"] == "v1.key.recovered"
+    assert event["payload_json"]["data"]["batch"] == serialize_public_batch(second)
+
+
+@pytest.mark.asyncio
+async def test_db_backed_terminal_webhook_reconciliation_rolls_back_config_on_outbox_failure(
+    batch_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, batch_id = await _seed_terminal_job_without_webhook(batch_db)
+
+    async def _fail_insert(*args, **kwargs):  # noqa: ANN002, ANN003
+        del args, kwargs
+        raise RuntimeError("simulated recovery outbox failure")
+
+    monkeypatch.setattr(
+        "src.batch.repositories.webhook_outbox_repository.BatchWebhookOutboxRepository.insert_event",
+        _fail_insert,
+    )
+
+    with pytest.raises(RuntimeError, match="simulated recovery outbox failure"):
+        await repository.reconcile_job_webhook_config(
+            batch_id=batch_id,
+            webhook_config_ciphertext="v1.key.recovered",
+            webhook_config_fingerprint="b" * 64,
+        )
+
+    reloaded = await repository.get_job(batch_id)
+    assert reloaded is not None
+    assert reloaded.webhook_config_ciphertext is None
+    assert reloaded.webhook_config_fingerprint is None
+    rows = await batch_db.query_raw(
+        "SELECT event_id FROM deltallm_batch_webhook_outbox WHERE batch_id = $1",
+        batch_id,
+    )
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_db_backed_finalization_reuses_outer_transaction_and_observes_uncommitted_items(
+    batch_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.COMPLETED,
+    )
+    await _reset_finalizing_webhook_job_item_to_pending(batch_db, batch_id=batch_id)
+    observed: list[str] = []
+    monkeypatch.setattr(
+        repository.jobs,
+        "observe_finalization",
+        lambda job: observed.append(job.batch_id),
+    )
+
+    async with batch_db.tx() as tx:
+        await tx.execute_raw(
+            """
+            UPDATE deltallm_batch_item
+            SET status = 'completed',
+                completed_at = NOW()
+            WHERE batch_id = $1
+            """,
+            batch_id,
+        )
+        transactional_repository = repository.with_prisma(tx)
+        finalized = await transactional_repository.attach_artifacts_and_finalize(
+            batch_id=batch_id,
+            output_file_id=None,
+            error_file_id=None,
+            final_status=BatchJobStatus.COMPLETED,
+            worker_id=worker_id,
+        )
+
+        assert finalized is not None
+        assert finalized.status is BatchJobStatus.COMPLETED
+        assert finalized.completed_items == 1
+        assert observed == []
+
+    repository.publish_finalization_metric_after_commit(finalized)
+
+    assert observed == [batch_id]
+    reloaded = await repository.get_job(batch_id)
+    assert reloaded is not None
+    assert reloaded.status is BatchJobStatus.COMPLETED
+    assert reloaded.completed_items == 1
+    rows = await batch_db.query_raw(
+        """
+        SELECT event_type, payload_json
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert len(rows) == 1
+    row = dict(rows[0])
+    assert row["event_type"] == BatchWebhookEventType.COMPLETED.value
+    assert row["payload_json"]["data"]["batch"] == serialize_public_batch(reloaded)
+
+
+@pytest.mark.asyncio
+async def test_db_backed_outer_transaction_rollback_removes_terminal_transition_and_webhook(
+    batch_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.COMPLETED,
+    )
+    await _reset_finalizing_webhook_job_item_to_pending(batch_db, batch_id=batch_id)
+    observed: list[str] = []
+    monkeypatch.setattr(
+        repository.jobs,
+        "observe_finalization",
+        lambda job: observed.append(job.batch_id),
+    )
+
+    with pytest.raises(RuntimeError, match="force outer rollback"):
+        async with batch_db.tx() as tx:
+            await tx.execute_raw(
+                """
+                UPDATE deltallm_batch_item
+                SET status = 'completed',
+                    completed_at = NOW()
+                WHERE batch_id = $1
+                """,
+                batch_id,
+            )
+            transactional_repository = repository.with_prisma(tx)
+            finalized = await transactional_repository.attach_artifacts_and_finalize(
+                batch_id=batch_id,
+                output_file_id=None,
+                error_file_id=None,
+                final_status=BatchJobStatus.COMPLETED,
+                worker_id=worker_id,
+            )
+            assert finalized is not None
+            assert observed == []
+            raise RuntimeError("force outer rollback")
+
+    job_rows = await batch_db.query_raw(
+        """
+        SELECT status, output_file_id, locked_by, completed_items
+        FROM deltallm_batch_job
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert [dict(row) for row in job_rows] == [
+        {
+            "status": "finalizing",
+            "output_file_id": None,
+            "locked_by": worker_id,
+            "completed_items": 0,
+        }
+    ]
+    item_rows = await batch_db.query_raw(
+        """
+        SELECT status, completed_at
+        FROM deltallm_batch_item
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert [dict(row) for row in item_rows] == [
+        {
+            "status": "pending",
+            "completed_at": None,
+        }
+    ]
+    outbox_rows = await batch_db.query_raw(
+        "SELECT event_id FROM deltallm_batch_webhook_outbox WHERE batch_id = $1",
+        batch_id,
+    )
+    assert outbox_rows == []
+    assert observed == []
+
+
+@pytest.mark.asyncio
 async def test_db_backed_permanent_finalization_failure_snapshots_final_public_batch(
     batch_db,
 ) -> None:
@@ -1520,7 +1923,7 @@ async def test_db_backed_permanent_finalization_failure_snapshots_final_public_b
         batch_db,
         final_status=BatchJobStatus.FAILED,
     )
-    provider_error = "artifact_validation_failed: invalid output artifact"
+    provider_error = BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR
 
     finalized = await repository.attach_artifacts_and_finalize(
         batch_id=batch_id,
@@ -1551,6 +1954,97 @@ async def test_db_backed_permanent_finalization_failure_snapshots_final_public_b
 
 
 @pytest.mark.asyncio
+async def test_db_backed_oversized_artifact_validation_failure_still_enqueues_webhook(
+    batch_db,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.FAILED,
+    )
+    provider_marker = "provider-controlled-marker"
+    provider_value = provider_marker + ("x" * 65_536)
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_item
+        SET response_body = $2::jsonb
+        WHERE batch_id = $1
+        """,
+        batch_id,
+        json.dumps(
+            {
+                "object": provider_value,
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}],
+                "model": "m1",
+                "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
+            }
+        ),
+    )
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_job
+        SET total_items = 1,
+            completed_items = 1,
+            failed_items = 0,
+            in_progress_items = 0,
+            cancelled_items = 0
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    job = await repository.get_job(batch_id)
+    assert job is not None
+
+    finalizer = BatchArtifactFinalizer(
+        repository=repository,
+        storage=LocalBatchArtifactStorage(str(tmp_path)),
+        config=BatchWorkerConfig(worker_id=worker_id),
+    )
+    with caplog.at_level(logging.WARNING):
+        await finalizer.finalize_with_retry(job)
+
+    reloaded = await repository.get_job(batch_id)
+    assert reloaded is not None
+    assert reloaded.status is BatchJobStatus.FAILED
+    assert reloaded.provider_error == BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR
+    assert reloaded.completed_at is not None
+    assert reloaded.locked_by is None
+    assert reloaded.lease_expires_at is None
+    assert reloaded.total_items == 1
+    assert reloaded.completed_items == 1
+    assert reloaded.in_progress_items == 0
+    assert provider_marker not in caplog.text
+    assert list(tmp_path.rglob("*")) == []
+
+    duplicate = await repository.attach_artifacts_and_finalize(
+        batch_id=batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.FAILED,
+        worker_id=worker_id,
+        terminal_provider_error=BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR,
+    )
+    assert duplicate is None
+    rows = await batch_db.query_raw(
+        """
+        SELECT *
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert len(rows) == 1
+    row = dict(rows[0])
+    payload = row["payload_json"]
+    assert isinstance(payload, dict)
+    assert row["event_type"] == BatchWebhookEventType.FAILED.value
+    assert row["payload_sha256"] == batch_webhook_event_payload_sha256(payload)
+    assert payload["data"]["batch"] == serialize_public_batch(reloaded)
+    assert provider_marker not in json.dumps(payload)
+
+
+@pytest.mark.asyncio
 async def test_db_backed_webhook_outbox_failure_rolls_back_terminal_transition(
     batch_db,
     monkeypatch: pytest.MonkeyPatch,
@@ -1576,7 +2070,7 @@ async def test_db_backed_webhook_outbox_failure_rolls_back_terminal_transition(
             error_file_id=None,
             final_status=BatchJobStatus.COMPLETED,
             worker_id=worker_id,
-            terminal_provider_error="artifact_validation_failed: invalid output artifact",
+            terminal_provider_error=BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR,
         )
 
     job_rows = await batch_db.query_raw(

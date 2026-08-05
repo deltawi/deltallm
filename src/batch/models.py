@@ -77,6 +77,10 @@ class BatchWebhookDeliveryStatus(StrEnum):
     FAILED = "failed"
 
 
+class BatchWebhookConfigurationConflictError(RuntimeError):
+    """Stored webhook state does not match the staged creation contract."""
+
+
 BATCH_WEBHOOK_EVENT_TYPES = tuple(BatchWebhookEventType)
 BATCH_WEBHOOK_EVENT_TYPE_VALUES = tuple(event_type.value for event_type in BatchWebhookEventType)
 BATCH_WEBHOOK_DELIVERY_STATUSES = tuple(BatchWebhookDeliveryStatus)
