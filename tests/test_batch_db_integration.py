@@ -41,6 +41,7 @@ from src.batch.scheduling import (
     stable_tenant_scope_id,
 )
 from src.batch.service import BatchService
+from src.batch.serialization import serialize_public_batch
 from src.batch.storage import LocalBatchArtifactStorage, S3BatchArtifactStorage
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
 from src.batch.webhooks import BatchWebhookCipher
@@ -1512,6 +1513,44 @@ async def test_db_backed_terminal_transition_atomically_enqueues_one_webhook_eve
 
 
 @pytest.mark.asyncio
+async def test_db_backed_permanent_finalization_failure_snapshots_final_public_batch(
+    batch_db,
+) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.FAILED,
+    )
+    provider_error = "artifact_validation_failed: invalid output artifact"
+
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id=batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.FAILED,
+        worker_id=worker_id,
+        terminal_provider_error=provider_error,
+    )
+
+    assert finalized is not None
+    assert finalized.provider_error == provider_error
+    reloaded = await repository.get_job(batch_id)
+    assert reloaded is not None
+    assert reloaded.provider_error == provider_error
+    rows = await batch_db.query_raw(
+        """
+        SELECT payload_json
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert len(rows) == 1
+    payload = dict(rows[0])["payload_json"]
+    assert payload["type"] == BatchWebhookEventType.FAILED.value
+    assert payload["data"]["batch"] == serialize_public_batch(reloaded)
+
+
+@pytest.mark.asyncio
 async def test_db_backed_webhook_outbox_failure_rolls_back_terminal_transition(
     batch_db,
     monkeypatch: pytest.MonkeyPatch,
@@ -1537,11 +1576,12 @@ async def test_db_backed_webhook_outbox_failure_rolls_back_terminal_transition(
             error_file_id=None,
             final_status=BatchJobStatus.COMPLETED,
             worker_id=worker_id,
+            terminal_provider_error="artifact_validation_failed: invalid output artifact",
         )
 
     job_rows = await batch_db.query_raw(
         """
-        SELECT status, output_file_id, locked_by
+        SELECT status, output_file_id, locked_by, provider_error
         FROM deltallm_batch_job
         WHERE batch_id = $1
         """,
@@ -1552,6 +1592,7 @@ async def test_db_backed_webhook_outbox_failure_rolls_back_terminal_transition(
             "status": "finalizing",
             "output_file_id": None,
             "locked_by": worker_id,
+            "provider_error": None,
         }
     ]
     outbox_rows = await batch_db.query_raw(

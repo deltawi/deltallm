@@ -310,27 +310,16 @@ class BatchArtifactFinalizer:
         return BatchJobStatus.COMPLETED
 
     async def _persist_permanent_finalization_failure(self, job, *, reason: str) -> bool:
+        provider_error = f"artifact_validation_failed: {reason}"
         finalized = await self.repository.attach_artifacts_and_finalize(
             batch_id=job.batch_id,
             output_file_id=None,
             error_file_id=None,
             final_status=BatchJobStatus.FAILED,
             worker_id=self.config.worker_id,
+            terminal_provider_error=provider_error,
         )
-        if finalized is None:
-            return False
-        try:
-            await self.repository.set_provider_error(
-                batch_id=job.batch_id,
-                provider_error=f"artifact_validation_failed: {reason}",
-            )
-        except Exception:
-            logger.warning(
-                "batch finalization failed to persist permanent failure reason batch_id=%s",
-                job.batch_id,
-                exc_info=True,
-            )
-        return True
+        return finalized is not None
 
     async def _schedule_finalization_retry(self, job) -> None:
         rescheduled = await self.repository.reschedule_finalization(

@@ -4629,7 +4629,6 @@ async def test_batch_worker_marks_invalid_completed_artifacts_failed_without_ret
         def __init__(self) -> None:
             self.claim_count = 0
             self.attach_calls: list[dict] = []
-            self.provider_error_calls: list[dict] = []
             self.rescheduled: list[int] = []
             self.released = 0
             self.job = BatchJobRecord(
@@ -4703,10 +4702,6 @@ async def test_batch_worker_marks_invalid_completed_artifacts_failed_without_ret
             self.attach_calls.append(kwargs)
             return self.job
 
-        async def set_provider_error(self, **kwargs):
-            self.provider_error_calls.append(kwargs)
-            return self.job
-
         async def reschedule_finalization(self, *, batch_id: str, worker_id: str, retry_delay_seconds: int) -> bool:
             assert batch_id == "b-finalize"
             assert worker_id == "w1"
@@ -4746,12 +4741,10 @@ async def test_batch_worker_marks_invalid_completed_artifacts_failed_without_ret
             "error_file_id": None,
             "final_status": BatchJobStatus.FAILED,
             "worker_id": "w1",
-        }
-    ]
-    assert repo.provider_error_calls == [
-        {
-            "batch_id": "b-finalize",
-            "provider_error": "artifact_validation_failed: completed batch item embedding response is missing a valid model",
+            "terminal_provider_error": (
+                "artifact_validation_failed: completed batch item embedding response "
+                "is missing a valid model"
+            ),
         }
     ]
     assert repo.rescheduled == []

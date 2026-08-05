@@ -4572,6 +4572,7 @@ class BatchJobRepository:
         error_file_id: str | None,
         final_status: str | BatchJobStatus,
         worker_id: str | None = None,
+        terminal_provider_error: str | None = None,
     ) -> BatchJobRecord | None:
         if self.prisma is None:
             return None
@@ -4594,6 +4595,7 @@ class BatchJobRepository:
                 SET output_file_id = $2,
                     error_file_id = $3,
                     status = $4::"DeltaLLM_BatchJobStatus",
+                    provider_error = COALESCE($5, j.provider_error),
                     total_items = stats.total_items,
                     in_progress_items = stats.in_progress_items,
                     completed_items = stats.completed_items,
@@ -4615,6 +4617,7 @@ class BatchJobRepository:
                 output_file_id,
                 error_file_id,
                 normalized_final_status.value,
+                terminal_provider_error,
             )
         else:
             rows = await self.prisma.query_raw(
@@ -4634,6 +4637,7 @@ class BatchJobRepository:
                 SET output_file_id = $3,
                     error_file_id = $4,
                     status = $5::"DeltaLLM_BatchJobStatus",
+                    provider_error = COALESCE($6, j.provider_error),
                     total_items = stats.total_items,
                     in_progress_items = stats.in_progress_items,
                     completed_items = stats.completed_items,
@@ -4657,6 +4661,7 @@ class BatchJobRepository:
                 output_file_id,
                 error_file_id,
                 normalized_final_status.value,
+                terminal_provider_error,
             )
         if not rows:
             return None

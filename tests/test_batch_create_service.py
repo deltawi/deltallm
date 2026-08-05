@@ -289,6 +289,46 @@ def test_create_session_service_rejects_webhook_when_encryption_is_unavailable()
 
 
 @pytest.mark.asyncio
+async def test_create_session_service_rejects_non_utf8_webhook_url_before_loading_file() -> None:
+    async def _fail_get_file(file_id: str):  # noqa: ANN201
+        raise AssertionError(f"get_file must not be called for invalid webhook URL: {file_id}")
+
+    service = BatchCreateSessionService(
+        repository=SimpleNamespace(get_file=_fail_get_file),  # type: ignore[arg-type]
+        create_session_repository=SimpleNamespace(),  # type: ignore[arg-type]
+        stager=_NeverCalledStager(),  # type: ignore[arg-type]
+        promoter=SimpleNamespace(),  # type: ignore[arg-type]
+        storage_registry={},
+        max_file_bytes=1024,
+        max_items_per_batch=100,
+        max_line_bytes=1024,
+        storage_chunk_size=128,
+        webhook_enabled=True,
+        webhook_cipher=BatchWebhookCipher(bytes(range(32))),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await service.create_batch(
+            auth=UserAPIKeyAuth(api_key="key-a"),
+            input_file_id="file-1",
+            endpoint="/v1/embeddings",
+            metadata=None,
+            completion_window=None,
+            webhook={
+                "url": "https://customer.example/\ud800",
+                "signing_secret": "s" * 32,
+            },
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == {
+        "code": "invalid_url",
+        "message": "webhook url is invalid",
+        "field": "url",
+    }
+
+
+@pytest.mark.asyncio
 async def test_create_session_service_matches_idempotency_by_webhook_fingerprint() -> None:
     cipher = BatchWebhookCipher(bytes(range(32)))
     webhook = {

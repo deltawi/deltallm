@@ -145,8 +145,14 @@ class _TransactionManager:
 
 
 class _JobRepository:
-    def __init__(self, job: BatchJobRecord | None) -> None:
+    def __init__(
+        self,
+        job: BatchJobRecord | None,
+        *,
+        observe_error: Exception | None = None,
+    ) -> None:
         self.job = job
+        self.observe_error = observe_error
         self.calls: list[dict[str, object]] = []
         self.observed: list[str] = []
 
@@ -156,6 +162,8 @@ class _JobRepository:
 
     def observe_finalization(self, job: BatchJobRecord) -> None:
         self.observed.append(job.batch_id)
+        if self.observe_error is not None:
+            raise self.observe_error
 
 
 class _OutboxRepository:
@@ -186,7 +194,8 @@ def _aggregate_repository(
     *,
     job: BatchJobRecord | None,
     outbox: _OutboxRepository,
-) -> tuple[BatchRepository, _TransactionManager, _JobRepository]:
+    observe_error: Exception | None = None,
+) -> tuple[BatchRepository, _TransactionManager, _JobRepository, _JobRepository]:
     transaction_manager = _TransactionManager()
     transactional_jobs = _JobRepository(job)
     transactional_repository = SimpleNamespace(
@@ -196,16 +205,59 @@ def _aggregate_repository(
     )
     repository = BatchRepository()
     repository.prisma = transaction_manager
-    observed_jobs = _JobRepository(None)
+    observed_jobs = _JobRepository(None, observe_error=observe_error)
     repository.jobs = observed_jobs  # type: ignore[assignment]
     repository.with_prisma = lambda _tx: transactional_repository  # type: ignore[method-assign]
-    return repository, transaction_manager, observed_jobs
+    return repository, transaction_manager, observed_jobs, transactional_jobs
 
 
 @pytest.mark.asyncio
 async def test_atomic_finalization_enqueues_configured_event_then_publishes_metric() -> None:
     outbox = _OutboxRepository()
-    repository, transaction, observed_jobs = _aggregate_repository(job=_job(), outbox=outbox)
+    repository, transaction, observed_jobs, transactional_jobs = _aggregate_repository(
+        job=_job(),
+        outbox=outbox,
+    )
+
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id="batch-1",
+        output_file_id="file-output",
+        error_file_id=None,
+        final_status=BatchJobStatus.COMPLETED,
+        worker_id="worker-1",
+        terminal_provider_error="artifact_validation_failed: invalid artifact",
+    )
+
+    assert finalized is not None
+    assert transaction.committed is True
+    assert transaction.rolled_back is False
+    assert len(outbox.events) == 1
+    assert outbox.events[0].payload_json["data"]["batch"]["metadata"] == {
+        "customer_job_id": "job-1"
+    }
+    assert observed_jobs.observed == ["batch-1"]
+    assert transactional_jobs.calls == [
+        {
+            "batch_id": "batch-1",
+            "output_file_id": "file-output",
+            "error_file_id": None,
+            "final_status": BatchJobStatus.COMPLETED,
+            "worker_id": "worker-1",
+            "terminal_provider_error": "artifact_validation_failed: invalid artifact",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_atomic_finalization_ignores_metric_failure_after_commit(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    outbox = _OutboxRepository()
+    repository, transaction, observed_jobs, _ = _aggregate_repository(
+        job=_job(),
+        outbox=outbox,
+        observe_error=RuntimeError("metrics unavailable"),
+    )
 
     finalized = await repository.attach_artifacts_and_finalize(
         batch_id="batch-1",
@@ -219,16 +271,14 @@ async def test_atomic_finalization_enqueues_configured_event_then_publishes_metr
     assert transaction.committed is True
     assert transaction.rolled_back is False
     assert len(outbox.events) == 1
-    assert outbox.events[0].payload_json["data"]["batch"]["metadata"] == {
-        "customer_job_id": "job-1"
-    }
     assert observed_jobs.observed == ["batch-1"]
+    assert "batch finalization metric publish failed batch_id=batch-1" in caplog.text
 
 
 @pytest.mark.asyncio
 async def test_atomic_finalization_rolls_back_when_outbox_insert_fails() -> None:
     outbox = _OutboxRepository(error=RuntimeError("outbox unavailable"))
-    repository, transaction, observed_jobs = _aggregate_repository(job=_job(), outbox=outbox)
+    repository, transaction, observed_jobs, _ = _aggregate_repository(job=_job(), outbox=outbox)
 
     with pytest.raises(RuntimeError, match="outbox unavailable"):
         await repository.attach_artifacts_and_finalize(
@@ -247,7 +297,7 @@ async def test_atomic_finalization_rolls_back_when_outbox_insert_fails() -> None
 @pytest.mark.asyncio
 async def test_atomic_finalization_skips_outbox_for_legacy_batch() -> None:
     outbox = _OutboxRepository(error=AssertionError("outbox must not be called"))
-    repository, transaction, observed_jobs = _aggregate_repository(
+    repository, transaction, observed_jobs, _ = _aggregate_repository(
         job=_job(configured=False),
         outbox=outbox,
     )
@@ -269,7 +319,7 @@ async def test_atomic_finalization_skips_outbox_for_legacy_batch() -> None:
 @pytest.mark.asyncio
 async def test_atomic_finalization_fence_loss_creates_no_event_or_metric() -> None:
     outbox = _OutboxRepository(error=AssertionError("outbox must not be called"))
-    repository, transaction, observed_jobs = _aggregate_repository(job=None, outbox=outbox)
+    repository, transaction, observed_jobs, _ = _aggregate_repository(job=None, outbox=outbox)
 
     finalized = await repository.attach_artifacts_and_finalize(
         batch_id="batch-1",
@@ -290,7 +340,7 @@ async def test_atomic_finalization_accepts_verified_existing_logical_event() -> 
     job = _job()
     existing = _outbox_record(job)
     outbox = _OutboxRepository(inserted=None, existing=existing)
-    repository, transaction, observed_jobs = _aggregate_repository(job=job, outbox=outbox)
+    repository, transaction, observed_jobs, _ = _aggregate_repository(job=job, outbox=outbox)
 
     finalized = await repository.attach_artifacts_and_finalize(
         batch_id="batch-1",
@@ -311,7 +361,7 @@ async def test_atomic_finalization_rejects_conflicting_existing_event() -> None:
     existing = _outbox_record(job)
     existing.payload_json["data"]["batch"]["status"] = "failed"
     outbox = _OutboxRepository(inserted=None, existing=existing)
-    repository, transaction, observed_jobs = _aggregate_repository(job=job, outbox=outbox)
+    repository, transaction, observed_jobs, _ = _aggregate_repository(job=job, outbox=outbox)
 
     with pytest.raises(RuntimeError, match="conflicts with terminal outcome"):
         await repository.attach_artifacts_and_finalize(

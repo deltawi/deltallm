@@ -33,6 +33,10 @@ def _normalize_webhook_url(value: str) -> str:
     normalized = str(value or "").strip()
     if not normalized:
         raise ValueError("webhook url is required")
+    try:
+        normalized.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("webhook url must contain valid UTF-8 text") from exc
     if len(normalized) > BATCH_WEBHOOK_MAX_URL_LENGTH:
         raise ValueError(f"webhook url must be at most {BATCH_WEBHOOK_MAX_URL_LENGTH} characters")
     if any(ord(character) <= 0x20 or ord(character) == 0x7F for character in normalized):

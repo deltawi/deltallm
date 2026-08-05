@@ -4521,11 +4521,14 @@ async def test_attach_artifacts_and_finalize_casts_status_parameter_to_enum() ->
         output_file_id="out-1",
         error_file_id="err-1",
         final_status="completed",
+        terminal_provider_error="artifact_validation_failed: invalid artifact",
     )
 
     assert finalized is None
     assert 'status = $4::"DeltaLLM_BatchJobStatus"' in prisma.sql
+    assert "provider_error = COALESCE($5, j.provider_error)" in prisma.sql
     assert prisma.params[3] == BatchJobStatus.COMPLETED.value
+    assert prisma.params[4] == "artifact_validation_failed: invalid artifact"
 
 
 @pytest.mark.asyncio

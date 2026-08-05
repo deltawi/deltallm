@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 from datetime import datetime
 from typing import Any, Literal
 
@@ -42,6 +43,8 @@ from src.batch.webhooks.events import (
     build_batch_webhook_event,
 )
 from src.metrics import increment_batch_duplicate_completion_rejection
+
+logger = logging.getLogger(__name__)
 
 
 def _webhook_outbox_matches_terminal_job(
@@ -809,6 +812,7 @@ class BatchRepository:
         error_file_id: str | None,
         final_status: str | BatchJobStatus,
         worker_id: str | None = None,
+        terminal_provider_error: str | None = None,
     ) -> BatchJobRecord | None:
         normalized_final_status = normalize_batch_job_status(final_status)
         event_type = batch_webhook_event_type_for_status(normalized_final_status)
@@ -820,6 +824,7 @@ class BatchRepository:
                 error_file_id=error_file_id,
                 final_status=normalized_final_status,
                 worker_id=worker_id,
+                terminal_provider_error=terminal_provider_error,
             )
             if finalized is None:
                 return None
@@ -869,7 +874,14 @@ class BatchRepository:
             finalized = await _run_in_current_repo(self)
 
         if finalized is not None:
-            self.jobs.observe_finalization(finalized)
+            try:
+                self.jobs.observe_finalization(finalized)
+            except Exception:
+                logger.warning(
+                    "batch finalization metric publish failed batch_id=%s",
+                    finalized.batch_id,
+                    exc_info=True,
+                )
         return finalized
 
     async def retry_finalization_now(self, batch_id: str) -> BatchJobRecord | None:
