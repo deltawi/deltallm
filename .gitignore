@@ -202,6 +202,15 @@ config.yaml
 
 .worktrees/
 
+# Generated design-preview workspaces
+artifacts/
+
+# Downloaded Prisma query-engine binaries
+prisma-query-engine-*
+
+# Agent package-manager state (generated targets are not versioned)
+prpm.lock
+
 # Replit-specific (not versioned)
 .replit
 replit.md
