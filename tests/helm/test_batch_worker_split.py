@@ -145,6 +145,49 @@ def test_batch_webhook_key_is_wired_only_through_secret_and_optional_env() -> No
     }
 
 
+def test_split_worker_receives_webhook_key_and_delivery_configuration() -> None:
+    docs = _render(
+        "--set",
+        "batchWorker.enabled=true",
+        "--set",
+        f"secret.values.batchWebhookEncryptionKey={'A' * 43}",
+        "--show-only",
+        "templates/secret.yaml",
+        "--show-only",
+        "templates/configmap.yaml",
+        "--show-only",
+        "templates/deployment.yaml",
+        "--show-only",
+        "templates/batch-worker-deployment.yaml",
+    )
+    api = _deployment_by_pod_component(docs, "api")
+    worker = _deployment_by_pod_component(docs, "batch-worker")
+    secret_reference = {
+        "name": "deltallm-app",
+        "key": "batch-webhook-encryption-key",
+        "optional": True,
+    }
+    for deployment in (api, worker):
+        env = deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+        webhook_env = next(
+            item for item in env if item["name"] == "DELTALLM_BATCH_WEBHOOK_ENCRYPTION_KEY"
+        )
+        assert webhook_env["valueFrom"]["secretKeyRef"] == secret_reference
+
+    api_general = _config_yaml(
+        _by_kind_and_name(docs, "ConfigMap", "deltallm-config")
+    )["general_settings"]
+    worker_general = _config_yaml(
+        _by_kind_and_name(docs, "ConfigMap", "deltallm-batch-worker-config")
+    )["general_settings"]
+    assert api_general["batch_webhook_worker_enabled"] is False
+    assert worker_general["batch_webhook_worker_enabled"] is True
+    assert worker_general["batch_webhook_max_concurrency"] == 4
+    assert worker_general["batch_webhook_allowed_ports"] == [443]
+    assert "A" * 43 not in str(api_general)
+    assert "A" * 43 not in str(worker_general)
+
+
 @pytest.mark.parametrize(
     "override_path",
     [
