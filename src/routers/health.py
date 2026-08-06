@@ -76,5 +76,11 @@ async def _readiness_payload(request: Request) -> dict[str, object]:
         except Exception:
             checks["database"] = False
 
+    if bool(getattr(request.app.state, "batch_webhook_worker_expected", False)):
+        worker_task = getattr(request.app.state, "batch_webhook_outbox_task", None)
+        checks["batch_webhook_worker"] = bool(
+            worker_task is not None and not worker_task.done()
+        )
+
     status = "ok" if all(checks.values()) else "degraded"
     return {"status": status, "checks": checks}

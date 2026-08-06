@@ -1568,6 +1568,129 @@ async def test_db_backed_terminal_transition_atomically_enqueues_one_webhook_eve
 
 
 @pytest.mark.asyncio
+async def test_db_backed_webhook_delivery_claims_recover_and_fence_attempt_generations(
+    batch_db,
+) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.COMPLETED,
+    )
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id=batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.COMPLETED,
+        worker_id=worker_id,
+    )
+    assert finalized is not None
+
+    db_one = await _connect_prisma()
+    db_two = await _connect_prisma()
+    try:
+        repo_one = BatchRepository(db_one)
+        repo_two = BatchRepository(db_two)
+        first, second = await asyncio.gather(
+            repo_one.claim_webhook_outbox_due(
+                worker_id="delivery-1",
+                lease_seconds=30,
+                limit=1,
+            ),
+            repo_two.claim_webhook_outbox_due(
+                worker_id="delivery-2",
+                lease_seconds=30,
+                limit=1,
+            ),
+        )
+        claims = first or second
+        assert len(claims) == 1
+        assert not (first and second)
+        claimed = claims[0]
+        owner = str(claimed.locked_by)
+        owner_repo = repo_one if owner == "delivery-1" else repo_two
+        recovery_repo = repo_two if owner == "delivery-1" else repo_one
+        assert claimed.attempt_count == 1
+        assert await owner_repo.renew_webhook_outbox_lease(
+            event_id=claimed.event_id,
+            worker_id=owner,
+            attempt_count=1,
+            lease_seconds=30,
+        )
+        assert not await owner_repo.mark_webhook_outbox_delivered(
+            event_id=claimed.event_id,
+            worker_id=owner,
+            attempt_count=2,
+            status_code=200,
+        )
+
+        await batch_db.execute_raw(
+            """
+            UPDATE deltallm_batch_webhook_outbox
+            SET lease_expires_at = NOW() - INTERVAL '1 second'
+            WHERE event_id = $1
+            """,
+            claimed.event_id,
+        )
+        recovered = await recovery_repo.claim_webhook_outbox_due(
+            worker_id="delivery-recovery",
+            lease_seconds=30,
+            limit=1,
+        )
+        assert len(recovered) == 1
+        assert recovered[0].attempt_count == 2
+        assert not await owner_repo.mark_webhook_outbox_delivered(
+            event_id=claimed.event_id,
+            worker_id=owner,
+            attempt_count=1,
+            status_code=200,
+        )
+        assert await recovery_repo.mark_webhook_outbox_retrying(
+            event_id=claimed.event_id,
+            worker_id="delivery-recovery",
+            attempt_count=2,
+            status_code=503,
+            error="http_retryable_status",
+            next_attempt_at=datetime.now(tz=UTC),
+        )
+
+        final_claim = await owner_repo.claim_webhook_outbox_due(
+            worker_id="delivery-final",
+            lease_seconds=30,
+            limit=1,
+        )
+        assert len(final_claim) == 1
+        assert final_claim[0].attempt_count == 3
+        assert await owner_repo.mark_webhook_outbox_delivered(
+            event_id=claimed.event_id,
+            worker_id="delivery-final",
+            attempt_count=3,
+            status_code=204,
+        )
+    finally:
+        await db_one.disconnect()
+        await db_two.disconnect()
+
+    rows = await batch_db.query_raw(
+        """
+        SELECT status, attempt_count, last_status_code, locked_by,
+               lease_expires_at, delivered_at
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    row = dict(rows[0])
+    assert row["status"] == "delivered"
+    assert int(row["attempt_count"]) == 3
+    assert int(row["last_status_code"]) == 204
+    assert row["locked_by"] is None
+    assert row["lease_expires_at"] is None
+    assert row["delivered_at"] is not None
+    unchanged_batch = await repository.get_job(batch_id)
+    assert unchanged_batch is not None
+    assert unchanged_batch.status is BatchJobStatus.COMPLETED
+
+
+@pytest.mark.asyncio
 async def test_db_backed_terminal_webhook_reconciliation_preserves_snapshot_after_timestamp_drift(
     batch_db,
 ) -> None:

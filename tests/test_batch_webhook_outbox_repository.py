@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -130,6 +131,81 @@ async def test_webhook_outbox_repository_inserts_explicit_stable_event_id() -> N
     assert inserted is not None
     assert inserted.event_id == "evt-stable"
     assert inserted.payload_json["id"] == "evt-stable"
+
+
+@pytest.mark.asyncio
+async def test_webhook_delivery_repository_claims_and_fences_every_transition() -> None:
+    source = _outbox_record(_job())
+    now = datetime.now(tz=UTC)
+    row = asdict(source)
+    row.update(
+        status="processing",
+        attempt_count=2,
+        locked_by="worker-1",
+        lease_expires_at=now + timedelta(seconds=30),
+        updated_at=now,
+    )
+
+    class _Prisma:
+        def __init__(self) -> None:
+            self.execute_calls: list[str] = []
+            self.query_calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def execute_raw(self, sql: str, *params) -> int:  # noqa: ANN002
+            assert not params
+            self.execute_calls.append(sql)
+            return 1
+
+        async def query_raw(self, sql: str, *params):  # noqa: ANN201
+            self.query_calls.append((sql, params))
+            if "WITH due AS" in sql:
+                return [row]
+            return [{"event_id": params[0]}]
+
+    prisma = _Prisma()
+    repository = BatchWebhookOutboxRepository(prisma)
+
+    claimed = await repository.claim_due(worker_id="worker-1", lease_seconds=30, limit=10)
+    assert len(claimed) == 1
+    assert claimed[0].attempt_count == 2
+    assert "max_attempts_exhausted_after_lease_expiry" in prisma.execute_calls[0]
+    claim_sql, claim_params = prisma.query_calls[0]
+    assert "FOR UPDATE SKIP LOCKED" in claim_sql
+    assert "attempt_count < max_attempts" in claim_sql
+    assert claim_params == (10, "worker-1", 30)
+
+    assert await repository.renew_lease(
+        source.event_id,
+        worker_id="worker-1",
+        attempt_count=2,
+        lease_seconds=30,
+    )
+    assert await repository.mark_retrying(
+        source.event_id,
+        worker_id="worker-1",
+        attempt_count=2,
+        status_code=503,
+        error="  http_retryable_status\n",
+        next_attempt_at=now,
+    )
+    assert await repository.mark_failed(
+        source.event_id,
+        worker_id="worker-1",
+        attempt_count=2,
+        status_code=400,
+        error="http_permanent_status",
+    )
+    assert await repository.mark_delivered(
+        source.event_id,
+        worker_id="worker-1",
+        attempt_count=2,
+        status_code=204,
+    )
+
+    transition_calls = prisma.query_calls[1:]
+    assert all("AND attempt_count = $3" in sql for sql, _params in transition_calls)
+    retry_params = transition_calls[1][1]
+    assert retry_params[4] == "http_retryable_status"
 
 
 class _TransactionManager:

@@ -794,6 +794,85 @@ class BatchRepository:
     async def count_pending_completion_outbox(self) -> int:
         return await self.completion_outbox.count_pending()
 
+    async def claim_webhook_outbox_due(
+        self,
+        *,
+        worker_id: str,
+        lease_seconds: int,
+        limit: int,
+    ) -> list[BatchWebhookOutboxRecord]:
+        return await self.webhook_outbox.claim_due(
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
+            limit=limit,
+        )
+
+    async def renew_webhook_outbox_lease(
+        self,
+        *,
+        event_id: str,
+        worker_id: str,
+        attempt_count: int,
+        lease_seconds: int,
+    ) -> bool:
+        return await self.webhook_outbox.renew_lease(
+            event_id,
+            worker_id=worker_id,
+            attempt_count=attempt_count,
+            lease_seconds=lease_seconds,
+        )
+
+    async def mark_webhook_outbox_delivered(
+        self,
+        *,
+        event_id: str,
+        worker_id: str,
+        attempt_count: int,
+        status_code: int,
+    ) -> bool:
+        return await self.webhook_outbox.mark_delivered(
+            event_id,
+            worker_id=worker_id,
+            attempt_count=attempt_count,
+            status_code=status_code,
+        )
+
+    async def mark_webhook_outbox_retrying(
+        self,
+        *,
+        event_id: str,
+        worker_id: str,
+        attempt_count: int,
+        status_code: int | None,
+        error: str,
+        next_attempt_at: datetime,
+    ) -> bool:
+        return await self.webhook_outbox.mark_retrying(
+            event_id,
+            worker_id=worker_id,
+            attempt_count=attempt_count,
+            status_code=status_code,
+            error=error,
+            next_attempt_at=next_attempt_at,
+        )
+
+    async def mark_webhook_outbox_failed(
+        self,
+        *,
+        event_id: str,
+        worker_id: str,
+        attempt_count: int,
+        status_code: int | None,
+        error: str,
+    ) -> bool:
+        return await self.webhook_outbox.mark_failed(
+            event_id,
+            worker_id=worker_id,
+            attempt_count=attempt_count,
+            status_code=status_code,
+            error=error,
+        )
+
     async def mark_pending_items_cancelled(self, batch_id: str) -> None:
         await self.items.mark_pending_items_cancelled(batch_id)
 
