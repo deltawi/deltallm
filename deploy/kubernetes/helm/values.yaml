@@ -235,7 +235,9 @@ config:
     embeddings_batch_completion_outbox_worker_enabled: true
     batch_webhook_enabled: false
     batch_webhook_worker_enabled: true
+    batch_webhook_observability_enabled: true
     batch_webhook_poll_interval_seconds: 1
+    batch_webhook_observability_refresh_interval_seconds: 15
     batch_webhook_max_concurrency: 4
     batch_webhook_lease_seconds: 30
     batch_webhook_timeout_seconds: 10
@@ -247,6 +249,7 @@ config:
     batch_webhook_allowed_private_cidrs: []
     batch_webhook_allow_http: false
     batch_webhook_delivery_retention_days: 30
+    batch_webhook_cleanup_max_rows_per_run: 10000
     embeddings_batch_storage_backend: local
     embeddings_batch_storage_dir: .deltallm/batch-artifacts
     embeddings_batch_create_session_cleanup_enabled: true

@@ -33,14 +33,20 @@ from src.batch.scheduling import (
     scheduler_mode_uses_size_aware,
     scheduler_mode_uses_work_slice,
 )
+from src.batch.webhooks.operations import serialize_batch_webhook_delivery
 from src.config_runtime.dynamic import DynamicConfigPersistenceError, DynamicConfigValidationError
+from src.db.repositories import AuditRepository
 from src.metrics import (
     collect_batch_scheduler_status_metrics,
     increment_batch_repair_action,
+    increment_batch_webhook_replay,
     publish_batch_runtime_summary,
 )
 from src.middleware.admin import require_admin_permission
-from src.services.ui_authorization import build_batch_capabilities
+from src.services.ui_authorization import (
+    build_archived_batch_webhook_capabilities,
+    build_batch_capabilities,
+)
 
 router = APIRouter(tags=["Admin Batches"])
 logger = logging.getLogger(__name__)
@@ -425,7 +431,7 @@ def _scheduler_flow_response(flow) -> dict[str, Any]:  # noqa: ANN001
     }
 
 
-async def _load_batch_scope_row(db: Any, batch_id: str) -> dict[str, Any]:
+async def _find_batch_scope_row(db: Any, batch_id: str) -> dict[str, Any] | None:
     rows = await db.query_raw(
         """
         SELECT batch_id, status, created_by_team_id, created_by_organization_id
@@ -435,29 +441,72 @@ async def _load_batch_scope_row(db: Any, batch_id: str) -> dict[str, Any]:
         """,
         batch_id,
     )
-    if not rows:
+    return dict(rows[0]) if rows else None
+
+
+async def _load_batch_scope_row(db: Any, batch_id: str) -> dict[str, Any]:
+    job = await _find_batch_scope_row(db, batch_id)
+    if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
-    return dict(rows[0])
+    return job
 
 
-async def _enforce_batch_update_scope(*, db: Any, scope, job: dict[str, Any]) -> None:  # noqa: ANN001
-    if scope.is_platform_admin:
-        return
-    team_id = job.get("created_by_team_id")
-    organization_id = job.get("created_by_organization_id")
-    if team_id and scope.team_ids and team_id in scope.team_ids:
-        return
-    if organization_id and scope.org_ids and organization_id in scope.org_ids:
-        return
-    if team_id and scope.org_ids:
+async def _enforce_batch_update_scope(  # noqa: ANN001
+    *,
+    db: Any,
+    scope,
+    job: dict[str, Any],
+) -> dict[str, str | None]:
+    team_id = str(job.get("created_by_team_id") or "").strip() or None
+    organization_id = str(
+        job.get("organization_id") or job.get("created_by_organization_id") or ""
+    ).strip() or None
+    if organization_id is None and team_id:
         org_rows = await db.query_raw(
             "SELECT organization_id FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
             team_id,
         )
-        org_id = str((org_rows[0] if org_rows else {}).get("organization_id") or "")
-        if org_id in scope.org_ids:
-            return
+        organization_id = str(
+            (org_rows[0] if org_rows else {}).get("organization_id") or ""
+        ).strip() or None
+
+    ownership = {
+        "created_by_team_id": team_id,
+        "organization_id": organization_id,
+    }
+    if scope.is_platform_admin:
+        return ownership
+    if team_id and scope.team_ids and team_id in scope.team_ids:
+        return ownership
+    if organization_id and scope.org_ids and organization_id in scope.org_ids:
+        return ownership
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+
+async def _enforce_webhook_delivery_scope(
+    *,
+    db: Any,
+    scope,
+    deliveries,
+) -> dict[str, str | None]:  # noqa: ANN001
+    ownership_scopes = {
+        (
+            str(delivery.created_by_team_id or "").strip() or None,
+            str(delivery.created_by_organization_id or "").strip() or None,
+        )
+        for delivery in deliveries
+    }
+    if len(ownership_scopes) != 1:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    team_id, organization_id = next(iter(ownership_scopes))
+    return await _enforce_batch_update_scope(
+        db=db,
+        scope=scope,
+        job={
+            "created_by_team_id": team_id,
+            "created_by_organization_id": organization_id,
+        },
+    )
 
 
 def _append_batch_scope_clause(*, clauses: list[str], params: list[Any], scope, job_alias: str = "") -> bool:  # noqa: ANN001
@@ -1039,6 +1088,16 @@ async def get_batch(
     )
 
     masked_key = _mask_api_key(job.get("created_by_api_key"))
+    repository = getattr(request.app.state, "batch_repository", None)
+    webhook_deliveries = (
+        await repository.list_webhook_outbox_by_batch_id(batch_id=batch_id)
+        if repository is not None
+        else []
+    )
+    safe_webhook_deliveries = [
+        to_json_value(serialize_batch_webhook_delivery(delivery))
+        for delivery in webhook_deliveries
+    ]
 
     return {
         "batch_id": job.get("batch_id"),
@@ -1060,7 +1119,12 @@ async def get_batch(
         "completed_at": to_json_value(job.get("completed_at")),
         "cancel_requested_at": to_json_value(job.get("cancel_requested_at")),
         "expires_at": to_json_value(job.get("expires_at")),
-        "capabilities": build_batch_capabilities(scope, job),
+        "capabilities": build_batch_capabilities(
+            scope,
+            job,
+            webhook_statuses=(delivery.status.value for delivery in webhook_deliveries),
+        ),
+        "webhook_deliveries": safe_webhook_deliveries,
         "items": {
             "data": [to_json_value(r) for r in item_rows_page],
             "pagination": {
@@ -1161,6 +1225,167 @@ async def cancel_batch(
         batch_id,
     )
     return {"batch_id": batch_id, "status": dict(updated[0]).get("status") if updated else job.get("status"), "cancel_requested": True}
+
+
+@router.get("/ui/api/batches/{batch_id}/webhook-deliveries")
+async def get_batch_webhook_deliveries(
+    request: Request,
+    batch_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    scope = get_auth_scope(
+        request,
+        authorization,
+        x_master_key,
+        required_permission=Permission.KEY_READ,
+    )
+    db = db_or_503(request)
+    repository = _batch_repository_or_503(request)
+    job = await _find_batch_scope_row(db, batch_id)
+    deliveries = await repository.list_webhook_outbox_by_batch_id(batch_id=batch_id)
+    if job is not None:
+        ownership = await _enforce_batch_update_scope(db=db, scope=scope, job=job)
+        capability_batch = {
+            **job,
+            **ownership,
+        }
+    elif deliveries:
+        ownership = await _enforce_webhook_delivery_scope(
+            db=db,
+            scope=scope,
+            deliveries=deliveries,
+        )
+        capability_batch = None
+    else:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
+
+    return {
+        "batch_id": batch_id,
+        "capabilities": (
+            build_batch_capabilities(
+                scope,
+                capability_batch,
+                webhook_statuses=(delivery.status.value for delivery in deliveries),
+            )
+            if capability_batch is not None
+            else build_archived_batch_webhook_capabilities(
+                scope,
+                ownership,
+                webhook_statuses=(delivery.status.value for delivery in deliveries),
+            )
+        ),
+        "data": [
+            to_json_value(serialize_batch_webhook_delivery(delivery))
+            for delivery in deliveries
+        ],
+    }
+
+
+@router.post("/ui/api/batches/{batch_id}/webhook-deliveries/{event_id}/replay")
+async def replay_batch_webhook_delivery(
+    request: Request,
+    batch_id: str,
+    event_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+) -> dict[str, Any]:
+    request_start = perf_counter()
+    scope = get_auth_scope(
+        request,
+        authorization,
+        x_master_key,
+        required_permission=Permission.KEY_UPDATE,
+    )
+    db = db_or_503(request)
+    repository = _batch_repository_or_503(request)
+    job = await _find_batch_scope_row(db, batch_id)
+    deliveries = await repository.list_webhook_outbox_by_batch_id(batch_id=batch_id)
+    if job is not None:
+        ownership = await _enforce_batch_update_scope(db=db, scope=scope, job=job)
+    elif deliveries:
+        ownership = await _enforce_webhook_delivery_scope(
+            db=db,
+            scope=scope,
+            deliveries=deliveries,
+        )
+    else:
+        increment_batch_webhook_replay(result="not_found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Webhook delivery not found",
+        )
+
+    delivery = next((item for item in deliveries if item.event_id == event_id), None)
+    if delivery is None:
+        increment_batch_webhook_replay(result="not_found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Webhook delivery not found",
+        )
+    if delivery.status.value != "failed":
+        increment_batch_webhook_replay(result="not_failed")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only failed webhook deliveries can be replayed",
+        )
+
+    transaction = getattr(db, "tx", None)
+    if not callable(transaction):
+        increment_batch_webhook_replay(result="error")
+        raise RuntimeError("batch webhook replay requires transaction support")
+
+    try:
+        async with transaction() as tx:
+            replayed = await repository.with_prisma(tx).replay_failed_webhook_outbox(
+                batch_id=batch_id,
+                event_id=event_id,
+            )
+            if replayed is None:
+                increment_batch_webhook_replay(result="conflict")
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Webhook delivery is no longer failed",
+                )
+
+            response = {
+                "batch_id": batch_id,
+                "replayed": True,
+                "previous_attempt_count": replayed.previous_attempt_count,
+                "delivery": to_json_value(
+                    serialize_batch_webhook_delivery(replayed.record)
+                ),
+            }
+            await emit_admin_mutation_audit(
+                request=request,
+                request_start=request_start,
+                action=AuditAction.ADMIN_BATCH_WEBHOOK_REPLAY,
+                scope=scope,
+                resource_type="batch_webhook",
+                resource_id=event_id,
+                organization_id=ownership.get("organization_id"),
+                request_payload={"batch_id": batch_id, "event_id": event_id},
+                response_payload=response,
+                transactional_audit_repository=AuditRepository(tx),
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        increment_batch_webhook_replay(result="error")
+        raise
+
+    increment_batch_webhook_replay(result="scheduled")
+    logger.info(
+        "batch webhook replay scheduled",
+        extra={
+            "batch_id": batch_id,
+            "event_id": event_id,
+            "event_type": replayed.record.event_type.value,
+            "previous_attempt_count": replayed.previous_attempt_count,
+            "actor_id": scope.account_id,
+        },
+    )
+    return response
 
 
 @router.post("/ui/api/batches/{batch_id}/retry-finalization")

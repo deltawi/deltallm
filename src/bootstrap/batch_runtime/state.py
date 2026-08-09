@@ -36,6 +36,8 @@ def _initialize_optional_state(app: Any) -> None:
     app.state.batch_stale_lease_sweeper_worker = None
     app.state.batch_webhook_outbox_worker = None
     app.state.batch_webhook_outbox_task = None
+    app.state.batch_webhook_observability_worker = None
+    app.state.batch_webhook_observability_task = None
     app.state.batch_webhook_worker_expected = False
 
 
@@ -64,6 +66,10 @@ def build_batch_statuses(
                 and not webhook_cipher_configured
                 else None
             ),
+        ),
+        BootstrapStatus(
+            "batch_webhook_observability",
+            "ready" if runtime.webhook_observability_worker is not None else "disabled",
         ),
         BootstrapStatus(
             "embeddings_batch_gc",

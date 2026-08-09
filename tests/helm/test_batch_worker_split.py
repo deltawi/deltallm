@@ -105,10 +105,20 @@ def test_helm_schema_exposes_batch_webhook_settings_and_secret_key() -> None:
     secret = schema["properties"]["secret"]["properties"]
 
     assert general["batch_webhook_enabled"] == {"type": "boolean"}
+    assert general["batch_webhook_observability_enabled"] == {"type": "boolean"}
     assert "batch_webhook_encryption_key" not in general
     assert general["batch_webhook_max_concurrency"]["maximum"] == 100
+    assert general["batch_webhook_observability_refresh_interval_seconds"] == {
+        "type": "number",
+        "exclusiveMinimum": 0,
+    }
     assert general["batch_webhook_allowed_ports"]["items"]["maximum"] == 65535
     assert general["batch_webhook_delivery_retention_days"]["minimum"] == 1
+    assert general["batch_webhook_cleanup_max_rows_per_run"] == {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1_000_000,
+    }
     assert secret["keys"]["properties"]["batchWebhookEncryptionKey"]["minLength"] == 1
     assert secret["values"]["properties"]["batchWebhookEncryptionKey"] == {"type": "string"}
 
@@ -181,9 +191,12 @@ def test_split_worker_receives_webhook_key_and_delivery_configuration() -> None:
         _by_kind_and_name(docs, "ConfigMap", "deltallm-batch-worker-config")
     )["general_settings"]
     assert api_general["batch_webhook_worker_enabled"] is False
+    assert api_general["batch_webhook_observability_enabled"] is False
     assert worker_general["batch_webhook_worker_enabled"] is True
+    assert worker_general["batch_webhook_observability_enabled"] is True
     assert worker_general["batch_webhook_max_concurrency"] == 4
     assert worker_general["batch_webhook_allowed_ports"] == [443]
+    assert worker_general["batch_webhook_cleanup_max_rows_per_run"] == 10_000
     assert "A" * 43 not in str(api_general)
     assert "A" * 43 not in str(worker_general)
 
@@ -535,6 +548,7 @@ def test_split_mode_separates_api_and_worker_configs() -> None:
     assert api_general["embeddings_batch_worker_enabled"] is False
     assert api_general["embeddings_batch_completion_outbox_worker_enabled"] is False
     assert api_general["batch_webhook_worker_enabled"] is False
+    assert api_general["batch_webhook_observability_enabled"] is False
     assert api_general["embeddings_batch_gc_enabled"] is False
     assert api_general["embeddings_batch_create_session_cleanup_enabled"] is False
     assert api_general["embeddings_batch_scheduler_backfill_enabled"] is False
@@ -545,6 +559,7 @@ def test_split_mode_separates_api_and_worker_configs() -> None:
     assert worker_general["embeddings_batch_worker_enabled"] is True
     assert worker_general["embeddings_batch_completion_outbox_worker_enabled"] is True
     assert worker_general["batch_webhook_worker_enabled"] is True
+    assert worker_general["batch_webhook_observability_enabled"] is True
     assert worker_general["embeddings_batch_gc_enabled"] is True
     assert worker_general["embeddings_batch_create_session_cleanup_enabled"] is True
     assert worker_general["embeddings_batch_scheduler_backfill_enabled"] is True

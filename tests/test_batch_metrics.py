@@ -35,6 +35,11 @@ from src.metrics import (
     increment_batch_scheduler_shadow_better_choice,
     increment_batch_scheduler_shadow_comparison,
     increment_batch_work_claim,
+    increment_batch_webhook_delivery_attempt,
+    increment_batch_webhook_lease_recovery,
+    increment_batch_webhook_permanent_failure,
+    increment_batch_webhook_replay,
+    increment_batch_webhook_retry_scheduled,
     increment_batch_scheduler_size_claim,
     observe_batch_create_latency,
     observe_batch_finalize_latency,
@@ -55,6 +60,8 @@ from src.metrics import (
     observe_batch_work_claim_items,
     observe_batch_work_claim_latency,
     observe_batch_work_claim_units,
+    observe_batch_webhook_delivery_latency,
+    observe_batch_webhook_event_age,
     observe_batch_time_to_first_claim,
     publish_batch_create_session_summary,
     publish_batch_model_capacity_snapshot,
@@ -70,6 +77,9 @@ from src.metrics import (
     set_batch_scheduler_config_info,
     set_batch_scheduler_oldest_wait,
     set_batch_worker_saturation,
+    set_batch_webhook_due_depth,
+    set_batch_webhook_oldest_pending_age,
+    set_batch_webhook_queue_depth,
 )
 
 
@@ -97,6 +107,16 @@ def test_batch_metrics_are_exported() -> None:
     increment_batch_item_reclaim()
     increment_batch_item_retry(category="rate_limit")
     increment_batch_item_terminal_failure(category="budget", reason="not_retryable")
+    set_batch_webhook_queue_depth(status="failed", count=2)
+    set_batch_webhook_due_depth(count=3)
+    set_batch_webhook_oldest_pending_age(age_seconds=42)
+    increment_batch_webhook_delivery_attempt(outcome="retrying", status_class="5xx")
+    observe_batch_webhook_delivery_latency(outcome="retrying", latency_seconds=0.25)
+    observe_batch_webhook_event_age(outcome="failed", age_seconds=30)
+    increment_batch_webhook_retry_scheduled(reason="connect_timeout")
+    increment_batch_webhook_permanent_failure(reason="max_attempts_exhausted")
+    increment_batch_webhook_lease_recovery()
+    increment_batch_webhook_replay(result="scheduled")
     increment_batch_model_group_deferral(reason="no_healthy_deployments")
     increment_batch_model_group_deferred_items(reason="no_healthy_deployments")
     increment_batch_model_capacity_snapshot_failure(reason="unknown_capacity")
@@ -256,6 +276,17 @@ def test_batch_metrics_are_exported() -> None:
     assert "deltallm_batch_items" in metrics_text
     assert "deltallm_batch_oldest_item_age_seconds" in metrics_text
     assert "deltallm_batch_worker_saturation_ratio" in metrics_text
+    assert 'deltallm_batch_webhook_queue_depth{status="failed"} 2.0' in metrics_text
+    assert "deltallm_batch_webhook_due_depth 3.0" in metrics_text
+    assert "deltallm_batch_webhook_oldest_pending_age_seconds 42.0" in metrics_text
+    assert "deltallm_batch_webhook_delivery_attempts_total" in metrics_text
+    assert 'outcome="retrying",status_class="5xx"' in metrics_text
+    assert "deltallm_batch_webhook_delivery_latency_seconds" in metrics_text
+    assert "deltallm_batch_webhook_event_age_seconds" in metrics_text
+    assert "deltallm_batch_webhook_retries_scheduled_total" in metrics_text
+    assert "deltallm_batch_webhook_permanent_failures_total" in metrics_text
+    assert "deltallm_batch_webhook_lease_recoveries_total" in metrics_text
+    assert "deltallm_batch_webhook_replays_total" in metrics_text
     assert "deltallm_batch_create_session_actions_total" in metrics_text
     assert 'action="promotion_precheck"' in metrics_text
     assert 'status="rejected"' in metrics_text

@@ -128,7 +128,12 @@ def build_team_capabilities(scope: Any, team: dict[str, Any]) -> dict[str, bool]
     }
 
 
-def build_batch_capabilities(scope: Any, batch: dict[str, Any]) -> dict[str, bool]:
+def build_batch_capabilities(
+    scope: Any,
+    batch: dict[str, Any],
+    *,
+    webhook_statuses: Iterable[str] | None = None,
+) -> dict[str, bool]:
     team_id = str(batch.get("created_by_team_id") or "").strip()
     organization_id = str(batch.get("organization_id") or "").strip()
     status = str(batch.get("status") or "").strip().lower()
@@ -137,12 +142,39 @@ def build_batch_capabilities(scope: Any, batch: dict[str, Any]) -> dict[str, boo
         or _scope_has_org_permission(scope, organization_id, Permission.KEY_UPDATE)
     )
 
-    return {
+    capabilities = {
         "view": True,
         "cancel": can_update,
         "retry_finalization": can_update and status == "finalizing",
         "requeue_stale": can_update and status == "in_progress",
         "mark_failed": can_update and status not in {"completed", "failed", "cancelled", "expired"},
+    }
+    if webhook_statuses is not None:
+        capabilities["replay_webhook"] = can_update and "failed" in set(webhook_statuses)
+    return capabilities
+
+
+def build_archived_batch_webhook_capabilities(
+    scope: Any,
+    ownership: dict[str, Any],
+    *,
+    webhook_statuses: Iterable[str],
+) -> dict[str, bool]:
+    """Capabilities for retained deliveries whose mutable batch job is gone."""
+
+    team_id = str(ownership.get("created_by_team_id") or "").strip()
+    organization_id = str(ownership.get("organization_id") or "").strip()
+    can_update = (
+        _scope_has_team_permission(scope, team_id, Permission.KEY_UPDATE)
+        or _scope_has_org_permission(scope, organization_id, Permission.KEY_UPDATE)
+    )
+    return {
+        "view": True,
+        "cancel": False,
+        "retry_finalization": False,
+        "requeue_stale": False,
+        "mark_failed": False,
+        "replay_webhook": can_update and "failed" in set(webhook_statuses),
     }
 
 

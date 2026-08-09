@@ -10,6 +10,7 @@ from src.metrics.prometheus import get_prometheus_registry, sanitize_label
 
 BATCH_LATENCY_BUCKETS = [0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0]
 SCHEDULER_STATUS_METRIC_SAMPLE_LIMIT = 200
+WEBHOOK_EVENT_AGE_BUCKETS = [1, 5, 15, 30, 60, 300, 900, 3_600, 21_600, 86_400]
 
 deltallm_batch_jobs_metric = Gauge(
     "deltallm_batch_jobs",
@@ -43,6 +44,75 @@ deltallm_batch_worker_saturation_metric = Gauge(
     "deltallm_batch_worker_saturation_ratio",
     "Current active worker concurrency / configured concurrency",
     ["worker_id"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_webhook_queue_depth_metric = Gauge(
+    "deltallm_batch_webhook_queue_depth",
+    "Current batch webhook delivery rows by status",
+    ["status"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_webhook_due_depth_metric = Gauge(
+    "deltallm_batch_webhook_due_depth",
+    "Current batch webhook delivery rows eligible for worker processing",
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_webhook_oldest_pending_age_metric = Gauge(
+    "deltallm_batch_webhook_oldest_pending_age_seconds",
+    "Age in seconds of the oldest active batch webhook event",
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_webhook_delivery_attempts_metric = Counter(
+    "deltallm_batch_webhook_delivery_attempts_total",
+    "Batch webhook attempts by bounded outcome and HTTP status class",
+    ["outcome", "status_class"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_webhook_delivery_latency_metric = Histogram(
+    "deltallm_batch_webhook_delivery_latency_seconds",
+    "End-to-end duration of a batch webhook delivery attempt",
+    ["outcome"],
+    buckets=BATCH_LATENCY_BUCKETS,
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_webhook_event_age_metric = Histogram(
+    "deltallm_batch_webhook_event_age_seconds",
+    "Age of a batch webhook event when it reaches a terminal delivery status",
+    ["outcome"],
+    buckets=WEBHOOK_EVENT_AGE_BUCKETS,
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_webhook_retries_scheduled_metric = Counter(
+    "deltallm_batch_webhook_retries_scheduled_total",
+    "Batch webhook retries scheduled by bounded reason",
+    ["reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_webhook_permanent_failures_metric = Counter(
+    "deltallm_batch_webhook_permanent_failures_total",
+    "Batch webhook events moved to failed by bounded reason",
+    ["reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_webhook_lease_recoveries_metric = Counter(
+    "deltallm_batch_webhook_lease_recoveries_total",
+    "Batch webhook events reclaimed or terminalized after an expired processing lease",
+    registry=get_prometheus_registry(),
+)
+
+deltallm_batch_webhook_replays_metric = Counter(
+    "deltallm_batch_webhook_replays_total",
+    "Batch webhook operator replay requests by bounded result",
+    ["result"],
     registry=get_prometheus_registry(),
 )
 
@@ -716,6 +786,55 @@ def set_batch_worker_saturation(*, worker_id: str, active: int, capacity: int) -
     deltallm_batch_worker_saturation_metric.labels(worker_id=sanitize_label(worker_id)).set(
         max(0.0, float(active) / float(denominator))
     )
+
+
+def set_batch_webhook_queue_depth(*, status: str, count: int) -> None:
+    deltallm_batch_webhook_queue_depth_metric.labels(status=sanitize_label(status)).set(
+        max(0, int(count))
+    )
+
+
+def set_batch_webhook_due_depth(*, count: int) -> None:
+    deltallm_batch_webhook_due_depth_metric.set(max(0, int(count)))
+
+
+def set_batch_webhook_oldest_pending_age(*, age_seconds: float) -> None:
+    deltallm_batch_webhook_oldest_pending_age_metric.set(max(0.0, float(age_seconds)))
+
+
+def increment_batch_webhook_delivery_attempt(*, outcome: str, status_class: str) -> None:
+    deltallm_batch_webhook_delivery_attempts_metric.labels(
+        outcome=sanitize_label(outcome),
+        status_class=sanitize_label(status_class),
+    ).inc()
+
+
+def observe_batch_webhook_delivery_latency(*, outcome: str, latency_seconds: float) -> None:
+    deltallm_batch_webhook_delivery_latency_metric.labels(
+        outcome=sanitize_label(outcome)
+    ).observe(max(0.0, float(latency_seconds)))
+
+
+def observe_batch_webhook_event_age(*, outcome: str, age_seconds: float) -> None:
+    deltallm_batch_webhook_event_age_metric.labels(outcome=sanitize_label(outcome)).observe(
+        max(0.0, float(age_seconds))
+    )
+
+
+def increment_batch_webhook_retry_scheduled(*, reason: str) -> None:
+    deltallm_batch_webhook_retries_scheduled_metric.labels(reason=sanitize_label(reason)).inc()
+
+
+def increment_batch_webhook_permanent_failure(*, reason: str) -> None:
+    deltallm_batch_webhook_permanent_failures_metric.labels(reason=sanitize_label(reason)).inc()
+
+
+def increment_batch_webhook_lease_recovery() -> None:
+    deltallm_batch_webhook_lease_recoveries_metric.inc()
+
+
+def increment_batch_webhook_replay(*, result: str) -> None:
+    deltallm_batch_webhook_replays_metric.labels(result=sanitize_label(result)).inc()
 
 
 def increment_batch_finalization_retry(*, result: str) -> None:

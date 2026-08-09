@@ -81,6 +81,14 @@ class BatchWebhookConfigurationConflictError(RuntimeError):
     """Stored webhook state does not match the staged creation contract."""
 
 
+class BatchWebhookOwnershipConflictError(RuntimeError):
+    """Retained webhook ownership conflicts with its authoritative batch job."""
+
+    def __init__(self, conflict_count: int) -> None:
+        self.conflict_count = max(1, int(conflict_count))
+        super().__init__("batch webhook ownership conflict")
+
+
 BATCH_WEBHOOK_EVENT_TYPES = tuple(BatchWebhookEventType)
 BATCH_WEBHOOK_EVENT_TYPE_VALUES = tuple(event_type.value for event_type in BatchWebhookEventType)
 BATCH_WEBHOOK_DELIVERY_STATUSES = tuple(BatchWebhookDeliveryStatus)
@@ -388,11 +396,27 @@ class BatchWebhookOutboxRecord:
     created_at: datetime
     updated_at: datetime
     delivered_at: datetime | None
+    recovered_from_expired_lease: bool = False
+    created_by_team_id: str | None = None
+    created_by_organization_id: str | None = None
 
     def __post_init__(self) -> None:
         self.event_type = normalize_batch_webhook_event_type(self.event_type)
         self.status = normalize_batch_webhook_delivery_status(self.status)
         self.last_error = normalize_batch_webhook_last_error(self.last_error)
+
+
+@dataclass(frozen=True, slots=True)
+class BatchWebhookReplayResult:
+    record: BatchWebhookOutboxRecord
+    previous_attempt_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class BatchWebhookQueueSummary:
+    counts: dict[BatchWebhookDeliveryStatus, int]
+    oldest_pending_age_seconds: float
+    due_count: int = 0
 
 
 @dataclass
@@ -403,6 +427,8 @@ class BatchWebhookOutboxCreate:
     target_config_ciphertext: str
     payload_json: dict[str, Any]
     payload_sha256: str
+    created_by_team_id: str | None = None
+    created_by_organization_id: str | None = None
     status: BatchWebhookDeliveryStatus = BatchWebhookDeliveryStatus.QUEUED
     attempt_count: int = 0
     max_attempts: int = 8

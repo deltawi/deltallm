@@ -412,6 +412,23 @@ These settings retain the historical `embeddings_batch_*` names for compatibilit
 | `embeddings_batch_enabled` | `false` | Enable `/v1/files` and `/v1/batches` endpoints |
 | `embeddings_batch_worker_enabled` | `true` | Run internal batch executor worker loop |
 | `embeddings_batch_completion_outbox_worker_enabled` | `true` | Run the batch completion outbox worker loop that finalizes item accounting and spend records |
+| `batch_webhook_enabled` | `false` | Accept an optional terminal webhook configuration on new batches |
+| `batch_webhook_worker_enabled` | `true` | Run durable webhook delivery workers; disable on API-only pods in split deployments |
+| `batch_webhook_observability_enabled` | `true` | Refresh cluster-wide webhook queue gauges independently of delivery and cleanup; assign this role to worker pods in split deployments |
+| `batch_webhook_encryption_key` | unset | URL-safe base64 32-byte key used to encrypt webhook URLs and signing secrets at rest; required when webhooks are enabled |
+| `batch_webhook_poll_interval_seconds` | `1.0` | Idle webhook outbox poll interval |
+| `batch_webhook_observability_refresh_interval_seconds` | `15.0` | Interval for refreshing cluster-wide webhook queue gauges from Postgres |
+| `batch_webhook_max_concurrency` | `4` | Maximum concurrent deliveries per webhook worker process |
+| `batch_webhook_lease_seconds` | `30` | Delivery ownership lease; must exceed the request timeout |
+| `batch_webhook_timeout_seconds` | `10.0` | DNS resolution and outbound request timeout |
+| `batch_webhook_max_attempts` | `8` | Maximum attempts before a delivery becomes failed |
+| `batch_webhook_retry_initial_seconds` | `5` | Initial jittered exponential retry delay |
+| `batch_webhook_retry_max_seconds` | `3600` | Maximum retry delay and `Retry-After` cap |
+| `batch_webhook_allowed_ports` | `[443]` | Destination ports permitted by the webhook SSRF policy |
+| `batch_webhook_allowed_private_cidrs` | `[]` | Explicit private CIDR exceptions; cloud metadata addresses remain denied |
+| `batch_webhook_allow_http` | `false` | Permit unencrypted HTTP destinations; intended only for controlled development networks |
+| `batch_webhook_delivery_retention_days` | `30` | Retain delivered and failed outbox rows for inspection/replay history; active rows are never removed, and retained ownership snapshots preserve scoped operations after normal batch metadata cleanup |
+| `batch_webhook_cleanup_max_rows_per_run` | `10000` | Maximum delivered/failed webhook rows deleted per garbage-collection run; cleanup uses bounded pages and stops at this budget |
 | `embeddings_batch_storage_backend` | `local` | Artifact storage backend. Use `s3` for multi-replica production deployments |
 | `embeddings_batch_storage_dir` | `.deltallm/batch-artifacts` | Local artifact storage base directory |
 | `embeddings_batch_create_session_cleanup_enabled` | `true` | Enable cleanup for internal staged batch-create artifacts |

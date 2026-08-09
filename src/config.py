@@ -492,8 +492,10 @@ class GeneralSettings(BaseModel):
     embeddings_batch_completion_outbox_worker_enabled: bool = True
     batch_webhook_enabled: bool = False
     batch_webhook_worker_enabled: bool = True
+    batch_webhook_observability_enabled: bool = True
     batch_webhook_encryption_key: SecretStr | None = None
     batch_webhook_poll_interval_seconds: float = Field(default=1.0, gt=0.0)
+    batch_webhook_observability_refresh_interval_seconds: float = Field(default=15.0, gt=0.0)
     batch_webhook_max_concurrency: int = Field(default=4, ge=1, le=100)
     batch_webhook_lease_seconds: int = Field(default=30, ge=5)
     batch_webhook_timeout_seconds: float = Field(default=10.0, gt=0.0)
@@ -504,6 +506,11 @@ class GeneralSettings(BaseModel):
     batch_webhook_allowed_private_cidrs: list[str] = Field(default_factory=list)
     batch_webhook_allow_http: bool = False
     batch_webhook_delivery_retention_days: int = Field(default=30, ge=1)
+    batch_webhook_cleanup_max_rows_per_run: int = Field(
+        default=10_000,
+        ge=1,
+        le=1_000_000,
+    )
     embeddings_batch_storage_backend: Literal["local", "s3"] = "local"
     embeddings_batch_storage_dir: str = ".deltallm/batch-artifacts"
     embeddings_batch_s3_bucket: str | None = None

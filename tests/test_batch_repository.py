@@ -14,6 +14,7 @@ from src.batch.models import (
     BatchFairShareClaimResult,
     BatchJobStatus,
     BatchSchedulerFlowRecord,
+    BatchWebhookOwnershipConflictError,
     BatchWorkClaim,
     OPERATOR_FAILED_PREFIX,
 )
@@ -47,6 +48,60 @@ class _PrismaSpy:
         self.queries.append(sql)
         self.calls.append((sql, params))
         return []
+
+
+class _CleanupTransactionSpy:
+    def __init__(
+        self,
+        *,
+        fail_repair: bool = False,
+        ownership_conflict_count: int = 0,
+    ) -> None:
+        self.calls: list[tuple[str, str, tuple[object, ...]]] = []
+        self.fail_repair = fail_repair
+        self.ownership_conflict_count = ownership_conflict_count
+        self.claimed = False
+
+    def is_transaction(self) -> bool:
+        return True
+
+    async def query_raw(self, sql: str, *params):
+        self.calls.append(("query", sql, params))
+        if "SELECT batch_id" in sql and "FOR UPDATE SKIP LOCKED" in sql:
+            if self.claimed:
+                return []
+            self.claimed = True
+            return [{"batch_id": "batch-expired"}]
+        if "UPDATE deltallm_batch_webhook_outbox" in sql and self.fail_repair:
+            raise RuntimeError("ownership repair failed")
+        if "SELECT COUNT(*)::int AS conflict_count" in sql:
+            return [{"conflict_count": self.ownership_conflict_count}]
+        if "DELETE FROM deltallm_batch_job" in sql:
+            return [{"batch_id": "batch-expired"}]
+        return []
+
+    async def execute_raw(self, sql: str, *params):
+        self.calls.append(("execute", sql, params))
+        return 1
+
+
+class _CleanupPrismaSpy:
+    def __init__(
+        self,
+        *,
+        fail_repair: bool = False,
+        ownership_conflict_count: int = 0,
+    ) -> None:
+        self.transaction = _CleanupTransactionSpy(
+            fail_repair=fail_repair,
+            ownership_conflict_count=ownership_conflict_count,
+        )
+        self.tx_entries = 0
+
+    @asynccontextmanager
+    async def tx(self):
+        self.tx_entries += 1
+        yield self.transaction
 
 
 class _LeaseSweepPrisma:
@@ -102,6 +157,110 @@ class _LeaseSweepPrisma:
             for sql, params in self.calls
             if "WITH target AS" in sql and "UNNEST($1::text[])" in sql
         ]
+
+
+@pytest.mark.asyncio
+async def test_expired_batch_metadata_claim_is_bounded_and_skip_locked() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchMaintenanceRepository(prisma)
+    now = datetime.now(tz=UTC)
+
+    assert await repository.claim_expired_terminal_job_ids(now=now, limit=25) == []
+
+    assert "FROM deltallm_batch_job" in prisma.sql
+    assert "NOT EXISTS" in prisma.sql
+    assert "deltallm_batch_webhook_outbox" in prisma.sql
+    assert "IS DISTINCT FROM" in prisma.sql
+    assert "FOR UPDATE SKIP LOCKED" in prisma.sql
+    assert prisma.params == (now, 25)
+
+
+@pytest.mark.asyncio
+async def test_batch_organization_resolution_prefers_snapshot_without_query() -> None:
+    prisma = _PrismaSpy()
+    repository = BatchRepository(prisma)
+
+    resolved = await repository.resolve_batch_organization_id(
+        batch_id="batch-1",
+        created_by_team_id="team-1",
+        created_by_organization_id="org-snapshot",
+    )
+
+    assert resolved == "org-snapshot"
+    assert prisma.calls == []
+
+
+@pytest.mark.asyncio
+async def test_batch_organization_resolution_falls_back_to_team() -> None:
+    class _TeamPrisma(_PrismaSpy):
+        async def query_raw(self, sql: str, *params):
+            await super().query_raw(sql, *params)
+            if "FROM deltallm_teamtable" in sql:
+                return [{"organization_id": "org-team"}]
+            return []
+
+    prisma = _TeamPrisma()
+    repository = BatchRepository(prisma)
+
+    resolved = await repository.resolve_batch_organization_id(
+        created_by_team_id="team-1",
+    )
+
+    assert resolved == "org-team"
+    assert prisma.params == ("team-1",)
+
+
+@pytest.mark.asyncio
+async def test_expired_batch_cleanup_repairs_and_deletes_one_job_in_one_transaction() -> None:
+    prisma = _CleanupPrismaSpy()
+    repository = BatchRepository(prisma)
+
+    deleted = await repository.cleanup_next_expired_terminal_job(
+        now=datetime.now(tz=UTC),
+    )
+
+    assert deleted is True
+    assert prisma.tx_entries == 1
+    sql_calls = [sql for _, sql, _ in prisma.transaction.calls]
+    assert "FOR UPDATE SKIP LOCKED" in sql_calls[0]
+    assert prisma.transaction.calls[0][2][-1] == 1
+    assert "UPDATE deltallm_batch_webhook_outbox" in sql_calls[1]
+    assert "IS DISTINCT FROM" in sql_calls[2]
+    assert "DELETE FROM deltallm_batch_item" in sql_calls[3]
+    assert "DELETE FROM deltallm_batch_job" in sql_calls[4]
+
+
+@pytest.mark.asyncio
+async def test_expired_batch_cleanup_does_not_delete_when_ownership_repair_fails() -> None:
+    prisma = _CleanupPrismaSpy(fail_repair=True)
+    repository = BatchRepository(prisma)
+
+    with pytest.raises(RuntimeError, match="ownership repair failed"):
+        await repository.cleanup_next_expired_terminal_job(
+            now=datetime.now(tz=UTC),
+        )
+
+    sql_calls = [sql for _, sql, _ in prisma.transaction.calls]
+    assert all("DELETE FROM deltallm_batch_item" not in sql for sql in sql_calls)
+    assert all("DELETE FROM deltallm_batch_job" not in sql for sql in sql_calls)
+
+
+@pytest.mark.asyncio
+async def test_expired_batch_cleanup_does_not_delete_on_ownership_conflict() -> None:
+    prisma = _CleanupPrismaSpy(ownership_conflict_count=2)
+    repository = BatchRepository(prisma)
+
+    with pytest.raises(BatchWebhookOwnershipConflictError) as exc_info:
+        await repository.cleanup_next_expired_terminal_job(
+            now=datetime.now(tz=UTC),
+        )
+
+    assert exc_info.value.conflict_count == 2
+    sql_calls = [sql for _, sql, _ in prisma.transaction.calls]
+    assert "UPDATE deltallm_batch_webhook_outbox" in sql_calls[1]
+    assert "IS DISTINCT FROM" in sql_calls[2]
+    assert all("DELETE FROM deltallm_batch_item" not in sql for sql in sql_calls)
+    assert all("DELETE FROM deltallm_batch_job" not in sql for sql in sql_calls)
 
 
 @pytest.mark.asyncio

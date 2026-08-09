@@ -131,8 +131,12 @@ class AuditService:
         event: AuditEventInput,
         *,
         payloads: list[AuditPayloadInput] | None = None,
+        repository: AuditRepository | None = None,
     ) -> None:
-        await self._persist(_QueueItem(event=event, payloads=list(payloads or []), critical=True))
+        await self._persist(
+            _QueueItem(event=event, payloads=list(payloads or []), critical=True),
+            repository=repository,
+        )
 
     async def _worker_loop(self) -> None:
         while True:
@@ -152,9 +156,18 @@ class AuditService:
                 self._queue.task_done()
                 set_audit_queue_depth(self._queue.qsize())
 
-    async def _persist(self, item: _QueueItem, *, path: AuditIngestionPath = AuditIngestionPath.SYNC) -> None:
+    async def _persist(
+        self,
+        item: _QueueItem,
+        *,
+        path: AuditIngestionPath = AuditIngestionPath.SYNC,
+        repository: AuditRepository | None = None,
+    ) -> None:
         started = perf_counter()
-        content_enabled = await self.repository.is_content_storage_enabled_for_org(item.event.organization_id)
+        target_repository = repository if repository is not None else self.repository
+        content_enabled = await target_repository.is_content_storage_enabled_for_org(
+            item.event.organization_id
+        )
         payload_records: list[AuditPayloadRecord] = []
         content_stored = False
 
@@ -190,7 +203,7 @@ class AuditService:
                     )
                 )
 
-        stored_event = await self.repository.create_event(
+        stored_event = await target_repository.create_event(
             AuditEventRecord(
                 event_id="",
                 action=item.event.action,
@@ -219,7 +232,7 @@ class AuditService:
 
         for payload_record in payload_records:
             payload_record.event_id = stored_event.event_id
-            await self.repository.create_payload(payload_record)
+            await target_repository.create_payload(payload_record)
         observe_audit_ingestion_latency(path=path.value, latency_seconds=perf_counter() - started)
 
     def _schedule_fallback(self, item: _QueueItem) -> None:

@@ -59,11 +59,14 @@ def test_batch_webhook_defaults_are_safe() -> None:
 
     assert settings.batch_webhook_enabled is False
     assert settings.batch_webhook_worker_enabled is True
+    assert settings.batch_webhook_observability_enabled is True
+    assert settings.batch_webhook_observability_refresh_interval_seconds == 15.0
     assert settings.batch_webhook_encryption_key is None
     assert settings.batch_webhook_allowed_ports == [443]
     assert settings.batch_webhook_allowed_private_cidrs == []
     assert settings.batch_webhook_allow_http is False
     assert settings.batch_webhook_delivery_retention_days == 30
+    assert settings.batch_webhook_cleanup_max_rows_per_run == 10_000
 
 
 def test_batch_webhook_enabled_requires_valid_encryption_key() -> None:

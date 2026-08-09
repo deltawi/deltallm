@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test": "npm run test:unit",
-    "test:unit": "esbuild tests/modelFormShared.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.tmp/modelFormShared.test.mjs && node --test node_modules/.tmp/modelFormShared.test.mjs",
+    "test:unit": "node scripts/run-unit-tests.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

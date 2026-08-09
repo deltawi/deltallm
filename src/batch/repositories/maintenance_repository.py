@@ -69,17 +69,36 @@ class BatchMaintenanceRepository:
         self.model_group_resolver = model_group_resolver
         self.tenant_scope_preference = parse_tenant_scope_preference(tenant_scope_preference)
 
-    async def list_expired_terminal_job_ids(self, *, now: datetime, limit: int = 100) -> list[str]:
+    async def claim_expired_terminal_job_ids(self, *, now: datetime, limit: int = 100) -> list[str]:
+        """Lock a bounded cleanup page until the caller's transaction commits."""
         if self.prisma is None:
             return []
         rows = await self.prisma.query_raw(
             """
             SELECT batch_id
-            FROM deltallm_batch_job
-            WHERE expires_at IS NOT NULL
-              AND expires_at < $1::timestamp
-              AND status IN ('completed', 'failed', 'cancelled', 'expired')
-            ORDER BY expires_at ASC
+            FROM deltallm_batch_job j
+            WHERE j.expires_at IS NOT NULL
+              AND j.expires_at < $1::timestamp
+              AND j.status IN ('completed', 'failed', 'cancelled', 'expired')
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM deltallm_batch_webhook_outbox o
+                    WHERE o.batch_id = j.batch_id
+                      AND (
+                            (
+                                o.created_by_team_id IS NOT NULL
+                                AND o.created_by_team_id IS DISTINCT FROM j.created_by_team_id
+                            )
+                            OR
+                            (
+                                o.created_by_organization_id IS NOT NULL
+                                AND o.created_by_organization_id
+                                    IS DISTINCT FROM j.created_by_organization_id
+                            )
+                      )
+              )
+            ORDER BY j.expires_at ASC, j.batch_id ASC
+            FOR UPDATE SKIP LOCKED
             LIMIT $2
             """,
             now,
@@ -87,23 +106,72 @@ class BatchMaintenanceRepository:
         )
         return [str(row.get("batch_id") or "") for row in rows if row.get("batch_id")]
 
-    async def delete_job_metadata(self, batch_id: str) -> None:
+    async def count_expired_terminal_job_ownership_conflicts(
+        self,
+        *,
+        now: datetime,
+        limit: int = 100,
+    ) -> int:
+        """Return a bounded count of expired jobs intentionally skipped by cleanup."""
         if self.prisma is None:
-            return
+            return 0
+        rows = await self.prisma.query_raw(
+            """
+            SELECT COUNT(*)::int AS conflict_count
+            FROM (
+                SELECT j.batch_id
+                FROM deltallm_batch_job j
+                WHERE j.expires_at IS NOT NULL
+                  AND j.expires_at < $1::timestamp
+                  AND j.status IN ('completed', 'failed', 'cancelled', 'expired')
+                  AND EXISTS (
+                        SELECT 1
+                        FROM deltallm_batch_webhook_outbox o
+                        WHERE o.batch_id = j.batch_id
+                          AND (
+                                (
+                                    o.created_by_team_id IS NOT NULL
+                                    AND o.created_by_team_id
+                                        IS DISTINCT FROM j.created_by_team_id
+                                )
+                                OR
+                                (
+                                    o.created_by_organization_id IS NOT NULL
+                                    AND o.created_by_organization_id
+                                        IS DISTINCT FROM j.created_by_organization_id
+                                )
+                          )
+                  )
+                ORDER BY j.expires_at ASC, j.batch_id ASC
+                LIMIT $2
+            ) conflicts
+            """,
+            now,
+            max(1, min(limit, 1_000)),
+        )
+        return int(dict(rows[0]).get("conflict_count") or 0) if rows else 0
+
+    async def delete_job_metadata(self, batch_id: str) -> bool:
+        if self.prisma is None or not batch_id:
+            return False
         await self.prisma.execute_raw(
             """
             DELETE FROM deltallm_batch_item
-            WHERE batch_id = $1
+            WHERE batch_id::text = ANY($1::text[])
             """,
-            batch_id,
+            [batch_id],
         )
-        await self.prisma.execute_raw(
+        rows = await self.prisma.query_raw(
             """
             DELETE FROM deltallm_batch_job
-            WHERE batch_id = $1
+            WHERE batch_id::text = ANY($1::text[])
+              AND expires_at IS NOT NULL
+              AND status IN ('completed', 'failed', 'cancelled', 'expired')
+            RETURNING batch_id
             """,
-            batch_id,
+            [batch_id],
         )
+        return bool(rows)
 
     async def _count_active_item_leases(self, prisma: Any, *, now: datetime, limit: int) -> int:
         rows = await prisma.query_raw(

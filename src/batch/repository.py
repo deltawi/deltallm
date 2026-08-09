@@ -22,6 +22,8 @@ from src.batch.models import (
     BatchSchedulerFlowRecord,
     BatchWebhookOutboxCreate,
     BatchWebhookOutboxRecord,
+    BatchWebhookQueueSummary,
+    BatchWebhookReplayResult,
     BatchWebhookEventType,
     BatchWebhookConfigurationConflictError,
     BatchWorkClaim,
@@ -66,6 +68,8 @@ def _webhook_outbox_matches_terminal_job(
     return bool(
         record.batch_id == job.batch_id
         and record.event_type == event_type
+        and record.created_by_team_id == job.created_by_team_id
+        and record.created_by_organization_id == job.created_by_organization_id
         and record.target_config_ciphertext == job.webhook_config_ciphertext
         and isinstance(payload, dict)
         and payload.get("id") == record.event_id
@@ -807,6 +811,84 @@ class BatchRepository:
             limit=limit,
         )
 
+    async def fail_exhausted_webhook_outbox_leases(
+        self,
+        *,
+        limit: int = 100,
+    ) -> list[BatchWebhookOutboxRecord]:
+        return await self.webhook_outbox.fail_exhausted_expired_leases(limit=limit)
+
+    async def list_webhook_outbox_by_batch_id(
+        self,
+        *,
+        batch_id: str,
+    ) -> list[BatchWebhookOutboxRecord]:
+        return await self.webhook_outbox.list_by_batch_id(batch_id=batch_id)
+
+    async def resolve_batch_organization_id(
+        self,
+        *,
+        batch_id: str | None = None,
+        created_by_team_id: str | None = None,
+        created_by_organization_id: str | None = None,
+    ) -> str | None:
+        """Resolve the authoritative organization without exposing webhook material."""
+
+        organization_id = str(created_by_organization_id or "").strip() or None
+        team_id = str(created_by_team_id or "").strip() or None
+        if organization_id is not None:
+            return organization_id
+
+        if batch_id and (team_id is None or organization_id is None):
+            job = await self.get_job(batch_id)
+            if job is not None:
+                organization_id = str(job.created_by_organization_id or "").strip() or None
+                team_id = team_id or (str(job.created_by_team_id or "").strip() or None)
+                if organization_id is not None:
+                    return organization_id
+
+        if self.prisma is None or team_id is None:
+            return None
+        rows = await self.prisma.query_raw(
+            "SELECT organization_id FROM deltallm_teamtable WHERE team_id = $1 LIMIT 1",
+            team_id,
+        )
+        return str((rows[0] if rows else {}).get("organization_id") or "").strip() or None
+
+    async def backfill_missing_webhook_ownership(
+        self,
+        *,
+        batch_ids: list[str],
+    ) -> int:
+        return await self.webhook_outbox.backfill_missing_ownership_for_batches(
+            batch_ids=batch_ids
+        )
+
+    async def replay_failed_webhook_outbox(
+        self,
+        *,
+        batch_id: str,
+        event_id: str,
+    ) -> BatchWebhookReplayResult | None:
+        return await self.webhook_outbox.replay_failed(
+            batch_id=batch_id,
+            event_id=event_id,
+        )
+
+    async def summarize_webhook_outbox(self) -> BatchWebhookQueueSummary:
+        return await self.webhook_outbox.summarize()
+
+    async def delete_terminal_webhook_outbox_before(
+        self,
+        *,
+        cutoff: datetime,
+        limit: int,
+    ) -> dict[str, int]:
+        return await self.webhook_outbox.delete_terminal_before(
+            cutoff=cutoff,
+            limit=limit,
+        )
+
     async def renew_webhook_outbox_lease(
         self,
         *,
@@ -918,25 +1000,36 @@ class BatchRepository:
                 event_id=event.event_id,
                 batch_id=job.batch_id,
                 event_type=event.event_type,
+                created_by_team_id=job.created_by_team_id,
+                created_by_organization_id=job.created_by_organization_id,
                 target_config_ciphertext=ciphertext,
                 payload_json=event.payload_json,
                 payload_sha256=event.payload_sha256,
                 max_attempts=self.webhook_max_attempts,
             )
         )
-        if inserted is None:
-            inserted = await self.webhook_outbox.get_by_batch_and_event_type(
+        if inserted is not None:
+            return
+
+        existing = await self.webhook_outbox.fill_missing_ownership(
+            batch_id=job.batch_id,
+            event_type=event_type,
+            created_by_team_id=job.created_by_team_id,
+            created_by_organization_id=job.created_by_organization_id,
+        )
+        if existing is None:
+            existing = await self.webhook_outbox.get_by_batch_and_event_type(
                 batch_id=job.batch_id,
                 event_type=event_type,
             )
-            if inserted is None or not _webhook_outbox_matches_terminal_job(
-                inserted,
-                job=job,
-                event_type=event_type,
-            ):
-                raise BatchWebhookConfigurationConflictError(
-                    "batch webhook event conflicts with terminal outcome"
-                )
+        if existing is None or not _webhook_outbox_matches_terminal_job(
+            existing,
+            job=job,
+            event_type=event_type,
+        ):
+            raise BatchWebhookConfigurationConflictError(
+                "batch webhook event conflicts with terminal outcome"
+            )
 
     async def _attach_artifacts_and_enqueue_webhook_in_current_transaction(
         self,
@@ -1218,11 +1311,44 @@ class BatchRepository:
     async def set_provider_error(self, *, batch_id: str, provider_error: str | None) -> BatchJobRecord | None:
         return await self.jobs.set_provider_error(batch_id=batch_id, provider_error=provider_error)
 
-    async def list_expired_terminal_job_ids(self, *, now: datetime, limit: int = 100) -> list[str]:
-        return await self.maintenance.list_expired_terminal_job_ids(now=now, limit=limit)
+    async def cleanup_next_expired_terminal_job(self, *, now: datetime) -> bool:
+        """Delete at most one expired job in its own transaction."""
 
-    async def delete_job_metadata(self, batch_id: str) -> None:
-        await self.maintenance.delete_job_metadata(batch_id)
+        async def _cleanup_one(repo: BatchRepository) -> int:
+            batch_ids = await repo.maintenance.claim_expired_terminal_job_ids(
+                now=now,
+                limit=1,
+            )
+            if not batch_ids:
+                return 0
+            await repo.webhook_outbox.backfill_missing_ownership_for_batches(
+                batch_ids=batch_ids
+            )
+            await repo.webhook_outbox.assert_ownership_matches_jobs_for_batches(
+                batch_ids=batch_ids
+            )
+            deleted = await repo.maintenance.delete_job_metadata(batch_ids[0])
+            return int(deleted)
+
+        if self.prisma is None:
+            return False
+        if _prisma_client_is_transaction(self.prisma):
+            return bool(await _cleanup_one(self))
+        if hasattr(self.prisma, "tx"):
+            async with self.prisma.tx() as tx:
+                return bool(await _cleanup_one(self.with_prisma(tx)))
+        raise RuntimeError("expired batch cleanup requires transaction support")
+
+    async def count_expired_terminal_job_ownership_conflicts(
+        self,
+        *,
+        now: datetime,
+        limit: int = 100,
+    ) -> int:
+        return await self.maintenance.count_expired_terminal_job_ownership_conflicts(
+            now=now,
+            limit=limit,
+        )
 
     async def backfill_scheduler_dimensions(
         self,

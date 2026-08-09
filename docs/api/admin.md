@@ -422,8 +422,12 @@ Supported report parameters include:
 |--------|----------|---------|
 | `GET` | `/ui/api/batches/summary` | Batch counts by status |
 | `GET` | `/ui/api/batches` | List batches |
-| `GET` | `/ui/api/batches/{batch_id}` | Get one batch with items |
+| `GET` | `/ui/api/batches/{batch_id}` | Get one batch with items and redacted webhook delivery state |
+| `GET` | `/ui/api/batches/{batch_id}/webhook-deliveries` | Inspect redacted delivery state, including after batch metadata cleanup |
 | `POST` | `/ui/api/batches/{batch_id}/cancel` | Cancel a batch |
+| `POST` | `/ui/api/batches/{batch_id}/webhook-deliveries/{event_id}/replay` | Reschedule a failed webhook delivery while preserving its event ID and body |
+
+Webhook inspection requires the existing scoped batch read permission. Replay requires scoped batch update permission and returns `409` unless the delivery is still failed. The standalone delivery endpoint and replay remain scoped through ownership retained on the outbox row after batch metadata cleanup. These responses never include the destination URL, signing secret, encrypted configuration, headers, payload, ownership identifiers, or caller metadata.
 
 ### Audit
 

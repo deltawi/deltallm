@@ -8,6 +8,7 @@ from fastapi import Request
 from src.audit.actions import AuditAction, normalize_audit_action
 from src.audit.errors import derive_audit_error_code
 from src.auth.roles import Permission, has_platform_permission
+from src.db.repositories import AuditRepository
 from src.middleware.platform_auth import get_platform_auth_context
 from src.services.audit_service import AuditEventInput, AuditPayloadInput, AuditService
 
@@ -108,6 +109,7 @@ async def emit_control_audit_event(
     metadata: dict[str, Any] | None = None,
     error: Exception | None = None,
     critical: bool = True,
+    transactional_repository: AuditRepository | None = None,
 ) -> None:
     audit_service: AuditService | None = getattr(request.app.state, "audit_service", None)
     if audit_service is None:
@@ -144,7 +146,13 @@ async def emit_control_audit_event(
         error_code=derive_audit_error_code(error),
         metadata=event_metadata,
     )
-    if _should_sync_control_audit(request, action, critical=critical):
+    if transactional_repository is not None:
+        await audit_service.record_event_sync(
+            event,
+            payloads=payloads,
+            repository=transactional_repository,
+        )
+    elif _should_sync_control_audit(request, action, critical=critical):
         await audit_service.record_event_sync(event, payloads=payloads)
     else:
         audit_service.record_event(event, payloads=payloads, critical=critical)

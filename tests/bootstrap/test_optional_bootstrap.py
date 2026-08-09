@@ -42,6 +42,7 @@ def _batch_config(
     storage_backend: str = "local",
     s3_bucket: str | None = None,
     webhook_worker_enabled: bool = True,
+    webhook_observability_enabled: bool = True,
     webhook_encryption_key: str | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
@@ -51,6 +52,7 @@ def _batch_config(
             embeddings_batch_completion_outbox_worker_enabled=completion_outbox_worker_enabled,
             batch_webhook_enabled=False,
             batch_webhook_worker_enabled=webhook_worker_enabled,
+            batch_webhook_observability_enabled=webhook_observability_enabled,
             batch_webhook_encryption_key=webhook_encryption_key,
             batch_webhook_poll_interval_seconds=1.0,
             batch_webhook_max_concurrency=3,
@@ -61,6 +63,8 @@ def _batch_config(
             batch_webhook_allowed_ports=[443],
             batch_webhook_allowed_private_cidrs=[],
             batch_webhook_allow_http=False,
+            batch_webhook_delivery_retention_days=30,
+            batch_webhook_cleanup_max_rows_per_run=10_000,
             embeddings_batch_gc_enabled=gc_enabled,
             embeddings_batch_storage_backend=storage_backend,
             embeddings_batch_storage_dir="/tmp/batch-artifacts",
@@ -146,6 +150,78 @@ def test_batch_worker_id_is_cluster_unique_and_log_safe(monkeypatch: pytest.Monk
     worker_id = batch_workers._batch_worker_id("batch executor")
 
     assert worker_id == "batch-executor-pod-name-with-spaces-12345-abc123def456"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("observer_enabled", "delivery_enabled", "gc_enabled", "expected_started"),
+    [
+        (True, True, False, True),
+        (True, False, True, True),
+        (True, False, False, True),
+        (False, True, True, False),
+    ],
+)
+async def test_webhook_observability_worker_has_independent_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+    observer_enabled: bool,
+    delivery_enabled: bool,
+    gc_enabled: bool,
+    expected_started: bool,
+) -> None:
+    created: list[object] = []
+
+    class _Worker:
+        def __init__(self, *, repository, config) -> None:  # noqa: ANN001
+            self.repository = repository
+            self.config = config
+            self.stopped = False
+            created.append(self)
+
+        async def run(self) -> None:
+            while not self.stopped:
+                await asyncio.sleep(0)
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    monkeypatch.setattr(batch_workers, "BatchWebhookObservabilityWorker", _Worker)
+    cfg = _batch_config(
+        enabled=True,
+        worker_enabled=False,
+        gc_enabled=gc_enabled,
+        webhook_worker_enabled=delivery_enabled,
+        webhook_observability_enabled=observer_enabled,
+    )
+    runtime = batch_bootstrap.BatchRuntime()
+    repository = object()
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            batch_webhook_observability_worker=None,
+            batch_webhook_observability_task=None,
+        )
+    )
+
+    batch_workers._start_webhook_observability_worker(  # type: ignore[arg-type]
+        app,
+        cfg,
+        repository,
+        runtime,
+    )
+
+    assert (runtime.webhook_observability_worker is not None) is expected_started
+    assert (runtime.webhook_observability_task is not None) is expected_started
+    assert (app.state.batch_webhook_observability_worker is not None) is expected_started
+    assert (app.state.batch_webhook_observability_task is not None) is expected_started
+    if not expected_started:
+        assert created == []
+        return
+
+    worker = created[0]
+    assert worker.repository is repository
+    assert worker.config.refresh_interval_seconds == 15.0
+    await shutdown_batch_runtime(runtime)
+    assert worker.stopped is True
 
 
 @pytest.mark.asyncio
@@ -486,6 +562,7 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
     assert runtime.create_session_cleanup_worker is None
     assert runtime.create_session_cleanup_task is None
     assert created["gc_worker"].storage_registry == {"local": {"path": "/tmp/batch-artifacts"}}
+    assert created["gc_worker"].config.webhook_cleanup_max_rows_per_run == 10_000
     assert app.state.batch_scheduler_backfill_worker is created["scheduler_backfill_worker"]
     assert created["scheduler_backfill_worker"].repository is repository
     assert created["scheduler_backfill_worker"].config.interval_seconds == 60.0
@@ -515,6 +592,7 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
             "disabled",
             "encryption key not configured",
         ),
+        BootstrapStatus("batch_webhook_observability", "ready"),
         BootstrapStatus("embeddings_batch_gc", "ready"),
         BootstrapStatus("embeddings_batch_scheduler_backfill", "ready"),
         BootstrapStatus("embeddings_batch_stale_lease_sweeper", "ready"),
@@ -592,6 +670,7 @@ async def test_init_batch_runtime_can_disable_completion_outbox_worker(
             "disabled",
             "encryption key not configured",
         ),
+        BootstrapStatus("batch_webhook_observability", "ready"),
         BootstrapStatus("embeddings_batch_gc", "disabled"),
         BootstrapStatus("embeddings_batch_scheduler_backfill", "disabled"),
         BootstrapStatus("embeddings_batch_stale_lease_sweeper", "disabled"),
@@ -827,6 +906,7 @@ async def test_init_and_shutdown_batch_runtime_with_create_session_cleanup_worke
             "disabled",
             "encryption key not configured",
         ),
+        BootstrapStatus("batch_webhook_observability", "ready"),
         BootstrapStatus("embeddings_batch_gc", "disabled"),
         BootstrapStatus("embeddings_batch_scheduler_backfill", "disabled"),
         BootstrapStatus("embeddings_batch_stale_lease_sweeper", "disabled"),
@@ -951,6 +1031,7 @@ async def test_init_batch_runtime_builds_create_session_public_service(
             "disabled",
             "encryption key not configured",
         ),
+        BootstrapStatus("batch_webhook_observability", "ready"),
         BootstrapStatus("embeddings_batch_gc", "disabled"),
         BootstrapStatus("embeddings_batch_scheduler_backfill", "disabled"),
         BootstrapStatus("embeddings_batch_stale_lease_sweeper", "disabled"),

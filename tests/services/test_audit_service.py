@@ -58,6 +58,27 @@ async def test_audit_service_enforces_org_content_toggle():
 
 
 @pytest.mark.asyncio
+async def test_audit_service_sync_write_can_use_transaction_bound_repository():
+    default_repo = FakeAuditRepository()
+    transactional_repo = FakeAuditRepository()
+    transactional_repo.content_toggles = {"org-1": True}
+    service = AuditService(default_repo)
+
+    await service.record_event_sync(
+        AuditEventInput(action="ADMIN_BATCH_WEBHOOK_REPLAY", organization_id="org-1"),
+        payloads=[AuditPayloadInput(kind="response", content_json={"replayed": True})],
+        repository=transactional_repo,  # type: ignore[arg-type]
+    )
+
+    assert default_repo.events == []
+    assert default_repo.payloads == []
+    assert [event.action for event in transactional_repo.events] == [
+        "ADMIN_BATCH_WEBHOOK_REPLAY"
+    ]
+    assert transactional_repo.payloads[0].content_json == {"replayed": True}
+
+
+@pytest.mark.asyncio
 async def test_audit_service_drops_non_critical_when_queue_full():
     repo = FakeAuditRepository()
     service = AuditService(repo, queue_max_size=1)
