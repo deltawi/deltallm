@@ -10,6 +10,7 @@ const outputDir = path.join(uiRoot, 'node_modules', '.tmp', 'ui-unit-tests');
 const testSources = [
   'tests/modelFormShared.test.ts',
   'tests/batchDetailResource.test.ts',
+  'tests/dashboardRange.test.ts',
 ];
 
 await rm(outputDir, { recursive: true, force: true });

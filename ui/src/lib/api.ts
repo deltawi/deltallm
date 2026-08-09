@@ -135,6 +135,23 @@ export interface SpendSummary {
   failed_requests?: number;
 }
 
+export type SpendBucket = 'day' | 'week' | 'month';
+
+export interface SpendTimeSeriesRow {
+  group_key: string;
+  total_spend: number;
+  request_count: number;
+  total_tokens: number;
+  successful_requests: number;
+  failed_requests: number;
+}
+
+export interface SpendTimeSeriesReport {
+  group_by: 'day';
+  interval: SpendBucket;
+  breakdown: SpendTimeSeriesRow[];
+}
+
 export interface SpendGroupRow {
   group_key: string;
   display_name?: string | null;
@@ -758,6 +775,24 @@ export const spend = {
     if (end_date) qs.set('end_date', end_date);
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     return apiFetch<SpendSummary>(`/ui/api/spend/summary${suffix}`, opts);
+  },
+  timeSeries: (
+    params: { start_date?: string; end_date?: string; interval: SpendBucket },
+    opts?: RequestInit,
+  ) => {
+    const qs = new URLSearchParams({ group_by: 'day', interval: params.interval });
+    if (params.start_date) qs.set('start_date', params.start_date);
+    if (params.end_date) qs.set('end_date', params.end_date);
+    return apiFetch<SpendTimeSeriesReport>(`/ui/api/spend/report?${qs.toString()}`, opts);
+  },
+  providerReport: (
+    params?: { start_date?: string; end_date?: string; limit?: number },
+    opts?: RequestInit,
+  ) => {
+    const qs = new URLSearchParams({ group_by: 'provider', limit: String(params?.limit ?? 5) });
+    if (params?.start_date) qs.set('start_date', params.start_date);
+    if (params?.end_date) qs.set('end_date', params.end_date);
+    return apiFetch<SpendGroupReport>(`/ui/api/spend/report?${qs.toString()}`, opts);
   },
   report: (
     group_by: 'model' | 'provider' | 'day' | 'user' | 'team',
