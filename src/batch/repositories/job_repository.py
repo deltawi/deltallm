@@ -4613,19 +4613,19 @@ class BatchJobRepository:
                     error_file_id = $3,
                     status = (
                         CASE
-                        WHEN j.cancel_requested_at IS NOT NULL OR $4 = 'cancelled'
+                        WHEN j.cancel_requested_at IS NOT NULL OR $4::text = 'cancelled'
                             THEN 'cancelled'
-                        WHEN $4 = 'expired'
+                        WHEN $4::text = 'expired'
                             THEN 'expired'
-                        WHEN $4 = 'failed'
-                          OR $5 IS NOT NULL
-                          OR LEFT(COALESCE(j.provider_error, ''), LENGTH($6)) = $6
+                        WHEN $4::text = 'failed'
+                          OR $5::text IS NOT NULL
+                          OR LEFT(COALESCE(j.provider_error, ''), LENGTH($6::text)) = $6::text
                           OR (stats.completed_items = 0 AND stats.failed_items > 0)
                             THEN 'failed'
                         ELSE 'completed'
                         END
                     )::"DeltaLLM_BatchJobStatus",
-                    provider_error = COALESCE($5, j.provider_error),
+                    provider_error = COALESCE($5::text, j.provider_error),
                     total_items = stats.total_items,
                     in_progress_items = stats.in_progress_items,
                     completed_items = stats.completed_items,
@@ -4669,19 +4669,19 @@ class BatchJobRepository:
                     error_file_id = $4,
                     status = (
                         CASE
-                        WHEN j.cancel_requested_at IS NOT NULL OR $5 = 'cancelled'
+                        WHEN j.cancel_requested_at IS NOT NULL OR $5::text = 'cancelled'
                             THEN 'cancelled'
-                        WHEN $5 = 'expired'
+                        WHEN $5::text = 'expired'
                             THEN 'expired'
-                        WHEN $5 = 'failed'
-                          OR $6 IS NOT NULL
-                          OR LEFT(COALESCE(j.provider_error, ''), LENGTH($7)) = $7
+                        WHEN $5::text = 'failed'
+                          OR $6::text IS NOT NULL
+                          OR LEFT(COALESCE(j.provider_error, ''), LENGTH($7::text)) = $7::text
                           OR (stats.completed_items = 0 AND stats.failed_items > 0)
                             THEN 'failed'
                         ELSE 'completed'
                         END
                     )::"DeltaLLM_BatchJobStatus",
-                    provider_error = COALESCE($6, j.provider_error),
+                    provider_error = COALESCE($6::text, j.provider_error),
                     total_items = stats.total_items,
                     in_progress_items = stats.in_progress_items,
                     completed_items = stats.completed_items,

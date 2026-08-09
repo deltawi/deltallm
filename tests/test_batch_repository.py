@@ -4687,9 +4687,10 @@ async def test_attach_artifacts_and_finalize_casts_status_parameter_to_enum() ->
 
     assert finalized is None
     assert 'status = (' in prisma.sql
-    assert "j.cancel_requested_at IS NOT NULL OR $4 = 'cancelled'" in prisma.sql
-    assert "LEFT(COALESCE(j.provider_error, ''), LENGTH($6)) = $6" in prisma.sql
-    assert "provider_error = COALESCE($5, j.provider_error)" in prisma.sql
+    assert "j.cancel_requested_at IS NOT NULL OR $4::text = 'cancelled'" in prisma.sql
+    assert "$5::text IS NOT NULL" in prisma.sql
+    assert "LEFT(COALESCE(j.provider_error, ''), LENGTH($6::text)) = $6::text" in prisma.sql
+    assert "provider_error = COALESCE($5::text, j.provider_error)" in prisma.sql
     assert prisma.params[3] == BatchJobStatus.COMPLETED.value
     assert prisma.params[4] == BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR
     assert prisma.params[5] == OPERATOR_FAILED_PREFIX

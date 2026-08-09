@@ -56,7 +56,7 @@ class BatchWebhookOutboxRepository:
                 $4,
                 $5,
                 $6,
-                $7,
+                $7::jsonb,
                 $8,
                 $9,
                 $10,
@@ -342,14 +342,14 @@ class BatchWebhookOutboxRepository:
         rows = await self.prisma.query_raw(
             """
             UPDATE deltallm_batch_webhook_outbox
-            SET created_by_team_id = COALESCE(created_by_team_id, $3),
-                created_by_organization_id = COALESCE(created_by_organization_id, $4)
+            SET created_by_team_id = COALESCE(created_by_team_id, $3::text),
+                created_by_organization_id = COALESCE(created_by_organization_id, $4::text)
             WHERE batch_id = $1
               AND event_type = $2
               AND (
-                    (created_by_team_id IS NULL AND $3 IS NOT NULL)
+                    (created_by_team_id IS NULL AND $3::text IS NOT NULL)
                     OR
-                    (created_by_organization_id IS NULL AND $4 IS NOT NULL)
+                    (created_by_organization_id IS NULL AND $4::text IS NOT NULL)
               )
             RETURNING *
             """,

@@ -143,7 +143,8 @@ class BatchItemRepository:
                 worker_id,
                 reclaimed_count,
             )
-        return [item_from_row(row) for row in rows]
+        claimed_items = [item_from_row(row) for row in rows]
+        return sorted(claimed_items, key=lambda item: item.line_number)
 
     async def mark_item_completed(
         self,

@@ -1728,7 +1728,7 @@ async def test_db_backed_webhook_delivery_claims_recover_and_fence_attempt_gener
             attempt_count=2,
             status_code=503,
             error="http_retryable_status",
-            next_attempt_at=datetime.now(tz=UTC),
+            next_attempt_at=datetime.now(tz=UTC) - timedelta(seconds=1),
         )
 
         final_claim = await owner_repo.claim_webhook_outbox_due(
@@ -2567,7 +2567,8 @@ async def test_db_backed_oversized_artifact_validation_failure_still_enqueues_we
     await batch_db.execute_raw(
         """
         UPDATE deltallm_batch_item
-        SET response_body = $2::jsonb
+        SET status = 'completed',
+            response_body = $2::jsonb
         WHERE batch_id = $1
         """,
         batch_id,
@@ -2652,6 +2653,18 @@ async def test_db_backed_webhook_outbox_failure_rolls_back_terminal_transition(
         batch_db,
         final_status=BatchJobStatus.COMPLETED,
     )
+    output_file = await repository.create_file(
+        purpose="batch_output",
+        filename="output.jsonl",
+        bytes_size=16,
+        storage_backend="local",
+        storage_key=f"seed/{batch_id}/output.jsonl",
+        checksum="seed-output",
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+    )
+    assert output_file is not None
 
     async def _fail_insert(*args, **kwargs):  # noqa: ANN002, ANN003
         del args, kwargs
@@ -2665,7 +2678,7 @@ async def test_db_backed_webhook_outbox_failure_rolls_back_terminal_transition(
     with pytest.raises(RuntimeError, match="simulated webhook outbox failure"):
         await repository.attach_artifacts_and_finalize(
             batch_id=batch_id,
-            output_file_id="file-output",
+            output_file_id=output_file.file_id,
             error_file_id=None,
             final_status=BatchJobStatus.COMPLETED,
             worker_id=worker_id,
