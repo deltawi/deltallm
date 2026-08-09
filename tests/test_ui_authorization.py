@@ -248,8 +248,35 @@ async def test_auth_me_returns_ui_access(client, test_app):
     assert payload["ui_access"]["mcp_approvals"] is True
     assert payload["ui_access"]["audit"] is True
     assert payload["ui_access"]["playground"] is True
+    assert payload["ui_access"]["named_credentials"] is False
     assert payload["ui_access"]["people_access"] is False
     assert payload["ui_access"]["usage"] is False
+
+
+@pytest.mark.asyncio
+async def test_auth_me_allows_platform_admin_to_access_named_credentials(client, test_app):
+    class StubIdentityService:
+        async def get_context_for_session(self, token: str):
+            if token != "session-token":
+                return None
+            return PlatformAuthContext(
+                account_id="acct-admin",
+                email="admin@example.com",
+                role="platform_admin",
+                permissions=[],
+                organization_memberships=[],
+                team_memberships=[],
+                mfa_enabled=False,
+                mfa_verified=False,
+                force_password_change=False,
+            )
+
+    test_app.state.platform_identity_service = StubIdentityService()
+
+    response = await client.get("/auth/me", cookies={"deltallm_session": "session-token"})
+
+    assert response.status_code == 200
+    assert response.json()["ui_access"]["named_credentials"] is True
 
 
 @pytest.mark.asyncio
