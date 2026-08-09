@@ -32,7 +32,10 @@ from src.batch.scheduling import (
 )
 from src.batch.scheduling.estimator import size_class_for_work_units
 from src.batch.worker import BatchWorkerConfig
-from src.bootstrap.batch import BatchRuntime, _apply_live_batch_scheduler_config
+from src.bootstrap.batch import BatchRuntime
+from src.bootstrap.batch_runtime.scheduler import (
+    apply_live_batch_scheduler_config as _apply_live_batch_scheduler_config,
+)
 from src.config import AppConfig, GeneralSettings
 from src.config_runtime.dynamic import DynamicConfigManager
 

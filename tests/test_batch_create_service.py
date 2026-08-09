@@ -15,6 +15,7 @@ from src.batch.create import (
 from src.batch.create.service import BatchCreateSessionService, BatchCreateSessionServiceResult
 from src.batch.models import BatchJobRecord, BatchJobStatus
 from src.batch.service import BatchService
+from src.batch.webhooks import BatchWebhookCipher, batch_webhook_config_fingerprint
 from src.models.responses import UserAPIKeyAuth
 
 
@@ -59,6 +60,8 @@ def _session(
     status: str = BatchCreateSessionStatus.COMPLETED,
     input_file_id: str = "file-1",
     metadata: dict | None = None,
+    webhook_config_ciphertext: str | None = None,
+    webhook_config_fingerprint: str | None = None,
 ) -> BatchCreateSessionRecord:
     now = datetime.now(tz=UTC)
     return BatchCreateSessionRecord(
@@ -92,6 +95,8 @@ def _session(
         completed_at=now if status == BatchCreateSessionStatus.COMPLETED else None,
         last_attempt_at=now,
         expires_at=None,
+        webhook_config_ciphertext=webhook_config_ciphertext,
+        webhook_config_fingerprint=webhook_config_fingerprint,
     )
 
 
@@ -246,6 +251,267 @@ async def test_create_session_service_rejects_mismatched_existing_idempotent_req
     assert exc.value.status_code == 409
 
 
+def test_create_session_service_rejects_webhook_before_staging_when_disabled() -> None:
+    service = _create_session_service_for_validation()
+
+    with pytest.raises(HTTPException) as exc:
+        service._validate_webhook(  # noqa: SLF001
+            {
+                "url": "https://customer.example/webhooks",
+                "signing_secret": "s" * 32,
+            }
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == {
+        "code": "batch_webhook_disabled",
+        "message": "Batch webhooks are not enabled",
+    }
+
+
+def test_create_session_service_rejects_webhook_when_encryption_is_unavailable() -> None:
+    service = _create_session_service_for_validation()
+    service.webhook_enabled = True
+
+    with pytest.raises(HTTPException) as exc:
+        service._validate_webhook(  # noqa: SLF001
+            {
+                "url": "https://customer.example/webhooks",
+                "signing_secret": "s" * 32,
+            }
+        )
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == {
+        "code": "batch_webhook_unavailable",
+        "message": "Batch webhook encryption is unavailable",
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_session_service_rejects_non_utf8_webhook_url_before_loading_file() -> None:
+    async def _fail_get_file(file_id: str):  # noqa: ANN201
+        raise AssertionError(f"get_file must not be called for invalid webhook URL: {file_id}")
+
+    service = BatchCreateSessionService(
+        repository=SimpleNamespace(get_file=_fail_get_file),  # type: ignore[arg-type]
+        create_session_repository=SimpleNamespace(),  # type: ignore[arg-type]
+        stager=_NeverCalledStager(),  # type: ignore[arg-type]
+        promoter=SimpleNamespace(),  # type: ignore[arg-type]
+        storage_registry={},
+        max_file_bytes=1024,
+        max_items_per_batch=100,
+        max_line_bytes=1024,
+        storage_chunk_size=128,
+        webhook_enabled=True,
+        webhook_cipher=BatchWebhookCipher(bytes(range(32))),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await service.create_batch(
+            auth=UserAPIKeyAuth(api_key="key-a"),
+            input_file_id="file-1",
+            endpoint="/v1/embeddings",
+            metadata=None,
+            completion_window=None,
+            webhook={
+                "url": "https://customer.example/\ud800",
+                "signing_secret": "s" * 32,
+            },
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == {
+        "code": "invalid_url",
+        "message": "webhook url is invalid",
+        "field": "url",
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_session_service_matches_idempotency_by_webhook_fingerprint() -> None:
+    cipher = BatchWebhookCipher(bytes(range(32)))
+    webhook = {
+        "url": "https://customer.example/webhooks",
+        "signing_secret": "s" * 32,
+    }
+    validation_service = BatchCreateSessionService(
+        repository=SimpleNamespace(),  # type: ignore[arg-type]
+        create_session_repository=SimpleNamespace(),  # type: ignore[arg-type]
+        stager=SimpleNamespace(),  # type: ignore[arg-type]
+        promoter=SimpleNamespace(),  # type: ignore[arg-type]
+        storage_registry={},
+        max_file_bytes=1024,
+        max_items_per_batch=100,
+        max_line_bytes=1024,
+        storage_chunk_size=128,
+        webhook_enabled=True,
+        webhook_cipher=cipher,
+    )
+    validated = validation_service._validate_webhook(webhook)  # noqa: SLF001
+    assert validated is not None
+    existing_session = _session(
+        webhook_config_ciphertext=cipher.encrypt(validated.config),
+        webhook_config_fingerprint=batch_webhook_config_fingerprint(validated.config),
+    )
+    job = _job(batch_id=existing_session.target_batch_id)
+    job.webhook_config_ciphertext = existing_session.webhook_config_ciphertext
+    job.webhook_config_fingerprint = existing_session.webhook_config_fingerprint
+
+    async def _get_session_by_idempotency_key(**kwargs):  # noqa: ANN003, ANN201
+        del kwargs
+        return existing_session
+
+    promoter = _PromoterStub(
+        result=BatchCreatePromotionResult(
+            session_id=existing_session.session_id,
+            batch_id=job.batch_id,
+            promoted=False,
+            job=job,
+        )
+    )
+    service = BatchCreateSessionService(
+        repository=_FailIfLoadedRepo(job=job),  # type: ignore[arg-type]
+        create_session_repository=SimpleNamespace(
+            get_session_by_idempotency_key=_get_session_by_idempotency_key
+        ),  # type: ignore[arg-type]
+        stager=SimpleNamespace(),  # type: ignore[arg-type]
+        promoter=promoter,  # type: ignore[arg-type]
+        storage_registry={},
+        max_file_bytes=1024,
+        max_items_per_batch=100,
+        max_line_bytes=1024,
+        storage_chunk_size=128,
+        idempotency_enabled=True,
+        webhook_enabled=True,
+        webhook_cipher=cipher,
+    )
+
+    result = await service.create_batch(
+        auth=UserAPIKeyAuth(api_key="key-a"),
+        input_file_id="file-1",
+        endpoint="/v1/embeddings",
+        metadata=None,
+        completion_window=None,
+        idempotency_key="idem-1",
+        webhook=webhook,
+    )
+
+    assert result.job.batch_id == "batch-1"
+    assert result.audit_metadata["webhook_configured"] is True
+
+    changed_webhook = dict(webhook, signing_secret="x" * 32)
+    with pytest.raises(HTTPException) as exc:
+        await service.create_batch(
+            auth=UserAPIKeyAuth(api_key="key-a"),
+            input_file_id="file-1",
+            endpoint="/v1/embeddings",
+            metadata=None,
+            completion_window=None,
+            idempotency_key="idem-1",
+            webhook=changed_webhook,
+        )
+
+    assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_create_session_service_encrypts_webhook_into_staged_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+    cipher = BatchWebhookCipher(bytes(range(32)))
+    secret = "s" * 32
+    url = "https://customer.example/webhooks"
+    file_record = SimpleNamespace(
+        file_id="file-1",
+        filename="batch.jsonl",
+        bytes=128,
+        storage_backend="local",
+        storage_key="input/file-1.jsonl",
+        created_by_api_key="key-a",
+        created_by_team_id=None,
+        created_by_organization_id=None,
+    )
+
+    class _Storage:
+        async def iter_lines(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
+            del args, kwargs
+            yield '{"custom_id":"req-1","url":"/v1/embeddings","body":{"model":"m1","input":"hello"}}'
+
+    class _Stager:
+        created = None
+
+        async def stage_session(self, *, records, filename, build_session):  # noqa: ANN001, ANN201
+            del filename
+            staged = [record async for record in records]
+            assert len(staged) == 1
+            self.created = build_session(
+                SimpleNamespace(
+                    storage_backend="local",
+                    storage_key="batch-create-stage/session-1.jsonl",
+                    checksum="checksum",
+                    bytes_size=128,
+                )
+            )
+            return _session(
+                status=BatchCreateSessionStatus.STAGED,
+                webhook_config_ciphertext=self.created.webhook_config_ciphertext,
+                webhook_config_fingerprint=self.created.webhook_config_fingerprint,
+            )
+
+    async def _get_file(file_id: str):  # noqa: ANN201
+        assert file_id == "file-1"
+        return file_record
+
+    async def _count_active_jobs_for_scope(**kwargs):  # noqa: ANN003, ANN201
+        del kwargs
+        return 0
+
+    job = _job()
+    promoter = _PromoterStub(
+        result=BatchCreatePromotionResult(
+            session_id="session-1",
+            batch_id=job.batch_id,
+            promoted=True,
+            job=job,
+        )
+    )
+    stager = _Stager()
+    service = BatchCreateSessionService(
+        repository=SimpleNamespace(
+            get_file=_get_file,
+            count_active_jobs_for_scope=_count_active_jobs_for_scope,
+        ),  # type: ignore[arg-type]
+        create_session_repository=SimpleNamespace(),  # type: ignore[arg-type]
+        stager=stager,  # type: ignore[arg-type]
+        promoter=promoter,  # type: ignore[arg-type]
+        storage_registry={"local": _Storage()},  # type: ignore[dict-item]
+        max_file_bytes=1024,
+        max_items_per_batch=100,
+        max_line_bytes=1024,
+        storage_chunk_size=128,
+        webhook_enabled=True,
+        webhook_cipher=cipher,
+    )
+
+    await service.create_batch(
+        auth=UserAPIKeyAuth(api_key="key-a"),
+        input_file_id="file-1",
+        endpoint="/v1/embeddings",
+        metadata=None,
+        completion_window=None,
+        webhook={"url": url, "signing_secret": secret},
+    )
+
+    assert stager.created is not None
+    assert stager.created.webhook_config_ciphertext not in {None, "", url, secret}
+    decrypted = cipher.decrypt(stager.created.webhook_config_ciphertext)
+    assert decrypted.url == "https://customer.example/webhooks"
+    assert decrypted.signing_secret.get_secret_value() == secret
+    assert len(stager.created.webhook_config_fingerprint) == 64
+
+
 @pytest.mark.asyncio
 async def test_batch_service_create_result_delegates_to_bound_create_session_service() -> None:
     class _CreateSessionServiceStub:
@@ -273,6 +539,7 @@ async def test_batch_service_create_result_delegates_to_bound_create_session_ser
         metadata=None,
         completion_window=None,
         idempotency_key="idem-1",
+        webhook={"configured": "raw-placeholder"},
     )
 
     assert result.response["id"] == "batch-delegated"
@@ -281,6 +548,7 @@ async def test_batch_service_create_result_delegates_to_bound_create_session_ser
     assert result.response["errors"] is None
     assert result.audit_metadata["create_path"] == "create_session"
     assert create_session_service.calls[0]["idempotency_key"] == "idem-1"
+    assert create_session_service.calls[0]["webhook"] == {"configured": "raw-placeholder"}
 
 
 @pytest.mark.asyncio

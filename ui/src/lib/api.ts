@@ -354,6 +354,34 @@ export interface ApiKey {
 export interface BatchCapabilities {
   view: boolean;
   cancel: boolean;
+  replay_webhook?: boolean;
+}
+
+export interface BatchWebhookDelivery {
+  event_id: string;
+  event_type: string;
+  status: string;
+  attempt_count: number;
+  max_attempts: number;
+  next_attempt_at?: string | null;
+  last_status_class?: string | null;
+  last_error?: string | null;
+  lease_expires_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  delivered_at?: string | null;
+}
+
+export interface BatchWebhookDeliveryList {
+  batch_id: string;
+  capabilities: BatchCapabilities;
+  data: BatchWebhookDelivery[];
+}
+
+export interface BatchWebhookReplayResponse {
+  batch_id: string;
+  replayed: boolean;
+  delivery: BatchWebhookDelivery;
 }
 
 export interface BatchFeatureStatus {
@@ -444,6 +472,7 @@ export interface BatchJobDetail {
   cancel_requested_at?: string | null;
   expires_at?: string | null;
   capabilities: BatchCapabilities;
+  webhook_deliveries?: BatchWebhookDelivery[];
   items: Paginated<BatchJobItem>;
 }
 
@@ -1150,11 +1179,20 @@ export const batches = {
   summary: () => apiFetch<BatchJobSummary>('/ui/api/batches/summary'),
   get: (batchId: string, params?: { items_limit?: number; items_offset?: number; after_line_number?: number | null }) =>
     apiFetch<BatchJobDetail>(withQuery(`/ui/api/batches/${encodeURIComponent(batchId)}`, params as any)),
+  webhookDeliveries: (batchId: string) =>
+    apiFetch<BatchWebhookDeliveryList>(
+      `/ui/api/batches/${encodeURIComponent(batchId)}/webhook-deliveries`,
+    ),
   costs: (batchId: string) =>
     apiFetch<BatchJobCosts>(`/ui/api/batches/${encodeURIComponent(batchId)}/costs`),
   getItem: (batchId: string, itemId: string) =>
     apiFetch<BatchJobItemDetail>(`/ui/api/batches/${encodeURIComponent(batchId)}/items/${encodeURIComponent(itemId)}`),
   cancel: (batchId: string) => apiFetch<{ batch_id: string; status: string }>(`/ui/api/batches/${encodeURIComponent(batchId)}/cancel`, { method: 'POST' }),
+  replayWebhook: (batchId: string, eventId: string) =>
+    apiFetch<BatchWebhookReplayResponse>(
+      `/ui/api/batches/${encodeURIComponent(batchId)}/webhook-deliveries/${encodeURIComponent(eventId)}/replay`,
+      { method: 'POST' },
+    ),
 };
 
 export type GuardrailMode = 'pre_call' | 'post_call';

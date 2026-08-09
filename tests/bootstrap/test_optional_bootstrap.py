@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from types import SimpleNamespace
 
 import pytest
@@ -8,7 +9,11 @@ import pytest
 from src.bootstrap import BootstrapStatus
 from src.bootstrap import batch as batch_bootstrap
 from src.bootstrap.audit import init_audit_runtime, shutdown_audit_runtime
-from src.bootstrap.batch import _drain_worker_task, init_batch_runtime, shutdown_batch_runtime
+from src.bootstrap.batch import init_batch_runtime, shutdown_batch_runtime
+from src.bootstrap.batch_runtime import lifecycle as batch_lifecycle
+from src.bootstrap.batch_runtime import scheduler as batch_scheduler
+from src.bootstrap.batch_runtime import workers as batch_workers
+from src.bootstrap.batch_runtime.lifecycle import drain_worker_task as _drain_worker_task
 from src.batch.scheduling import advisory_lock_mode, set_advisory_lock_mode
 
 
@@ -36,12 +41,30 @@ def _batch_config(
     stale_lease_sweeper_enabled: bool = False,
     storage_backend: str = "local",
     s3_bucket: str | None = None,
+    webhook_worker_enabled: bool = True,
+    webhook_observability_enabled: bool = True,
+    webhook_encryption_key: str | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         general_settings=SimpleNamespace(
             embeddings_batch_enabled=enabled,
             embeddings_batch_worker_enabled=worker_enabled,
             embeddings_batch_completion_outbox_worker_enabled=completion_outbox_worker_enabled,
+            batch_webhook_enabled=False,
+            batch_webhook_worker_enabled=webhook_worker_enabled,
+            batch_webhook_observability_enabled=webhook_observability_enabled,
+            batch_webhook_encryption_key=webhook_encryption_key,
+            batch_webhook_poll_interval_seconds=1.0,
+            batch_webhook_max_concurrency=3,
+            batch_webhook_lease_seconds=30,
+            batch_webhook_timeout_seconds=10.0,
+            batch_webhook_retry_initial_seconds=5,
+            batch_webhook_retry_max_seconds=300,
+            batch_webhook_allowed_ports=[443],
+            batch_webhook_allowed_private_cidrs=[],
+            batch_webhook_allow_http=False,
+            batch_webhook_delivery_retention_days=30,
+            batch_webhook_cleanup_max_rows_per_run=10_000,
             embeddings_batch_gc_enabled=gc_enabled,
             embeddings_batch_storage_backend=storage_backend,
             embeddings_batch_storage_dir="/tmp/batch-artifacts",
@@ -120,13 +143,85 @@ def _batch_config(
 
 
 def test_batch_worker_id_is_cluster_unique_and_log_safe(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(batch_bootstrap.socket, "gethostname", lambda: "pod/name with spaces")
-    monkeypatch.setattr(batch_bootstrap.os, "getpid", lambda: 12345)
-    monkeypatch.setattr(batch_bootstrap, "_BATCH_WORKER_BOOT_ID", "abc123def456")
+    monkeypatch.setattr(batch_workers.socket, "gethostname", lambda: "pod/name with spaces")
+    monkeypatch.setattr(batch_workers.os, "getpid", lambda: 12345)
+    monkeypatch.setattr(batch_workers, "_BATCH_WORKER_BOOT_ID", "abc123def456")
 
-    worker_id = batch_bootstrap._batch_worker_id("batch executor")
+    worker_id = batch_workers._batch_worker_id("batch executor")
 
     assert worker_id == "batch-executor-pod-name-with-spaces-12345-abc123def456"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("observer_enabled", "delivery_enabled", "gc_enabled", "expected_started"),
+    [
+        (True, True, False, True),
+        (True, False, True, True),
+        (True, False, False, True),
+        (False, True, True, False),
+    ],
+)
+async def test_webhook_observability_worker_has_independent_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+    observer_enabled: bool,
+    delivery_enabled: bool,
+    gc_enabled: bool,
+    expected_started: bool,
+) -> None:
+    created: list[object] = []
+
+    class _Worker:
+        def __init__(self, *, repository, config) -> None:  # noqa: ANN001
+            self.repository = repository
+            self.config = config
+            self.stopped = False
+            created.append(self)
+
+        async def run(self) -> None:
+            while not self.stopped:
+                await asyncio.sleep(0)
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    monkeypatch.setattr(batch_workers, "BatchWebhookObservabilityWorker", _Worker)
+    cfg = _batch_config(
+        enabled=True,
+        worker_enabled=False,
+        gc_enabled=gc_enabled,
+        webhook_worker_enabled=delivery_enabled,
+        webhook_observability_enabled=observer_enabled,
+    )
+    runtime = batch_bootstrap.BatchRuntime()
+    repository = object()
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            batch_webhook_observability_worker=None,
+            batch_webhook_observability_task=None,
+        )
+    )
+
+    batch_workers._start_webhook_observability_worker(  # type: ignore[arg-type]
+        app,
+        cfg,
+        repository,
+        runtime,
+    )
+
+    assert (runtime.webhook_observability_worker is not None) is expected_started
+    assert (runtime.webhook_observability_task is not None) is expected_started
+    assert (app.state.batch_webhook_observability_worker is not None) is expected_started
+    assert (app.state.batch_webhook_observability_task is not None) is expected_started
+    if not expected_started:
+        assert created == []
+        return
+
+    worker = created[0]
+    assert worker.repository is repository
+    assert worker.config.refresh_interval_seconds == 15.0
+    await shutdown_batch_runtime(runtime)
+    assert worker.stopped is True
 
 
 @pytest.mark.asyncio
@@ -148,7 +243,7 @@ async def test_init_batch_runtime_applies_batch_advisory_lock_mode() -> None:
 
 def test_batch_creation_scheduler_active_includes_tenant_fair_share() -> None:
     assert (
-        batch_bootstrap._batch_scheduler_active_enabled_for_creation(
+        batch_scheduler.batch_scheduler_active_enabled_for_creation(
             SimpleNamespace(
                 embeddings_batch_scheduler_enabled=False,
                 embeddings_batch_tenant_fair_share_enabled=True,
@@ -157,7 +252,7 @@ def test_batch_creation_scheduler_active_includes_tenant_fair_share() -> None:
         is True
     )
     assert (
-        batch_bootstrap._batch_scheduler_active_enabled_for_creation(
+        batch_scheduler.batch_scheduler_active_enabled_for_creation(
             SimpleNamespace(
                 embeddings_batch_scheduler_enabled=False,
                 embeddings_batch_tenant_fair_share_enabled=False,
@@ -408,16 +503,16 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
         def stop(self) -> None:
             self.stopped = True
 
-    monkeypatch.setattr("src.bootstrap.batch.LocalBatchArtifactStorage", lambda path: {"path": path})
-    monkeypatch.setattr("src.bootstrap.batch.BatchService", FakeBatchService)
-    monkeypatch.setattr("src.bootstrap.batch.BatchExecutorWorker", FakeBatchWorker)
-    monkeypatch.setattr("src.bootstrap.batch.BatchCompletionOutboxWorker", FakeCompletionOutboxWorker)
-    monkeypatch.setattr("src.bootstrap.batch.BatchRetentionCleanupWorker", FakeGCWorker)
-    monkeypatch.setattr("src.bootstrap.batch.BatchSchedulerBackfillWorker", FakeSchedulerBackfillWorker)
-    monkeypatch.setattr("src.bootstrap.batch.BatchStaleLeaseSweeperWorker", FakeStaleLeaseSweeperWorker)
-    monkeypatch.setattr("src.bootstrap.batch.BatchCreateArtifactStorageBackend", FakeStagingBackend)
-    monkeypatch.setattr("src.bootstrap.batch.BatchCreateSessionPromoter", FakePromoter)
-    monkeypatch.setattr("src.bootstrap.batch.BatchCreateSessionAdminService", FakeCreateSessionAdminService)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", lambda path: {"path": path})
+    monkeypatch.setattr("src.bootstrap.batch_runtime.core.BatchService", FakeBatchService)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.workers.BatchExecutorWorker", FakeBatchWorker)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.workers.BatchCompletionOutboxWorker", FakeCompletionOutboxWorker)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.workers.BatchRetentionCleanupWorker", FakeGCWorker)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.workers.BatchSchedulerBackfillWorker", FakeSchedulerBackfillWorker)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.workers.BatchStaleLeaseSweeperWorker", FakeStaleLeaseSweeperWorker)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateArtifactStorageBackend", FakeStagingBackend)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionPromoter", FakePromoter)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionAdminService", FakeCreateSessionAdminService)
 
     app = SimpleNamespace(state=SimpleNamespace(redis="redis-client"))
     create_sessions = _FakeCreateSessionRepository()
@@ -467,6 +562,7 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
     assert runtime.create_session_cleanup_worker is None
     assert runtime.create_session_cleanup_task is None
     assert created["gc_worker"].storage_registry == {"local": {"path": "/tmp/batch-artifacts"}}
+    assert created["gc_worker"].config.webhook_cleanup_max_rows_per_run == 10_000
     assert app.state.batch_scheduler_backfill_worker is created["scheduler_backfill_worker"]
     assert created["scheduler_backfill_worker"].repository is repository
     assert created["scheduler_backfill_worker"].config.interval_seconds == 60.0
@@ -491,6 +587,12 @@ async def test_init_and_shutdown_batch_runtime_enabled(monkeypatch: pytest.Monke
         BootstrapStatus("embeddings_batch", "ready"),
         BootstrapStatus("embeddings_batch_worker", "ready"),
         BootstrapStatus("embeddings_batch_completion_outbox", "ready"),
+        BootstrapStatus(
+            "batch_webhook_outbox",
+            "disabled",
+            "encryption key not configured",
+        ),
+        BootstrapStatus("batch_webhook_observability", "ready"),
         BootstrapStatus("embeddings_batch_gc", "ready"),
         BootstrapStatus("embeddings_batch_scheduler_backfill", "ready"),
         BootstrapStatus("embeddings_batch_stale_lease_sweeper", "ready"),
@@ -534,12 +636,12 @@ async def test_init_batch_runtime_can_disable_completion_outbox_worker(
         del args, kwargs
         raise AssertionError("completion outbox worker should not start")
 
-    monkeypatch.setattr("src.bootstrap.batch.LocalBatchArtifactStorage", lambda path: {"path": path})
-    monkeypatch.setattr("src.bootstrap.batch.BatchService", FakeBatchService)
-    monkeypatch.setattr("src.bootstrap.batch.BatchCompletionOutboxWorker", _unexpected_outbox_worker)
-    monkeypatch.setattr("src.bootstrap.batch.BatchCreateArtifactStorageBackend", FakeStagingBackend)
-    monkeypatch.setattr("src.bootstrap.batch.BatchCreateSessionPromoter", FakePromoter)
-    monkeypatch.setattr("src.bootstrap.batch.BatchCreateSessionAdminService", FakeCreateSessionAdminService)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", lambda path: {"path": path})
+    monkeypatch.setattr("src.bootstrap.batch_runtime.core.BatchService", FakeBatchService)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.workers.BatchCompletionOutboxWorker", _unexpected_outbox_worker)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateArtifactStorageBackend", FakeStagingBackend)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionPromoter", FakePromoter)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionAdminService", FakeCreateSessionAdminService)
 
     app = SimpleNamespace(state=SimpleNamespace())
     repository = SimpleNamespace(create_sessions=_FakeCreateSessionRepository())
@@ -563,6 +665,12 @@ async def test_init_batch_runtime_can_disable_completion_outbox_worker(
         BootstrapStatus("embeddings_batch", "ready"),
         BootstrapStatus("embeddings_batch_worker", "disabled"),
         BootstrapStatus("embeddings_batch_completion_outbox", "disabled"),
+        BootstrapStatus(
+            "batch_webhook_outbox",
+            "disabled",
+            "encryption key not configured",
+        ),
+        BootstrapStatus("batch_webhook_observability", "ready"),
         BootstrapStatus("embeddings_batch_gc", "disabled"),
         BootstrapStatus("embeddings_batch_scheduler_backfill", "disabled"),
         BootstrapStatus("embeddings_batch_stale_lease_sweeper", "disabled"),
@@ -571,6 +679,98 @@ async def test_init_batch_runtime_can_disable_completion_outbox_worker(
     )
 
     await shutdown_batch_runtime(runtime)
+
+
+@pytest.mark.asyncio
+async def test_init_and_shutdown_batch_webhook_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    created: dict[str, object] = {}
+
+    class FakeBatchService:
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            del args, kwargs
+
+        def bind_create_session_service(self, create_session_service) -> None:  # noqa: ANN001
+            del create_session_service
+
+    class FakeStagingBackend:
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            del args, kwargs
+
+    class FakePromoter:
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            del args, kwargs
+
+    class FakeCreateSessionAdminService:
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            del args, kwargs
+
+    class FakeTransport:
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            self.args = args
+            self.kwargs = kwargs
+            self.closed = False
+            created["transport"] = self
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    class FakeWebhookWorker:
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            self.kwargs = kwargs
+            self.stopped = False
+            created["worker"] = self
+
+        async def run(self) -> None:
+            while not self.stopped:
+                await asyncio.sleep(0.01)
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", lambda path: {"path": path}
+    )
+    monkeypatch.setattr("src.bootstrap.batch_runtime.core.BatchService", FakeBatchService)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateArtifactStorageBackend", FakeStagingBackend)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionPromoter", FakePromoter)
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionAdminService", FakeCreateSessionAdminService
+    )
+    monkeypatch.setattr("src.bootstrap.batch_runtime.workers.BatchWebhookOutboxWorker", FakeWebhookWorker)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.workers.httpx.AsyncHTTPTransport", FakeTransport)
+
+    app = SimpleNamespace(state=SimpleNamespace())
+    repository = SimpleNamespace(create_sessions=_FakeCreateSessionRepository())
+    key = base64.urlsafe_b64encode(bytes(range(32))).decode()
+    runtime = await init_batch_runtime(
+        app,
+        _batch_config(
+            enabled=True,
+            worker_enabled=False,
+            gc_enabled=False,
+            completion_outbox_worker_enabled=False,
+            webhook_encryption_key=key,
+        ),
+        repository=repository,
+    )
+
+    assert runtime.webhook_outbox_worker is created["worker"]
+    assert runtime.webhook_outbox_task is not None
+    assert runtime.webhook_transport is created["transport"]
+    assert app.state.batch_webhook_outbox_worker is created["worker"]
+    assert app.state.batch_webhook_outbox_task is runtime.webhook_outbox_task
+    assert app.state.batch_webhook_worker_expected is True
+    assert created["worker"].kwargs["config"].max_concurrency == 3
+    assert created["transport"].kwargs["retries"] == 0
+    assert created["transport"].kwargs["trust_env"] is False
+    assert created["transport"].kwargs["limits"].max_connections == 3
+    assert created["transport"].kwargs["limits"].max_keepalive_connections == 0
+    assert BootstrapStatus("batch_webhook_outbox", "ready") in runtime.statuses
+
+    await shutdown_batch_runtime(runtime)
+
+    assert created["worker"].stopped is True
+    assert created["transport"].closed is True
 
 
 @pytest.mark.asyncio
@@ -642,13 +842,13 @@ async def test_init_and_shutdown_batch_runtime_with_create_session_cleanup_worke
         def stop(self) -> None:
             self.stopped = True
 
-    monkeypatch.setattr("src.bootstrap.batch.LocalBatchArtifactStorage", lambda path: {"path": path})
-    monkeypatch.setattr("src.bootstrap.batch.BatchService", FakeBatchService)
-    monkeypatch.setattr("src.bootstrap.batch.BatchCompletionOutboxWorker", FakeCompletionOutboxWorker)
-    monkeypatch.setattr("src.bootstrap.batch.BatchCreateArtifactStorageBackend", FakeStagingBackend)
-    monkeypatch.setattr("src.bootstrap.batch.BatchCreateSessionPromoter", FakePromoter)
-    monkeypatch.setattr("src.bootstrap.batch.BatchCreateSessionAdminService", FakeCreateSessionAdminService)
-    monkeypatch.setattr("src.bootstrap.batch.BatchCreateSessionCleanupWorker", FakeCreateSessionCleanupWorker)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", lambda path: {"path": path})
+    monkeypatch.setattr("src.bootstrap.batch_runtime.core.BatchService", FakeBatchService)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.workers.BatchCompletionOutboxWorker", FakeCompletionOutboxWorker)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateArtifactStorageBackend", FakeStagingBackend)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionPromoter", FakePromoter)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionAdminService", FakeCreateSessionAdminService)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionCleanupWorker", FakeCreateSessionCleanupWorker)
 
     app = SimpleNamespace(state=SimpleNamespace())
     create_sessions = _FakeCreateSessionRepository()
@@ -701,6 +901,12 @@ async def test_init_and_shutdown_batch_runtime_with_create_session_cleanup_worke
         BootstrapStatus("embeddings_batch", "ready"),
         BootstrapStatus("embeddings_batch_worker", "disabled"),
         BootstrapStatus("embeddings_batch_completion_outbox", "ready"),
+        BootstrapStatus(
+            "batch_webhook_outbox",
+            "disabled",
+            "encryption key not configured",
+        ),
+        BootstrapStatus("batch_webhook_observability", "ready"),
         BootstrapStatus("embeddings_batch_gc", "disabled"),
         BootstrapStatus("embeddings_batch_scheduler_backfill", "disabled"),
         BootstrapStatus("embeddings_batch_stale_lease_sweeper", "disabled"),
@@ -767,12 +973,12 @@ async def test_init_batch_runtime_builds_create_session_public_service(
             self.staging = staging
             created["admin_service"] = self
 
-    monkeypatch.setattr("src.bootstrap.batch.LocalBatchArtifactStorage", lambda path: {"path": path})
-    monkeypatch.setattr("src.bootstrap.batch.BatchService", FakeBatchService)
-    monkeypatch.setattr("src.bootstrap.batch.BatchCompletionOutboxWorker", FakeCompletionOutboxWorker)
-    monkeypatch.setattr("src.bootstrap.batch.BatchCreateArtifactStorageBackend", FakeStagingBackend)
-    monkeypatch.setattr("src.bootstrap.batch.BatchCreateSessionPromoter", FakePromoter)
-    monkeypatch.setattr("src.bootstrap.batch.BatchCreateSessionAdminService", FakeCreateSessionAdminService)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", lambda path: {"path": path})
+    monkeypatch.setattr("src.bootstrap.batch_runtime.core.BatchService", FakeBatchService)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.workers.BatchCompletionOutboxWorker", FakeCompletionOutboxWorker)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateArtifactStorageBackend", FakeStagingBackend)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionPromoter", FakePromoter)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionAdminService", FakeCreateSessionAdminService)
 
     app = SimpleNamespace(state=SimpleNamespace())
     create_sessions = _FakeCreateSessionRepository()
@@ -820,6 +1026,12 @@ async def test_init_batch_runtime_builds_create_session_public_service(
         BootstrapStatus("embeddings_batch", "ready"),
         BootstrapStatus("embeddings_batch_worker", "disabled"),
         BootstrapStatus("embeddings_batch_completion_outbox", "ready"),
+        BootstrapStatus(
+            "batch_webhook_outbox",
+            "disabled",
+            "encryption key not configured",
+        ),
+        BootstrapStatus("batch_webhook_observability", "ready"),
         BootstrapStatus("embeddings_batch_gc", "disabled"),
         BootstrapStatus("embeddings_batch_scheduler_backfill", "disabled"),
         BootstrapStatus("embeddings_batch_stale_lease_sweeper", "disabled"),
@@ -863,21 +1075,21 @@ async def test_init_batch_runtime_selects_s3_storage(monkeypatch: pytest.MonkeyP
             self.create_session_service = create_session_service
 
     monkeypatch.setattr(
-        "src.bootstrap.batch.S3BatchArtifactStorage",
+        "src.bootstrap.batch_runtime.storage.S3BatchArtifactStorage",
         lambda **kwargs: {"backend": "s3", **kwargs},
     )
-    monkeypatch.setattr("src.bootstrap.batch.LocalBatchArtifactStorage", lambda path: {"backend": "local", "path": path})
-    monkeypatch.setattr("src.bootstrap.batch.BatchService", FakeBatchService)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", lambda path: {"backend": "local", "path": path})
+    monkeypatch.setattr("src.bootstrap.batch_runtime.core.BatchService", FakeBatchService)
     monkeypatch.setattr(
-        "src.bootstrap.batch.BatchCreateArtifactStorageBackend",
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateArtifactStorageBackend",
         lambda **kwargs: {"kind": "staging", **kwargs},
     )
     monkeypatch.setattr(
-        "src.bootstrap.batch.BatchCreateSessionPromoter",
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionPromoter",
         lambda **kwargs: {"kind": "promoter", **kwargs},
     )
     monkeypatch.setattr(
-        "src.bootstrap.batch.BatchCreateSessionAdminService",
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionAdminService",
         lambda **kwargs: {"kind": "admin-service", **kwargs},
     )
 
@@ -919,22 +1131,22 @@ async def test_init_batch_runtime_allows_s3_when_local_storage_is_unavailable(mo
     def _fail_local(path: str):  # noqa: ANN001
         raise RuntimeError("local storage unavailable")
 
-    monkeypatch.setattr("src.bootstrap.batch.LocalBatchArtifactStorage", _fail_local)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", _fail_local)
     monkeypatch.setattr(
-        "src.bootstrap.batch.S3BatchArtifactStorage",
+        "src.bootstrap.batch_runtime.storage.S3BatchArtifactStorage",
         lambda **kwargs: {"backend": "s3", **kwargs},
     )
-    monkeypatch.setattr("src.bootstrap.batch.BatchService", FakeBatchService)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.core.BatchService", FakeBatchService)
     monkeypatch.setattr(
-        "src.bootstrap.batch.BatchCreateArtifactStorageBackend",
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateArtifactStorageBackend",
         lambda **kwargs: {"kind": "staging", **kwargs},
     )
     monkeypatch.setattr(
-        "src.bootstrap.batch.BatchCreateSessionPromoter",
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionPromoter",
         lambda **kwargs: {"kind": "promoter", **kwargs},
     )
     monkeypatch.setattr(
-        "src.bootstrap.batch.BatchCreateSessionAdminService",
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionAdminService",
         lambda **kwargs: {"kind": "admin-service", **kwargs},
     )
 
@@ -978,10 +1190,10 @@ async def test_init_batch_runtime_raises_when_create_session_schema_is_unavailab
         def bind_create_session_service(self, create_session_service) -> None:  # noqa: ANN001
             del create_session_service
 
-    monkeypatch.setattr("src.bootstrap.batch.LocalBatchArtifactStorage", lambda path: {"path": path})
-    monkeypatch.setattr("src.bootstrap.batch.BatchService", FakeBatchService)
+    monkeypatch.setattr("src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage", lambda path: {"path": path})
+    monkeypatch.setattr("src.bootstrap.batch_runtime.core.BatchService", FakeBatchService)
     monkeypatch.setattr(
-        "src.bootstrap.batch.BatchCompletionOutboxWorker",
+        "src.bootstrap.batch_runtime.workers.BatchCompletionOutboxWorker",
         lambda *args, **kwargs: SimpleNamespace(run=lambda: asyncio.sleep(0.01), stop=lambda: None),
     )
 
@@ -1027,3 +1239,387 @@ async def test_drain_worker_task_cancels_on_timeout() -> None:
     await _drain_worker_task(task, label="test worker", timeout=0.05)
     assert task.done()
     assert task.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_drain_worker_task_bounds_cancellation_suppressing_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        batch_lifecycle,
+        "WORKER_SHUTDOWN_CANCEL_CLEANUP_TIMEOUT_SECONDS",
+        0.01,
+    )
+    started = asyncio.Event()
+    cancellation_seen = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _worker() -> None:
+        started.set()
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                cancellation_seen.set()
+
+    task = asyncio.create_task(_worker())
+    await started.wait()
+    drain_task = asyncio.create_task(
+        _drain_worker_task(task, label="test worker", timeout=0.01)
+    )
+    try:
+        await asyncio.wait_for(cancellation_seen.wait(), timeout=0.1)
+        await asyncio.sleep(0.03)
+        assert drain_task.done()
+        assert not task.done()
+    finally:
+        release.set()
+        await asyncio.gather(task, drain_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_cancel_worker_tasks_bounded_consumes_already_failed_tasks() -> None:
+    class _DoneFailedTask:
+        def __init__(self) -> None:
+            self.result_called = False
+
+        def done(self) -> bool:
+            return True
+
+        def result(self) -> None:
+            self.result_called = True
+            raise RuntimeError("worker failed")
+
+    task = _DoneFailedTask()
+
+    pending = await batch_lifecycle._cancel_worker_tasks_bounded(
+        (task,),  # type: ignore[arg-type]
+        timeout=0.01,
+    )
+
+    assert pending == ()
+    assert task.result_called is True
+
+
+@pytest.mark.asyncio
+async def test_cancel_worker_tasks_bounded_consumes_task_completed_during_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _CompletingFailedTask:
+        def __init__(self) -> None:
+            self.completed = False
+            self.cancel_calls = 0
+            self.result_calls = 0
+            self.callback_calls = 0
+
+        def done(self) -> bool:
+            return self.completed
+
+        def cancel(self) -> None:
+            self.cancel_calls += 1
+
+        def result(self) -> None:
+            self.result_calls += 1
+            raise RuntimeError("worker failed")
+
+        def add_done_callback(self, _callback: object) -> None:
+            self.callback_calls += 1
+
+    task = _CompletingFailedTask()
+
+    async def _interrupted_wait(_tasks: object, *, timeout: float) -> None:
+        assert timeout == 0.01
+        task.completed = True
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(batch_lifecycle.asyncio, "wait", _interrupted_wait)
+
+    with pytest.raises(asyncio.CancelledError):
+        await batch_lifecycle._cancel_worker_tasks_bounded(
+            (task,),  # type: ignore[arg-type]
+            timeout=0.01,
+        )
+
+    assert task.cancel_calls == 1
+    assert task.result_calls == 1
+    assert task.callback_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_shutdown_treats_cancelled_worker_task_as_drained() -> None:
+    class _Worker:
+        def __init__(self) -> None:
+            self.stop_event = asyncio.Event()
+
+        def stop(self) -> None:
+            self.stop_event.set()
+
+        async def run(self) -> None:
+            await self.stop_event.wait()
+
+    class _Transport:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    worker = _Worker()
+    worker_task = asyncio.create_task(worker.run())
+    cancelled_task = asyncio.create_task(asyncio.sleep(30))
+    cancelled_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_task
+    transport = _Transport()
+    runtime = batch_bootstrap.BatchRuntime(
+        worker=worker,  # type: ignore[arg-type]
+        worker_task=worker_task,
+        webhook_outbox_task=cancelled_task,
+        webhook_transport=transport,  # type: ignore[arg-type]
+    )
+
+    await asyncio.wait_for(shutdown_batch_runtime(runtime), timeout=1)
+
+    assert worker_task.done()
+    assert transport.closed is True
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancellation_cancels_workers_before_closing_transport() -> None:
+    worker_cancelled = asyncio.Event()
+
+    class _Worker:
+        def stop(self) -> None:
+            pass
+
+        async def run(self) -> None:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                worker_cancelled.set()
+                raise
+
+    class _Transport:
+        def __init__(self, worker_task: asyncio.Task[None]) -> None:
+            self.worker_task = worker_task
+            self.closed = False
+
+        async def aclose(self) -> None:
+            assert self.worker_task.done()
+            self.closed = True
+
+    worker = _Worker()
+    worker_task = asyncio.create_task(worker.run())
+    transport = _Transport(worker_task)
+    runtime = batch_bootstrap.BatchRuntime(
+        webhook_outbox_worker=worker,  # type: ignore[arg-type]
+        webhook_outbox_task=worker_task,
+        webhook_transport=transport,  # type: ignore[arg-type]
+    )
+    shutdown_task = asyncio.create_task(shutdown_batch_runtime(runtime))
+    await asyncio.sleep(0)
+
+    shutdown_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(shutdown_task, timeout=1)
+
+    assert worker_cancelled.is_set()
+    assert worker_task.done()
+    assert transport.closed is True
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancellation_is_bounded_when_worker_suppresses_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release_worker = asyncio.Event()
+    cancellation_seen = asyncio.Event()
+
+    class _Worker:
+        def stop(self) -> None:
+            pass
+
+        async def run(self) -> None:
+            while not release_worker.is_set():
+                try:
+                    await release_worker.wait()
+                except asyncio.CancelledError:
+                    cancellation_seen.set()
+
+    class _Transport:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(
+        batch_lifecycle,
+        "WORKER_SHUTDOWN_CANCEL_CLEANUP_TIMEOUT_SECONDS",
+        0.01,
+        raising=False,
+    )
+    worker = _Worker()
+    worker_task = asyncio.create_task(worker.run())
+    transport = _Transport()
+    runtime = batch_bootstrap.BatchRuntime(
+        webhook_outbox_worker=worker,  # type: ignore[arg-type]
+        webhook_outbox_task=worker_task,
+        webhook_transport=transport,  # type: ignore[arg-type]
+    )
+    shutdown_task = asyncio.create_task(shutdown_batch_runtime(runtime))
+    await asyncio.sleep(0)
+
+    shutdown_task.cancel()
+    await asyncio.wait_for(cancellation_seen.wait(), timeout=1)
+    done, _pending = await asyncio.wait({shutdown_task}, timeout=0.1)
+    completed_before_release = shutdown_task in done
+    transport_closed_before_release = transport.closed
+
+    release_worker.set()
+    if not shutdown_task.done():
+        with pytest.raises(asyncio.CancelledError):
+            await shutdown_task
+    else:
+        with pytest.raises(asyncio.CancelledError):
+            shutdown_task.result()
+    await asyncio.wait_for(worker_task, timeout=1)
+
+    assert completed_before_release is True
+    assert transport_closed_before_release is True
+
+
+@pytest.mark.asyncio
+async def test_shutdown_bounds_stalled_webhook_transport_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    close_started = asyncio.Event()
+    close_cancelled = asyncio.Event()
+
+    class _Transport:
+        async def aclose(self) -> None:
+            close_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                close_cancelled.set()
+                raise
+
+    monkeypatch.setattr(
+        batch_lifecycle,
+        "WEBHOOK_TRANSPORT_CLOSE_TIMEOUT_SECONDS",
+        0.01,
+        raising=False,
+    )
+    shutdown_task = asyncio.create_task(
+        shutdown_batch_runtime(
+            batch_bootstrap.BatchRuntime(
+                webhook_transport=_Transport(),  # type: ignore[arg-type]
+            )
+        )
+    )
+
+    done, _pending = await asyncio.wait({shutdown_task}, timeout=0.1)
+    completed_in_time = shutdown_task in done
+    if not shutdown_task.done():
+        shutdown_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await shutdown_task
+
+    assert completed_in_time is True
+    assert close_started.is_set()
+    assert close_cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancellation_is_not_masked_by_transport_close_failure() -> None:
+    class _Worker:
+        def stop(self) -> None:
+            pass
+
+        async def run(self) -> None:
+            await asyncio.Event().wait()
+
+    class _Transport:
+        async def aclose(self) -> None:
+            raise RuntimeError("transport close failed")
+
+    worker = _Worker()
+    worker_task = asyncio.create_task(worker.run())
+    runtime = batch_bootstrap.BatchRuntime(
+        webhook_outbox_worker=worker,  # type: ignore[arg-type]
+        webhook_outbox_task=worker_task,
+        webhook_transport=_Transport(),  # type: ignore[arg-type]
+    )
+    shutdown_task = asyncio.create_task(shutdown_batch_runtime(runtime))
+    await asyncio.sleep(0)
+
+    shutdown_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(shutdown_task, timeout=1)
+
+    assert worker_task.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_stops_all_workers_before_concurrent_draining(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Worker:
+        def __init__(self) -> None:
+            self.stopped = False
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    workers = [_Worker() for _ in range(7)]
+    all_drains_started = asyncio.Event()
+    drain_calls: list[tuple[str, float]] = []
+    drain_finished: list[str] = []
+
+    async def _fake_drain(task, *, label: str, timeout: float) -> None:  # noqa: ANN001
+        del task
+        assert all(worker.stopped for worker in workers)
+        drain_calls.append((label, timeout))
+        if len(drain_calls) == len(workers):
+            all_drains_started.set()
+        await all_drains_started.wait()
+        drain_finished.append(label)
+
+    class _Transport:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def aclose(self) -> None:
+            assert len(drain_finished) == len(workers)
+            self.closed = True
+
+    monkeypatch.setattr(batch_lifecycle, "drain_worker_task", _fake_drain)
+    transport = _Transport()
+    task_tokens = [object() for _ in workers]
+    runtime = batch_bootstrap.BatchRuntime(
+        worker=workers[0],  # type: ignore[arg-type]
+        worker_task=task_tokens[0],  # type: ignore[arg-type]
+        completion_outbox_worker=workers[1],  # type: ignore[arg-type]
+        completion_outbox_task=task_tokens[1],  # type: ignore[arg-type]
+        webhook_outbox_worker=workers[2],  # type: ignore[arg-type]
+        webhook_outbox_task=task_tokens[2],  # type: ignore[arg-type]
+        webhook_transport=transport,  # type: ignore[arg-type]
+        gc_worker=workers[3],  # type: ignore[arg-type]
+        gc_task=task_tokens[3],  # type: ignore[arg-type]
+        scheduler_backfill_worker=workers[4],  # type: ignore[arg-type]
+        scheduler_backfill_task=task_tokens[4],  # type: ignore[arg-type]
+        stale_lease_sweeper_worker=workers[5],  # type: ignore[arg-type]
+        stale_lease_sweeper_task=task_tokens[5],  # type: ignore[arg-type]
+        create_session_cleanup_worker=workers[6],  # type: ignore[arg-type]
+        create_session_cleanup_task=task_tokens[6],  # type: ignore[arg-type]
+    )
+
+    await asyncio.wait_for(shutdown_batch_runtime(runtime), timeout=1)
+
+    assert len(drain_calls) == len(workers)
+    assert (
+        "batch webhook outbox worker",
+        batch_lifecycle.WORKER_SHUTDOWN_DRAIN_TIMEOUT_SECONDS,
+    ) in drain_calls
+    assert transport.closed is True

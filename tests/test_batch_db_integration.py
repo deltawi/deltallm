@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 import json
+import logging
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,7 +27,14 @@ from src.batch.create import (
 )
 from src.batch.create.service import BatchCreateSessionService
 from src.batch.cleanup import BatchCleanupConfig, BatchRetentionCleanupWorker
-from src.batch.models import BATCH_JOB_STATUS_VALUES, BatchCompletionOutboxCreate, BatchItemCreate
+from src.batch.models import (
+    BATCH_JOB_STATUS_VALUES,
+    BatchCompletionOutboxCreate,
+    BatchItemCreate,
+    BatchJobStatus,
+    BatchWebhookEventType,
+    BatchWebhookOutboxCreate,
+)
 from src.batch.models import encode_operator_failed_reason
 from src.batch.repository import BatchRepository
 from src.batch.scheduling import (
@@ -35,8 +43,13 @@ from src.batch.scheduling import (
     stable_tenant_scope_id,
 )
 from src.batch.service import BatchService
+from src.batch.serialization import serialize_public_batch
 from src.batch.storage import LocalBatchArtifactStorage, S3BatchArtifactStorage
 from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
+from src.batch.worker_artifacts import BatchArtifactFinalizer
+from src.batch.worker_types import BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR
+from src.batch.webhooks import BatchWebhookCipher
+from src.batch.webhooks.events import batch_webhook_event_payload_sha256
 from src.auth.roles import Permission
 from src.models.responses import UserAPIKeyAuth
 
@@ -54,6 +67,20 @@ BATCH_JOB_STATUS_RECONCILIATION_MIGRATION_PATH = (
     / "20260424120000_batch_job_status_contract_reconciliation"
     / "migration.sql"
 )
+
+
+async def _drain_expired_terminal_jobs(
+    repository: BatchRepository,
+    *,
+    now: datetime,
+    limit: int = 100,
+) -> int:
+    deleted_jobs = 0
+    for _ in range(limit):
+        if not await repository.cleanup_next_expired_terminal_job(now=now):
+            break
+        deleted_jobs += 1
+    return deleted_jobs
 
 
 class _Upload:
@@ -149,6 +176,7 @@ async def _connect_prisma() -> Any:
 async def _reset_batch_tables(db: Any) -> None:
     await db.execute_raw("DELETE FROM deltallm_batch_scheduler_flow")
     await db.execute_raw("DELETE FROM deltallm_batch_create_session")
+    await db.execute_raw("DELETE FROM deltallm_batch_webhook_outbox")
     await db.execute_raw("DELETE FROM deltallm_batch_completion_outbox")
     await db.execute_raw("DELETE FROM deltallm_batch_item")
     await db.execute_raw("DELETE FROM deltallm_batch_job")
@@ -242,11 +270,16 @@ async def batch_db():
             """
             SELECT
                 to_regclass('public.deltallm_batch_job')::text AS batch_job,
-                to_regclass('public.deltallm_batch_completion_outbox')::text AS batch_completion_outbox
+                to_regclass('public.deltallm_batch_completion_outbox')::text AS batch_completion_outbox,
+                to_regclass('public.deltallm_batch_webhook_outbox')::text AS batch_webhook_outbox
             """
         )
         row = dict(rows[0]) if rows else {}
-        if row.get("batch_job") is None or row.get("batch_completion_outbox") is None:
+        if (
+            row.get("batch_job") is None
+            or row.get("batch_completion_outbox") is None
+            or row.get("batch_webhook_outbox") is None
+        ):
             pytest.skip("Batch tables are missing; run prisma migrate deploy before DB-backed batch tests")
         await _reset_batch_tables(db)
         yield db
@@ -936,6 +969,8 @@ def _build_cutover_batch_service(
     storage_registry: dict[str, Any] | None = None,
     idempotency_enabled: bool = False,
     max_pending_batches_per_scope: int = 20,
+    webhook_enabled: bool = False,
+    webhook_cipher: BatchWebhookCipher | None = None,
 ) -> BatchService:
     active_storage_registry = {"local": storage}
     if storage_registry:
@@ -963,6 +998,8 @@ def _build_cutover_batch_service(
         storage_chunk_size=65_536,
         max_pending_batches_per_scope=max_pending_batches_per_scope,
         idempotency_enabled=idempotency_enabled,
+        webhook_enabled=webhook_enabled,
+        webhook_cipher=webhook_cipher,
     )
     return BatchService(
         repository=repository,
@@ -1286,6 +1323,1389 @@ async def test_db_backed_batch_create_cutover_rejects_idempotency_payload_mismat
     job_rows = await batch_db.query_raw("SELECT batch_id FROM deltallm_batch_job")
     assert len(session_rows) == 1
     assert len(job_rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_db_backed_batch_create_persists_encrypted_webhook_and_matches_idempotency(
+    batch_db,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("src.batch.create.service.ensure_batch_model_allowed", lambda *args, **kwargs: None)
+    cipher = BatchWebhookCipher(bytes(range(32)))
+    repository = BatchRepository(batch_db)
+    storage = LocalBatchArtifactStorage(str(tmp_path / "cutover-webhook-artifacts"))
+    service = _build_cutover_batch_service(
+        repository=repository,
+        storage=storage,
+        idempotency_enabled=True,
+        webhook_enabled=True,
+        webhook_cipher=cipher,
+    )
+    auth = UserAPIKeyAuth(api_key="key-a")
+    input_file_id = await _create_input_file(
+        service,
+        auth=auth,
+        payload=b'{"custom_id":"c1","url":"/v1/embeddings","body":{"model":"m1","input":"hello"}}\n',
+    )
+    webhook = {
+        "url": "https://customer.example/webhooks/deltallm",
+        "signing_secret": "s" * 32,
+    }
+
+    first = await service.create_batch_result(
+        auth=auth,
+        input_file_id=input_file_id,
+        endpoint="/v1/embeddings",
+        metadata={"customer_job_id": "job-1"},
+        completion_window=None,
+        idempotency_key="idem-webhook",
+        webhook=webhook,
+    )
+    second = await service.create_batch_result(
+        auth=auth,
+        input_file_id=input_file_id,
+        endpoint="/v1/embeddings",
+        metadata={"customer_job_id": "job-1"},
+        completion_window=None,
+        idempotency_key="idem-webhook",
+        webhook=webhook,
+    )
+
+    assert first.response["id"] == second.response["id"]
+    assert first.response["webhook"] == {"configured": True}
+    assert second.audit_metadata["idempotency_resolution"] == "existing"
+    rows = await batch_db.query_raw(
+        """
+        SELECT
+            s.webhook_config_ciphertext AS session_ciphertext,
+            s.webhook_config_fingerprint AS session_fingerprint,
+            j.webhook_config_ciphertext AS job_ciphertext,
+            j.webhook_config_fingerprint AS job_fingerprint
+        FROM deltallm_batch_create_session s
+        JOIN deltallm_batch_job j ON j.batch_id = s.target_batch_id
+        WHERE j.batch_id = $1
+        """,
+        str(first.response["id"]),
+    )
+    assert len(rows) == 1
+    row = dict(rows[0])
+    assert row["session_ciphertext"] == row["job_ciphertext"]
+    assert row["session_fingerprint"] == row["job_fingerprint"]
+    assert webhook["url"] not in str(row)
+    assert webhook["signing_secret"] not in str(row)
+    decrypted = cipher.decrypt(str(row["job_ciphertext"]))
+    assert decrypted.url == webhook["url"]
+    assert decrypted.signing_secret.get_secret_value() == webhook["signing_secret"]
+
+    with pytest.raises(HTTPException) as exc:
+        await service.create_batch_result(
+            auth=auth,
+            input_file_id=input_file_id,
+            endpoint="/v1/embeddings",
+            metadata={"customer_job_id": "job-1"},
+            completion_window=None,
+            idempotency_key="idem-webhook",
+            webhook={**webhook, "signing_secret": "x" * 32},
+        )
+
+    assert exc.value.status_code == 409
+
+
+async def _seed_finalizing_webhook_job(
+    batch_db,
+    *,
+    final_status: BatchJobStatus,
+    created_by_team_id: str | None = None,
+    created_by_organization_id: str | None = None,
+) -> tuple[BatchRepository, str, str]:
+    repository = BatchRepository(batch_db, webhook_max_attempts=7)
+    input_file_id = await _seed_batch_file(repository)
+    job = await repository.create_job(
+        endpoint="/v1/embeddings",
+        input_file_id=input_file_id,
+        model="m1",
+        metadata={"customer_job_id": "job-1"},
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=created_by_team_id,
+        created_by_organization_id=created_by_organization_id,
+        expires_at=None,
+        webhook_config_ciphertext="v1.key.ciphertext",
+        webhook_config_fingerprint="a" * 64,
+    )
+    assert job is not None
+    inserted = await repository.create_items(
+        job.batch_id,
+        [BatchItemCreate(line_number=1, custom_id="c1", request_body={"model": "m1", "input": "a"})],
+    )
+    assert inserted == 1
+    item_status = {
+        BatchJobStatus.COMPLETED: "completed",
+        BatchJobStatus.FAILED: "failed",
+        BatchJobStatus.CANCELLED: "cancelled",
+        BatchJobStatus.EXPIRED: "failed",
+    }[final_status]
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_item
+        SET status = $2,
+            completed_at = NOW()
+        WHERE batch_id = $1
+        """,
+        job.batch_id,
+        item_status,
+    )
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_job
+        SET status = 'finalizing',
+            locked_by = 'worker-1',
+            lease_expires_at = NOW() + INTERVAL '2 minutes',
+            started_at = NOW()
+        WHERE batch_id = $1
+        """,
+        job.batch_id,
+    )
+    return repository, job.batch_id, "worker-1"
+
+
+async def _reset_finalizing_webhook_job_item_to_pending(batch_db, *, batch_id: str) -> None:
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_item
+        SET status = 'pending',
+            completed_at = NULL
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_job
+        SET total_items = 1,
+            completed_items = 0,
+            failed_items = 0,
+            in_progress_items = 0,
+            cancelled_items = 0
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+
+
+async def _seed_terminal_job_without_webhook(
+    batch_db,
+) -> tuple[BatchRepository, str]:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.COMPLETED,
+    )
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_job
+        SET webhook_config_ciphertext = NULL,
+            webhook_config_fingerprint = NULL
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id=batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.COMPLETED,
+        worker_id=worker_id,
+    )
+    assert finalized is not None
+    assert finalized.status is BatchJobStatus.COMPLETED
+    return repository, batch_id
+
+
+@pytest.mark.parametrize(
+    ("final_status", "event_type"),
+    [
+        (BatchJobStatus.COMPLETED, BatchWebhookEventType.COMPLETED),
+        (BatchJobStatus.FAILED, BatchWebhookEventType.FAILED),
+        (BatchJobStatus.CANCELLED, BatchWebhookEventType.CANCELLED),
+        (BatchJobStatus.EXPIRED, BatchWebhookEventType.EXPIRED),
+    ],
+)
+@pytest.mark.asyncio
+async def test_db_backed_terminal_transition_atomically_enqueues_one_webhook_event(
+    batch_db,
+    final_status: BatchJobStatus,
+    event_type: BatchWebhookEventType,
+) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=final_status,
+    )
+
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id=batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=final_status,
+        worker_id=worker_id,
+    )
+    duplicate = await repository.attach_artifacts_and_finalize(
+        batch_id=batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=final_status,
+        worker_id=worker_id,
+    )
+
+    assert finalized is not None
+    assert finalized.status is final_status
+    assert finalized.total_items == 1
+    assert finalized.in_progress_items == 0
+    assert duplicate is None
+    rows = await batch_db.query_raw(
+        """
+        SELECT *
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert len(rows) == 1
+    row = dict(rows[0])
+    assert row["event_type"] == event_type.value
+    assert row["target_config_ciphertext"] == "v1.key.ciphertext"
+    assert row["status"] == "queued"
+    assert int(row["max_attempts"]) == 7
+    payload = row["payload_json"]
+    assert isinstance(payload, dict)
+    assert payload["id"] == row["event_id"]
+    assert payload["type"] == event_type.value
+    assert payload["data"]["batch"]["status"] == final_status.value
+    assert payload["data"]["batch"]["metadata"] == {"customer_job_id": "job-1"}
+    assert row["payload_sha256"] == batch_webhook_event_payload_sha256(payload)
+
+
+@pytest.mark.asyncio
+async def test_db_backed_webhook_due_summary_excludes_retry_backoff(batch_db) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.COMPLETED,
+    )
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id=batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.COMPLETED,
+        worker_id=worker_id,
+    )
+    assert finalized is not None
+    assert (await repository.summarize_webhook_outbox()).due_count == 1
+
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_webhook_outbox
+        SET status = 'retrying',
+            attempt_count = 1,
+            next_attempt_at = NOW() + INTERVAL '1 hour'
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert (await repository.summarize_webhook_outbox()).due_count == 0
+
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_webhook_outbox
+        SET next_attempt_at = NOW() - INTERVAL '1 second'
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert (await repository.summarize_webhook_outbox()).due_count == 1
+
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_webhook_outbox
+        SET attempt_count = max_attempts
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert (await repository.summarize_webhook_outbox()).due_count == 0
+
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_webhook_outbox
+        SET status = 'processing',
+            lease_expires_at = NOW() - INTERVAL '1 second'
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert (await repository.summarize_webhook_outbox()).due_count == 1
+
+
+@pytest.mark.asyncio
+async def test_db_backed_webhook_delivery_claims_recover_and_fence_attempt_generations(
+    batch_db,
+) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.COMPLETED,
+    )
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id=batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.COMPLETED,
+        worker_id=worker_id,
+    )
+    assert finalized is not None
+
+    db_one = await _connect_prisma()
+    db_two = await _connect_prisma()
+    try:
+        repo_one = BatchRepository(db_one)
+        repo_two = BatchRepository(db_two)
+        first, second = await asyncio.gather(
+            repo_one.claim_webhook_outbox_due(
+                worker_id="delivery-1",
+                lease_seconds=30,
+                limit=1,
+            ),
+            repo_two.claim_webhook_outbox_due(
+                worker_id="delivery-2",
+                lease_seconds=30,
+                limit=1,
+            ),
+        )
+        claims = first or second
+        assert len(claims) == 1
+        assert not (first and second)
+        claimed = claims[0]
+        owner = str(claimed.locked_by)
+        owner_repo = repo_one if owner == "delivery-1" else repo_two
+        recovery_repo = repo_two if owner == "delivery-1" else repo_one
+        assert claimed.attempt_count == 1
+        assert await owner_repo.renew_webhook_outbox_lease(
+            event_id=claimed.event_id,
+            worker_id=owner,
+            attempt_count=1,
+            lease_seconds=30,
+        )
+        assert not await owner_repo.mark_webhook_outbox_delivered(
+            event_id=claimed.event_id,
+            worker_id=owner,
+            attempt_count=2,
+            status_code=200,
+        )
+
+        await batch_db.execute_raw(
+            """
+            UPDATE deltallm_batch_webhook_outbox
+            SET lease_expires_at = NOW() - INTERVAL '1 second'
+            WHERE event_id = $1
+            """,
+            claimed.event_id,
+        )
+        recovered = await recovery_repo.claim_webhook_outbox_due(
+            worker_id="delivery-recovery",
+            lease_seconds=30,
+            limit=1,
+        )
+        assert len(recovered) == 1
+        assert recovered[0].attempt_count == 2
+        assert recovered[0].recovered_from_expired_lease is True
+        assert not await owner_repo.mark_webhook_outbox_delivered(
+            event_id=claimed.event_id,
+            worker_id=owner,
+            attempt_count=1,
+            status_code=200,
+        )
+        assert await recovery_repo.mark_webhook_outbox_retrying(
+            event_id=claimed.event_id,
+            worker_id="delivery-recovery",
+            attempt_count=2,
+            status_code=503,
+            error="http_retryable_status",
+            next_attempt_at=datetime.now(tz=UTC) - timedelta(seconds=1),
+        )
+
+        final_claim = await owner_repo.claim_webhook_outbox_due(
+            worker_id="delivery-final",
+            lease_seconds=30,
+            limit=1,
+        )
+        assert len(final_claim) == 1
+        assert final_claim[0].attempt_count == 3
+        assert await owner_repo.mark_webhook_outbox_delivered(
+            event_id=claimed.event_id,
+            worker_id="delivery-final",
+            attempt_count=3,
+            status_code=204,
+        )
+    finally:
+        await db_one.disconnect()
+        await db_two.disconnect()
+
+    rows = await batch_db.query_raw(
+        """
+        SELECT status, attempt_count, last_status_code, locked_by,
+               lease_expires_at, delivered_at
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    row = dict(rows[0])
+    assert row["status"] == "delivered"
+    assert int(row["attempt_count"]) == 3
+    assert int(row["last_status_code"]) == 204
+    assert row["locked_by"] is None
+    assert row["lease_expires_at"] is None
+    assert row["delivered_at"] is not None
+    unchanged_batch = await repository.get_job(batch_id)
+    assert unchanged_batch is not None
+    assert unchanged_batch.status is BatchJobStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_db_backed_failed_webhook_replay_preserves_event_and_body(batch_db) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.COMPLETED,
+    )
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id=batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.COMPLETED,
+        worker_id=worker_id,
+    )
+    assert finalized is not None
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_webhook_outbox
+        SET status = 'failed',
+            attempt_count = max_attempts,
+            last_status_code = 503,
+            last_error = 'max_attempts_exhausted',
+            updated_at = NOW()
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    before_rows = await batch_db.query_raw(
+        """
+        SELECT event_id, event_type, target_config_ciphertext, payload_json, payload_sha256,
+               attempt_count, max_attempts
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    before = dict(before_rows[0])
+
+    replayed = await repository.replay_failed_webhook_outbox(
+        batch_id=batch_id,
+        event_id=str(before["event_id"]),
+    )
+    duplicate = await repository.replay_failed_webhook_outbox(
+        batch_id=batch_id,
+        event_id=str(before["event_id"]),
+    )
+
+    assert replayed is not None
+    assert replayed.previous_attempt_count == int(before["attempt_count"])
+    assert replayed.record.status.value == "queued"
+    assert replayed.record.attempt_count == 0
+    assert replayed.record.event_id == before["event_id"]
+    assert replayed.record.event_type.value == before["event_type"]
+    assert replayed.record.target_config_ciphertext == before["target_config_ciphertext"]
+    assert replayed.record.payload_json == before["payload_json"]
+    assert replayed.record.payload_sha256 == before["payload_sha256"]
+    assert replayed.record.max_attempts == int(before["max_attempts"])
+    assert duplicate is None
+
+
+@pytest.mark.asyncio
+async def test_db_backed_webhook_retention_deletes_terminal_and_preserves_active_rows(
+    batch_db,
+) -> None:
+    repository, delivered_batch_id, delivered_worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.COMPLETED,
+    )
+    delivered_job = await repository.attach_artifacts_and_finalize(
+        batch_id=delivered_batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.COMPLETED,
+        worker_id=delivered_worker_id,
+    )
+    assert delivered_job is not None
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_webhook_outbox
+        SET status = 'delivered',
+            delivered_at = NOW() - INTERVAL '60 days',
+            updated_at = NOW() - INTERVAL '60 days'
+        WHERE batch_id = $1
+        """,
+        delivered_batch_id,
+    )
+
+    active_repository, active_batch_id, active_worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.FAILED,
+        created_by_team_id="team-webhook-retention",
+        created_by_organization_id="org-webhook-retention",
+    )
+    active_job = await active_repository.attach_artifacts_and_finalize(
+        batch_id=active_batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.FAILED,
+        worker_id=active_worker_id,
+    )
+    assert active_job is not None
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_webhook_outbox
+        SET updated_at = NOW() - INTERVAL '60 days'
+        WHERE batch_id = $1
+        """,
+        active_batch_id,
+    )
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_job
+        SET expires_at = NOW() - INTERVAL '60 days'
+        WHERE batch_id IN ($1, $2)
+        """,
+        delivered_batch_id,
+        active_batch_id,
+    )
+
+    deleted = await repository.delete_terminal_webhook_outbox_before(
+        cutoff=datetime.now(tz=UTC) - timedelta(days=30),
+        limit=100,
+    )
+    deleted_jobs = await _drain_expired_terminal_jobs(
+        repository,
+        now=datetime.now(tz=UTC),
+        limit=100,
+    )
+    remaining = await batch_db.query_raw(
+        """
+        SELECT batch_id, status, created_by_team_id, created_by_organization_id
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id IN ($1, $2)
+        ORDER BY batch_id
+        """,
+        delivered_batch_id,
+        active_batch_id,
+    )
+    remaining_jobs = await batch_db.query_raw(
+        """
+        SELECT batch_id
+        FROM deltallm_batch_job
+        WHERE batch_id IN ($1, $2)
+        ORDER BY batch_id
+        """,
+        delivered_batch_id,
+        active_batch_id,
+    )
+
+    assert deleted == {"delivered": 1, "failed": 0}
+    assert deleted_jobs == 2
+    assert [dict(row) for row in remaining] == [
+        {
+            "batch_id": active_batch_id,
+            "status": "queued",
+            "created_by_team_id": "team-webhook-retention",
+            "created_by_organization_id": "org-webhook-retention",
+        }
+    ]
+    assert remaining_jobs == []
+
+
+@pytest.mark.asyncio
+async def test_db_backed_cleanup_repairs_mixed_version_webhook_ownership_before_job_delete(
+    batch_db,
+) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.COMPLETED,
+        created_by_team_id="team-mixed-version",
+        created_by_organization_id="org-mixed-version",
+    )
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id=batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.COMPLETED,
+        worker_id=worker_id,
+    )
+    assert finalized is not None
+    before_rows = await batch_db.query_raw(
+        """
+        UPDATE deltallm_batch_webhook_outbox
+        SET created_by_team_id = NULL,
+            created_by_organization_id = NULL
+        WHERE batch_id = $1
+        RETURNING event_id, updated_at
+        """,
+        batch_id,
+    )
+    before = dict(before_rows[0])
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_job
+        SET expires_at = NOW() - INTERVAL '1 day'
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+
+    deleted_jobs = await _drain_expired_terminal_jobs(
+        repository,
+        now=datetime.now(tz=UTC),
+        limit=100,
+    )
+
+    after_rows = await batch_db.query_raw(
+        """
+        SELECT event_id, created_by_team_id, created_by_organization_id, updated_at
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert deleted_jobs == 1
+    assert [dict(row) for row in after_rows] == [
+        {
+            "event_id": before["event_id"],
+            "created_by_team_id": "team-mixed-version",
+            "created_by_organization_id": "org-mixed-version",
+            "updated_at": before["updated_at"],
+        }
+    ]
+    assert await repository.get_job(batch_id) is None
+
+
+@pytest.mark.asyncio
+async def test_db_backed_cleanup_skips_ownership_conflict_and_deletes_safe_jobs(
+    batch_db,
+) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.COMPLETED,
+        created_by_team_id="team-cleanup-owner",
+        created_by_organization_id="org-cleanup-owner",
+    )
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id=batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.COMPLETED,
+        worker_id=worker_id,
+    )
+    assert finalized is not None
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_webhook_outbox
+        SET created_by_team_id = 'team-wrong-owner'
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_job
+        SET expires_at = NOW() - INTERVAL '2 days'
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+
+    safe_repository, safe_batch_id, safe_worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.COMPLETED,
+        created_by_team_id="team-cleanup-safe",
+        created_by_organization_id="org-cleanup-safe",
+    )
+    safe_finalized = await safe_repository.attach_artifacts_and_finalize(
+        batch_id=safe_batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.COMPLETED,
+        worker_id=safe_worker_id,
+    )
+    assert safe_finalized is not None
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_job
+        SET expires_at = NOW() - INTERVAL '1 day'
+        WHERE batch_id = $1
+        """,
+        safe_batch_id,
+    )
+
+    assert await _drain_expired_terminal_jobs(
+        repository,
+        now=datetime.now(tz=UTC),
+        limit=100,
+    ) == 1
+    assert await repository.count_expired_terminal_job_ownership_conflicts(
+        now=datetime.now(tz=UTC),
+        limit=100,
+    ) == 1
+    assert await repository.get_job(batch_id) is not None
+    assert await repository.get_job(safe_batch_id) is None
+    retained = await repository.list_webhook_outbox_by_batch_id(batch_id=batch_id)
+    assert len(retained) == 1
+    assert retained[0].created_by_team_id == "team-wrong-owner"
+
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_webhook_outbox
+        SET created_by_team_id = 'team-cleanup-owner'
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert await _drain_expired_terminal_jobs(
+        repository,
+        now=datetime.now(tz=UTC),
+        limit=100,
+    ) == 1
+    assert await repository.get_job(batch_id) is None
+
+
+@pytest.mark.asyncio
+async def test_db_backed_cleanup_skips_mixed_version_writer_then_repairs_next_pass(
+    batch_db,
+) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.COMPLETED,
+        created_by_team_id="team-cleanup-race",
+        created_by_organization_id="org-cleanup-race",
+    )
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id=batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.COMPLETED,
+        worker_id=worker_id,
+    )
+    assert finalized is not None
+    original = (await repository.list_webhook_outbox_by_batch_id(batch_id=batch_id))[0]
+    await batch_db.execute_raw(
+        "DELETE FROM deltallm_batch_webhook_outbox WHERE batch_id = $1",
+        batch_id,
+    )
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_job
+        SET expires_at = NOW() - INTERVAL '1 day'
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+
+    writer_locked = asyncio.Event()
+    release_writer = asyncio.Event()
+
+    async def _old_writer() -> None:
+        async with batch_db.tx() as tx:
+            rows = await tx.query_raw(
+                "SELECT batch_id FROM deltallm_batch_job WHERE batch_id = $1 FOR UPDATE",
+                batch_id,
+            )
+            assert rows
+            writer_locked.set()
+            await release_writer.wait()
+            inserted = await repository.with_prisma(tx).webhook_outbox.insert_event(
+                BatchWebhookOutboxCreate(
+                    event_id=original.event_id,
+                    batch_id=batch_id,
+                    event_type=original.event_type,
+                    created_by_team_id=None,
+                    created_by_organization_id=None,
+                    target_config_ciphertext=original.target_config_ciphertext,
+                    payload_json=original.payload_json,
+                    payload_sha256=original.payload_sha256,
+                    max_attempts=original.max_attempts,
+                )
+            )
+            assert inserted is not None
+
+    writer_task = asyncio.create_task(_old_writer())
+    await writer_locked.wait()
+    try:
+        assert await _drain_expired_terminal_jobs(
+            repository,
+            now=datetime.now(tz=UTC),
+            limit=100,
+        ) == 0
+    finally:
+        release_writer.set()
+    await writer_task
+
+    assert await _drain_expired_terminal_jobs(
+        repository,
+        now=datetime.now(tz=UTC),
+        limit=100,
+    ) == 1
+    retained = await repository.list_webhook_outbox_by_batch_id(batch_id=batch_id)
+    assert len(retained) == 1
+    assert retained[0].created_by_team_id == "team-cleanup-race"
+    assert retained[0].created_by_organization_id == "org-cleanup-race"
+    assert await repository.get_job(batch_id) is None
+
+
+@pytest.mark.asyncio
+async def test_db_backed_terminal_webhook_reconciliation_preserves_snapshot_after_timestamp_drift(
+    batch_db,
+) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.FAILED,
+    )
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id=batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.FAILED,
+        worker_id=worker_id,
+    )
+    assert finalized is not None
+    before_rows = await batch_db.query_raw(
+        """
+        SELECT event_id, payload_json, payload_sha256
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert len(before_rows) == 1
+    before = dict(before_rows[0])
+
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_job
+        SET status_last_updated_at = status_last_updated_at + INTERVAL '1 hour'
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    drifted = await repository.get_job(batch_id)
+    assert drifted is not None
+    assert before["payload_json"]["data"]["batch"]["failed_at"] != serialize_public_batch(
+        drifted
+    )["failed_at"]
+
+    reconciled = await repository.reconcile_job_webhook_config(
+        batch_id=batch_id,
+        webhook_config_ciphertext="v1.key.ciphertext",
+        webhook_config_fingerprint="a" * 64,
+    )
+
+    assert reconciled is not None
+    assert reconciled.status is BatchJobStatus.FAILED
+    after_rows = await batch_db.query_raw(
+        """
+        SELECT event_id, payload_json, payload_sha256
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert [dict(row) for row in after_rows] == [before]
+    assert before["payload_sha256"] == batch_webhook_event_payload_sha256(
+        before["payload_json"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_db_backed_late_cancellation_controls_terminal_status_and_webhook_event(
+    batch_db,
+) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.COMPLETED,
+    )
+    cancellation = await repository.request_cancel(batch_id)
+    assert cancellation is not None
+    assert cancellation.status is BatchJobStatus.FINALIZING
+    assert cancellation.cancel_requested_at is not None
+
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id=batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.COMPLETED,
+        worker_id=worker_id,
+    )
+
+    assert finalized is not None
+    assert finalized.status is BatchJobStatus.CANCELLED
+    rows = await batch_db.query_raw(
+        """
+        SELECT event_type, payload_json
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert len(rows) == 1
+    event = dict(rows[0])
+    assert event["event_type"] == BatchWebhookEventType.CANCELLED.value
+    assert event["payload_json"]["data"]["batch"] == serialize_public_batch(finalized)
+
+
+@pytest.mark.asyncio
+async def test_db_backed_late_operator_failure_controls_terminal_status_and_webhook_event(
+    batch_db,
+) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.COMPLETED,
+    )
+    updated = await repository.set_provider_error(
+        batch_id=batch_id,
+        provider_error=encode_operator_failed_reason("manual stop"),
+    )
+    assert updated is not None
+
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id=batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.COMPLETED,
+        worker_id=worker_id,
+    )
+
+    assert finalized is not None
+    assert finalized.status is BatchJobStatus.FAILED
+    rows = await batch_db.query_raw(
+        """
+        SELECT event_type, payload_json
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert len(rows) == 1
+    event = dict(rows[0])
+    assert event["event_type"] == BatchWebhookEventType.FAILED.value
+    assert event["payload_json"]["data"]["batch"] == serialize_public_batch(finalized)
+
+
+@pytest.mark.asyncio
+async def test_db_backed_terminal_webhook_reconciliation_repairs_config_and_event_once(
+    batch_db,
+) -> None:
+    repository, batch_id = await _seed_terminal_job_without_webhook(batch_db)
+
+    first = await repository.reconcile_job_webhook_config(
+        batch_id=batch_id,
+        webhook_config_ciphertext="v1.key.recovered",
+        webhook_config_fingerprint="b" * 64,
+    )
+    second = await repository.reconcile_job_webhook_config(
+        batch_id=batch_id,
+        webhook_config_ciphertext="v1.key.recovered",
+        webhook_config_fingerprint="b" * 64,
+    )
+
+    assert first is not None
+    assert second is not None
+    assert first.webhook_config_ciphertext == "v1.key.recovered"
+    assert second.webhook_config_fingerprint == "b" * 64
+    rows = await batch_db.query_raw(
+        """
+        SELECT event_type, target_config_ciphertext, payload_json
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert len(rows) == 1
+    event = dict(rows[0])
+    assert event["event_type"] == BatchWebhookEventType.COMPLETED.value
+    assert event["target_config_ciphertext"] == "v1.key.recovered"
+    assert event["payload_json"]["data"]["batch"] == serialize_public_batch(second)
+
+
+@pytest.mark.asyncio
+async def test_db_backed_terminal_webhook_reconciliation_rolls_back_config_on_outbox_failure(
+    batch_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, batch_id = await _seed_terminal_job_without_webhook(batch_db)
+
+    async def _fail_insert(*args, **kwargs):  # noqa: ANN002, ANN003
+        del args, kwargs
+        raise RuntimeError("simulated recovery outbox failure")
+
+    monkeypatch.setattr(
+        "src.batch.repositories.webhook_outbox_repository.BatchWebhookOutboxRepository.insert_event",
+        _fail_insert,
+    )
+
+    with pytest.raises(RuntimeError, match="simulated recovery outbox failure"):
+        await repository.reconcile_job_webhook_config(
+            batch_id=batch_id,
+            webhook_config_ciphertext="v1.key.recovered",
+            webhook_config_fingerprint="b" * 64,
+        )
+
+    reloaded = await repository.get_job(batch_id)
+    assert reloaded is not None
+    assert reloaded.webhook_config_ciphertext is None
+    assert reloaded.webhook_config_fingerprint is None
+    rows = await batch_db.query_raw(
+        "SELECT event_id FROM deltallm_batch_webhook_outbox WHERE batch_id = $1",
+        batch_id,
+    )
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_db_backed_finalization_reuses_outer_transaction_and_observes_uncommitted_items(
+    batch_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.COMPLETED,
+    )
+    await _reset_finalizing_webhook_job_item_to_pending(batch_db, batch_id=batch_id)
+    observed: list[str] = []
+    monkeypatch.setattr(
+        repository.jobs,
+        "observe_finalization",
+        lambda job: observed.append(job.batch_id),
+    )
+
+    async with batch_db.tx() as tx:
+        await tx.execute_raw(
+            """
+            UPDATE deltallm_batch_item
+            SET status = 'completed',
+                completed_at = NOW()
+            WHERE batch_id = $1
+            """,
+            batch_id,
+        )
+        transactional_repository = repository.with_prisma(tx)
+        finalized = await transactional_repository.attach_artifacts_and_finalize(
+            batch_id=batch_id,
+            output_file_id=None,
+            error_file_id=None,
+            final_status=BatchJobStatus.COMPLETED,
+            worker_id=worker_id,
+        )
+
+        assert finalized is not None
+        assert finalized.status is BatchJobStatus.COMPLETED
+        assert finalized.completed_items == 1
+        assert observed == []
+
+    repository.publish_finalization_metric_after_commit(finalized)
+
+    assert observed == [batch_id]
+    reloaded = await repository.get_job(batch_id)
+    assert reloaded is not None
+    assert reloaded.status is BatchJobStatus.COMPLETED
+    assert reloaded.completed_items == 1
+    rows = await batch_db.query_raw(
+        """
+        SELECT event_type, payload_json
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert len(rows) == 1
+    row = dict(rows[0])
+    assert row["event_type"] == BatchWebhookEventType.COMPLETED.value
+    assert row["payload_json"]["data"]["batch"] == serialize_public_batch(reloaded)
+
+
+@pytest.mark.asyncio
+async def test_db_backed_outer_transaction_rollback_removes_terminal_transition_and_webhook(
+    batch_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.COMPLETED,
+    )
+    await _reset_finalizing_webhook_job_item_to_pending(batch_db, batch_id=batch_id)
+    observed: list[str] = []
+    monkeypatch.setattr(
+        repository.jobs,
+        "observe_finalization",
+        lambda job: observed.append(job.batch_id),
+    )
+
+    with pytest.raises(RuntimeError, match="force outer rollback"):
+        async with batch_db.tx() as tx:
+            await tx.execute_raw(
+                """
+                UPDATE deltallm_batch_item
+                SET status = 'completed',
+                    completed_at = NOW()
+                WHERE batch_id = $1
+                """,
+                batch_id,
+            )
+            transactional_repository = repository.with_prisma(tx)
+            finalized = await transactional_repository.attach_artifacts_and_finalize(
+                batch_id=batch_id,
+                output_file_id=None,
+                error_file_id=None,
+                final_status=BatchJobStatus.COMPLETED,
+                worker_id=worker_id,
+            )
+            assert finalized is not None
+            assert observed == []
+            raise RuntimeError("force outer rollback")
+
+    job_rows = await batch_db.query_raw(
+        """
+        SELECT status, output_file_id, locked_by, completed_items
+        FROM deltallm_batch_job
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert [dict(row) for row in job_rows] == [
+        {
+            "status": "finalizing",
+            "output_file_id": None,
+            "locked_by": worker_id,
+            "completed_items": 0,
+        }
+    ]
+    item_rows = await batch_db.query_raw(
+        """
+        SELECT status, completed_at
+        FROM deltallm_batch_item
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert [dict(row) for row in item_rows] == [
+        {
+            "status": "pending",
+            "completed_at": None,
+        }
+    ]
+    outbox_rows = await batch_db.query_raw(
+        "SELECT event_id FROM deltallm_batch_webhook_outbox WHERE batch_id = $1",
+        batch_id,
+    )
+    assert outbox_rows == []
+    assert observed == []
+
+
+@pytest.mark.asyncio
+async def test_db_backed_permanent_finalization_failure_snapshots_final_public_batch(
+    batch_db,
+) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.FAILED,
+    )
+    provider_error = BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR
+
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id=batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.FAILED,
+        worker_id=worker_id,
+        terminal_provider_error=provider_error,
+    )
+
+    assert finalized is not None
+    assert finalized.provider_error == provider_error
+    reloaded = await repository.get_job(batch_id)
+    assert reloaded is not None
+    assert reloaded.provider_error == provider_error
+    rows = await batch_db.query_raw(
+        """
+        SELECT payload_json
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert len(rows) == 1
+    payload = dict(rows[0])["payload_json"]
+    assert payload["type"] == BatchWebhookEventType.FAILED.value
+    assert payload["data"]["batch"] == serialize_public_batch(reloaded)
+
+
+@pytest.mark.asyncio
+async def test_db_backed_oversized_artifact_validation_failure_still_enqueues_webhook(
+    batch_db,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.FAILED,
+    )
+    provider_marker = "provider-controlled-marker"
+    provider_value = provider_marker + ("x" * 65_536)
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_item
+        SET status = 'completed',
+            response_body = $2::jsonb
+        WHERE batch_id = $1
+        """,
+        batch_id,
+        json.dumps(
+            {
+                "object": provider_value,
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}],
+                "model": "m1",
+                "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
+            }
+        ),
+    )
+    await batch_db.execute_raw(
+        """
+        UPDATE deltallm_batch_job
+        SET total_items = 1,
+            completed_items = 1,
+            failed_items = 0,
+            in_progress_items = 0,
+            cancelled_items = 0
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    job = await repository.get_job(batch_id)
+    assert job is not None
+
+    finalizer = BatchArtifactFinalizer(
+        repository=repository,
+        storage=LocalBatchArtifactStorage(str(tmp_path)),
+        config=BatchWorkerConfig(worker_id=worker_id),
+    )
+    with caplog.at_level(logging.WARNING):
+        await finalizer.finalize_with_retry(job)
+
+    reloaded = await repository.get_job(batch_id)
+    assert reloaded is not None
+    assert reloaded.status is BatchJobStatus.FAILED
+    assert reloaded.provider_error == BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR
+    assert reloaded.completed_at is not None
+    assert reloaded.locked_by is None
+    assert reloaded.lease_expires_at is None
+    assert reloaded.total_items == 1
+    assert reloaded.completed_items == 1
+    assert reloaded.in_progress_items == 0
+    assert provider_marker not in caplog.text
+    assert list(tmp_path.rglob("*")) == []
+
+    duplicate = await repository.attach_artifacts_and_finalize(
+        batch_id=batch_id,
+        output_file_id=None,
+        error_file_id=None,
+        final_status=BatchJobStatus.FAILED,
+        worker_id=worker_id,
+        terminal_provider_error=BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR,
+    )
+    assert duplicate is None
+    rows = await batch_db.query_raw(
+        """
+        SELECT *
+        FROM deltallm_batch_webhook_outbox
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert len(rows) == 1
+    row = dict(rows[0])
+    payload = row["payload_json"]
+    assert isinstance(payload, dict)
+    assert row["event_type"] == BatchWebhookEventType.FAILED.value
+    assert row["payload_sha256"] == batch_webhook_event_payload_sha256(payload)
+    assert payload["data"]["batch"] == serialize_public_batch(reloaded)
+    assert provider_marker not in json.dumps(payload)
+
+
+@pytest.mark.asyncio
+async def test_db_backed_webhook_outbox_failure_rolls_back_terminal_transition(
+    batch_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, batch_id, worker_id = await _seed_finalizing_webhook_job(
+        batch_db,
+        final_status=BatchJobStatus.COMPLETED,
+    )
+    output_file = await repository.create_file(
+        purpose="batch_output",
+        filename="output.jsonl",
+        bytes_size=16,
+        storage_backend="local",
+        storage_key=f"seed/{batch_id}/output.jsonl",
+        checksum="seed-output",
+        created_by_api_key="key-a",
+        created_by_user_id=None,
+        created_by_team_id=None,
+    )
+    assert output_file is not None
+
+    async def _fail_insert(*args, **kwargs):  # noqa: ANN002, ANN003
+        del args, kwargs
+        raise RuntimeError("simulated webhook outbox failure")
+
+    monkeypatch.setattr(
+        "src.batch.repositories.webhook_outbox_repository.BatchWebhookOutboxRepository.insert_event",
+        _fail_insert,
+    )
+
+    with pytest.raises(RuntimeError, match="simulated webhook outbox failure"):
+        await repository.attach_artifacts_and_finalize(
+            batch_id=batch_id,
+            output_file_id=output_file.file_id,
+            error_file_id=None,
+            final_status=BatchJobStatus.COMPLETED,
+            worker_id=worker_id,
+            terminal_provider_error=BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR,
+        )
+
+    job_rows = await batch_db.query_raw(
+        """
+        SELECT status, output_file_id, locked_by, provider_error
+        FROM deltallm_batch_job
+        WHERE batch_id = $1
+        """,
+        batch_id,
+    )
+    assert [dict(row) for row in job_rows] == [
+        {
+            "status": "finalizing",
+            "output_file_id": None,
+            "locked_by": worker_id,
+            "provider_error": None,
+        }
+    ]
+    outbox_rows = await batch_db.query_raw(
+        "SELECT event_id FROM deltallm_batch_webhook_outbox WHERE batch_id = $1",
+        batch_id,
+    )
+    assert outbox_rows == []
 
 
 @pytest.mark.asyncio

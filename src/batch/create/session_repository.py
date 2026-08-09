@@ -53,6 +53,8 @@ def _session_from_row(row: dict[str, Any]) -> BatchCreateSessionRecord:
         completed_at=parse_datetime(row.get("completed_at")),
         last_attempt_at=parse_datetime(row.get("last_attempt_at")),
         expires_at=parse_datetime(row.get("expires_at")),
+        webhook_config_ciphertext=row.get("webhook_config_ciphertext"),
+        webhook_config_fingerprint=row.get("webhook_config_fingerprint"),
     )
 
 
@@ -66,7 +68,7 @@ class BatchCreateSessionRepository:
         try:
             await self.prisma.query_raw(
                 """
-                SELECT 1
+                SELECT webhook_config_ciphertext, webhook_config_fingerprint
                 FROM deltallm_batch_create_session
                 LIMIT 0
                 """
@@ -94,7 +96,8 @@ class BatchCreateSessionRepository:
                 priority_quota_scope_key, idempotency_scope_key, idempotency_key,
                 last_error_code, last_error_message, promotion_attempt_count,
                 created_by_api_key, created_by_user_id, created_by_team_id,
-                created_by_organization_id, completed_at, last_attempt_at, expires_at
+                created_by_organization_id, completed_at, last_attempt_at, expires_at,
+                webhook_config_ciphertext, webhook_config_fingerprint
             )
             VALUES (
                 $1, $2, $3, $4, $5,
@@ -104,7 +107,8 @@ class BatchCreateSessionRepository:
                 $17, $18, $19,
                 $20, $21, $22,
                 $23, $24, $25,
-                $26, $27::timestamp, $28::timestamp, $29::timestamp
+                $26, $27::timestamp, $28::timestamp, $29::timestamp,
+                $30, $31
             )
             RETURNING *
             """,
@@ -137,6 +141,8 @@ class BatchCreateSessionRepository:
             session.completed_at,
             session.last_attempt_at,
             session.expires_at,
+            session.webhook_config_ciphertext,
+            session.webhook_config_fingerprint,
         )
         if not rows:
             return None

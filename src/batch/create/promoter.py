@@ -19,7 +19,12 @@ from src.batch.create.models import (
 )
 from src.batch.scopes import batch_pending_scope_target_for_session
 from src.batch.create.staging import BatchCreateStagingBackend, staged_artifact_from_session
-from src.batch.models import BatchItemCreate, BatchJobRecord, BatchJobStatus
+from src.batch.models import (
+    BatchItemCreate,
+    BatchJobRecord,
+    BatchJobStatus,
+    BatchWebhookConfigurationConflictError,
+)
 from src.batch.scheduling import (
     ESTIMATOR_VERSION,
     MIXED_MODEL_GROUP,
@@ -201,12 +206,48 @@ class BatchCreateSessionPromoter:
                 code="completed_session_missing_batch",
                 retryable=False,
             )
+        job = await self._reconcile_existing_job_webhook(
+            repository=self.repository,
+            session=session,
+        )
         return BatchCreatePromotionResult(
             session_id=session.session_id,
             batch_id=job.batch_id,
             promoted=False,
             job=job,
         )
+
+    async def _reconcile_existing_job_webhook(
+        self,
+        *,
+        repository: BatchRepository,
+        session: BatchCreateSessionRecord,
+    ) -> BatchJobRecord:
+        try:
+            job = await repository.reconcile_job_webhook_config(
+                batch_id=session.target_batch_id,
+                webhook_config_ciphertext=session.webhook_config_ciphertext,
+                webhook_config_fingerprint=session.webhook_config_fingerprint,
+            )
+        except BatchWebhookConfigurationConflictError:
+            raise BatchCreatePromotionError(
+                f"Existing batch '{session.target_batch_id}' has inconsistent webhook configuration",
+                code="webhook_config_mismatch",
+                retryable=False,
+            ) from None
+        except Exception:
+            raise BatchCreatePromotionError(
+                f"Failed to reconcile webhook configuration for existing batch '{session.target_batch_id}'",
+                code="webhook_reconciliation_failed",
+                retryable=True,
+            ) from None
+        if job is None:
+            raise BatchCreatePromotionError(
+                f"Existing batch '{session.target_batch_id}' has inconsistent webhook configuration",
+                code="webhook_config_mismatch",
+                retryable=False,
+            )
+        return job
 
     async def _spool_staged_items(
         self,
@@ -358,6 +399,10 @@ class BatchCreateSessionPromoter:
                         code="completed_session_missing_batch",
                         retryable=False,
                     )
+                existing_job = await self._reconcile_existing_job_webhook(
+                    repository=tx_repository,
+                    session=session,
+                )
                 return BatchCreatePromotionResult(
                     session_id=session.session_id,
                     batch_id=existing_job.batch_id,
@@ -366,6 +411,10 @@ class BatchCreateSessionPromoter:
                 )
 
             if existing_job is not None:
+                existing_job = await self._reconcile_existing_job_webhook(
+                    repository=tx_repository,
+                    session=session,
+                )
                 completed = await tx_repository.create_sessions.mark_session_completed(
                     session.session_id,
                     completed_at=datetime.now(tz=UTC),
@@ -434,6 +483,8 @@ class BatchCreateSessionPromoter:
                     "mixed_model": scheduling_summary.mixed_model,
                     "strict_model_homogeneity_enabled": self.strict_model_homogeneity_enabled,
                 },
+                webhook_config_ciphertext=session.webhook_config_ciphertext,
+                webhook_config_fingerprint=session.webhook_config_fingerprint,
                 tenant_scope_preference=self.tenant_scope_preference,
             )
             if job is None:

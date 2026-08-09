@@ -120,7 +120,10 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
     monkeypatch.setattr("src.bootstrap.infrastructure.RouteGroupRepository", lambda client: ("route-group-repo", client))
     monkeypatch.setattr("src.bootstrap.infrastructure.PromptRegistryRepository", lambda client: ("prompt-repo", client))
     monkeypatch.setattr("src.bootstrap.infrastructure.MCPRepository", lambda client: ("mcp-repo", client))
-    monkeypatch.setattr("src.bootstrap.infrastructure.BatchRepository", lambda client: ("batch-repo", client))
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.BatchRepository",
+        lambda client, **kwargs: ("batch-repo", client, kwargs),
+    )
 
     app = SimpleNamespace(state=SimpleNamespace())
 
@@ -156,7 +159,11 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
     assert runtime.control_http_client.limits.max_keepalive_connections == 20
     assert runtime.control_http_client.limits.keepalive_expiry == 30
     assert app.state.openai_adapter[0] == "openai"
-    assert app.state.batch_repository == ("batch-repo", "db-client")
+    assert app.state.batch_repository == (
+        "batch-repo",
+        "db-client",
+        {"webhook_max_attempts": 8},
+    )
 
     await shutdown_infrastructure_runtime(runtime)
 

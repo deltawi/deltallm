@@ -446,6 +446,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "prisma" },
@@ -477,6 +478,7 @@ guardrails-presidio = [
 requires-dist = [
     { name = "boto3", specifier = ">=1.35,<2.0" },
     { name = "boto3", marker = "extra == 'batch-s3'", specifier = ">=1.35,<2.0" },
+    { name = "cryptography", specifier = ">=42,<47" },
     { name = "fastapi", specifier = ">=0.109,<1.0" },
     { name = "httpx", specifier = ">=0.26,<1.0" },
     { name = "presidio-analyzer", marker = "extra == 'guardrails-presidio'", specifier = ">=2.2,<3.0" },

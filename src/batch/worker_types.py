@@ -7,6 +7,9 @@ from src.batch.embedding_microbatch import _ExecutionSignature
 from src.models.requests import ChatCompletionRequest, EmbeddingRequest
 
 
+BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR = "artifact_validation_failed"
+
+
 class BatchArtifactValidationError(ValueError):
     """Raised when a completed batch artifact payload cannot be safely exposed."""
 

@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
+from src.batch.models import BatchWebhookOwnershipConflictError
 from src.batch.repository import BatchRepository
 from src.batch.storage import BatchArtifactStorage
 from src.metrics import (
@@ -20,6 +21,8 @@ class BatchCleanupConfig:
     interval_seconds: float = 86_400.0
     failure_interval_seconds: float = 60.0
     scan_limit: int = 200
+    webhook_delivery_retention_days: int = 30
+    webhook_cleanup_max_rows_per_run: int = 10_000
 
 
 class BatchRetentionCleanupWorker:
@@ -60,6 +63,43 @@ class BatchRetentionCleanupWorker:
             logger.debug("batch cleanup runtime metrics refresh failed", exc_info=True)
             return
 
+    async def _cleanup_webhook_deliveries(self, *, now: datetime) -> dict[str, int]:
+        cutoff = now - timedelta(
+            days=max(1, int(self.config.webhook_delivery_retention_days))
+        )
+        deleted = {"delivered": 0, "failed": 0}
+        remaining = max(1, int(self.config.webhook_cleanup_max_rows_per_run))
+        page_size = max(1, min(int(self.config.scan_limit), 1_000))
+        while remaining > 0:
+            page_limit = min(page_size, remaining)
+            try:
+                page = await self.repository.delete_terminal_webhook_outbox_before(
+                    cutoff=cutoff,
+                    limit=page_limit,
+                )
+            except Exception:
+                logger.warning(
+                    "batch webhook cleanup failed",
+                    extra={"reason": "repository_error"},
+                )
+                break
+            page_deleted = sum(max(0, int(value)) for value in page.values())
+            deleted["delivered"] += max(0, int(page.get("delivered", 0)))
+            deleted["failed"] += max(0, int(page.get("failed", 0)))
+            remaining -= min(page_deleted, remaining)
+            if page_deleted <= 0 or page_deleted < page_limit:
+                break
+        if remaining == 0:
+            logger.info(
+                "batch webhook cleanup reached per-run budget",
+                extra={
+                    "max_rows_per_run": int(
+                        self.config.webhook_cleanup_max_rows_per_run
+                    ),
+                },
+            )
+        return deleted
+
     async def run(self) -> None:
         self._running = True
         while self._running and not self._stop_event.is_set():
@@ -96,14 +136,56 @@ class BatchRetentionCleanupWorker:
         now = datetime.now(tz=UTC)
         deleted_jobs = 0
         deleted_files = 0
+        deleted_webhooks = {"delivered": 0, "failed": 0}
+        deleted_webhooks = await self._cleanup_webhook_deliveries(now=now)
 
-        expired_job_ids = await self.repository.list_expired_terminal_job_ids(
-            now=now,
-            limit=self.config.scan_limit,
-        )
-        for batch_id in expired_job_ids:
-            await self.repository.delete_job_metadata(batch_id)
+        for _ in range(max(1, min(int(self.config.scan_limit), 1_000))):
+            try:
+                deleted = await self.repository.cleanup_next_expired_terminal_job(
+                    now=now,
+                )
+            except BatchWebhookOwnershipConflictError as exc:
+                logger.warning(
+                    "batch metadata cleanup failed",
+                    extra={
+                        "reason": "webhook_ownership_conflict",
+                        "conflict_count": exc.conflict_count,
+                        "committed_jobs": deleted_jobs,
+                    },
+                )
+                break
+            except Exception:
+                # Ownership repair and job deletion share one transaction. Stop
+                # this pass, while retaining the count from earlier transactions.
+                logger.warning(
+                    "batch metadata cleanup failed",
+                    extra={
+                        "reason": "repository_error",
+                        "committed_jobs": deleted_jobs,
+                    },
+                )
+                break
+            if not deleted:
+                break
             deleted_jobs += 1
+
+        try:
+            ownership_conflicts = (
+                await self.repository.count_expired_terminal_job_ownership_conflicts(
+                    now=now,
+                    limit=self.config.scan_limit,
+                )
+            )
+        except Exception:
+            ownership_conflicts = 0
+        if ownership_conflicts:
+            logger.warning(
+                "batch metadata cleanup skipped ownership conflicts",
+                extra={
+                    "reason": "webhook_ownership_conflict",
+                    "conflict_count": ownership_conflicts,
+                },
+            )
 
         expired_files = await self.repository.list_expired_unreferenced_files(
             now=now,
@@ -122,7 +204,16 @@ class BatchRetentionCleanupWorker:
             await self.repository.delete_file(file_record.file_id)
             deleted_files += 1
 
-        if deleted_jobs or deleted_files:
-            logger.info("batch GC deleted jobs=%s files=%s", deleted_jobs, deleted_files)
+        deleted_webhook_count = sum(deleted_webhooks.values())
+        if deleted_jobs or deleted_files or deleted_webhook_count:
+            logger.info(
+                "batch GC deleted records",
+                extra={
+                    "jobs": deleted_jobs,
+                    "files": deleted_files,
+                    "webhook_delivered": deleted_webhooks.get("delivered", 0),
+                    "webhook_failed": deleted_webhooks.get("failed", 0),
+                },
+            )
         await self._refresh_batch_runtime_metrics(now=now)
         return deleted_jobs, deleted_files

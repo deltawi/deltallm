@@ -9,6 +9,9 @@ from src.batch.models import (
     BatchItemRecord,
     BatchItemStatus,
     BatchJobRecord,
+    BatchWebhookOutboxRecord,
+    normalize_batch_webhook_delivery_status,
+    normalize_batch_webhook_event_type,
     normalize_batch_job_status,
 )
 
@@ -109,6 +112,39 @@ def job_from_row(row: dict[str, Any]) -> BatchJobRecord:
         last_claimed_at=parse_datetime(row.get("last_claimed_at")),
         last_scheduled_at=parse_datetime(row.get("last_scheduled_at")),
         scheduler_debug=parse_json_dict(row.get("scheduler_debug")),
+        webhook_config_ciphertext=row.get("webhook_config_ciphertext"),
+        webhook_config_fingerprint=row.get("webhook_config_fingerprint"),
+    )
+
+
+def webhook_outbox_from_row(row: dict[str, Any]) -> BatchWebhookOutboxRecord:
+    created_at = parse_datetime(row.get("created_at"))
+    updated_at = parse_datetime(row.get("updated_at"))
+    if created_at is None or updated_at is None:
+        raise ValueError("batch webhook outbox row is missing timestamps")
+    return BatchWebhookOutboxRecord(
+        event_id=str(row.get("event_id") or ""),
+        batch_id=str(row.get("batch_id") or ""),
+        event_type=normalize_batch_webhook_event_type(row.get("event_type") or ""),
+        target_config_ciphertext=str(row.get("target_config_ciphertext") or ""),
+        payload_json=parse_json_dict(row.get("payload_json")) or {},
+        payload_sha256=str(row.get("payload_sha256") or ""),
+        status=normalize_batch_webhook_delivery_status(row.get("status") or ""),
+        attempt_count=int(row.get("attempt_count") or 0),
+        max_attempts=int(row.get("max_attempts") or 0),
+        next_attempt_at=parse_datetime(row.get("next_attempt_at")),
+        last_status_code=(
+            int(row["last_status_code"]) if row.get("last_status_code") is not None else None
+        ),
+        last_error=row.get("last_error"),
+        locked_by=row.get("locked_by"),
+        lease_expires_at=parse_datetime(row.get("lease_expires_at")),
+        created_at=created_at,
+        updated_at=updated_at,
+        delivered_at=parse_datetime(row.get("delivered_at")),
+        recovered_from_expired_lease=bool(row.get("recovered_from_expired_lease", False)),
+        created_by_team_id=row.get("created_by_team_id"),
+        created_by_organization_id=row.get("created_by_organization_id"),
     )
 
 

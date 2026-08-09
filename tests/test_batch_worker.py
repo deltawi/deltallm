@@ -28,7 +28,10 @@ from src.batch.scheduling import (
 )
 from src.batch.service import BatchService
 from src.batch.worker import BatchArtifactValidationError, BatchExecutorWorker, BatchWorkerConfig
-from src.batch.worker_types import BatchItemLeaseLostError
+from src.batch.worker_types import (
+    BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR,
+    BatchItemLeaseLostError,
+)
 from src.config import GeneralSettings
 from src.db.repositories import KeyRecord
 from src.guardrails.exceptions import GuardrailViolationError
@@ -4624,12 +4627,12 @@ async def test_batch_worker_marks_invalid_completed_artifacts_failed_without_ret
     caplog: pytest.LogCaptureFixture,
 ):
     now = datetime.now(tz=UTC)
+    provider_value = "provider-controlled-marker-" + ("x" * 65_536)
 
     class _FinalizingRepo:
         def __init__(self) -> None:
             self.claim_count = 0
             self.attach_calls: list[dict] = []
-            self.provider_error_calls: list[dict] = []
             self.rescheduled: list[int] = []
             self.released = 0
             self.job = BatchJobRecord(
@@ -4675,7 +4678,7 @@ async def test_batch_worker_marks_invalid_completed_artifacts_failed_without_ret
         async def list_items(self, batch_id: str):
             assert batch_id == "b-finalize"
             invalid_body = _valid_embedding_artifact_response_body()
-            invalid_body.pop("model")
+            invalid_body["object"] = provider_value
             return [
                 BatchItemRecord(
                     item_id="i1",
@@ -4701,10 +4704,6 @@ async def test_batch_worker_marks_invalid_completed_artifacts_failed_without_ret
 
         async def attach_artifacts_and_finalize(self, **kwargs):
             self.attach_calls.append(kwargs)
-            return self.job
-
-        async def set_provider_error(self, **kwargs):
-            self.provider_error_calls.append(kwargs)
             return self.job
 
         async def reschedule_finalization(self, *, batch_id: str, worker_id: str, retry_delay_seconds: int) -> bool:
@@ -4746,21 +4745,21 @@ async def test_batch_worker_marks_invalid_completed_artifacts_failed_without_ret
             "error_file_id": None,
             "final_status": BatchJobStatus.FAILED,
             "worker_id": "w1",
-        }
-    ]
-    assert repo.provider_error_calls == [
-        {
-            "batch_id": "b-finalize",
-            "provider_error": "artifact_validation_failed: completed batch item embedding response is missing a valid model",
+            "terminal_provider_error": BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR,
         }
     ]
     assert repo.rescheduled == []
     assert repo.released == 1
     assert "batch finalization permanently failed batch_id=b-finalize" in caplog.text
+    assert f"error_code={BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR}" in caplog.text
+    assert "reason=completed batch item has invalid embedding response object" in caplog.text
+    assert "provider-controlled-marker" not in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_batch_worker_finalize_artifacts_writes_openai_compatible_rows():
+async def test_batch_worker_finalize_artifacts_writes_openai_compatible_rows(
+    caplog: pytest.LogCaptureFixture,
+):
     now = datetime.now(tz=UTC)
 
     class _FinalizingRepo:
@@ -4820,7 +4819,10 @@ async def test_batch_worker_finalize_artifacts_writes_openai_compatible_rows():
 
         async def attach_artifacts_and_finalize(self, **kwargs):
             self.attach_calls.append(kwargs)
-            return SimpleNamespace(batch_id=kwargs["batch_id"])
+            return SimpleNamespace(
+                batch_id=kwargs["batch_id"],
+                status=BatchJobStatus.CANCELLED,
+            )
 
     class _CapturingStorage:
         backend_name = "local"
@@ -4875,7 +4877,8 @@ async def test_batch_worker_finalize_artifacts_writes_openai_compatible_rows():
         expires_at=None,
     )
 
-    await worker._finalize_artifacts(job)
+    with caplog.at_level(logging.INFO):
+        await worker._finalize_artifacts(job)
 
     output_rows = [json.loads(line) for line in storage.writes["batch_output"]["lines"]]
     error_rows = [json.loads(line) for line in storage.writes["batch_error"]["lines"]]
@@ -4914,6 +4917,7 @@ async def test_batch_worker_finalize_artifacts_writes_openai_compatible_rows():
             "worker_id": "w1",
         }
     ]
+    assert "batch finalized id=b-finalize status=cancelled" in caplog.text
 
 
 @pytest.mark.asyncio
