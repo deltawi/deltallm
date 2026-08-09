@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, time
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, Query, Request
 
@@ -281,6 +281,7 @@ async def spend_summary(
 async def spend_report(
     request: Request,
     group_by: str = Query(default="day", pattern="^(model|provider|day|user|team|organization|api_key)$"),
+    interval: Literal["day", "week", "month"] = Query(default="day"),
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
     search: str | None = Query(default=None),
@@ -294,6 +295,11 @@ async def spend_report(
     db = db_or_503(request)
     source = get_spend_read_source()
     if group_by == "day":
+        bucket_expr = {
+            "day": "DATE(start_time)",
+            "week": "DATE_TRUNC('week', start_time)::date",
+            "month": "DATE_TRUNC('month', start_time)::date",
+        }[interval]
         clauses: list[str] = []
         params: list[Any] = []
         if start_date is not None:
@@ -312,7 +318,7 @@ async def spend_report(
         rows = await db.query_raw(
             f"""
             SELECT
-                DATE(start_time) AS group_key,
+                {bucket_expr} AS group_key,
                 COALESCE(SUM(spend), 0) AS total_spend,
                 COUNT(*) AS request_count,
                 COALESCE(SUM(total_tokens), 0) AS total_tokens,
@@ -320,7 +326,7 @@ async def spend_report(
                 COUNT(*) FILTER (WHERE status = 'error') AS failed_requests
             FROM {source.table}
             {where_sql}
-            GROUP BY DATE(start_time)
+            GROUP BY {bucket_expr}
             ORDER BY group_key ASC
             """,
             *params,
@@ -328,12 +334,14 @@ async def spend_report(
         log_admin_query_timing(
             "spend_report_day",
             started_at,
+            interval=interval,
             start_date=start_date.isoformat() if start_date else None,
             end_date=end_date.isoformat() if end_date else None,
             scoped=not scope.is_platform_admin,
         )
         return {
             "group_by": group_by,
+            "interval": interval,
             "breakdown": [to_json_value(dict(row)) for row in rows],
         }
 

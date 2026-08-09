@@ -162,6 +162,57 @@ async def test_spend_report_not_scoped_for_platform_admin(client, test_app, monk
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("interval", "bucket_expression"),
+    [
+        ("day", "DATE(start_time)"),
+        ("week", "DATE_TRUNC('week', start_time)::date"),
+        ("month", "DATE_TRUNC('month', start_time)::date"),
+    ],
+)
+async def test_daily_spend_report_supports_safe_time_intervals(
+    client, test_app, monkeypatch, interval, bucket_expression
+):
+    fake_db = FakeSpendDB()
+    test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.spend.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(
+            is_platform_admin=True,
+            org_ids=[],
+            team_ids=[],
+        ),
+    )
+
+    response = await client.get(
+        f"/ui/api/spend/report?group_by=day&interval={interval}",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["interval"] == interval
+    query, _ = fake_db.calls[0]
+    assert f"{bucket_expression} AS group_key" in query
+    assert f"GROUP BY {bucket_expression}" in query
+    assert "successful_requests" in query
+    assert "failed_requests" in query
+
+
+@pytest.mark.asyncio
+async def test_daily_spend_report_rejects_unknown_time_interval(client, test_app):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    response = await client.get(
+        "/ui/api/spend/report?group_by=day&interval=quarter",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_grouped_spend_report_applies_org_scope_for_non_platform(client, test_app, monkeypatch):
     fake_db = FakeSpendDB()
     test_app.state.prisma_manager = type("Prisma", (), {"client": fake_db})()
