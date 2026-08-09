@@ -152,6 +152,12 @@ async def shutdown_batch_runtime(runtime: BatchRuntime) -> None:
             "batch webhook outbox worker",
             WORKER_SHUTDOWN_DRAIN_TIMEOUT_SECONDS,
         ),
+        (
+            runtime.webhook_observability_worker,
+            runtime.webhook_observability_task,
+            "batch webhook observability worker",
+            5.0,
+        ),
         (runtime.gc_worker, runtime.gc_task, "batch gc worker", 5.0),
         (
             runtime.scheduler_backfill_worker,

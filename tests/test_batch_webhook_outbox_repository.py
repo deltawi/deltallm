@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +14,7 @@ from src.batch.models import (
     BatchWebhookDeliveryStatus,
     BatchWebhookOutboxCreate,
     BatchWebhookOutboxRecord,
+    BatchWebhookOwnershipConflictError,
 )
 from src.batch.repositories.webhook_outbox_repository import BatchWebhookOutboxRepository
 from src.batch.repository import BatchRepository
@@ -21,6 +23,20 @@ from src.batch.webhooks.events import (
     build_batch_webhook_event,
 )
 from src.batch.worker_types import BATCH_ARTIFACT_VALIDATION_FAILED_PROVIDER_ERROR
+
+
+def test_webhook_operations_migration_snapshots_ownership_and_adds_retention_index() -> None:
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "prisma/migrations/20260806120000_batch_webhook_operations/migration.sql"
+    )
+    sql = migration.read_text(encoding="utf-8")
+
+    assert 'ADD COLUMN "created_by_team_id" TEXT' in sql
+    assert 'ADD COLUMN "created_by_organization_id" TEXT' in sql
+    assert 'FROM "deltallm_batch_job" AS job' in sql
+    assert 'WHERE job."batch_id" = webhook."batch_id"' in sql
+    assert '"deltallm_batch_webhook_outbox_retention_idx"' in sql
 
 
 def _job(*, configured: bool = True) -> BatchJobRecord:
@@ -50,13 +66,14 @@ def _job(*, configured: bool = True) -> BatchJobRecord:
         status_last_updated_at=now,
         created_by_api_key="key-1",
         created_by_user_id=None,
-        created_by_team_id=None,
+        created_by_team_id="team-1",
         created_at=now,
         started_at=now,
         completed_at=now,
         expires_at=None,
         webhook_config_ciphertext="v1.key.ciphertext" if configured else None,
         webhook_config_fingerprint="a" * 64 if configured else None,
+        created_by_organization_id="org-1",
     )
 
 
@@ -81,6 +98,8 @@ def _outbox_record(job: BatchJobRecord) -> BatchWebhookOutboxRecord:
         created_at=now,
         updated_at=now,
         delivered_at=None,
+        created_by_team_id=job.created_by_team_id,
+        created_by_organization_id=job.created_by_organization_id,
     )
 
 
@@ -96,15 +115,17 @@ async def test_webhook_outbox_repository_inserts_explicit_stable_event_id() -> N
                     "event_id": params[0],
                     "batch_id": params[1],
                     "event_type": params[2],
-                    "target_config_ciphertext": params[3],
-                    "payload_json": params[4],
-                    "payload_sha256": params[5],
-                    "status": params[6],
-                    "attempt_count": params[7],
-                    "max_attempts": params[8],
+                    "created_by_team_id": params[3],
+                    "created_by_organization_id": params[4],
+                    "target_config_ciphertext": params[5],
+                    "payload_json": params[6],
+                    "payload_sha256": params[7],
+                    "status": params[8],
+                    "attempt_count": params[9],
+                    "max_attempts": params[10],
                     "next_attempt_at": now,
-                    "last_status_code": params[10],
-                    "last_error": params[11],
+                    "last_status_code": params[12],
+                    "last_error": params[13],
                     "locked_by": None,
                     "lease_expires_at": None,
                     "created_at": now,
@@ -122,6 +143,8 @@ async def test_webhook_outbox_repository_inserts_explicit_stable_event_id() -> N
             event_id=event.event_id,
             batch_id=job.batch_id,
             event_type=event.event_type,
+            created_by_team_id=job.created_by_team_id,
+            created_by_organization_id=job.created_by_organization_id,
             target_config_ciphertext=str(job.webhook_config_ciphertext),
             payload_json=event.payload_json,
             payload_sha256=event.payload_sha256,
@@ -131,6 +154,81 @@ async def test_webhook_outbox_repository_inserts_explicit_stable_event_id() -> N
     assert inserted is not None
     assert inserted.event_id == "evt-stable"
     assert inserted.payload_json["id"] == "evt-stable"
+    assert inserted.created_by_team_id == "team-1"
+    assert inserted.created_by_organization_id == "org-1"
+
+
+@pytest.mark.asyncio
+async def test_webhook_outbox_repository_repairs_only_missing_ownership() -> None:
+    source = _outbox_record(_job())
+    original_updated_at = source.updated_at
+    row = asdict(source)
+    row.update(
+        event_type=source.event_type.value,
+        status=source.status.value,
+        created_by_team_id="team-1",
+        created_by_organization_id="org-1",
+    )
+
+    class _Prisma:
+        async def query_raw(self, sql: str, *params):  # noqa: ANN201
+            assert "SET created_by_team_id = COALESCE" in sql
+            assert "updated_at" not in sql
+            assert params == ("batch-1", "batch.completed", "team-1", "org-1")
+            return [row]
+
+    repaired = await BatchWebhookOutboxRepository(_Prisma()).fill_missing_ownership(
+        batch_id="batch-1",
+        event_type="batch.completed",
+        created_by_team_id="team-1",
+        created_by_organization_id="org-1",
+    )
+
+    assert repaired is not None
+    assert repaired.created_by_team_id == "team-1"
+    assert repaired.created_by_organization_id == "org-1"
+    assert repaired.target_config_ciphertext == source.target_config_ciphertext
+    assert repaired.payload_json == source.payload_json
+    assert repaired.payload_sha256 == source.payload_sha256
+    assert repaired.updated_at == original_updated_at
+
+
+@pytest.mark.asyncio
+async def test_webhook_outbox_repository_bulk_repairs_bounded_cleanup_page() -> None:
+    class _Prisma:
+        async def query_raw(self, sql: str, *params):  # noqa: ANN201
+            assert "FROM deltallm_batch_job j" in sql
+            assert "o.batch_id::text = ANY($1::text[])" in sql
+            assert "o.created_by_team_id = j.created_by_team_id" in sql
+            assert "o.created_by_organization_id = j.created_by_organization_id" in sql
+            assert "updated_at" not in sql
+            assert params == (["batch-1", "batch-2"],)
+            return [{"event_id": "evt-1"}, {"event_id": "evt-2"}]
+
+    repaired = await BatchWebhookOutboxRepository(
+        _Prisma()
+    ).backfill_missing_ownership_for_batches(batch_ids=["batch-1", "batch-2"])
+
+    assert repaired == 2
+
+
+@pytest.mark.asyncio
+async def test_webhook_outbox_repository_rejects_cleanup_ownership_conflicts() -> None:
+    class _Prisma:
+        async def query_raw(self, sql: str, *params):  # noqa: ANN201
+            assert "IS DISTINCT FROM" in sql
+            assert "JOIN deltallm_batch_job j" in sql
+            assert params == (["batch-1", "batch-2"],)
+            return [{"conflict_count": 1}]
+
+    with pytest.raises(BatchWebhookOwnershipConflictError) as exc_info:
+        await BatchWebhookOutboxRepository(
+            _Prisma()
+        ).assert_ownership_matches_jobs_for_batches(
+            batch_ids=["batch-1", "batch-2"]
+        )
+
+    assert exc_info.value.conflict_count == 1
 
 
 @pytest.mark.asyncio
@@ -148,17 +246,11 @@ async def test_webhook_delivery_repository_claims_and_fences_every_transition() 
 
     class _Prisma:
         def __init__(self) -> None:
-            self.execute_calls: list[str] = []
             self.query_calls: list[tuple[str, tuple[object, ...]]] = []
-
-        async def execute_raw(self, sql: str, *params) -> int:  # noqa: ANN002
-            assert not params
-            self.execute_calls.append(sql)
-            return 1
 
         async def query_raw(self, sql: str, *params):  # noqa: ANN201
             self.query_calls.append((sql, params))
-            if "WITH due AS" in sql:
+            if "WITH due AS" in sql or "WITH exhausted AS" in sql:
                 return [row]
             return [{"event_id": params[0]}]
 
@@ -168,11 +260,17 @@ async def test_webhook_delivery_repository_claims_and_fences_every_transition() 
     claimed = await repository.claim_due(worker_id="worker-1", lease_seconds=30, limit=10)
     assert len(claimed) == 1
     assert claimed[0].attempt_count == 2
-    assert "max_attempts_exhausted_after_lease_expiry" in prisma.execute_calls[0]
     claim_sql, claim_params = prisma.query_calls[0]
     assert "FOR UPDATE SKIP LOCKED" in claim_sql
     assert "attempt_count < max_attempts" in claim_sql
     assert claim_params == (10, "worker-1", 30)
+
+    terminalized = await repository.fail_exhausted_expired_leases(limit=7)
+    assert len(terminalized) == 1
+    terminal_sql, terminal_params = prisma.query_calls[1]
+    assert "max_attempts_exhausted_after_lease_expiry" in terminal_sql
+    assert "FOR UPDATE SKIP LOCKED" in terminal_sql
+    assert terminal_params == (7,)
 
     assert await repository.renew_lease(
         source.event_id,
@@ -202,10 +300,105 @@ async def test_webhook_delivery_repository_claims_and_fences_every_transition() 
         status_code=204,
     )
 
-    transition_calls = prisma.query_calls[1:]
+    transition_calls = prisma.query_calls[2:]
     assert all("AND attempt_count = $3" in sql for sql, _params in transition_calls)
     retry_params = transition_calls[1][1]
     assert retry_params[4] == "http_retryable_status"
+
+
+@pytest.mark.asyncio
+async def test_webhook_replay_is_failed_only_and_preserves_immutable_material() -> None:
+    source = _outbox_record(_job())
+    source.status = BatchWebhookDeliveryStatus.QUEUED
+    source.attempt_count = 0
+    source.last_status_code = None
+    source.last_error = None
+    row = asdict(source)
+    row["status"] = "queued"
+    row["previous_attempt_count"] = 8
+
+    class _Prisma:
+        async def query_raw(self, sql: str, *params):  # noqa: ANN201
+            assert params == (source.event_id, source.batch_id)
+            assert "AND status = 'failed'" in sql
+            assert "attempt_count = 0" in sql
+            assert "payload_json =" not in sql
+            assert "payload_sha256 =" not in sql
+            assert "target_config_ciphertext =" not in sql
+            assert "event_id =" not in sql.split("SET", 1)[1].split("FROM", 1)[0]
+            return [row]
+
+    result = await BatchWebhookOutboxRepository(_Prisma()).replay_failed(
+        batch_id=source.batch_id,
+        event_id=source.event_id,
+    )
+
+    assert result is not None
+    assert result.previous_attempt_count == 8
+    assert result.record.event_id == source.event_id
+    assert result.record.payload_json == source.payload_json
+    assert result.record.payload_sha256 == source.payload_sha256
+    assert result.record.target_config_ciphertext == source.target_config_ciphertext
+    assert result.record.status == BatchWebhookDeliveryStatus.QUEUED
+
+
+@pytest.mark.asyncio
+async def test_webhook_summary_zero_fills_statuses_and_tracks_oldest_active_age() -> None:
+    class _Prisma:
+        async def query_raw(self, sql: str, *params):  # noqa: ANN201, ARG002
+            assert "GROUP BY status" in sql
+            assert "attempt_count < max_attempts" in sql
+            assert "next_attempt_at <= NOW()" in sql
+            assert "lease_expires_at < NOW()" in sql
+            return [
+                {
+                    "status": "queued",
+                    "count": 2,
+                    "oldest_age_seconds": 45.5,
+                    "due_count": 1,
+                },
+                {
+                    "status": "processing",
+                    "count": 2,
+                    "oldest_age_seconds": 30,
+                    "due_count": 1,
+                },
+                {
+                    "status": "failed",
+                    "count": 1,
+                    "oldest_age_seconds": 0,
+                    "due_count": 0,
+                },
+            ]
+
+    summary = await BatchWebhookOutboxRepository(_Prisma()).summarize()
+
+    assert summary.counts[BatchWebhookDeliveryStatus.QUEUED] == 2
+    assert summary.counts[BatchWebhookDeliveryStatus.PROCESSING] == 2
+    assert summary.counts[BatchWebhookDeliveryStatus.DELIVERED] == 0
+    assert summary.counts[BatchWebhookDeliveryStatus.FAILED] == 1
+    assert summary.oldest_pending_age_seconds == 45.5
+    assert summary.due_count == 2
+
+
+@pytest.mark.asyncio
+async def test_webhook_retention_deletes_only_bounded_terminal_rows() -> None:
+    cutoff = datetime(2026, 7, 1, tzinfo=UTC)
+
+    class _Prisma:
+        async def query_raw(self, sql: str, *params):  # noqa: ANN201
+            assert "status IN ('delivered', 'failed')" in sql
+            assert "FOR UPDATE SKIP LOCKED" in sql
+            assert "DELETE FROM deltallm_batch_webhook_outbox" in sql
+            assert params == (cutoff, 1000)
+            return [{"status": "delivered"}, {"status": "failed"}, {"status": "failed"}]
+
+    deleted = await BatchWebhookOutboxRepository(_Prisma()).delete_terminal_before(
+        cutoff=cutoff,
+        limit=10_000,
+    )
+
+    assert deleted == {"delivered": 1, "failed": 2}
 
 
 class _TransactionManager:
@@ -293,6 +486,7 @@ class _OutboxRepository:
         self.existing = existing
         self.error = error
         self.events: list[BatchWebhookOutboxCreate] = []
+        self.ownership_repairs: list[dict[str, object]] = []
 
     async def insert_event(self, event: BatchWebhookOutboxCreate):  # noqa: ANN201
         self.events.append(event)
@@ -302,6 +496,18 @@ class _OutboxRepository:
 
     async def get_by_batch_and_event_type(self, **kwargs):  # noqa: ANN003, ANN201
         del kwargs
+        return self.existing
+
+    async def fill_missing_ownership(self, **kwargs):  # noqa: ANN003, ANN201
+        self.ownership_repairs.append(kwargs)
+        if self.existing is None:
+            return None
+        if self.existing.created_by_team_id is None:
+            self.existing.created_by_team_id = kwargs["created_by_team_id"]
+        if self.existing.created_by_organization_id is None:
+            self.existing.created_by_organization_id = kwargs[
+                "created_by_organization_id"
+            ]
         return self.existing
 
 
@@ -349,6 +555,8 @@ async def test_atomic_finalization_enqueues_configured_event_then_publishes_metr
     assert outbox.events[0].payload_json["data"]["batch"]["metadata"] == {
         "customer_job_id": "job-1"
     }
+    assert outbox.events[0].created_by_team_id == "team-1"
+    assert outbox.events[0].created_by_organization_id == "org-1"
     assert observed_jobs.observed == ["batch-1"]
     assert transactional_jobs.calls == [
         {
@@ -567,6 +775,62 @@ async def test_atomic_finalization_accepts_verified_existing_logical_event() -> 
     assert finalized is not None
     assert transaction.committed is True
     assert observed_jobs.observed == ["batch-1"]
+
+
+@pytest.mark.asyncio
+async def test_atomic_finalization_repairs_legacy_existing_event_ownership() -> None:
+    job = _job()
+    existing = _outbox_record(job)
+    original_updated_at = existing.updated_at
+    existing.created_by_team_id = None
+    existing.created_by_organization_id = None
+    outbox = _OutboxRepository(inserted=None, existing=existing)
+    repository, transaction, observed_jobs, _ = _aggregate_repository(job=job, outbox=outbox)
+
+    finalized = await repository.attach_artifacts_and_finalize(
+        batch_id=job.batch_id,
+        output_file_id=job.output_file_id,
+        error_file_id=job.error_file_id,
+        final_status=job.status,
+        worker_id="worker-1",
+    )
+
+    assert finalized is job
+    assert transaction.committed is True
+    assert observed_jobs.observed == [job.batch_id]
+    assert existing.created_by_team_id == job.created_by_team_id
+    assert existing.created_by_organization_id == job.created_by_organization_id
+    assert existing.updated_at == original_updated_at
+    assert outbox.ownership_repairs == [
+        {
+            "batch_id": job.batch_id,
+            "event_type": existing.event_type,
+            "created_by_team_id": job.created_by_team_id,
+            "created_by_organization_id": job.created_by_organization_id,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_atomic_finalization_rejects_non_null_ownership_conflict() -> None:
+    job = _job()
+    existing = _outbox_record(job)
+    existing.created_by_team_id = "different-team"
+    outbox = _OutboxRepository(inserted=None, existing=existing)
+    repository, transaction, observed_jobs, _ = _aggregate_repository(job=job, outbox=outbox)
+
+    with pytest.raises(RuntimeError, match="conflicts with terminal outcome"):
+        await repository.attach_artifacts_and_finalize(
+            batch_id=job.batch_id,
+            output_file_id=job.output_file_id,
+            error_file_id=job.error_file_id,
+            final_status=job.status,
+            worker_id="worker-1",
+        )
+
+    assert existing.created_by_team_id == "different-team"
+    assert transaction.rolled_back is True
+    assert observed_jobs.observed == []
 
 
 @pytest.mark.parametrize(

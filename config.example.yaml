@@ -104,8 +104,10 @@ general_settings:
   # Keep the key in an environment secret; it encrypts callback URLs and signing secrets at rest.
   batch_webhook_enabled: false
   batch_webhook_worker_enabled: true
+  batch_webhook_observability_enabled: true
   batch_webhook_encryption_key: os.environ/DELTALLM_BATCH_WEBHOOK_ENCRYPTION_KEY
   batch_webhook_poll_interval_seconds: 1
+  batch_webhook_observability_refresh_interval_seconds: 15
   batch_webhook_max_concurrency: 4
   batch_webhook_lease_seconds: 30
   batch_webhook_timeout_seconds: 10
@@ -117,6 +119,7 @@ general_settings:
   batch_webhook_allowed_private_cidrs: []
   batch_webhook_allow_http: false
   batch_webhook_delivery_retention_days: 30
+  batch_webhook_cleanup_max_rows_per_run: 10000
 
   # Email delivery is optional.
   # Enable this when you want invitations, password reset, test email, or governance notifications.

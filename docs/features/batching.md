@@ -207,6 +207,100 @@ curl http://localhost:8000/v1/batches \
 
 DeltaLLM currently supports the OpenAI-compatible `24h` completion window. Missing or null values default to `24h`; other values are rejected.
 
+### Optional terminal webhook
+
+When `batch_webhook_enabled=true`, a batch may include one HTTPS callback configuration. The URL and signing secret are write-only: DeltaLLM encrypts them at rest and returns only whether a webhook is configured.
+
+```bash
+curl http://localhost:8000/v1/batches \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input_file_id": "file_abc123",
+    "endpoint": "/v1/embeddings",
+    "completion_window": "24h",
+    "metadata": {"customer_job_id": "job-42"},
+    "webhook": {
+      "url": "https://receiver.example/deltallm/batches",
+      "signing_secret": "replace-with-a-random-secret-at-least-32-bytes"
+    }
+  }'
+```
+
+The create and later batch-read responses contain:
+
+```json
+"webhook": {"configured": true}
+```
+
+The URL and signing secret are never returned. When the batch reaches `completed`, `failed`, `cancelled`, or `expired`, DeltaLLM stores an immutable event and asynchronously delivers this JSON shape:
+
+```json
+{
+  "id": "evt_0123456789abcdef",
+  "object": "event",
+  "type": "batch.completed",
+  "created_at": 1786017600,
+  "data": {
+    "batch": {
+      "id": "batch_xyz789",
+      "object": "batch",
+      "status": "completed",
+      "metadata": {"customer_job_id": "job-42"},
+      "webhook": {"configured": true}
+    }
+  }
+}
+```
+
+The `data.batch` value is the final public batch representation, including caller metadata. Treat the receiver as authorized to receive that batch response. Event types are `batch.completed`, `batch.failed`, `batch.cancelled`, and `batch.expired`.
+
+Every attempt includes these headers:
+
+| Header | Meaning |
+|--------|---------|
+| `X-DeltaLLM-Event-Id` | Stable event identifier; also sent as `Idempotency-Key` |
+| `X-DeltaLLM-Event-Type` | Terminal event type |
+| `X-DeltaLLM-Webhook-Attempt` | Current delivery attempt number |
+| `X-DeltaLLM-Timestamp` | Unix timestamp used by the signature |
+| `X-DeltaLLM-Signature` | `v1=` followed by lowercase HMAC-SHA256 hex |
+
+The signed bytes are `timestamp + b"." + raw_request_body`. Verify the signature before parsing JSON, enforce a timestamp tolerance, and deduplicate by event ID:
+
+```python
+import hashlib
+import hmac
+import time
+
+
+def verify_deltallm_webhook(
+    *,
+    raw_body: bytes,
+    timestamp_header: str,
+    signature_header: str,
+    signing_secret: str,
+    tolerance_seconds: int = 300,
+) -> bool:
+    try:
+        timestamp = int(timestamp_header)
+    except (TypeError, ValueError):
+        return False
+    if abs(int(time.time()) - timestamp) > tolerance_seconds:
+        return False
+    if not signature_header.startswith("v1="):
+        return False
+    expected = hmac.new(
+        signing_secret.encode("utf-8"),
+        str(timestamp).encode("ascii") + b"." + raw_body,
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(signature_header[3:], expected)
+```
+
+Return any `2xx` response to acknowledge delivery. DeltaLLM retries transport/DNS failures, `408`, `425`, `429`, and `5xx` using jittered exponential backoff. A valid `Retry-After` delta or HTTP date is honored up to `batch_webhook_retry_max_seconds`. Other HTTP statuses fail permanently. Delivery failure never changes the batch's terminal status.
+
+Retries preserve the event ID and exact body; signature timestamps and attempt headers change. An operator replay is accepted only for a failed row, preserves the event ID/body, and grants a fresh attempt budget. Receivers must therefore use the event ID as the deduplication key even after acknowledging an event.
+
 ### 4. Poll for completion
 
 ```bash
@@ -356,6 +450,24 @@ general_settings:
 All other settings have defaults that work for single-instance deployments with local storage.
 For production, use the production setup above instead of the minimal setup.
 
+### Terminal Webhook Delivery
+
+Webhooks require a shared encryption key in addition to the opt-in feature flag:
+
+```yaml
+general_settings:
+  batch_webhook_enabled: true
+  batch_webhook_worker_enabled: true
+  batch_webhook_observability_enabled: true
+  batch_webhook_encryption_key: os.environ/DELTALLM_BATCH_WEBHOOK_ENCRYPTION_KEY
+  batch_webhook_allowed_ports: [443]
+  batch_webhook_allow_http: false
+```
+
+The destination is validated when the batch is created and resolved again before every attempt. HTTP is denied by default, only configured ports are permitted, and non-global addresses are denied unless covered by `batch_webhook_allowed_private_cidrs`. Cloud metadata endpoints remain denied even when a broad private CIDR is configured. Keep private CIDR exceptions narrow and use them only for controlled internal receivers.
+
+In split deployments, API pods need the encryption key to accept and encrypt configurations but should set both `batch_webhook_worker_enabled=false` and `batch_webhook_observability_enabled=false`. Dedicated `batchWorker` pods use the same key with delivery and observation enabled. Observation has its own lifecycle, so a designated process can continue publishing durable queue state while outbound delivery and garbage collection are paused. Turning `batch_webhook_enabled` off stops new configurations while workers continue draining durable rows. See the [Batch Webhook Rollout Runbook](../deployment/batch-webhook-rollout.md).
+
 ### Storage Backend
 
 DeltaLLM stores batch input and output files in a configurable storage backend.
@@ -478,6 +590,10 @@ Completed batches and their artifacts are automatically cleaned up by a backgrou
 | `embeddings_batch_gc_interval_seconds` | `86400` | How often the cleanup loop runs (default: daily) |
 | `embeddings_batch_gc_scan_limit` | `200` | Maximum expired items processed per cleanup pass |
 | `embeddings_batch_create_session_cleanup_enabled` | `true` | Enable cleanup for internal staged batch-create artifacts |
+| `batch_webhook_delivery_retention_days` | `30` | Days to keep delivered and failed webhook rows for inspection and replay history |
+| `batch_webhook_cleanup_max_rows_per_run` | `10000` | Maximum terminal webhook rows deleted per garbage-collection run across bounded pages |
+
+Webhook cleanup uses the same bounded garbage-collection loop. It drains short database pages until no eligible rows remain or `batch_webhook_cleanup_max_rows_per_run` is reached, so operators can size cleanup throughput without holding one large transaction. Only `delivered` and `failed` rows older than the webhook retention cutoff are removed. Queued, retrying, and processing rows are never removed by retention cleanup. Webhook rows snapshot the batch team and organization ownership, so delivery, scoped inspection, and replay remain available after the independent batch metadata and artifact cleanup removes the job.
 
 In Kubernetes production deployments, prefer a split worker deployment over running these worker loops inside every API/UI pod. In shared mode, upper-bound executor pressure is roughly `api replicas * embeddings_batch_worker_concurrency`. In split mode, it becomes `batchWorker replicas * embeddings_batch_worker_concurrency`, so gateway and UI traffic can scale independently from batch throughput.
 
@@ -648,6 +764,23 @@ DeltaLLM exposes Prometheus metrics for batch processing on the configured metri
 | `deltallm_batch_stale_lease_sweeper_duration_seconds` | Histogram | Stale lease sweeper duration |
 | `deltallm_batch_repair_actions_total` | Counter | Admin repair actions by type and status |
 
+### Terminal webhooks
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `deltallm_batch_webhook_queue_depth` | Gauge | Cluster-wide webhook outbox rows by fixed status |
+| `deltallm_batch_webhook_due_depth` | Gauge | Cluster-wide queued, retrying, or expired-processing rows currently eligible for worker processing |
+| `deltallm_batch_webhook_oldest_pending_age_seconds` | Gauge | Age of the oldest queued, retrying, or processing event |
+| `deltallm_batch_webhook_delivery_attempts_total` | Counter | Attempts by bounded outcome and HTTP status class |
+| `deltallm_batch_webhook_delivery_latency_seconds` | Histogram | Full delivery-attempt duration |
+| `deltallm_batch_webhook_event_age_seconds` | Histogram | Event age when delivered or permanently failed |
+| `deltallm_batch_webhook_retries_scheduled_total` | Counter | Retries by bounded reason |
+| `deltallm_batch_webhook_permanent_failures_total` | Counter | Terminal failures by bounded reason |
+| `deltallm_batch_webhook_lease_recoveries_total` | Counter | Processing leases recovered for retry or terminalized after final-attempt expiry |
+| `deltallm_batch_webhook_replays_total` | Counter | Operator replay requests by bounded result |
+
+Queue gauges are Postgres-backed cluster-wide snapshots emitted by processes with `batch_webhook_observability_enabled=true`. The observer does not require the encryption key, delivery worker, or garbage collector, so queue state remains visible when outbound delivery is disabled or misconfigured. Aggregate replicated gauges with `max` rather than `sum`. Counters and histograms are process-local and must be summed across all processes that produce them: delivery, retry, and lease metrics originate on workers, while operator replay metrics originate on API processes. Webhook logs contain safe identifiers, status class, bounded reason, attempts, and duration; they never contain the URL, secret, headers, request body, caller metadata, or encrypted configuration.
+
 ### Claim decision logs
 
 Batch workers emit structured `batch_work_claim_decision` records when a work-slice claim is empty or blocked by model capacity, tenant fair-share caps, oversized head items, deferred retries, or lease contention.
@@ -707,6 +840,10 @@ Tune DB probe cost with `embeddings_batch_claim_diagnostics_enabled`, `embedding
 - **`deltallm_batch_chat_microbatch_fallbacks_total`** increasing after enabling chat `sync_microbatch` means items are being protected by compatibility checks or no executor is available.
 - **`deltallm_batch_model_group_deferrals_total`** increasing means workers are seeing temporary model-group unavailability. Check deployment health and router cooldown state.
 - **`deltallm_batch_stale_lease_sweeper_runs_total{status="error"}`** should stay at zero. Reclaimed rows should be rare in healthy steady state.
+- **`deltallm_batch_webhook_queue_depth{status="failed"}`** should normally remain zero. Inspect the batch detail and receiver health before replaying.
+- **`deltallm_batch_webhook_oldest_pending_age_seconds`** growing beyond the maximum retry window indicates worker, network, or receiver pressure.
+- **`deltallm_batch_webhook_due_depth`** excludes deliveries waiting for a future retry time. Due depth above zero with no increase in **`deltallm_batch_webhook_delivery_attempts_total`** indicates the webhook worker may be disabled, unhealthy, or unable to claim rows.
+- **`deltallm_batch_webhook_lease_recoveries_total`** should be rare; sustained growth indicates worker termination, request timeouts longer than the lease, or database connectivity instability.
 
 ## Troubleshooting
 
@@ -737,6 +874,15 @@ Provider `Retry-After` hints are honored for retryable rate-limit failures, but 
 - Budget exhaustion, model access denial, guardrail rejection, deleted keys, and expired keys are terminal and are not retried
 - Rate-limit and max-parallel contention are retried until the item reaches `embeddings_batch_max_attempts`
 - Check that the model deployment is healthy and reachable
+
+### Terminal webhook is not delivered
+
+- Open **Operations > Batch Jobs** and inspect the redacted Webhook Delivery card.
+- Confirm `batch_webhook_worker_enabled=true` on at least one healthy worker and that all API/worker roles use the same encryption key.
+- Check queue depth, oldest pending age, retry, permanent-failure, and lease-recovery metrics.
+- Review the bounded reason: DNS/transport/timeout errors are retryable, while SSRF policy errors and non-retryable HTTP responses fail permanently.
+- Fix the receiver before selecting **Replay delivery**. Replay is available only for failed events and preserves the event ID/body, so the receiver must deduplicate.
+- Do not add broad private CIDRs merely to make a rejected destination work; verify the destination and keep SSRF exceptions narrow.
 
 ## Known Limitations
 

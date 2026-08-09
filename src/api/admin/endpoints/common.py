@@ -11,6 +11,7 @@ from fastapi import HTTPException, Request, status
 
 from src.api.audit import emit_control_audit_event
 from src.audit.actions import AuditAction
+from src.db.repositories import AuditRepository
 from src.guardrails.catalog import (
     get_guardrail_preset_by_class_path,
     guardrail_threshold_from_params,
@@ -480,6 +481,7 @@ async def emit_admin_mutation_audit(
     scope: AuthScope | None = None,
     resource_type: str,
     resource_id: str | None = None,
+    organization_id: str | None = None,
     request_payload: dict[str, Any] | None = None,
     response_payload: dict[str, Any] | None = None,
     before: dict[str, Any] | None = None,
@@ -487,6 +489,7 @@ async def emit_admin_mutation_audit(
     status: str = "success",
     error: Exception | None = None,
     request_start: float | None = None,
+    transactional_audit_repository: AuditRepository | None = None,
 ) -> None:
     metadata: dict[str, Any] = {}
     if before is not None and after is not None:
@@ -498,10 +501,12 @@ async def emit_admin_mutation_audit(
         status=status,
         resource_type=resource_type,
         resource_id=resource_id,
+        organization_id=organization_id,
         request_payload=request_payload,
         response_payload=response_payload,
         scope=scope,
         metadata=metadata,
         error=error,
         critical=True,
+        transactional_repository=transactional_audit_repository,
     )

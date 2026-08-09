@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import logging
 from types import SimpleNamespace
 
 import pytest
+from prometheus_client import generate_latest
 
+from src.audit.actions import AuditAction
 from src.batch.models import (
     BatchWebhookDeliveryStatus,
     BatchWebhookEventType,
     BatchWebhookOutboxRecord,
+    BatchWebhookQueueSummary,
 )
 from src.batch.webhooks.crypto import BatchWebhookCipher
 from src.batch.webhooks.delivery import (
@@ -21,9 +25,16 @@ from src.batch.webhooks.delivery import (
 from src.batch.webhooks.events import batch_webhook_event_payload_sha256
 from src.batch.webhooks.models import parse_batch_webhook_request
 from src.batch.webhooks.network_policy import BatchWebhookNetworkPolicy
+from src.batch.webhooks.operations import serialize_batch_webhook_delivery
 from src.batch.webhooks.worker import (
     BatchWebhookOutboxWorker,
     BatchWebhookOutboxWorkerConfig,
+)
+from src.metrics import get_prometheus_registry
+from src.metrics.batch import (
+    deltallm_batch_webhook_delivery_attempts_metric,
+    deltallm_batch_webhook_lease_recoveries_metric,
+    deltallm_batch_webhook_permanent_failures_metric,
 )
 
 
@@ -39,6 +50,8 @@ def _record(
     max_attempts: int = 3,
     url: str = "https://customer.example/webhook",
     metadata: dict | None = None,
+    team_id: str | None = None,
+    organization_id: str | None = None,
 ) -> BatchWebhookOutboxRecord:
     payload = {
         "id": event_id,
@@ -74,11 +87,26 @@ def _record(
         created_at=NOW,
         updated_at=NOW,
         delivered_at=None,
+        created_by_team_id=team_id,
+        created_by_organization_id=organization_id,
     )
 
 
 class _Repository:
     def __init__(self, records: list[BatchWebhookOutboxRecord]) -> None:
+        class _Transaction:
+            async def __aenter__(inner_self):  # noqa: ANN202
+                return inner_self
+
+            async def __aexit__(inner_self, exc_type, exc, traceback) -> None:  # noqa: ANN001
+                del inner_self, exc_type, exc, traceback
+
+        class _Prisma:
+            def tx(inner_self):  # noqa: ANN202
+                del inner_self
+                return _Transaction()
+
+        self.prisma = _Prisma()
         self.records = list(records)
         self.delivered: list[dict] = []
         self.retrying: list[dict] = []
@@ -86,12 +114,42 @@ class _Repository:
         self.renewed: list[dict] = []
         self.renew_result = True
         self.all_processed = asyncio.Event()
+        self.exhausted: list[BatchWebhookOutboxRecord] = []
+        self.get_job_calls: list[str] = []
+        self.resolved_organization_id: str | None = None
+        self.resolve_organization_calls: list[dict[str, str | None]] = []
+        self.summary_calls = 0
+
+    def with_prisma(self, prisma) -> _Repository:  # noqa: ANN001
+        del prisma
+        return self
 
     async def claim_webhook_outbox_due(self, **kwargs):  # noqa: ANN003, ANN201
         limit = int(kwargs["limit"])
         claimed = self.records[:limit]
         del self.records[:limit]
         return claimed
+
+    async def fail_exhausted_webhook_outbox_leases(self, **kwargs):  # noqa: ANN003, ANN201
+        del kwargs
+        failed = list(self.exhausted)
+        self.exhausted.clear()
+        return failed
+
+    async def summarize_webhook_outbox(self) -> BatchWebhookQueueSummary:
+        self.summary_calls += 1
+        return BatchWebhookQueueSummary(
+            counts={status: 0 for status in BatchWebhookDeliveryStatus},
+            oldest_pending_age_seconds=0.0,
+        )
+
+    async def get_job(self, batch_id: str):  # noqa: ANN201
+        self.get_job_calls.append(batch_id)
+        return None
+
+    async def resolve_batch_organization_id(self, **kwargs):  # noqa: ANN003, ANN201
+        self.resolve_organization_calls.append(kwargs)
+        return kwargs.get("created_by_organization_id") or self.resolved_organization_id
 
     async def mark_webhook_outbox_delivered(self, **kwargs) -> bool:  # noqa: ANN003
         self.delivered.append(kwargs)
@@ -164,6 +222,7 @@ def _worker(
     concurrency: int = 2,
     lease_seconds: float = 30,
     clock: Callable[[], datetime] | None = None,
+    audit_service=None,  # noqa: ANN001
 ) -> BatchWebhookOutboxWorker:
     return BatchWebhookOutboxWorker(
         repository=repository,  # type: ignore[arg-type]
@@ -179,7 +238,22 @@ def _worker(
             retry_max_seconds=60,
         ),
         clock=clock or (lambda: NOW),
+        audit_service=audit_service,
     )
+
+
+class _RecordingAuditService:
+    def __init__(self) -> None:
+        self.records: list[tuple[object, bool]] = []
+
+    def record_event(self, event, *, payloads=None, critical: bool = False) -> None:  # noqa: ANN001
+        assert payloads is None
+        self.records.append((event, critical))
+
+    async def record_event_sync(self, event, *, payloads=None, repository=None) -> None:  # noqa: ANN001
+        assert payloads is None
+        assert repository is not None
+        self.records.append((event, True))
 
 
 @pytest.mark.asyncio
@@ -193,8 +267,107 @@ async def test_worker_marks_2xx_delivered(status_code: int) -> None:
     assert repository.delivered[0]["status_code"] == status_code
     assert repository.retrying == []
     assert repository.failed == []
+    assert repository.summary_calls == 0
     assert sender.calls[0]["headers"]["X-DeltaLLM-Signature"].startswith("v1=")
     assert sender.calls[0]["headers"]["X-DeltaLLM-Event-Id"] == "evt-1"
+
+
+@pytest.mark.asyncio
+async def test_worker_audits_only_fenced_terminal_delivery_outcomes() -> None:
+    audit = _RecordingAuditService()
+    delivered_repository = _Repository([_record(organization_id="org-1")])
+
+    await _worker(
+        delivered_repository,
+        _Sender(status_code=204),
+        audit_service=audit,
+    ).process_once()
+
+    assert len(audit.records) == 1
+    delivered_event, delivered_critical = audit.records[0]
+    assert delivered_event.action == AuditAction.BATCH_WEBHOOK_DELIVERED
+    assert delivered_event.organization_id == "org-1"
+    assert delivered_event.metadata["batch_id"] == "batch-1"
+    assert delivered_event.metadata["status_class"] == "2xx"
+    assert delivered_critical is True
+    assert delivered_repository.get_job_calls == []
+    assert "private" not in str(delivered_event.metadata)
+
+    team_repository = _Repository([_record(team_id="team-1")])
+    team_repository.resolved_organization_id = "org-team"
+    await _worker(
+        team_repository,
+        _Sender(status_code=204),
+        audit_service=audit,
+    ).process_once()
+    team_event, team_critical = audit.records[1]
+    assert team_event.organization_id == "org-team"
+    assert team_critical is True
+    assert team_repository.resolve_organization_calls == [
+        {
+            "batch_id": "batch-1",
+            "created_by_team_id": "team-1",
+            "created_by_organization_id": None,
+        }
+    ]
+
+    retry_repository = _Repository([_record(attempt_count=1)])
+    await _worker(
+        retry_repository,
+        _Sender(status_code=503),
+        audit_service=audit,
+    ).process_once()
+    assert len(audit.records) == 2
+
+    failed_repository = _Repository([_record(attempt_count=1)])
+    await _worker(
+        failed_repository,
+        _Sender(status_code=400),
+        audit_service=audit,
+    ).process_once()
+    assert len(audit.records) == 3
+    failed_event, failed_critical = audit.records[2]
+    assert failed_event.action == AuditAction.BATCH_WEBHOOK_FAILED
+    assert failed_event.metadata["status_class"] == "4xx"
+    assert failed_critical is True
+
+
+@pytest.mark.asyncio
+async def test_worker_observes_and_audits_exhausted_expired_lease() -> None:
+    audit = _RecordingAuditService()
+    repository = _Repository([])
+    repository.exhausted = [
+        replace(
+            _record(attempt_count=3, max_attempts=3),
+            status=BatchWebhookDeliveryStatus.FAILED,
+            last_error="max_attempts_exhausted_after_lease_expiry",
+            locked_by=None,
+            lease_expires_at=None,
+        )
+    ]
+
+    failed_attempts = deltallm_batch_webhook_delivery_attempts_metric.labels(
+        outcome="failed",
+        status_class="none",
+    )
+    permanent_failures = deltallm_batch_webhook_permanent_failures_metric.labels(
+        reason="max_attempts_exhausted_after_lease_expiry"
+    )
+    attempts_before = failed_attempts._value.get()
+    recoveries_before = deltallm_batch_webhook_lease_recoveries_metric._value.get()
+    failures_before = permanent_failures._value.get()
+
+    assert await _worker(repository, _Sender(), audit_service=audit).process_once() == 0
+
+    assert failed_attempts._value.get() == attempts_before + 1
+    assert deltallm_batch_webhook_lease_recoveries_metric._value.get() == recoveries_before + 1
+    assert permanent_failures._value.get() == failures_before + 1
+
+    assert len(audit.records) == 1
+    event, critical = audit.records[0]
+    assert event.action == AuditAction.BATCH_WEBHOOK_FAILED
+    assert event.metadata["reason"] == "max_attempts_exhausted_after_lease_expiry"
+    assert critical is True
 
 
 @pytest.mark.asyncio
@@ -242,6 +415,64 @@ async def test_worker_retries_normalized_transport_error() -> None:
 
     assert repository.retrying[0]["status_code"] is None
     assert repository.retrying[0]["error"] == "connect_timeout"
+
+
+@pytest.mark.asyncio
+async def test_worker_preserves_request_timeout_for_operations_and_metrics(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    repository = _Repository([_record()])
+
+    with caplog.at_level(logging.INFO, logger="src.batch.webhooks.worker"):
+        await _worker(repository, _Sender(error="request_timeout")).process_once()
+
+    assert repository.retrying[0]["error"] == "request_timeout"
+    outcome_log = next(
+        record
+        for record in caplog.records
+        if record.message == "batch webhook attempt finished"
+    )
+    assert outcome_log.reason == "request_timeout"  # type: ignore[attr-defined]
+    assert outcome_log.status_class == "none"  # type: ignore[attr-defined]
+    metrics = generate_latest(get_prometheus_registry()).decode("utf-8")
+    assert (
+        'deltallm_batch_webhook_retries_scheduled_total{reason="request_timeout"}'
+        in metrics
+    )
+    assert (
+        serialize_batch_webhook_delivery(
+            replace(_record(), last_error="request_timeout")
+        )["last_error"]
+        == "request_timeout"
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_logs_unexpected_failures_with_safe_structured_fields(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _FailingRepository(_Repository):
+        async def mark_webhook_outbox_retrying(self, **kwargs) -> bool:  # noqa: ANN003
+            del kwargs
+            raise RuntimeError("private database error")
+
+    repository = _FailingRepository([_record()])
+
+    with caplog.at_level(logging.WARNING, logger="src.batch.webhooks.worker"):
+        await _worker(repository, _Sender(status_code=503)).process_once()
+
+    failure_log = next(
+        record
+        for record in caplog.records
+        if record.message == "batch webhook attempt failed unexpectedly"
+    )
+    assert failure_log.event_id == "evt-1"  # type: ignore[attr-defined]
+    assert failure_log.batch_id == "batch-1"  # type: ignore[attr-defined]
+    assert failure_log.event_type == "batch.completed"  # type: ignore[attr-defined]
+    assert failure_log.attempt == 1  # type: ignore[attr-defined]
+    assert failure_log.status_class == "none"  # type: ignore[attr-defined]
+    assert failure_log.reason == "internal_error"  # type: ignore[attr-defined]
+    assert "private database error" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -366,7 +597,12 @@ async def test_worker_logs_never_include_sensitive_delivery_material(
         await _worker(repository, sender).process_once()
 
     captured = caplog.text
-    assert "evt-1" in captured
+    outcome_log = next(
+        item for item in caplog.records if item.message == "batch webhook attempt finished"
+    )
+    assert outcome_log.event_id == "evt-1"  # type: ignore[attr-defined]
+    assert outcome_log.batch_id == "batch-1"  # type: ignore[attr-defined]
+    assert outcome_log.event_type == "batch.completed"  # type: ignore[attr-defined]
     for sensitive in (
         url,
         SECRET,

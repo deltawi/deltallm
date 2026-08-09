@@ -23,6 +23,9 @@ The public batch API supports embeddings and non-streaming chat completion batch
 - team ownership
 - estimated or accumulated cost
 - timestamps for creation, start, and completion
+- redacted terminal webhook delivery status, attempts, status class, and bounded failure reason
+- a replay action for failed webhook deliveries when the operator has batch update permission
+- an archived delivery-only view when ordinary batch metadata has already been cleaned up
 
 ## When To Use It
 
@@ -32,6 +35,11 @@ Use this page when work is not request-response interactive and you need:
 - failure review at the item level
 - cancellation controls
 - operational reporting after a batch finishes
+- inspection or replay of a failed terminal webhook without exposing customer delivery material
+
+If a known batch ID no longer has retained job metadata, opening its detail route automatically checks for separately retained webhook delivery state. The page clearly identifies this archived state and shows only redacted delivery fields and permitted replay controls; job items, cost, cancellation, destination, headers, payload, and signing material are unavailable.
+
+After **Replay delivery** succeeds, the page immediately shows the delivery as queued and refreshes only the webhook delivery state. If that follow-up refresh fails, a warning explains that the replay was scheduled but the newest status could not be loaded. The warning does not mean the replay failed; refresh the page to inspect its current state.
 
 ## Related API Surface
 
@@ -41,6 +49,8 @@ The admin backend exposes endpoints for:
 - batch list
 - batch detail with items
 - batch cancellation
+- redacted webhook delivery inspection
+- failed-only webhook replay
 
 The public data-plane API also exposes:
 

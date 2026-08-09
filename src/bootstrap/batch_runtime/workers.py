@@ -22,6 +22,10 @@ from src.batch.worker import BatchExecutorWorker, BatchWorkerConfig
 from src.batch.webhooks import BatchWebhookCipher
 from src.batch.webhooks.delivery import BatchWebhookHTTPSender
 from src.batch.webhooks.network_policy import BatchWebhookNetworkPolicy
+from src.batch.webhooks.observability import (
+    BatchWebhookObservabilityWorker,
+    BatchWebhookObservabilityWorkerConfig,
+)
 from src.batch.webhooks.worker import BatchWebhookOutboxWorker, BatchWebhookOutboxWorkerConfig
 from src.bootstrap.batch_runtime.core import BatchCoreComponents
 from src.bootstrap.batch_runtime.runtime import BatchRuntime
@@ -58,6 +62,7 @@ def start_batch_workers(
 ) -> BatchWebhookCipher | None:
     _start_executor_worker(app, cfg, repository, runtime, core)
     _start_completion_outbox_worker(app, cfg, repository, runtime)
+    _start_webhook_observability_worker(app, cfg, repository, runtime)
     webhook_cipher = _start_webhook_worker(app, cfg, repository, runtime)
     _start_maintenance_workers(app, cfg, repository, runtime, core)
     return webhook_cipher
@@ -258,12 +263,47 @@ def _start_webhook_worker(
                 getattr(general, "batch_webhook_retry_max_seconds", 3_600)
             ),
         ),
+        audit_service=getattr(app.state, "audit_service", None),
     )
     runtime.webhook_outbox_task = create_task(runtime.webhook_outbox_worker.run())
     app.state.batch_webhook_outbox_worker = runtime.webhook_outbox_worker
     app.state.batch_webhook_outbox_task = runtime.webhook_outbox_task
     app.state.batch_webhook_worker_expected = True
     return cipher
+
+
+def _start_webhook_observability_worker(
+    app: Any,
+    cfg: Any,
+    repository: BatchRepository,
+    runtime: BatchRuntime,
+) -> None:
+    general = cfg.general_settings
+    if not bool(getattr(general, "batch_webhook_observability_enabled", True)):
+        return
+
+    refresh_interval = max(
+        1.0,
+        float(
+            getattr(
+                general,
+                "batch_webhook_observability_refresh_interval_seconds",
+                15.0,
+            )
+        ),
+    )
+    runtime.webhook_observability_worker = BatchWebhookObservabilityWorker(
+        repository=repository,
+        config=BatchWebhookObservabilityWorkerConfig(
+            refresh_interval_seconds=refresh_interval,
+            failure_interval_seconds=min(5.0, refresh_interval),
+        ),
+    )
+    runtime.webhook_observability_task = create_task(
+        runtime.webhook_observability_worker.run()
+    )
+    app.state.batch_webhook_observability_worker = runtime.webhook_observability_worker
+    app.state.batch_webhook_observability_task = runtime.webhook_observability_task
 
 
 def _start_maintenance_workers(
@@ -282,6 +322,16 @@ def _start_maintenance_workers(
             config=BatchCleanupConfig(
                 interval_seconds=general.embeddings_batch_gc_interval_seconds,
                 scan_limit=general.embeddings_batch_gc_scan_limit,
+                webhook_delivery_retention_days=int(
+                    getattr(general, "batch_webhook_delivery_retention_days", 30)
+                ),
+                webhook_cleanup_max_rows_per_run=int(
+                    getattr(
+                        general,
+                        "batch_webhook_cleanup_max_rows_per_run",
+                        10_000,
+                    )
+                ),
             ),
         )
         runtime.gc_task = create_task(runtime.gc_worker.run())

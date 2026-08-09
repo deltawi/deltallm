@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -8,7 +10,16 @@ from prometheus_client import generate_latest
 
 from src.api.admin.endpoints.common import AuthScope
 from src.audit.actions import AuditAction
-from src.batch.models import BatchJobRecord, BatchJobStatus, BatchSchedulerFlowRecord
+from src.auth.roles import Permission
+from src.batch.models import (
+    BatchJobRecord,
+    BatchJobStatus,
+    BatchSchedulerFlowRecord,
+    BatchWebhookDeliveryStatus,
+    BatchWebhookEventType,
+    BatchWebhookOutboxRecord,
+    BatchWebhookReplayResult,
+)
 from src.batch.models import encode_operator_failed_reason
 from src.batch.scheduling import BatchTenantFairShareConfig, scheduler_config_fingerprint
 from src.config import AppConfig
@@ -27,13 +38,42 @@ class _FakeBatchRepairDB:
         status: str = "finalizing",
         created_by_team_id: str | None = "team-1",
         created_by_organization_id: str | None = None,
+        team_organization_id: str | None = None,
+        job_exists: bool = True,
     ) -> None:
         self.status = status
         self.created_by_team_id = created_by_team_id
         self.created_by_organization_id = created_by_organization_id
+        self.team_organization_id = team_organization_id
+        self.job_exists = job_exists
+        self.tx_entries = 0
+        self._rollback_callbacks: list[object] = []
+
+    def add_rollback_callback(self, callback) -> None:  # noqa: ANN001
+        self._rollback_callbacks.append(callback)
+
+    @asynccontextmanager
+    async def tx(self):  # noqa: ANN201
+        self.tx_entries += 1
+        try:
+            yield self
+        except Exception:
+            for callback in reversed(self._rollback_callbacks):
+                callback()
+            raise
+        finally:
+            self._rollback_callbacks.clear()
 
     async def query_raw(self, query: str, *params):
-        if "FROM deltallm_batch_job" in query and "WHERE batch_id = $1" in query:
+        if "FROM deltallm_teamtable" in query:
+            if self.team_organization_id is None:
+                return []
+            return [{"organization_id": self.team_organization_id}]
+        if "FROM deltallm_batch_job" in query and (
+            "WHERE batch_id = $1" in query or "WHERE j.batch_id = $1" in query
+        ):
+            if not self.job_exists:
+                return []
             return [{
                 "batch_id": str(params[0]),
                 "status": self.status,
@@ -55,6 +95,17 @@ class _FakeBatchRepairRepository:
         self.scheduler_backfill_calls: list[dict[str, object]] = []
         self.refresh_scheduler_flow_calls: list[dict[str, object]] = []
         self.list_scheduler_flow_calls: list[dict[str, object]] = []
+        self.webhook_deliveries: list[BatchWebhookOutboxRecord] = []
+        self.webhook_replay_calls: list[tuple[str, str]] = []
+
+    def with_prisma(self, prisma):  # noqa: ANN001, ANN201
+        snapshot = list(self.webhook_deliveries)
+        add_rollback_callback = getattr(prisma, "add_rollback_callback", None)
+        if callable(add_rollback_callback):
+            add_rollback_callback(
+                lambda: setattr(self, "webhook_deliveries", snapshot)
+            )
+        return self
 
     async def summarize_runtime_statuses(self, *, now):  # noqa: ANN001
         del now
@@ -222,6 +273,73 @@ class _FakeBatchRepairRepository:
             )
         ]
 
+    async def list_webhook_outbox_by_batch_id(
+        self,
+        *,
+        batch_id: str,
+    ) -> list[BatchWebhookOutboxRecord]:
+        return [item for item in self.webhook_deliveries if item.batch_id == batch_id]
+
+    async def replay_failed_webhook_outbox(
+        self,
+        *,
+        batch_id: str,
+        event_id: str,
+    ) -> BatchWebhookReplayResult | None:
+        self.webhook_replay_calls.append((batch_id, event_id))
+        for index, delivery in enumerate(self.webhook_deliveries):
+            if (
+                delivery.batch_id == batch_id
+                and delivery.event_id == event_id
+                and delivery.status == BatchWebhookDeliveryStatus.FAILED
+            ):
+                replayed = replace(
+                    delivery,
+                    status=BatchWebhookDeliveryStatus.QUEUED,
+                    attempt_count=0,
+                    last_status_code=None,
+                    last_error=None,
+                    locked_by=None,
+                    lease_expires_at=None,
+                    delivered_at=None,
+                )
+                self.webhook_deliveries[index] = replayed
+                return BatchWebhookReplayResult(
+                    record=replayed,
+                    previous_attempt_count=delivery.attempt_count,
+                )
+        return None
+
+
+def _webhook_delivery(
+    *,
+    status: BatchWebhookDeliveryStatus = BatchWebhookDeliveryStatus.FAILED,
+    created_by_team_id: str | None = None,
+    created_by_organization_id: str | None = None,
+) -> BatchWebhookOutboxRecord:
+    now = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
+    return BatchWebhookOutboxRecord(
+        event_id="evt-safe",
+        batch_id="batch-1",
+        event_type=BatchWebhookEventType.COMPLETED,
+        target_config_ciphertext="ciphertext-private-value",
+        payload_json={"metadata": "private-metadata-value"},
+        payload_sha256="private-payload-digest",
+        status=status,
+        attempt_count=8,
+        max_attempts=8,
+        next_attempt_at=now,
+        last_status_code=503,
+        last_error="http_retryable_status",
+        locked_by=None,
+        lease_expires_at=None,
+        created_at=now,
+        updated_at=now,
+        delivered_at=None,
+        created_by_team_id=created_by_team_id,
+        created_by_organization_id=created_by_organization_id,
+    )
+
 
 class _FakeDynamicConfigManager:
     def __init__(self, config: AppConfig) -> None:
@@ -272,6 +390,446 @@ async def test_retry_finalization_endpoint(client, test_app, monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"batch_id": "batch-1", "status": "finalizing", "retried": True}
+
+
+@pytest.mark.asyncio
+async def test_batch_detail_exposes_only_safe_webhook_delivery_state(
+    client,
+    test_app,
+    monkeypatch,
+):
+    test_app.state.prisma_manager = type(
+        "Prisma",
+        (),
+        {"client": _FakeBatchRepairDB(status="completed")},
+    )()
+    repository = _FakeBatchRepairRepository(status="completed")
+    repository.webhook_deliveries = [_webhook_delivery()]
+    test_app.state.batch_repository = repository
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=True,
+            account_id="acct-1",
+        ),
+    )
+
+    response = await client.get(
+        "/ui/api/batches/batch-1",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["capabilities"]["replay_webhook"] is True
+    assert body["webhook_deliveries"] == [
+        {
+            "event_id": "evt-safe",
+            "event_type": "batch.completed",
+            "status": "failed",
+            "attempt_count": 8,
+            "max_attempts": 8,
+            "next_attempt_at": "2026-08-06T12:00:00+00:00",
+            "last_status_class": "5xx",
+            "last_error": "http_retryable_status",
+            "lease_expires_at": None,
+            "created_at": "2026-08-06T12:00:00+00:00",
+            "updated_at": "2026-08-06T12:00:00+00:00",
+            "delivered_at": None,
+        }
+    ]
+    serialized = response.text
+    assert "ciphertext-private-value" not in serialized
+    assert "private-metadata-value" not in serialized
+    assert "private-payload-digest" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_failed_webhook_replay_is_scoped_atomic_and_audited(
+    client,
+    test_app,
+    monkeypatch,
+):
+    test_app.state.prisma_manager = type(
+        "Prisma",
+        (),
+        {"client": _FakeBatchRepairDB(status="completed")},
+    )()
+    repository = _FakeBatchRepairRepository(status="completed")
+    repository.webhook_deliveries = [_webhook_delivery()]
+    test_app.state.batch_repository = repository
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=True,
+            account_id="acct-1",
+        ),
+    )
+    audits: list[dict[str, object]] = []
+
+    async def _capture_audit(**kwargs):  # noqa: ANN003
+        audits.append(kwargs)
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.emit_admin_mutation_audit",
+        _capture_audit,
+    )
+
+    response = await client.post(
+        "/ui/api/batches/batch-1/webhook-deliveries/evt-safe/replay",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["previous_attempt_count"] == 8
+    assert response.json()["delivery"]["status"] == "queued"
+    assert response.json()["delivery"]["attempt_count"] == 0
+    assert repository.webhook_replay_calls == [("batch-1", "evt-safe")]
+    assert audits[0]["action"] == AuditAction.ADMIN_BATCH_WEBHOOK_REPLAY
+    assert audits[0]["transactional_audit_repository"].prisma is (
+        test_app.state.prisma_manager.client
+    )
+    assert "ciphertext-private-value" not in str(audits)
+    assert "private-metadata-value" not in str(audits)
+
+
+@pytest.mark.asyncio
+async def test_failed_webhook_replay_rolls_back_when_required_audit_fails(
+    client,
+    test_app,
+    monkeypatch,
+):
+    db = _FakeBatchRepairDB(status="completed")
+    test_app.state.prisma_manager = type("Prisma", (), {"client": db})()
+    repository = _FakeBatchRepairRepository(status="completed")
+    repository.webhook_deliveries = [_webhook_delivery()]
+    test_app.state.batch_repository = repository
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=True,
+            account_id="acct-1",
+        ),
+    )
+
+    async def _fail_audit(**kwargs):  # noqa: ANN003
+        del kwargs
+        raise RuntimeError("audit unavailable")
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.emit_admin_mutation_audit",
+        _fail_audit,
+    )
+
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        await client.post(
+            "/ui/api/batches/batch-1/webhook-deliveries/evt-safe/replay",
+            headers={"Authorization": "Bearer mk-test"},
+        )
+
+    assert db.tx_entries == 1
+    assert repository.webhook_deliveries[0].status == BatchWebhookDeliveryStatus.FAILED
+    assert repository.webhook_deliveries[0].attempt_count == 8
+
+
+@pytest.mark.asyncio
+async def test_webhook_delivery_inspection_survives_batch_metadata_cleanup(
+    client,
+    test_app,
+    monkeypatch,
+):
+    test_app.state.prisma_manager = type(
+        "Prisma",
+        (),
+        {"client": _FakeBatchRepairDB(job_exists=False)},
+    )()
+    repository = _FakeBatchRepairRepository(status="completed")
+    repository.webhook_deliveries = [
+        _webhook_delivery(created_by_organization_id="org-1")
+    ]
+    test_app.state.batch_repository = repository
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=False,
+            account_id="acct-1",
+            org_ids=["org-1"],
+            org_permissions_by_id={
+                "org-1": {Permission.KEY_READ, Permission.KEY_UPDATE},
+            },
+        ),
+    )
+
+    response = await client.get(
+        "/ui/api/batches/batch-1/webhook-deliveries",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["batch_id"] == "batch-1"
+    assert body["capabilities"] == {
+        "view": True,
+        "cancel": False,
+        "retry_finalization": False,
+        "requeue_stale": False,
+        "mark_failed": False,
+        "replay_webhook": True,
+    }
+    assert body["data"][0]["event_id"] == "evt-safe"
+    assert "created_by_organization_id" not in response.text
+    assert "ciphertext-private-value" not in response.text
+    assert "private-metadata-value" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_webhook_delivery_inspection_reports_org_scoped_replay_capability(
+    client,
+    test_app,
+    monkeypatch,
+):
+    test_app.state.prisma_manager = type(
+        "Prisma",
+        (),
+        {
+            "client": _FakeBatchRepairDB(
+                status="completed",
+                created_by_team_id=None,
+                created_by_organization_id="org-1",
+            )
+        },
+    )()
+    repository = _FakeBatchRepairRepository(status="completed")
+    repository.webhook_deliveries = [
+        _webhook_delivery(created_by_organization_id="org-1")
+    ]
+    test_app.state.batch_repository = repository
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=False,
+            account_id="acct-1",
+            org_ids=["org-1"],
+            org_permissions_by_id={
+                "org-1": {Permission.KEY_READ, Permission.KEY_UPDATE},
+            },
+        ),
+    )
+
+    response = await client.get(
+        "/ui/api/batches/batch-1/webhook-deliveries",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["capabilities"]["replay_webhook"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("job_exists", [True, False])
+async def test_webhook_delivery_capability_resolves_team_organization(
+    client,
+    test_app,
+    monkeypatch,
+    job_exists: bool,
+):
+    test_app.state.prisma_manager = type(
+        "Prisma",
+        (),
+        {
+            "client": _FakeBatchRepairDB(
+                status="completed",
+                created_by_team_id="team-1",
+                created_by_organization_id=None,
+                team_organization_id="org-1",
+                job_exists=job_exists,
+            )
+        },
+    )()
+    repository = _FakeBatchRepairRepository(status="completed")
+    repository.webhook_deliveries = [
+        _webhook_delivery(created_by_team_id="team-1")
+    ]
+    test_app.state.batch_repository = repository
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=False,
+            account_id="acct-1",
+            org_ids=["org-1"],
+            org_permissions_by_id={
+                "org-1": {Permission.KEY_READ, Permission.KEY_UPDATE},
+            },
+        ),
+    )
+
+    response = await client.get(
+        "/ui/api/batches/batch-1/webhook-deliveries",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["capabilities"]["replay_webhook"] is True
+
+
+@pytest.mark.asyncio
+async def test_webhook_replay_audit_uses_resolved_team_organization(
+    client,
+    test_app,
+    monkeypatch,
+):
+    test_app.state.prisma_manager = type(
+        "Prisma",
+        (),
+        {
+            "client": _FakeBatchRepairDB(
+                status="completed",
+                created_by_team_id="team-1",
+                created_by_organization_id=None,
+                team_organization_id="org-1",
+            )
+        },
+    )()
+    repository = _FakeBatchRepairRepository(status="completed")
+    repository.webhook_deliveries = [
+        _webhook_delivery(created_by_team_id="team-1")
+    ]
+    test_app.state.batch_repository = repository
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=False,
+            account_id="acct-1",
+            org_ids=["org-1"],
+            org_permissions_by_id={"org-1": {Permission.KEY_UPDATE}},
+        ),
+    )
+    audits: list[dict[str, object]] = []
+
+    async def _capture_audit(**kwargs):  # noqa: ANN003
+        audits.append(kwargs)
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.emit_admin_mutation_audit",
+        _capture_audit,
+    )
+
+    response = await client.post(
+        "/ui/api/batches/batch-1/webhook-deliveries/evt-safe/replay",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    assert audits[0]["organization_id"] == "org-1"
+
+
+@pytest.mark.asyncio
+async def test_failed_webhook_replay_survives_batch_metadata_cleanup(
+    client,
+    test_app,
+    monkeypatch,
+):
+    test_app.state.prisma_manager = type(
+        "Prisma",
+        (),
+        {"client": _FakeBatchRepairDB(job_exists=False)},
+    )()
+    repository = _FakeBatchRepairRepository(status="completed")
+    repository.webhook_deliveries = [
+        _webhook_delivery(created_by_organization_id="org-1")
+    ]
+    test_app.state.batch_repository = repository
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=False,
+            account_id="acct-1",
+            org_ids=["org-1"],
+            org_permissions_by_id={"org-1": {Permission.KEY_UPDATE}},
+        ),
+    )
+    audits: list[dict[str, object]] = []
+
+    async def _capture_audit(**kwargs):  # noqa: ANN003
+        audits.append(kwargs)
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.emit_admin_mutation_audit",
+        _capture_audit,
+    )
+
+    response = await client.post(
+        "/ui/api/batches/batch-1/webhook-deliveries/evt-safe/replay",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 200
+    assert repository.webhook_replay_calls == [("batch-1", "evt-safe")]
+    assert audits[0]["action"] == AuditAction.ADMIN_BATCH_WEBHOOK_REPLAY
+
+
+@pytest.mark.asyncio
+async def test_orphaned_webhook_delivery_rejects_wrong_organization_scope(
+    client,
+    test_app,
+    monkeypatch,
+):
+    test_app.state.prisma_manager = type(
+        "Prisma",
+        (),
+        {"client": _FakeBatchRepairDB(job_exists=False)},
+    )()
+    repository = _FakeBatchRepairRepository(status="completed")
+    repository.webhook_deliveries = [
+        _webhook_delivery(created_by_organization_id="org-owner")
+    ]
+    test_app.state.batch_repository = repository
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=False,
+            account_id="acct-1",
+            org_ids=["org-other"],
+            org_permissions_by_id={"org-other": {Permission.KEY_UPDATE}},
+        ),
+    )
+
+    response = await client.post(
+        "/ui/api/batches/batch-1/webhook-deliveries/evt-safe/replay",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 403
+    assert repository.webhook_replay_calls == []
+
+
+@pytest.mark.asyncio
+async def test_webhook_replay_rejects_nonfailed_delivery(client, test_app, monkeypatch):
+    test_app.state.prisma_manager = type(
+        "Prisma",
+        (),
+        {"client": _FakeBatchRepairDB(status="completed")},
+    )()
+    repository = _FakeBatchRepairRepository(status="completed")
+    repository.webhook_deliveries = [
+        _webhook_delivery(status=BatchWebhookDeliveryStatus.DELIVERED)
+    ]
+    test_app.state.batch_repository = repository
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.batches.get_auth_scope",
+        lambda request, authorization=None, x_master_key=None, required_permission=None: AuthScope(  # noqa: ARG005
+            is_platform_admin=True,
+            account_id="acct-1",
+        ),
+    )
+
+    response = await client.post(
+        "/ui/api/batches/batch-1/webhook-deliveries/evt-safe/replay",
+        headers={"Authorization": "Bearer mk-test"},
+    )
+
+    assert response.status_code == 409
+    assert repository.webhook_replay_calls == []
 
 
 @pytest.mark.asyncio

@@ -103,6 +103,7 @@ nav:
       - Docker: deployment/docker.md
       - Governance Rollout: deployment/governance.md
       - Kubernetes: deployment/kubernetes.md
+      - Batch Webhook Rollout: deployment/batch-webhook-rollout.md
       - Upstream HTTP Tuning: deployment/upstream-http.md
 
 extra:

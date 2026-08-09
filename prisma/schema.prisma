@@ -1123,6 +1123,8 @@ model DeltaLLM_BatchWebhookOutbox {
   event_id                 String   @id @default(uuid())
   batch_id                 String
   event_type               String
+  created_by_team_id       String?
+  created_by_organization_id String?
   target_config_ciphertext String
   payload_json             Json
   payload_sha256           String
@@ -1142,5 +1144,6 @@ model DeltaLLM_BatchWebhookOutbox {
   @@index([status, next_attempt_at], map: "deltallm_batch_webhook_outbox_due_idx")
   @@index([lease_expires_at], map: "deltallm_batch_webhook_outbox_lease_idx")
   @@index([batch_id, created_at], map: "deltallm_batch_webhook_outbox_batch_idx")
+  @@index([status, updated_at], map: "deltallm_batch_webhook_outbox_retention_idx")
   @@map("deltallm_batch_webhook_outbox")
 }

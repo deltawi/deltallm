@@ -23,6 +23,7 @@ from src.batch.scheduling import (
 )
 from src.batch.worker import BatchExecutorWorker
 from src.batch.webhooks.worker import BatchWebhookOutboxWorker
+from src.batch.webhooks.observability import BatchWebhookObservabilityWorker
 from src.bootstrap.status import BootstrapStatus
 
 
@@ -40,6 +41,8 @@ class BatchRuntime:
     completion_outbox_task: Task[None] | None = None
     webhook_outbox_worker: BatchWebhookOutboxWorker | None = None
     webhook_outbox_task: Task[None] | None = None
+    webhook_observability_worker: BatchWebhookObservabilityWorker | None = None
+    webhook_observability_task: Task[None] | None = None
     webhook_transport: httpx.AsyncBaseTransport | None = None
     gc_worker: BatchRetentionCleanupWorker | None = None
     gc_task: Task[None] | None = None

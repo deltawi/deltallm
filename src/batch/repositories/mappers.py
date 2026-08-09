@@ -142,6 +142,9 @@ def webhook_outbox_from_row(row: dict[str, Any]) -> BatchWebhookOutboxRecord:
         created_at=created_at,
         updated_at=updated_at,
         delivered_at=parse_datetime(row.get("delivered_at")),
+        recovered_from_expired_lease=bool(row.get("recovered_from_expired_lease", False)),
+        created_by_team_id=row.get("created_by_team_id"),
+        created_by_organization_id=row.get("created_by_organization_id"),
     )
 
 
