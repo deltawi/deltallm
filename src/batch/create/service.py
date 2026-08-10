@@ -322,6 +322,8 @@ class BatchCreateSessionService:
                 created_by_user_id=auth.user_id,
                 created_by_team_id=auth.team_id,
                 created_by_organization_id=auth.organization_id,
+                created_by_owner_account_id=auth.owner_account_id,
+                created_by_owner_snapshot_complete=True,
             )
 
         return await self.stager.stage_session(

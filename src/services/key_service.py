@@ -166,7 +166,9 @@ class KeyService:
 
     @staticmethod
     def _cache_key(token_hash: str) -> str:
-        return f"key:{token_hash}"
+        # Version the serialized auth contract so pre-owner-attribution cache
+        # entries cannot silently authenticate without the immutable owner ID.
+        return f"key:v2:{token_hash}"
 
     def _auth_from_record(self, record: Any) -> UserAPIKeyAuth:
         auth = UserAPIKeyAuth(
@@ -174,6 +176,7 @@ class KeyService:
             user_id=record.user_id,
             team_id=record.team_id,
             organization_id=record.organization_id,
+            owner_account_id=record.owner_account_id,
             models=record.models or [],
             team_models=record.team_models or [],
             max_budget=record.max_budget,

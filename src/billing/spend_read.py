@@ -14,6 +14,7 @@ class SpendReadSource:
     cached_prompt_tokens_column: str
     cached_completion_tokens_column: str
     organization_column: str | None = None
+    owner_account_column: str | None = None
 
     def column(self, column: str, *, table_alias: str | None = None) -> str:
         target = getattr(self, column)
@@ -31,6 +32,7 @@ SPEND_READ_SOURCE = SpendReadSource(
     cached_prompt_tokens_column="cached_input_tokens",
     cached_completion_tokens_column="cached_output_tokens",
     organization_column="organization_id",
+    owner_account_column="owner_account_id",
 )
 
 

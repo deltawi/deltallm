@@ -314,6 +314,8 @@ class WorkerPersistenceMixin:
             "user_id": job.created_by_user_id,
             "team_id": job.created_by_team_id,
             "organization_id": job.created_by_organization_id,
+            "owner_account_id": job.created_by_owner_account_id,
+            "owner_snapshot_complete": job.created_by_owner_snapshot_complete,
             "model": prepared.payload.model,
             "call_type": batch_call_type_for_endpoint(job.endpoint),
             "usage": dict(usage),

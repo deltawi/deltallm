@@ -433,12 +433,17 @@ Asset-access writes emit the matching scope audit action, such as `ADMIN_ORGANIZ
 
 Supported report parameters include:
 
-- `group_by=model|api_key|team|user`
+- `group_by=model|provider|day|api_key|organization|team|user`
+- `view=organization|team|self` for accounts with multiple reporting views
 - `start_date`
 - `end_date`
-- `include_logs`
-- `page`
-- `page_size`
+- `interval=day|week|month` for time series
+- `scope_type=organization|team|user` with exactly one of `scope_id=<id>` or `scope_unassigned=true` for a model drill-down
+- `limit` and `offset` for grouped reports
+
+Grouped rows return a nullable `group_key` and an explicit `is_unassigned` boolean. Clients must use `is_unassigned` rather than reserving a string identifier; a real model or tenant identifier such as `__unassigned__` remains an ordinary assigned value.
+
+For `view=self`, the report accepts only `group_by=organization|team` in addition to the common day, model, and provider groupings. A model drill-down may use only `scope_type=organization|team`. Both the grouping and drill-down retain the authenticated account's owner predicate and active membership boundary, so they partition personal usage without exposing another account's traffic. User/API-key groupings and request logs remain unavailable to self-only accounts.
 
 ### Batches
 

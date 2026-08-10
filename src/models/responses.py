@@ -99,6 +99,7 @@ class UserAPIKeyAuth(BaseModel):
     user_id: str | None = None
     team_id: str | None = None
     organization_id: str | None = None
+    owner_account_id: str | None = None
     models: list[str] = Field(default_factory=list)
     team_models: list[str] = Field(default_factory=list)
     max_budget: float | None = None

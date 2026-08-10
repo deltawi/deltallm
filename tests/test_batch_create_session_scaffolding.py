@@ -199,6 +199,8 @@ async def test_create_session_repository_insert_and_lookup_contract() -> None:
                 "created_by_user_id": "user-1",
                 "created_by_team_id": "team-1",
                 "created_by_organization_id": "org-1",
+                "created_by_owner_account_id": "acct-owner",
+                "created_by_owner_snapshot_complete": True,
                 "created_at": now,
                 "completed_at": None,
                 "last_attempt_at": None,
@@ -230,6 +232,7 @@ async def test_create_session_repository_insert_and_lookup_contract() -> None:
             created_by_user_id="user-1",
             created_by_team_id="team-1",
             created_by_organization_id="org-1",
+            created_by_owner_account_id="acct-owner",
             webhook_config_ciphertext="v1.key.ciphertext",
             webhook_config_fingerprint="a" * 64,
         )
@@ -242,7 +245,9 @@ async def test_create_session_repository_insert_and_lookup_contract() -> None:
     assert "webhook_config_ciphertext" in prisma.sql
     assert record.webhook_config_ciphertext == "v1.key.ciphertext"
     assert record.webhook_config_fingerprint == "a" * 64
-    assert prisma.params[-2:] == ("v1.key.ciphertext", "a" * 64)
+    assert prisma.params[-4:] == ("v1.key.ciphertext", "a" * 64, "acct-owner", True)
+    assert record.created_by_owner_account_id == "acct-owner"
+    assert record.created_by_owner_snapshot_complete is True
     assert prisma.params[1] == "batch-1"
 
     prisma.rows = []

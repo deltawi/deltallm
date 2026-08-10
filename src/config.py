@@ -408,6 +408,12 @@ class GeneralSettings(BaseModel):
     database_url: str | None = None
     db_pool_size: int = Field(default=20, gt=0)
     db_pool_timeout: int = Field(default=30, ge=0)
+    spend_reporting_max_concurrency: int = Field(default=2, gt=0, le=32)
+    spend_reporting_global_max_concurrency: int = Field(default=2, gt=0, le=64)
+    spend_reporting_queue_timeout_seconds: float = Field(default=10.0, gt=0)
+    spend_reporting_execution_timeout_seconds: float = Field(default=60.0, gt=0)
+    spend_reporting_redis_timeout_seconds: float = Field(default=0.5, gt=0)
+    spend_reporting_v2_enabled: bool = False
     upstream_http_connect_timeout_seconds: float = Field(default=10.0, gt=0)
     upstream_http_read_timeout_seconds: float = Field(default=300.0, gt=0)
     upstream_http_write_timeout_seconds: float = Field(default=30.0, gt=0)

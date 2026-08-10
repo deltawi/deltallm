@@ -68,6 +68,12 @@ async function apiFetch<T>(path: string, opts?: RequestInit & { json?: unknown }
   return (await res.json()) as T;
 }
 
+export function reportingRequestInit(signal: AbortSignal, forceRefresh = false): RequestInit {
+  return forceRefresh
+    ? { signal, headers: { 'Cache-Control': 'no-cache' } }
+    : { signal };
+}
+
 export interface Pagination {
   total: number;
   limit: number;
@@ -75,6 +81,16 @@ export interface Pagination {
   has_more: boolean;
   after_line_number?: number | null;
   next_after_line_number?: number | null;
+}
+
+export interface SpendLogsPagination {
+  total?: number;
+  limit: number;
+  offset: number;
+  count?: number;
+  has_more: boolean;
+  next_cursor?: string | null;
+  mode?: 'offset' | 'cursor';
 }
 
 export interface Paginated<T> {
@@ -122,7 +138,26 @@ export interface SpendLog {
   error_type?: string | null;
 }
 
-export type SpendGroupBy = 'model' | 'organization' | 'team' | 'api_key';
+export type SpendUsageDimension = 'organization' | 'team' | 'user';
+export type SpendUsageMetric = 'spend' | 'tokens';
+export type SpendGroupBy = 'model' | SpendUsageDimension | 'api_key';
+export type SpendView = 'platform' | 'organization' | 'team' | 'self';
+
+export interface SpendReportingContext {
+  api_version: number;
+  active_view: SpendView;
+}
+
+export interface SpendCapabilities {
+  visibility_level: SpendView;
+  active_view: SpendView;
+  default_view: SpendView;
+  available_views: SpendView[];
+  self_scoped: boolean;
+  allowed_dimensions: SpendUsageDimension[];
+  request_logs: boolean;
+  user_identity_labels: boolean;
+}
 
 export interface SpendSummary {
   total_spend: number;
@@ -130,9 +165,11 @@ export interface SpendSummary {
   prompt_tokens: number;
   completion_tokens: number;
   total_requests: number;
-  unique_models?: number;
+  unique_models: number;
   successful_requests?: number;
   failed_requests?: number;
+  capabilities?: SpendCapabilities;
+  reporting_context?: SpendReportingContext;
 }
 
 export type SpendBucket = 'day' | 'week' | 'month';
@@ -150,24 +187,40 @@ export interface SpendTimeSeriesReport {
   group_by: 'day';
   interval: SpendBucket;
   breakdown: SpendTimeSeriesRow[];
+  reporting_context?: SpendReportingContext;
 }
 
 export interface SpendGroupRow {
-  group_key: string;
+  group_key: string | null;
+  is_unassigned: boolean;
   display_name?: string | null;
   total_spend: number;
   total_tokens: number;
+  prompt_tokens: number;
+  completion_tokens: number;
   request_count: number;
 }
 
 export interface SpendGroupReport {
   group_by: SpendGroupBy | 'provider' | 'user';
   data: SpendGroupRow[];
+  capabilities?: {
+    user_identity_labels?: boolean;
+  };
   pagination: Pagination;
+  reporting_context?: SpendReportingContext;
+}
+
+export interface SpendLogsResponse {
+  logs: SpendLog[];
+  pagination: SpendLogsPagination;
+  reporting_context?: SpendReportingContext;
 }
 
 export interface SpendFeatureStatus {
   cache_enabled: boolean;
+  reporting_api_version?: number;
+  capabilities?: SpendCapabilities;
 }
 
 export type ProviderHealthStatus = 'healthy' | 'degraded' | 'down';
@@ -769,29 +822,32 @@ export const health = {
 
 export const spend = {
   featureStatus: (opts?: RequestInit) => apiFetch<SpendFeatureStatus>('/ui/api/spend/feature-status', opts),
-  summary: (start_date?: string, end_date?: string, opts?: RequestInit) => {
+  summary: (start_date?: string, end_date?: string, view?: SpendView, opts?: RequestInit) => {
     const qs = new URLSearchParams();
     if (start_date) qs.set('start_date', start_date);
     if (end_date) qs.set('end_date', end_date);
+    if (view && view !== 'platform') qs.set('view', view);
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     return apiFetch<SpendSummary>(`/ui/api/spend/summary${suffix}`, opts);
   },
   timeSeries: (
-    params: { start_date?: string; end_date?: string; interval: SpendBucket },
+    params: { start_date?: string; end_date?: string; interval: SpendBucket; view?: SpendView },
     opts?: RequestInit,
   ) => {
     const qs = new URLSearchParams({ group_by: 'day', interval: params.interval });
     if (params.start_date) qs.set('start_date', params.start_date);
     if (params.end_date) qs.set('end_date', params.end_date);
+    if (params.view && params.view !== 'platform') qs.set('view', params.view);
     return apiFetch<SpendTimeSeriesReport>(`/ui/api/spend/report?${qs.toString()}`, opts);
   },
   providerReport: (
-    params?: { start_date?: string; end_date?: string; limit?: number },
+    params?: { start_date?: string; end_date?: string; limit?: number; view?: SpendView },
     opts?: RequestInit,
   ) => {
     const qs = new URLSearchParams({ group_by: 'provider', limit: String(params?.limit ?? 5) });
     if (params?.start_date) qs.set('start_date', params.start_date);
     if (params?.end_date) qs.set('end_date', params.end_date);
+    if (params?.view && params.view !== 'platform') qs.set('view', params.view);
     return apiFetch<SpendGroupReport>(`/ui/api/spend/report?${qs.toString()}`, opts);
   },
   report: (
@@ -807,21 +863,37 @@ export const spend = {
   },
   groupedReport: (
     group_by: SpendGroupBy,
-    params?: { start_date?: string; end_date?: string; search?: string; limit?: number; offset?: number },
+    params?: {
+      start_date?: string;
+      end_date?: string;
+      search?: string;
+      sort_by?: SpendUsageMetric;
+      scope_type?: SpendUsageDimension;
+      scope_id?: string;
+      scope_unassigned?: boolean;
+      limit?: number;
+      offset?: number;
+      view?: SpendView;
+    },
     opts?: RequestInit,
   ) => {
     const qs = new URLSearchParams({ group_by });
     if (params?.start_date) qs.set('start_date', params.start_date);
     if (params?.end_date) qs.set('end_date', params.end_date);
     if (params?.search) qs.set('search', params.search);
+    if (params?.sort_by) qs.set('sort_by', params.sort_by);
+    if (params?.scope_type) qs.set('scope_type', params.scope_type);
+    if (params?.scope_id) qs.set('scope_id', params.scope_id);
+    if (params?.scope_unassigned) qs.set('scope_unassigned', 'true');
     if (params?.limit != null) qs.set('limit', String(params.limit));
     if (params?.offset != null) qs.set('offset', String(params.offset));
+    if (params?.view && params.view !== 'platform') qs.set('view', params.view);
     return apiFetch<SpendGroupReport>(`/ui/api/spend/report?${qs.toString()}`, opts);
   },
   logs: (params?: Record<string, string>, opts?: RequestInit) => {
     const qs = new URLSearchParams(params || {});
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
-    return apiFetch<{ logs: SpendLog[]; pagination: Pagination }>(`/ui/api/logs${suffix}`, opts);
+    return apiFetch<SpendLogsResponse>(`/ui/api/logs${suffix}`, opts);
   },
 };
 

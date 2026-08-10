@@ -1,83 +1,86 @@
-import { useEffect, useEffectEvent, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   spend,
-  type Pagination,
+  reportingRequestInit,
   type SpendFeatureStatus,
-  type SpendGroupBy,
-  type SpendGroupReport,
-  type SpendGroupRow,
   type SpendLog,
+  type SpendLogsResponse,
   type SpendSummary,
+  type SpendTimeSeriesReport,
+  type SpendUsageDimension,
+  type SpendView,
 } from '../lib/api';
 import { useApi } from '../lib/hooks';
 import Card from '../components/Card';
 import DataTable from '../components/DataTable';
+import ReportingRangeControl from '../components/ReportingRangeControl';
 import StatCard from '../components/StatCard';
-import { fmtCompact } from '../lib/format';
+import UsageBreakdownCard from '../components/UsageBreakdownCard';
+import { fmtCompact, fmtSpendAxis, fmtSpendPrecise, fmtSpendValue } from '../lib/format';
+import {
+  bucketCadence,
+  formatBucketLabel,
+  formatBucketTick,
+  normalizeReportingSeries,
+  reportingAutoRefreshOptions,
+  resolveCustomReportingRange,
+  resolveReportingRange,
+  resolveReportingRangeQuery,
+  withReportingRangeQuery,
+  type ReportingAutoRefreshMs,
+  type ReportingRangeKey,
+  type ResolvedReportingRange,
+} from '../lib/reportingRange';
+import { useUtcReportingDay } from '../lib/useUtcReportingDay';
+import { resolveUsageView, supportsCursorSpendLogs, verifiedReportingResponse } from '../lib/usageBreakdown';
+import {
+  beginReportingRefresh,
+  beginReportingPartAttempt,
+  recordReportingPartOutcome,
+  reportingBreakdownReady,
+  reportingRefreshStatus,
+  type ReportingPartAttempt,
+  type ReportingPartOutcome,
+} from '../lib/reportingRefresh';
 import Modal from '../components/Modal';
-import { DollarSign, LoaderCircle, Zap, Hash, Calendar, Info } from 'lucide-react';
-import { XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
+import { AlertCircle, Calendar, ChevronLeft, ChevronRight, DollarSign, Hash, Info, LoaderCircle, RefreshCw, Zap } from 'lucide-react';
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
-const SPEND_GROUP_OPTIONS: Array<{ value: SpendGroupBy; label: string }> = [
-  { value: 'model', label: 'Model' },
-  { value: 'organization', label: 'Organization' },
-  { value: 'team', label: 'Team' },
-  { value: 'api_key', label: 'API Key' },
-];
-
-const SPEND_GROUP_LABELS: Record<SpendGroupBy, string> = {
-  model: 'Model',
-  organization: 'Organization',
-  team: 'Team',
-  api_key: 'API Key',
-};
-
-const SPEND_SEARCH_PLACEHOLDERS: Record<SpendGroupBy, string> = {
-  model: 'Filter models...',
-  organization: 'Filter organizations...',
-  team: 'Filter teams...',
-  api_key: 'Filter API keys...',
-};
-
-const AUTO_REFRESH_OPTIONS = [
-  { value: 0, label: 'Off' },
-  { value: 5000, label: '5 seconds' },
-  { value: 10000, label: '10 seconds' },
-  { value: 30000, label: '30 seconds' },
-] as const;
-
-type AutoRefreshMs = (typeof AUTO_REFRESH_OPTIONS)[number]['value'];
-
-interface SpendDayReportRow {
-  group_key: string;
-  total_spend: number;
+interface RangeCursorState {
+  rangeKey: string;
+  cursors: Array<string | null>;
+  page: number;
 }
 
-interface SpendDayReport {
-  breakdown: SpendDayReportRow[];
+interface RangeAutoRefreshState {
+  rangeKey: string;
+  value: ReportingAutoRefreshMs;
 }
 
-interface SpendLogsResponse {
-  logs: SpendLog[];
-  pagination: Pagination;
+interface ReportingRefreshState {
+  nonce: number;
+  forcedRangeKey: string | null;
 }
 
-interface UsageRefreshSnapshot {
-  startDate: string;
-  endDate: string;
-  spendBy: SpendGroupBy;
-  spendSearch: string;
-  spendOffset: number;
-  logsOffset: number;
+interface SpendTrendDatum {
+  date: string;
+  totalSpend: number;
 }
 
-type RefreshStrategy = 'replace' | 'skip_if_busy';
-
-function fmt(n: number | null | undefined): string {
-  if (n == null) return '$0.00';
-  return `$${Number(n).toFixed(4)}`;
+interface SpendTrendTooltipEntry {
+  payload?: SpendTrendDatum;
 }
+
+interface SpendTrendTooltipProps {
+  active?: boolean;
+  payload?: readonly SpendTrendTooltipEntry[];
+  label?: string | number;
+  bucket: ResolvedReportingRange['bucket'];
+}
+
+const LEGACY_USAGE_DIMENSIONS: SpendUsageDimension[] = ['organization', 'team', 'user'];
 
 function fmtNum(n: number | null | undefined): string {
   if (n == null) return '0';
@@ -90,6 +93,38 @@ function fmtDateTime(value: string | null | undefined): string {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
+}
+
+function requestErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function reportingRangesMatch(
+  first: ResolvedReportingRange | null,
+  second: ResolvedReportingRange,
+): boolean {
+  return first !== null
+    && first.key === second.key
+    && first.startDate === second.startDate
+    && first.endDate === second.endDate
+    && first.bucket === second.bucket;
+}
+
+function reportingRangeRequestKey(range: ResolvedReportingRange, view: SpendView): string {
+  return `${view}:${range.key}:${range.startDate ?? ''}:${range.endDate ?? ''}:${range.bucket}`;
+}
+
+function isSpendView(value: string | null): value is SpendView {
+  return value === 'platform' || value === 'organization' || value === 'team' || value === 'self';
+}
+
+function spendViewLabel(view: SpendView): string {
+  return {
+    platform: 'Platform',
+    organization: 'Organizations',
+    team: 'Teams',
+    self: 'My usage',
+  }[view];
 }
 
 function prettyJson(value: Record<string, unknown> | null | undefined): string {
@@ -111,6 +146,21 @@ function errorMessage(value: SpendLog): string {
   return '—';
 }
 
+function SpendTrendTooltip({ active, payload, label, bucket }: SpendTrendTooltipProps) {
+  const datum = payload?.[0]?.payload;
+  if (!active || !datum || typeof label !== 'string') return null;
+
+  return (
+    <div className="min-w-40 rounded-lg border border-gray-200 bg-white p-3 shadow-lg">
+      <p className="text-xs font-semibold text-gray-700">{formatBucketLabel(label, bucket)}</p>
+      <div className="mt-2 flex items-center justify-between gap-6 text-xs text-gray-600">
+        <span>Spend</span>
+        <span className="font-semibold tabular-nums text-gray-900">{fmtSpendPrecise(datum.totalSpend)}</span>
+      </div>
+    </div>
+  );
+}
+
 function StatusBadge({ status }: { status: 'success' | 'error' }) {
   const classes =
     status === 'error'
@@ -128,173 +178,441 @@ function DetailItem({ label, value, mono = false }: { label: string; value: Reac
   );
 }
 
-function renderSpendGroupValue(groupBy: SpendGroupBy, row: SpendGroupRow) {
-  if (groupBy === 'model') {
-    return <span className="font-medium">{row.group_key}</span>;
-  }
-  if (groupBy === 'api_key') {
-    return (
-      <div>
-        <div className="font-medium">{row.display_name || 'Unnamed key'}</div>
-        <code className="text-xs text-gray-500">
-          {row.group_key.length > 18 ? `${row.group_key.slice(0, 18)}...` : row.group_key}
-        </code>
-      </div>
-    );
-  }
-  return (
-    <div>
-      <div className="font-medium">{row.display_name || row.group_key}</div>
-      {row.display_name && <div className="text-xs text-gray-500">{row.group_key}</div>}
-    </div>
-  );
-}
-
 export default function Usage() {
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const utcReportingDay = useUtcReportingDay();
+  const rangeParam = searchParams.get('range');
+  const rangeStartParam = searchParams.get('start');
+  const rangeEndParam = searchParams.get('end');
+  const rollingRangeDay = rangeParam === 'custom' || rangeParam === 'all' ? null : utcReportingDay;
+  const selectedRange = useMemo(
+    () => resolveReportingRangeQuery(
+      rangeParam,
+      rangeStartParam,
+      rangeEndParam,
+      rollingRangeDay ? new Date(`${rollingRangeDay}T00:00:00Z`) : new Date(),
+    ),
+    [rangeParam, rangeStartParam, rangeEndParam, rollingRangeDay],
+  );
+  const requestedView = isSpendView(searchParams.get('view')) ? searchParams.get('view') as SpendView : null;
+  const {
+    data: spendFeatureStatus,
+    error: spendFeatureStatusError,
+  } = useApi<SpendFeatureStatus>(spend.featureStatus, []);
+  const featureCapabilities = spendFeatureStatus?.capabilities;
+  const availableViews = featureCapabilities?.available_views ?? [];
+  const activeView = resolveUsageView(featureCapabilities, requestedView);
+  const legacyReportingApi = spendFeatureStatus !== null && featureCapabilities === undefined;
+  const reportingV2Enabled = supportsCursorSpendLogs(spendFeatureStatus?.reporting_api_version);
+  const supportsCursorLogs = reportingV2Enabled;
+  const usageScopeReady = spendFeatureStatus !== null || spendFeatureStatusError !== null;
+  const rangeRequestKey = reportingRangeRequestKey(selectedRange, activeView);
   const [tab, setTab] = useState<'overview' | 'logs'>('overview');
   const [selectedLog, setSelectedLog] = useState<SpendLog | null>(null);
-  const [spendBy, setSpendBy] = useState<SpendGroupBy>('model');
-  const [spendSearchInput, setSpendSearchInput] = useState('');
-  const [spendSearch, setSpendSearch] = useState('');
-  const [spendOffset, setSpendOffset] = useState(0);
-  const [logsOffset, setLogsOffset] = useState(0);
+  const [logsNavigation, setLogsNavigation] = useState<RangeCursorState>({
+    rangeKey: rangeRequestKey,
+    cursors: [null],
+    page: 0,
+  });
+  const logsPage = logsNavigation.rangeKey === rangeRequestKey ? logsNavigation.page : 0;
+  const logsCursor = logsNavigation.rangeKey === rangeRequestKey
+    ? logsNavigation.cursors[logsPage] ?? null
+    : null;
   const [summary, setSummary] = useState<SpendSummary | null>(null);
-  const [dailyReport, setDailyReport] = useState<SpendDayReport | null>(null);
-  const [spendGroupsData, setSpendGroupsData] = useState<SpendGroupReport | null>(null);
+  const [timeSeries, setTimeSeries] = useState<SpendTimeSeriesReport | null>(null);
+  const [loadedRange, setLoadedRange] = useState<ResolvedReportingRange | null>(null);
+  const [trendLoadedRange, setTrendLoadedRange] = useState<ResolvedReportingRange | null>(null);
+  const [trendLoading, setTrendLoading] = useState(false);
+  const [trendError, setTrendError] = useState<string | null>(null);
   const [logsData, setLogsData] = useState<SpendLogsResponse | null>(null);
+  const [logsDataKey, setLogsDataKey] = useState('');
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [logsError, setLogsError] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [backgroundRefreshing, setBackgroundRefreshing] = useState(false);
+  const [refreshState, setRefreshState] = useState<ReportingRefreshState>({
+    nonce: 0,
+    forcedRangeKey: null,
+  });
   const [lastRefreshedAt, setLastRefreshedAt] = useState<number | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
-  const [autoRefreshMs, setAutoRefreshMs] = useState<AutoRefreshMs>(0);
+  const [autoRefreshState, setAutoRefreshState] = useState<RangeAutoRefreshState>({
+    rangeKey: rangeRequestKey,
+    value: 0,
+  });
   const [pageVisible, setPageVisible] = useState(() => (typeof document === 'undefined' ? true : document.visibilityState === 'visible'));
-  const { data: spendFeatureStatus } = useApi<SpendFeatureStatus | null>(
-    () => (tab === 'logs' ? spend.featureStatus() : Promise.resolve(null)),
-    [tab],
-  );
-  const spendPageSize = 5;
   const logsPageSize = 25;
-  const activeControllerRef = useRef<AbortController | null>(null);
-  const latestRequestIdRef = useRef(0);
-  const mountedRef = useRef(true);
-  const previousPageVisibleRef = useRef(pageVisible);
-  const hasUsageData =
-    summary !== null || dailyReport !== null || spendGroupsData !== null || logsData !== null;
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setSpendSearch(spendSearchInput.trim());
-      setSpendOffset(0);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [spendSearchInput]);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      activeControllerRef.current?.abort();
-      activeControllerRef.current = null;
-    };
+  const refreshNonce = refreshState.nonce;
+  const reportingGeneration = `${rangeRequestKey}:${tab}:${refreshNonce}`;
+  const forceReportingRefresh = refreshState.forcedRangeKey === rangeRequestKey;
+  const hasLoadedUsageDataRef = useRef(false);
+  const hasLoadedUsageData = loadedRange !== null;
+  const logsRequestKey = `${rangeRequestKey}:${logsPage}:${logsCursor ?? ''}`;
+  const autoRefreshOptions = useMemo(() => reportingAutoRefreshOptions(selectedRange), [selectedRange]);
+  const autoRefreshMs = autoRefreshState.rangeKey === rangeRequestKey ? autoRefreshState.value : 0;
+  const autoRefreshAllowed = autoRefreshOptions.some((option) => option.value === autoRefreshMs);
+  const effectiveAutoRefreshMs = autoRefreshAllowed ? autoRefreshMs : 0;
+  const [reportingOutcome, setReportingOutcome] = useState(() => (
+    beginReportingRefresh(reportingGeneration, tab)
+  ));
+  const visibleReportingOutcome = reportingOutcome.generation === reportingGeneration
+    ? reportingOutcome
+    : beginReportingRefresh(reportingGeneration, tab);
+  const currentReportingStatus = reportingRefreshStatus(visibleReportingOutcome);
+  const refreshBusy = currentReportingStatus === 'pending';
+  const refreshFailed = currentReportingStatus === 'error';
+  const refreshBusyRef = useRef(true);
+  const summaryRefreshNonceRef = useRef(refreshNonce);
+  const trendRefreshNonceRef = useRef(refreshNonce);
+  const loadedRangeRef = useRef<ResolvedReportingRange | null>(null);
+  const trendLoadedRangeRef = useRef<ResolvedReportingRange | null>(null);
+  const beginReportingAttempt = useCallback((attempt: ReportingPartAttempt) => {
+    setReportingOutcome((current) => beginReportingPartAttempt(current, attempt));
+  }, []);
+  const markReportingOutcome = useCallback((outcome: ReportingPartOutcome) => {
+    setReportingOutcome((current) => recordReportingPartOutcome(current, outcome));
   }, []);
 
-  const buildRefreshSnapshot = useEffectEvent((): UsageRefreshSnapshot => ({
-    startDate,
-    endDate,
-    spendBy,
-    spendSearch,
-    spendOffset,
-    logsOffset,
-  }));
+  useEffect(() => {
+    setReportingOutcome(beginReportingRefresh(reportingGeneration, tab));
+  }, [reportingGeneration, tab]);
 
-  const runRefresh = useEffectEvent(async (snapshot: UsageRefreshSnapshot, strategy: RefreshStrategy) => {
-    if (strategy === 'skip_if_busy' && activeControllerRef.current) {
-      return;
-    }
-
-    activeControllerRef.current?.abort();
-    const controller = new AbortController();
-    activeControllerRef.current = controller;
-    const requestId = latestRequestIdRef.current + 1;
-    latestRequestIdRef.current = requestId;
-
-    if (hasUsageData) {
-      setBackgroundRefreshing(true);
-    } else {
-      setInitialLoading(true);
-    }
-    setRefreshError(null);
-
-    try {
-      const logsParams: Record<string, string> = {
-        limit: String(logsPageSize),
-        offset: String(snapshot.logsOffset),
-      };
-      if (snapshot.startDate) logsParams.start_date = snapshot.startDate;
-      if (snapshot.endDate) logsParams.end_date = snapshot.endDate;
-
-      const [nextSummary, nextDailyReport, nextSpendGroupsData, nextLogsData] = await Promise.all([
-        spend.summary(snapshot.startDate, snapshot.endDate, { signal: controller.signal }),
-        spend.report('day', snapshot.startDate, snapshot.endDate, { signal: controller.signal }) as Promise<SpendDayReport>,
-        spend.groupedReport(snapshot.spendBy, {
-          start_date: snapshot.startDate || undefined,
-          end_date: snapshot.endDate || undefined,
-          search: snapshot.spendSearch || undefined,
-          limit: spendPageSize,
-          offset: snapshot.spendOffset,
-        }, { signal: controller.signal }),
-        spend.logs(logsParams, { signal: controller.signal }),
-      ]);
-
-      if (!mountedRef.current || controller.signal.aborted || requestId !== latestRequestIdRef.current) {
-        return;
-      }
-
-      setSummary(nextSummary);
-      setDailyReport(nextDailyReport);
-      setSpendGroupsData(nextSpendGroupsData);
-      setLogsData(nextLogsData);
+  useEffect(() => {
+    if (currentReportingStatus === 'success') {
       setLastRefreshedAt(Date.now());
-    } catch (error) {
-      if (controller.signal.aborted || isAbortError(error)) {
-        return;
-      }
-      if (mountedRef.current && requestId === latestRequestIdRef.current) {
-        setRefreshError(error instanceof Error ? error.message : 'Refresh failed');
-      }
-    } finally {
-      if (activeControllerRef.current === controller) {
-        activeControllerRef.current = null;
-      }
-      if (
-        mountedRef.current &&
-        requestId === latestRequestIdRef.current &&
-        activeControllerRef.current === null
-      ) {
-        setInitialLoading(false);
-        setBackgroundRefreshing(false);
-      }
     }
-  });
+  }, [currentReportingStatus, reportingGeneration]);
 
-  const handleStartDateChange = (value: string) => {
-    setStartDate(value);
-    setSpendOffset(0);
-    setLogsOffset(0);
+  useEffect(() => {
+    const canonical = withReportingRangeQuery(searchParams, selectedRange);
+    if (spendFeatureStatus) {
+      if (featureCapabilities && availableViews.length > 1) canonical.set('view', activeView);
+      else canonical.delete('view');
+    }
+    if (canonical.toString() !== searchParams.toString()) {
+      setSearchParams(canonical, { replace: true });
+    }
+  }, [activeView, availableViews.length, featureCapabilities, searchParams, selectedRange, setSearchParams, spendFeatureStatus]);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setSummary(null);
+      setTimeSeries(null);
+      setLoadedRange(null);
+      setTrendLoadedRange(null);
+      setLogsData(null);
+      setLogsDataKey('');
+      setLogsNavigation({ rangeKey: '', cursors: [null], page: 0 });
+      loadedRangeRef.current = null;
+      trendLoadedRangeRef.current = null;
+      hasLoadedUsageDataRef.current = false;
+      setInitialLoading(true);
+      setRefreshError(null);
+      setTrendError(null);
+    });
+    return () => { cancelled = true; };
+  }, [activeView]);
+
+  useEffect(() => {
+    if (tab === 'logs' && activeView !== 'platform' && activeView !== 'organization') {
+      queueMicrotask(() => setTab('overview'));
+    }
+  }, [activeView, tab]);
+
+  useEffect(() => {
+    if (!usageScopeReady || !pageVisible || tab !== 'overview') return;
+
+    const controller = new AbortController();
+    const requestGeneration = reportingGeneration;
+    const summaryRefreshTriggered = summaryRefreshNonceRef.current !== refreshNonce;
+    const trendRefreshTriggered = trendRefreshNonceRef.current !== refreshNonce;
+    const isRangeTransition = !reportingRangesMatch(loadedRangeRef.current, selectedRange)
+      || !reportingRangesMatch(trendLoadedRangeRef.current, selectedRange);
+    summaryRefreshNonceRef.current = refreshNonce;
+    trendRefreshNonceRef.current = refreshNonce;
+    queueMicrotask(() => {
+      if (controller.signal.aborted) return;
+      if (hasLoadedUsageDataRef.current) setBackgroundRefreshing(true);
+      else setInitialLoading(true);
+      setTrendLoading(true);
+      setRefreshError(null);
+      setTrendError(null);
+    });
+
+    const summaryRequest = spend.summary(
+      selectedRange.startDate,
+      selectedRange.endDate,
+      activeView,
+      reportingRequestInit(
+        controller.signal,
+        forceReportingRefresh && summaryRefreshTriggered,
+      ),
+    ).then((response) => (
+      reportingV2Enabled ? verifiedReportingResponse(response, activeView) : response
+    ));
+    const trendRequest = spend.timeSeries({
+      start_date: selectedRange.startDate,
+      end_date: selectedRange.endDate,
+      interval: selectedRange.bucket,
+      view: activeView,
+    }, reportingRequestInit(
+      controller.signal,
+      forceReportingRefresh && trendRefreshTriggered,
+    )).then((response) => (
+      reportingV2Enabled ? verifiedReportingResponse(response, activeView) : response
+    ));
+
+    void Promise.allSettled([summaryRequest, trendRequest]).then(([summaryResult, trendResult]) => {
+      if (controller.signal.aborted) return;
+
+      const summarySucceeded = summaryResult.status === 'fulfilled';
+      const trendSucceeded = trendResult.status === 'fulfilled';
+      markReportingOutcome({
+        generation: requestGeneration,
+        part: 'summary',
+        status: summarySucceeded ? 'success' : 'error',
+      });
+      markReportingOutcome({
+        generation: requestGeneration,
+        part: 'trend',
+        status: trendSucceeded ? 'success' : 'error',
+      });
+
+      if (summarySucceeded && trendSucceeded) {
+        setSummary(summaryResult.value);
+        setTimeSeries(trendResult.value);
+        setLoadedRange(selectedRange);
+        setTrendLoadedRange(selectedRange);
+        loadedRangeRef.current = selectedRange;
+        trendLoadedRangeRef.current = selectedRange;
+        hasLoadedUsageDataRef.current = true;
+      } else if (!isRangeTransition) {
+        if (summarySucceeded) {
+          setSummary(summaryResult.value);
+          setLoadedRange(selectedRange);
+          loadedRangeRef.current = selectedRange;
+          hasLoadedUsageDataRef.current = true;
+        }
+        if (trendSucceeded) {
+          setTimeSeries(trendResult.value);
+          setTrendLoadedRange(selectedRange);
+          trendLoadedRangeRef.current = selectedRange;
+        }
+      } else {
+        markReportingOutcome({
+          generation: requestGeneration,
+          part: 'breakdown',
+          status: 'skipped',
+        });
+      }
+
+      if (!summarySucceeded) {
+        setRefreshError(requestErrorMessage(summaryResult.reason, 'Refresh failed'));
+      }
+      if (!trendSucceeded) {
+        setTrendError(requestErrorMessage(trendResult.reason, 'Spend trend request failed'));
+      }
+      setInitialLoading(false);
+      setBackgroundRefreshing(false);
+      setTrendLoading(false);
+    });
+
+    return () => controller.abort();
+  }, [
+    forceReportingRefresh,
+    activeView,
+    markReportingOutcome,
+    pageVisible,
+    rangeRequestKey,
+    refreshNonce,
+    reportingGeneration,
+    reportingV2Enabled,
+    selectedRange,
+    tab,
+    usageScopeReady,
+  ]);
+
+  useEffect(() => {
+    if (
+      !usageScopeReady
+      || !pageVisible
+      || tab !== 'logs'
+      || (activeView !== 'platform' && activeView !== 'organization')
+    ) return;
+
+    const controller = new AbortController();
+    const requestGeneration = reportingGeneration;
+    const refreshTriggered = summaryRefreshNonceRef.current !== refreshNonce;
+    const isRangeTransition = !reportingRangesMatch(loadedRangeRef.current, selectedRange);
+    summaryRefreshNonceRef.current = refreshNonce;
+    queueMicrotask(() => {
+      if (controller.signal.aborted) return;
+      if (hasLoadedUsageDataRef.current) setBackgroundRefreshing(true);
+      else setInitialLoading(true);
+      if (isRangeTransition) {
+        setLogsLoading(true);
+        setLogsError(null);
+      }
+      setRefreshError(null);
+    });
+
+    void spend.summary(
+      selectedRange.startDate,
+      selectedRange.endDate,
+      activeView,
+      reportingRequestInit(controller.signal, forceReportingRefresh && refreshTriggered),
+    ).then((response) => (
+      reportingV2Enabled ? verifiedReportingResponse(response, activeView) : response
+    )).then((nextSummary) => {
+      if (controller.signal.aborted) return;
+      setSummary(nextSummary);
+      setLoadedRange(selectedRange);
+      loadedRangeRef.current = selectedRange;
+      hasLoadedUsageDataRef.current = true;
+      markReportingOutcome({
+        generation: requestGeneration,
+        part: 'summary',
+        status: 'success',
+      });
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted || isAbortError(error)) return;
+      setRefreshError(requestErrorMessage(error, 'Refresh failed'));
+      markReportingOutcome({
+        generation: requestGeneration,
+        part: 'summary',
+        status: 'error',
+      });
+      if (isRangeTransition) {
+        setLogsLoading(false);
+        setLogsError('Request logs were not loaded because the usage summary failed.');
+        markReportingOutcome({
+          generation: requestGeneration,
+          part: 'logs',
+          status: 'skipped',
+        });
+      }
+    }).finally(() => {
+      if (controller.signal.aborted) return;
+      setInitialLoading(false);
+      setBackgroundRefreshing(false);
+    });
+
+    return () => controller.abort();
+  }, [activeView, forceReportingRefresh, markReportingOutcome, pageVisible, rangeRequestKey, refreshNonce, reportingGeneration, reportingV2Enabled, selectedRange, tab, usageScopeReady]);
+
+  useEffect(() => {
+    if (
+      !pageVisible
+      || tab !== 'logs'
+      || (activeView !== 'platform' && activeView !== 'organization')
+    ) return;
+    if (!reportingRangesMatch(loadedRange, selectedRange)) return;
+
+    const controller = new AbortController();
+    const requestGeneration = reportingGeneration;
+    const logsParams: Record<string, string> = {
+      limit: String(logsPageSize),
+    };
+    if (supportsCursorLogs) {
+      logsParams.pagination_mode = 'cursor';
+      if (logsCursor) logsParams.cursor = logsCursor;
+    } else {
+      logsParams.offset = String(logsPage * logsPageSize);
+    }
+    if (selectedRange.startDate) logsParams.start_date = selectedRange.startDate;
+    if (selectedRange.endDate) logsParams.end_date = selectedRange.endDate;
+    if (activeView !== 'platform') logsParams.view = activeView;
+    queueMicrotask(() => {
+      if (controller.signal.aborted) return;
+      setLogsLoading(true);
+      setLogsError(null);
+    });
+
+    void spend.logs(logsParams, { signal: controller.signal }).then((response) => (
+      reportingV2Enabled ? verifiedReportingResponse(response, activeView) : response
+    )).then((nextLogs) => {
+      if (controller.signal.aborted) return;
+      setLogsData(nextLogs);
+      setLogsDataKey(logsRequestKey);
+      markReportingOutcome({
+        generation: requestGeneration,
+        part: 'logs',
+        status: 'success',
+      });
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted || isAbortError(error)) return;
+      setLogsError(requestErrorMessage(error, 'Request logs failed'));
+      markReportingOutcome({
+        generation: requestGeneration,
+        part: 'logs',
+        status: 'error',
+      });
+    }).finally(() => {
+      if (!controller.signal.aborted) setLogsLoading(false);
+    });
+
+    return () => controller.abort();
+  }, [activeView, pageVisible, tab, logsCursor, logsPage, logsRequestKey, loadedRange, markReportingOutcome, rangeRequestKey, refreshNonce, reportingGeneration, reportingV2Enabled, selectedRange, supportsCursorLogs]);
+
+  const handlePresetRangeChange = (key: ReportingRangeKey) => {
+    setSearchParams(withReportingRangeQuery(searchParams, resolveReportingRange(key)));
+    setLogsNavigation({ rangeKey: '', cursors: [null], page: 0 });
   };
 
-  const handleEndDateChange = (value: string) => {
-    setEndDate(value);
-    setSpendOffset(0);
-    setLogsOffset(0);
+  const handleCustomRangeApply = (startDate: string, endDate: string) => {
+    const nextRange = resolveCustomReportingRange(startDate, endDate);
+    if (!nextRange) return;
+    setSearchParams(withReportingRangeQuery(searchParams, nextRange));
+    setLogsNavigation({ rangeKey: '', cursors: [null], page: 0 });
   };
 
-  const handleSpendByChange = (value: SpendGroupBy) => {
-    setSpendBy(value);
-    setSpendOffset(0);
+  const handleViewChange = (view: SpendView) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('view', view);
+    setSearchParams(next);
   };
+
+  const handlePreviousLogsPage = () => {
+    setLogsNavigation((current) => {
+      const currentPage = current.rangeKey === rangeRequestKey ? current.page : 0;
+      return {
+        rangeKey: rangeRequestKey,
+        cursors: current.rangeKey === rangeRequestKey ? current.cursors : [null],
+        page: Math.max(0, currentPage - 1),
+      };
+    });
+  };
+
+  const handleNextLogsPage = () => {
+    const nextCursor = logsPagination?.next_cursor;
+    if (supportsCursorLogs && !nextCursor) return;
+    setLogsNavigation((current) => {
+      const navigation = current.rangeKey === rangeRequestKey
+        ? current
+        : { rangeKey: rangeRequestKey, cursors: [null], page: 0 };
+      const nextPage = navigation.page + 1;
+      return {
+        rangeKey: rangeRequestKey,
+        cursors: supportsCursorLogs
+          ? [...navigation.cursors.slice(0, nextPage), nextCursor ?? null]
+          : navigation.cursors,
+        page: nextPage,
+      };
+    });
+  };
+
+  const triggerRefresh = useCallback((forceRefresh: boolean) => {
+    setRefreshState((current) => ({
+      nonce: current.nonce + 1,
+      forcedRangeKey: forceRefresh ? rangeRequestKey : null,
+    }));
+  }, [rangeRequestKey]);
+
+  useEffect(() => {
+    refreshBusyRef.current = refreshBusy;
+  }, [refreshBusy]);
 
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -307,86 +625,72 @@ export default function Usage() {
   }, []);
 
   useEffect(() => {
-    if (!pageVisible) {
-      return;
-    }
-    void runRefresh(buildRefreshSnapshot(), 'replace');
-  }, [startDate, endDate, spendBy, spendSearch, spendOffset, logsOffset]);
-
-  useEffect(() => {
-    const wasVisible = previousPageVisibleRef.current;
-    previousPageVisibleRef.current = pageVisible;
-    if (!pageVisible) {
-      activeControllerRef.current?.abort();
-      return;
-    }
-    if (wasVisible || (autoRefreshMs === 0 && hasUsageData)) {
-      return;
-    }
-    void runRefresh(buildRefreshSnapshot(), 'replace');
-  }, [pageVisible, autoRefreshMs, hasUsageData]);
-
-  useEffect(() => {
-    if (!pageVisible || autoRefreshMs === 0) {
-      return;
-    }
-    void runRefresh(buildRefreshSnapshot(), 'replace');
-  }, [autoRefreshMs]);
-
-  useEffect(() => {
-    if (!pageVisible || autoRefreshMs === 0) {
+    if (!pageVisible || effectiveAutoRefreshMs === 0) {
       return;
     }
     const timer = window.setInterval(() => {
-      void runRefresh(buildRefreshSnapshot(), 'skip_if_busy');
-    }, autoRefreshMs);
+      if (refreshBusyRef.current) return;
+      triggerRefresh(false);
+    }, effectiveAutoRefreshMs);
     return () => {
       window.clearInterval(timer);
     };
-  }, [pageVisible, autoRefreshMs]);
+  }, [pageVisible, effectiveAutoRefreshMs, triggerRefresh]);
 
-  const spendGroupsLoading = initialLoading && spendGroupsData === null;
-  const logsLoading = initialLoading && logsData === null;
-  const refreshControlDisabled = initialLoading || backgroundRefreshing;
-  const daily = (dailyReport?.breakdown || []).map((row) => ({ date: row.group_key, total_spend: row.total_spend }));
-  const spendGroups = spendGroupsData?.data || [];
-  const spendGroupsPagination = spendGroupsData?.pagination;
-  const logs = logsData?.logs || [];
-  const logsPagination = logsData?.pagination;
-  const refreshStatusLabel = backgroundRefreshing
+  const refreshControlDisabled = refreshBusy;
+  const refreshActive = refreshBusy;
+  const trendRange = trendLoadedRange ?? selectedRange;
+  const trendData: SpendTrendDatum[] = useMemo(
+    () => normalizeReportingSeries(timeSeries?.breakdown ?? [], trendRange).map((row) => ({
+      date: row.group_key,
+      totalSpend: Number(row.total_spend),
+    })),
+    [timeSeries?.breakdown, trendRange],
+  );
+  const loadedRangeMatchesSelection = reportingRangesMatch(loadedRange, selectedRange);
+  const rangeIsUpdating = backgroundRefreshing && loadedRange !== null && !loadedRangeMatchesSelection;
+  const staleRangeAfterError = refreshError !== null && loadedRange !== null && !loadedRangeMatchesSelection;
+  const usageDataUnavailable = refreshError !== null && !hasLoadedUsageData && !initialLoading;
+  const trendRangeMatchesSelection = reportingRangesMatch(trendLoadedRange, selectedRange);
+  const trendIsUpdating = trendLoading && trendLoadedRange !== null && !trendRangeMatchesSelection;
+  const staleTrendAfterError = trendError !== null && trendLoadedRange !== null && !trendRangeMatchesSelection;
+  const displayedBreakdownRange = loadedRange ?? selectedRange;
+  const displayedBreakdownRangeKey = reportingRangeRequestKey(displayedBreakdownRange, activeView);
+  const visibleLogsData = logsDataKey === logsRequestKey ? logsData : null;
+  const logs = visibleLogsData?.logs ?? [];
+  const logsPagination = visibleLogsData?.pagination;
+  const logsTableLoading = logsLoading && visibleLogsData === null;
+  const usageCapabilities = summary?.capabilities;
+  const selfScoped = usageCapabilities?.self_scoped ?? activeView === 'self';
+  const canViewLogs = usageCapabilities?.request_logs
+    ?? (activeView === 'platform' || activeView === 'organization');
+  const allowedDimensions = usageCapabilities?.allowed_dimensions
+    ?? featureCapabilities?.allowed_dimensions
+    ?? (legacyReportingApi ? LEGACY_USAGE_DIMENSIONS : []);
+  const selectedAutoRefreshOption = autoRefreshOptions.find((option) => option.value === effectiveAutoRefreshMs);
+  const refreshStatusLabel = refreshActive
     ? 'Refreshing now'
-    : refreshError
-      ? 'Refresh failed'
-      : autoRefreshMs > 0
+    : refreshFailed
+      ? 'Completed with errors'
+      : effectiveAutoRefreshMs > 0
         ? pageVisible
-          ? `Every ${autoRefreshMs / 1000}s`
+          ? selectedAutoRefreshOption?.statusLabel ?? 'Auto refresh on'
           : 'Paused in background'
-        : 'Manual refresh';
-  const refreshStatusTone = backgroundRefreshing
+        : selectedAutoRefreshOption?.statusLabel ?? 'Manual refresh';
+  const refreshStatusTone = refreshActive
     ? 'bg-blue-50 text-blue-700 ring-blue-200'
-    : refreshError
+    : refreshFailed
       ? 'bg-rose-50 text-rose-700 ring-rose-200'
-      : autoRefreshMs > 0
+      : effectiveAutoRefreshMs > 0
         ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
         : 'bg-gray-100 text-gray-600 ring-gray-200';
-
-  const spendGroupColumns = [
-    {
-      key: 'group_key',
-      header: SPEND_GROUP_LABELS[spendBy],
-      render: (row: SpendGroupRow) => renderSpendGroupValue(spendBy, row),
-    },
-    { key: 'total_spend', header: 'Spend', render: (r: any) => fmt(r.total_spend) },
-    { key: 'total_tokens', header: 'Tokens', render: (r: any) => fmtCompact(r.total_tokens) },
-    { key: 'request_count', header: 'Requests', render: (r: any) => fmtCompact(r.request_count) },
-  ];
 
   const logColumns = [
     { key: 'start_time', header: 'Time', render: (r: SpendLog) => <span className="text-xs text-gray-500 whitespace-nowrap">{fmtDateTime(r.start_time)}</span> },
     { key: 'model', header: 'Model', render: (r: SpendLog) => <span className="font-medium text-xs">{r.model}</span> },
     { key: 'call_type', header: 'Type', render: (r: SpendLog) => <span className="text-xs capitalize">{r.call_type}</span> },
     { key: 'status', header: 'Status', render: (r: SpendLog) => <StatusBadge status={logStatus(r)} /> },
-    { key: 'spend', header: 'Cost', render: (r: SpendLog) => fmt(r.spend) },
+    { key: 'spend', header: 'Cost', render: (r: SpendLog) => fmtSpendValue(r.spend) },
     { key: 'prompt_tokens', header: 'Prompt', render: (r: SpendLog) => fmtCompact(r.prompt_tokens) },
     { key: 'completion_tokens', header: 'Completion', render: (r: SpendLog) => fmtCompact(r.completion_tokens) },
     { key: 'prompt_tokens_cached', header: 'Cached Prompt', render: (r: SpendLog) => fmtCompact(r.prompt_tokens_cached) },
@@ -396,156 +700,318 @@ export default function Usage() {
 
   return (
     <div className="p-4 sm:p-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Usage & Spend</h1>
-        <p className="mt-1 text-sm text-gray-500">Monitor costs, tokens, and request analytics</p>
-      </div>
-
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <StatCard title="Total Spend" value={fmt(summary?.total_spend)} icon={<DollarSign className="w-5 h-5" />} />
-        <StatCard title="Total Tokens" value={fmtCompact(summary?.total_tokens)} icon={<Hash className="w-5 h-5" />} />
-        <StatCard title="Total Requests" value={fmtCompact(summary?.total_requests)} icon={<Zap className="w-5 h-5" />} />
-        <StatCard title="Unique Models" value={fmtCompact(summary?.unique_models)} icon={<Calendar className="w-5 h-5" />} />
-      </div>
-
-      <div className="mb-6 flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-        <div className="flex gap-2">
-          <button onClick={() => setTab('overview')} className={`px-4 py-2 text-sm rounded-lg transition-colors ${tab === 'overview' ? 'bg-blue-600 text-white' : 'bg-white border text-gray-700 hover:bg-gray-50'}`}>Overview</button>
-          <button onClick={() => setTab('logs')} className={`px-4 py-2 text-sm rounded-lg transition-colors ${tab === 'logs' ? 'bg-blue-600 text-white' : 'bg-white border text-gray-700 hover:bg-gray-50'}`}>Request Logs</button>
+      <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">{selfScoped ? 'Your usage' : 'Usage & Spend'}</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            {selfScoped
+              ? 'Track costs, tokens, and requests from API keys owned by your account'
+              : 'Monitor costs, tokens, and request analytics'}
+            {' '}· reporting dates use UTC
+          </p>
         </div>
-
-        <div className="flex flex-col gap-2 xl:items-end">
-          <div className="flex flex-wrap items-center gap-2 xl:justify-end">
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => handleStartDateChange(e.target.value)}
-              className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              aria-label="Start date"
-            />
-            <span className="text-sm text-gray-400">to</span>
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => handleEndDateChange(e.target.value)}
-              className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              aria-label="End date"
-            />
-            <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${refreshStatusTone}`}>
-              {backgroundRefreshing ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
-              <span>{refreshStatusLabel}</span>
-            </span>
-            <select
-              value={String(autoRefreshMs)}
-              onChange={(e) => setAutoRefreshMs(Number(e.target.value) as AutoRefreshMs)}
-              disabled={refreshControlDisabled}
-              className="rounded-full border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
-              aria-label="Auto refresh interval"
-            >
-              {AUTO_REFRESH_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500 xl:justify-end">
-            {refreshError ? (
-              <span className="text-rose-600">{refreshError}</span>
-            ) : lastRefreshedAt !== null ? (
-              <span>Last updated {new Date(lastRefreshedAt).toLocaleTimeString()}</span>
-            ) : (
-              <span>Waiting for first refresh</span>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {tab === 'overview' ? (
-        <>
-          <Card title="Daily Spend Trend" className="mb-6">
-            {daily && daily.length > 0 ? (
-              <ResponsiveContainer width="100%" height={280}>
-                <AreaChart data={daily}>
-                  <defs>
-                    <linearGradient id="spendGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.1} />
-                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                  <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `$${v}`} />
-                  <Tooltip formatter={(v: any) => [`$${Number(v).toFixed(4)}`, 'Spend']} />
-                  <Area type="monotone" dataKey="total_spend" stroke="#3b82f6" fill="url(#spendGrad)" strokeWidth={2} />
-                </AreaChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="flex items-center justify-center h-[280px] text-gray-400 text-sm">No data available</div>
-            )}
-          </Card>
-
-          <Card title="Spend by">
-            <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              <div className="inline-flex w-full flex-wrap rounded-lg border border-gray-200 bg-gray-50 p-1 lg:w-auto">
-                {SPEND_GROUP_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    onClick={() => handleSpendByChange(option.value)}
-                    className={`rounded-md px-3 py-2 text-sm transition-colors ${
-                      spendBy === option.value ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
-                    }`}
-                  >
-                    {option.label}
-                  </button>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          {availableViews.length > 1 && (
+            <label className="flex flex-col gap-1.5 text-xs font-medium text-gray-500">
+              View
+              <select
+                value={activeView}
+                onChange={(event) => handleViewChange(event.target.value as SpendView)}
+                className="h-10 rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                aria-label="Usage reporting scope"
+              >
+                {availableViews.map((view) => (
+                  <option key={view} value={view}>{spendViewLabel(view)}</option>
                 ))}
-              </div>
-              <input
-                value={spendSearchInput}
-                onChange={(e) => setSpendSearchInput(e.target.value)}
-                placeholder={SPEND_SEARCH_PLACEHOLDERS[spendBy]}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 lg:w-72"
-              />
-            </div>
-            <DataTable
-              columns={spendGroupColumns}
-              data={spendGroups}
-              loading={spendGroupsLoading}
-              emptyMessage={`No ${SPEND_GROUP_LABELS[spendBy].toLowerCase()} spend data`}
-              pagination={spendGroupsPagination}
-              onPageChange={setSpendOffset}
-            />
-          </Card>
-        </>
-      ) : (
-        <Card
-          title="Request Logs"
-          action={<span className="text-xs text-gray-500">Click a row for details</span>}
-        >
-          {spendFeatureStatus?.cache_enabled === false && (
-            <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              <div className="flex items-start gap-3">
-                <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-                <div>
-                  <p className="font-medium">Cache is disabled.</p>
-                  <p className="mt-1 text-amber-800">
-                    New requests are expected to appear as <code className="rounded bg-amber-100 px-1 py-0.5 text-xs">Miss</code> in the{' '}
-                    <code className="rounded bg-amber-100 px-1 py-0.5 text-xs">Cache</code> column while caching is off.
-                  </p>
-                </div>
-              </div>
-            </div>
+              </select>
+            </label>
           )}
-          <DataTable
-            columns={logColumns}
-            data={logs || []}
-            loading={logsLoading}
-            emptyMessage="No request logs yet"
-            onRowClick={setSelectedLog}
-            pagination={logsPagination}
-            onPageChange={setLogsOffset}
+          <ReportingRangeControl
+            value={selectedRange.key}
+            startDate={selectedRange.startDate}
+            endDate={selectedRange.endDate}
+            customLabel={selectedRange.key === 'custom' ? selectedRange.label : undefined}
+            onPresetChange={handlePresetRangeChange}
+            onCustomApply={handleCustomRangeApply}
+            allowCustom
+            ariaLabel="Usage reporting period"
+            desktopBreakpoint="xl"
           />
-        </Card>
+        </div>
+      </div>
+
+      {refreshError && (
+        <div className="mb-6 flex flex-col gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 sm:flex-row sm:items-center sm:justify-between" role="alert">
+          <div className="flex min-w-0 items-start gap-2">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div className="min-w-0">
+              <p className="font-medium">
+                {staleRangeAfterError && loadedRange
+                  ? `Unable to load ${selectedRange.label}. Showing ${loadedRange.label}.`
+                  : hasLoadedUsageData
+                    ? `Unable to refresh ${selectedRange.label}. Showing the last successful data.`
+                    : `Unable to load usage data for ${selectedRange.label}.`}
+              </p>
+              <p className="mt-1 break-words text-xs text-rose-600">{refreshError}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => triggerRefresh(false)}
+            className="inline-flex shrink-0 items-center gap-1.5 self-start rounded-lg px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 sm:self-center"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Retry
+          </button>
+        </div>
+      )}
+
+      {refreshFailed && !refreshError && (
+        <div className="mb-6 flex flex-col gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 sm:flex-row sm:items-center sm:justify-between" role="alert">
+          <div className="flex min-w-0 items-start gap-2">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <p className="font-medium">Some usage panels could not be refreshed. Review the affected panel for details.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => triggerRefresh(false)}
+            className="inline-flex shrink-0 items-center gap-1.5 self-start rounded-lg px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 sm:self-center"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Retry all
+          </button>
+        </div>
+      )}
+
+      {!usageDataUnavailable && (
+        <>
+          <div
+            className={`mb-6 grid grid-cols-2 gap-4 transition-opacity lg:grid-cols-4 ${rangeIsUpdating ? 'opacity-60' : ''}`}
+            aria-busy={initialLoading || rangeIsUpdating}
+          >
+            <StatCard title="Total Spend" value={summary === null ? '—' : fmtSpendValue(summary.total_spend)} icon={<DollarSign className="w-5 h-5" />} />
+            <StatCard title="Total Tokens" value={summary === null ? '—' : fmtCompact(summary.total_tokens)} icon={<Hash className="w-5 h-5" />} />
+            <StatCard title="Total Requests" value={summary === null ? '—' : fmtCompact(summary.total_requests)} icon={<Zap className="w-5 h-5" />} />
+            <StatCard title="Unique Models" value={summary === null ? '—' : fmtCompact(summary.unique_models)} icon={<Calendar className="w-5 h-5" />} />
+          </div>
+
+          <div className="mb-6 flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+            {canViewLogs ? (
+              <div className="flex gap-2">
+                <button type="button" aria-pressed={tab === 'overview'} onClick={() => setTab('overview')} className={`rounded-lg px-4 py-2 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${tab === 'overview' ? 'bg-blue-600 text-white' : 'border bg-white text-gray-700 hover:bg-gray-50'}`}>Overview</button>
+                <button type="button" aria-pressed={tab === 'logs'} onClick={() => setTab('logs')} className={`rounded-lg px-4 py-2 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${tab === 'logs' ? 'bg-blue-600 text-white' : 'border bg-white text-gray-700 hover:bg-gray-50'}`}>Request Logs</button>
+              </div>
+            ) : <div />}
+
+            <div className="flex flex-col gap-2 xl:items-end">
+              <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+                <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${refreshStatusTone}`}>
+                  {refreshActive ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
+                  <span>{refreshStatusLabel}</span>
+                </span>
+                <select
+                  value={String(effectiveAutoRefreshMs)}
+                  onChange={(e) => setAutoRefreshState({
+                    rangeKey: rangeRequestKey,
+                    value: Number(e.target.value) as ReportingAutoRefreshMs,
+                  })}
+                  disabled={refreshControlDisabled}
+                  className="rounded-full border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+                  aria-label="Auto refresh interval"
+                >
+                  {autoRefreshOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => triggerRefresh(true)}
+                  disabled={refreshControlDisabled}
+                  aria-label="Refresh usage now"
+                  className="rounded-full border border-gray-300 bg-white p-2 text-gray-600 shadow-sm hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-300"
+                >
+                  <RefreshCw className={`h-4 w-4 ${refreshActive ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500 xl:justify-end">
+                {lastRefreshedAt !== null ? (
+                  <span>{refreshFailed ? 'Last successful refresh' : 'Last refreshed'} {new Date(lastRefreshedAt).toLocaleTimeString()}</span>
+                ) : (
+                  <span>Waiting for first refresh</span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            {tab === 'overview' ? (
+              <>
+                <Card
+                  title={selfScoped ? 'Your spend trend' : 'Spend Trend'}
+                  className="mb-6"
+                  action={(
+                    <span className="ml-4 text-right text-xs text-gray-400">
+                      {trendRange.label} · {bucketCadence(trendRange.bucket)} buckets
+                    </span>
+                  )}
+                >
+                  {trendError && (
+                    <div className="mb-4 flex items-start justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700" role="alert">
+                      <span>
+                        {staleTrendAfterError && trendLoadedRange
+                          ? `Unable to load ${selectedRange.label}. Showing ${trendLoadedRange.label}.`
+                          : 'Unable to load the spend trend.'}
+                        {' '}{trendError}
+                      </span>
+                      <button type="button" onClick={() => triggerRefresh(false)} className="shrink-0 rounded font-semibold hover:text-rose-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500">Retry</button>
+                    </div>
+                  )}
+                  <div className={`transition-opacity ${trendIsUpdating ? 'opacity-60' : ''}`} aria-busy={trendLoading}>
+                    {trendLoading && timeSeries === null ? (
+                      <div className="h-[280px] animate-pulse rounded-lg bg-gray-50" />
+                    ) : trendError && timeSeries === null ? (
+                      <div className="flex h-[280px] items-center justify-center text-sm text-gray-400">Spend trend is temporarily unavailable</div>
+                    ) : trendData.length > 0 ? (
+                      <ResponsiveContainer width="100%" height={280}>
+                        <AreaChart data={trendData} margin={{ top: 8, right: 8, left: 4, bottom: 4 }} accessibilityLayer>
+                          <defs>
+                            <linearGradient id="spendGrad" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.14} />
+                              <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                          <XAxis
+                            dataKey="date"
+                            axisLine={false}
+                            tickLine={false}
+                            tick={{ fontSize: 11, fill: '#6b7280' }}
+                            tickFormatter={(value: string) => formatBucketTick(
+                              value,
+                              trendRange.bucket,
+                              trendRange.key === 'all' || trendRange.startDate?.slice(0, 4) !== trendRange.endDate?.slice(0, 4),
+                            )}
+                            minTickGap={28}
+                            interval="preserveStartEnd"
+                            dy={8}
+                          />
+                          <YAxis
+                            axisLine={false}
+                            tickLine={false}
+                            tick={{ fontSize: 11, fill: '#6b7280' }}
+                            tickFormatter={(value: number) => fmtSpendAxis(value)}
+                            domain={[0, 'auto']}
+                            width={76}
+                          />
+                          <Tooltip content={<SpendTrendTooltip bucket={trendRange.bucket} />} cursor={{ stroke: '#d1d5db' }} />
+                          <Area
+                            type="linear"
+                            dataKey="totalSpend"
+                            name="Spend"
+                            stroke="#3b82f6"
+                            fill="url(#spendGrad)"
+                            strokeWidth={2}
+                            dot={trendData.length === 1 ? { r: 3 } : false}
+                            activeDot={{ r: 4 }}
+                          />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <div className="flex h-[280px] items-center justify-center text-sm text-gray-400">No spend recorded in this period</div>
+                    )}
+                  </div>
+                </Card>
+
+                <UsageBreakdownCard
+                  key={activeView}
+                  view={activeView}
+                  dimensions={allowedDimensions}
+                  selfScoped={selfScoped}
+                  active={tab === 'overview'
+                    && reportingBreakdownReady(
+                      visibleReportingOutcome,
+                      loadedRangeMatchesSelection && trendRangeMatchesSelection,
+                    )}
+                  pageVisible={pageVisible}
+                  range={displayedBreakdownRange}
+                  rangeRequestKey={displayedBreakdownRangeKey}
+                  refreshNonce={refreshNonce}
+                  reportingGeneration={reportingGeneration}
+                  reportingV2Enabled={reportingV2Enabled}
+                  forceRefresh={forceReportingRefresh}
+                  onReportingAttempt={beginReportingAttempt}
+                  onReportingOutcome={markReportingOutcome}
+                />
+              </>
+            ) : (
+              <Card
+                title="Request Logs"
+                action={<span className="text-xs text-gray-500">Click a row for details</span>}
+              >
+                {spendFeatureStatus?.cache_enabled === false && (
+                  <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                    <div className="flex items-start gap-3">
+                      <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                      <div>
+                        <p className="font-medium">Cache is disabled.</p>
+                        <p className="mt-1 text-amber-800">
+                          New requests are expected to appear as <code className="rounded bg-amber-100 px-1 py-0.5 text-xs">Miss</code> in the{' '}
+                          <code className="rounded bg-amber-100 px-1 py-0.5 text-xs">Cache</code> column while caching is off.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {logsError && (
+                  <div className="mb-4 flex items-start justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700" role="alert">
+                    <span>Unable to load request logs. {logsError}</span>
+                    <button type="button" onClick={() => triggerRefresh(false)} className="shrink-0 rounded font-semibold hover:text-rose-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500">Retry</button>
+                  </div>
+                )}
+                <DataTable
+                  columns={logColumns}
+                  data={logs}
+                  loading={logsTableLoading}
+                  emptyMessage={logsError ? 'Request logs are temporarily unavailable' : 'No request logs yet'}
+                  onRowClick={setSelectedLog}
+                />
+                {(logsPage > 0 || Boolean(logsPagination?.has_more)) && (
+                  <div className="flex items-center justify-between border-t border-gray-100 px-4 py-3">
+                    <span className="text-xs text-gray-500">
+                      {logs.length > 0
+                        ? `Showing ${logsPage * logsPageSize + 1}–${logsPage * logsPageSize + logs.length}`
+                        : `Page ${logsPage + 1}`}
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={handlePreviousLogsPage}
+                        disabled={logsPage === 0 || logsLoading}
+                        aria-label="Previous request logs page"
+                        className="rounded-lg p-1.5 hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-30"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                      </button>
+                      <span className="px-2 text-xs text-gray-600">Page {logsPage + 1}</span>
+                      <button
+                        type="button"
+                        onClick={handleNextLogsPage}
+                        disabled={!logsPagination?.has_more || (supportsCursorLogs && !logsPagination.next_cursor) || logsLoading}
+                        aria-label="Next request logs page"
+                        className="rounded-lg p-1.5 hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-30"
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </Card>
+            )}
+          </div>
+        </>
       )}
 
       <Modal open={selectedLog !== null} onClose={() => setSelectedLog(null)} title="Request Log Details" wide>
@@ -558,7 +1024,7 @@ export default function Usage() {
               <DetailItem label="Status" value={<StatusBadge status={logStatus(selectedLog)} />} />
               <DetailItem label="HTTP Status" value={selectedLog.http_status_code ?? '—'} />
               <DetailItem label="Error Type" value={selectedLog.error_type || '—'} />
-              <DetailItem label="Cost" value={fmt(selectedLog.spend)} />
+              <DetailItem label="Cost" value={fmtSpendValue(selectedLog.spend)} />
               <DetailItem label="Total Tokens" value={fmtNum(selectedLog.total_tokens)} />
               <DetailItem label="Cache" value={selectedLog.cache_hit ? 'Hit' : 'Miss'} />
               <DetailItem label="Prompt Tokens" value={fmtNum(selectedLog.prompt_tokens)} />

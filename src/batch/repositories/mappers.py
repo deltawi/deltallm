@@ -114,6 +114,8 @@ def job_from_row(row: dict[str, Any]) -> BatchJobRecord:
         scheduler_debug=parse_json_dict(row.get("scheduler_debug")),
         webhook_config_ciphertext=row.get("webhook_config_ciphertext"),
         webhook_config_fingerprint=row.get("webhook_config_fingerprint"),
+        created_by_owner_account_id=row.get("created_by_owner_account_id"),
+        created_by_owner_snapshot_complete=bool(row.get("created_by_owner_snapshot_complete")),
     )
 
 

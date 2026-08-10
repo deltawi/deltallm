@@ -43,6 +43,7 @@ class KeyRecord:
     key_name: str | None = None
     user_id: str | None = None
     team_id: str | None = None
+    owner_account_id: str | None = None
     models: list[str] | None = None
     team_models: list[str] | None = None
     max_budget: float | None = None
@@ -95,6 +96,7 @@ class KeyRepository:
                 v.token,
                 v.key_name,
                 v.user_id,
+                v.owner_account_id,
                 COALESCE(v.team_id, u.team_id) AS team_id,
                 t.organization_id,
                 v.models,
@@ -155,6 +157,7 @@ class KeyRepository:
             key_name=row.get("key_name"),
             user_id=row.get("user_id"),
             team_id=row.get("team_id"),
+            owner_account_id=row.get("owner_account_id"),
             models=row.get("models") or [],
             team_models=row.get("team_models") or [],
             max_budget=row.get("max_budget"),

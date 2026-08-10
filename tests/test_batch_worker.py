@@ -418,6 +418,8 @@ async def test_batch_worker_logs_batch_pricing_and_spend(monkeypatch):
         completed_at=None,
         expires_at=None,
         created_by_organization_id="org-1",
+        created_by_owner_account_id="acct-owner",
+        created_by_owner_snapshot_complete=True,
     )
     item = BatchItemRecord(
         item_id="i1",
@@ -452,6 +454,8 @@ async def test_batch_worker_logs_batch_pricing_and_spend(monkeypatch):
     assert outbox_payload["billed_cost"] == 0.0025
     assert outbox_payload["provider_cost"] == 0.005
     assert outbox_payload["organization_id"] == "org-1"
+    assert outbox_payload["owner_account_id"] == "acct-owner"
+    assert outbox_payload["owner_snapshot_complete"] is True
     assert outbox_payload["deployment_model"] == "vllm/sentence-transformers/all-MiniLM-L6-v2"
     assert spend.events == []
 
@@ -574,6 +578,8 @@ async def test_batch_worker_processes_chat_item_with_chat_batch_accounting(monke
         completed_at=None,
         expires_at=None,
         created_by_organization_id="org-1",
+        created_by_owner_account_id="acct-owner",
+        created_by_owner_snapshot_complete=True,
     )
     item = BatchItemRecord(
         item_id="i-chat",
@@ -733,6 +739,8 @@ async def test_batch_worker_logs_chat_request_failure_with_batch_metadata(monkey
         completed_at=None,
         expires_at=None,
         created_by_organization_id="org-1",
+        created_by_owner_account_id="acct-owner",
+        created_by_owner_snapshot_complete=False,
     )
     item = BatchItemRecord(
         item_id="i-chat",
@@ -768,6 +776,8 @@ async def test_batch_worker_logs_chat_request_failure_with_batch_metadata(monkey
     assert spend.events[0]["status"] == "error"
     assert spend.events[0]["request_id"] == "batch:b-chat:i-chat"
     assert spend.events[0]["call_type"] == "chat_batch"
+    assert spend.events[0]["owner_account_id"] == "acct-owner"
+    assert spend.events[0]["owner_snapshot_complete"] is False
     assert spend.events[0]["metadata"] == {
         "batch_id": "b-chat",
         "batch_item_id": "i-chat",

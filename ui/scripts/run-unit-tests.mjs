@@ -11,9 +11,15 @@ const testSources = [
   'tests/authorization.test.ts',
   'tests/modelFormShared.test.ts',
   'tests/batchDetailResource.test.ts',
-  'tests/dashboardRange.test.ts',
   'tests/organizationPolicy.test.ts',
   'tests/tierHelpers.test.ts',
+  'tests/dashboardAnalytics.test.ts',
+  'tests/format.test.ts',
+  'tests/reportingRange.test.ts',
+  'tests/reportingRangeControl.test.ts',
+  'tests/reportingRequest.test.ts',
+  'tests/reportingRefresh.test.ts',
+  'tests/usageBreakdown.test.ts',
 ];
 
 await rm(outputDir, { recursive: true, force: true });

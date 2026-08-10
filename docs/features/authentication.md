@@ -247,20 +247,22 @@ DeltaLLM separates platform roles, organization roles, and team roles.
 | Role | Typical access |
 |------|----------------|
 | `org_owner` | Full organization control |
-| `org_admin` | Manage teams, users, and keys |
+| `org_admin` | Manage teams, users, and keys; view usage from owned keys |
 | `org_billing` | Spend-focused visibility |
 | `org_auditor` | Read-only operational visibility |
-| `org_member` | Basic organization membership |
+| `org_member` | Basic organization membership; view usage from owned keys |
 
 ### Team Roles
 
 | Role | Typical access |
 |------|----------------|
-| `team_admin` | Manage the team and its keys |
-| `team_developer` | Use and create keys, self-service key creation (`key.create_self`) |
-| `team_viewer` | Read-only access |
+| `team_admin` | Manage the team and its keys; view team usage |
+| `team_developer` | Use and create keys, self-service key creation (`key.create_self`), view usage from owned keys |
+| `team_viewer` | Read-only access, including usage from owned keys |
 
 The `team_developer` role includes the `key.create_self` permission, which allows developers to create, regenerate, revoke, and delete their own API keys when the team has self-service enabled. See [API Keys: Self-Service](../admin-ui/api-keys.md#self-service-key-creation) for details.
+
+Personal usage is attributed from the API key owner's immutable request-time snapshot. A later key transfer does not move earlier synchronous or batch usage to the new owner, and an intentionally ownerless key remains unattributed rather than falling back to its current owner.
 
 ### Important Note on `user_role`
 

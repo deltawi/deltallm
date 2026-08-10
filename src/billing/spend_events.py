@@ -6,6 +6,9 @@ from typing import Any
 from src.providers.resolution import provider_from_model
 
 
+_REPORTING_WRITER_METADATA_KEY = "_deltallm_reporting_writer_version"
+
+
 def build_spend_event(
     *,
     request_id: str,
@@ -25,9 +28,22 @@ def build_spend_event(
     status: str = "success",
     http_status_code: int | None = None,
     error_type: str | None = None,
+    owner_account_id: str | None = None,
+    owner_snapshot_complete: bool = True,
 ) -> dict[str, Any]:
     usage_data = usage or {}
-    meta = metadata if isinstance(metadata, dict) else {}
+    # The marker lets the short-lived rolling-deploy trigger distinguish an
+    # upgraded writer that intentionally has no account owner (for example a
+    # service-account key) from an old writer that omitted owner attribution.
+    # Copy first so internal metadata never mutates the caller's dictionary.
+    meta = dict(metadata) if isinstance(metadata, dict) else {}
+    if owner_snapshot_complete:
+        meta[_REPORTING_WRITER_METADATA_KEY] = 2
+    else:
+        # A legacy durable payload may be consumed by an upgraded process. Do
+        # not let either the new process or caller metadata claim that owner
+        # attribution is complete; the rolling-deploy trigger must resolve it.
+        meta.pop(_REPORTING_WRITER_METADATA_KEY, None)
     billing = meta.get("billing") if isinstance(meta.get("billing"), dict) else {}
     usage_snapshot = billing.get("usage_snapshot") if isinstance(billing.get("usage_snapshot"), dict) else {}
 
@@ -62,6 +78,7 @@ def build_spend_event(
         "user_id": user_id,
         "team_id": team_id,
         "organization_id": organization_id,
+        "owner_account_id": owner_account_id,
         "end_user_id": end_user_id,
         "model": model,
         "deployment_model": _str_or_none(meta.get("deployment_model")),

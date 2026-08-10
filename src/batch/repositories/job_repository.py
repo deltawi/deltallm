@@ -414,6 +414,8 @@ class BatchJobRepository:
         created_by_user_id: str | None,
         created_by_team_id: str | None,
         created_by_organization_id: str | None = None,
+        created_by_owner_account_id: str | None = None,
+        created_by_owner_snapshot_complete: bool = True,
         expires_at: datetime | None = None,
         execution_mode: str = "managed_internal",
         status: str | BatchJobStatus = BatchJobStatus.QUEUED,
@@ -477,7 +479,8 @@ class BatchJobRepository:
                 scheduling_endpoint, tenant_scope_type, tenant_scope_id, service_tier,
                 estimated_work_units, remaining_work_units, size_class, queue_entered_at,
                 scheduler_debug, created_by_api_key, created_by_user_id, created_by_team_id,
-                created_by_organization_id, expires_at, webhook_config_ciphertext,
+                created_by_organization_id, created_by_owner_account_id,
+                created_by_owner_snapshot_complete, expires_at, webhook_config_ciphertext,
                 webhook_config_fingerprint
             )
             VALUES (
@@ -505,9 +508,11 @@ class BatchJobRepository:
                 $22,
                 $23,
                 $24,
-                $25::timestamp,
+                $25,
                 $26,
-                $27
+                $27::timestamp,
+                $28,
+                $29
             )
             RETURNING *
             """,
@@ -535,6 +540,8 @@ class BatchJobRepository:
             created_by_user_id,
             created_by_team_id,
             created_by_organization_id,
+            created_by_owner_account_id,
+            created_by_owner_snapshot_complete,
             expires_at,
             webhook_config_ciphertext,
             webhook_config_fingerprint,

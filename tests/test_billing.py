@@ -23,6 +23,61 @@ class RecordingDB:
         return None
 
 
+def test_spend_event_marks_the_v2_writer_without_mutating_request_metadata() -> None:
+    metadata = {"source": "test"}
+
+    event = build_spend_event(
+        request_id="req-1",
+        api_key="key-1",
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        end_user_id=None,
+        model="model-1",
+        call_type="completion",
+        usage=None,
+        cost=0,
+        metadata=metadata,
+        cache_hit=False,
+        start_time=datetime(2026, 8, 11, tzinfo=UTC),
+        end_time=datetime(2026, 8, 11, tzinfo=UTC),
+    )
+
+    assert metadata == {"source": "test"}
+    assert event["metadata"] == {
+        "source": "test",
+        "_deltallm_reporting_writer_version": 2,
+    }
+
+
+def test_spend_event_does_not_mark_an_incomplete_legacy_owner_snapshot() -> None:
+    metadata = {
+        "source": "legacy-outbox",
+        "_deltallm_reporting_writer_version": 2,
+    }
+
+    event = build_spend_event(
+        request_id="req-legacy",
+        api_key="key-1",
+        user_id="user-1",
+        team_id="team-1",
+        organization_id="org-1",
+        end_user_id=None,
+        model="model-1",
+        call_type="embedding_batch",
+        usage=None,
+        cost=0,
+        metadata=metadata,
+        cache_hit=False,
+        start_time=datetime(2026, 8, 11, tzinfo=UTC),
+        end_time=datetime(2026, 8, 11, tzinfo=UTC),
+        owner_snapshot_complete=False,
+    )
+
+    assert metadata["_deltallm_reporting_writer_version"] == 2
+    assert event["metadata"] == {"source": "legacy-outbox"}
+
+
 class DuplicateSpendEventDB(RecordingDB):
     async def query_raw(self, query: str, *args):
         self.calls.append((query, args))
@@ -228,6 +283,7 @@ async def test_spend_tracking_writes_log_and_ledger_updates():
         user_id="user_1",
         team_id="team_1",
         organization_id="org_1",
+        owner_account_id="acct-owner",
         end_user_id="end_1",
         model="gpt-4o-mini",
         call_type="completion",
@@ -242,6 +298,8 @@ async def test_spend_tracking_writes_log_and_ledger_updates():
     assert any("update deltallm_usertable" in q.lower() for q, _ in db.calls)
     assert any("update deltallm_teamtable" in q.lower() for q, _ in db.calls)
     assert any("update deltallm_organizationtable" in q.lower() for q, _ in db.calls)
+    event_call = next(args for query, args in db.calls if "insert into deltallm_spendlog_events" in query.lower())
+    assert event_call[41] == "acct-owner"
 
 
 @pytest.mark.asyncio
@@ -307,6 +365,7 @@ async def test_log_spend_once_returns_duplicate_without_ledger_update():
         user_id="user_1",
         team_id="team_1",
         organization_id="org_1",
+        owner_account_id="acct-owner",
         end_user_id=None,
         model="gpt-4o-mini",
         call_type="completion",
@@ -317,6 +376,13 @@ async def test_log_spend_once_returns_duplicate_without_ledger_update():
 
     assert result == "duplicate"
     assert any("insert into deltallm_spendlog_events" in q.lower() for q, _ in db.calls)
+    event_query, event_args = next(
+        (query, args)
+        for query, args in db.calls
+        if "insert into deltallm_spendlog_events" in query.lower()
+    )
+    assert "owner_account_id" in event_query
+    assert event_args[41] == "acct-owner"
     assert not any("update deltallm_verificationtoken" in q.lower() for q, _ in db.calls)
 
 

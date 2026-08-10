@@ -90,6 +90,10 @@ function deriveUiAccessFromPermissions(session: SessionLike | null | undefined):
   }
   const permissions = new Set((session.effective_permissions || []).map((value) => String(value)));
   const isPlatformAdmin = session.role === 'platform_admin';
+  // Scoped usage is a server-gated v2 capability. Legacy session payloads do
+  // not carry that cluster-wide readiness signal, so only derive the existing
+  // organization permission here and trust ui_access when it is present.
+  const canReadUsage = permissions.has('spend.read');
   const canReadKeys = permissions.has('key.read') || permissions.has('key.update') || permissions.has('key.create_self');
   const canCreateTeamInOrganization = isPlatformAdmin || (session.organization_memberships || []).some((membership) => {
     const role = String(membership?.role || '');
@@ -112,7 +116,7 @@ function deriveUiAccessFromPermissions(session: SessionLike | null | undefined):
     teams: isPlatformAdmin || permissions.has('team.read'),
     team_create: canCreateTeamInOrganization,
     people_access: isPlatformAdmin,
-    usage: isPlatformAdmin || permissions.has('spend.read'),
+    usage: isPlatformAdmin || canReadUsage,
     audit: isPlatformAdmin || permissions.has('audit.read'),
     batches: isPlatformAdmin || permissions.has('key.read'),
     guardrails: isPlatformAdmin,

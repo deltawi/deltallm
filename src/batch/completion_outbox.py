@@ -195,6 +195,10 @@ class BatchCompletionOutboxWorker:
     ) -> bool:
         api_key = str(payload.get("api_key") or "").strip()
         if api_key:
+            # Current producers make completeness explicit, including for an
+            # intentionally ownerless key. Missing legacy markers fail closed
+            # into the database compatibility trigger.
+            owner_snapshot_complete = payload.get("owner_snapshot_complete") is True
             service = spend_tracking_service
             if service is None:
                 service = SpendTrackingService(getattr(repository, "prisma", None))
@@ -222,6 +226,12 @@ class BatchCompletionOutboxWorker:
                 organization_id=(
                     str(payload.get("organization_id")) if payload.get("organization_id") is not None else None
                 ),
+                owner_account_id=(
+                    str(payload.get("owner_account_id"))
+                    if payload.get("owner_account_id") is not None
+                    else None
+                ),
+                owner_snapshot_complete=owner_snapshot_complete,
                 end_user_id=None,
                 model=str(payload.get("model") or ""),
                 call_type=str(payload.get("call_type") or "embedding_batch"),
