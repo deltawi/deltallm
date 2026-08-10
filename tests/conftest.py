@@ -430,7 +430,7 @@ class FakeRedis:
             if rpm[0] == 0:
                 await record_limit_hit(str(rpm[1]))
                 return [
-                    [0, rpm[1], rpm[2], active_count, total_weight / 1000, effective_weight / 1000, rpm[3], rpm[4], rpm[5], rpm[6], rpm[7], rpm[8]],
+                    [0, rpm[1], rpm[2], active_count, total_weight, effective_weight, rpm[3], rpm[4], rpm[5], rpm[6], int(rpm[7] * 1_000_000), rpm[8]],
                     None,
                 ]
             rpm_org_total = int(rpm[4])
@@ -442,7 +442,7 @@ class FakeRedis:
             if tpm[0] == 0:
                 await record_limit_hit(str(tpm[1]))
                 return [
-                    [0, tpm[1], tpm[2], active_count, total_weight / 1000, effective_weight / 1000, tpm[3], tpm[4], tpm[5], tpm[6], tpm[7], tpm[8]],
+                    [0, tpm[1], tpm[2], active_count, total_weight, effective_weight, tpm[3], tpm[4], tpm[5], tpm[6], int(tpm[7] * 1_000_000), tpm[8]],
                     None,
                 ]
             tpm_org_total = int(tpm[4])
@@ -473,13 +473,13 @@ class FakeRedis:
                     selected[1],
                     reason,
                     active_count,
-                    total_weight / 1000,
-                    effective_weight / 1000,
+                    total_weight,
+                    effective_weight,
                     selected[3],
                     selected[4],
                     selected[5],
                     selected[6],
-                    selected[7],
+                    int(selected[7] * 1_000_000),
                     selected[8],
                 ],
                 commit,

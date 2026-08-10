@@ -9,6 +9,7 @@ from typing import Any, Literal
 from src.models.errors import RateLimitError, ServiceUnavailableError
 from src.services.tier_capacity_fair_share import (
     FAIR_SHARE_ACTIVE_CLEANUP_LIMIT,
+    FAIR_SHARE_SATURATION_SCALE,
     FAIR_SHARE_WEIGHT_SCALE,
     DEFAULT_ACTIVE_TTL_SECONDS,
     FAIR_SHARE_WINDOW_SECONDS,
@@ -482,13 +483,17 @@ def _fair_share_decision_from_raw(check: TierFairShareCheck, raw: Any) -> TierFa
     scope = str(_raw_at(values, 1, "allowed"))
     reason = str(_raw_at(values, 2, "allowed"))
     active_count = int(float(_raw_at(values, 3, 1)))
-    total_weight = float(_raw_at(values, 4, max(1, check.assignment_weight)))
-    effective_weight = float(_raw_at(values, 5, max(1, check.assignment_weight)))
+    total_weight = float(
+        _raw_at(values, 4, max(1, check.assignment_weight) * FAIR_SHARE_WEIGHT_SCALE)
+    ) / FAIR_SHARE_WEIGHT_SCALE
+    effective_weight = float(
+        _raw_at(values, 5, max(1, check.assignment_weight) * FAIR_SHARE_WEIGHT_SCALE)
+    ) / FAIR_SHARE_WEIGHT_SCALE
     pool_current = int(float(_raw_at(values, 6, 0)))
     org_current = int(float(_raw_at(values, 7, 0)))
     pool_limit = int(float(_raw_at(values, 8, 0)))
     share_limit = int(float(_raw_at(values, 9, 0)))
-    saturation = float(_raw_at(values, 10, 0.0))
+    saturation = float(_raw_at(values, 10, 0.0)) / FAIR_SHARE_SATURATION_SCALE
     dimension = str(_raw_at(values, 11, "all"))
     return TierFairShareDecision(
         allowed=ok == 1,

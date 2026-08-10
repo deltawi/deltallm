@@ -358,7 +358,7 @@ local function evaluate_fair_share(index, key_offset, arg_offset)
   local rpm = check_dimension(rpm_pool_key, rpm_org_key, rpm_capacity, rpm_amount, 'tier_pool_fair_share_rpm')
   if rpm[1] == 0 then
     record_limit_hit(rpm[2])
-    return {0, 'fair', index, rpm[1], rpm[2], rpm[3], active_count, total_weight / 1000, effective_weight / 1000, rpm[4], rpm[5], rpm[6], rpm[7], rpm[8], 'rpm'}
+    return {0, 'fair', index, rpm[1], rpm[2], rpm[3], active_count, total_weight, effective_weight, rpm[4], rpm[5], rpm[6], rpm[7], math.floor(rpm[8] * 1000000), 'rpm'}
   end
   local rpm_org_total = rpm[5]
   if rpm_capacity > 0 and rpm_amount > 0 then
@@ -369,7 +369,7 @@ local function evaluate_fair_share(index, key_offset, arg_offset)
   local tpm = check_dimension(tpm_pool_key, tpm_org_key, tpm_capacity, tpm_amount, 'tier_pool_fair_share_tpm')
   if tpm[1] == 0 then
     record_limit_hit(tpm[2])
-    return {0, 'fair', index, tpm[1], tpm[2], tpm[3], active_count, total_weight / 1000, effective_weight / 1000, tpm[4], tpm[5], tpm[6], tpm[7], tpm[8], 'tpm'}
+    return {0, 'fair', index, tpm[1], tpm[2], tpm[3], active_count, total_weight, effective_weight, tpm[4], tpm[5], tpm[6], tpm[7], math.floor(tpm[8] * 1000000), 'tpm'}
   end
   local tpm_org_total = tpm[5]
   if tpm_capacity > 0 and tpm_amount > 0 then
@@ -387,7 +387,7 @@ local function evaluate_fair_share(index, key_offset, arg_offset)
     selected = tpm
     selected_dimension = 'tpm'
   end
-  fair_results[index] = {1, selected[2], final_reason, active_count, total_weight / 1000, effective_weight / 1000, selected[4], selected[5], selected[6], selected[7], selected[8], selected_dimension}
+  fair_results[index] = {1, selected[2], final_reason, active_count, total_weight, effective_weight, selected[4], selected[5], selected[6], selected[7], math.floor(selected[8] * 1000000), selected_dimension}
   fair_commits[index] = {
     rpm_pool_key,
     rpm_org_key,
