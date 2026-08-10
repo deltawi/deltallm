@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from time import perf_counter
 from types import SimpleNamespace
 from typing import Any
 
@@ -1148,6 +1149,39 @@ def test_build_rate_limit_checks_filters_by_tier_mode_and_request_mode() -> None
     assert "tier_org_model_rpm" not in batch_scopes
     assert "tier_pool_model_rpm" in batch_scopes
     assert "tier_org_model_rpm" not in shadow_scopes
+
+
+@pytest.mark.parametrize(
+    ("policy_mode", "expected_tier_checks"),
+    [("disabled", 0), ("shadow", 0), ("enforce", 1)],
+)
+def test_tier_lookup_latency_is_bounded_in_each_rollout_mode(
+    policy_mode: str,
+    expected_tier_checks: int,
+) -> None:
+    service = _TierRateLimitService(
+        mode=policy_mode,
+        descriptors={
+            ("org-1", "gpt-4o-mini"): (
+                _descriptor("tier_org_model_rpm", limit=100),
+            )
+        },
+    )
+    auth = _auth(rpm_limit=None, tpm_limit=None)
+
+    started = perf_counter()
+    for _ in range(25_000):
+        checks = build_rate_limit_checks(
+            auth=auth,
+            tokens=100,
+            model="gpt-4o-mini",
+            tier_policy_service=service,
+            tier_policy_mode=policy_mode,
+        )
+    elapsed = perf_counter() - started
+
+    assert sum(check.scope.startswith("tier_") for check in checks) == expected_tier_checks
+    assert elapsed < 2
 
 
 def test_batch_tier_limits_fall_back_to_sync_rpm_tpm_when_batch_overrides_absent() -> None:
