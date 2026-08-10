@@ -10,6 +10,34 @@ from typing import Any, Literal
 from src.models.errors import RateLimitError, ServiceUnavailableError
 
 _PARALLEL_LEASE_TTL_SECONDS = 300
+_FAIR_SHARE_ACTIVE_TTL_SECONDS = 120
+
+
+@dataclass(frozen=True)
+class FairShareLimit:
+    organization_id: str
+    weight: int
+    tier_key: str | None = None
+    strategy: Literal["weighted_fair", "reserved_burst"] = "weighted_fair"
+    saturation_threshold: float = 0.8
+    burst_multiplier: float = 1.0
+    active_ttl_seconds: int = _FAIR_SHARE_ACTIVE_TTL_SECONDS
+
+
+@dataclass(frozen=True)
+class FairShareObservation:
+    scope: str
+    entity_id: str
+    organization_id: str
+    tier_key: str | None
+    active_organizations: int
+    effective_weight: float
+    total_active_weight: float
+    share_limit: int
+    pool_limit: int
+    pool_current: int
+    saturated: bool
+    capacity_boost_multiplier: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -19,6 +47,7 @@ class RateLimitCheck:
     limit: int
     amount: int = 1
     window_seconds: int = 60
+    fair_share: FairShareLimit | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +96,7 @@ class RateLimitResult:
     current_values: list[int] = field(default_factory=list)
     window_reset_at: int = 0
     window_resets: list[int] = field(default_factory=list)
+    fair_share_observations: list[FairShareObservation] = field(default_factory=list)
 
 
 class LimitCounter:
@@ -75,6 +105,7 @@ class LimitCounter:
         self.degraded_mode = degraded_mode if degraded_mode in {"fail_open", "fail_closed"} else "fail_open"
         self._fallback_counters: dict[str, tuple[int, int]] = {}
         self._fallback_parallel: dict[str, int] = {}
+        self._fallback_fair_active: dict[str, dict[str, tuple[int, float]]] = {}
         self._fallback_lock = asyncio.Lock()
 
     @staticmethod
@@ -130,6 +161,14 @@ class LimitCounter:
         if self.redis is None:
             return await self._check_rate_limits_fallback(normalized, window_reset_at, per_check_resets)
 
+        if any(check.fair_share is not None for check in normalized):
+            return await self._check_rate_limits_redis_fair_share(
+                normalized,
+                window_reset_at=window_reset_at,
+                per_check_resets=per_check_resets,
+                now=now,
+            )
+
         keys = [
             f"ratelimit:{check.scope}:{check.entity_id}:{self._window_id(check.window_seconds)}"
             for check in normalized
@@ -183,6 +222,272 @@ return results
             param=failed.scope,
             code=f"{failed.scope}_exceeded",
             retry_after=retry_after,
+        )
+
+    async def _check_rate_limits_redis_fair_share(
+        self,
+        checks: list[RateLimitCheck],
+        *,
+        window_reset_at: int,
+        per_check_resets: list[int],
+        now: float,
+    ) -> RateLimitResult:
+        n = len(checks)
+        window_ids = [self._window_id(check.window_seconds) for check in checks]
+        global_keys = [
+            f"ratelimit:{check.scope}:{check.entity_id}:{window_ids[index]}"
+            for index, check in enumerate(checks)
+        ]
+        org_keys = [
+            _fair_share_org_usage_key(check, window_ids[index])
+            if check.fair_share is not None
+            else global_keys[index]
+            for index, check in enumerate(checks)
+        ]
+        active_keys = [
+            _fair_share_active_key(check.entity_id)
+            if check.fair_share is not None
+            else global_keys[index]
+            for index, check in enumerate(checks)
+        ]
+        weight_keys = [
+            _fair_share_weight_key(check.entity_id)
+            if check.fair_share is not None
+            else global_keys[index]
+            for index, check in enumerate(checks)
+        ]
+        boost_keys = [
+            fair_share_boost_key(check.entity_id, check.fair_share.organization_id)
+            if check.fair_share is not None
+            else global_keys[index]
+            for index, check in enumerate(checks)
+        ]
+        denial_keys = [
+            _fair_share_denial_key(check.scope, check.entity_id, window_ids[index])
+            if check.fair_share is not None
+            else global_keys[index]
+            for index, check in enumerate(checks)
+        ]
+        amounts = [str(int(check.amount)) for check in checks]
+        limits = [str(int(check.limit)) for check in checks]
+        ttls = [str(int(check.window_seconds)) for check in checks]
+        fair_enabled = ["1" if check.fair_share is not None else "0" for check in checks]
+        organization_ids = [
+            check.fair_share.organization_id if check.fair_share is not None else ""
+            for check in checks
+        ]
+        weights = [
+            str(max(1, int(check.fair_share.weight))) if check.fair_share is not None else "1"
+            for check in checks
+        ]
+        thresholds = [
+            str(_normalized_saturation_threshold(check.fair_share.saturation_threshold))
+            if check.fair_share is not None
+            else "1"
+            for check in checks
+        ]
+        burst_multipliers = [
+            str(_normalized_burst_multiplier(check.fair_share))
+            if check.fair_share is not None
+            else "1"
+            for check in checks
+        ]
+        active_ttls = [
+            str(max(1, int(check.fair_share.active_ttl_seconds)))
+            if check.fair_share is not None
+            else "1"
+            for check in checks
+        ]
+
+        script = """
+local n = #KEYS / 6
+local now_ms = tonumber(ARGV[(9 * n) + 1]) or 0
+local active_counts = {}
+local share_limits = {}
+local saturated_values = {}
+local boost_values = {}
+local total_weight_values = {}
+local effective_weight_values = {}
+
+for i = 1, n do
+  local current = tonumber(redis.call('GET', KEYS[i]) or '0')
+  local amount = tonumber(ARGV[i]) or 0
+  local limit = tonumber(ARGV[n + i]) or 0
+  if current + amount > limit then
+    if ARGV[(3 * n) + i] == '1' then
+      redis.call('HINCRBY', KEYS[(5 * n) + i], ARGV[(4 * n) + i], 1)
+      redis.call('EXPIRE', KEYS[(5 * n) + i], tonumber(ARGV[(2 * n) + i]) or 60)
+    end
+    return {0, i, 1, 0, 0, 1, 1000, 0, 0, current + amount}
+  end
+end
+
+for i = 1, n do
+  active_counts[i] = 0
+  share_limits[i] = 0
+  saturated_values[i] = 0
+  boost_values[i] = 1000
+  total_weight_values[i] = 0
+  effective_weight_values[i] = 0
+  if ARGV[(3 * n) + i] == '1' then
+    local org_id = ARGV[(4 * n) + i]
+    local base_weight = tonumber(ARGV[(5 * n) + i]) or 1
+    local threshold = tonumber(ARGV[(6 * n) + i]) or 0.8
+    local burst = tonumber(ARGV[(7 * n) + i]) or 1
+    local active_ttl = tonumber(ARGV[(8 * n) + i]) or 120
+    local boost = tonumber(redis.call('GET', KEYS[(4 * n) + i]) or '1') or 1
+    if boost < 1 then boost = 1 end
+    local effective_weight = base_weight * boost
+    redis.call('ZREMRANGEBYSCORE', KEYS[(2 * n) + i], '-inf', now_ms)
+    redis.call('ZADD', KEYS[(2 * n) + i], now_ms + (active_ttl * 1000), org_id)
+    redis.call('HSET', KEYS[(3 * n) + i], org_id, effective_weight)
+    redis.call('EXPIRE', KEYS[(2 * n) + i], active_ttl)
+    redis.call('EXPIRE', KEYS[(3 * n) + i], active_ttl)
+
+    local members = redis.call('ZRANGE', KEYS[(2 * n) + i], 0, -1)
+    local total_weight = 0
+    for _, member in ipairs(members) do
+      total_weight = total_weight + (tonumber(redis.call('HGET', KEYS[(3 * n) + i], member) or '1') or 1)
+    end
+    if total_weight <= 0 then total_weight = effective_weight end
+    local limit = tonumber(ARGV[n + i]) or 0
+    local amount = tonumber(ARGV[i]) or 0
+    local current = tonumber(redis.call('GET', KEYS[i]) or '0')
+    local pool_after = current + amount
+    local saturated = 0
+    if limit > 0 and (pool_after / limit) >= threshold then saturated = 1 end
+    local share_limit = math.max(1, math.floor((limit * effective_weight / total_weight) * burst))
+    local org_current = tonumber(redis.call('GET', KEYS[n + i]) or '0')
+
+    active_counts[i] = #members
+    share_limits[i] = share_limit
+    saturated_values[i] = saturated
+    boost_values[i] = math.floor(boost * 1000)
+    total_weight_values[i] = math.floor(total_weight * 1000)
+    effective_weight_values[i] = math.floor(effective_weight * 1000)
+
+    if saturated == 1 and org_current + amount > share_limit then
+      redis.call('HINCRBY', KEYS[(5 * n) + i], org_id, 1)
+      redis.call('EXPIRE', KEYS[(5 * n) + i], tonumber(ARGV[(2 * n) + i]) or 60)
+      return {0, i, 2, #members, share_limit, saturated, math.floor(boost * 1000), math.floor(total_weight * 1000), math.floor(effective_weight * 1000), pool_after}
+    end
+  end
+end
+
+local results = {1, 0}
+for i = 1, n do
+  local amount = tonumber(ARGV[i]) or 0
+  local ttl = tonumber(ARGV[(2 * n) + i]) or 60
+  local new_val = redis.call('INCRBY', KEYS[i], amount)
+  redis.call('EXPIRE', KEYS[i], ttl)
+  results[i + 2] = new_val
+  if ARGV[(3 * n) + i] == '1' then
+    redis.call('INCRBY', KEYS[n + i], amount)
+    redis.call('EXPIRE', KEYS[n + i], ttl)
+  end
+end
+for i = 1, n do results[(1 * n) + i + 2] = active_counts[i] end
+for i = 1, n do results[(2 * n) + i + 2] = share_limits[i] end
+for i = 1, n do results[(3 * n) + i + 2] = saturated_values[i] end
+for i = 1, n do results[(4 * n) + i + 2] = boost_values[i] end
+for i = 1, n do results[(5 * n) + i + 2] = total_weight_values[i] end
+for i = 1, n do results[(6 * n) + i + 2] = effective_weight_values[i] end
+return results
+"""
+        try:
+            raw = await self.redis.eval(
+                script,
+                6 * n,
+                *global_keys,
+                *org_keys,
+                *active_keys,
+                *weight_keys,
+                *boost_keys,
+                *denial_keys,
+                *amounts,
+                *limits,
+                *ttls,
+                *fair_enabled,
+                *organization_ids,
+                *weights,
+                *thresholds,
+                *burst_multipliers,
+                *active_ttls,
+                str(int(now * 1000)),
+            )
+        except Exception:
+            await self._handle_redis_degraded()
+            return await self._check_rate_limits_fallback(
+                checks,
+                window_reset_at,
+                per_check_resets,
+            )
+
+        ok = int(raw[0]) if isinstance(raw, (list, tuple)) and raw else 1
+        if ok != 1:
+            failed_index = int(raw[1]) - 1 if len(raw) >= 2 else 0
+            failed_index = max(0, min(failed_index, n - 1))
+            failed = checks[failed_index]
+            reason = int(raw[2]) if len(raw) >= 3 else 1
+            retry_after = failed.window_seconds - int(now % failed.window_seconds)
+            scope = f"{failed.scope}_fair_share" if reason == 2 else failed.scope
+            error = RateLimitError(
+                message=f"Rate limit exceeded for scope '{scope}'",
+                param=scope,
+                code=f"{scope}_exceeded",
+                retry_after=retry_after,
+            )
+            if failed.fair_share is not None and len(raw) >= 10:
+                setattr(
+                    error,
+                    "fair_share_observation",
+                    _fair_share_observation(
+                        failed,
+                        active_organizations=int(raw[3]),
+                        share_limit=int(raw[4]),
+                        saturated=bool(int(raw[5])),
+                        boost_scaled=int(raw[6]),
+                        total_weight_scaled=int(raw[7]),
+                        effective_weight_scaled=int(raw[8]),
+                        pool_current=int(raw[9]),
+                    ),
+                )
+            raise error
+
+        current_values = [
+            _raw_int(raw, index + 2, default=check.amount)
+            for index, check in enumerate(checks)
+        ]
+        observations: list[FairShareObservation] = []
+        for index, check in enumerate(checks):
+            if check.fair_share is None:
+                continue
+            observations.append(
+                _fair_share_observation(
+                    check,
+                    active_organizations=_raw_int(raw, n + index + 2, default=1),
+                    share_limit=_raw_int(raw, (2 * n) + index + 2, default=check.limit),
+                    saturated=bool(_raw_int(raw, (3 * n) + index + 2, default=0)),
+                    boost_scaled=_raw_int(raw, (4 * n) + index + 2, default=1000),
+                    total_weight_scaled=_raw_int(
+                        raw,
+                        (5 * n) + index + 2,
+                        default=max(1, check.fair_share.weight) * 1000,
+                    ),
+                    effective_weight_scaled=_raw_int(
+                        raw,
+                        (6 * n) + index + 2,
+                        default=max(1, check.fair_share.weight) * 1000,
+                    ),
+                    pool_current=current_values[index],
+                )
+            )
+        return RateLimitResult(
+            checks=checks,
+            current_values=current_values,
+            window_reset_at=window_reset_at,
+            window_resets=per_check_resets,
+            fair_share_observations=observations,
         )
 
     async def acquire_parallel(self, scope: str, entity_id: str, limit: int | None) -> None:
@@ -510,6 +815,8 @@ return {1, 0}
                 int((math.floor(now / c.window_seconds) + 1) * c.window_seconds) for c in normalized
             ]
         pending_updates: list[tuple[str, int, int]] = []
+        current_values: list[int] = []
+        observations: list[FairShareObservation] = []
 
         async with self._fallback_lock:
             for check in normalized:
@@ -529,17 +836,79 @@ return {1, 0}
                         retry_after=retry_after,
                     )
                 pending_updates.append((key, expiry, next_value))
+                current_values.append(next_value)
 
-            current_values = []
+                fair = check.fair_share
+                if fair is None:
+                    continue
+                active_key = _fair_share_active_key(check.entity_id)
+                active = self._fallback_fair_active.setdefault(active_key, {})
+                active = {
+                    org_id: (active_expiry, weight)
+                    for org_id, (active_expiry, weight) in active.items()
+                    if active_expiry > now
+                }
+                effective_weight = float(max(1, int(fair.weight)))
+                active[fair.organization_id] = (
+                    now + max(1, int(fair.active_ttl_seconds)),
+                    effective_weight,
+                )
+                self._fallback_fair_active[active_key] = active
+                total_weight = sum(weight for _, weight in active.values()) or effective_weight
+                threshold = _normalized_saturation_threshold(fair.saturation_threshold)
+                saturated = next_value / check.limit >= threshold
+                share_limit = max(
+                    1,
+                    math.floor(
+                        check.limit
+                        * effective_weight
+                        / total_weight
+                        * _normalized_burst_multiplier(fair)
+                    ),
+                )
+                org_key = _fair_share_org_usage_fallback_key(check, window_id)
+                org_expiry, org_current = self._fallback_counters.get(
+                    org_key,
+                    (now + ws, 0),
+                )
+                if org_expiry <= now:
+                    org_expiry, org_current = now + ws, 0
+                org_next = org_current + check.amount
+                observation = FairShareObservation(
+                    scope=check.scope,
+                    entity_id=check.entity_id,
+                    organization_id=fair.organization_id,
+                    tier_key=fair.tier_key,
+                    active_organizations=len(active),
+                    effective_weight=effective_weight,
+                    total_active_weight=total_weight,
+                    share_limit=share_limit,
+                    pool_limit=check.limit,
+                    pool_current=next_value,
+                    saturated=saturated,
+                )
+                if saturated and org_next > share_limit:
+                    scope = f"{check.scope}_fair_share"
+                    error = RateLimitError(
+                        message=f"Rate limit exceeded for scope '{scope}'",
+                        param=scope,
+                        code=f"{scope}_exceeded",
+                        retry_after=max(1, org_expiry - now),
+                    )
+                    setattr(error, "fair_share_observation", observation)
+                    raise error
+                pending_updates.append((org_key, org_expiry, org_next))
+                observations.append(observation)
+
             for key, expiry, next_value in pending_updates:
                 self._fallback_counters[key] = (expiry, next_value)
-                current_values.append(next_value)
 
         return RateLimitResult(
             checks=normalized,
             current_values=current_values,
             window_reset_at=window_reset_at,
             window_resets=per_check_resets,
+            fair_share_observations=observations,
         )
 
     async def _check_rate_limit_fallback(self, scope: str, entity_id: str, limit: int, amount: int) -> None:
@@ -627,6 +996,108 @@ return {1, 0}
                     self._fallback_parallel.pop(key, None)
                 else:
                     self._fallback_parallel[key] = current
+
+
+def fair_share_boost_key(entity_id: str, organization_id: str) -> str:
+    return f"tier_capacity_boost:{entity_id}:{organization_id}"
+
+
+def fair_share_active_key(entity_id: str) -> str:
+    return _fair_share_active_key(entity_id)
+
+
+def fair_share_weight_key(entity_id: str) -> str:
+    return _fair_share_weight_key(entity_id)
+
+
+def fair_share_denial_key(scope: str, entity_id: str, window_id: int) -> str:
+    return _fair_share_denial_key(scope, entity_id, window_id)
+
+
+def fair_share_org_usage_key(check: RateLimitCheck, window_id: int) -> str:
+    return _fair_share_org_usage_key(check, window_id)
+
+
+def _fair_share_active_key(entity_id: str) -> str:
+    return f"tier_capacity_active:{entity_id}"
+
+
+def _fair_share_weight_key(entity_id: str) -> str:
+    return f"tier_capacity_weight:{entity_id}"
+
+
+def _fair_share_denial_key(scope: str, entity_id: str, window_id: int) -> str:
+    return f"tier_capacity_denials:{scope}:{entity_id}:{window_id}"
+
+
+def _fair_share_org_usage_key(check: RateLimitCheck, window_id: int) -> str:
+    fair = check.fair_share
+    organization_id = fair.organization_id if fair is not None else "unknown"
+    return f"ratelimit:{check.scope}_org:{check.entity_id}:{organization_id}:{window_id}"
+
+
+def _fair_share_org_usage_fallback_key(check: RateLimitCheck, window_id: int) -> str:
+    fair = check.fair_share
+    organization_id = fair.organization_id if fair is not None else "unknown"
+    return f"{check.scope}_org:{check.entity_id}:{organization_id}:{window_id}"
+
+
+def _normalized_saturation_threshold(value: object) -> float:
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        return 0.8
+    if normalized <= 0 or normalized > 1:
+        return 0.8
+    return normalized
+
+
+def _normalized_burst_multiplier(fair: FairShareLimit) -> float:
+    if fair.strategy != "reserved_burst":
+        return 1.0
+    try:
+        return max(1.0, float(fair.burst_multiplier))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _fair_share_observation(
+    check: RateLimitCheck,
+    *,
+    active_organizations: int,
+    share_limit: int,
+    saturated: bool,
+    boost_scaled: int,
+    total_weight_scaled: int,
+    effective_weight_scaled: int,
+    pool_current: int,
+) -> FairShareObservation:
+    fair = check.fair_share
+    if fair is None:
+        raise ValueError("fair-share observation requires fair-share metadata")
+    return FairShareObservation(
+        scope=check.scope,
+        entity_id=check.entity_id,
+        organization_id=fair.organization_id,
+        tier_key=fair.tier_key,
+        active_organizations=max(1, int(active_organizations)),
+        effective_weight=max(0.001, effective_weight_scaled / 1000),
+        total_active_weight=max(0.001, total_weight_scaled / 1000),
+        share_limit=max(1, int(share_limit)),
+        pool_limit=int(check.limit),
+        pool_current=max(0, int(pool_current)),
+        saturated=bool(saturated),
+        capacity_boost_multiplier=max(1.0, boost_scaled / 1000),
+    )
+
+
+def _raw_int(raw: object, index: int, *, default: int) -> int:
+    if not isinstance(raw, (list, tuple)) or index < 0 or index >= len(raw):
+        return int(default)
+    try:
+        return int(raw[index])
+    except (TypeError, ValueError):
+        return int(default)
 
 
 def _parallel_limit_error(scope: str) -> RateLimitError:

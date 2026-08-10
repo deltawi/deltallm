@@ -152,6 +152,38 @@ Use capacity pools for:
 
 Do not create pools for every cheap/default model. For common models, organization-level RPM and TPM limits are usually enough.
 
+### Capacity Pool Strategies
+
+| Strategy | Behavior | Typical use |
+| --- | --- | --- |
+| `hard_cap` | Enforces only the shared pool RPM, TPM, and parallel-request ceilings | A simple provider or GPU quota |
+| `weighted_fair` | Lets active organizations borrow idle capacity below saturation, then applies a share based on assignment weight | Shared premium capacity where every active customer must make progress |
+| `reserved_burst` | Uses weighted fair sharing and multiplies each organization's saturated share by the configured burst multiplier; the pool hard cap still wins | Plans that include a bounded burst entitlement |
+
+For weighted strategies, `saturation_threshold` is the pool utilization ratio at which per-organization shares begin to apply. It defaults to `0.8`. Below that point an organization can borrow otherwise-idle capacity. At or above it, the runtime calculates:
+
+```text
+organization share = pool limit * effective organization weight / total active weight
+```
+
+`reserved_burst` then multiplies that share by `burst_multiplier`. The shared pool limit is never increased, so a burst cannot exceed the provider-facing hard cap.
+
+An organization is active for 120 seconds after its latest request to that pool. The weight comes from its effective tier assignment. RPM and TPM are tracked independently in their existing 60-second windows; parallel-request capacity remains a hard cap.
+
+A saturated fair-share denial returns a normal `429` with scope `tier_pool_model_rpm_fair_share` or `tier_pool_model_tpm_fair_share`. A denial at the absolute pool ceiling retains the base pool scope.
+
+### Capacity Operations
+
+Platform admins can inspect current pool utilization and temporarily boost one organization's effective weight:
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/ui/api/tiers/capacity/dashboard` | Pool saturation, active organizations, top consumers, boosts, and a limit-hit heatmap |
+| `POST` | `/ui/api/tiers/capacity/boosts` | Apply a `1`-to-`100` weight multiplier with a Redis TTL of at most seven days |
+| `DELETE` | `/ui/api/tiers/capacity/boosts` | Remove a temporary boost |
+
+Boost creation and deletion are written to the audit log. A boost is runtime state: it expires automatically and does not modify the published tier version. See the [Organization Tiers Rollout Runbook](../deployment/organization-tiers-rollout.md) for API examples, metrics, and troubleshooting.
+
 ## Recommended User Journey
 
 1. Open **AI Gateway > Tiers**
@@ -236,3 +268,4 @@ When a customer upgrades to Enterprise, assign the Enterprise tier instead of ma
 - [Organizations](organizations.md)
 - [Usage & Spend](usage.md)
 - [Rate Limiting](../features/rate-limiting.md)
+- [Organization Tiers Rollout](../deployment/organization-tiers-rollout.md)

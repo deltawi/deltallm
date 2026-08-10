@@ -129,6 +129,7 @@ from src.metrics.counters import (
     increment_spend,
     increment_tier_policy_shadow_mismatch,
     increment_usage,
+    record_tier_capacity_observation,
 )
 from src.metrics.gauges import (
     set_deployment_active_requests,
@@ -263,6 +264,7 @@ __all__ = [
     "increment_callable_target_policy_shadow_mismatch",
     "increment_callable_target_policy_fallback",
     "increment_tier_policy_shadow_mismatch",
+    "record_tier_capacity_observation",
     "increment_config_reload",
     "increment_prompt_cache_lookup",
     "increment_prompt_resolution",

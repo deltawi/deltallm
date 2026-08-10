@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from src.metrics import record_tier_capacity_observation
 from src.models.errors import RateLimitError
 from src.services.limit_counter import (
     LegacyParallelLease,
@@ -303,8 +304,25 @@ async def acquire_rate_limit_controls(
     try:
         result = await limiter.check_rate_limits_atomic(checks)
     except RateLimitError as exc:
-        _annotate_rate_limit_error(exc, checks=checks)
+        fair_share_observation = getattr(exc, "fair_share_observation", None)
+        if fair_share_observation is not None:
+            record_tier_capacity_observation(fair_share_observation, outcome="denied")
+        _annotate_rate_limit_error(
+            exc,
+            checks=checks,
+            state=(
+                _fair_share_429_state(
+                    fair_share_observation,
+                    scope=str(getattr(exc, "param", "") or fair_share_observation.scope),
+                    retry_after=int(getattr(exc, "retry_after", 60) or 60),
+                )
+                if fair_share_observation is not None
+                else None
+            ),
+        )
         raise
+    for observation in result.fair_share_observations:
+        record_tier_capacity_observation(observation, outcome="allowed")
     rate_limit_state = compute_rate_limit_state(result, checks)
 
     legacy_parallel_check = _parallel_limit_check(
@@ -455,6 +473,31 @@ def _ensure_parallel_error_fields(exc: RateLimitError, check: ParallelLimitCheck
         exc.param = check.scope
     if getattr(exc, "code", None) is None:
         exc.code = _parallel_limit_error_code(check.scope)
+
+
+def _fair_share_429_state(
+    observation: Any,
+    *,
+    scope: str,
+    retry_after: int,
+) -> RateLimitState:
+    limit = max(1, int(getattr(observation, "share_limit", 1) or 1))
+    reset_at = int(time.time()) + max(1, retry_after)
+    if str(getattr(observation, "scope", "")).endswith("_tpm"):
+        return RateLimitState(
+            tpm_limit=limit,
+            tpm_remaining=0,
+            tpm_reset=reset_at,
+            tpm_scope=scope,
+            warning="near_limit",
+        )
+    return RateLimitState(
+        rpm_limit=limit,
+        rpm_remaining=0,
+        rpm_reset=reset_at,
+        rpm_scope=scope,
+        warning="near_limit",
+    )
 
 
 def _parallel_429_state(check: ParallelLimitCheck, *, retry_after: object) -> RateLimitState:

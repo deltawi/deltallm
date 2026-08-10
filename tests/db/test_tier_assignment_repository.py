@@ -232,8 +232,8 @@ async def test_upsert_org_assignment_rejects_overlapping_primary_assignment() ->
 
 @pytest.mark.asyncio
 async def test_upsert_org_assignment_checks_effective_window_overlap_params() -> None:
-    starts_at = datetime(2026, 7, 1, tzinfo=UTC)
-    ends_at = datetime(2026, 8, 1, tzinfo=UTC)
+    starts_at = datetime(2099, 7, 1, tzinfo=UTC)
+    ends_at = datetime(2099, 8, 1, tzinfo=UTC)
     prisma = _FakePrisma(enable_tx=True)
     repository = TierRepository(prisma)
 

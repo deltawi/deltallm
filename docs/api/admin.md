@@ -122,6 +122,30 @@ Example inline model create payload:
 
 `POST /ui/api/provider-models/discover` accepts the same connection fields, including `auth_header_name` and `auth_header_format`, so the UI can probe OpenAI-compatible gateways before saving a deployment.
 
+### Organization Tiers
+
+Tier administration requires platform-admin permission.
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET`, `POST` | `/ui/api/tiers` | List or create tiers |
+| `GET`, `PATCH`, `DELETE` | `/ui/api/tiers/{tier_id}` | Read, update, or delete a tier |
+| `POST` | `/ui/api/tiers/{tier_id}/versions` | Create a draft version |
+| `GET` | `/ui/api/tiers/{tier_id}/versions/{tier_version_id}` | Read a version and its policies |
+| `POST` | `/ui/api/tiers/{tier_id}/versions/{tier_version_id}/clone` | Clone a version into a draft |
+| `PUT` | `/ui/api/tiers/{tier_id}/versions/{tier_version_id}/model-policies` | Replace the draft's model policies |
+| `PUT` | `/ui/api/tiers/{tier_id}/versions/{tier_version_id}/capacity-pools` | Replace the draft's capacity pools |
+| `POST` | `/ui/api/tiers/{tier_id}/versions/{tier_version_id}/publish` | Publish a version |
+| `POST` | `/ui/api/tiers/{tier_id}/versions/{tier_version_id}/archive` | Archive a version |
+| `GET`, `POST` | `/ui/api/organizations/{organization_id}/tier-assignments` | List or create assignments |
+| `PATCH`, `DELETE` | `/ui/api/organizations/{organization_id}/tier-assignments/{assignment_id}` | Update or remove an assignment |
+| `GET` | `/ui/api/organizations/{organization_id}/tier-policy-preview` | Preview the effective compiled policy |
+| `POST` | `/ui/api/organizations/{organization_id}/tier-policy/simulate` | Simulate model access, pricing, and limits |
+| `GET` | `/ui/api/tiers/capacity/dashboard` | Inspect live pool utilization and limit hits |
+| `POST`, `DELETE` | `/ui/api/tiers/capacity/boosts` | Apply or clear an audited temporary weight boost |
+
+See [Admin UI: Tiers](../admin-ui/tiers.md) for the policy model and [Organization Tiers Rollout](../deployment/organization-tiers-rollout.md) for activation and operations.
+
 ### Named Credentials
 
 | Method | Endpoint | Purpose |

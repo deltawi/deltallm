@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from src.models.errors import ServiceUnavailableError
-from src.services.limit_counter import ParallelLimitCheck, RateLimitCheck
+from src.services.limit_counter import FairShareLimit, ParallelLimitCheck, RateLimitCheck
 from src.services.tier_policy_service import resolve_tier_policy_unavailable_decision
 
 RateLimitMode = Literal["sync", "batch"]
@@ -168,6 +168,14 @@ def _build_tier_controls_from_service(
             pool_policy,
             tokens=tokens,
             request_mode=request_mode,
+            organization_id=organization_id,
+            assignment_weight=_positive_int_or_none(
+                getattr(getattr(model_policy, "source", None), "assignment_weight", None)
+            )
+            or 1,
+            tier_key=_normalize_id(
+                getattr(getattr(model_policy, "source", None), "tier_key", None)
+            ),
         )
     )
     pool_parallel_check = _pool_parallel_limit_check(
@@ -185,18 +193,41 @@ def _capacity_pool_rate_limit_checks(
     *,
     tokens: int,
     request_mode: RateLimitMode,
+    organization_id: str,
+    assignment_weight: int,
+    tier_key: str | None,
 ) -> list[RateLimitCheck]:
     descriptors = select_tier_rate_limit_descriptors(
         getattr(pool_policy, "rate_limit_descriptors", ()) if pool_policy is not None else (),
         request_mode=request_mode,
     )
     checks: list[RateLimitCheck] = []
+    strategy = str(getattr(pool_policy, "strategy", "hard_cap") or "hard_cap").strip().lower()
     for descriptor in descriptors:
         check = _rate_limit_check_from_descriptor(
             descriptor,
             tokens=tokens,
         )
         if check is not None:
+            if strategy in {"weighted_fair", "reserved_burst"}:
+                check = replace(
+                    check,
+                    fair_share=FairShareLimit(
+                        organization_id=organization_id,
+                        weight=assignment_weight,
+                        tier_key=tier_key,
+                        strategy=strategy,
+                        saturation_threshold=_positive_float_or_default(
+                            getattr(pool_policy, "saturation_threshold", None),
+                            default=0.8,
+                            maximum=1.0,
+                        ),
+                        burst_multiplier=_positive_float_or_default(
+                            getattr(pool_policy, "burst_multiplier", None),
+                            default=1.0,
+                        ),
+                    ),
+                )
             checks.append(check)
     return checks
 
@@ -407,3 +438,18 @@ def _positive_int_or_none(value: object) -> int | None:
     except (TypeError, ValueError):
         return None
     return normalized if normalized > 0 else None
+
+
+def _positive_float_or_default(
+    value: object,
+    *,
+    default: float,
+    maximum: float | None = None,
+) -> float:
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        return default
+    if normalized <= 0 or (maximum is not None and normalized > maximum):
+        return default
+    return normalized

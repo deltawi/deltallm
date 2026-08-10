@@ -1069,19 +1069,25 @@ async def test_init_batch_runtime_uses_settings_fallback_for_policy_modes(
             self.kwargs = kwargs
             created["create_session_service"] = self
 
-    monkeypatch.setattr("src.bootstrap.batch.LocalBatchArtifactStorage", lambda path: {"path": path})
-    monkeypatch.setattr("src.bootstrap.batch.BatchService", FakeBatchService)
-    monkeypatch.setattr("src.bootstrap.batch.BatchCreateSessionService", FakeBatchCreateSessionService)
     monkeypatch.setattr(
-        "src.bootstrap.batch.BatchCreateArtifactStorageBackend",
+        "src.bootstrap.batch_runtime.storage.LocalBatchArtifactStorage",
+        lambda path: {"path": path},
+    )
+    monkeypatch.setattr("src.bootstrap.batch_runtime.core.BatchService", FakeBatchService)
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionService",
+        FakeBatchCreateSessionService,
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateArtifactStorageBackend",
         lambda **kwargs: {"kind": "staging", **kwargs},
     )
     monkeypatch.setattr(
-        "src.bootstrap.batch.BatchCreateSessionPromoter",
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionPromoter",
         lambda **kwargs: {"kind": "promoter", **kwargs},
     )
     monkeypatch.setattr(
-        "src.bootstrap.batch.BatchCreateSessionAdminService",
+        "src.bootstrap.batch_runtime.create_sessions.BatchCreateSessionAdminService",
         lambda **kwargs: {"kind": "admin-service", **kwargs},
     )
 

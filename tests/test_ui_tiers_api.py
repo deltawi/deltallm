@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
+from types import SimpleNamespace
 
 import pytest
 
@@ -43,6 +44,22 @@ class _RecordingGovernanceInvalidationService:
     async def notify(self, *targets: str) -> bool:
         self.notified_targets.append(tuple(targets))
         return self.notify_result
+
+
+class _BoostRedis:
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+        self.ttls: dict[str, int] = {}
+
+    async def set(self, key: str, value: str, *, ex: int) -> None:
+        self.values[key] = value
+        self.ttls[key] = ex
+
+    async def delete(self, key: str) -> int:
+        existed = key in self.values
+        self.values.pop(key, None)
+        self.ttls.pop(key, None)
+        return int(existed)
 
 
 class _FakeTierRepository:
@@ -807,3 +824,47 @@ async def test_tier_admin_publish_non_draft_returns_conflict(client, test_app):
 
     assert response.status_code == 409
     assert response.json()["detail"] == "only draft tier versions can be published"
+
+
+@pytest.mark.asyncio
+async def test_tier_capacity_boost_routes_are_static_audited_and_ttl_backed(client, test_app):
+    redis = _BoostRedis()
+    audit = _RecordingAuditService()
+    policy = SimpleNamespace(strategy="weighted_fair")
+    test_app.state.redis = redis
+    test_app.state.audit_service = audit
+    test_app.state.tier_policy_service = SimpleNamespace(
+        get_capacity_pool_policy=lambda pool_key, callable_key: (
+            policy if (pool_key, callable_key) == ("shared", "gpt-4o-mini") else None
+        )
+    )
+
+    created = await client.post(
+        "/ui/api/tiers/capacity/boosts",
+        headers=_headers(test_app),
+        json={
+            "pool_key": "shared",
+            "callable_key": "gpt-4o-mini",
+            "organization_id": "org-1",
+            "multiplier": 2,
+            "expires_in_seconds": 300,
+        },
+    )
+
+    assert created.status_code == 200
+    assert created.json()["multiplier"] == 2
+    assert redis.values["tier_capacity_boost:shared:gpt-4o-mini:org-1"] == "2.0"
+    assert redis.ttls["tier_capacity_boost:shared:gpt-4o-mini:org-1"] == 300
+    assert audit.sync_calls[-1][0].action == AuditAction.ADMIN_TIER_CAPACITY_BOOST_CREATE
+
+    deleted = await client.delete(
+        (
+            "/ui/api/tiers/capacity/boosts?pool_key=shared"
+            "&callable_key=gpt-4o-mini&organization_id=org-1"
+        ),
+        headers=_headers(test_app),
+    )
+
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] is True
+    assert audit.sync_calls[-1][0].action == AuditAction.ADMIN_TIER_CAPACITY_BOOST_DELETE

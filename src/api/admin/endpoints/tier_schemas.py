@@ -66,3 +66,11 @@ class TierCapacityPoolRequest(_StrictRequest):
 
 class TierCapacityPoolReplaceRequest(_StrictRequest):
     pools: list[TierCapacityPoolRequest]
+
+
+class TierCapacityBoostRequest(_StrictRequest):
+    pool_key: str
+    callable_key: str
+    organization_id: str
+    multiplier: float = Field(ge=1, le=100)
+    expires_in_seconds: int = Field(ge=1, le=604_800)

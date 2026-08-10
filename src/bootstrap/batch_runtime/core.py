@@ -17,6 +17,7 @@ from src.batch.scheduling import (
 from src.batch.service import BatchService
 from src.bootstrap.batch_runtime.runtime import BatchRuntime
 from src.bootstrap.batch_runtime.scheduler import record_startup_scheduler_rollbacks
+from src.bootstrap.batch_runtime.settings import batch_runtime_setting
 from src.bootstrap.batch_runtime.state import configure_enabled_batch_state
 from src.bootstrap.batch_runtime.storage import build_batch_storage, build_batch_storage_registry
 from src.services.model_visibility import normalize_callable_target_policy_mode
@@ -96,13 +97,24 @@ async def initialize_batch_core(
         callable_target_grant_service=getattr(app.state, "callable_target_grant_service", None),
         tier_policy_service=getattr(app.state, "tier_policy_service", None),
         callable_target_scope_policy_mode=normalize_callable_target_policy_mode(
-            getattr(general, "callable_target_scope_policy_mode", "enforce")
+            batch_runtime_setting(
+                app,
+                cfg,
+                "callable_target_scope_policy_mode",
+                default="enforce",
+            )
         ),
-        tier_policy_mode=getattr(general, "tier_policy_mode", "disabled"),
-        tier_policy_missing_service_mode=getattr(
-            general,
+        tier_policy_mode=batch_runtime_setting(
+            app,
+            cfg,
+            "tier_policy_mode",
+            default="disabled",
+        ),
+        tier_policy_missing_service_mode=batch_runtime_setting(
+            app,
+            cfg,
             "tier_policy_missing_service_mode",
-            "fail_open",
+            default="fail_open",
         ),
         model_group_resolver=model_group_resolver,
     )
