@@ -8,36 +8,22 @@ import time
 from typing import Any, Literal
 
 from src.models.errors import RateLimitError, ServiceUnavailableError
+from src.services.tier_capacity_fair_share import (
+    DEFAULT_ACTIVE_TTL_SECONDS,
+    FAIR_SHARE_WINDOW_SECONDS,
+    TierFairShareCheck,
+    TierFairShareDecision,
+)
+from src.services.tier_fair_share_counter import TierFairShareCounter
+from src.services.tier_fair_share_counter import (
+    fair_share_decision_from_raw,
+    fair_share_rate_limit_error,
+    fair_share_script_args,
+    fair_share_script_keys,
+)
+from src.services.tier_fair_share_admission_lua import RATE_AND_FAIR_SHARE_LUA
 
 _PARALLEL_LEASE_TTL_SECONDS = 300
-_FAIR_SHARE_ACTIVE_TTL_SECONDS = 120
-
-
-@dataclass(frozen=True)
-class FairShareLimit:
-    organization_id: str
-    weight: int
-    tier_key: str | None = None
-    strategy: Literal["weighted_fair", "reserved_burst"] = "weighted_fair"
-    saturation_threshold: float = 0.8
-    burst_multiplier: float = 1.0
-    active_ttl_seconds: int = _FAIR_SHARE_ACTIVE_TTL_SECONDS
-
-
-@dataclass(frozen=True)
-class FairShareObservation:
-    scope: str
-    entity_id: str
-    organization_id: str
-    tier_key: str | None
-    active_organizations: int
-    effective_weight: float
-    total_active_weight: float
-    share_limit: int
-    pool_limit: int
-    pool_current: int
-    saturated: bool
-    capacity_boost_multiplier: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -47,7 +33,6 @@ class RateLimitCheck:
     limit: int
     amount: int = 1
     window_seconds: int = 60
-    fair_share: FairShareLimit | None = None
 
 
 @dataclass(frozen=True)
@@ -96,7 +81,14 @@ class RateLimitResult:
     current_values: list[int] = field(default_factory=list)
     window_reset_at: int = 0
     window_resets: list[int] = field(default_factory=list)
-    fair_share_observations: list[FairShareObservation] = field(default_factory=list)
+
+
+@dataclass
+class RateLimitAdmissionResult:
+    rate_result: RateLimitResult = field(default_factory=RateLimitResult)
+    fair_share_decisions: tuple[TierFairShareDecision, ...] = ()
+    legacy_parallel_lease: LegacyParallelLease | None = None
+    parallel_leases: tuple[ParallelLimitLease, ...] = ()
 
 
 class LimitCounter:
@@ -105,8 +97,11 @@ class LimitCounter:
         self.degraded_mode = degraded_mode if degraded_mode in {"fail_open", "fail_closed"} else "fail_open"
         self._fallback_counters: dict[str, tuple[int, int]] = {}
         self._fallback_parallel: dict[str, int] = {}
-        self._fallback_fair_active: dict[str, dict[str, tuple[int, float]]] = {}
         self._fallback_lock = asyncio.Lock()
+        self._tier_fair_share_counter = TierFairShareCounter(
+            redis_client=redis_client,
+            degraded_mode=self.degraded_mode,
+        )
 
     @staticmethod
     def _window_id(window_seconds: int) -> int:
@@ -160,14 +155,6 @@ class LimitCounter:
 
         if self.redis is None:
             return await self._check_rate_limits_fallback(normalized, window_reset_at, per_check_resets)
-
-        if any(check.fair_share is not None for check in normalized):
-            return await self._check_rate_limits_redis_fair_share(
-                normalized,
-                window_reset_at=window_reset_at,
-                per_check_resets=per_check_resets,
-                now=now,
-            )
 
         keys = [
             f"ratelimit:{check.scope}:{check.entity_id}:{self._window_id(check.window_seconds)}"
@@ -224,270 +211,230 @@ return results
             retry_after=retry_after,
         )
 
-    async def _check_rate_limits_redis_fair_share(
+    async def check_rate_limits_and_tier_fair_share_atomic(
         self,
-        checks: list[RateLimitCheck],
+        rate_checks: list[RateLimitCheck],
+        fair_share_checks: list[TierFairShareCheck],
         *,
-        window_reset_at: int,
-        per_check_resets: list[int],
-        now: float,
-    ) -> RateLimitResult:
-        n = len(checks)
-        window_ids = [self._window_id(check.window_seconds) for check in checks]
-        global_keys = [
-            f"ratelimit:{check.scope}:{check.entity_id}:{window_ids[index]}"
-            for index, check in enumerate(checks)
+        active_ttl_seconds: int = DEFAULT_ACTIVE_TTL_SECONDS,
+        legacy_parallel_check: ParallelLimitCheck | None = None,
+        parallel_checks: list[ParallelLimitCheck] | None = None,
+        parallel_ttl_seconds: int = _PARALLEL_LEASE_TTL_SECONDS,
+    ) -> RateLimitAdmissionResult:
+        normalized_rate_checks = [check for check in rate_checks if check.limit > 0 and check.amount > 0]
+        normalized_fair_share_checks = _normalize_tier_fair_share_checks(fair_share_checks)
+        normalized_parallel_groups = _coalesce_parallel_limit_checks(parallel_checks or [])
+        normalized_legacy_check = (
+            legacy_parallel_check
+            if legacy_parallel_check is not None and legacy_parallel_check.limit > 0 and legacy_parallel_check.entity_id
+            else None
+        )
+        if not normalized_fair_share_checks and normalized_legacy_check is None and not normalized_parallel_groups:
+            rate_result = await self.check_rate_limits_atomic(normalized_rate_checks)
+            return RateLimitAdmissionResult(rate_result=rate_result)
+
+        now = time.time()
+        rate_resets = [
+            int((math.floor(now / check.window_seconds) + 1) * check.window_seconds)
+            for check in normalized_rate_checks
         ]
-        org_keys = [
-            _fair_share_org_usage_key(check, window_ids[index])
-            if check.fair_share is not None
-            else global_keys[index]
-            for index, check in enumerate(checks)
+        min_rate_window = min((check.window_seconds for check in normalized_rate_checks), default=0)
+        window_reset_at = (
+            int((math.floor(now / min_rate_window) + 1) * min_rate_window)
+            if min_rate_window > 0
+            else 0
+        )
+
+        if self.redis is None:
+            return await self._check_rate_limits_and_tier_fair_share_fallback(
+                normalized_rate_checks,
+                normalized_fair_share_checks,
+                legacy_parallel_check=normalized_legacy_check,
+                parallel_groups=normalized_parallel_groups,
+                window_reset_at=window_reset_at,
+                rate_resets=rate_resets,
+                active_ttl_seconds=active_ttl_seconds,
+                parallel_ttl_seconds=parallel_ttl_seconds,
+            )
+
+        window_id = math.floor(now / FAIR_SHARE_WINDOW_SECONDS)
+        rate_keys = [
+            f"ratelimit:{check.scope}:{check.entity_id}:{self._window_id(check.window_seconds)}"
+            for check in normalized_rate_checks
         ]
-        active_keys = [
-            _fair_share_active_key(check.entity_id)
-            if check.fair_share is not None
-            else global_keys[index]
-            for index, check in enumerate(checks)
+        legacy_parallel_keys = (
+            [_legacy_parallel_key(normalized_legacy_check.scope, normalized_legacy_check.entity_id)]
+            if normalized_legacy_check is not None
+            else []
+        )
+        normalized_parallel_ttl_seconds = max(1, int(parallel_ttl_seconds))
+        now_ms = int(now * 1000)
+        parallel_expires_at_ms = now_ms + (normalized_parallel_ttl_seconds * 1000)
+        parallel_leases = tuple(
+            ParallelLimitLease(
+                scope=group.check.scope,
+                entity_id=group.check.entity_id,
+                limit=group.check.limit,
+                token=secrets.token_urlsafe(18),
+                backend="redis",
+                ttl_seconds=normalized_parallel_ttl_seconds,
+            )
+            for group in normalized_parallel_groups
+            for _ in range(group.requested_count)
+        )
+        parallel_keys = [
+            _parallel_lease_key(group.check.scope, group.check.entity_id)
+            for group in normalized_parallel_groups
         ]
-        weight_keys = [
-            _fair_share_weight_key(check.entity_id)
-            if check.fair_share is not None
-            else global_keys[index]
-            for index, check in enumerate(checks)
-        ]
-        boost_keys = [
-            fair_share_boost_key(check.entity_id, check.fair_share.organization_id)
-            if check.fair_share is not None
-            else global_keys[index]
-            for index, check in enumerate(checks)
-        ]
-        denial_keys = [
-            _fair_share_denial_key(check.scope, check.entity_id, window_ids[index])
-            if check.fair_share is not None
-            else global_keys[index]
-            for index, check in enumerate(checks)
-        ]
-        amounts = [str(int(check.amount)) for check in checks]
-        limits = [str(int(check.limit)) for check in checks]
-        ttls = [str(int(check.window_seconds)) for check in checks]
-        fair_enabled = ["1" if check.fair_share is not None else "0" for check in checks]
-        organization_ids = [
-            check.fair_share.organization_id if check.fair_share is not None else ""
-            for check in checks
-        ]
-        weights = [
-            str(max(1, int(check.fair_share.weight))) if check.fair_share is not None else "1"
-            for check in checks
-        ]
-        thresholds = [
-            str(_normalized_saturation_threshold(check.fair_share.saturation_threshold))
-            if check.fair_share is not None
-            else "1"
-            for check in checks
-        ]
-        burst_multipliers = [
-            str(_normalized_burst_multiplier(check.fair_share))
-            if check.fair_share is not None
-            else "1"
-            for check in checks
-        ]
-        active_ttls = [
-            str(max(1, int(check.fair_share.active_ttl_seconds)))
-            if check.fair_share is not None
-            else "1"
-            for check in checks
+        fair_keys: list[str] = []
+        fair_args: list[str] = []
+        for check in normalized_fair_share_checks:
+            fair_keys.extend(fair_share_script_keys(check, window_id=window_id))
+            fair_args.extend(fair_share_script_args(check, now=now, ttl_seconds=max(1, int(active_ttl_seconds))))
+
+        rate_amounts = [str(int(check.amount)) for check in normalized_rate_checks]
+        rate_limits = [str(int(check.limit)) for check in normalized_rate_checks]
+        rate_ttls = [str(int(check.window_seconds)) for check in normalized_rate_checks]
+        legacy_parallel_limits = (
+            [str(int(normalized_legacy_check.limit))]
+            if normalized_legacy_check is not None
+            else []
+        )
+        parallel_limits = [str(int(group.check.limit)) for group in normalized_parallel_groups]
+        parallel_requested_counts = [str(int(group.requested_count)) for group in normalized_parallel_groups]
+        parallel_tokens = [lease.token for lease in parallel_leases]
+        argv = [
+            str(len(normalized_rate_checks)),
+            str(len(normalized_fair_share_checks)),
+            str(1 if normalized_legacy_check is not None else 0),
+            str(len(normalized_parallel_groups)),
+            str(now_ms),
+            str(parallel_expires_at_ms),
+            str(normalized_parallel_ttl_seconds),
+            *rate_amounts,
+            *rate_limits,
+            *rate_ttls,
+            *legacy_parallel_limits,
+            *parallel_limits,
+            *parallel_requested_counts,
+            *parallel_tokens,
+            *fair_args,
         ]
 
-        script = """
-local n = #KEYS / 6
-local now_ms = tonumber(ARGV[(9 * n) + 1]) or 0
-local active_counts = {}
-local share_limits = {}
-local saturated_values = {}
-local boost_values = {}
-local total_weight_values = {}
-local effective_weight_values = {}
-
-for i = 1, n do
-  local current = tonumber(redis.call('GET', KEYS[i]) or '0')
-  local amount = tonumber(ARGV[i]) or 0
-  local limit = tonumber(ARGV[n + i]) or 0
-  if current + amount > limit then
-    if ARGV[(3 * n) + i] == '1' then
-      redis.call('HINCRBY', KEYS[(5 * n) + i], ARGV[(4 * n) + i], 1)
-      redis.call('EXPIRE', KEYS[(5 * n) + i], tonumber(ARGV[(2 * n) + i]) or 60)
-    end
-    return {0, i, 1, 0, 0, 1, 1000, 0, 0, current + amount}
-  end
-end
-
-for i = 1, n do
-  active_counts[i] = 0
-  share_limits[i] = 0
-  saturated_values[i] = 0
-  boost_values[i] = 1000
-  total_weight_values[i] = 0
-  effective_weight_values[i] = 0
-  if ARGV[(3 * n) + i] == '1' then
-    local org_id = ARGV[(4 * n) + i]
-    local base_weight = tonumber(ARGV[(5 * n) + i]) or 1
-    local threshold = tonumber(ARGV[(6 * n) + i]) or 0.8
-    local burst = tonumber(ARGV[(7 * n) + i]) or 1
-    local active_ttl = tonumber(ARGV[(8 * n) + i]) or 120
-    local boost = tonumber(redis.call('GET', KEYS[(4 * n) + i]) or '1') or 1
-    if boost < 1 then boost = 1 end
-    local effective_weight = base_weight * boost
-    redis.call('ZREMRANGEBYSCORE', KEYS[(2 * n) + i], '-inf', now_ms)
-    redis.call('ZADD', KEYS[(2 * n) + i], now_ms + (active_ttl * 1000), org_id)
-    redis.call('HSET', KEYS[(3 * n) + i], org_id, effective_weight)
-    redis.call('EXPIRE', KEYS[(2 * n) + i], active_ttl)
-    redis.call('EXPIRE', KEYS[(3 * n) + i], active_ttl)
-
-    local members = redis.call('ZRANGE', KEYS[(2 * n) + i], 0, -1)
-    local total_weight = 0
-    for _, member in ipairs(members) do
-      total_weight = total_weight + (tonumber(redis.call('HGET', KEYS[(3 * n) + i], member) or '1') or 1)
-    end
-    if total_weight <= 0 then total_weight = effective_weight end
-    local limit = tonumber(ARGV[n + i]) or 0
-    local amount = tonumber(ARGV[i]) or 0
-    local current = tonumber(redis.call('GET', KEYS[i]) or '0')
-    local pool_after = current + amount
-    local saturated = 0
-    if limit > 0 and (pool_after / limit) >= threshold then saturated = 1 end
-    local share_limit = math.max(1, math.floor((limit * effective_weight / total_weight) * burst))
-    local org_current = tonumber(redis.call('GET', KEYS[n + i]) or '0')
-
-    active_counts[i] = #members
-    share_limits[i] = share_limit
-    saturated_values[i] = saturated
-    boost_values[i] = math.floor(boost * 1000)
-    total_weight_values[i] = math.floor(total_weight * 1000)
-    effective_weight_values[i] = math.floor(effective_weight * 1000)
-
-    if saturated == 1 and org_current + amount > share_limit then
-      redis.call('HINCRBY', KEYS[(5 * n) + i], org_id, 1)
-      redis.call('EXPIRE', KEYS[(5 * n) + i], tonumber(ARGV[(2 * n) + i]) or 60)
-      return {0, i, 2, #members, share_limit, saturated, math.floor(boost * 1000), math.floor(total_weight * 1000), math.floor(effective_weight * 1000), pool_after}
-    end
-  end
-end
-
-local results = {1, 0}
-for i = 1, n do
-  local amount = tonumber(ARGV[i]) or 0
-  local ttl = tonumber(ARGV[(2 * n) + i]) or 60
-  local new_val = redis.call('INCRBY', KEYS[i], amount)
-  redis.call('EXPIRE', KEYS[i], ttl)
-  results[i + 2] = new_val
-  if ARGV[(3 * n) + i] == '1' then
-    redis.call('INCRBY', KEYS[n + i], amount)
-    redis.call('EXPIRE', KEYS[n + i], ttl)
-  end
-end
-for i = 1, n do results[(1 * n) + i + 2] = active_counts[i] end
-for i = 1, n do results[(2 * n) + i + 2] = share_limits[i] end
-for i = 1, n do results[(3 * n) + i + 2] = saturated_values[i] end
-for i = 1, n do results[(4 * n) + i + 2] = boost_values[i] end
-for i = 1, n do results[(5 * n) + i + 2] = total_weight_values[i] end
-for i = 1, n do results[(6 * n) + i + 2] = effective_weight_values[i] end
-return results
-"""
         try:
-            raw = await self.redis.eval(
-                script,
-                6 * n,
-                *global_keys,
-                *org_keys,
-                *active_keys,
-                *weight_keys,
-                *boost_keys,
-                *denial_keys,
-                *amounts,
-                *limits,
-                *ttls,
-                *fair_enabled,
-                *organization_ids,
-                *weights,
-                *thresholds,
-                *burst_multipliers,
-                *active_ttls,
-                str(int(now * 1000)),
+            raw = await RATE_AND_FAIR_SHARE_LUA.eval(
+                self.redis,
+                len(rate_keys) + len(legacy_parallel_keys) + len(parallel_keys) + len(fair_keys),
+                *rate_keys,
+                *legacy_parallel_keys,
+                *parallel_keys,
+                *fair_keys,
+                *argv,
             )
         except Exception:
             await self._handle_redis_degraded()
-            return await self._check_rate_limits_fallback(
-                checks,
-                window_reset_at,
-                per_check_resets,
+            return await self._check_rate_limits_and_tier_fair_share_fallback(
+                normalized_rate_checks,
+                normalized_fair_share_checks,
+                legacy_parallel_check=normalized_legacy_check,
+                parallel_groups=normalized_parallel_groups,
+                window_reset_at=window_reset_at,
+                rate_resets=rate_resets,
+                active_ttl_seconds=active_ttl_seconds,
+                parallel_ttl_seconds=parallel_ttl_seconds,
             )
 
-        ok = int(raw[0]) if isinstance(raw, (list, tuple)) and raw else 1
-        if ok != 1:
-            failed_index = int(raw[1]) - 1 if len(raw) >= 2 else 0
-            failed_index = max(0, min(failed_index, n - 1))
-            failed = checks[failed_index]
-            reason = int(raw[2]) if len(raw) >= 3 else 1
-            retry_after = failed.window_seconds - int(now % failed.window_seconds)
-            scope = f"{failed.scope}_fair_share" if reason == 2 else failed.scope
-            error = RateLimitError(
-                message=f"Rate limit exceeded for scope '{scope}'",
-                param=scope,
-                code=f"{scope}_exceeded",
-                retry_after=retry_after,
-            )
-            if failed.fair_share is not None and len(raw) >= 10:
-                setattr(
-                    error,
-                    "fair_share_observation",
-                    _fair_share_observation(
-                        failed,
-                        active_organizations=int(raw[3]),
-                        share_limit=int(raw[4]),
-                        saturated=bool(int(raw[5])),
-                        boost_scaled=int(raw[6]),
-                        total_weight_scaled=int(raw[7]),
-                        effective_weight_scaled=int(raw[8]),
-                        pool_current=int(raw[9]),
-                    ),
+        values = list(raw) if isinstance(raw, (list, tuple)) else []
+        ok = int(values[0]) if values else 1
+        if ok == 1:
+            rate_count = int(values[1]) if len(values) > 1 else len(normalized_rate_checks)
+            fair_count = int(values[2]) if len(values) > 2 else len(normalized_fair_share_checks)
+            current_values = [int(values[3 + index]) for index in range(rate_count) if 3 + index < len(values)]
+            fair_start = 3 + rate_count
+            decisions = tuple(
+                fair_share_decision_from_raw(
+                    normalized_fair_share_checks[index],
+                    values[fair_start + (index * 12) : fair_start + ((index + 1) * 12)],
                 )
-            raise error
+                for index in range(fair_count)
+            )
+            return RateLimitAdmissionResult(
+                rate_result=RateLimitResult(
+                    checks=normalized_rate_checks,
+                    current_values=current_values,
+                    window_reset_at=window_reset_at,
+                    window_resets=rate_resets,
+                ),
+                fair_share_decisions=decisions,
+                legacy_parallel_lease=(
+                    LegacyParallelLease(
+                        scope=normalized_legacy_check.scope,
+                        entity_id=normalized_legacy_check.entity_id,
+                        limit=normalized_legacy_check.limit,
+                        backend="redis",
+                        ttl_seconds=normalized_parallel_ttl_seconds,
+                    )
+                    if normalized_legacy_check is not None
+                    else None
+                ),
+                parallel_leases=parallel_leases,
+            )
 
-        current_values = [
-            _raw_int(raw, index + 2, default=check.amount)
-            for index, check in enumerate(checks)
-        ]
-        observations: list[FairShareObservation] = []
-        for index, check in enumerate(checks):
-            if check.fair_share is None:
-                continue
-            observations.append(
-                _fair_share_observation(
-                    check,
-                    active_organizations=_raw_int(raw, n + index + 2, default=1),
-                    share_limit=_raw_int(raw, (2 * n) + index + 2, default=check.limit),
-                    saturated=bool(_raw_int(raw, (3 * n) + index + 2, default=0)),
-                    boost_scaled=_raw_int(raw, (4 * n) + index + 2, default=1000),
-                    total_weight_scaled=_raw_int(
-                        raw,
-                        (5 * n) + index + 2,
-                        default=max(1, check.fair_share.weight) * 1000,
-                    ),
-                    effective_weight_scaled=_raw_int(
-                        raw,
-                        (6 * n) + index + 2,
-                        default=max(1, check.fair_share.weight) * 1000,
-                    ),
-                    pool_current=current_values[index],
-                )
+        failure_kind = str(values[1]) if len(values) > 1 else "rate"
+        if failure_kind == "fair":
+            failed_index = int(values[2]) - 1 if len(values) > 2 else 0
+            failed_index = max(0, min(failed_index, len(normalized_fair_share_checks) - 1))
+            decision = fair_share_decision_from_raw(
+                normalized_fair_share_checks[failed_index],
+                values[3:15],
             )
-        return RateLimitResult(
-            checks=checks,
-            current_values=current_values,
-            window_reset_at=window_reset_at,
-            window_resets=per_check_resets,
-            fair_share_observations=observations,
+            raise fair_share_rate_limit_error(decision, now=now)
+        if failure_kind == "parallel":
+            failed_check = normalized_legacy_check
+            if len(values) > 2 and str(values[2]) == "lease":
+                failed_index = int(values[3]) - 1 if len(values) > 3 else 0
+                failed_index = max(0, min(failed_index, len(normalized_parallel_groups) - 1))
+                failed_check = normalized_parallel_groups[failed_index].check if normalized_parallel_groups else None
+            if failed_check is None:
+                failed_check = ParallelLimitCheck(scope="key", entity_id="", limit=1)
+            raise _parallel_limit_error(failed_check.scope)
+
+        failed_index = int(values[2]) - 1 if len(values) > 2 else 0
+        failed = normalized_rate_checks[max(0, min(failed_index, len(normalized_rate_checks) - 1))]
+        retry_after = failed.window_seconds - int(now % failed.window_seconds)
+        raise RateLimitError(
+            message=f"Rate limit exceeded for scope '{failed.scope}'",
+            param=failed.scope,
+            code=f"{failed.scope}_exceeded",
+            retry_after=retry_after,
+        )
+
+    async def check_tier_fair_share(
+        self,
+        checks: list[TierFairShareCheck],
+        *,
+        active_ttl_seconds: int = DEFAULT_ACTIVE_TTL_SECONDS,
+    ) -> tuple[TierFairShareDecision, ...]:
+        return await self._tier_fair_share_counter.check(
+            checks,
+            active_ttl_seconds=active_ttl_seconds,
+        )
+
+    async def record_tier_fair_share_limit_hit(
+        self,
+        *,
+        pool_key: str,
+        callable_key: str,
+        organization_id: str,
+        scope: str,
+        tier_key: str | None,
+    ) -> None:
+        await self._tier_fair_share_counter.record_limit_hit(
+            pool_key=pool_key,
+            callable_key=callable_key,
+            organization_id=organization_id,
+            scope=scope,
+            tier_key=tier_key,
         )
 
     async def acquire_parallel(self, scope: str, entity_id: str, limit: int | None) -> None:
@@ -815,8 +762,6 @@ return {1, 0}
                 int((math.floor(now / c.window_seconds) + 1) * c.window_seconds) for c in normalized
             ]
         pending_updates: list[tuple[str, int, int]] = []
-        current_values: list[int] = []
-        observations: list[FairShareObservation] = []
 
         async with self._fallback_lock:
             for check in normalized:
@@ -836,80 +781,142 @@ return {1, 0}
                         retry_after=retry_after,
                     )
                 pending_updates.append((key, expiry, next_value))
-                current_values.append(next_value)
 
-                fair = check.fair_share
-                if fair is None:
-                    continue
-                active_key = _fair_share_active_key(check.entity_id)
-                active = self._fallback_fair_active.setdefault(active_key, {})
-                active = {
-                    org_id: (active_expiry, weight)
-                    for org_id, (active_expiry, weight) in active.items()
-                    if active_expiry > now
-                }
-                effective_weight = float(max(1, int(fair.weight)))
-                active[fair.organization_id] = (
-                    now + max(1, int(fair.active_ttl_seconds)),
-                    effective_weight,
-                )
-                self._fallback_fair_active[active_key] = active
-                total_weight = sum(weight for _, weight in active.values()) or effective_weight
-                threshold = _normalized_saturation_threshold(fair.saturation_threshold)
-                saturated = next_value / check.limit >= threshold
-                share_limit = max(
-                    1,
-                    math.floor(
-                        check.limit
-                        * effective_weight
-                        / total_weight
-                        * _normalized_burst_multiplier(fair)
-                    ),
-                )
-                org_key = _fair_share_org_usage_fallback_key(check, window_id)
-                org_expiry, org_current = self._fallback_counters.get(
-                    org_key,
-                    (now + ws, 0),
-                )
-                if org_expiry <= now:
-                    org_expiry, org_current = now + ws, 0
-                org_next = org_current + check.amount
-                observation = FairShareObservation(
-                    scope=check.scope,
-                    entity_id=check.entity_id,
-                    organization_id=fair.organization_id,
-                    tier_key=fair.tier_key,
-                    active_organizations=len(active),
-                    effective_weight=effective_weight,
-                    total_active_weight=total_weight,
-                    share_limit=share_limit,
-                    pool_limit=check.limit,
-                    pool_current=next_value,
-                    saturated=saturated,
-                )
-                if saturated and org_next > share_limit:
-                    scope = f"{check.scope}_fair_share"
-                    error = RateLimitError(
-                        message=f"Rate limit exceeded for scope '{scope}'",
-                        param=scope,
-                        code=f"{scope}_exceeded",
-                        retry_after=max(1, org_expiry - now),
-                    )
-                    setattr(error, "fair_share_observation", observation)
-                    raise error
-                pending_updates.append((org_key, org_expiry, org_next))
-                observations.append(observation)
-
+            current_values = []
             for key, expiry, next_value in pending_updates:
                 self._fallback_counters[key] = (expiry, next_value)
+                current_values.append(next_value)
 
         return RateLimitResult(
             checks=normalized,
             current_values=current_values,
             window_reset_at=window_reset_at,
             window_resets=per_check_resets,
-            fair_share_observations=observations,
         )
+
+    async def _check_rate_limits_and_tier_fair_share_fallback(
+        self,
+        rate_checks: list[RateLimitCheck],
+        fair_share_checks: list[TierFairShareCheck],
+        *,
+        legacy_parallel_check: ParallelLimitCheck | None,
+        parallel_groups: tuple[_ParallelLeaseGroup, ...],
+        window_reset_at: int,
+        rate_resets: list[int],
+        active_ttl_seconds: int,
+        parallel_ttl_seconds: int,
+    ) -> RateLimitAdmissionResult:
+        if self.degraded_mode == "fail_closed":
+            raise ServiceUnavailableError(message="Rate limit backend unavailable")
+
+        now = int(time.time())
+        normalized_parallel_ttl_seconds = max(1, int(parallel_ttl_seconds))
+        rate_updates: list[tuple[str, int, int]] = []
+        current_values: list[int] = []
+        legacy_parallel_lease: LegacyParallelLease | None = None
+        parallel_leases: tuple[ParallelLimitLease, ...] = ()
+
+        async with self._fallback_lock:
+            for check in rate_checks:
+                ws = check.window_seconds
+                key = f"{check.scope}:{check.entity_id}:{self._window_id(ws)}"
+                expiry, current = self._fallback_counters.get(key, (now + ws, 0))
+                if expiry <= now:
+                    expiry, current = now + ws, 0
+                next_value = current + check.amount
+                if next_value > check.limit:
+                    retry_after = max(1, expiry - now)
+                    raise RateLimitError(
+                        message=f"Rate limit exceeded for scope '{check.scope}'",
+                        param=check.scope,
+                        code=f"{check.scope}_exceeded",
+                        retry_after=retry_after,
+                    )
+                rate_updates.append((key, expiry, next_value))
+                current_values.append(next_value)
+
+            if legacy_parallel_check is not None:
+                legacy_key = f"{legacy_parallel_check.scope}:{legacy_parallel_check.entity_id}"
+                current = int(self._fallback_parallel.get(legacy_key, 0))
+                if current + 1 > legacy_parallel_check.limit:
+                    raise _parallel_limit_error(legacy_parallel_check.scope)
+
+            for group in parallel_groups:
+                key = f"{group.check.scope}:{group.check.entity_id}"
+                current = int(self._fallback_parallel.get(key, 0))
+                if current + group.requested_count > group.check.limit:
+                    raise _parallel_limit_error(group.check.scope)
+
+            for key, expiry, next_value in rate_updates:
+                self._fallback_counters[key] = (expiry, next_value)
+
+            if legacy_parallel_check is not None:
+                legacy_key = f"{legacy_parallel_check.scope}:{legacy_parallel_check.entity_id}"
+                self._fallback_parallel[legacy_key] = int(self._fallback_parallel.get(legacy_key, 0)) + 1
+                legacy_parallel_lease = LegacyParallelLease(
+                    scope=legacy_parallel_check.scope,
+                    entity_id=legacy_parallel_check.entity_id,
+                    limit=legacy_parallel_check.limit,
+                    backend="fallback",
+                    ttl_seconds=normalized_parallel_ttl_seconds,
+                )
+
+            parallel_leases = tuple(
+                ParallelLimitLease(
+                    scope=group.check.scope,
+                    entity_id=group.check.entity_id,
+                    limit=group.check.limit,
+                    token=secrets.token_urlsafe(18),
+                    backend="fallback",
+                    ttl_seconds=normalized_parallel_ttl_seconds,
+                )
+                for group in parallel_groups
+                for _ in range(group.requested_count)
+            )
+            for lease in parallel_leases:
+                key = f"{lease.scope}:{lease.entity_id}"
+                self._fallback_parallel[key] = int(self._fallback_parallel.get(key, 0)) + 1
+
+        rate_result = RateLimitResult(
+            checks=rate_checks,
+            current_values=current_values,
+            window_reset_at=window_reset_at,
+            window_resets=rate_resets,
+        )
+        try:
+            decisions = await self._tier_fair_share_counter.check(
+                fair_share_checks,
+                active_ttl_seconds=active_ttl_seconds,
+            )
+        except Exception:
+            await self._rollback_rate_limit_fallback(rate_checks)
+            if legacy_parallel_lease is not None:
+                await self._release_parallel_fallback(legacy_parallel_lease.scope, legacy_parallel_lease.entity_id)
+            if parallel_leases:
+                await self._release_parallel_leases_fallback(list(parallel_leases))
+            raise
+        return RateLimitAdmissionResult(
+            rate_result=rate_result,
+            fair_share_decisions=decisions,
+            legacy_parallel_lease=legacy_parallel_lease,
+            parallel_leases=parallel_leases,
+        )
+
+    async def _rollback_rate_limit_fallback(self, checks: list[RateLimitCheck]) -> None:
+        now = int(time.time())
+        async with self._fallback_lock:
+            for check in checks:
+                if check.limit <= 0 or check.amount <= 0:
+                    continue
+                key = f"{check.scope}:{check.entity_id}:{self._window_id(check.window_seconds)}"
+                expiry, current = self._fallback_counters.get(key, (0, 0))
+                if expiry <= now:
+                    continue
+                next_value = max(0, current - check.amount)
+                if next_value == 0:
+                    self._fallback_counters.pop(key, None)
+                else:
+                    self._fallback_counters[key] = (expiry, next_value)
 
     async def _check_rate_limit_fallback(self, scope: str, entity_id: str, limit: int, amount: int) -> None:
         if self.degraded_mode == "fail_closed":
@@ -998,108 +1005,6 @@ return {1, 0}
                     self._fallback_parallel[key] = current
 
 
-def fair_share_boost_key(entity_id: str, organization_id: str) -> str:
-    return f"tier_capacity_boost:{entity_id}:{organization_id}"
-
-
-def fair_share_active_key(entity_id: str) -> str:
-    return _fair_share_active_key(entity_id)
-
-
-def fair_share_weight_key(entity_id: str) -> str:
-    return _fair_share_weight_key(entity_id)
-
-
-def fair_share_denial_key(scope: str, entity_id: str, window_id: int) -> str:
-    return _fair_share_denial_key(scope, entity_id, window_id)
-
-
-def fair_share_org_usage_key(check: RateLimitCheck, window_id: int) -> str:
-    return _fair_share_org_usage_key(check, window_id)
-
-
-def _fair_share_active_key(entity_id: str) -> str:
-    return f"tier_capacity_active:{entity_id}"
-
-
-def _fair_share_weight_key(entity_id: str) -> str:
-    return f"tier_capacity_weight:{entity_id}"
-
-
-def _fair_share_denial_key(scope: str, entity_id: str, window_id: int) -> str:
-    return f"tier_capacity_denials:{scope}:{entity_id}:{window_id}"
-
-
-def _fair_share_org_usage_key(check: RateLimitCheck, window_id: int) -> str:
-    fair = check.fair_share
-    organization_id = fair.organization_id if fair is not None else "unknown"
-    return f"ratelimit:{check.scope}_org:{check.entity_id}:{organization_id}:{window_id}"
-
-
-def _fair_share_org_usage_fallback_key(check: RateLimitCheck, window_id: int) -> str:
-    fair = check.fair_share
-    organization_id = fair.organization_id if fair is not None else "unknown"
-    return f"{check.scope}_org:{check.entity_id}:{organization_id}:{window_id}"
-
-
-def _normalized_saturation_threshold(value: object) -> float:
-    try:
-        normalized = float(value)
-    except (TypeError, ValueError):
-        return 0.8
-    if normalized <= 0 or normalized > 1:
-        return 0.8
-    return normalized
-
-
-def _normalized_burst_multiplier(fair: FairShareLimit) -> float:
-    if fair.strategy != "reserved_burst":
-        return 1.0
-    try:
-        return max(1.0, float(fair.burst_multiplier))
-    except (TypeError, ValueError):
-        return 1.0
-
-
-def _fair_share_observation(
-    check: RateLimitCheck,
-    *,
-    active_organizations: int,
-    share_limit: int,
-    saturated: bool,
-    boost_scaled: int,
-    total_weight_scaled: int,
-    effective_weight_scaled: int,
-    pool_current: int,
-) -> FairShareObservation:
-    fair = check.fair_share
-    if fair is None:
-        raise ValueError("fair-share observation requires fair-share metadata")
-    return FairShareObservation(
-        scope=check.scope,
-        entity_id=check.entity_id,
-        organization_id=fair.organization_id,
-        tier_key=fair.tier_key,
-        active_organizations=max(1, int(active_organizations)),
-        effective_weight=max(0.001, effective_weight_scaled / 1000),
-        total_active_weight=max(0.001, total_weight_scaled / 1000),
-        share_limit=max(1, int(share_limit)),
-        pool_limit=int(check.limit),
-        pool_current=max(0, int(pool_current)),
-        saturated=bool(saturated),
-        capacity_boost_multiplier=max(1.0, boost_scaled / 1000),
-    )
-
-
-def _raw_int(raw: object, index: int, *, default: int) -> int:
-    if not isinstance(raw, (list, tuple)) or index < 0 or index >= len(raw):
-        return int(default)
-    try:
-        return int(raw[index])
-    except (TypeError, ValueError):
-        return int(default)
-
-
 def _parallel_limit_error(scope: str) -> RateLimitError:
     if scope == "key":
         return RateLimitError(message="Parallel request limit exceeded", retry_after=1)
@@ -1113,6 +1018,17 @@ def _parallel_limit_error(scope: str) -> RateLimitError:
 
 def _parallel_limit_error_code(scope: str) -> str:
     return f"{scope}_exceeded" if scope.endswith("_parallel") else f"{scope}_parallel_exceeded"
+
+
+def _normalize_tier_fair_share_checks(checks: list[TierFairShareCheck]) -> list[TierFairShareCheck]:
+    return [
+        check
+        for check in checks
+        if (
+            (check.rpm_capacity is not None and check.rpm_capacity > 0 and check.request_amount > 0)
+            or (check.tpm_capacity is not None and check.tpm_capacity > 0 and check.token_amount > 0)
+        )
+    ]
 
 
 def _parallel_lease_key(scope: str, entity_id: str) -> str:

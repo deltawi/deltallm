@@ -3,10 +3,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import StatusBadge from '../components/StatusBadge';
 import IndexShell from '../components/admin/shells/IndexShell';
+import TierCapacityDashboardPanel from '../components/tiers/TierCapacityDashboardPanel';
 import TierFormDrawer from '../components/tiers/TierFormDrawer';
 import { useToast } from '../components/ToastProvider';
 import { useApi } from '../lib/hooks';
-import { tiers, type Tier } from '../lib/api';
+import { tierCapacity, tiers, type Tier } from '../lib/api';
 import { errorMessage, formatDateTime, tierToForm } from '../lib/tiers';
 
 export default function Tiers() {
@@ -35,6 +36,15 @@ export default function Tiers() {
   const { data: result, loading, error, refetch } = useApi(
     () => tiers.list({ search, enabled: enabledParam, limit: pageSize, offset: pageOffset }),
     [search, enabledParam, pageOffset],
+  );
+  const {
+    data: capacityDashboard,
+    loading: capacityLoading,
+    error: capacityError,
+    refetch: refetchCapacity,
+  } = useApi(
+    () => tierCapacity.dashboard({ top_org_limit: 8, pool_limit: 50 }),
+    [],
   );
 
   const tierRows = useMemo(() => result?.data || [], [result]);
@@ -169,6 +179,13 @@ export default function Tiers() {
         </div>
       ) : undefined}
     >
+      <TierCapacityDashboardPanel
+        dashboard={capacityDashboard}
+        loading={capacityLoading}
+        error={capacityError}
+        onRefresh={refetchCapacity}
+      />
+
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">

@@ -84,6 +84,15 @@ class CompiledTierCapacityPoolPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class CompiledTierCapacityPoolMember:
+    pool_key: str
+    callable_key: str
+    organization_id: str
+    tier_key: str | None
+    assignment_weight: int
+
+
+@dataclass(frozen=True, slots=True)
 class TierPolicySnapshot:
     etag: str
     generated_at: datetime
@@ -93,6 +102,7 @@ class TierPolicySnapshot:
     pricing_policies: Mapping[tuple[str, str, str], CompiledTierPricingPolicy]
     rate_limit_descriptors: Mapping[tuple[str, str], tuple[CompiledTierRateLimitDescriptor, ...]]
     capacity_pool_policy: Mapping[tuple[str, str], CompiledTierCapacityPoolPolicy]
+    capacity_pool_members: Mapping[tuple[str, str], tuple[CompiledTierCapacityPoolMember, ...]]
     org_tier_keys: Mapping[str, tuple[str, ...]]
     org_has_explicit_tier_policy: frozenset[str]
     assignment_count: int = 0
@@ -114,6 +124,7 @@ def empty_tier_policy_snapshot(*, generated_at: datetime | None = None) -> TierP
         pricing_policies=MappingProxyType({}),
         rate_limit_descriptors=MappingProxyType({}),
         capacity_pool_policy=MappingProxyType({}),
+        capacity_pool_members=MappingProxyType({}),
         org_tier_keys=MappingProxyType({}),
         org_has_explicit_tier_policy=frozenset(),
     )

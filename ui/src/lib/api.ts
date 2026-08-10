@@ -1330,9 +1330,96 @@ export interface TierPolicySimulationPayload {
   completion_tokens?: number;
 }
 
+export interface TierCapacityDashboardOrgUsage {
+  organization_id: string;
+  rpm_used: number;
+  tpm_used: number;
+  total_usage: number;
+}
+
+export interface TierCapacityDashboardBoost {
+  organization_id: string;
+  weight_multiplier: number;
+  reason?: string | null;
+  expires_at?: string | null;
+}
+
+export interface TierCapacityDashboardPool {
+  pool_key: string;
+  callable_key: string;
+  strategy: string;
+  advanced_fair_share: boolean;
+  rpm_capacity?: number | null;
+  tpm_capacity?: number | null;
+  rpm_used: number;
+  tpm_used: number;
+  rpm_saturation?: number | null;
+  tpm_saturation?: number | null;
+  saturation_threshold?: number | null;
+  burst_multiplier?: number | null;
+  member_count: number;
+  active_org_count: number;
+  top_orgs: TierCapacityDashboardOrgUsage[];
+  active_boosts: TierCapacityDashboardBoost[];
+  active_boost_count: number;
+  cleanup_lagged?: boolean;
+}
+
+export interface TierCapacityLimitHit {
+  pool_key: string;
+  callable_key: string;
+  organization_id?: string | null;
+  scope: string;
+  tier_key?: string | null;
+  count: number;
+}
+
+export interface TierCapacityDashboard {
+  snapshot: TierPolicySnapshotInfo;
+  window_seconds: number;
+  window_id: number;
+  generated_at: string;
+  pools: TierCapacityDashboardPool[];
+  total_pool_count: number;
+  scanned_pool_count: number;
+  pool_scan_limit: number;
+  pool_scan_truncated: boolean;
+  advanced_pool_count: number;
+  saturated_pool_count: number;
+  pool_limit: number;
+  truncated: boolean;
+  limit_hit_count: number;
+  limit_hit_heatmap: TierCapacityLimitHit[];
+}
+
+export interface TierCapacityBoostPayload {
+  organization_id: string;
+  pool_key: string;
+  callable_key: string;
+  weight_multiplier?: number;
+  ttl_seconds?: number;
+  reason?: string | null;
+}
+
 export const settings = {
   get: () => apiFetch<any>('/ui/api/settings'),
   update: (payload: any) => apiFetch<any>('/ui/api/settings', { method: 'PUT', json: payload }),
+};
+
+export const tierCapacity = {
+  dashboard: (params?: { top_org_limit?: number; pool_limit?: number }) =>
+    apiFetch<TierCapacityDashboard>(withQuery('/ui/api/tier-capacity/dashboard', params)),
+  upsertBoost: (payload: TierCapacityBoostPayload) =>
+    apiFetch<TierCapacityDashboardBoost & {
+      pool_key: string;
+      callable_key: string;
+      ttl_seconds: number;
+    }>('/ui/api/tier-capacity/boosts', { method: 'POST', json: payload }),
+  deleteBoost: (params: { organization_id: string; pool_key: string; callable_key: string }) =>
+    apiFetch<{ deleted: boolean; organization_id: string; pool_key: string; callable_key: string }>(
+      withQuery('/ui/api/tier-capacity/boosts', params),
+      { method: 'DELETE' },
+    ),
 };
 
 export const tiers = {

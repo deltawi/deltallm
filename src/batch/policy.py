@@ -27,6 +27,8 @@ from src.models.responses import UserAPIKeyAuth
 from src.services.model_visibility import (
     ensure_model_allowed,
     get_callable_target_policy_mode_from_app,
+    get_tier_capacity_fair_share_active_ttl_seconds_from_app,
+    get_tier_capacity_fair_share_enabled_from_app,
     get_tier_policy_missing_service_mode_from_app,
     get_tier_policy_mode_from_app,
 )
@@ -160,6 +162,8 @@ async def acquire_batch_policy_lease(*, app: Any, payload: BaseModel, auth: User
         tier_policy_service=getattr(app.state, "tier_policy_service", None),
         tier_policy_mode=get_tier_policy_mode_from_app(app),
         tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(app),
+        tier_capacity_fair_share_enabled=get_tier_capacity_fair_share_enabled_from_app(app),
+        tier_capacity_fair_share_active_ttl_seconds=get_tier_capacity_fair_share_active_ttl_seconds_from_app(app),
         mode="batch",
     )
     return BatchPolicyLease(rate_limit_lease=lease)

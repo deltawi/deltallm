@@ -312,6 +312,30 @@ def get_tier_policy_missing_service_mode_from_app(app: Any) -> str:
     )
 
 
+def get_tier_capacity_fair_share_enabled_from_app(app: Any) -> bool:
+    return bool(
+        _app_setting(
+            app,
+            "tier_capacity_fair_share_enabled",
+            default=False,
+        )
+    )
+
+
+def get_tier_capacity_fair_share_active_ttl_seconds_from_app(app: Any) -> int:
+    try:
+        ttl_seconds = int(
+            _app_setting(
+                app,
+                "tier_capacity_fair_share_active_ttl_seconds",
+                default=10,
+            )
+        )
+    except (TypeError, ValueError):
+        return 10
+    return max(1, ttl_seconds)
+
+
 def normalize_callable_target_policy_mode(value: object) -> CallableTargetPolicyMode:
     normalized = str(value or "").strip().lower()
     if normalized == "legacy":

@@ -2,26 +2,41 @@ from __future__ import annotations
 
 from prometheus_client import generate_latest
 
-from src.metrics import get_prometheus_registry, record_tier_capacity_observation
-from src.services.limit_counter import FairShareObservation
+from src.metrics import (
+    get_prometheus_registry,
+    record_tier_capacity_observation,
+    set_tier_capacity_pool_saturation,
+)
+from src.services.tier_capacity_fair_share import TierFairShareDecision
 
 
 def test_tier_capacity_observation_exports_pool_org_and_tier_metrics() -> None:
     record_tier_capacity_observation(
-        FairShareObservation(
-            scope="tier_pool_model_rpm",
-            entity_id="growth:gpt-4o-mini",
+        TierFairShareDecision(
+            allowed=False,
+            pool_key="growth",
+            callable_key="gpt-4o-mini",
             organization_id="org-metrics",
             tier_key="enterprise",
-            active_organizations=2,
+            scope="tier_pool_fair_share_rpm",
+            reason="weighted_share_exceeded",
+            dimension="rpm",
+            active_org_count=2,
+            total_weight=4,
             effective_weight=3,
-            total_active_weight=4,
-            share_limit=750,
+            pool_current=749,
+            org_current=750,
             pool_limit=1_000,
-            pool_current=750,
-            saturated=True,
+            share_limit=750,
+            saturation=0.75,
         ),
         outcome="denied",
+    )
+    set_tier_capacity_pool_saturation(
+        pool_key="growth",
+        model="gpt-4o-mini",
+        dimension="rpm",
+        saturation=0.75,
     )
 
     lines = generate_latest(get_prometheus_registry()).decode("utf-8").splitlines()
@@ -39,7 +54,7 @@ def test_tier_capacity_observation_exports_pool_org_and_tier_metrics() -> None:
     saturation_line = next(
         line
         for line in lines
-        if line.startswith("deltallm_tier_capacity_pool_saturation_ratio{")
+        if line.startswith("deltallm_tier_capacity_pool_saturation{")
         and 'pool_key="growth"' in line
     )
     active_line = next(

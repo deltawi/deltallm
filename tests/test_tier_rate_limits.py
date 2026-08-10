@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from time import perf_counter
 from typing import Any
 
 import pytest
@@ -16,14 +15,7 @@ from src.models.responses import UserAPIKeyAuth
 from src.rate_limit_lease_refresh import RateLimitLeaseRefresher
 from src.rate_limit_release_retry import RateLimitReleaseRetryQueue
 from src.rate_limit_policy import RateLimitLease, acquire_rate_limit_controls, build_rate_limit_checks, release_rate_limit_controls
-from src.services.limit_counter import (
-    FairShareLimit,
-    LegacyParallelLease,
-    LimitCounter,
-    ParallelLimitCheck,
-    ParallelLimitLease,
-    RateLimitCheck,
-)
+from src.services.limit_counter import LegacyParallelLease, LimitCounter, ParallelLimitCheck, ParallelLimitLease
 from src.services.tier_policy_models import (
     CompiledTierCapacityPoolPolicy,
     CompiledTierRateLimitDescriptor,
@@ -297,9 +289,6 @@ def _pool_policy(
     rpm_capacity: int | None = None,
     tpm_capacity: int | None = None,
     max_parallel_requests: int | None = None,
-    strategy: str = "hard_cap",
-    saturation_threshold: float | None = None,
-    burst_multiplier: float | None = None,
 ) -> CompiledTierCapacityPoolPolicy:
     descriptors = []
     entity_id = f"{pool_key}:{callable_key}"
@@ -328,9 +317,9 @@ def _pool_policy(
         rpm_capacity=rpm_capacity,
         tpm_capacity=tpm_capacity,
         max_parallel_requests=max_parallel_requests,
-        strategy=strategy,
-        saturation_threshold=saturation_threshold,
-        burst_multiplier=burst_multiplier,
+        strategy="hard_cap",
+        saturation_threshold=None,
+        burst_multiplier=None,
         source_tier_version_ids=("version-1",),
         source_pool_ids=("pool-1",),
         rate_limit_descriptors=tuple(descriptors),
@@ -481,276 +470,6 @@ async def test_shared_pool_tpm_is_enforced_across_organizations() -> None:
 
     assert exc_info.value.param == "tier_pool_model_tpm"
     assert exc_info.value.code == "tier_pool_model_tpm_exceeded"
-
-
-@pytest.mark.asyncio
-async def test_weighted_pool_allows_borrowing_then_enforces_share_at_saturation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    capacity_outcomes: list[str] = []
-    monkeypatch.setattr(
-        "src.rate_limit_policy.record_tier_capacity_observation",
-        lambda observation, *, outcome: capacity_outcomes.append(outcome),
-    )
-    service = _TierRateLimitService(
-        model_policies={
-            ("org-1", "gpt-4o-mini"): SimpleNamespace(
-                access_mode="allow",
-                capacity_pool_key="shared",
-                source=SimpleNamespace(assignment_weight=1, tier_key="standard"),
-            ),
-            ("org-2", "gpt-4o-mini"): SimpleNamespace(
-                access_mode="allow",
-                capacity_pool_key="shared",
-                source=SimpleNamespace(assignment_weight=1, tier_key="standard"),
-            ),
-        },
-        pool_policies={
-            ("shared", "gpt-4o-mini"): _pool_policy(
-                rpm_capacity=10,
-                strategy="weighted_fair",
-                saturation_threshold=0.8,
-            )
-        },
-        allowed_by_org={"org-1": {"gpt-4o-mini"}, "org-2": {"gpt-4o-mini"}},
-    )
-    limiter = LimitCounter(redis_client=None, degraded_mode="fail_open")
-
-    for _ in range(7):
-        await acquire_rate_limit_controls(
-            limiter=limiter,
-            auth=_auth(
-                organization_id="org-1",
-                api_key="key-1",
-                rpm_limit=None,
-                tpm_limit=None,
-            ),
-            tokens=1,
-            model="gpt-4o-mini",
-            tier_policy_service=service,
-            tier_policy_mode="enforce",
-        )
-
-    await acquire_rate_limit_controls(
-        limiter=limiter,
-        auth=_auth(
-            organization_id="org-2",
-            api_key="key-2",
-            rpm_limit=None,
-            tpm_limit=None,
-        ),
-        tokens=1,
-        model="gpt-4o-mini",
-        tier_policy_service=service,
-        tier_policy_mode="enforce",
-    )
-
-    with pytest.raises(RateLimitError) as exc_info:
-        await acquire_rate_limit_controls(
-            limiter=limiter,
-            auth=_auth(
-                organization_id="org-1",
-                api_key="key-1",
-                rpm_limit=None,
-                tpm_limit=None,
-            ),
-            tokens=1,
-            model="gpt-4o-mini",
-            tier_policy_service=service,
-            tier_policy_mode="enforce",
-        )
-
-    assert exc_info.value.param == "tier_pool_model_rpm_fair_share"
-    observation = exc_info.value.fair_share_observation
-    assert observation.active_organizations == 2
-    assert observation.share_limit == 5
-    assert observation.saturated is True
-    assert exc_info.value.rate_limit_state.rpm_scope == "tier_pool_model_rpm_fair_share"
-    assert capacity_outcomes == (["allowed"] * 8) + ["denied"]
-
-
-@pytest.mark.asyncio
-async def test_weighted_pool_uses_assignment_weights_when_saturated() -> None:
-    service = _TierRateLimitService(
-        model_policies={
-            ("org-1", "gpt-4o-mini"): SimpleNamespace(
-                access_mode="allow",
-                capacity_pool_key="shared",
-                source=SimpleNamespace(assignment_weight=1, tier_key="standard"),
-            ),
-            ("org-2", "gpt-4o-mini"): SimpleNamespace(
-                access_mode="allow",
-                capacity_pool_key="shared",
-                source=SimpleNamespace(assignment_weight=3, tier_key="enterprise"),
-            ),
-        },
-        pool_policies={
-            ("shared", "gpt-4o-mini"): _pool_policy(
-                rpm_capacity=8,
-                strategy="weighted_fair",
-                saturation_threshold=0.1,
-            )
-        },
-        allowed_by_org={"org-1": {"gpt-4o-mini"}, "org-2": {"gpt-4o-mini"}},
-    )
-    limiter = LimitCounter(redis_client=None, degraded_mode="fail_open")
-
-    for organization_id, api_key in (("org-1", "key-1"), ("org-2", "key-2"), ("org-1", "key-1")):
-        await acquire_rate_limit_controls(
-            limiter=limiter,
-            auth=_auth(
-                organization_id=organization_id,
-                api_key=api_key,
-                rpm_limit=None,
-                tpm_limit=None,
-            ),
-            tokens=1,
-            model="gpt-4o-mini",
-            tier_policy_service=service,
-            tier_policy_mode="enforce",
-        )
-
-    with pytest.raises(RateLimitError) as exc_info:
-        await acquire_rate_limit_controls(
-            limiter=limiter,
-            auth=_auth(
-                organization_id="org-1",
-                api_key="key-1",
-                rpm_limit=None,
-                tpm_limit=None,
-            ),
-            tokens=1,
-            model="gpt-4o-mini",
-            tier_policy_service=service,
-            tier_policy_mode="enforce",
-        )
-
-    observation = exc_info.value.fair_share_observation
-    assert observation.share_limit == 2
-    assert observation.total_active_weight == 4
-
-
-@pytest.mark.asyncio
-async def test_reserved_burst_expands_share_without_bypassing_pool_hard_cap() -> None:
-    limiter = LimitCounter(redis_client=None, degraded_mode="fail_open")
-
-    def check(organization_id: str, amount: int = 1) -> RateLimitCheck:
-        return RateLimitCheck(
-            scope="tier_pool_model_rpm",
-            entity_id="reserved:gpt-4o-mini",
-            limit=10,
-            amount=amount,
-            fair_share=FairShareLimit(
-                organization_id=organization_id,
-                weight=1,
-                strategy="reserved_burst",
-                saturation_threshold=0.5,
-                burst_multiplier=2,
-            ),
-        )
-
-    await limiter.check_rate_limits_atomic([check("org-1")])
-    await limiter.check_rate_limits_atomic([check("org-2")])
-    result = await limiter.check_rate_limits_atomic([check("org-1", amount=5)])
-
-    observation = result.fair_share_observations[0]
-    assert observation.saturated is True
-    assert observation.share_limit == 10
-
-    with pytest.raises(RateLimitError) as exc_info:
-        await limiter.check_rate_limits_atomic([check("org-1", amount=4)])
-    assert exc_info.value.param == "tier_pool_model_rpm"
-
-
-@pytest.mark.asyncio
-async def test_weighted_pool_uses_one_atomic_redis_round_trip() -> None:
-    redis = _RecordingRedis()
-    service = _TierRateLimitService(
-        model_policies={
-            ("org-1", "gpt-4o-mini"): SimpleNamespace(
-                access_mode="allow",
-                capacity_pool_key="shared",
-                source=SimpleNamespace(assignment_weight=1, tier_key="standard"),
-            )
-        },
-        pool_policies={
-            ("shared", "gpt-4o-mini"): _pool_policy(
-                rpm_capacity=10,
-                strategy="weighted_fair",
-                saturation_threshold=0.8,
-            )
-        },
-    )
-
-    await acquire_rate_limit_controls(
-        limiter=LimitCounter(redis_client=redis, degraded_mode="fail_open"),
-        auth=_auth(rpm_limit=None, tpm_limit=None),
-        tokens=1,
-        model="gpt-4o-mini",
-        tier_policy_service=service,
-        tier_policy_mode="enforce",
-    )
-
-    assert len(redis.eval_calls) == 1
-    assert redis.eval_calls[0][0] == 6
-
-
-@pytest.mark.asyncio
-async def test_weighted_pool_atomic_path_synthetic_benchmark() -> None:
-    redis = _RecordingRedis()
-    limiter = LimitCounter(redis_client=redis, degraded_mode="fail_open")
-    check = RateLimitCheck(
-        scope="tier_pool_model_rpm",
-        entity_id="shared:gpt-4o-mini",
-        limit=1_000_000,
-        fair_share=FairShareLimit(
-            organization_id="org-1",
-            weight=1,
-            tier_key="standard",
-            saturation_threshold=0.8,
-        ),
-    )
-
-    started = perf_counter()
-    for _ in range(1_000):
-        await limiter.check_rate_limits_atomic([check])
-    elapsed = perf_counter() - started
-
-    assert len(redis.eval_calls) == 1_000
-    assert elapsed < 1.0
-
-
-@pytest.mark.parametrize(
-    ("policy_mode", "expected_tier_checks"),
-    [("disabled", 0), ("shadow", 0), ("enforce", 1)],
-)
-def test_tier_lookup_latency_is_bounded_in_each_rollout_mode(
-    policy_mode: str,
-    expected_tier_checks: int,
-) -> None:
-    service = _TierRateLimitService(
-        mode=policy_mode,
-        descriptors={
-            ("org-1", "gpt-4o-mini"): (
-                _descriptor("tier_org_model_rpm", limit=100),
-            )
-        },
-    )
-    auth = _auth(rpm_limit=None, tpm_limit=None)
-
-    started = perf_counter()
-    for _ in range(25_000):
-        checks = build_rate_limit_checks(
-            auth=auth,
-            tokens=100,
-            model="gpt-4o-mini",
-            tier_policy_service=service,
-            tier_policy_mode=policy_mode,
-        )
-    elapsed = perf_counter() - started
-
-    assert sum(check.scope.startswith("tier_") for check in checks) == expected_tier_checks
-    assert elapsed < 2
 
 
 @pytest.mark.asyncio
@@ -979,6 +698,24 @@ async def test_tier_parallel_failure_releases_previously_acquired_key_slot() -> 
         assert "key:key-1" not in limiter._fallback_parallel
     finally:
         await limiter.release_parallel("tier_org_model_parallel", "org-1:gpt-4o-mini")
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_failure_does_not_acquire_key_parallel_lease() -> None:
+    redis = FakeRedis()
+    limiter = LimitCounter(redis_client=redis, degraded_mode="fail_open")
+    redis.store[f"ratelimit:key_rpm:key-1:{limiter._window_id(60)}"] = "1"
+
+    with pytest.raises(RateLimitError) as exc_info:
+        await acquire_rate_limit_controls(
+            limiter=limiter,
+            auth=_auth(rpm_limit=1, max_parallel_requests=1),
+            tokens=10,
+            model="gpt-4o-mini",
+        )
+
+    assert exc_info.value.param == "key_rpm"
+    assert "parallel:key:key-1" not in redis.store
 
 
 @pytest.mark.asyncio

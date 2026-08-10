@@ -23,6 +23,7 @@ from src.api.admin.endpoints import (
     service_accounts_router,
     spend_router,
     teams_router,
+    tier_capacity_router,
     tier_policy_preview_router,
     tiers_router,
     users_router,
@@ -50,6 +51,7 @@ admin_router.include_router(batches_router)
 admin_router.include_router(batch_create_sessions_router)
 admin_router.include_router(rbac_router)
 admin_router.include_router(guardrails_router)
+admin_router.include_router(tier_capacity_router)
 admin_router.include_router(tiers_router)
 admin_router.include_router(tier_policy_preview_router)
 admin_router.include_router(route_groups_router)

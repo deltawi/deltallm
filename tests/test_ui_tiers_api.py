@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime
+from types import MappingProxyType, SimpleNamespace
 from typing import Any
-from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +16,14 @@ from src.db.tiers import (
     TierVersionRecord,
 )
 from src.models.platform_auth import PlatformAuthContext
+from src.services.tier_capacity_fair_share import fair_share_boost_key
+from src.services.tier_policy_models import (
+    CompiledTierCapacityPoolMember,
+    CompiledTierCapacityPoolPolicy,
+    TierPolicySnapshot,
+    empty_tier_policy_snapshot,
+)
+from tests.conftest import FakeRedis
 
 
 class _RecordingAuditService:
@@ -44,22 +52,6 @@ class _RecordingGovernanceInvalidationService:
     async def notify(self, *targets: str) -> bool:
         self.notified_targets.append(tuple(targets))
         return self.notify_result
-
-
-class _BoostRedis:
-    def __init__(self) -> None:
-        self.values: dict[str, str] = {}
-        self.ttls: dict[str, int] = {}
-
-    async def set(self, key: str, value: str, *, ex: int) -> None:
-        self.values[key] = value
-        self.ttls[key] = ex
-
-    async def delete(self, key: str) -> int:
-        existed = key in self.values
-        self.values.pop(key, None)
-        self.ttls.pop(key, None)
-        return int(existed)
 
 
 class _FakeTierRepository:
@@ -350,6 +342,61 @@ class _FakeTierRepository:
             version_count=len(versions),
             assignment_count=self.active_assignment_counts.get(record.tier_id, 0),
         )
+
+
+class _SnapshotTierPolicyService:
+    mode = "enforce"
+    snapshot_stale = False
+    last_reload_failed = False
+    last_reload_error_at = None
+
+    def __init__(self, snapshot: TierPolicySnapshot) -> None:
+        self.snapshot = snapshot
+
+    def get_snapshot(self) -> TierPolicySnapshot:
+        return self.snapshot
+
+    def snapshot_info(self) -> object:
+        return SimpleNamespace(
+            etag=self.snapshot.etag,
+            generated_at=self.snapshot.generated_at,
+            org_count=self.snapshot.org_count,
+            assignment_count=self.snapshot.assignment_count,
+            model_policy_count=self.snapshot.model_policy_count,
+            capacity_pool_count=self.snapshot.capacity_pool_count,
+            next_transition_at=self.snapshot.next_transition_at,
+            mode=self.mode,
+            snapshot_stale=self.snapshot_stale,
+            last_reload_failed=self.last_reload_failed,
+            last_reload_error_at=self.last_reload_error_at,
+        )
+
+
+def _capacity_dashboard_snapshot(
+    pool: CompiledTierCapacityPoolPolicy,
+    *,
+    organization_ids: tuple[str, ...] = ("org-1",),
+) -> TierPolicySnapshot:
+    pool_ref = (pool.pool_key, pool.callable_key)
+    return replace(
+        empty_tier_policy_snapshot(),
+        capacity_pool_policy=MappingProxyType({pool_ref: pool}),
+        capacity_pool_members=MappingProxyType(
+            {
+                pool_ref: tuple(
+                    CompiledTierCapacityPoolMember(
+                        pool_key=pool.pool_key,
+                        callable_key=pool.callable_key,
+                        organization_id=organization_id,
+                        tier_key="growth",
+                        assignment_weight=1,
+                    )
+                    for organization_id in organization_ids
+                )
+            }
+        ),
+        capacity_pool_count=1,
+    )
 
 
 def _headers(test_app) -> dict[str, str]:  # noqa: ANN001
@@ -827,44 +874,204 @@ async def test_tier_admin_publish_non_draft_returns_conflict(client, test_app):
 
 
 @pytest.mark.asyncio
-async def test_tier_capacity_boost_routes_are_static_audited_and_ttl_backed(client, test_app):
-    redis = _BoostRedis()
-    audit = _RecordingAuditService()
-    policy = SimpleNamespace(strategy="weighted_fair")
-    test_app.state.redis = redis
-    test_app.state.audit_service = audit
-    test_app.state.tier_policy_service = SimpleNamespace(
-        get_capacity_pool_policy=lambda pool_key, callable_key: (
-            policy if (pool_key, callable_key) == ("shared", "gpt-4o-mini") else None
-        )
+async def test_tier_capacity_dashboard_endpoint_returns_snapshot_pools(client, test_app):
+    pool = CompiledTierCapacityPoolPolicy(
+        pool_key="shared",
+        callable_key="gpt-4o-mini",
+        rpm_capacity=100,
+        tpm_capacity=10_000,
+        max_parallel_requests=20,
+        strategy="weighted_fair",
+        saturation_threshold=0.8,
+        burst_multiplier=None,
+        source_tier_version_ids=("version-1",),
+        source_pool_ids=("pool-1",),
+    )
+    snapshot = replace(
+        empty_tier_policy_snapshot(),
+        capacity_pool_policy=MappingProxyType({("shared", "gpt-4o-mini"): pool}),
+        capacity_pool_count=1,
+    )
+    test_app.state.tier_policy_service = _SnapshotTierPolicyService(snapshot)
+    test_app.state.redis = FakeRedis()
+
+    response = await client.get(
+        "/ui/api/tier-capacity/dashboard",
+        headers=_headers(test_app),
     )
 
-    created = await client.post(
-        "/ui/api/tiers/capacity/boosts",
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["snapshot"]["etag"] == "empty"
+    assert payload["pools"][0]["pool_key"] == "shared"
+    assert payload["pools"][0]["callable_key"] == "gpt-4o-mini"
+    assert payload["pools"][0]["advanced_fair_share"] is True
+    assert payload["advanced_pool_count"] == 1
+    assert payload["saturated_pool_count"] == 0
+    assert payload["limit_hit_count"] == 0
+    assert payload["pool_scan_truncated"] is False
+
+
+@pytest.mark.asyncio
+async def test_tier_capacity_boost_endpoint_writes_deletes_and_audits(client, test_app):
+    redis = FakeRedis()
+    audit = _RecordingAuditService()
+    pool = CompiledTierCapacityPoolPolicy(
+        pool_key="shared",
+        callable_key="gpt-4o-mini",
+        rpm_capacity=100,
+        tpm_capacity=10_000,
+        max_parallel_requests=20,
+        strategy="weighted_fair",
+        saturation_threshold=0.8,
+        burst_multiplier=None,
+        source_tier_version_ids=("version-1",),
+        source_pool_ids=("pool-1",),
+    )
+    test_app.state.redis = redis
+    test_app.state.audit_service = audit
+    test_app.state.tier_policy_service = _SnapshotTierPolicyService(_capacity_dashboard_snapshot(pool))
+
+    response = await client.post(
+        "/ui/api/tier-capacity/boosts",
         headers=_headers(test_app),
         json={
+            "organization_id": "org-1",
             "pool_key": "shared",
             "callable_key": "gpt-4o-mini",
-            "organization_id": "org-1",
-            "multiplier": 2,
-            "expires_in_seconds": 300,
+            "weight_multiplier": 2.0,
+            "ttl_seconds": 60,
+            "reason": "temporary launch capacity",
         },
     )
 
-    assert created.status_code == 200
-    assert created.json()["multiplier"] == 2
-    assert redis.values["tier_capacity_boost:shared:gpt-4o-mini:org-1"] == "2.0"
-    assert redis.ttls["tier_capacity_boost:shared:gpt-4o-mini:org-1"] == 300
-    assert audit.sync_calls[-1][0].action == AuditAction.ADMIN_TIER_CAPACITY_BOOST_CREATE
+    assert response.status_code == 200
+    assert response.json()["weight_multiplier"] == 2.0
+    boost_key = fair_share_boost_key(
+        pool_key="shared",
+        callable_key="gpt-4o-mini",
+        organization_id="org-1",
+    )
+    assert await redis.get(boost_key) == "2.0"
 
-    deleted = await client.delete(
-        (
-            "/ui/api/tiers/capacity/boosts?pool_key=shared"
-            "&callable_key=gpt-4o-mini&organization_id=org-1"
-        ),
+    delete_response = await client.delete(
+        "/ui/api/tier-capacity/boosts",
         headers=_headers(test_app),
+        params={
+            "organization_id": "org-1",
+            "pool_key": "shared",
+            "callable_key": "gpt-4o-mini",
+        },
     )
 
-    assert deleted.status_code == 200
-    assert deleted.json()["deleted"] is True
-    assert audit.sync_calls[-1][0].action == AuditAction.ADMIN_TIER_CAPACITY_BOOST_DELETE
+    assert delete_response.status_code == 200
+    assert await redis.get(boost_key) is None
+    actions = [event.action for event, _ in audit.sync_calls]
+    assert AuditAction.ADMIN_TIER_CAPACITY_BOOST_UPSERT.value in actions
+    assert AuditAction.ADMIN_TIER_CAPACITY_BOOST_DELETE.value in actions
+
+
+@pytest.mark.asyncio
+async def test_tier_capacity_boost_endpoint_rejects_unknown_pool(client, test_app):
+    pool = CompiledTierCapacityPoolPolicy(
+        pool_key="shared",
+        callable_key="gpt-4o-mini",
+        rpm_capacity=100,
+        tpm_capacity=10_000,
+        max_parallel_requests=20,
+        strategy="weighted_fair",
+        saturation_threshold=0.8,
+        burst_multiplier=None,
+        source_tier_version_ids=("version-1",),
+        source_pool_ids=("pool-1",),
+    )
+    test_app.state.redis = FakeRedis()
+    test_app.state.tier_policy_service = _SnapshotTierPolicyService(_capacity_dashboard_snapshot(pool))
+
+    response = await client.post(
+        "/ui/api/tier-capacity/boosts",
+        headers=_headers(test_app),
+        json={
+            "organization_id": "org-1",
+            "pool_key": "typo",
+            "callable_key": "gpt-4o-mini",
+            "weight_multiplier": 2.0,
+            "ttl_seconds": 60,
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Capacity pool not found in active tier policy snapshot"
+
+
+@pytest.mark.asyncio
+async def test_tier_capacity_boost_delete_allows_stale_non_member_org(client, test_app):
+    redis = FakeRedis()
+    pool = CompiledTierCapacityPoolPolicy(
+        pool_key="shared",
+        callable_key="gpt-4o-mini",
+        rpm_capacity=100,
+        tpm_capacity=10_000,
+        max_parallel_requests=20,
+        strategy="weighted_fair",
+        saturation_threshold=0.8,
+        burst_multiplier=None,
+        source_tier_version_ids=("version-1",),
+        source_pool_ids=("pool-1",),
+    )
+    boost_key = fair_share_boost_key(
+        pool_key="shared",
+        callable_key="gpt-4o-mini",
+        organization_id="org-stale",
+    )
+    await redis.set(boost_key, "2.0", ex=60)
+    test_app.state.redis = redis
+    test_app.state.tier_policy_service = _SnapshotTierPolicyService(
+        _capacity_dashboard_snapshot(pool, organization_ids=())
+    )
+
+    response = await client.delete(
+        "/ui/api/tier-capacity/boosts",
+        headers=_headers(test_app),
+        params={
+            "organization_id": "org-stale",
+            "pool_key": "shared",
+            "callable_key": "gpt-4o-mini",
+        },
+    )
+
+    assert response.status_code == 200
+    assert await redis.get(boost_key) is None
+
+
+@pytest.mark.asyncio
+async def test_tier_capacity_boost_endpoint_rejects_non_member_org(client, test_app):
+    pool = CompiledTierCapacityPoolPolicy(
+        pool_key="shared",
+        callable_key="gpt-4o-mini",
+        rpm_capacity=100,
+        tpm_capacity=10_000,
+        max_parallel_requests=20,
+        strategy="weighted_fair",
+        saturation_threshold=0.8,
+        burst_multiplier=None,
+        source_tier_version_ids=("version-1",),
+        source_pool_ids=("pool-1",),
+    )
+    test_app.state.redis = FakeRedis()
+    test_app.state.tier_policy_service = _SnapshotTierPolicyService(_capacity_dashboard_snapshot(pool))
+
+    response = await client.post(
+        "/ui/api/tier-capacity/boosts",
+        headers=_headers(test_app),
+        json={
+            "organization_id": "org-missing",
+            "pool_key": "shared",
+            "callable_key": "gpt-4o-mini",
+            "weight_multiplier": 2.0,
+            "ttl_seconds": 60,
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Organization is not an active member of this capacity pool"

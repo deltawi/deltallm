@@ -311,6 +311,8 @@ config:
     embeddings_batch_small_job_fast_lane_enabled: false
     embeddings_batch_small_job_max_work_units: 100
     embeddings_batch_finalization_first: true
+    tier_capacity_fair_share_enabled: false
+    tier_capacity_fair_share_active_ttl_seconds: 10
 
 s3:
   enabled: false

@@ -103,13 +103,6 @@ deltallm_tier_capacity_requests_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
-deltallm_tier_capacity_saturation_metric = Gauge(
-    "deltallm_tier_capacity_pool_saturation_ratio",
-    "Current tier capacity-pool utilization ratio",
-    ["pool_key", "model", "scope"],
-    registry=get_prometheus_registry(),
-)
-
 deltallm_tier_capacity_active_orgs_metric = Gauge(
     "deltallm_tier_capacity_pool_active_organizations",
     "Active organizations participating in a tier capacity pool",
@@ -121,6 +114,13 @@ deltallm_config_reload_events_metric = Counter(
     "deltallm_config_reload_events_total",
     "Dynamic config reload events by source and result",
     ["source", "result"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_tier_capacity_fair_share_decisions_metric = Counter(
+    "deltallm_tier_capacity_fair_share_decisions_total",
+    "Tier capacity fair-share decisions",
+    ["pool_key", "model", "tier_key", "decision", "reason", "scope"],
     registry=get_prometheus_registry(),
 )
 
@@ -274,7 +274,14 @@ def increment_tier_policy_shadow_mismatch(
 
 
 def record_tier_capacity_observation(observation: Any, *, outcome: str) -> None:
-    pool_key, model = _split_capacity_entity(getattr(observation, "entity_id", ""))
+    pool_key = str(getattr(observation, "pool_key", "") or "").strip()
+    model = str(getattr(observation, "callable_key", "") or "").strip()
+    if not pool_key or not model:
+        legacy_pool_key, legacy_model = _split_capacity_entity(
+            getattr(observation, "entity_id", "")
+        )
+        pool_key = pool_key or legacy_pool_key
+        model = model or legacy_model
     scope = sanitize_label(getattr(observation, "scope", None), "unknown")
     organization_id = sanitize_label(getattr(observation, "organization_id", None), "unknown")
     tier_key = sanitize_label(getattr(observation, "tier_key", None), "none")
@@ -286,18 +293,15 @@ def record_tier_capacity_observation(observation: Any, *, outcome: str) -> None:
         scope=scope,
         outcome=sanitize_label(outcome, "unknown"),
     ).inc()
-    pool_limit = max(0, int(getattr(observation, "pool_limit", 0) or 0))
-    pool_current = max(0, int(getattr(observation, "pool_current", 0) or 0))
-    ratio = min(1.0, pool_current / pool_limit) if pool_limit > 0 else 0.0
-    deltallm_tier_capacity_saturation_metric.labels(
-        pool_key=sanitize_label(pool_key, "unknown"),
-        model=sanitize_label(model, "unknown"),
-        scope=scope,
-    ).set(ratio)
+    active_organizations = getattr(
+        observation,
+        "active_org_count",
+        getattr(observation, "active_organizations", 0),
+    )
     deltallm_tier_capacity_active_orgs_metric.labels(
         pool_key=sanitize_label(pool_key, "unknown"),
         model=sanitize_label(model, "unknown"),
-    ).set(max(0, int(getattr(observation, "active_organizations", 0) or 0)))
+    ).set(max(0, int(active_organizations or 0)))
 
 
 def _split_capacity_entity(entity_id: object) -> tuple[str, str]:
@@ -305,3 +309,22 @@ def _split_capacity_entity(entity_id: object) -> tuple[str, str]:
     if not separator:
         return pool_key, ""
     return pool_key, model
+
+
+def increment_tier_capacity_fair_share_decision(
+    *,
+    pool_key: str,
+    model: str,
+    tier_key: str | None,
+    decision: str,
+    reason: str,
+    scope: str,
+) -> None:
+    deltallm_tier_capacity_fair_share_decisions_metric.labels(
+        pool_key=sanitize_label(pool_key),
+        model=sanitize_label(model),
+        tier_key=sanitize_label(tier_key, "none"),
+        decision=sanitize_label(decision),
+        reason=sanitize_label(reason),
+        scope=sanitize_label(scope),
+    ).inc()

@@ -662,6 +662,8 @@ class GeneralSettings(BaseModel):
     tier_policy_refresh_jitter_seconds: float = Field(default=1.0, ge=0.0)
     tier_policy_transition_grace_seconds: float = Field(default=0.05, ge=0.0)
     tier_policy_refresh_retry_delay_seconds: float = Field(default=5.0, gt=0.0)
+    tier_capacity_fair_share_enabled: bool = False
+    tier_capacity_fair_share_active_ttl_seconds: int = Field(default=10, ge=1, le=300)
     audit_enabled: bool = True
     audit_retention_worker_enabled: bool = True
     audit_retention_interval_seconds: float = 86400.0
@@ -840,6 +842,8 @@ class Settings(BaseSettings):
     tier_policy_refresh_jitter_seconds: float = Field(default=1.0, ge=0.0)
     tier_policy_transition_grace_seconds: float = Field(default=0.05, ge=0.0)
     tier_policy_refresh_retry_delay_seconds: float = Field(default=5.0, gt=0.0)
+    tier_capacity_fair_share_enabled: bool = False
+    tier_capacity_fair_share_active_ttl_seconds: int = Field(default=10, ge=1, le=300)
 
     @field_validator("master_key")
     @classmethod

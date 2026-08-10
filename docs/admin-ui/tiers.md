@@ -160,7 +160,7 @@ Do not create pools for every cheap/default model. For common models, organizati
 | `weighted_fair` | Lets active organizations borrow idle capacity below saturation, then applies a share based on assignment weight | Shared premium capacity where every active customer must make progress |
 | `reserved_burst` | Uses weighted fair sharing and multiplies each organization's saturated share by the configured burst multiplier; the pool hard cap still wins | Plans that include a bounded burst entitlement |
 
-For weighted strategies, `saturation_threshold` is the pool utilization ratio at which per-organization shares begin to apply. It defaults to `0.8`. Below that point an organization can borrow otherwise-idle capacity. At or above it, the runtime calculates:
+For weighted strategies, `saturation_threshold` is the pool utilization ratio above which per-organization shares begin to apply. It defaults to `0.85`. At or below that point an organization can borrow otherwise-idle capacity. Above it, the runtime calculates:
 
 ```text
 organization share = pool limit * effective organization weight / total active weight
@@ -168,9 +168,9 @@ organization share = pool limit * effective organization weight / total active w
 
 `reserved_burst` then multiplies that share by `burst_multiplier`. The shared pool limit is never increased, so a burst cannot exceed the provider-facing hard cap.
 
-An organization is active for 120 seconds after its latest request to that pool. The weight comes from its effective tier assignment. RPM and TPM are tracked independently in their existing 60-second windows; parallel-request capacity remains a hard cap.
+An organization is active for 10 seconds by default after its latest request to that pool. Operators can tune this from 1 to 300 seconds with `tier_capacity_fair_share_active_ttl_seconds`. The weight comes from its effective tier assignment. RPM and TPM are tracked independently in their existing 60-second windows; parallel-request capacity remains a hard cap.
 
-A saturated fair-share denial returns a normal `429` with scope `tier_pool_model_rpm_fair_share` or `tier_pool_model_tpm_fair_share`. A denial at the absolute pool ceiling retains the base pool scope.
+A fair-share denial returns a normal `429` with scope `tier_pool_fair_share_rpm` or `tier_pool_fair_share_tpm`. The `reason` distinguishes `weighted_share_exceeded` from the absolute `pool_capacity_exceeded` ceiling.
 
 ### Capacity Operations
 
@@ -178,9 +178,9 @@ Platform admins can inspect current pool utilization and temporarily boost one o
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
-| `GET` | `/ui/api/tiers/capacity/dashboard` | Pool saturation, active organizations, top consumers, boosts, and a limit-hit heatmap |
-| `POST` | `/ui/api/tiers/capacity/boosts` | Apply a `1`-to-`100` weight multiplier with a Redis TTL of at most seven days |
-| `DELETE` | `/ui/api/tiers/capacity/boosts` | Remove a temporary boost |
+| `GET` | `/ui/api/tier-capacity/dashboard` | Pool saturation, active organizations, top consumers, boosts, and a limit-hit heatmap |
+| `POST` | `/ui/api/tier-capacity/boosts` | Apply a `1`-to-`100` weight multiplier with a Redis TTL of at most seven days |
+| `DELETE` | `/ui/api/tier-capacity/boosts` | Remove a temporary boost |
 
 Boost creation and deletion are written to the audit log. A boost is runtime state: it expires automatically and does not modify the published tier version. See the [Organization Tiers Rollout Runbook](../deployment/organization-tiers-rollout.md) for API examples, metrics, and troubleshooting.
 

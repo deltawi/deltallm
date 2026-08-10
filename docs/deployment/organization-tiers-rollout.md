@@ -33,6 +33,7 @@ Advance one stage at a time.
    general_settings:
      tier_policy_mode: disabled
      tier_policy_missing_service_mode: fail_open
+     tier_capacity_fair_share_enabled: false
    ```
 
 2. Create draft tiers, model policies, and capacity pools. Publish the intended versions, assign only test organizations, and use the effective-policy preview and simulation endpoints.
@@ -43,11 +44,20 @@ Advance one stage at a time.
    general_settings:
      tier_policy_mode: shadow
      tier_policy_missing_service_mode: fail_open
+     tier_capacity_fair_share_enabled: false
    ```
 
 4. Hold shadow mode for a representative traffic cycle. Resolve unexpected `deltallm_tier_policy_shadow_mismatches_total` results and confirm snapshot refreshes succeed on every instance.
 
-5. Canary enforcement with test organizations, conservative `hard_cap` pools, and `fail_open`. Then enable `weighted_fair` or `reserved_burst` on selected pools.
+5. Canary enforcement with test organizations, conservative `hard_cap` pools, and `fail_open`. Then enable `weighted_fair` or `reserved_burst` on selected pools and opt into advanced admission:
+
+   ```yaml
+   general_settings:
+     tier_policy_mode: enforce
+     tier_policy_missing_service_mode: fail_open
+     tier_capacity_fair_share_enabled: true
+     tier_capacity_fair_share_active_ttl_seconds: 10
+   ```
 
 6. Move to `fail_closed` only after Redis, database, snapshot-refresh, and invalidation reliability meet the service's availability target:
 
@@ -55,6 +65,8 @@ Advance one stage at a time.
    general_settings:
      tier_policy_mode: enforce
      tier_policy_missing_service_mode: fail_closed
+     tier_capacity_fair_share_enabled: true
+     tier_capacity_fair_share_active_ttl_seconds: 10
    ```
 
 Publishing or assigning a tier triggers snapshot invalidation. Verify all instances converge before expanding the canary.
@@ -76,7 +88,7 @@ curl -sS -X POST "$DELTALLM_URL/ui/api/organizations/$ORGANIZATION_ID/tier-polic
 Inspect live capacity state:
 
 ```bash
-curl -sS "$DELTALLM_URL/ui/api/tiers/capacity/dashboard?top_org_limit=20" \
+curl -sS "$DELTALLM_URL/ui/api/tier-capacity/dashboard?top_org_limit=20&pool_limit=100" \
   -H "Authorization: Bearer $DELTALLM_MASTER_KEY"
 ```
 
@@ -86,8 +98,10 @@ Monitor these Prometheus series:
 
 - `deltallm_tier_policy_shadow_mismatches_total`
 - `deltallm_tier_capacity_requests_total`
-- `deltallm_tier_capacity_pool_saturation_ratio`
+- `deltallm_tier_capacity_fair_share_decisions_total`
+- `deltallm_tier_capacity_pool_saturation`
 - `deltallm_tier_capacity_pool_active_organizations`
+- `deltallm_tier_capacity_fair_share_latency_seconds`
 - `deltallm_config_reload_events_total`
 
 Useful starting queries:
@@ -97,8 +111,8 @@ sum by (pool_key, model, scope, outcome) (
   rate(deltallm_tier_capacity_requests_total[5m])
 )
 
-max by (pool_key, model, scope) (
-  deltallm_tier_capacity_pool_saturation_ratio
+max by (pool_key, model, dimension) (
+  deltallm_tier_capacity_pool_saturation
 )
 
 sum by (auth_source, difference_type, reason) (
@@ -120,15 +134,16 @@ Before expanding enforcement, confirm:
 Apply a short-lived boost only during an active incident or an approved customer event:
 
 ```bash
-curl -sS -X POST "$DELTALLM_URL/ui/api/tiers/capacity/boosts" \
+curl -sS -X POST "$DELTALLM_URL/ui/api/tier-capacity/boosts" \
   -H "Authorization: Bearer $DELTALLM_MASTER_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "pool_key":"growth-premium",
     "callable_key":"gpt-4o",
     "organization_id":"org-id",
-    "multiplier":2,
-    "expires_in_seconds":3600
+    "weight_multiplier":2,
+    "ttl_seconds":3600,
+    "reason":"approved launch event"
   }'
 ```
 
@@ -136,7 +151,7 @@ Remove it early with:
 
 ```bash
 curl -sS -X DELETE \
-  "$DELTALLM_URL/ui/api/tiers/capacity/boosts?pool_key=growth-premium&callable_key=gpt-4o&organization_id=org-id" \
+  "$DELTALLM_URL/ui/api/tier-capacity/boosts?pool_key=growth-premium&callable_key=gpt-4o&organization_id=org-id" \
   -H "Authorization: Bearer $DELTALLM_MASTER_KEY"
 ```
 
@@ -149,9 +164,10 @@ For an individual pool, publish a new tier version using `hard_cap`. This immedi
 For a system-wide rollback, set:
 
 ```yaml
-general_settings:
-  tier_policy_mode: disabled
-  tier_policy_missing_service_mode: fail_open
+   general_settings:
+     tier_policy_mode: disabled
+     tier_policy_missing_service_mode: fail_open
+     tier_capacity_fair_share_enabled: false
 ```
 
 Restart or roll all API and batch-worker instances with the same configuration. Existing non-tier Asset Access, deployment pricing, and standard rate limits become authoritative again. Database rows and temporary Redis state can remain in place for diagnosis; no destructive rollback is required.
@@ -160,9 +176,9 @@ Restart or roll all API and batch-worker instances with the same configuration. 
 
 | Symptom | Check | Action |
 | --- | --- | --- |
-| `429` with `*_fair_share` scope | Dashboard active weights, organization usage, threshold, and boost TTL | Correct the assignment weight or pool settings; use an audited temporary boost only when approved |
-| `429` with base `tier_pool_model_*` scope | Absolute pool usage | Increase real provider capacity or reduce traffic; a weight boost cannot bypass the hard cap |
-| Unexpected active-organization count | Requests in the last 120 seconds and clock synchronization | Wait for the activity TTL or investigate missing/repeated organization identity |
+| `429` with `tier_pool_fair_share_*` scope and `weighted_share_exceeded` reason | Dashboard active weights, organization usage, threshold, and boost TTL | Correct the assignment weight or pool settings; use an audited temporary boost only when approved |
+| `429` with `tier_pool_fair_share_*` scope and `pool_capacity_exceeded` reason | Absolute pool usage | Increase real provider capacity or reduce traffic; a weight boost cannot bypass the hard cap |
+| Unexpected active-organization count | Requests within `tier_capacity_fair_share_active_ttl_seconds` and clock synchronization | Wait for the activity TTL or investigate missing/repeated organization identity |
 | `503` after enabling `fail_closed` | Redis connectivity and tier snapshot freshness | Restore the backend; temporarily return to `fail_open` only under an approved availability policy |
 | Different decisions across instances | Config values, snapshot etag, invalidation delivery, and refresh logs | Converge configuration and force a tier policy reload |
 | Correct access but unexpected price | Tier mode, published model policy, sync/batch pricing fields, and spend metadata | Compare simulation output with the recorded tier pricing metadata |

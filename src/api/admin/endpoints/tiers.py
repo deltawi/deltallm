@@ -8,7 +8,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from src.api.admin.endpoints.common import emit_admin_mutation_audit
 from src.api.admin.endpoints.tier_schemas import (
     TierCapacityPoolReplaceRequest,
-    TierCapacityBoostRequest,
     TierCreateRequest,
     TierModelPolicyReplaceRequest,
     TierPatchRequest,
@@ -19,8 +18,6 @@ from src.auth.roles import Permission
 from src.middleware.admin import require_admin_permission
 from src.services.tier_policy_invalidation import reload_tier_policy
 from src.middleware.platform_auth import get_platform_auth_context
-from src.models.errors import ServiceUnavailableError
-from src.services.tier_capacity import TierCapacityRuntimeService
 from src.services.tier_admin import (
     TierAdminConflictError,
     TierAdminError,
@@ -45,13 +42,6 @@ def _tier_service(request: Request) -> TierAdminService:
             detail="Tier repository unavailable",
         )
     return TierAdminService(repository)
-
-
-def _tier_capacity_service(request: Request) -> TierCapacityRuntimeService:
-    return TierCapacityRuntimeService(
-        redis_client=getattr(request.app.state, "redis", None),
-        tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
-    )
 
 
 def _http_error(exc: TierAdminError) -> HTTPException:
@@ -115,104 +105,6 @@ async def create_tier(request: Request, payload: TierCreateRequest) -> dict[str,
         resource_type="tier",
         resource_id=created.tier_id,
         request_payload=request_payload,
-        response_payload=response,
-        before=None,
-        after=response,
-    )
-    return response
-
-
-@router.get(
-    "/ui/api/tiers/capacity/dashboard",
-    dependencies=_PLATFORM_ADMIN_DEPENDENCY,
-)
-async def get_tier_capacity_dashboard(
-    request: Request,
-    top_org_limit: int = Query(default=20, ge=1, le=100),
-) -> dict[str, Any]:
-    try:
-        return await _tier_capacity_service(request).dashboard(top_org_limit=top_org_limit)
-    except ServiceUnavailableError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc.message),
-        ) from exc
-
-
-@router.post(
-    "/ui/api/tiers/capacity/boosts",
-    dependencies=_PLATFORM_ADMIN_DEPENDENCY,
-)
-async def create_tier_capacity_boost(
-    request: Request,
-    payload: TierCapacityBoostRequest,
-) -> dict[str, Any]:
-    request_start = perf_counter()
-    request_payload = _payload(payload)
-    try:
-        response = await _tier_capacity_service(request).set_temporary_boost(**request_payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except ServiceUnavailableError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc.message),
-        ) from exc
-    resource_id = (
-        f"{payload.pool_key}:{payload.callable_key}:{payload.organization_id}"
-    )
-    await emit_admin_mutation_audit(
-        request=request,
-        request_start=request_start,
-        action=AuditAction.ADMIN_TIER_CAPACITY_BOOST_CREATE,
-        organization_id=payload.organization_id,
-        resource_type="tier_capacity_boost",
-        resource_id=resource_id,
-        request_payload=request_payload,
-        response_payload=response,
-        before=None,
-        after=response,
-    )
-    return response
-
-
-@router.delete(
-    "/ui/api/tiers/capacity/boosts",
-    dependencies=_PLATFORM_ADMIN_DEPENDENCY,
-)
-async def delete_tier_capacity_boost(
-    request: Request,
-    pool_key: str = Query(min_length=1),
-    callable_key: str = Query(min_length=1),
-    organization_id: str = Query(min_length=1),
-) -> dict[str, Any]:
-    request_start = perf_counter()
-    try:
-        response = await _tier_capacity_service(request).clear_temporary_boost(
-            pool_key=pool_key,
-            callable_key=callable_key,
-            organization_id=organization_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except ServiceUnavailableError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc.message),
-        ) from exc
-    resource_id = f"{pool_key}:{callable_key}:{organization_id}"
-    await emit_admin_mutation_audit(
-        request=request,
-        request_start=request_start,
-        action=AuditAction.ADMIN_TIER_CAPACITY_BOOST_DELETE,
-        organization_id=organization_id,
-        resource_type="tier_capacity_boost",
-        resource_id=resource_id,
-        request_payload={
-            "pool_key": pool_key,
-            "callable_key": callable_key,
-            "organization_id": organization_id,
-        },
         response_payload=response,
         before=None,
         after=response,

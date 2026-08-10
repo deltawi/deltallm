@@ -106,3 +106,5 @@ config:
     embeddings_batch_min_large_job_claim_interval_seconds: 30
     embeddings_batch_small_job_fast_lane_enabled: false
     embeddings_batch_small_job_max_work_units: 100
+    tier_capacity_fair_share_enabled: false
+    tier_capacity_fair_share_active_ttl_seconds: 10

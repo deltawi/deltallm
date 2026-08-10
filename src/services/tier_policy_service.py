@@ -11,6 +11,7 @@ from typing import Any, Literal
 from src.db.tiers import TierPolicyLoadResult
 from src.services.tier_policy_compiler import compile_tier_policy_snapshot
 from src.services.tier_policy_models import (
+    CompiledTierCapacityPoolMember,
     CompiledTierCapacityPoolPolicy,
     CompiledTierModelPolicy,
     CompiledTierPricingPolicy,
@@ -290,6 +291,20 @@ class TierPolicyService:
             return None
         return self._snapshot.capacity_pool_policy.get(
             (normalized_pool_key, normalized_callable_key)
+        )
+
+    def get_capacity_pool_members(
+        self,
+        pool_key: str | None,
+        callable_key: str | None,
+    ) -> tuple[CompiledTierCapacityPoolMember, ...]:
+        normalized_pool_key = _normalize_id(pool_key)
+        normalized_callable_key = _normalize_id(callable_key)
+        if normalized_pool_key is None or normalized_callable_key is None:
+            return ()
+        return self._snapshot.capacity_pool_members.get(
+            (normalized_pool_key, normalized_callable_key),
+            (),
         )
 
     async def _refresh_loop(self) -> None:

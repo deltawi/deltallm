@@ -25,6 +25,8 @@ from src.rate_limit_policy import (
 )
 from src.services.limit_counter import LimitCounter, RateLimitCheck
 from src.services.model_visibility import (
+    get_tier_capacity_fair_share_active_ttl_seconds_from_app,
+    get_tier_capacity_fair_share_enabled_from_app,
     get_tier_policy_missing_service_mode_from_app,
     get_tier_policy_mode_from_app,
 )
@@ -238,6 +240,10 @@ async def _check_and_acquire_rate_limits(request: Request) -> None:
     tier_policy_service = getattr(request.app.state, "tier_policy_service", None)
     tier_policy_mode = get_tier_policy_mode_from_app(request.app)
     tier_policy_missing_service_mode = get_tier_policy_missing_service_mode_from_app(request.app)
+    tier_capacity_fair_share_enabled = get_tier_capacity_fair_share_enabled_from_app(request.app)
+    tier_capacity_fair_share_active_ttl_seconds = (
+        get_tier_capacity_fair_share_active_ttl_seconds_from_app(request.app)
+    )
 
     try:
         lease, rate_limit_state = await acquire_rate_limit_controls(
@@ -248,6 +254,8 @@ async def _check_and_acquire_rate_limits(request: Request) -> None:
             tier_policy_service=tier_policy_service,
             tier_policy_mode=tier_policy_mode,
             tier_policy_missing_service_mode=tier_policy_missing_service_mode,
+            tier_capacity_fair_share_enabled=tier_capacity_fair_share_enabled,
+            tier_capacity_fair_share_active_ttl_seconds=tier_capacity_fair_share_active_ttl_seconds,
         )
         request.state._rate_limit_state = rate_limit_state
     except RateLimitError as exc:
@@ -263,6 +271,7 @@ async def _check_and_acquire_rate_limits(request: Request) -> None:
                         tier_policy_service=tier_policy_service,
                         tier_policy_mode=tier_policy_mode,
                         tier_policy_missing_service_mode=tier_policy_missing_service_mode,
+                        tier_capacity_fair_share_enabled=tier_capacity_fair_share_enabled,
                     )
                 except Exception:
                     checks = []

@@ -141,8 +141,8 @@ Tier administration requires platform-admin permission.
 | `PATCH`, `DELETE` | `/ui/api/organizations/{organization_id}/tier-assignments/{assignment_id}` | Update or remove an assignment |
 | `GET` | `/ui/api/organizations/{organization_id}/tier-policy-preview` | Preview the effective compiled policy |
 | `POST` | `/ui/api/organizations/{organization_id}/tier-policy/simulate` | Simulate model access, pricing, and limits |
-| `GET` | `/ui/api/tiers/capacity/dashboard` | Inspect live pool utilization and limit hits |
-| `POST`, `DELETE` | `/ui/api/tiers/capacity/boosts` | Apply or clear an audited temporary weight boost |
+| `GET` | `/ui/api/tier-capacity/dashboard` | Inspect live pool utilization and limit hits |
+| `POST`, `DELETE` | `/ui/api/tier-capacity/boosts` | Apply or clear an audited temporary weight boost |
 
 See [Admin UI: Tiers](../admin-ui/tiers.md) for the policy model and [Organization Tiers Rollout](../deployment/organization-tiers-rollout.md) for activation and operations.
 

@@ -21,6 +21,7 @@ from src.services.tier_policy_builders import (
     compile_rate_limit_descriptors,
 )
 from src.services.tier_policy_models import (
+    CompiledTierCapacityPoolMember,
     CompiledTierModelPolicy,
     CompiledTierPricingPolicy,
     CompiledTierRateLimitDescriptor,
@@ -114,6 +115,10 @@ def compile_tier_policy_snapshot(
             rate_limit_descriptors[key] = descriptors
 
     capacity_pool_policy = compile_capacity_pools(capacity_pools)
+    capacity_pool_members = _compile_capacity_pool_members(
+        org_model_policy,
+        capacity_pool_policy,
+    )
 
     return TierPolicySnapshot(
         etag=_snapshot_etag(assignments, model_policies, capacity_pools),
@@ -129,6 +134,7 @@ def compile_tier_policy_snapshot(
         pricing_policies=MappingProxyType(pricing_policies),
         rate_limit_descriptors=MappingProxyType(rate_limit_descriptors),
         capacity_pool_policy=MappingProxyType(capacity_pool_policy),
+        capacity_pool_members=MappingProxyType(capacity_pool_members),
         org_tier_keys=MappingProxyType(
             {
                 org_id: tuple(sorted(tier_keys))
@@ -140,6 +146,35 @@ def compile_tier_policy_snapshot(
         model_policy_count=len(model_policies),
         capacity_pool_count=len(capacity_pools),
     )
+
+
+def _compile_capacity_pool_members(
+    org_model_policy: Mapping[tuple[str, str], CompiledTierModelPolicy],
+    capacity_pool_policy: Mapping[tuple[str, str], Any],
+) -> dict[tuple[str, str], tuple[CompiledTierCapacityPoolMember, ...]]:
+    members: dict[tuple[str, str], dict[str, CompiledTierCapacityPoolMember]] = defaultdict(dict)
+    for (_organization_id, callable_key), policy in org_model_policy.items():
+        if policy.access_mode == "deny" or not policy.capacity_pool_key:
+            continue
+        pool_ref = (policy.capacity_pool_key, callable_key)
+        if pool_ref not in capacity_pool_policy:
+            continue
+        source = policy.source
+        existing = members[pool_ref].get(policy.organization_id)
+        candidate = CompiledTierCapacityPoolMember(
+            pool_key=policy.capacity_pool_key,
+            callable_key=callable_key,
+            organization_id=policy.organization_id,
+            tier_key=source.tier_key,
+            assignment_weight=max(1, int(source.assignment_weight or 1)),
+        )
+        if existing is None or candidate.assignment_weight > existing.assignment_weight:
+            members[pool_ref][policy.organization_id] = candidate
+
+    return {
+        pool_ref: tuple(sorted(pool_members.values(), key=lambda item: item.organization_id))
+        for pool_ref, pool_members in members.items()
+    }
 
 
 def _set_if_better(

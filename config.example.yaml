@@ -98,6 +98,8 @@ general_settings:
   tier_policy_refresh_jitter_seconds: 1
   tier_policy_transition_grace_seconds: 0.05
   tier_policy_refresh_retry_delay_seconds: 5
+  tier_capacity_fair_share_enabled: false
+  tier_capacity_fair_share_active_ttl_seconds: 10
 
   # Governance notifications are opt-in and disabled by default.
   governance_notifications_enabled: false

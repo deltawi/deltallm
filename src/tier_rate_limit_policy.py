@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from src.models.errors import ServiceUnavailableError
-from src.services.limit_counter import FairShareLimit, ParallelLimitCheck, RateLimitCheck
+from src.services.limit_counter import ParallelLimitCheck, RateLimitCheck
+from src.services.tier_capacity_fair_share import (
+    TierFairShareCheck,
+    is_advanced_capacity_pool_strategy,
+)
 from src.services.tier_policy_service import resolve_tier_policy_unavailable_decision
 
 RateLimitMode = Literal["sync", "batch"]
@@ -21,6 +25,7 @@ _BATCH_FALLBACK_SYNC_SCOPES = frozenset(_BATCH_SCOPE_FALLBACKS.values())
 class TierLimitControls:
     rate_checks: tuple[RateLimitCheck, ...] = ()
     parallel_checks: tuple[ParallelLimitCheck, ...] = ()
+    fair_share_checks: tuple[TierFairShareCheck, ...] = ()
 
 
 def build_tier_rate_limit_checks(
@@ -31,6 +36,7 @@ def build_tier_rate_limit_checks(
     tier_policy_service: Any | None,
     tier_policy_mode: str = "disabled",
     tier_policy_missing_service_mode: str = "fail_open",
+    tier_capacity_fair_share_enabled: bool = False,
     mode: RateLimitMode | str = "sync",
 ) -> list[RateLimitCheck]:
     return list(
@@ -41,6 +47,7 @@ def build_tier_rate_limit_checks(
             tier_policy_service=tier_policy_service,
             tier_policy_mode=tier_policy_mode,
             tier_policy_missing_service_mode=tier_policy_missing_service_mode,
+            tier_capacity_fair_share_enabled=tier_capacity_fair_share_enabled,
             mode=mode,
         ).rate_checks
     )
@@ -53,6 +60,7 @@ def build_tier_parallel_limit_checks(
     tier_policy_service: Any | None,
     tier_policy_mode: str = "disabled",
     tier_policy_missing_service_mode: str = "fail_open",
+    tier_capacity_fair_share_enabled: bool = False,
     mode: RateLimitMode | str = "sync",
 ) -> list[ParallelLimitCheck]:
     return list(
@@ -63,6 +71,7 @@ def build_tier_parallel_limit_checks(
             tier_policy_service=tier_policy_service,
             tier_policy_mode=tier_policy_mode,
             tier_policy_missing_service_mode=tier_policy_missing_service_mode,
+            tier_capacity_fair_share_enabled=tier_capacity_fair_share_enabled,
             mode=mode,
         ).parallel_checks
     )
@@ -76,6 +85,7 @@ def build_tier_limit_controls(
     tier_policy_service: Any | None,
     tier_policy_mode: str = "disabled",
     tier_policy_missing_service_mode: str = "fail_open",
+    tier_capacity_fair_share_enabled: bool = False,
     mode: RateLimitMode | str = "sync",
 ) -> TierLimitControls:
     organization_id = _normalize_id(getattr(auth, "organization_id", None))
@@ -112,6 +122,7 @@ def build_tier_limit_controls(
             organization_id=organization_id,
             callable_key=callable_key,
             tokens=tokens,
+            tier_capacity_fair_share_enabled=tier_capacity_fair_share_enabled,
             request_mode=request_mode,
         )
     except Exception as exc:
@@ -131,6 +142,7 @@ def _build_tier_controls_from_service(
     organization_id: str,
     callable_key: str,
     tokens: int,
+    tier_capacity_fair_share_enabled: bool,
     request_mode: RateLimitMode,
 ) -> TierLimitControls:
     checks: list[RateLimitCheck] = []
@@ -163,21 +175,22 @@ def _build_tier_controls_from_service(
         return TierLimitControls(rate_checks=tuple(checks), parallel_checks=tuple(parallel_checks))
 
     pool_policy = tier_policy_service.get_capacity_pool_policy(capacity_pool_key, callable_key)
-    checks.extend(
-        _capacity_pool_rate_limit_checks(
-            pool_policy,
-            tokens=tokens,
-            request_mode=request_mode,
-            organization_id=organization_id,
-            assignment_weight=_positive_int_or_none(
-                getattr(getattr(model_policy, "source", None), "assignment_weight", None)
-            )
-            or 1,
-            tier_key=_normalize_id(
-                getattr(getattr(model_policy, "source", None), "tier_key", None)
-            ),
-        )
+    fair_share_check = _capacity_pool_fair_share_check(
+        pool_policy,
+        model_policy=model_policy,
+        organization_id=organization_id,
+        callable_key=callable_key,
+        tokens=tokens,
+        enabled=tier_capacity_fair_share_enabled,
     )
+    if fair_share_check is None:
+        checks.extend(
+            _capacity_pool_rate_limit_checks(
+                pool_policy,
+                tokens=tokens,
+                request_mode=request_mode,
+            )
+        )
     pool_parallel_check = _pool_parallel_limit_check(
         pool_policy,
         fallback_pool_key=capacity_pool_key,
@@ -185,7 +198,45 @@ def _build_tier_controls_from_service(
     )
     if pool_parallel_check is not None:
         parallel_checks.append(pool_parallel_check)
-    return TierLimitControls(rate_checks=tuple(checks), parallel_checks=tuple(parallel_checks))
+    return TierLimitControls(
+        rate_checks=tuple(checks),
+        parallel_checks=tuple(parallel_checks),
+        fair_share_checks=(fair_share_check,) if fair_share_check is not None else (),
+    )
+
+
+def _capacity_pool_fair_share_check(
+    pool_policy: Any | None,
+    *,
+    model_policy: Any | None,
+    organization_id: str,
+    callable_key: str,
+    tokens: int,
+    enabled: bool,
+) -> TierFairShareCheck | None:
+    if not enabled or pool_policy is None:
+        return None
+    if not is_advanced_capacity_pool_strategy(getattr(pool_policy, "strategy", None)):
+        return None
+    pool_key = _normalize_id(getattr(pool_policy, "pool_key", None))
+    pool_callable_key = _normalize_id(getattr(pool_policy, "callable_key", None)) or callable_key
+    if pool_key is None:
+        return None
+    source = getattr(model_policy, "source", None)
+    return TierFairShareCheck(
+        pool_key=pool_key,
+        callable_key=pool_callable_key,
+        organization_id=organization_id,
+        tier_key=_normalize_id(getattr(source, "tier_key", None)),
+        assignment_weight=max(1, int(getattr(source, "assignment_weight", 1) or 1)),
+        rpm_capacity=_positive_int_or_none(getattr(pool_policy, "rpm_capacity", None)),
+        tpm_capacity=_positive_int_or_none(getattr(pool_policy, "tpm_capacity", None)),
+        request_amount=1,
+        token_amount=max(0, int(tokens)),
+        strategy=str(getattr(pool_policy, "strategy", "weighted_fair") or "weighted_fair").strip().lower(),
+        saturation_threshold=getattr(pool_policy, "saturation_threshold", None),
+        burst_multiplier=getattr(pool_policy, "burst_multiplier", None),
+    )
 
 
 def _capacity_pool_rate_limit_checks(
@@ -193,41 +244,18 @@ def _capacity_pool_rate_limit_checks(
     *,
     tokens: int,
     request_mode: RateLimitMode,
-    organization_id: str,
-    assignment_weight: int,
-    tier_key: str | None,
 ) -> list[RateLimitCheck]:
     descriptors = select_tier_rate_limit_descriptors(
         getattr(pool_policy, "rate_limit_descriptors", ()) if pool_policy is not None else (),
         request_mode=request_mode,
     )
     checks: list[RateLimitCheck] = []
-    strategy = str(getattr(pool_policy, "strategy", "hard_cap") or "hard_cap").strip().lower()
     for descriptor in descriptors:
         check = _rate_limit_check_from_descriptor(
             descriptor,
             tokens=tokens,
         )
         if check is not None:
-            if strategy in {"weighted_fair", "reserved_burst"}:
-                check = replace(
-                    check,
-                    fair_share=FairShareLimit(
-                        organization_id=organization_id,
-                        weight=assignment_weight,
-                        tier_key=tier_key,
-                        strategy=strategy,
-                        saturation_threshold=_positive_float_or_default(
-                            getattr(pool_policy, "saturation_threshold", None),
-                            default=0.8,
-                            maximum=1.0,
-                        ),
-                        burst_multiplier=_positive_float_or_default(
-                            getattr(pool_policy, "burst_multiplier", None),
-                            default=1.0,
-                        ),
-                    ),
-                )
             checks.append(check)
     return checks
 
@@ -438,18 +466,3 @@ def _positive_int_or_none(value: object) -> int | None:
     except (TypeError, ValueError):
         return None
     return normalized if normalized > 0 else None
-
-
-def _positive_float_or_default(
-    value: object,
-    *,
-    default: float,
-    maximum: float | None = None,
-) -> float:
-    try:
-        normalized = float(value)
-    except (TypeError, ValueError):
-        return default
-    if normalized <= 0 or (maximum is not None and normalized > maximum):
-        return default
-    return normalized
