@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from typing import Any
+from urllib.parse import quote
 
 import pytest
 
@@ -409,6 +410,45 @@ async def test_route_group_admin_crud_and_policy_publish(client, test_app):
 
     assert test_app.state.model_hot_reload_manager.calls == 3
     assert runtime_cache.invalidate_calls == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deployment_id", ["dep-a", "openai/gpt-4o"])
+async def test_route_group_member_delete_supports_encoded_deployment_ids(
+    client,
+    test_app,
+    deployment_id: str,
+):
+    setattr(test_app.state.settings, "master_key", "mk-test")
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.model_hot_reload_manager = _FakeHotReload()
+    test_app.state.route_group_runtime_cache = _FakeRouteGroupRuntimeCache()
+    headers = {"Authorization": "Bearer mk-test"}
+
+    create_response = await client.post(
+        "/ui/api/route-groups",
+        headers=headers,
+        json={"group_key": "support-route", "mode": "chat"},
+    )
+    assert create_response.status_code == 200
+
+    member_response = await client.post(
+        "/ui/api/route-groups/support-route/members",
+        headers=headers,
+        json={"deployment_id": deployment_id},
+    )
+    assert member_response.status_code == 200
+
+    delete_response = await client.delete(
+        f"/ui/api/route-groups/support-route/members/{quote(deployment_id, safe='')}",
+        headers=headers,
+    )
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {"deleted": True}
+
+    detail_response = await client.get("/ui/api/route-groups/support-route", headers=headers)
+    assert detail_response.status_code == 200
+    assert detail_response.json()["members"] == []
 
 
 @pytest.mark.asyncio

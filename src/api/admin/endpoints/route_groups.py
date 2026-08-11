@@ -674,7 +674,7 @@ async def upsert_route_group_member(request: Request, group_key: str, payload: d
     return response
 
 
-@router.delete("/ui/api/route-groups/{group_key}/members/{deployment_id}", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
+@router.delete("/ui/api/route-groups/{group_key}/members/{deployment_id:path}", dependencies=[Depends(require_admin_permission(Permission.CONFIG_UPDATE))])
 async def delete_route_group_member(request: Request, group_key: str, deployment_id: str) -> dict[str, bool]:
     request_start = perf_counter()
     repository = _repository_or_503(request)
