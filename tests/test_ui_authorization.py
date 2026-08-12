@@ -214,7 +214,13 @@ class FakeAuthorizationDB:
 
 
 @pytest.mark.asyncio
-async def test_auth_me_returns_ui_access(client, test_app):
+@pytest.mark.parametrize(
+    ("reporting_v2_enabled", "expected_usage"),
+    [(False, False), (True, True)],
+)
+async def test_auth_me_gates_scoped_usage_access(
+    client, test_app, reporting_v2_enabled, expected_usage
+):
     class StubIdentityService:
         async def get_context_for_session(self, token: str):
             if token != "session-token":
@@ -232,6 +238,11 @@ async def test_auth_me_returns_ui_access(client, test_app):
             )
 
     test_app.state.platform_identity_service = StubIdentityService()
+    setattr(
+        test_app.state.app_config.general_settings,
+        "spend_reporting_v2_enabled",
+        reporting_v2_enabled,
+    )
 
     response = await client.get("/auth/me", cookies={"deltallm_session": "session-token"})
 
@@ -250,7 +261,7 @@ async def test_auth_me_returns_ui_access(client, test_app):
     assert payload["ui_access"]["playground"] is True
     assert payload["ui_access"]["named_credentials"] is False
     assert payload["ui_access"]["people_access"] is False
-    assert payload["ui_access"]["usage"] is False
+    assert payload["ui_access"]["usage"] is expected_usage
     assert payload["ui_access"]["tiers"] is False
 
 

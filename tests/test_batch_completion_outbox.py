@@ -249,7 +249,10 @@ async def test_completion_outbox_worker_marks_sent_and_records_spend_once(monkey
     monkeypatch.setattr("src.batch.completion_outbox.increment_usage", lambda **kwargs: usage_calls.append(kwargs))
     monkeypatch.setattr("src.batch.completion_outbox.increment_spend", lambda **kwargs: spend_calls.append(kwargs))
 
-    record = _build_record()
+    record = _build_record(payload_overrides={
+        "owner_account_id": "acct-owner",
+        "owner_snapshot_complete": True,
+    })
     repository = _FakeRepository({record.completion_id: record}, prisma=_FakeDB())
     spend_tracking_service = _FakeSpendTrackingService()
     worker = BatchCompletionOutboxWorker(
@@ -266,6 +269,8 @@ async def test_completion_outbox_worker_marks_sent_and_records_spend_once(monkey
     assert len(spend_tracking_service.calls) == 1
     assert spend_tracking_service.calls[0]["event_id"] == record.completion_id
     assert spend_tracking_service.calls[0]["request_id"] == "batch:b1:i1"
+    assert spend_tracking_service.calls[0]["owner_account_id"] == "acct-owner"
+    assert spend_tracking_service.calls[0]["owner_snapshot_complete"] is True
     assert spend_tracking_service.bound_dbs and spend_tracking_service.bound_dbs[0] is not None
     assert request_calls == [
         {
@@ -300,6 +305,37 @@ async def test_completion_outbox_worker_marks_sent_and_records_spend_once(monkey
     ]
     assert repository.retry_calls == []
     assert repository.failed_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload_overrides", "expected_owner", "snapshot_complete"),
+    [
+        ({}, None, False),
+        ({"owner_account_id": None}, None, False),
+        ({"owner_account_id": "acct-owner"}, "acct-owner", False),
+        ({"owner_account_id": None, "owner_snapshot_complete": True}, None, True),
+        ({"owner_account_id": "acct-owner", "owner_snapshot_complete": True}, "acct-owner", True),
+        ({"owner_account_id": "acct-owner", "owner_snapshot_complete": False}, "acct-owner", False),
+    ],
+)
+async def test_completion_outbox_preserves_owner_snapshot_version_contract(
+    payload_overrides: dict,
+    expected_owner: str | None,
+    snapshot_complete: bool,
+) -> None:
+    record = _build_record(payload_overrides=payload_overrides)
+    repository = _FakeRepository({record.completion_id: record}, prisma=_FakeDB())
+    spend_tracking_service = _FakeSpendTrackingService()
+    worker = BatchCompletionOutboxWorker(
+        app=SimpleNamespace(state=SimpleNamespace(spend_tracking_service=spend_tracking_service)),
+        repository=repository,  # type: ignore[arg-type]
+        config=BatchCompletionOutboxWorkerConfig(max_batch_size=10, max_concurrency=1),
+    )
+
+    assert await worker.process_once() == 1
+    assert spend_tracking_service.calls[0]["owner_account_id"] == expected_owner
+    assert spend_tracking_service.calls[0]["owner_snapshot_complete"] is snapshot_complete
 
 
 @pytest.mark.asyncio

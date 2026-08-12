@@ -40,6 +40,8 @@ class SpendTrackingService:
         cache_hit: bool = False,
         start_time: datetime | None = None,
         end_time: datetime | None = None,
+        owner_account_id: str | None = None,
+        owner_snapshot_complete: bool = True,
     ) -> None:
         await self._log_request_event(
             request_id=request_id,
@@ -56,6 +58,8 @@ class SpendTrackingService:
             cache_hit=cache_hit,
             start_time=start_time,
             end_time=end_time,
+            owner_account_id=owner_account_id,
+            owner_snapshot_complete=owner_snapshot_complete,
             update_ledger=True,
         )
 
@@ -77,6 +81,8 @@ class SpendTrackingService:
         http_status_code: int | None = None,
         exc: Exception | None = None,
         error_type: str | None = None,
+        owner_account_id: str | None = None,
+        owner_snapshot_complete: bool = True,
     ) -> None:
         await self._log_request_event(
             request_id=request_id,
@@ -100,6 +106,8 @@ class SpendTrackingService:
             status="error",
             http_status_code=http_status_code,
             error_type=error_type or getattr(exc, "error_type", None) or (exc.__class__.__name__ if exc is not None else None),
+            owner_account_id=owner_account_id,
+            owner_snapshot_complete=owner_snapshot_complete,
             update_ledger=False,
         )
 
@@ -121,6 +129,8 @@ class SpendTrackingService:
         cache_hit: bool = False,
         start_time: datetime | None = None,
         end_time: datetime | None = None,
+        owner_account_id: str | None = None,
+        owner_snapshot_complete: bool = True,
     ) -> SpendLogOnceResult:
         if self.db is None:
             raise RuntimeError("spend tracking database is unavailable")
@@ -145,6 +155,8 @@ class SpendTrackingService:
             cache_hit=cache_hit,
             start_time=log_start,
             end_time=log_end,
+            owner_account_id=owner_account_id,
+            owner_snapshot_complete=owner_snapshot_complete,
         )
         result = await self._write_event_once(event_entry, event_id=event_id)
         if result == "duplicate":
@@ -179,6 +191,8 @@ class SpendTrackingService:
         status: str = "success",
         http_status_code: int | None = None,
         error_type: str | None = None,
+        owner_account_id: str | None,
+        owner_snapshot_complete: bool,
         update_ledger: bool,
     ) -> None:
         if self.db is None:
@@ -208,6 +222,8 @@ class SpendTrackingService:
             status=status,
             http_status_code=http_status_code,
             error_type=error_type,
+            owner_account_id=owner_account_id,
+            owner_snapshot_complete=owner_snapshot_complete,
         )
 
         await self._write_event(event_entry)
@@ -282,9 +298,10 @@ class SpendTrackingService:
                     metadata,
                     status,
                     http_status_code,
-                    error_type
+                    error_type,
+                    owner_account_id
                 ) VALUES (
-                    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29::timestamp,$30::timestamp,$31,$32,$33,$34,$35,$36::jsonb,$37::jsonb,$38::jsonb,$39,$40,$41
+                    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29::timestamp,$30::timestamp,$31,$32,$33,$34,$35,$36::jsonb,$37::jsonb,$38::jsonb,$39,$40,$41,$42
                 )
                 """
                 + conflict_sql
@@ -332,6 +349,7 @@ class SpendTrackingService:
                 event_entry["status"],
                 event_entry["http_status_code"],
                 event_entry["error_type"],
+                event_entry["owner_account_id"],
             )
             return bool(rows)
         except Exception as exc:  # pragma: no cover - defensive logging
@@ -389,9 +407,10 @@ class SpendTrackingService:
                 metadata,
                 status,
                 http_status_code,
-                error_type
+                error_type,
+                owner_account_id
             ) VALUES (
-                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29::timestamp,$30::timestamp,$31,$32,$33,$34,$35,$36::jsonb,$37::jsonb,$38::jsonb,$39,$40,$41
+                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29::timestamp,$30::timestamp,$31,$32,$33,$34,$35,$36::jsonb,$37::jsonb,$38::jsonb,$39,$40,$41,$42
             )
             ON CONFLICT (id) DO NOTHING
             RETURNING id
@@ -437,6 +456,7 @@ class SpendTrackingService:
             event_entry["status"],
             event_entry["http_status_code"],
             event_entry["error_type"],
+            event_entry["owner_account_id"],
         )
         return "inserted" if rows else "duplicate"
 

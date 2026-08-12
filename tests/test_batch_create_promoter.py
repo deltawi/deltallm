@@ -47,6 +47,7 @@ def _session(
         created_by_user_id="user-1",
         created_by_team_id="team-1",
         created_by_organization_id="org-1",
+        created_by_owner_account_id="acct-owner",
         created_at=now,
         completed_at=now if status == BatchCreateSessionStatus.COMPLETED else None,
         last_attempt_at=None,
@@ -449,6 +450,8 @@ async def test_promote_session_uses_configured_tx_timings_and_locked_recheck() -
     assert tx_repository.created_jobs[0]["size_class"] == "xs"
     assert tx_repository.created_jobs[0]["webhook_config_ciphertext"] == "v1.key.ciphertext"
     assert tx_repository.created_jobs[0]["webhook_config_fingerprint"] == "a" * 64
+    assert tx_repository.created_jobs[0]["created_by_owner_account_id"] == "acct-owner"
+    assert tx_repository.created_jobs[0]["created_by_owner_snapshot_complete"] is True
 
 
 @pytest.mark.asyncio

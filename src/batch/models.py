@@ -224,6 +224,8 @@ class BatchJobRecord:
     scheduler_debug: dict[str, Any] | None = None
     webhook_config_ciphertext: str | None = None
     webhook_config_fingerprint: str | None = None
+    created_by_owner_account_id: str | None = None
+    created_by_owner_snapshot_complete: bool = True
 
     def __post_init__(self) -> None:
         self.status = normalize_batch_job_status(self.status)

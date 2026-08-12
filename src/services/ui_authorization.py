@@ -29,6 +29,7 @@ def build_ui_access(
     authenticated: bool,
     effective_permissions: Iterable[str],
     organization_memberships: Iterable[dict[str, Any]] | None = None,
+    spend_reporting_v2_enabled: bool = False,
 ) -> dict[str, bool]:
     permissions = set(effective_permissions)
     is_platform_admin = Permission.PLATFORM_ADMIN in permissions
@@ -46,6 +47,15 @@ def build_ui_access(
                 can_create_team = True
                 break
 
+    can_view_usage = (
+        is_platform_admin
+        or Permission.SPEND_READ in permissions
+        or (
+            spend_reporting_v2_enabled
+            and bool(permissions & {Permission.SPEND_READ_TEAM, Permission.SPEND_READ_SELF})
+        )
+    )
+
     return {
         "dashboard": can_view_dashboard,
         "models": authenticated,
@@ -62,7 +72,7 @@ def build_ui_access(
         "teams": authenticated and (is_platform_admin or Permission.TEAM_READ in permissions),
         "team_create": authenticated and can_create_team,
         "people_access": is_platform_admin,
-        "usage": authenticated and (is_platform_admin or Permission.SPEND_READ in permissions),
+        "usage": authenticated and can_view_usage,
         "audit": authenticated and (is_platform_admin or Permission.AUDIT_READ in permissions),
         "batches": authenticated and (is_platform_admin or Permission.KEY_READ in permissions),
         "guardrails": is_platform_admin,

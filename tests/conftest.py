@@ -226,6 +226,33 @@ class FakeRedis:
         return await self.eval(script, numkeys, *args)
 
     async def eval(self, script: str, numkeys: int, *args):
+        if "redis.call('SETEX', KEYS[2]" in script:
+            lock_key = str(args[0])
+            cache_key = str(args[1])
+            token = str(args[2])
+            ttl = int(args[3])
+            payload = str(args[4])
+            if str(self.store.get(lock_key)) != token:
+                return 0
+            await self.setex(cache_key, ttl, payload)
+            return 1
+
+        if "return redis.call('EXPIRE', KEYS[1], ARGV[2])" in script:
+            key = str(args[0])
+            token = str(args[1])
+            ttl = int(args[2])
+            if str(self.store.get(key)) != token:
+                return 0
+            return int(await self.expire(key, ttl))
+
+        if "return redis.call('DEL', KEYS[1])" in script:
+            key = str(args[0])
+            token = str(args[1])
+            if str(self.store.get(key)) != token:
+                return 0
+            self.store.pop(key, None)
+            return 1
+
         keys = [str(item) for item in args[:numkeys]]
         argv = [str(item) for item in args[numkeys:]]
         n = len(keys)
@@ -987,7 +1014,14 @@ async def test_app() -> FastAPI:
         (),
         {
             "router_settings": type("RouterCfg", (), {"num_retries": 0})(),
-            "general_settings": type("GeneralCfg", (), {"callable_target_scope_policy_mode": "enforce"})(),
+            "general_settings": type(
+                "GeneralCfg",
+                (),
+                {
+                    "callable_target_scope_policy_mode": "enforce",
+                    "spend_reporting_v2_enabled": True,
+                },
+            )(),
         },
     )()
 

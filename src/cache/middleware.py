@@ -438,6 +438,7 @@ class CacheMiddleware(BaseHTTPMiddleware):
                 user_id=auth.user_id,
                 team_id=auth.team_id,
                 organization_id=getattr(auth, "organization_id", None),
+                owner_account_id=getattr(auth, "owner_account_id", None),
                 end_user_id=None,
                 model=model,
                 call_type=call_type,

@@ -114,3 +114,38 @@ def require_admin_permission(permission: str) -> Callable:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
 
     return _require
+
+
+def require_any_admin_permission(permissions: tuple[str, ...]) -> Callable:
+    """Authorize a control-plane endpoint when any scoped permission is present."""
+
+    async def _require(
+        request: Request,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+        x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
+    ) -> str:
+        configured = None
+        app_config = getattr(request.app.state, "app_config", None)
+        if app_config is not None:
+            configured = getattr(getattr(app_config, "general_settings", None), "master_key", None)
+        if not configured:
+            configured = getattr(getattr(request.app.state, "settings", None), "master_key", None)
+
+        provided = x_master_key or _extract_bearer_token(authorization)
+        if configured and provided and _hmac.compare_digest(provided, configured):
+            return "master_key"
+
+        context = get_platform_auth_context(request)
+        if context is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+        if requires_mfa_verification(context):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="MFA verification required")
+
+        if has_platform_admin_session(request):
+            return "platform_session"
+        if any(has_scoped_permission(context=context, permission=permission) for permission in permissions):
+            return "platform_session"
+
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+
+    return _require

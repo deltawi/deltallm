@@ -87,8 +87,8 @@ async def test_key_scope_invalidation_batches_redis_deletes() -> None:
 
     assert invalidated == 501
     assert [len(call) for call in redis.delete_calls] == [500, 1]
-    assert redis.delete_calls[0][0] == "key:token-0"
-    assert redis.delete_calls[1][0] == "key:token-500"
+    assert redis.delete_calls[0][0] == "key:v2:token-0"
+    assert redis.delete_calls[1][0] == "key:v2:token-500"
 
 
 @pytest.mark.asyncio
@@ -108,7 +108,7 @@ async def test_key_cache_ttl_respects_configured_limit() -> None:
     service = KeyService(repository=repo, redis_client=redis, salt=salt, auth_cache_ttl_seconds=300)
 
     await service.validate_key(raw_key)
-    cache_key = f"key:{token_hash}"
+    cache_key = f"key:v2:{token_hash}"
     assert redis.ttls[cache_key] == 300
 
 
@@ -129,7 +129,7 @@ async def test_key_cache_ttl_capped_by_key_expiry() -> None:
     service = KeyService(repository=repo, redis_client=redis, salt=salt, auth_cache_ttl_seconds=300)
 
     await service.validate_key(raw_key)
-    cache_key = f"key:{token_hash}"
+    cache_key = f"key:v2:{token_hash}"
     assert 1 <= redis.ttls[cache_key] <= 20
 
 
@@ -154,6 +154,52 @@ async def test_validate_key_preserves_key_and_team_model_scopes() -> None:
 
     assert auth.models == ["gpt-4o-mini", "text-embedding-3-small"]
     assert auth.team_models == ["gpt-4o-mini", "text-embedding-3-small"]
+
+
+@pytest.mark.asyncio
+async def test_validate_key_preserves_platform_account_owner_in_auth_cache() -> None:
+    salt = "test-salt"
+    raw_key = "sk-owned-key"
+    token_hash = hashlib.sha256(f"{salt}:{raw_key}".encode("utf-8")).hexdigest()
+    repo = InMemoryRepo({
+        token_hash: KeyRecord(
+            token=token_hash,
+            owner_account_id="acct-owner",
+            expires=datetime.now(tz=UTC) + timedelta(hours=1),
+        )
+    })
+    redis = RecordingRedis()
+    service = KeyService(repository=repo, redis_client=redis, salt=salt)
+
+    first = await service.validate_key(raw_key)
+    second = await service.validate_key(raw_key)
+
+    assert first.owner_account_id == "acct-owner"
+    assert second.owner_account_id == "acct-owner"
+    assert repo.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_validate_key_ignores_pre_owner_contract_cache_entries() -> None:
+    salt = "test-salt"
+    raw_key = "sk-rotated-cache-contract"
+    token_hash = hashlib.sha256(f"{salt}:{raw_key}".encode("utf-8")).hexdigest()
+    repo = InMemoryRepo({
+        token_hash: KeyRecord(
+            token=token_hash,
+            owner_account_id="acct-current",
+            expires=datetime.now(tz=UTC) + timedelta(hours=1),
+        )
+    })
+    redis = RecordingRedis()
+    redis.store[f"key:{token_hash}"] = '{"api_key":"stale-token"}'
+    service = KeyService(repository=repo, redis_client=redis, salt=salt)
+
+    auth = await service.validate_key(raw_key)
+
+    assert auth.owner_account_id == "acct-current"
+    assert repo.calls == 1
+    assert f"key:v2:{token_hash}" in redis.store
 
 
 @pytest.mark.asyncio

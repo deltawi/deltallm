@@ -425,6 +425,32 @@ def test_settings_load_database_pool_overrides_from_environment(monkeypatch):
     assert settings.db_pool_timeout == 21
 
 
+def test_general_settings_spend_reporting_safety_defaults() -> None:
+    settings = GeneralSettings()
+
+    assert settings.spend_reporting_max_concurrency == 2
+    assert settings.spend_reporting_global_max_concurrency == 2
+    assert settings.spend_reporting_queue_timeout_seconds == 10.0
+    assert settings.spend_reporting_execution_timeout_seconds == 60.0
+    assert settings.spend_reporting_redis_timeout_seconds == 0.5
+    assert settings.spend_reporting_v2_enabled is False
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "spend_reporting_max_concurrency",
+        "spend_reporting_global_max_concurrency",
+        "spend_reporting_queue_timeout_seconds",
+        "spend_reporting_execution_timeout_seconds",
+        "spend_reporting_redis_timeout_seconds",
+    ],
+)
+def test_general_settings_rejects_non_positive_spend_reporting_limits(field: str) -> None:
+    with pytest.raises(ValueError, match=field):
+        GeneralSettings.model_validate({field: 0})
+
+
 def test_general_settings_upstream_http_defaults_build_httpx_config():
     settings = GeneralSettings()
 

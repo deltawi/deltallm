@@ -551,6 +551,10 @@ async def auth_me(request: Request) -> CurrentSessionResponse:
     effective_permissions = effective_permissions_for_context(context)
     organization_memberships = [dict(item) for item in (context.organization_memberships or [])]
     team_memberships = [dict(item) for item in (context.team_memberships or [])]
+    general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+    spend_reporting_v2_enabled = bool(
+        getattr(general_settings, "spend_reporting_v2_enabled", False)
+    )
     return CurrentSessionResponse(
         authenticated=True,
         account_id=context.account_id,
@@ -561,6 +565,7 @@ async def auth_me(request: Request) -> CurrentSessionResponse:
             authenticated=True,
             effective_permissions=effective_permissions,
             organization_memberships=organization_memberships,
+            spend_reporting_v2_enabled=spend_reporting_v2_enabled,
         ),
         organization_memberships=organization_memberships,
         team_memberships=team_memberships,

@@ -466,6 +466,8 @@ class BatchCreateSessionPromoter:
                 created_by_user_id=session.created_by_user_id,
                 created_by_team_id=session.created_by_team_id,
                 created_by_organization_id=session.created_by_organization_id,
+                created_by_owner_account_id=session.created_by_owner_account_id,
+                created_by_owner_snapshot_complete=session.created_by_owner_snapshot_complete,
                 expires_at=datetime.now(tz=UTC) + timedelta(days=self.metadata_retention_days),
                 execution_mode="managed_internal",
                 status=BatchJobStatus.QUEUED,

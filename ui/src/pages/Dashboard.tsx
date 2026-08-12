@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import ReportingRangeControl from '../components/ReportingRangeControl';
+import {
+  beginDashboardReport,
+  completeDashboardReport,
+  dashboardReportError,
+  dashboardReportPending,
+  dashboardReportingRangesMatch,
+  failDashboardReport,
+  initialDashboardReportState,
+} from '../lib/dashboardAnalytics';
 import { useApi } from '../lib/hooks';
 import {
   spend,
@@ -12,17 +22,17 @@ import {
   type SpendTimeSeriesReport,
 } from '../lib/api';
 import {
-  DASHBOARD_RANGE_OPTIONS,
   failureRate,
   formatBucketLabel,
   formatBucketTick,
-  normalizeRequestSeries,
-  parseDashboardRangeKey,
-  resolveDashboardRange,
-  type DashboardRangeKey,
-  type ResolvedDashboardRange,
-} from '../lib/dashboardRange';
-import { fmtCompact } from '../lib/format';
+  normalizeReportingSeries,
+  parseReportingRangeKey,
+  resolveReportingRange,
+  type ReportingRangeKey,
+  type ResolvedReportingRange,
+} from '../lib/reportingRange';
+import { fmtCompact, fmtSpendPrecise, fmtSpendValue } from '../lib/format';
+import { useUtcReportingDay } from '../lib/useUtcReportingDay';
 import { providerDisplayName } from '../lib/providers';
 import {
   Activity,
@@ -55,17 +65,15 @@ const COLORS = ['#8b5cf6', '#3b82f6', '#06b6d4', '#10b981', '#f59e0b', '#94a3b8'
 type ProviderSpendDatum = { provider: string; label: string; spend: number };
 type RequestChartDatum = { date: string; success: number; failed: number; total: number };
 
-interface DashboardAnalytics {
-  range: ResolvedDashboardRange;
+interface DashboardCoreAnalytics {
+  range: ResolvedReportingRange;
   summary: SpendSummary;
   timeSeries: SpendTimeSeriesReport;
-  providerReport: SpendGroupReport;
 }
 
-interface DashboardAnalyticsState {
-  requestKey: string | null;
-  data: DashboardAnalytics | null;
-  error: string | null;
+interface DashboardProviderAnalytics {
+  range: ResolvedReportingRange;
+  providerReport: SpendGroupReport;
 }
 
 interface ProviderAgg {
@@ -84,7 +92,7 @@ interface RequestTooltipProps {
   active?: boolean;
   payload?: readonly RequestTooltipEntry[];
   label?: string | number;
-  bucket: ResolvedDashboardRange['bucket'];
+  bucket: ResolvedReportingRange['bucket'];
 }
 
 const statusConfig: Record<ProviderHealthStatus, { dot: string; text: string; bg: string; label: string }> = {
@@ -92,11 +100,6 @@ const statusConfig: Record<ProviderHealthStatus, { dot: string; text: string; bg
   degraded: { dot: 'bg-amber-500', text: 'text-amber-700', bg: 'bg-amber-50', label: 'Degraded' },
   down: { dot: 'bg-rose-500', text: 'text-rose-700', bg: 'bg-rose-50', label: 'Down' },
 };
-
-function fmtDollar(n: number | null | undefined): string {
-  if (n == null) return '$0.0000';
-  return `$${Number(n).toFixed(4)}`;
-}
 
 function RequestVolumeTooltip({ active, payload, label, bucket }: RequestTooltipProps) {
   const datum = payload?.[0]?.payload;
@@ -127,22 +130,38 @@ function RequestVolumeTooltip({ active, payload, label, bucket }: RequestTooltip
   );
 }
 
-function MetricValue({ children, ready }: { children: ReactNode; ready: boolean }) {
-  if (!ready) return <span className="mt-2 block h-7 w-24 animate-pulse rounded bg-gray-100" />;
+function MetricValue({ children, ready, loading }: { children: ReactNode; ready: boolean; loading: boolean }) {
+  if (!ready && loading) return <span className="mt-2 block h-7 w-24 animate-pulse rounded bg-gray-100" />;
+  if (!ready) return <>—</>;
   return <>{children}</>;
+}
+
+function requestErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 export default function Dashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const selectedRangeKey = parseDashboardRangeKey(searchParams.get('range'));
-  const selectedRange = useMemo(() => resolveDashboardRange(selectedRangeKey), [selectedRangeKey]);
+  const utcReportingDay = useUtcReportingDay();
+  const selectedRangeKey = parseReportingRangeKey(searchParams.get('range'));
+  const rollingRangeDay = selectedRangeKey === 'all' ? null : utcReportingDay;
+  const selectedRange = useMemo(
+    () => resolveReportingRange(
+      selectedRangeKey,
+      rollingRangeDay ? new Date(`${rollingRangeDay}T00:00:00Z`) : new Date(),
+    ),
+    [rollingRangeDay, selectedRangeKey],
+  );
   const [refreshNonce, setRefreshNonce] = useState(0);
+  const [providerRefreshNonce, setProviderRefreshNonce] = useState(0);
   const requestKey = `${selectedRangeKey}:${selectedRange.startDate ?? ''}:${selectedRange.endDate ?? ''}:${refreshNonce}`;
-  const [analyticsState, setAnalyticsState] = useState<DashboardAnalyticsState>({
-    requestKey: null,
-    data: null,
-    error: null,
-  });
+  const providerRequestKey = `${requestKey}:${providerRefreshNonce}`;
+  const [coreState, setCoreState] = useState(
+    () => initialDashboardReportState<DashboardCoreAnalytics>(),
+  );
+  const [providerState, setProviderState] = useState(
+    () => initialDashboardReportState<DashboardProviderAnalytics>(),
+  );
 
   const { data: providerHealthSummary } = useApi(() => modelsApi.providerHealthSummary(), []);
   const { data: keysResult } = useApi(() => keysApi.list(), []);
@@ -150,10 +169,14 @@ export default function Dashboard() {
 
   useEffect(() => {
     const controller = new AbortController();
-    let active = true;
+    queueMicrotask(() => {
+      if (!controller.signal.aborted) {
+        setCoreState((current) => beginDashboardReport(current, requestKey));
+      }
+    });
 
-    Promise.all([
-      spend.summary(selectedRange.startDate, selectedRange.endDate, { signal: controller.signal }),
+    void Promise.all([
+      spend.summary(selectedRange.startDate, selectedRange.endDate, undefined, { signal: controller.signal }),
       spend.timeSeries(
         {
           start_date: selectedRange.startDate,
@@ -162,41 +185,84 @@ export default function Dashboard() {
         },
         { signal: controller.signal },
       ),
-      spend.providerReport(
-        { start_date: selectedRange.startDate, end_date: selectedRange.endDate },
-        { signal: controller.signal },
-      ),
     ])
-      .then(([summary, timeSeries, providerReport]) => {
-        if (!active) return;
-        setAnalyticsState({
+      .then(([summary, timeSeries]) => {
+        if (controller.signal.aborted) return;
+        setCoreState((current) => completeDashboardReport(
+          current,
           requestKey,
-          data: { range: selectedRange, summary, timeSeries, providerReport },
-          error: null,
-        });
+          { range: selectedRange, summary, timeSeries },
+        ));
       })
       .catch((error: unknown) => {
-        if (!active || (error instanceof Error && error.name === 'AbortError')) return;
-        setAnalyticsState((current) => ({
+        if (controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')) return;
+        setCoreState((current) => failDashboardReport(
+          current,
           requestKey,
-          data: current.data,
-          error: error instanceof Error ? error.message : 'Unable to load dashboard analytics.',
-        }));
+          requestErrorMessage(error, 'Unable to load dashboard analytics.'),
+        ));
       });
 
-    return () => {
-      active = false;
-      controller.abort();
-    };
+    return () => controller.abort();
   }, [requestKey, selectedRange]);
 
-  const analytics = analyticsState.data;
-  const analyticsLoading = analyticsState.requestKey !== requestKey;
-  const analyticsError = analyticsState.requestKey === requestKey ? analyticsState.error : null;
+  const coreForSelectedRequest = coreState.generation === requestKey && coreState.status === 'success'
+    ? coreState.data
+    : null;
+
+  useEffect(() => {
+    if (!coreForSelectedRequest) return;
+
+    const controller = new AbortController();
+    queueMicrotask(() => {
+      if (!controller.signal.aborted) {
+        setProviderState((current) => beginDashboardReport(current, providerRequestKey));
+      }
+    });
+    void spend.providerReport(
+      {
+        start_date: coreForSelectedRequest.range.startDate,
+        end_date: coreForSelectedRequest.range.endDate,
+      },
+      { signal: controller.signal },
+    ).then((providerReport) => {
+      if (controller.signal.aborted) return;
+      setProviderState((current) => completeDashboardReport(
+        current,
+        providerRequestKey,
+        { range: coreForSelectedRequest.range, providerReport },
+      ));
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')) return;
+      setProviderState((current) => failDashboardReport(
+        current,
+        providerRequestKey,
+        requestErrorMessage(error, 'Unable to load provider spend.'),
+      ));
+    });
+
+    return () => controller.abort();
+  }, [coreForSelectedRequest, providerRequestKey]);
+
+  const analytics = coreState.data;
+  const analyticsLoading = dashboardReportPending(coreState, requestKey);
+  const analyticsError = dashboardReportError(coreState, requestKey);
   const appliedRange = analytics?.range ?? selectedRange;
   const summary = analytics?.summary;
+  const providerAnalytics = dashboardReportingRangesMatch(providerState.data?.range, appliedRange)
+    ? providerState.data
+    : null;
+  const providerLoading = coreForSelectedRequest !== null
+    && dashboardReportPending(providerState, providerRequestKey);
+  const providerError = coreForSelectedRequest !== null
+    ? dashboardReportError(providerState, providerRequestKey)
+    : null;
+  const providerWaitingForCore = analytics === null && analyticsLoading;
+  const providerPanelLoading = providerWaitingForCore || providerLoading;
+  const providerIsUpdating = providerAnalytics !== null && (analyticsLoading || providerLoading);
+  const dashboardLoading = analyticsLoading || providerLoading;
   const requestSeries = useMemo(
-    () => normalizeRequestSeries(analytics?.timeSeries.breakdown ?? [], appliedRange),
+    () => normalizeReportingSeries(analytics?.timeSeries.breakdown ?? [], appliedRange),
     [analytics?.timeSeries.breakdown, appliedRange],
   );
   const requestData: RequestChartDatum[] = useMemo(
@@ -210,19 +276,19 @@ export default function Dashboard() {
   );
   const providerSpend: ProviderSpendDatum[] = useMemo(
     () => {
-      const providers = (analytics?.providerReport.data ?? [])
+      const providers = (providerAnalytics?.providerReport.data ?? [])
         .map((row) => {
           const provider = (row.group_key || 'unknown').trim().toLowerCase() || 'unknown';
           return { provider, label: providerDisplayName(provider), spend: Number(row.total_spend) };
         })
         .filter((provider) => provider.spend > 0);
-      if (!analytics?.providerReport.pagination?.has_more) return providers;
+      if (!providerAnalytics?.providerReport.pagination?.has_more || !analytics) return providers;
 
       const listedSpend = providers.reduce((total, provider) => total + provider.spend, 0);
       const otherSpend = Math.max(Number(analytics.summary.total_spend) - listedSpend, 0);
       return otherSpend > 0 ? [...providers, { provider: 'other', label: 'Other', spend: otherSpend }] : providers;
     },
-    [analytics],
+    [analytics, providerAnalytics],
   );
 
   const providerList = (providerHealthSummary?.providers || []) as ProviderAgg[];
@@ -238,7 +304,7 @@ export default function Dashboard() {
   const summaryReady = summary !== undefined;
   const isUpdating = analyticsLoading && analytics !== null;
 
-  function handleRangeChange(key: DashboardRangeKey) {
+  function handleRangeChange(key: ReportingRangeKey) {
     const next = new URLSearchParams(searchParams);
     next.set('range', key);
     setSearchParams(next);
@@ -254,43 +320,18 @@ export default function Dashboard() {
           </div>
 
           <div className="flex items-center gap-2">
-            {analyticsLoading && (
+            {dashboardLoading && (
               <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-500" role="status">
                 <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
                 <span className="hidden sm:inline">Updating</span>
                 <span className="sr-only sm:hidden">Updating dashboard</span>
               </span>
             )}
-            <div className="hidden rounded-lg border border-gray-200 bg-gray-100 p-1 md:flex" role="group" aria-label="Dashboard period">
-              {DASHBOARD_RANGE_OPTIONS.map((option) => {
-                const selected = selectedRangeKey === option.key;
-                return (
-                  <button
-                    key={option.key}
-                    type="button"
-                    aria-pressed={selected}
-                    onClick={() => handleRangeChange(option.key)}
-                    className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
-                      selected ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-900'
-                    }`}
-                  >
-                    {option.shortLabel}
-                  </button>
-                );
-              })}
-            </div>
-            <label className="flex flex-1 items-center gap-2 md:hidden">
-              <span className="text-sm font-medium text-gray-600">Period</span>
-              <select
-                value={selectedRangeKey}
-                onChange={(event) => handleRangeChange(event.target.value as DashboardRangeKey)}
-                className="min-w-0 flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                {DASHBOARD_RANGE_OPTIONS.map((option) => (
-                  <option key={option.key} value={option.key}>{option.label}</option>
-                ))}
-              </select>
-            </label>
+            <ReportingRangeControl
+              value={selectedRangeKey}
+              onPresetChange={handleRangeChange}
+              ariaLabel="Dashboard period"
+            />
           </div>
         </div>
 
@@ -316,10 +357,14 @@ export default function Dashboard() {
             </div>
             <div className="min-w-0">
               <p className="text-sm font-medium text-gray-500">Total Spend</p>
-              <p className="mt-1 text-2xl font-bold tabular-nums text-gray-900">
-                <MetricValue ready={summaryReady}>{fmtDollar(summary?.total_spend)}</MetricValue>
+              <p className="mt-1 whitespace-nowrap text-xl font-bold tabular-nums text-gray-900 lg:text-lg 2xl:text-xl">
+                <MetricValue ready={summaryReady} loading={analyticsLoading}>{fmtSpendValue(summary?.total_spend)}</MetricValue>
               </p>
-              <p className="mt-1 text-xs text-gray-500">{summaryReady ? `${fmtCompact(summary?.total_tokens)} tokens · ${appliedRange.label}` : 'Loading usage'}</p>
+              <p className="mt-1 text-xs text-gray-500">
+                {summaryReady
+                  ? `${fmtCompact(summary?.total_tokens)} tokens · ${appliedRange.label}`
+                  : analyticsLoading ? 'Loading usage' : 'Usage unavailable'}
+              </p>
             </div>
           </div>
 
@@ -330,10 +375,12 @@ export default function Dashboard() {
             <div className="min-w-0">
               <p className="text-sm font-medium text-gray-500">Total Requests</p>
               <p className="mt-1 text-2xl font-bold tabular-nums text-gray-900">
-                <MetricValue ready={summaryReady}>{fmtCompact(totalRequests)}</MetricValue>
+                <MetricValue ready={summaryReady} loading={analyticsLoading}>{fmtCompact(totalRequests)}</MetricValue>
               </p>
               <p className={`mt-1 text-xs font-medium ${failedRequests > 0 ? 'text-rose-600' : 'text-gray-400'}`}>
-                {summaryReady ? `${fmtCompact(failedRequests)} failed · ${failureRate(failedRequests, totalRequests).toFixed(1)}%` : 'Loading requests'}
+                {summaryReady
+                  ? `${fmtCompact(failedRequests)} failed · ${failureRate(failedRequests, totalRequests).toFixed(1)}%`
+                  : analyticsLoading ? 'Loading requests' : 'Requests unavailable'}
               </p>
             </div>
           </div>
@@ -372,8 +419,11 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className={`grid grid-cols-1 gap-6 transition-opacity lg:grid-cols-2 ${isUpdating ? 'opacity-60' : ''}`} aria-busy={analyticsLoading}>
-          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <div
+            className={`rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-opacity ${isUpdating ? 'opacity-60' : ''}`}
+            aria-busy={analyticsLoading}
+          >
             <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h2 className="text-base font-semibold text-gray-900">Request Volume</h2>
@@ -389,6 +439,10 @@ export default function Dashboard() {
             <div className="h-64">
               {!analytics && analyticsLoading ? (
                 <div className="h-full animate-pulse rounded-lg bg-gray-50" />
+              ) : !analytics && analyticsError ? (
+                <div className="flex h-full items-center justify-center text-sm text-gray-400">
+                  <div className="text-center"><AlertCircle className="mx-auto mb-2 h-8 w-8 opacity-50" /><p>Request volume is temporarily unavailable</p></div>
+                </div>
               ) : requestData.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={requestData} margin={{ top: 8, right: 8, left: 4, bottom: 4 }} accessibilityLayer>
@@ -424,14 +478,37 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <div
+            className={`rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-opacity ${providerIsUpdating ? 'opacity-60' : ''}`}
+            aria-busy={providerPanelLoading}
+          >
             <div className="mb-4">
               <h2 className="text-base font-semibold text-gray-900">Cost by Provider</h2>
               <p className="mt-0.5 text-xs text-gray-400">{appliedRange.label}</p>
             </div>
+            {providerError && (
+              <div className="mb-4 flex items-start justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700" role="alert">
+                <span>
+                  {providerAnalytics
+                    ? 'Could not refresh provider spend. Showing the last successful data.'
+                    : providerError}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setProviderRefreshNonce((value) => value + 1)}
+                  className="shrink-0 rounded font-semibold hover:text-rose-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
             <div className="min-h-[256px]">
-              {!analytics && analyticsLoading ? (
+              {providerPanelLoading && !providerAnalytics ? (
                 <div className="h-64 animate-pulse rounded-lg bg-gray-50" />
+              ) : !providerAnalytics ? (
+                <div className="flex h-64 w-full items-center justify-center text-sm text-gray-400">
+                  <div className="text-center"><AlertCircle className="mx-auto mb-2 h-8 w-8 opacity-50" /><p>Provider spend is temporarily unavailable</p></div>
+                </div>
               ) : providerSpend.length > 0 ? (
                 <div className="flex flex-col items-center gap-4 sm:flex-row">
                   <div className="h-48 w-full sm:h-64 sm:w-1/2">
@@ -441,7 +518,7 @@ export default function Dashboard() {
                           {providerSpend.map((provider, index) => <Cell key={provider.provider} fill={COLORS[index % COLORS.length]} />)}
                         </Pie>
                         <Tooltip
-                          formatter={(value: number | string | undefined) => [fmtDollar(Number(value ?? 0)), 'Spend']}
+                          formatter={(value: number | string | undefined) => [fmtSpendPrecise(Number(value ?? 0)), 'Spend']}
                           contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb', boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)', fontSize: '13px' }}
                         />
                       </PieChart>
@@ -455,7 +532,7 @@ export default function Dashboard() {
                             <div className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
                             <span className="truncate text-sm text-gray-600">{provider.label}</span>
                           </div>
-                          <span className="ml-2 shrink-0 text-sm font-medium tabular-nums text-gray-900">{fmtDollar(provider.spend)}</span>
+                          <span className="ml-2 shrink-0 text-sm font-medium tabular-nums text-gray-900">{fmtSpendValue(provider.spend)}</span>
                         </div>
                       ))}
                     </div>

@@ -160,6 +160,8 @@ class BatchCreateSessionCreate:
     created_by_user_id: str | None = None
     created_by_team_id: str | None = None
     created_by_organization_id: str | None = None
+    created_by_owner_account_id: str | None = None
+    created_by_owner_snapshot_complete: bool = True
     completed_at: datetime | None = None
     last_attempt_at: datetime | None = None
     expires_at: datetime | None = None
@@ -208,6 +210,8 @@ class BatchCreateSessionRecord:
     expires_at: datetime | None
     webhook_config_ciphertext: str | None = None
     webhook_config_fingerprint: str | None = None
+    created_by_owner_account_id: str | None = None
+    created_by_owner_snapshot_complete: bool = True
 
     def __post_init__(self) -> None:
         self.status = normalize_batch_create_session_status(self.status)

@@ -55,6 +55,8 @@ def _session_from_row(row: dict[str, Any]) -> BatchCreateSessionRecord:
         expires_at=parse_datetime(row.get("expires_at")),
         webhook_config_ciphertext=row.get("webhook_config_ciphertext"),
         webhook_config_fingerprint=row.get("webhook_config_fingerprint"),
+        created_by_owner_account_id=row.get("created_by_owner_account_id"),
+        created_by_owner_snapshot_complete=bool(row.get("created_by_owner_snapshot_complete")),
     )
 
 
@@ -68,7 +70,8 @@ class BatchCreateSessionRepository:
         try:
             await self.prisma.query_raw(
                 """
-                SELECT webhook_config_ciphertext, webhook_config_fingerprint
+                SELECT webhook_config_ciphertext, webhook_config_fingerprint,
+                       created_by_owner_account_id, created_by_owner_snapshot_complete
                 FROM deltallm_batch_create_session
                 LIMIT 0
                 """
@@ -97,7 +100,8 @@ class BatchCreateSessionRepository:
                 last_error_code, last_error_message, promotion_attempt_count,
                 created_by_api_key, created_by_user_id, created_by_team_id,
                 created_by_organization_id, completed_at, last_attempt_at, expires_at,
-                webhook_config_ciphertext, webhook_config_fingerprint
+                webhook_config_ciphertext, webhook_config_fingerprint,
+                created_by_owner_account_id, created_by_owner_snapshot_complete
             )
             VALUES (
                 $1, $2, $3, $4, $5,
@@ -108,7 +112,7 @@ class BatchCreateSessionRepository:
                 $20, $21, $22,
                 $23, $24, $25,
                 $26, $27::timestamp, $28::timestamp, $29::timestamp,
-                $30, $31
+                $30, $31, $32, $33
             )
             RETURNING *
             """,
@@ -143,6 +147,8 @@ class BatchCreateSessionRepository:
             session.expires_at,
             session.webhook_config_ciphertext,
             session.webhook_config_fingerprint,
+            session.created_by_owner_account_id,
+            session.created_by_owner_snapshot_complete,
         )
         if not rows:
             return None

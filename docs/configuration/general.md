@@ -39,6 +39,12 @@ general_settings:
   database_url: os.environ/DATABASE_URL
   db_pool_size: 20
   db_pool_timeout: 30
+  spend_reporting_max_concurrency: 2
+  spend_reporting_global_max_concurrency: 2
+  spend_reporting_queue_timeout_seconds: 10
+  spend_reporting_execution_timeout_seconds: 60
+  spend_reporting_redis_timeout_seconds: 0.5
+  spend_reporting_v2_enabled: false
   upstream_http_connect_timeout_seconds: 10
   upstream_http_read_timeout_seconds: 300
   upstream_http_write_timeout_seconds: 30
@@ -195,8 +201,18 @@ Recommended steady state:
 | `database_url` | — | PostgreSQL connection string |
 | `db_pool_size` | `20` | Maximum database connection pool size |
 | `db_pool_timeout` | `30` | Connection pool timeout in seconds |
+| `spend_reporting_max_concurrency` | `2` | Maximum cache-miss spend reports executing concurrently per API worker |
+| `spend_reporting_global_max_concurrency` | `2` | Maximum reporting transactions executing across all workers connected to the same PostgreSQL database |
+| `spend_reporting_queue_timeout_seconds` | `10` | Maximum time a spend report waits for a reporting query slot |
+| `spend_reporting_execution_timeout_seconds` | `60` | Maximum execution time after a reporting slot is acquired, including database connection acquisition and query execution |
+| `spend_reporting_redis_timeout_seconds` | `0.5` | Per-operation Redis deadline for reporting cache coordination before falling back to a guarded database load |
+| `spend_reporting_v2_enabled` | `false` | Enables gated team and personal usage views after the reporting-v2 database and fleet rollout is complete |
 
 Pool settings are applied by appending Prisma's `connection_limit` and `pool_timeout` query parameters to the effective database URL at startup.
+
+Keep both reporting concurrency limits comfortably below the database pool size so gateway authentication, spend writes, and control-plane operations retain database capacity. PostgreSQL advisory-lock slots enforce the global limit without blocking, while the per-worker limit bounds local queues. Cache hits do not consume reporting query slots. Reporting concurrency and timeout settings are applied to subsequent report loads when dynamic configuration changes; active loads retain the immutable limits with which they started.
+
+Leave `spend_reporting_v2_enabled` disabled during the initial rolling deployment. Follow the [scoped usage reporting rollout](../deployment/usage-reporting-v2.md) before enabling it.
 
 Environment overrides:
 - `DELTALLM_DATABASE_URL`

@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -325,6 +326,110 @@ async def test_batch_job_status_enum_query_shape_works_against_real_postgres(bat
 
     assert [str(dict(row)["batch_id"]) for row in rows] == [job.batch_id]
     assert [str(dict(row)["status"]) for row in rows] == ["queued"]
+
+
+@pytest.mark.asyncio
+async def test_ownerless_batch_snapshot_survives_later_key_assignment(batch_db) -> None:
+    schema_rows = await batch_db.query_raw(
+        """
+        SELECT COUNT(*) AS column_count
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND (table_name, column_name) IN (
+              ('deltallm_batch_create_session', 'created_by_owner_snapshot_complete'),
+              ('deltallm_batch_job', 'created_by_owner_snapshot_complete'),
+              ('deltallm_spendlog_events', 'owner_account_id')
+          )
+        """
+    )
+    if int(dict(schema_rows[0]).get("column_count") or 0) != 3:
+        pytest.skip("Spend reporting v2 owner migration is not applied")
+
+    suffix = uuid4().hex
+    key_token = f"ownerless-key-{suffix}"
+    account_id = f"owner-account-{suffix}"
+    batch_id = f"ownerless-batch-{suffix}"
+    event_id = f"ownerless-event-{suffix}"
+    repository = BatchRepository(batch_db)
+    input_file_id = await _seed_create_session_input_file(repository)
+    session = await repository.create_sessions.create_session(
+        BatchCreateSessionCreate(
+            target_batch_id=batch_id,
+            endpoint="/v1/embeddings",
+            input_file_id=input_file_id,
+            staged_storage_backend="local",
+            staged_storage_key=f"seed/{batch_id}.jsonl",
+            staged_bytes=2,
+            expected_item_count=1,
+            inferred_model="m1",
+            created_by_api_key=key_token,
+            created_by_owner_account_id=None,
+            created_by_owner_snapshot_complete=True,
+        )
+    )
+    assert session is not None
+    assert session.created_by_owner_account_id is None
+    assert session.created_by_owner_snapshot_complete is True
+
+    try:
+        await batch_db.execute_raw(
+            "INSERT INTO deltallm_platformaccount (account_id, email) VALUES ($1, $2)",
+            account_id,
+            f"{suffix}@example.com",
+        )
+        await batch_db.execute_raw(
+            """
+            INSERT INTO deltallm_verificationtoken (token, models, owner_account_id)
+            VALUES ($1, ARRAY[]::TEXT[], $2)
+            """,
+            key_token,
+            account_id,
+        )
+
+        job = await repository.create_job(
+            batch_id=batch_id,
+            endpoint=session.endpoint,
+            input_file_id=session.input_file_id,
+            model=session.inferred_model,
+            metadata=session.metadata,
+            created_by_api_key=session.created_by_api_key,
+            created_by_user_id=session.created_by_user_id,
+            created_by_team_id=session.created_by_team_id,
+            created_by_organization_id=session.created_by_organization_id,
+            created_by_owner_account_id=session.created_by_owner_account_id,
+            # Simulate a rolling-deploy promoter that omits the new marker. The
+            # job trigger must prefer the authoritative session NULL over the
+            # key owner assigned after session creation.
+            created_by_owner_snapshot_complete=False,
+        )
+        assert job is not None
+        assert job.created_by_owner_account_id is None
+        assert job.created_by_owner_snapshot_complete is True
+
+        now = datetime.now(tz=UTC)
+        await batch_db.execute_raw(
+            """
+            INSERT INTO deltallm_spendlog_events (
+                id, request_id, call_type, api_key, model, spend,
+                start_time, end_time, metadata
+            )
+            VALUES ($1, $2, 'embedding_batch', $3, 'm1', 0, $4::timestamp, $4::timestamp, $5::jsonb)
+            """,
+            event_id,
+            f"batch:{batch_id}:item-1",
+            key_token,
+            now,
+            json.dumps({"batch_id": batch_id}),
+        )
+        event_rows = await batch_db.query_raw(
+            "SELECT owner_account_id FROM deltallm_spendlog_events WHERE id = $1",
+            event_id,
+        )
+        assert dict(event_rows[0]).get("owner_account_id") is None
+    finally:
+        await batch_db.execute_raw("DELETE FROM deltallm_spendlog_events WHERE id = $1", event_id)
+        await batch_db.execute_raw("DELETE FROM deltallm_verificationtoken WHERE token = $1", key_token)
+        await batch_db.execute_raw("DELETE FROM deltallm_platformaccount WHERE account_id = $1", account_id)
 
 
 @pytest.mark.asyncio

@@ -59,6 +59,16 @@ general_settings:
   redis_url: os.environ/REDIS_URL
   db_pool_size: 20
   db_pool_timeout: 30
+  # Reserve database capacity for gateway traffic by bounding expensive UI reports locally
+  # and across every API worker connected to the same PostgreSQL database.
+  spend_reporting_max_concurrency: 2
+  spend_reporting_global_max_concurrency: 2
+  spend_reporting_queue_timeout_seconds: 10
+  spend_reporting_execution_timeout_seconds: 60
+  spend_reporting_redis_timeout_seconds: 0.5
+  # Enable only after the reporting-v2 database check passes and every gateway
+  # and batch worker runs the reporting-v2 writer.
+  spend_reporting_v2_enabled: false
 
   # Upstream provider HTTP pool tuning. These are startup-time settings;
   # restart the process or roll the Kubernetes deployment after changing them.

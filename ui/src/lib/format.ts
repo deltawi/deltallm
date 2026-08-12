@@ -27,6 +27,81 @@ export function fmtCompact(n: number | null | undefined): string {
   return v.toLocaleString();
 }
 
+function signedDollar(value: number, formattedAbsoluteValue: string): string {
+  return `${value < 0 ? '-$' : '$'}${formattedAbsoluteValue}`;
+}
+
+/** Format spend for cards and tables while preserving meaningful micro-spend. */
+export function fmtSpendValue(n: number | null | undefined): string {
+  const value = Number(n ?? 0);
+  if (!Number.isFinite(value) || value === 0) return '$0';
+
+  const absoluteValue = Math.abs(value);
+  if (absoluteValue >= 1_000) return signedDollar(value, fmtCompact(absoluteValue));
+  if (absoluteValue >= 1) {
+    return signedDollar(value, absoluteValue.toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }));
+  }
+  if (absoluteValue >= 0.01) {
+    return signedDollar(value, absoluteValue.toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 4,
+    }));
+  }
+  if (absoluteValue >= 0.00000001) {
+    return signedDollar(value, absoluteValue.toLocaleString('en-US', {
+      minimumFractionDigits: 4,
+      maximumFractionDigits: 8,
+    }));
+  }
+  return signedDollar(value, absoluteValue.toExponential(2));
+}
+
+/** Format chart ticks without rounding a non-zero micro-spend value down to zero. */
+export function fmtSpendAxis(n: number | null | undefined): string {
+  const value = Number(n ?? 0);
+  if (!Number.isFinite(value) || value === 0) return '$0';
+
+  const absoluteValue = Math.abs(value);
+  if (absoluteValue >= 1_000) return signedDollar(value, fmtCompact(absoluteValue));
+  if (absoluteValue >= 1) {
+    return signedDollar(value, absoluteValue.toLocaleString('en-US', { maximumFractionDigits: 2 }));
+  }
+  if (absoluteValue >= 0.01) {
+    return signedDollar(value, absoluteValue.toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 4,
+    }));
+  }
+  if (absoluteValue >= 0.000001) {
+    return signedDollar(value, absoluteValue.toLocaleString('en-US', { maximumFractionDigits: 6 }));
+  }
+  return signedDollar(value, absoluteValue.toExponential(1));
+}
+
+/** Format tooltip spend with more precision than the chart axis. */
+export function fmtSpendPrecise(n: number | null | undefined): string {
+  const value = Number(n ?? 0);
+  if (!Number.isFinite(value) || value === 0) return '$0.0000';
+
+  const absoluteValue = Math.abs(value);
+  if (absoluteValue < 0.00000001) {
+    return signedDollar(value, absoluteValue.toExponential(2));
+  }
+  if (absoluteValue >= 1) {
+    return signedDollar(value, absoluteValue.toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 4,
+    }));
+  }
+  return signedDollar(value, absoluteValue.toLocaleString('en-US', {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 8,
+  }));
+}
+
 function pad2(value: number): string {
   return String(value).padStart(2, '0');
 }
