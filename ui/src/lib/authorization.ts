@@ -129,7 +129,12 @@ export function resolveUiAccess(
     return fullUiAccess();
   }
   if (session?.ui_access) {
-    return { ...emptyUiAccess(), ...session.ui_access };
+    const access = { ...emptyUiAccess(), ...session.ui_access };
+    if (session.role !== 'platform_admin') {
+      access.tiers = false;
+      access.organization_create = false;
+    }
+    return access;
   }
   return deriveUiAccessFromPermissions(session);
 }

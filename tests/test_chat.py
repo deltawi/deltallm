@@ -17,6 +17,7 @@ from src.mcp.exceptions import MCPToolTimeoutError
 from src.mcp.exceptions import MCPTransportError
 from src.mcp.models import MCPToolCallResult
 from src.models.errors import ServiceUnavailableError
+from src.rate_limit_policy import estimate_tokens
 
 
 class BlockingChatGuardrail(CustomGuardrail):
@@ -46,6 +47,33 @@ class RecordingCallback(CustomLogger):
         del exception, start_time, end_time
         self.failure += 1
         self.failure_payloads.append(dict(kwargs))
+
+
+class RewritingPreCallCallback(CustomLogger):
+    def __init__(
+        self,
+        *,
+        model: str | None = None,
+        system_message: str | None = None,
+    ) -> None:
+        self.model = model
+        self.system_message = system_message
+        self.calls = 0
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):  # noqa: ANN001
+        del user_api_key_dict, cache
+        assert call_type == "completion"
+        self.calls += 1
+        updated = dict(data)
+        if self.model is not None:
+            updated["model"] = self.model
+        if self.system_message is not None:
+            messages = list(updated.get("messages") or [])
+            updated["messages"] = [
+                {"role": "system", "content": self.system_message},
+                *messages,
+            ]
+        return updated
 
 
 class BlockingMCPToolGuardrail(CustomGuardrail):
@@ -211,6 +239,74 @@ async def test_chat_completion_success(client, test_app):
     assert usage == {"rpm": 1, "tpm": 2}
     latency = await test_app.state.router_state_backend.get_latency_window(deployment_id, 300_000)
     assert len(latency) == 1
+
+
+@pytest.mark.asyncio
+async def test_chat_authorizes_the_model_after_pre_call_transformation(client, test_app):
+    rewriter = RewritingPreCallCallback(model="forbidden-model")
+    manager = CallbackManager()
+    manager.register_callback(rewriter, callback_type="success")
+    test_app.state.callback_manager = manager
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+
+    response = await client.post(
+        "/v1/chat/completions",
+        headers=headers,
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["type"] == "permission_denied"
+    assert "forbidden-model" in response.json()["error"]["message"]
+    assert rewriter.calls == 1
+    assert test_app.state.http_client.post_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_chat_rate_limit_estimate_uses_final_transformed_payload(
+    client,
+    test_app,
+    monkeypatch,
+):
+    import src.middleware.rate_limit as rate_limit_middleware
+
+    system_message = "policy context " * 80
+    rewriter = RewritingPreCallCallback(system_message=system_message)
+    manager = CallbackManager()
+    manager.register_callback(rewriter, callback_type="success")
+    test_app.state.callback_manager = manager
+    captured_tokens: list[int] = []
+    original_acquire = rate_limit_middleware.acquire_rate_limit_controls
+
+    async def capture_acquire(**kwargs):  # noqa: ANN003, ANN202
+        captured_tokens.append(int(kwargs["tokens"]))
+        return await original_acquire(**kwargs)
+
+    monkeypatch.setattr(rate_limit_middleware, "acquire_rate_limit_controls", capture_acquire)
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }
+    final_body = {
+        **body,
+        "messages": [
+            {"role": "system", "content": system_message},
+            *body["messages"],
+        ],
+    }
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert response.status_code == 200
+    assert captured_tokens == [estimate_tokens(final_body)]
+    assert captured_tokens[0] > estimate_tokens(body)
+    assert rewriter.calls == 1
 
 
 @pytest.mark.asyncio
@@ -1133,6 +1229,39 @@ async def test_chat_billing_uses_deployment_pricing_when_tier_snapshot_is_stale(
     assert recorder.events[-1]["metadata"]["tier_pricing_authoritative"] is False
     assert recorder.events[-1]["metadata"]["tier_pricing_applied"] is False
     assert recorder.events[-1]["metadata"]["tier_unavailable_reason"] == "tier_policy_unavailable_fail_open"
+
+
+@pytest.mark.asyncio
+async def test_chat_billing_marks_partial_token_pricing_unpriced(client, test_app):
+    recorder = _SpendRecorder()
+    test_app.state.spend_tracking_service = recorder
+    deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
+    deployment.model_info = {"input_cost_per_token": 1.0}
+
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    response = await client.post("/v1/chat/completions", headers=headers, json=body)
+
+    assert response.status_code == 200
+    await asyncio.sleep(0.05)
+    event = recorder.events[-1]
+    assert event["usage"] == {
+        "prompt_tokens": 1,
+        "completion_tokens": 1,
+        "total_tokens": 2,
+    }
+    assert event["cost"] == 0.0
+    assert event["metadata"]["billing_status"] == "unpriced"
+    assert event["metadata"]["billing"]["unpriced_reason"] == (
+        "no_configured_pricing"
+    )
+    assert event["metadata"]["missing_pricing_fields"] == [
+        "output_cost_per_token"
+    ]
 
 
 @pytest.mark.asyncio

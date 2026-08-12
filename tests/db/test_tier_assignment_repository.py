@@ -106,6 +106,29 @@ async def test_upsert_org_assignment_rejects_cross_tier_version() -> None:
 
 
 @pytest.mark.asyncio
+async def test_upsert_org_assignment_rejects_disabled_tier_before_version_lookup() -> None:
+    prisma = _FakePrisma(enable_tx=True, assignment_tier_enabled=False)
+    repository = TierRepository(prisma)
+
+    with pytest.raises(ValueError, match="enabled tier"):
+        await repository.upsert_org_assignment(
+            organization_id="org-1",
+            tier_id="tier-1",
+            tier_version_id="ver-1",
+            assignment_type="addon",
+            enabled=True,
+        )
+
+    assert prisma.tx_started == 1
+    assert prisma.tx_committed == 0
+    assert prisma.tx_rolled_back == 1
+    tx = prisma.tx_clients[0]
+    assert len(tx.calls) == 1
+    assert "SELECT tier_id, enabled" in tx.calls[0][0]
+    assert "FOR UPDATE" in tx.calls[0][0]
+
+
+@pytest.mark.asyncio
 async def test_upsert_org_assignment_rejects_draft_version() -> None:
     prisma = _FakePrisma(enable_tx=True, assignment_version_status="draft")
     repository = TierRepository(prisma)

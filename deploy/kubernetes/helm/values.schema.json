@@ -352,6 +352,18 @@
             "embeddings_batch_size_aware_scheduling_enabled": { "type": "boolean" },
             "embeddings_batch_aging_seconds_per_work_unit": { "type": "integer", "minimum": 1 },
             "embeddings_batch_max_age_credit_work_units": { "type": "integer", "minimum": 0 },
+            "tier_policy_mode": {
+              "type": "string",
+              "enum": ["disabled", "shadow", "enforce"]
+            },
+            "tier_policy_missing_service_mode": {
+              "type": "string",
+              "enum": ["fail_open", "fail_closed"]
+            },
+            "tier_policy_refresh_interval_seconds": { "type": "number", "exclusiveMinimum": 0 },
+            "tier_policy_refresh_jitter_seconds": { "type": "number", "minimum": 0 },
+            "tier_policy_transition_grace_seconds": { "type": "number", "minimum": 0 },
+            "tier_policy_refresh_retry_delay_seconds": { "type": "number", "exclusiveMinimum": 0 },
             "tier_capacity_fair_share_enabled": { "type": "boolean" },
             "tier_capacity_fair_share_active_ttl_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
             "embeddings_batch_min_large_job_claim_interval_seconds": { "type": "integer", "minimum": 0 },

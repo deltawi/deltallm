@@ -447,11 +447,16 @@ class EmbeddingWorkerExecutionMixin:
                 api_provider=api_provider,
                 model_fallback=deployment_model,
             )
-            billed_cost, provider_cost, pricing = self._batch_item_costs(
+            item_costs = self._batch_item_costs(
                 prepared=prepared,
                 usage=usage,
                 served_deployment=served_deployment,
             )
+            billed_cost = item_costs.billed_cost
+            provider_cost = item_costs.provider_cost
+            pricing = item_costs.pricing
+            customer_billing = item_costs.customer_billing
+            provider_billing = item_costs.provider_billing
             served_deployment_id = str(
                 getattr(served_deployment, "deployment_id", None)
                 or getattr(prepared.primary_deployment, "deployment_id", None)
@@ -499,6 +504,14 @@ class EmbeddingWorkerExecutionMixin:
                             deployment_model=deployment_model,
                             pricing_metadata=pricing.spend_metadata(
                                 provider_cost=provider_cost,
+                                billing=customer_billing.billing,
+                                provider_billing=provider_billing.billing,
+                                effective_pricing_sources=(
+                                    customer_billing.pricing_sources_used
+                                ),
+                                missing_pricing_fields=(
+                                    customer_billing.missing_pricing_fields
+                                ),
                                 pricing_tier="batch",
                             ),
                         ),
@@ -690,11 +703,16 @@ class EmbeddingWorkerExecutionMixin:
                     api_provider=api_provider,
                     model_fallback=deployment_model,
                 )
-                billed_cost, provider_cost, pricing = self._batch_item_costs(
+                item_costs = self._batch_item_costs(
                     prepared=prepared,
                     usage=usage,
                     served_deployment=served_deployment,
                 )
+                billed_cost = item_costs.billed_cost
+                provider_cost = item_costs.provider_cost
+                pricing = item_costs.pricing
+                customer_billing = item_costs.customer_billing
+                provider_billing = item_costs.provider_billing
                 completion_rows.append(
                     {
                         "prepared": prepared,
@@ -704,6 +722,14 @@ class EmbeddingWorkerExecutionMixin:
                         "billed_cost": billed_cost,
                         "pricing_metadata": pricing.spend_metadata(
                             provider_cost=provider_cost,
+                            billing=customer_billing.billing,
+                            provider_billing=provider_billing.billing,
+                            effective_pricing_sources=(
+                                customer_billing.pricing_sources_used
+                            ),
+                            missing_pricing_fields=(
+                                customer_billing.missing_pricing_fields
+                            ),
                             pricing_tier="batch",
                         ),
                     }

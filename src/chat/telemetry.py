@@ -6,8 +6,11 @@ from typing import Any
 
 from fastapi import Request
 
-from src.billing.cost import completion_cost
-from src.billing.tier_pricing import attach_pricing_metadata, resolve_deployment_tier_pricing
+from src.billing.tier_pricing import (
+    attach_pricing_metadata,
+    resolve_deployment_tier_pricing,
+    resolve_token_billing_result,
+)
 from src.callbacks import build_standard_logging_payload
 from src.chat.audit import emit_text_audit_event
 from src.metrics import (
@@ -65,19 +68,20 @@ def _resolve_completion_pricing_costs(
         tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
         mode="sync",
     )
-    request_cost = completion_cost(
+    customer_billing = resolve_token_billing_result(
+        pricing,
         model=model,
         usage=usage_data,
         cache_hit=cache_hit,
-        custom_pricing=pricing.customer_token_pricing,
     )
-    provider_cost = completion_cost(
+    provider_billing = resolve_token_billing_result(
+        pricing,
         model=model,
         usage=usage_data,
         cache_hit=cache_hit,
-        custom_pricing=pricing.provider_token_pricing,
+        pricing_view="provider",
     )
-    return usage_data, pricing, request_cost, provider_cost
+    return usage_data, pricing, customer_billing, provider_billing
 
 
 async def emit_stream_success(
@@ -103,13 +107,19 @@ async def emit_stream_success(
 ) -> None:
     await request.app.state.passive_health_tracker.record_request_outcome(served_deployment.deployment_id, success=True)
     api_provider = resolve_provider(params)
-    usage_data, pricing, request_cost, provider_cost = _resolve_completion_pricing_costs(
+    usage_data, pricing, customer_billing, provider_billing = _resolve_completion_pricing_costs(
         request=request,
         auth=auth,
         model=payload.model,
         served_deployment=served_deployment,
         usage=usage,
         cache_hit=cache_hit,
+    )
+    request_cost = customer_billing.billing.cost
+    provider_cost = (
+        None
+        if provider_billing.billing.unpriced_reason is not None
+        else provider_billing.billing.cost
     )
     increment_request(
         model=payload.model,
@@ -160,6 +170,10 @@ async def emit_stream_success(
                     },
                     pricing,
                     provider_cost=provider_cost,
+                    billing=customer_billing.billing,
+                    provider_billing=provider_billing.billing,
+                    effective_pricing_sources=customer_billing.pricing_sources_used,
+                    missing_pricing_fields=customer_billing.missing_pricing_fields,
                 ),
             ),
             cache_hit=cache_hit,
@@ -363,13 +377,19 @@ async def emit_nonstream_success(
     await request.app.state.passive_health_tracker.record_request_outcome(served_deployment.deployment_id, success=True)
     api_provider = resolve_provider(served_deployment.deltallm_params)
     api_base = str(served_deployment.deltallm_params.get("api_base", request.app.state.settings.openai_base_url)).rstrip("/")
-    usage, pricing, request_cost, provider_cost = _resolve_completion_pricing_costs(
+    usage, pricing, customer_billing, provider_billing = _resolve_completion_pricing_costs(
         request=request,
         auth=auth,
         model=payload.model,
         served_deployment=served_deployment,
         usage=payload_data.get("usage") if isinstance(payload_data.get("usage"), dict) else None,
         cache_hit=getattr(request.state, "cache_hit", False),
+    )
+    request_cost = customer_billing.billing.cost
+    provider_cost = (
+        None
+        if provider_billing.billing.unpriced_reason is not None
+        else provider_billing.billing.cost
     )
     increment_request(
         model=payload.model,
@@ -418,6 +438,10 @@ async def emit_nonstream_success(
                     },
                     pricing,
                     provider_cost=provider_cost,
+                    billing=customer_billing.billing,
+                    provider_billing=provider_billing.billing,
+                    effective_pricing_sources=customer_billing.pricing_sources_used,
+                    missing_pricing_fields=customer_billing.missing_pricing_fields,
                 ),
             ),
             cache_hit=cache_hit,

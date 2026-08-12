@@ -546,10 +546,47 @@ class FakeRedis:
             parallel_token_count = sum(parallel_requested)
             parallel_tokens = argv[cursor : cursor + parallel_token_count]
             cursor += parallel_token_count
+            capacity_arg_start = cursor + (fair_count * 15)
+            capacity_count = (
+                int(argv[capacity_arg_start])
+                if capacity_arg_start < len(argv)
+                else 0
+            )
+            capacity_by_rate_index: dict[int, tuple[str, int]] = {}
+            for idx in range(capacity_count):
+                arg_start = capacity_arg_start + 1 + (idx * 3)
+                capacity_by_rate_index[int(argv[arg_start])] = (
+                    argv[arg_start + 1],
+                    int(argv[arg_start + 2]),
+                )
+            capacity_key_start = (
+                rate_count
+                + legacy_parallel_count
+                + parallel_count
+                + (fair_count * 14)
+            )
+
+            async def record_capacity_limit_hit(rate_index: int) -> None:
+                metadata = capacity_by_rate_index.get(rate_index)
+                if metadata is None:
+                    return
+                field, ttl = metadata
+                heatmap_key, rank_key, total_key = keys[
+                    capacity_key_start : capacity_key_start + 3
+                ]
+                await self.hincrby(heatmap_key, field, 1)
+                await self.zincrby(rank_key, 1, field)
+                await self.incr(total_key)
+                await self.expire(heatmap_key, ttl)
+                await self.expire(rank_key, ttl)
+                await self.expire(total_key, ttl)
+
             for idx in range(rate_count):
                 current = int(self.store.get(keys[idx], 0) or 0)
-                if current + amounts[idx] > limits[idx]:
-                    return [0, "rate", idx + 1]
+                attempted = current + amounts[idx]
+                if attempted > limits[idx]:
+                    await record_capacity_limit_hit(idx + 1)
+                    return [0, "rate", idx + 1, attempted, current, limits[idx]]
             legacy_key_start = rate_count
             for idx in range(legacy_parallel_count):
                 key = keys[legacy_key_start + idx]

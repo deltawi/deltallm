@@ -56,10 +56,46 @@ for i = 1, parallel_token_count do
 end
 cursor = cursor + parallel_token_count
 
+local fair_key_offset = rate_n + legacy_parallel_n + parallel_n
+local capacity_arg_offset = cursor + (fair_n * 15)
+local capacity_n = tonumber(ARGV[capacity_arg_offset + 1]) or 0
+local capacity_key_offset = fair_key_offset + (fair_n * 14)
+local capacity_rate_indexes = {}
+local capacity_hit_fields = {}
+local capacity_hit_ttls = {}
+for i = 1, capacity_n do
+  local arg_offset = capacity_arg_offset + 1 + ((i - 1) * 3)
+  capacity_rate_indexes[i] = tonumber(ARGV[arg_offset + 1]) or 0
+  capacity_hit_fields[i] = ARGV[arg_offset + 2] or ''
+  capacity_hit_ttls[i] = tonumber(ARGV[arg_offset + 3]) or 60
+end
+
+local function record_capacity_limit_hit(rate_index)
+  for i = 1, capacity_n do
+    if capacity_rate_indexes[i] == rate_index then
+      local heatmap_key = KEYS[capacity_key_offset + 1]
+      local rank_key = KEYS[capacity_key_offset + 2]
+      local total_key = KEYS[capacity_key_offset + 3]
+      local field = capacity_hit_fields[i]
+      local ttl = capacity_hit_ttls[i]
+      redis.call('HINCRBY', heatmap_key, field, 1)
+      redis.call('ZINCRBY', rank_key, 1, field)
+      redis.call('INCR', total_key)
+      redis.call('EXPIRE', heatmap_key, ttl)
+      redis.call('EXPIRE', rank_key, ttl)
+      redis.call('EXPIRE', total_key, ttl)
+      return 1
+    end
+  end
+  return 0
+end
+
 for i = 1, rate_n do
   local current = tonumber(redis.call('GET', KEYS[i]) or '0') or 0
-  if current + rate_amounts[i] > rate_limits[i] then
-    return {0, 'rate', i}
+  local attempted = current + rate_amounts[i]
+  if attempted > rate_limits[i] then
+    record_capacity_limit_hit(i)
+    return {0, 'rate', i, attempted, current, rate_limits[i]}
   end
 end
 
@@ -406,7 +442,6 @@ local function evaluate_fair_share(index, key_offset, arg_offset)
   return nil
 end
 
-local fair_key_offset = rate_n + legacy_parallel_n + parallel_n
 for fair_index = 1, fair_n do
   local failure = evaluate_fair_share(
     fair_index,

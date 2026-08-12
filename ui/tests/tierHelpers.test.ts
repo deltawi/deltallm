@@ -3,6 +3,9 @@ import test from 'node:test';
 import {
   emptyCapacityPoolForm,
   emptyModelPolicyForm,
+  formatSimulationPerRequestPrice,
+  formatSimulationPrice,
+  capacityPoolFormWithStrategy,
   capacityPoolFormToPayload,
   capacityPoolsToPayload,
   capacityPoolToPayload,
@@ -18,6 +21,7 @@ import {
   poolOptionsForCallable,
   summarizePricing,
   summarizeSimulation,
+  tierSimulationFormToPayload,
   tierAssignmentRequiresActiveVersion,
 } from '../src/lib/tiers';
 import type { TierPolicySimulation } from '../src/lib/api';
@@ -222,8 +226,11 @@ test('pricing summaries use human labels and billing units', () => {
   };
   const entries = pricingEntries(pricing);
 
-  assert.deepEqual(entries.map((entry) => entry.shortLabel), ['Image', 'Request']);
-  assert.equal(summarizePricing(pricing, 'image_generation'), 'Image 0.25 /image · Request 0.75 /request');
+  assert.deepEqual(entries.map((entry) => entry.shortLabel), ['Input image', 'Request']);
+  assert.equal(
+    summarizePricing(pricing, 'image_generation'),
+    'Input image 0.25 /image · Request 0.75 /request',
+  );
 });
 
 test('modelPolicyFormToPayload rejects partial or non-positive numeric limits', () => {
@@ -290,6 +297,21 @@ test('capacity pool payload helpers preserve metadata and strip response-only fi
   assert.equal('tier_capacity_pool_id' in sanitized, false);
   assert.equal('created_at' in sanitized, false);
   assert.deepEqual(capacityPoolsToPayload([existing])[0], sanitized);
+});
+
+test('capacity pool strategy helper fills only relevant safe defaults', () => {
+  const hardCap = emptyCapacityPoolForm();
+  const weightedFair = capacityPoolFormWithStrategy(hardCap, 'weighted_fair');
+  assert.equal(weightedFair.saturation_threshold, '0.85');
+  assert.equal(weightedFair.burst_multiplier, '');
+
+  const reservedBurst = capacityPoolFormWithStrategy(weightedFair, 'reserved_burst');
+  assert.equal(reservedBurst.saturation_threshold, '0.85');
+  assert.equal(reservedBurst.burst_multiplier, '1.2');
+
+  const switchedBack = capacityPoolFormWithStrategy(reservedBurst, 'hard_cap');
+  assert.equal(switchedBack.saturation_threshold, '');
+  assert.equal(switchedBack.burst_multiplier, '');
 });
 
 test('poolOptionsForCallable filters and deduplicates by callable key', () => {
@@ -360,13 +382,21 @@ test('tier assignment helpers require active pinned versions for current enabled
   assert.equal(isAssignableTierVersion({ status: 'archived' }, false), true);
 });
 
-test('summarizeSimulation highlights static limit overflow', () => {
+test('summarizeSimulation reports the overall static decision', () => {
   const summary = summarizeSimulation({
     access: {
       allowed: true,
       reason: 'tier_policy_allowed',
       explicit_policy: true,
       tier_keys: ['growth'],
+    },
+    decision: {
+      allowed: false,
+      reason: 'static_limit_exceeded',
+      primary_limiting_scope: 'tier_org_model_tpm',
+      limiting_scopes: ['tier_org_model_tpm'],
+      basis: 'empty_window_static',
+      live_capacity_evaluated: false,
     },
     static_limit_checks: [
       {
@@ -383,5 +413,199 @@ test('summarizeSimulation highlights static limit overflow', () => {
     ],
   } as TierPolicySimulation);
 
-  assert.equal(summary, 'Allowed by tier, but exceeds tier_org_model_tpm');
+  assert.equal(summary, 'Denied: static_limit_exceeded');
+});
+
+test('formatSimulationPrice distinguishes exact, partial, and unavailable quotes', () => {
+  const base = {
+    currency: 'USD',
+    billing_mode: 'chat',
+    usage_snapshot: { prompt_tokens: 100 },
+    configured_candidate_count: 2,
+    priced_candidate_count: 2,
+    unpriced_candidate_count: 0,
+    unevaluated_candidate_count: 0,
+    unpriced_reasons: [],
+    pricing_sources: ['tier'],
+    basis: 'configured_routes',
+    request_count: 2,
+    amount_scope: 'aggregate',
+    per_request_amount: 0.625,
+    per_request_minimum_amount: 0.625,
+    per_request_maximum_amount: 0.625,
+  } as const;
+
+  assert.equal(formatSimulationPrice({
+    ...base,
+    status: 'available',
+    reason: null,
+    kind: 'exact',
+    amount: 1.25,
+    minimum_amount: 1.25,
+    maximum_amount: 1.25,
+  }), 'USD 1.250000');
+  assert.equal(formatSimulationPrice({
+    ...base,
+    status: 'partial',
+    reason: 'some_routes_unpriced',
+    kind: 'exact',
+    amount: null,
+    minimum_amount: 1,
+    maximum_amount: 1,
+    per_request_amount: null,
+    per_request_minimum_amount: 0.5,
+    per_request_maximum_amount: 0.5,
+    priced_candidate_count: 1,
+    unpriced_candidate_count: 1,
+  }), 'Partial route quote: USD 1.000000 (1 unpriced)');
+  assert.equal(formatSimulationPrice({
+    ...base,
+    status: 'unavailable',
+    reason: 'no_configured_routes',
+    kind: null,
+    amount: null,
+    minimum_amount: null,
+    maximum_amount: null,
+    per_request_amount: null,
+    per_request_minimum_amount: null,
+    per_request_maximum_amount: null,
+    configured_candidate_count: 0,
+    priced_candidate_count: 0,
+  }), 'Unavailable: No configured routes');
+});
+
+test('formatSimulationPrice preserves small positive prices and narrow ranges', () => {
+  const base = {
+    currency: 'USD',
+    billing_mode: 'chat',
+    usage_snapshot: { prompt_tokens: 1 },
+    configured_candidate_count: 1,
+    priced_candidate_count: 1,
+    unpriced_candidate_count: 0,
+    unevaluated_candidate_count: 0,
+    unpriced_reasons: [],
+    pricing_sources: ['default'],
+    basis: 'configured_routes',
+    status: 'available',
+    reason: null,
+    request_count: 1,
+    amount_scope: 'aggregate',
+    per_request_amount: 0.00000015,
+    per_request_minimum_amount: 0.00000015,
+    per_request_maximum_amount: 0.00000015,
+  } as const;
+
+  assert.equal(formatSimulationPrice({
+    ...base,
+    kind: 'exact',
+    amount: 0.00000015,
+    minimum_amount: 0.00000015,
+    maximum_amount: 0.00000015,
+  }), 'USD 0.00000015');
+  assert.equal(formatSimulationPrice({
+    ...base,
+    configured_candidate_count: 2,
+    priced_candidate_count: 2,
+    kind: 'range',
+    amount: null,
+    minimum_amount: 0.00000015,
+    maximum_amount: 0.0000006,
+    per_request_amount: null,
+    per_request_minimum_amount: 0.00000015,
+    per_request_maximum_amount: 0.0000006,
+  }), 'USD 0.00000015–0.0000006');
+  assert.equal(formatSimulationPrice({
+    ...base,
+    kind: 'exact',
+    amount: 0.000000000001,
+    minimum_amount: 0.000000000001,
+    maximum_amount: 0.000000000001,
+  }), 'USD 1e-12');
+});
+
+test('formatSimulationPerRequestPrice labels exact and range quotes', () => {
+  const base = {
+    status: 'available',
+    reason: null,
+    currency: 'USD',
+    billing_mode: 'chat',
+    usage_snapshot: { prompt_tokens: 100 },
+    configured_candidate_count: 2,
+    priced_candidate_count: 2,
+    unpriced_candidate_count: 0,
+    unevaluated_candidate_count: 0,
+    unpriced_reasons: [],
+    pricing_sources: ['tier'],
+    basis: 'configured_routes',
+    request_count: 4,
+    amount_scope: 'aggregate',
+  } as const;
+
+  assert.equal(formatSimulationPerRequestPrice({
+    ...base,
+    kind: 'exact',
+    amount: 5,
+    minimum_amount: 5,
+    maximum_amount: 5,
+    per_request_amount: 1.25,
+    per_request_minimum_amount: 1.25,
+    per_request_maximum_amount: 1.25,
+  }), 'USD 1.250000');
+  assert.equal(formatSimulationPerRequestPrice({
+    ...base,
+    kind: 'range',
+    amount: null,
+    minimum_amount: 4,
+    maximum_amount: 6,
+    per_request_amount: null,
+    per_request_minimum_amount: 1,
+    per_request_maximum_amount: 1.5,
+  }), 'USD 1.000000–1.500000');
+});
+
+test('tierSimulationFormToPayload sends audio text tokens without chat defaults', () => {
+  const base = {
+    mode: 'sync',
+    billing_mode: 'audio_speech' as const,
+    request_count: '2',
+    prompt_tokens: '1000',
+    completion_tokens: '500',
+    audio_prompt_tokens: '12',
+    audio_completion_tokens: '8',
+    input_images: '0',
+    output_images: '1',
+    input_characters: '100',
+    output_characters: '0',
+    input_audio_tokens: '3',
+    output_audio_tokens: '4',
+    duration_seconds: '2.5',
+  };
+
+  assert.deepEqual(tierSimulationFormToPayload(base, 'speech-model'), {
+    callable_key: 'speech-model',
+    mode: 'sync',
+    billing_mode: 'audio_speech',
+    request_count: 2,
+    prompt_tokens: 12,
+    completion_tokens: 8,
+    input_characters: 100,
+    output_characters: 0,
+    input_audio_tokens: 3,
+    output_audio_tokens: 4,
+    duration_seconds: 2.5,
+  });
+
+  assert.deepEqual(tierSimulationFormToPayload({
+    ...base,
+    billing_mode: 'audio_transcription',
+  }, 'transcription-model'), {
+    callable_key: 'transcription-model',
+    mode: 'sync',
+    billing_mode: 'audio_transcription',
+    request_count: 2,
+    prompt_tokens: 12,
+    completion_tokens: 8,
+    input_audio_tokens: 3,
+    duration_seconds: 2.5,
+  });
 });

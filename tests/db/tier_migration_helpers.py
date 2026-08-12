@@ -66,6 +66,7 @@ async def require_tier_schema(db: Any) -> None:
 
     for trigger_name in (
         "deltallm_orgtierassignment_active_version_guard",
+        "deltallm_tier_disable_assignment_guard",
         "deltallm_tierversion_retire_assignment_guard",
     ):
         rows = await db.query_raw(

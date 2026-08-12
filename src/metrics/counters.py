@@ -99,7 +99,7 @@ deltallm_tier_policy_shadow_mismatch_metric = Counter(
 deltallm_tier_capacity_requests_metric = Counter(
     "deltallm_tier_capacity_requests_total",
     "Tier capacity-pool requests by outcome and limiting scope",
-    ["pool_key", "model", "organization_id", "tier_key", "scope", "outcome"],
+    ["pool_key", "model", "tier_key", "scope", "outcome"],
     registry=get_prometheus_registry(),
 )
 
@@ -283,12 +283,10 @@ def record_tier_capacity_observation(observation: Any, *, outcome: str) -> None:
         pool_key = pool_key or legacy_pool_key
         model = model or legacy_model
     scope = sanitize_label(getattr(observation, "scope", None), "unknown")
-    organization_id = sanitize_label(getattr(observation, "organization_id", None), "unknown")
     tier_key = sanitize_label(getattr(observation, "tier_key", None), "none")
     deltallm_tier_capacity_requests_metric.labels(
         pool_key=sanitize_label(pool_key, "unknown"),
         model=sanitize_label(model, "unknown"),
-        organization_id=organization_id,
         tier_key=tier_key,
         scope=scope,
         outcome=sanitize_label(outcome, "unknown"),
@@ -296,12 +294,13 @@ def record_tier_capacity_observation(observation: Any, *, outcome: str) -> None:
     active_organizations = getattr(
         observation,
         "active_org_count",
-        getattr(observation, "active_organizations", 0),
+        getattr(observation, "active_organizations", None),
     )
-    deltallm_tier_capacity_active_orgs_metric.labels(
-        pool_key=sanitize_label(pool_key, "unknown"),
-        model=sanitize_label(model, "unknown"),
-    ).set(max(0, int(active_organizations or 0)))
+    if active_organizations is not None:
+        deltallm_tier_capacity_active_orgs_metric.labels(
+            pool_key=sanitize_label(pool_key, "unknown"),
+            model=sanitize_label(model, "unknown"),
+        ).set(max(0, int(active_organizations or 0)))
 
 
 def _split_capacity_entity(entity_id: object) -> tuple[str, str]:

@@ -10,6 +10,46 @@ from src.models.errors import InvalidRequestError
 from src.services.limit_counter import LimitCounter
 
 
+async def _multimodal_success_response(url: str, *args, **kwargs):  # noqa: ANN001, ANN202
+    del args, kwargs
+    request = httpx.Request("POST", url)
+    if url.endswith("/images/generations"):
+        return httpx.Response(
+            200,
+            json={"created": 1, "data": [{"url": "https://example.test/image.png"}]},
+            request=request,
+        )
+    if url.endswith("/rerank"):
+        return httpx.Response(
+            200,
+            json={"results": [], "usage": {"prompt_tokens": 1, "total_tokens": 1}},
+            request=request,
+        )
+    if url.endswith("/audio/speech"):
+        return httpx.Response(
+            200,
+            content=b"audio",
+            headers={"content-type": "audio/mpeg"},
+            request=request,
+        )
+    if url.endswith("/audio/transcriptions"):
+        return httpx.Response(200, json={"text": "hello"}, request=request)
+    return httpx.Response(404, json={"error": "not found"}, request=request)
+
+
+def _multimodal_request(path: str) -> dict[str, object]:
+    if path == "/v1/images/generations":
+        return {"json": {"model": "gpt-4o-mini", "prompt": "cat"}}
+    if path == "/v1/rerank":
+        return {"json": {"model": "gpt-4o-mini", "query": "q", "documents": ["a"]}}
+    if path == "/v1/audio/speech":
+        return {"json": {"model": "gpt-4o-mini", "input": "hello", "voice": "alloy"}}
+    return {
+        "files": {"file": ("audio.wav", b"abc", "audio/wav")},
+        "data": {"model": "gpt-4o-mini", "response_format": "json"},
+    }
+
+
 @pytest.mark.asyncio
 async def test_rate_limit_rpm_enforced(client, test_app):
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
@@ -96,6 +136,19 @@ async def test_audio_transcription_team_model_rpm_enforced_for_multipart_request
             self.seen_checks.append(list(checks))
             return await super().check_rate_limits_atomic(checks)
 
+        async def check_rate_limits_and_tier_fair_share_atomic(
+            self,
+            rate_checks,
+            fair_share_checks,
+            **kwargs,
+        ):
+            self.seen_checks.append(list(rate_checks))
+            return await super().check_rate_limits_and_tier_fair_share_atomic(
+                rate_checks,
+                fair_share_checks,
+                **kwargs,
+            )
+
     headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
     record = next(iter(test_app.state._test_repo.records.values()))
     record.rpm_limit = 50
@@ -123,6 +176,105 @@ async def test_audio_transcription_team_model_rpm_enforced_for_multipart_request
     payload = blocked.json()
     assert payload["error"]["code"] == "team_model_rpm_exceeded"
     assert payload["error"]["param"] == "team_model_rpm"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/images/generations",
+        "/v1/rerank",
+        "/v1/audio/speech",
+        "/v1/audio/transcriptions",
+    ],
+)
+async def test_multimodal_access_denial_does_not_consume_rate_quota(
+    client,
+    test_app,
+    path: str,
+) -> None:
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    record = next(iter(test_app.state._test_repo.records.values()))
+    record.rpm_limit = 1
+    test_app.state.http_client.post = _multimodal_success_response
+
+    grant_service = test_app.state.callable_target_grant_service
+    grant_repository = grant_service.repository
+    removed_bindings = [
+        binding
+        for binding in grant_repository.bindings
+        if binding.callable_key == "gpt-4o-mini"
+    ]
+    grant_repository.bindings = [
+        binding
+        for binding in grant_repository.bindings
+        if binding.callable_key != "gpt-4o-mini"
+    ]
+    await grant_service.reload()
+
+    denied = await client.post(path, headers=headers, **_multimodal_request(path))
+
+    assert denied.status_code == 403
+    assert not [key for key in test_app.state.redis.store if key.startswith("ratelimit:")]
+
+    grant_repository.bindings.extend(removed_bindings)
+    await grant_service.reload()
+
+    allowed = await client.post(path, headers=headers, **_multimodal_request(path))
+
+    assert allowed.status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "request_kwargs"),
+    [
+        ("/v1/images/generations", {"json": {"model": "gpt-4o-mini"}}),
+        ("/v1/rerank", {"json": {"model": "gpt-4o-mini", "query": "q"}}),
+        ("/v1/audio/speech", {"json": {"model": "gpt-4o-mini", "voice": "alloy"}}),
+        (
+            "/v1/audio/transcriptions",
+            {"data": {"model": "gpt-4o-mini", "response_format": "json"}},
+        ),
+    ],
+)
+async def test_invalid_multimodal_request_does_not_consume_rate_quota(
+    client,
+    test_app,
+    path: str,
+    request_kwargs: dict[str, object],
+) -> None:
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+    response = await client.post(path, headers=headers, **request_kwargs)
+
+    assert response.status_code == 422
+    assert not [key for key in test_app.state.redis.store if key.startswith("ratelimit:")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "expected_code"),
+    [
+        (b"{", -32700),
+        (b'[{"jsonrpc":"2.0"}]', -32600),
+        (b'{"jsonrpc":"2.0","id":1}', -32600),
+    ],
+)
+async def test_invalid_mcp_envelope_does_not_consume_rate_quota(
+    client,
+    test_app,
+    content: bytes,
+    expected_code: int,
+) -> None:
+    headers = {
+        "Authorization": f"Bearer {test_app.state._test_key}",
+        "Content-Type": "application/json",
+    }
+    response = await client.post("/mcp", headers=headers, content=content)
+
+    assert response.status_code == 200
+    assert response.json()["error"]["code"] == expected_code
+    assert not [key for key in test_app.state.redis.store if key.startswith("ratelimit:")]
 
 
 @pytest.mark.asyncio

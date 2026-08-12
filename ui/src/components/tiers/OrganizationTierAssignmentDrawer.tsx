@@ -38,6 +38,8 @@ export default function OrganizationTierAssignmentDrawer({
   onSave,
 }: OrganizationTierAssignmentDrawerProps) {
   const inputClassName = 'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500';
+  const selectedTier = tierOptions.find((tier) => tier.tier_id === form.tier_id);
+  const enabledTierConflict = form.enabled && selectedTier?.enabled === false;
 
   return (
     <div className="fixed inset-0 z-50 flex">
@@ -58,11 +60,12 @@ export default function OrganizationTierAssignmentDrawer({
             <select value={form.tier_id} onChange={(event) => onChange({ ...form, tier_id: event.target.value, tier_version_id: '' })} disabled={saving} className={inputClassName}>
               <option value="">Select tier</option>
               {tierOptions.map((tier) => (
-                <option key={tier.tier_id} value={tier.tier_id}>
+                <option key={tier.tier_id} value={tier.tier_id} disabled={form.enabled && !tier.enabled}>
                   {tier.name} ({tier.tier_key}){tier.enabled ? '' : ' - disabled'}
                 </option>
               ))}
             </select>
+            {enabledTierConflict ? <p className="mt-1 text-xs text-red-600">Enabled assignments require an enabled tier.</p> : null}
           </Field>
           <Field label="Version">
             <select value={form.tier_version_id} onChange={(event) => onChange({ ...form, tier_version_id: event.target.value })} disabled={saving} className={inputClassName}>
@@ -104,7 +107,7 @@ export default function OrganizationTierAssignmentDrawer({
         </div>
         <div className="flex justify-end gap-2 border-t border-gray-200 px-5 py-4">
           <button type="button" onClick={onClose} disabled={saving} className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50">Cancel</button>
-          <button type="button" onClick={onSave} disabled={saving} className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
+          <button type="button" onClick={onSave} disabled={saving || enabledTierConflict} className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
             <Save className="h-4 w-4" />
             {saving ? 'Saving...' : 'Save'}
           </button>

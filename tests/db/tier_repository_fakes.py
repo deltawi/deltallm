@@ -11,6 +11,7 @@ class _FakePrisma:
         assignment_version_tier_id: str | None = "tier-1",
         assignment_version_status: str = "active",
         assignment_tier_exists: bool = True,
+        assignment_tier_enabled: bool = True,
         mutation_version_status: str = "draft",
         version_lookup_status: str = "draft",
         unpinned_assignment_count: int = 0,
@@ -29,6 +30,7 @@ class _FakePrisma:
         self.assignment_version_tier_id = assignment_version_tier_id
         self.assignment_version_status = assignment_version_status
         self.assignment_tier_exists = assignment_tier_exists
+        self.assignment_tier_enabled = assignment_tier_enabled
         self.mutation_version_status = mutation_version_status
         self.version_lookup_status = version_lookup_status
         self.unpinned_assignment_count = unpinned_assignment_count
@@ -63,7 +65,11 @@ class _FakePrisma:
         if "pg_advisory_xact_lock" in sql:
             return [{"locked": None}]
         if "FROM deltallm_tier\n" in sql and "WHERE tier_id = $1" in sql:
-            return [{"tier_id": params[0]}] if self.assignment_tier_exists else []
+            return (
+                [{"tier_id": params[0], "enabled": self.assignment_tier_enabled}]
+                if self.assignment_tier_exists
+                else []
+            )
         if "FROM deltallm_organizationtable" in sql and "WHERE organization_id = $1" in sql:
             return [{"organization_id": params[0]}] if self.organization_exists else []
         if "MIN(transition_at) AS next_transition_at" in sql:
@@ -317,6 +323,7 @@ class _FakeTxContext:
             assignment_version_tier_id=self.root.assignment_version_tier_id,
             assignment_version_status=self.root.assignment_version_status,
             assignment_tier_exists=self.root.assignment_tier_exists,
+            assignment_tier_enabled=self.root.assignment_tier_enabled,
             mutation_version_status=self.root.mutation_version_status,
             version_lookup_status=self.root.version_lookup_status,
             unpinned_assignment_count=self.root.unpinned_assignment_count,

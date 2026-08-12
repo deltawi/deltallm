@@ -22,8 +22,10 @@ export default function TierCapacityDashboardPanel({
   const unloadedPoolCount = Math.max(0, totalPoolCount - pools.length);
   const hotSpots = (dashboard?.limit_hit_heatmap || []).slice(0, 5);
   const advancedPools = dashboard?.advanced_pool_count ?? pools.filter((pool) => pool.advanced_fair_share).length;
-  const saturatedPools = dashboard?.saturated_pool_count ?? pools.filter((pool) => maxSaturation(pool) >= (pool.saturation_threshold ?? 0.85)).length;
-  const limitHits = dashboard?.limit_hit_count ?? (dashboard?.limit_hit_heatmap || []).reduce((total, row) => total + Number(row.count || 0), 0);
+  const saturatedPools = dashboard
+    ? dashboard.saturated_pool_count
+    : pools.filter((pool) => maxSaturation(pool) >= (pool.saturation_threshold ?? 0.85)).length;
+  const limitHits = dashboard ? dashboard.limit_hit_count : 0;
   const scanTruncated = Boolean(dashboard?.pool_scan_truncated);
 
   return (
@@ -51,11 +53,20 @@ export default function TierCapacityDashboardPanel({
         </div>
       ) : null}
 
+      {dashboard && dashboard.live_data.status !== 'healthy' ? (
+        <div className="mx-4 mt-4 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Live capacity data is {dashboard.live_data.status}. Unavailable values are shown as — instead of zero.
+          {dashboard.live_data.failed_sections.length > 0
+            ? ` Failed sections: ${dashboard.live_data.failed_sections.join(', ')}.`
+            : null}
+        </div>
+      ) : null}
+
       <div className="grid grid-cols-2 gap-px border-b border-gray-100 bg-gray-100 md:grid-cols-4">
         <Metric icon={Gauge} label="Pools" value={String(totalPoolCount)} />
         <Metric icon={Zap} label="Fair-share" value={String(advancedPools)} />
-        <Metric icon={Activity} label="Saturated" value={String(saturatedPools)} />
-        <Metric icon={AlertTriangle} label="Limit hits" value={String(limitHits)} />
+        <Metric icon={Activity} label="Saturated" value={saturatedPools == null ? '—' : String(saturatedPools)} />
+        <Metric icon={AlertTriangle} label="Limit hits" value={limitHits == null ? '—' : String(limitHits)} />
       </div>
 
       <div className="overflow-x-auto">
@@ -105,9 +116,11 @@ export default function TierCapacityDashboardPanel({
                   <UsageBar used={pool.tpm_used} limit={pool.tpm_capacity} />
                 </td>
                 <td className="px-4 py-3 text-xs text-gray-600">
-                  {pool.active_org_count} active · {pool.member_count} members
+                  {pool.active_org_count == null ? '—' : pool.active_org_count} active · {pool.member_count} members
                 </td>
-                <td className="px-4 py-3 text-xs text-gray-600">{pool.active_boost_count ?? pool.active_boosts.length}</td>
+                <td className="px-4 py-3 text-xs text-gray-600">
+                  {pool.active_boost_count == null ? '—' : pool.active_boost_count}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -165,14 +178,14 @@ function Metric({
   );
 }
 
-function UsageBar({ used, limit }: { used: number; limit?: number | null }) {
-  const pct = limit ? Math.min(100, Math.round((used / limit) * 100)) : null;
+function UsageBar({ used, limit }: { used: number | null; limit?: number | null }) {
+  const pct = used != null && limit ? Math.min(100, Math.round((used / limit) * 100)) : null;
   const tone = pct == null ? 'bg-gray-300' : pct >= 95 ? 'bg-red-500' : pct >= 85 ? 'bg-amber-500' : 'bg-blue-500';
   return (
     <div className="min-w-[140px]">
       <div className="mb-1 flex items-center justify-between gap-2 text-xs text-gray-500">
-        <span className="tabular-nums">{formatLimit(used)}</span>
-        <span className="tabular-nums">{limit ? `${pct}%` : 'No cap'}</span>
+        <span className="tabular-nums">{used == null ? '—' : formatLimit(used)}</span>
+        <span className="tabular-nums">{used == null ? 'Unavailable' : limit ? `${pct}%` : 'No cap'}</span>
       </div>
       <div className="h-1.5 rounded-full bg-gray-100">
         <div className={`h-1.5 rounded-full ${tone}`} style={{ width: `${pct ?? 0}%` }} />

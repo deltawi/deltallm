@@ -8,12 +8,15 @@ import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from src.billing.cost import completion_cost
-from src.billing.tier_pricing import attach_pricing_metadata, resolve_deployment_tier_pricing
+from src.billing.tier_pricing import (
+    attach_pricing_metadata,
+    resolve_deployment_tier_pricing,
+    resolve_token_billing_result,
+)
 from src.cache.pricing import cache_pricing_snapshot_from_deployment
-from src.callbacks import CallbackManager, build_standard_logging_payload
+from src.callbacks import build_standard_logging_payload
+from src.embedding_preflight import run_embedding_preflight
 from src.middleware.auth import require_api_key
-from src.middleware.rate_limit import enforce_rate_limits
 from src.metrics import (
     increment_request,
     increment_request_failure,
@@ -39,13 +42,7 @@ from src.routers.routing_decision import (
     resolve_failure_target,
     update_served_route_decision,
 )
-from src.routers.utils import enforce_budget_if_configured, fire_and_forget
-from src.services.model_visibility import (
-    ensure_model_allowed,
-    get_callable_target_policy_mode_from_app,
-    get_tier_policy_missing_service_mode_from_app,
-    get_tier_policy_mode_from_app,
-)
+from src.routers.utils import fire_and_forget
 from src.services.audit_service import AuditEventInput, AuditPayloadInput, AuditService
 from src.audit.actions import AuditAction
 from src.audit.errors import derive_audit_error_code
@@ -164,7 +161,7 @@ async def _execute_embedding(
     return data
 
 
-@router.post("/embeddings", dependencies=[Depends(require_api_key), Depends(enforce_rate_limits)])
+@router.post("/embeddings", dependencies=[Depends(require_api_key)])
 async def embeddings(request: Request, payload: EmbeddingRequest):
     request_start = perf_counter()
     callback_start = datetime.now(tz=UTC)
@@ -175,33 +172,11 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
         request_start=request_start,
         audit_action=AuditAction.EMBEDDING_REQUEST.value,
     )
-    auth = request.state.user_api_key
-    ensure_model_allowed(
-        auth,
-        payload.model,
-        callable_target_grant_service=getattr(request.app.state, "callable_target_grant_service", None),
-        tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
-        policy_mode=get_callable_target_policy_mode_from_app(request.app),
-        tier_policy_mode=get_tier_policy_mode_from_app(request.app),
-        tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(request.app),
-        emit_shadow_log=True,
-    )
-    await enforce_budget_if_configured(request, model=payload.model, auth=auth)
-
-    callback_manager: CallbackManager = getattr(request.app.state, "callback_manager", CallbackManager())
-    request_data = payload.model_dump(exclude_none=True)
-    request_data = await callback_manager.execute_pre_call_hooks(
-        user_api_key_dict=auth.model_dump(mode="json"),
-        cache=getattr(request.state, "cache_context", None),
-        data=request_data,
-        call_type="embedding",
-    )
-    request_data = await request.app.state.guardrail_middleware.run_pre_call(
-        request_data=request_data,
-        user_api_key_dict=auth.model_dump(mode="python"),
-        call_type="embedding",
-    )
-    payload = EmbeddingRequest.model_validate(request_data)
+    preflight = await run_embedding_preflight(request=request, payload=payload)
+    auth = preflight.auth
+    payload = preflight.payload
+    request_data = preflight.request_data
+    callback_manager = preflight.callback_manager
 
     app_router = request.app.state.router
     model_group = app_router.resolve_model_group(payload.model)
@@ -259,17 +234,25 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
             mode="sync",
         )
-        request_cost = completion_cost(
+        cache_hit = bool(getattr(request.state, "cache_hit", False))
+        customer_billing = resolve_token_billing_result(
+            pricing,
             model=payload.model,
             usage=usage,
-            cache_hit=getattr(request.state, "cache_hit", False),
-            custom_pricing=pricing.customer_token_pricing,
+            cache_hit=cache_hit,
         )
-        provider_cost = completion_cost(
+        provider_billing = resolve_token_billing_result(
+            pricing,
             model=payload.model,
             usage=usage,
-            cache_hit=getattr(request.state, "cache_hit", False),
-            custom_pricing=pricing.provider_token_pricing,
+            cache_hit=cache_hit,
+            pricing_view="provider",
+        )
+        request_cost = customer_billing.billing.cost
+        provider_cost = (
+            None
+            if provider_billing.billing.unpriced_reason is not None
+            else provider_billing.billing.cost
         )
         increment_request(
             model=payload.model,
@@ -307,6 +290,10 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
             spend_metadata,
             pricing,
             provider_cost=provider_cost,
+            billing=customer_billing.billing,
+            provider_billing=provider_billing.billing,
+            effective_pricing_sources=customer_billing.pricing_sources_used,
+            missing_pricing_fields=customer_billing.missing_pricing_fields,
         )
         fire_and_forget(
             request.app.state.spend_tracking_service.log_spend(
@@ -321,7 +308,7 @@ async def embeddings(request: Request, payload: EmbeddingRequest):
                 usage=usage,
                 cost=request_cost,
                 metadata=spend_metadata,
-                cache_hit=getattr(request.state, "cache_hit", False),
+                cache_hit=cache_hit,
                 start_time=callback_start,
                 end_time=datetime.now(tz=UTC),
             )

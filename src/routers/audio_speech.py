@@ -19,7 +19,7 @@ from src.billing.cost import compute_billing_result
 from src.billing.tier_pricing import attach_pricing_metadata, resolve_deployment_tier_pricing
 from src.callbacks import CallbackManager, build_standard_logging_payload
 from src.middleware.auth import require_api_key
-from src.middleware.rate_limit import enforce_rate_limits
+from src.middleware.rate_limit import check_and_acquire_rate_limits_for_payload
 from src.metrics import (
     increment_request,
     increment_request_failure,
@@ -178,7 +178,7 @@ async def _execute_tts(
     }
 
 
-@router.post("/audio/speech", dependencies=[Depends(require_api_key), Depends(enforce_rate_limits)])
+@router.post("/audio/speech", dependencies=[Depends(require_api_key)])
 async def audio_speech(request: Request, payload: AudioSpeechRequest):
     request_start = perf_counter()
     callback_start = datetime.now(tz=UTC)
@@ -204,6 +204,11 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
 
     callback_manager: CallbackManager = getattr(request.app.state, "callback_manager", CallbackManager())
     request_data = payload.model_dump(exclude_none=True)
+    await check_and_acquire_rate_limits_for_payload(
+        request,
+        model=payload.model,
+        payload=request_data,
+    )
 
     app_router = request.app.state.router
     model_group = app_router.resolve_model_group(payload.model)

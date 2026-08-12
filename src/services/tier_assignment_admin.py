@@ -269,6 +269,8 @@ def _assignment_admin_error(exc: ValueError) -> TierAdminError:
         return TierAdminConflictError(detail)
     if "active tier version" in lowered:
         return TierAdminConflictError(detail)
+    if "enabled tier" in lowered:
+        return TierAdminConflictError(detail)
     if "existing tier" in lowered or "existing tier version" in lowered:
         return TierAdminNotFoundError(detail)
     return TierAdminValidationError(detail)
@@ -283,6 +285,8 @@ def _assignment_storage_error(exc: Exception) -> TierAdminError | None:
         return TierAdminConflictError(
             "organization can only have one active primary tier assignment"
         )
+    if "enabled tier assignments require an enabled tier" in message:
+        return TierAdminConflictError("enabled tier assignments require an enabled tier")
     if "foreign key" in message or "foreign_key_violation" in message:
         if "organization" in message:
             return TierAdminNotFoundError("Organization not found")

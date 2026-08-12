@@ -14,6 +14,7 @@ import {
   isScopedAssetAccessFor,
 } from '../lib/assetAccess';
 import { useAuth } from '../lib/auth';
+import { isPlatformAdminSession } from '../lib/authorization';
 import {
   dateTimeLocalUtcInputToIso,
   defaultMonthlyResetUtcInputValue,
@@ -32,7 +33,7 @@ import {
 import {
   ArrowLeft, Building2, Users, DollarSign, Gauge, TrendingUp, Pencil, Plus,
   UserPlus, Trash2, ChevronRight, Shield, CheckCircle2, AlertTriangle,
-  MoreHorizontal, ExternalLink, Info, CalendarDays,
+  MoreHorizontal, ExternalLink, Info, CalendarDays, LockKeyhole,
 } from 'lucide-react';
 
 /* ─────────────── helpers ─────────────── */
@@ -138,8 +139,7 @@ export default function OrganizationDetail() {
   const navigate = useNavigate();
   const location = useLocation();
   const { session, authMode } = useAuth();
-  const userRole = session?.role || (authMode === 'master_key' ? 'platform_admin' : '');
-  const isPlatformAdmin = userRole === 'platform_admin';
+  const isPlatformAdmin = isPlatformAdminSession(authMode, session);
   const [tab, setTab] = useState<TabId>('overview');
 
   useEffect(() => {
@@ -157,6 +157,9 @@ export default function OrganizationDetail() {
   const { data: org, loading: orgLoading, refetch: refetchOrg } = useApi(
     () => organizations.get(orgId!), [orgId],
   );
+  const servicePolicy = org?.service_policy;
+  const hasTier = servicePolicy?.source === 'tier';
+  const isTierAuthoritative = Boolean(servicePolicy?.tier_authoritative);
   const { data: orgTeams, loading: teamsLoading } = useApi(
     () => organizations.teams(orgId!), [orgId],
   );
@@ -164,16 +167,22 @@ export default function OrganizationDetail() {
     () => organizations.members(orgId!), [orgId],
   );
   const { data: orgAssetAccess, error: orgAssetAccessError, loading: orgAssetAccessLoading, refetch: refetchOrgAssetAccess } = useApi(
-    () => (isPlatformAdmin ? organizations.assetAccess(orgId!, { include_targets: false }) : Promise.resolve(null)),
-    [orgId, isPlatformAdmin],
+    () => (isPlatformAdmin && !isTierAuthoritative
+      ? organizations.assetAccess(orgId!, { include_targets: false })
+      : Promise.resolve(null)),
+    [orgId, isPlatformAdmin, isTierAuthoritative],
   );
   /* full targets: only loaded when assets tab is active */
   const { data: orgAssetTargetsFull, loading: orgAssetTargetsFullLoading } = useApi(
-    () => (tab === 'assets' && isPlatformAdmin
+    () => (tab === 'assets' && isPlatformAdmin && !isTierAuthoritative
       ? organizations.assetAccess(orgId!, { include_targets: true })
       : Promise.resolve(null)),
-    [orgId, isPlatformAdmin, tab],
+    [orgId, isPlatformAdmin, isTierAuthoritative, tab],
   );
+
+  useEffect(() => {
+    if (isTierAuthoritative && tab === 'assets') setTab('tiers');
+  }, [isTierAuthoritative, tab]);
   const currentOrgAssetAccess = orgId && isScopedAssetAccessFor(orgAssetAccess, {
     scopeType: 'organization',
     scopeId: orgId,
@@ -333,13 +342,13 @@ export default function OrganizationDetail() {
       }
       const payload: Record<string, unknown> = {
         organization_name: form.organization_name || undefined,
-        max_budget: form.max_budget ? Number(form.max_budget) : undefined,
-        soft_budget: form.soft_budget ? Number(form.soft_budget) : undefined,
-        rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
-        tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
-        rph_limit: form.rph_limit ? Number(form.rph_limit) : undefined,
-        rpd_limit: form.rpd_limit ? Number(form.rpd_limit) : undefined,
-        tpd_limit: form.tpd_limit ? Number(form.tpd_limit) : undefined,
+        max_budget: form.max_budget ? Number(form.max_budget) : null,
+        soft_budget: form.soft_budget ? Number(form.soft_budget) : null,
+        rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : null,
+        tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : null,
+        rph_limit: form.rph_limit ? Number(form.rph_limit) : null,
+        rpd_limit: form.rpd_limit ? Number(form.rpd_limit) : null,
+        tpd_limit: form.tpd_limit ? Number(form.tpd_limit) : null,
         audit_content_storage_enabled: !!form.audit_content_storage_enabled,
       };
       if (form.monthly_reset_enabled) {
@@ -354,6 +363,27 @@ export default function OrganizationDetail() {
       refetchOrg();
     } catch (err: unknown) {
       setOrgError(getErrorMessage(err, 'Failed to update organization'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleClearLegacyModelLimits = async () => {
+    if (!orgId || saving) return;
+    const confirmed = confirm(
+      'Clear the legacy organization per-model RPM and TPM maps? Confirm the equivalent limits are already configured on the tier. This can increase allowed traffic if they are not.',
+    );
+    if (!confirmed) return;
+    setSaving(true);
+    setPageError(null);
+    try {
+      await organizations.update(orgId, {
+        model_rpm_limit: null,
+        model_tpm_limit: null,
+      });
+      refetchOrg();
+    } catch (err: unknown) {
+      setPageError(getErrorMessage(err, 'Failed to clear legacy per-model limits.'));
     } finally {
       setSaving(false);
     }
@@ -450,7 +480,7 @@ export default function OrganizationDetail() {
   const canEditOrganization = Boolean(orgCapabilities.edit);
   const canAddTeam = Boolean(orgCapabilities.add_team);
   const canManageMembers = Boolean(orgCapabilities.manage_members);
-  const canManageAssets = Boolean(orgCapabilities.manage_assets);
+  const canManageAssets = Boolean(orgCapabilities.manage_assets) && !isTierAuthoritative;
   const spend = org?.spend || 0;
   const budget = org?.max_budget ?? null;
   const spendPct = budget ? Math.min(100, Math.round((spend / budget) * 100)) : null;
@@ -565,13 +595,15 @@ export default function OrganizationDetail() {
           />
           <DetailMetricCard
             icon={Shield}
-            label="Assets granted"
-            value={
-              orgAssetSummary
-                ? `${orgAssetSummary.effective_total}/${orgAssetSummary.selectable_total}`
-                : isPlatformAdmin ? '—' : 'N/A'
-            }
-            sub={assetPct != null ? `${assetPct}% of catalog` : 'of catalog'}
+            label="Service policy"
+            value={hasTier
+              ? servicePolicy?.primary_tier?.tier_name || servicePolicy?.primary_tier?.tier_key || 'Tier managed'
+              : 'Legacy'}
+            sub={hasTier
+              ? isTierAuthoritative
+                ? servicePolicy?.primary_tier?.follows_active_version ? 'Follows active version' : 'Pinned tier version'
+                : `${servicePolicy?.tier_policy_mode || 'rollout'} · legacy runtime`
+              : 'Direct asset access'}
             tone="indigo"
           />
         </>
@@ -608,7 +640,7 @@ export default function OrganizationDetail() {
                 </>
               ),
             },
-            ...(isPlatformAdmin ? [{ id: 'tiers' as const, label: 'Tiers' }] : []),
+            ...(isPlatformAdmin ? [{ id: 'tiers' as const, label: 'Service Policy' }] : []),
             ...(canManageAssets ? [{ id: 'assets' as const, label: 'Asset Access' }] : []),
           ]}
         />
@@ -620,6 +652,90 @@ export default function OrganizationDetail() {
       {tab === 'overview' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
             <div className="lg:col-span-2 space-y-5">
+              {/* Service policy */}
+              <div className={`rounded-xl border p-5 ${
+                hasTier ? 'border-blue-200 bg-blue-50/50' : 'border-amber-200 bg-amber-50/50'
+              }`}>
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    <Shield className={`mt-0.5 h-5 w-5 ${hasTier ? 'text-blue-700' : 'text-amber-700'}`} />
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-sm font-semibold text-gray-900">Service Policy</h3>
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                          hasTier ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'
+                        }`}>
+                          {hasTier ? (isTierAuthoritative ? 'Tier managed' : 'Tier staged') : 'Legacy'}
+                        </span>
+                      </div>
+                      {hasTier ? (
+                        <>
+                          <p className="mt-1 text-base font-semibold text-gray-900">
+                            {servicePolicy?.primary_tier?.tier_name || servicePolicy?.primary_tier?.tier_key || 'Primary tier'}
+                            {servicePolicy?.primary_tier?.tier_version_number != null && (
+                              <span className="ml-2 text-xs font-medium text-gray-500">v{servicePolicy.primary_tier.tier_version_number}</span>
+                            )}
+                          </p>
+                          <p className="mt-1 text-xs leading-relaxed text-gray-600">
+                            {isTierAuthoritative
+                              ? 'The tier controls model access, per-model limits, pricing, and capacity.'
+                              : `The tier is staged in ${servicePolicy?.tier_policy_mode || 'rollout'} mode. Legacy Asset Access remains authoritative until tier enforcement.`}
+                            {servicePolicy?.primary_tier?.follows_active_version && ' The assignment follows each newly published active version.'}
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
+                            {servicePolicy?.overlay_count ? (
+                              <span className="rounded bg-purple-100 px-2 py-1 font-medium text-purple-700">
+                                {servicePolicy.overlay_count} active overlay{servicePolicy.overlay_count === 1 ? '' : 's'}
+                              </span>
+                            ) : null}
+                            {servicePolicy?.hard_caps_configured && (
+                              <span className="rounded bg-amber-100 px-2 py-1 font-medium text-amber-700">Organization hard caps also apply</span>
+                            )}
+                          </div>
+                          {servicePolicy?.legacy_model_limits_configured && (
+                            <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-xs leading-relaxed text-red-800">
+                              <p className="font-semibold">Legacy per-model RPM/TPM caps still apply</p>
+                              <p className="mt-1">Move equivalent limits into the tier, then clear the legacy maps so the tier is the only per-model policy source.</p>
+                              {isPlatformAdmin && (
+                                <button
+                                  type="button"
+                                  onClick={handleClearLegacyModelLimits}
+                                  disabled={saving}
+                                  className="mt-2 rounded-md border border-red-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50"
+                                >
+                                  Clear legacy model caps
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <p className="mt-1 text-xs leading-relaxed text-gray-700">
+                          This existing organization still uses direct asset access.{' '}
+                          {isPlatformAdmin
+                            ? 'Assign a primary tier to migrate model access and per-model controls to the tier policy.'
+                            : 'A platform administrator must assign a primary tier to migrate it to tier-managed policy.'}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  {isPlatformAdmin ? (
+                    <button
+                      type="button"
+                      onClick={() => setTab('tiers')}
+                      className="shrink-0 rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50"
+                    >
+                      {hasTier ? 'Manage policy' : 'Assign tier'}
+                    </button>
+                  ) : (
+                    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 bg-white/80 px-3 py-1.5 text-xs font-medium text-gray-600">
+                      <LockKeyhole className="h-3.5 w-3.5" />
+                      Managed by platform administrator
+                    </span>
+                  )}
+                </div>
+              </div>
+
               {/* Budget & Spend */}
               <div className="bg-white rounded-xl border border-gray-200 p-5">
                 <div className="flex items-center justify-between mb-4">
@@ -659,7 +775,12 @@ export default function OrganizationDetail() {
                   )}
                   {!budget && <span className="text-sm text-gray-400">No budget limit</span>}
                 </div>
-                <div className="border-t border-gray-100 pt-4 grid grid-cols-2 gap-4">
+                <div className="border-t border-gray-100 pt-4">
+                  <div className="mb-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Organization-wide hard caps</p>
+                    <p className="mt-0.5 text-[10px] text-gray-400">Global ceilings applied in addition to the service tier.</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
                   <div>
                     <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1">
                       <Gauge className="w-3.5 h-3.5" /> RPM Limit
@@ -699,6 +820,7 @@ export default function OrganizationDetail() {
                     {org.tpd_limit != null
                       ? <p className="text-sm font-semibold text-gray-800">{Number(org.tpd_limit).toLocaleString()} <span className="text-xs font-normal text-gray-400">tok/day</span></p>
                       : <p className="text-sm text-gray-400">Unlimited</p>}
+                  </div>
                   </div>
                 </div>
               </div>
@@ -851,9 +973,13 @@ export default function OrganizationDetail() {
                         </div>
                       )}
                     </div>
+                    <div className="rounded-lg border border-purple-100 bg-purple-50 p-2.5">
+                      <p className="text-xs font-semibold text-purple-900">Organization-wide hard caps</p>
+                      <p className="mt-0.5 text-[10px] leading-relaxed text-purple-700">Optional global ceilings in addition to tier limits. Blank removes the organization cap.</p>
+                    </div>
                     <div className="grid grid-cols-2 gap-2">
                       <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">RPM Limit</label>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Org RPM</label>
                         <input
                           type="number"
                           value={form.rpm_limit}
@@ -863,7 +989,7 @@ export default function OrganizationDetail() {
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">TPM Limit</label>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Org TPM</label>
                         <input
                           type="number"
                           value={form.tpm_limit}
@@ -873,7 +999,7 @@ export default function OrganizationDetail() {
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">RPH Limit</label>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Org RPH</label>
                         <input
                           type="number"
                           value={form.rph_limit}
@@ -883,7 +1009,7 @@ export default function OrganizationDetail() {
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">RPD Limit</label>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Org RPD</label>
                         <input
                           type="number"
                           value={form.rpd_limit}
@@ -893,7 +1019,7 @@ export default function OrganizationDetail() {
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">TPD Limit</label>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Org TPD</label>
                         <input
                           type="number"
                           value={form.tpd_limit}

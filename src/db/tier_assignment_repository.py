@@ -361,7 +361,7 @@ class TierAssignmentRepositoryMixin:
     async def _lock_existing_tier_for_assignment(self, tier_id: str) -> None:
         rows = await self.prisma.query_raw(
             """
-            SELECT tier_id
+            SELECT tier_id, enabled
             FROM deltallm_tier
             WHERE tier_id = $1
             FOR UPDATE
@@ -370,6 +370,8 @@ class TierAssignmentRepositoryMixin:
         )
         if not rows:
             raise ValueError("tier_id must reference an existing tier")
+        if not bool(rows[0].get("enabled")):
+            raise ValueError("enabled tier assignments require an enabled tier")
 
     async def _ensure_tier_exists_for_assignment(self, tier_id: str) -> None:
         rows = await self.prisma.query_raw(

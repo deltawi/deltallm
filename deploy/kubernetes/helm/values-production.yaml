@@ -106,5 +106,11 @@ config:
     embeddings_batch_min_large_job_claim_interval_seconds: 30
     embeddings_batch_small_job_fast_lane_enabled: false
     embeddings_batch_small_job_max_work_units: 100
+    tier_policy_mode: disabled
+    tier_policy_missing_service_mode: fail_open
+    tier_policy_refresh_interval_seconds: 300
+    tier_policy_refresh_jitter_seconds: 1
+    tier_policy_transition_grace_seconds: 0.05
+    tier_policy_refresh_retry_delay_seconds: 5
     tier_capacity_fair_share_enabled: false
     tier_capacity_fair_share_active_ttl_seconds: 10

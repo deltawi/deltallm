@@ -71,6 +71,28 @@ Example:
 
 The primary tier is the normal package. Add-on tiers are useful for exceptions without creating a custom tier for every organization.
 
+An enabled assignment whose end time is still in the future, including a scheduled assignment that has not started yet, can only reference an enabled tier with an active version. Before disabling a tier, disable or end all of its live and scheduled assignments. Disabled or expired assignments remain as history and may continue to reference a disabled tier.
+
+### Creating Organizations
+
+When tier policy is enabled, the organization creation drawer starts with the service tier. The selected primary assignment follows the tier's active version by default. DeltaLLM creates the organization, primary assignment, and cache-invalidation outbox record in one database transaction, so an assignment failure cannot leave a partially created organization.
+
+Creation behavior follows the effective runtime mode:
+
+| Mode | New organization behavior |
+| --- | --- |
+| `enforce` | A primary tier is required |
+| `shadow` | A primary tier is recommended by default; its allowed models are mirrored into legacy Asset Access, and an explicit legacy migration exception remains available |
+| `disabled` | Legacy direct Asset Access remains available |
+
+Use a custom tier or clone an existing tier when one customer needs different model access, model limits, pricing, or capacity. Do not recreate that policy with organization fields. While an active tier is authoritative in `enforce`, the API rejects new organization-level per-model limit maps and organization Asset Access writes; organization-wide RPM/TPM/RPH/RPD/TPD hard caps remain editable.
+
+If an organization already had legacy per-model RPM/TPM maps before its tier was assigned, its Service Policy card shows a warning because those safety caps still apply alongside the tier. First reproduce any required limits on the tier, publish and preview them, then use **Clear legacy model caps**. The confirmation warns that clearing them before the tier is ready can increase allowed traffic.
+
+`shadow` evaluates the staged tier but does not enforce it. For a newly created tier-first organization, DeltaLLM atomically snapshots the selected active version's allowed callable targets into legacy Asset Access so requests continue to work. That legacy mirror remains editable and authoritative during rollout; it intentionally does not follow later tier publications, allowing the preview and mismatch telemetry to expose policy changes before enforcement. Creating a new legacy organization through the API in this mode requires `"legacy_policy_exception": true`, matching the explicit migration checkbox in the drawer. `disabled` also keeps legacy Asset Access authoritative even if an assignment has already been staged. Once mode is `enforce`, the tier becomes authoritative and the organization Asset Access editor is hidden.
+
+The optional organization RPM, TPM, RPH, RPD, and TPD fields are global hard caps. They apply across all models, teams, and keys in addition to the tier's per-model controls. Leave them blank when no extra organization-wide ceiling is needed. Budgets, budget resets, and audit-content storage also remain organization settings.
+
 ## Tiers and Asset Access
 
 Tiers and Asset Access answer different questions.
@@ -172,6 +194,10 @@ An organization is active for 10 seconds by default after its latest request to 
 
 A fair-share denial returns a normal `429` with scope `tier_pool_fair_share_rpm` or `tier_pool_fair_share_tpm`. The `reason` distinguishes `weighted_share_exceeded` from the absolute `pool_capacity_exceeded` ceiling.
 
+Static `hard_cap` pools also publish allowed and denied capacity metrics, saturation, and dashboard limit-hit heatmap entries. A rejected request is recorded atomically with its decision and does not consume RPM or TPM counter capacity.
+
+Prometheus capacity metrics aggregate by pool, model, tier, scope, and outcome and intentionally omit organization IDs. Use the capacity dashboard for bounded per-organization diagnostics.
+
 ### Capacity Operations
 
 Platform admins can inspect current pool utilization and temporarily boost one organization's effective weight:
@@ -182,7 +208,9 @@ Platform admins can inspect current pool utilization and temporarily boost one o
 | `POST` | `/ui/api/tier-capacity/boosts` | Apply a `1`-to-`100` weight multiplier with a Redis TTL of at most seven days |
 | `DELETE` | `/ui/api/tier-capacity/boosts` | Remove a temporary boost |
 
-Boost creation and deletion are written to the audit log. A boost is runtime state: it expires automatically and does not modify the published tier version. See the [Organization Tiers Rollout Runbook](../deployment/organization-tiers-rollout.md) for API examples, metrics, and troubleshooting.
+Boost creation and deletion are written to the audit log and attributed to the affected organization. A boost is runtime state: it expires automatically and does not modify the published tier version. See the [Organization Tiers Rollout Runbook](../deployment/organization-tiers-rollout.md) for API examples, metrics, and troubleshooting.
+
+The dashboard reports `live_data.status` as `healthy`, `partial`, or `unavailable`. When Redis cannot supply a live section, its numeric values are `null` and the UI shows an em dash; they are never presented as zero. The published pool configuration remains available from the tier snapshot.
 
 ## Recommended User Journey
 
@@ -192,14 +220,32 @@ Boost creation and deletion are written to the audit log. A boost is runtime sta
 4. Add model policies for the models in that package
 5. Set prices, RPM, TPM, and capacity pools per model
 6. Publish the version
-7. Open an organization detail page
-8. Assign the tier to the organization
+7. Create an organization and select the published tier, or open a legacy organization and assign it from **Service Policy**
+8. Add only the optional organization-wide budget and hard-cap guardrails that are needed
 9. Review the effective policy preview
 10. Run a simulation for an example request
 
 The preview answers: what can this organization actually use?
 
-The simulation answers: would this request be allowed, what would it cost, and which limit would block it?
+At runtime, DeltaLLM applies prompt templates, pre-call callbacks, and guardrails before it validates the final request and enforces tier model access, budgets, and rate limits. These transformations run once per request, including cacheable requests, so a rewritten model or prompt cannot bypass policy or use a stale cache identity. Streaming and cached responses retain any parallel-request lease until their final response body is sent.
+
+The simulation answers: would this request be allowed in an empty rate-limit window, what would it cost across the configured routes, and which tier, capacity-pool, legacy model, or organization hard cap would block it? Select the workload type that matches the configured routes, then enter the relevant usage: input and output tokens for chat; input tokens for embedding or rerank; input and generated images for image generation; text tokens, characters, audio tokens, or seconds for speech; and text tokens, audio tokens, or seconds for transcription. Embedding and rerank simulations reject non-zero completion tokens instead of counting an incompatible usage dimension.
+
+The calculated price has three states:
+
+- **Available**: every configured route has applicable pricing. The result is exact when all candidates agree and a range when their prices differ.
+- **Partial**: at least one route can be priced and at least one cannot. The displayed exact value or range covers only the priced routes and is not a complete route quote.
+- **Unavailable**: no reliable quote can be produced. Typical reasons include no configured routes, no applicable pricing, missing workload usage, mixed route workload types, or a selected workload type that does not match the routes.
+
+An explicit zero price remains an available `$0` quote when it matches the supplied usage unit. An absent price is not treated as zero. For known token models without a regular deployment or tier token override, the built-in model catalog price is used and reported with source `default`; cache-only or batch-only metadata does not replace the regular sync quote. Once a regular input or output override is configured, every token dimension used by the simulation must resolve from that configured pricing chain, so an incomplete override is reported as unpriced instead of mixing it with the catalog. Unknown token models without complete applicable pricing are unavailable. Configure an explicit zero in the model or tier pricing when a route is intentionally free.
+
+When the callable model is an alias, catalog fallback uses the resolved provider model. Runtime spend metadata records both names so operators can reconcile customer policy against provider cost without exposing the provider name as the public callable target.
+
+`pricing_sources` lists only sources that contributed fields to the calculated amount and can contain more than one value when tier and deployment fields are combined. Small positive token prices are displayed with additional decimal precision so they are not mistaken for zero.
+
+Displayed amounts are totals for the requested `request_count`. The quote contract also returns `per_request_amount`, or per-request minimum and maximum values for a range, so callers do not have to infer whether an amount is aggregate. For image requests with `input_images > 0`, an input-image price must resolve; an output-only image price is not silently applied as a zero input price.
+
+Transcription quotes apply the same provider billing rules as live traffic. For example, a provider minimum billable duration can make the quoted duration cost higher than the raw audio length, and routes using different providers can produce a range. The simulation does not query live routing health, current Redis counters, fair-share activity, or in-flight requests.
 
 ## Efficient Tier Design
 
@@ -228,12 +274,12 @@ Pricing is not always token pricing. Choose the pricing shape that matches the m
 | --- | --- | --- |
 | Chat | Input token, output token, cached token, batch token | `0.000001/input token`, `0.000003/output token` |
 | Embeddings | Input token | `0.00000002/input token` |
-| Image generation | Image price, request price | `0.04/image` |
-| Text-to-speech | Character, audio token, second, or request price | `0.00005/character` |
-| Transcription | Second, audio token, or request price | `0.00006/second` |
+| Image generation | Generated output image, optional input image, request price | `0.04/output image` |
+| Text-to-speech | Text token, character, audio token, second, or request price | `0.00005/character` |
+| Transcription | Text token, second, audio token, or request price | `0.00006/second` |
 | Rerank | Token or request price | `0.000001/input token` or `0.01/request` |
 
-Use token pricing for chat and embeddings. Use image pricing for image models. Use character pricing for most text-to-speech models when the provider bills by input text length. Use second pricing for transcription when the provider bills by audio duration.
+Use token pricing for chat and embeddings. For image generation, `output_cost_per_image` prices generated images; `input_cost_per_image` prices explicit input images and remains the generated-image fallback for existing configurations. Use character pricing for most text-to-speech models when the provider bills by input text length. Use second pricing for transcription when the provider bills by audio duration.
 
 Flat request pricing is useful when the upstream provider charges per request or when you sell a fixed internal package.
 

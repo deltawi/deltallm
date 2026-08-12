@@ -1,8 +1,8 @@
 import { Edit3, Plus, Save, Trash2, X } from 'lucide-react';
-import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 import type { TierCapacityPool } from '../../lib/api';
 import {
+  capacityPoolFormWithStrategy,
   capacityPoolFormToPayload,
   capacityPoolToForm,
   emptyCapacityPoolForm,
@@ -10,6 +10,7 @@ import {
   formatLimit,
   type TierCapacityPoolForm,
 } from '../../lib/tiers';
+import { TierField } from './TierEditorControls';
 
 type TierCapacityPoolEditorProps = {
   pools: TierCapacityPool[];
@@ -83,6 +84,10 @@ export default function TierCapacityPoolEditor({
     } catch (err: unknown) {
       setLocalError(errorMessage(err, 'Failed to remove capacity pool.'));
     }
+  };
+
+  const updateStrategy = (strategy: string) => {
+    setForm(capacityPoolFormWithStrategy(form, strategy));
   };
 
   return (
@@ -178,32 +183,48 @@ export default function TierCapacityPoolEditor({
               <X className="h-4 w-4" />
             </button>
           </div>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-            <Field label="Pool key">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <TierField
+              id="tier-pool-key"
+              label="Pool key"
+              help="Stable name referenced by model policies. Example: shared-premium-chat. Pool keys may be reused for different models because the model key is part of the pool identity."
+            >
               <input
+                id="tier-pool-key"
                 value={form.pool_key}
                 onChange={(event) => setForm({ ...form, pool_key: event.target.value })}
                 placeholder="shared-chat"
                 disabled={locked}
                 className={inputClassName}
               />
-            </Field>
-            <Field label="Model or callable key">
+            </TierField>
+            <TierField
+              id="tier-pool-callable-key"
+              label="Model or callable key"
+              help="The model whose provider or GPU capacity is shared by this pool. It must match the callable key used by attached model policies."
+            >
               <input
+                id="tier-pool-callable-key"
                 list="tier-pool-callables"
                 value={form.callable_key}
                 onChange={(event) => setForm({ ...form, callable_key: event.target.value })}
+                placeholder="Select or enter a callable"
                 disabled={locked}
                 className={inputClassName}
               />
               <datalist id="tier-pool-callables">
                 {callableOptions.map((option) => <option key={option} value={option} />)}
               </datalist>
-            </Field>
-            <Field label="Strategy">
+            </TierField>
+            <TierField
+              id="tier-pool-strategy"
+              label="Strategy"
+              help="Hard cap enforces only the shared ceiling. Weighted fair starts protecting each active organization's share near saturation. Reserved burst adds a bounded multiplier to that fair share while the pool hard cap still wins."
+            >
               <select
+                id="tier-pool-strategy"
                 value={form.strategy}
-                onChange={(event) => setForm({ ...form, strategy: event.target.value })}
+                onChange={(event) => updateStrategy(event.target.value)}
                 disabled={locked}
                 className={inputClassName}
               >
@@ -211,52 +232,92 @@ export default function TierCapacityPoolEditor({
                 <option value="weighted_fair">Weighted fair</option>
                 <option value="reserved_burst">Reserved burst</option>
               </select>
-            </Field>
-            <Field label="Parallel">
+            </TierField>
+            <TierField
+              id="tier-pool-parallel"
+              label="Parallel capacity"
+              help="Maximum in-flight requests shared by every organization attached to this model pool. Example: 20 allows twenty concurrent requests across the whole pool. Blank means unlimited."
+            >
               <input
+                id="tier-pool-parallel"
                 value={form.max_parallel_requests}
                 onChange={(event) => setForm({ ...form, max_parallel_requests: event.target.value })}
+                inputMode="numeric"
+                placeholder="Unlimited"
                 disabled={locked}
                 className={inputClassName}
               />
-            </Field>
+            </TierField>
           </div>
-          <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
-            <Field label="RPM capacity">
+          <div className={`mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 ${form.strategy === 'hard_cap' ? 'xl:grid-cols-2' : form.strategy === 'reserved_burst' ? 'xl:grid-cols-4' : 'xl:grid-cols-3'}`}>
+            <TierField
+              id="tier-pool-rpm-capacity"
+              label="RPM capacity"
+              help="Provider-facing requests-per-minute ceiling shared across attached organizations. Example: 1000 means the whole pool can accept up to 1,000 requests per minute. Blank means unlimited."
+            >
               <input
+                id="tier-pool-rpm-capacity"
                 value={form.rpm_capacity}
                 onChange={(event) => setForm({ ...form, rpm_capacity: event.target.value })}
+                inputMode="numeric"
+                placeholder="Unlimited"
                 disabled={locked}
                 className={inputClassName}
               />
-            </Field>
-            <Field label="TPM capacity">
+            </TierField>
+            <TierField
+              id="tier-pool-tpm-capacity"
+              label="TPM capacity"
+              help="Provider-facing tokens-per-minute ceiling shared across attached organizations. Example: 2000000 limits the whole pool to two million tokens per minute. Blank means unlimited."
+            >
               <input
+                id="tier-pool-tpm-capacity"
                 value={form.tpm_capacity}
                 onChange={(event) => setForm({ ...form, tpm_capacity: event.target.value })}
+                inputMode="numeric"
+                placeholder="Unlimited"
                 disabled={locked}
                 className={inputClassName}
               />
-            </Field>
-            <Field label="Saturation threshold">
-              <input
-                value={form.saturation_threshold}
-                onChange={(event) => setForm({ ...form, saturation_threshold: event.target.value })}
-                placeholder="0.9"
-                disabled={locked}
-                className={inputClassName}
-              />
-            </Field>
-            <Field label="Burst multiplier">
-              <input
-                value={form.burst_multiplier}
-                onChange={(event) => setForm({ ...form, burst_multiplier: event.target.value })}
-                placeholder="1.2"
-                disabled={locked}
-                className={inputClassName}
-              />
-            </Field>
+            </TierField>
+            {form.strategy === 'weighted_fair' || form.strategy === 'reserved_burst' ? (
+              <TierField
+                id="tier-pool-saturation-threshold"
+                label="Saturation threshold"
+                help="Pool-utilization ratio above which per-organization fair shares begin to apply. The default 0.85 means organizations can borrow idle capacity until the pool is more than 85% utilized."
+              >
+                <input
+                  id="tier-pool-saturation-threshold"
+                  value={form.saturation_threshold}
+                  onChange={(event) => setForm({ ...form, saturation_threshold: event.target.value })}
+                  inputMode="decimal"
+                  placeholder="0.85"
+                  disabled={locked}
+                  className={inputClassName}
+                />
+              </TierField>
+            ) : null}
+            {form.strategy === 'reserved_burst' ? (
+              <TierField
+                id="tier-pool-burst-multiplier"
+                label="Burst multiplier"
+                help="Multiplier applied to an organization's saturated fair share. The default 1.2 permits up to 20% above that share, but never above the shared pool hard cap."
+              >
+                <input
+                  id="tier-pool-burst-multiplier"
+                  value={form.burst_multiplier}
+                  onChange={(event) => setForm({ ...form, burst_multiplier: event.target.value })}
+                  inputMode="decimal"
+                  placeholder="1.2"
+                  disabled={locked}
+                  className={inputClassName}
+                />
+              </TierField>
+            ) : null}
           </div>
+          <p className="mt-3 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+            {capacityStrategyDescription(form.strategy)}
+          </p>
           <div className="mt-4 flex justify-end">
             <button
               type="button"
@@ -274,11 +335,12 @@ export default function TierCapacityPoolEditor({
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-xs font-semibold text-gray-500">{label}</span>
-      {children}
-    </label>
-  );
+function capacityStrategyDescription(strategy: string): string {
+  if (strategy === 'weighted_fair') {
+    return 'Weighted fair: active organizations may borrow idle capacity below 85% utilization; above it, assignment weights determine protected shares.';
+  }
+  if (strategy === 'reserved_burst') {
+    return 'Reserved burst: weighted fair sharing applies near saturation, with a default 1.2× burst entitlement that still cannot exceed the pool ceiling.';
+  }
+  return 'Hard cap: only the shared RPM, TPM, and parallel ceilings are enforced; no per-organization fair-share calculation is applied.';
 }

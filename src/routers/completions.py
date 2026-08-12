@@ -3,7 +3,6 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 
 from src.middleware.auth import require_api_key
-from src.middleware.rate_limit import enforce_rate_limits
 from src.models.requests import CompletionsRequest
 from src.routers.chat import handle_chat_like_request
 from src.routers.text_adapters import (
@@ -15,7 +14,7 @@ from src.routers.text_adapters import (
 router = APIRouter(prefix="/v1", tags=["completions"])
 
 
-@router.post("/completions", dependencies=[Depends(require_api_key), Depends(enforce_rate_limits)])
+@router.post("/completions", dependencies=[Depends(require_api_key)])
 async def completions(request: Request, payload: CompletionsRequest):
     canonical = completions_to_chat_request(payload)
     return await handle_chat_like_request(

@@ -120,11 +120,16 @@ class ChatWorkerExecutionMixin:
         api_provider = resolve_provider(served_deployment.deltallm_params)
         api_base = served_deployment.deltallm_params.get("api_base")
         deployment_model = str(served_deployment.deltallm_params.get("model") or "") or None
-        billed_cost, provider_cost, pricing = self._batch_item_costs(
+        item_costs = self._batch_item_costs(
             prepared=prepared,
             usage=usage,
             served_deployment=served_deployment,
         )
+        billed_cost = item_costs.billed_cost
+        provider_cost = item_costs.provider_cost
+        pricing = item_costs.pricing
+        customer_billing = item_costs.customer_billing
+        provider_billing = item_costs.provider_billing
         return {
             "item_id": prepared.item.item_id,
             "claim_epoch": prepared.item.claim_epoch,
@@ -143,6 +148,14 @@ class ChatWorkerExecutionMixin:
                 deployment_model=deployment_model,
                 pricing_metadata=pricing.spend_metadata(
                     provider_cost=provider_cost,
+                    billing=customer_billing.billing,
+                    provider_billing=provider_billing.billing,
+                    effective_pricing_sources=(
+                        customer_billing.pricing_sources_used
+                    ),
+                    missing_pricing_fields=(
+                        customer_billing.missing_pricing_fields
+                    ),
                     pricing_tier="batch",
                 ),
                 batch_execution_mode=batch_execution_mode,

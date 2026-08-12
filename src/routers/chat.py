@@ -22,7 +22,6 @@ from src.chat import (
 )
 from src.chat.stream_usage import StreamUsageTracker
 from src.middleware.auth import require_api_key
-from src.middleware.rate_limit import enforce_rate_limits
 from src.mcp.orchestrator import MCPChatOrchestrator, chat_request_has_mcp_tools
 from src.models.errors import InvalidRequestError, ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
@@ -41,7 +40,7 @@ from src.routers.routing_decision import (
 router = APIRouter(prefix="/v1", tags=["chat"])
 
 
-@router.post("/chat/completions", dependencies=[Depends(require_api_key), Depends(enforce_rate_limits)])
+@router.post("/chat/completions", dependencies=[Depends(require_api_key)])
 async def chat_completions(request: Request, payload: ChatCompletionRequest):
     return await handle_chat_like_request(request, payload)
 

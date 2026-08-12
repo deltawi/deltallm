@@ -89,11 +89,24 @@ class TierAdminService:
             if by_key is not None and by_key.tier_id != tier_id:
                 raise TierAdminConflictError("A tier with this tier_key already exists")
 
+        if existing.enabled and not fields["enabled"]:
+            live_assignments = (
+                await self.repository.count_live_or_scheduled_tier_assignments(tier_id)
+            )
+            if live_assignments:
+                raise TierAdminConflictError(
+                    "Tier has enabled live or scheduled organization assignments"
+                )
+
         try:
             updated = await self.repository.update_tier(tier_id, **fields)
         except Exception as exc:
             if _looks_like_unique_violation(exc):
                 raise TierAdminConflictError("A tier with this tier_key already exists") from exc
+            if _looks_like_enabled_assignment_violation(exc):
+                raise TierAdminConflictError(
+                    "Tier has enabled live or scheduled organization assignments"
+                ) from exc
             raise
         if updated is None:
             raise TierAdminNotFoundError("Tier not found")
@@ -101,8 +114,10 @@ class TierAdminService:
 
     async def delete_tier(self, tier_id: str) -> dict[str, Any]:
         existing = await self.require_tier(tier_id)
-        active_assignments = await self.repository.count_active_tier_assignments(existing.tier_id)
-        if active_assignments:
+        live_assignments = await self.repository.count_live_or_scheduled_tier_assignments(
+            existing.tier_id
+        )
+        if live_assignments:
             raise TierAdminConflictError("Tier has active organization assignments")
 
         try:
@@ -307,6 +322,14 @@ def _looks_like_unique_violation(exc: Exception) -> bool:
 def _looks_like_restrict_violation(exc: Exception) -> bool:
     message = str(exc).lower()
     return "foreign key" in message or "restrict" in message or "violates" in message
+
+
+def _looks_like_enabled_assignment_violation(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        "cannot disable tier while enabled organization assignments exist" in message
+        or "deltallm_tier_disable_assignment_guard" in message
+    )
 
 
 __all__ = [

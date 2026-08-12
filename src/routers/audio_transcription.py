@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
@@ -15,7 +16,7 @@ from src.billing.cost import compute_billing_result
 from src.billing.tier_pricing import attach_pricing_metadata, resolve_deployment_tier_pricing
 from src.callbacks import CallbackManager, build_standard_logging_payload
 from src.middleware.auth import require_api_key
-from src.middleware.rate_limit import enforce_rate_limits
+from src.middleware.rate_limit import check_and_acquire_rate_limits_for_payload
 from src.metrics import (
     increment_request,
     increment_request_failure,
@@ -24,6 +25,7 @@ from src.metrics import (
     observe_request_latency,
 )
 from src.models.errors import InvalidRequestError
+from src.rate_limit_policy import estimate_tokens
 from src.providers.resolution import (
     is_openai_compatible_provider,
     resolve_provider,
@@ -166,7 +168,7 @@ async def _execute_stt(
     return data
 
 
-@router.post("/audio/transcriptions", dependencies=[Depends(require_api_key), Depends(enforce_rate_limits)])
+@router.post("/audio/transcriptions", dependencies=[Depends(require_api_key)])
 async def audio_transcriptions(
     request: Request,
     file: UploadFile = File(...),
@@ -204,6 +206,19 @@ async def audio_transcriptions(
     file_content = await file.read()
     filename = file.filename or "audio.wav"
     content_type_str = file.content_type or "application/octet-stream"
+    admission_payload = {
+        **request_data,
+        "filename": filename,
+        "content_type": content_type_str,
+        "file_size": len(file_content),
+        "file_sha256": hashlib.sha256(file_content).hexdigest(),
+    }
+    await check_and_acquire_rate_limits_for_payload(
+        request,
+        model=model,
+        payload=admission_payload,
+        token_estimate=estimate_tokens(request_data) + estimate_tokens(file_content),
+    )
 
     app_router = request.app.state.router
     model_group = app_router.resolve_model_group(model)

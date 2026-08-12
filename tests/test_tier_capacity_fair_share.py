@@ -852,6 +852,48 @@ async def test_capacity_dashboard_reports_usage_and_boosts() -> None:
 
 
 @pytest.mark.asyncio
+async def test_capacity_dashboard_reports_redis_read_failures_without_false_zeros() -> None:
+    class _FailingRedis:
+        def pipeline(self):
+            raise RuntimeError("redis unavailable")
+
+        async def mget(self, keys):  # noqa: ANN001
+            del keys
+            raise RuntimeError("redis unavailable")
+
+        async def zrevrange(self, *args):  # noqa: ANN002
+            del args
+            raise RuntimeError("redis unavailable")
+
+        async def hgetall(self, key):  # noqa: ANN001
+            del key
+            raise RuntimeError("redis unavailable")
+
+        async def get(self, key):  # noqa: ANN001
+            del key
+            raise RuntimeError("redis unavailable")
+
+    pool_policy = _pool_policy()
+    snapshot = replace(
+        empty_tier_policy_snapshot(),
+        capacity_pool_policy=MappingProxyType({("shared", "gpt-4o-mini"): pool_policy}),
+        capacity_pool_count=1,
+    )
+
+    dashboard = await build_tier_capacity_dashboard(
+        tier_policy_service=_SnapshotService(snapshot),
+        redis_client=_FailingRedis(),
+    )
+
+    assert dashboard["live_data"]["status"] == "unavailable"
+    assert dashboard["live_data"]["redis_available"] is False
+    assert dashboard["limit_hit_count"] is None
+    assert dashboard["saturated_pool_count"] is None
+    assert dashboard["pools"][0]["rpm_used"] is None
+    assert dashboard["pools"][0]["active_org_count"] is None
+
+
+@pytest.mark.asyncio
 async def test_capacity_dashboard_bounds_active_boost_metadata_reads() -> None:
     class _BoostTrackingRedis(FakeRedis):
         def __init__(self) -> None:

@@ -5,7 +5,9 @@ import type {
   TierModelPolicy,
   TierModelPolicyPayload,
   TierPolicySimulation,
+  TierPolicySimulationPayload,
   TierRateLimitDescriptor,
+  TierSimulationBillingMode,
   TierVersion,
 } from './api';
 import {
@@ -81,6 +83,23 @@ export type TierCapacityPoolForm = {
   strategy: string;
   saturation_threshold: string;
   burst_multiplier: string;
+};
+
+export type TierSimulationFormValues = {
+  mode: string;
+  billing_mode: TierSimulationBillingMode;
+  request_count: string;
+  prompt_tokens: string;
+  completion_tokens: string;
+  audio_prompt_tokens: string;
+  audio_completion_tokens: string;
+  input_images: string;
+  output_images: string;
+  input_characters: string;
+  output_characters: string;
+  input_audio_tokens: string;
+  output_audio_tokens: string;
+  duration_seconds: string;
 };
 
 export type TierCapacityPoolOption = Pick<TierCapacityPool, 'pool_key' | 'callable_key'>;
@@ -301,6 +320,19 @@ export function emptyCapacityPoolForm(): TierCapacityPoolForm {
   };
 }
 
+export function capacityPoolFormWithStrategy(
+  form: TierCapacityPoolForm,
+  strategy: string,
+): TierCapacityPoolForm {
+  const usesFairShare = strategy === 'weighted_fair' || strategy === 'reserved_burst';
+  return {
+    ...form,
+    strategy,
+    saturation_threshold: usesFairShare ? form.saturation_threshold || '0.85' : '',
+    burst_multiplier: strategy === 'reserved_burst' ? form.burst_multiplier || '1.2' : '',
+  };
+}
+
 export function capacityPoolToForm(pool?: TierCapacityPool | null): TierCapacityPoolForm {
   return {
     pool_key: pool?.pool_key || '',
@@ -386,6 +418,65 @@ export function parsePositiveIntegerInput(value: string, label: string): number 
   return parsed;
 }
 
+export function parseNonNegativeNumberInput(value: string, label: string): number {
+  const normalized = value.trim();
+  const parsed = Number(normalized);
+  if (!normalized || !Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${label} must be a non-negative number.`);
+  }
+  return parsed;
+}
+
+export function tierSimulationFormToPayload(
+  form: TierSimulationFormValues,
+  callableKey: string,
+): TierPolicySimulationPayload {
+  const payload: TierPolicySimulationPayload = {
+    callable_key: callableKey,
+    mode: form.mode,
+    billing_mode: form.billing_mode,
+    request_count: parsePositiveIntegerInput(form.request_count, 'Requests'),
+  };
+  if (['chat', 'embedding', 'rerank'].includes(form.billing_mode)) {
+    payload.prompt_tokens = parseNonNegativeIntegerInput(form.prompt_tokens, 'Prompt tokens');
+    payload.completion_tokens = form.billing_mode === 'chat'
+      ? parseNonNegativeIntegerInput(form.completion_tokens, 'Output tokens')
+      : 0;
+  } else if (form.billing_mode === 'image_generation') {
+    payload.input_images = parseNonNegativeIntegerInput(form.input_images, 'Input images');
+    payload.output_images = parseNonNegativeIntegerInput(form.output_images, 'Generated images');
+  } else {
+    payload.prompt_tokens = parseNonNegativeIntegerInput(
+      form.audio_prompt_tokens,
+      'Audio text input tokens',
+    );
+    payload.completion_tokens = parseNonNegativeIntegerInput(
+      form.audio_completion_tokens,
+      'Audio text output tokens',
+    );
+    payload.input_audio_tokens = parseNonNegativeIntegerInput(
+      form.input_audio_tokens,
+      'Input audio tokens',
+    );
+    payload.duration_seconds = parseNonNegativeNumberInput(form.duration_seconds, 'Duration');
+    if (form.billing_mode === 'audio_speech') {
+      payload.input_characters = parseNonNegativeIntegerInput(
+        form.input_characters,
+        'Input characters',
+      );
+      payload.output_characters = parseNonNegativeIntegerInput(
+        form.output_characters,
+        'Output characters',
+      );
+      payload.output_audio_tokens = parseNonNegativeIntegerInput(
+        form.output_audio_tokens,
+        'Output audio tokens',
+      );
+    }
+  }
+  return payload;
+}
+
 export function parseNonNegativeIntegerInput(value: string, label: string): number {
   const normalized = value.trim();
   if (!/^\d+$/.test(normalized)) {
@@ -421,12 +512,81 @@ export function describeRateLimit(descriptor: TierRateLimitDescriptor): string {
 
 export function summarizeSimulation(simulation: TierPolicySimulation | null): string {
   if (!simulation) return 'No simulation run';
-  if (!simulation.access.allowed) return `Denied: ${simulation.access.reason}`;
-  const exceeded = simulation.static_limit_checks.filter((item) => item.would_exceed_limit);
-  if (exceeded.length > 0) {
-    return `Allowed by tier, but exceeds ${exceeded.map((item) => item.scope).join(', ')}`;
+  if (!simulation.decision.allowed) return `Denied: ${simulation.decision.reason}`;
+  return 'Allowed in an empty rate-limit window';
+}
+
+export function formatSimulationPrice(
+  price: TierPolicySimulation['calculated_price'],
+): string {
+  if (price.status === 'unavailable') {
+    const reasons: Record<string, string> = {
+      no_configured_routes: 'No configured routes',
+      mixed_billing_modes: 'Configured routes use different workload types',
+      unsupported_billing_mode: 'Unsupported workload type',
+      billing_mode_mismatch: 'Selected workload type does not match configured routes',
+      missing_usage_for_billing_mode: 'Required workload usage is missing',
+      no_configured_pricing: 'No configured pricing',
+    };
+    return `Unavailable: ${reasons[price.reason || ''] || price.reason || 'unknown reason'}`;
   }
-  return 'Allowed by effective tier policy';
+  const minimum = price.minimum_amount;
+  const maximum = price.maximum_amount;
+  if (minimum == null || maximum == null) return 'Unavailable: incomplete quote';
+  const values = price.kind === 'exact'
+    ? [price.amount ?? minimum]
+    : [minimum, maximum];
+  const precision = simulationCurrencyPrecision(values);
+  const formatted = price.kind === 'exact'
+    ? `${price.currency} ${formatSimulationAmount(price.amount ?? minimum, precision)}`
+    : `${price.currency} ${formatSimulationAmount(minimum, precision)}–${formatSimulationAmount(maximum, precision)}`;
+  return price.status === 'partial'
+    ? `Partial route quote: ${formatted} (${price.unpriced_candidate_count} unpriced)`
+    : formatted;
+}
+
+export function formatSimulationPerRequestPrice(
+  price: TierPolicySimulation['calculated_price'],
+): string | null {
+  const minimum = price.per_request_minimum_amount;
+  const maximum = price.per_request_maximum_amount;
+  if (minimum == null || maximum == null) return null;
+  const values = price.kind === 'exact'
+    ? [price.per_request_amount ?? minimum]
+    : [minimum, maximum];
+  const precision = simulationCurrencyPrecision(values);
+  return price.kind === 'exact'
+    ? `${price.currency} ${formatSimulationAmount(price.per_request_amount ?? minimum, precision)}`
+    : `${price.currency} ${formatSimulationAmount(minimum, precision)}–${formatSimulationAmount(maximum, precision)}`;
+}
+
+function simulationCurrencyPrecision(values: number[]): number {
+  let precision = values.reduce((current, value) => {
+    const absoluteValue = Math.abs(value);
+    if (!Number.isFinite(absoluteValue) || absoluteValue === 0 || absoluteValue >= 0.000001) {
+      return current;
+    }
+    return Math.max(current, Math.ceil(-Math.log10(absoluteValue)) + 2);
+  }, 6);
+  precision = Math.min(10, precision);
+
+  if (values.length > 1 && values[0] !== values[1]) {
+    while (precision < 10 && values[0].toFixed(precision) === values[1].toFixed(precision)) {
+      precision += 1;
+    }
+  }
+  return precision;
+}
+
+function formatSimulationAmount(value: number, precision: number): string {
+  const fixed = value.toFixed(precision);
+  if (value !== 0 && Number(fixed) === 0) {
+    return value.toExponential(4).replace(/\.0+e/, 'e').replace('e+', 'e');
+  }
+  if (precision <= 6) return fixed;
+  const [whole, fraction = ''] = fixed.split('.');
+  const trimmedFraction = fraction.replace(/0+$/, '').padEnd(6, '0');
+  return `${whole}.${trimmedFraction}`;
 }
 
 function withOptionalMetadata<T extends object>(

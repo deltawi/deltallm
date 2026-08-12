@@ -1,4 +1,4 @@
-import { Edit3, Plus, Trash2 } from 'lucide-react';
+import { Edit3, LockKeyhole, Plus, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   OrganizationTierAssignment,
@@ -70,20 +70,20 @@ export default function OrganizationTierPanel({ organizationId, canManage }: Org
   }, [organizationId]);
 
   const { data: assignmentsResponse, loading: assignmentsLoading, error: assignmentsError, refetch: refetchAssignments } = useApi(
-    () => organizations.tierAssignments(organizationId),
-    [organizationId],
+    () => canManage ? organizations.tierAssignments(organizationId) : Promise.resolve({ data: [] }),
+    [organizationId, canManage],
   );
   const { data: tierPage } = useApi(
     () => canManage ? tiers.listAll({ enabled: true }) : Promise.resolve([]),
     [canManage],
   );
   const { data: selectedTierDetail } = useApi(
-    () => form.tier_id ? tiers.get(form.tier_id) : Promise.resolve(null),
-    [form.tier_id],
+    () => canManage && form.tier_id ? tiers.get(form.tier_id) : Promise.resolve(null),
+    [canManage, form.tier_id],
   );
   const { data: preview, loading: previewLoading, error: previewError, refetch: refetchPreview } = useApi(
-    () => organizations.tierPolicyPreview(organizationId),
-    [organizationId],
+    () => canManage ? organizations.tierPolicyPreview(organizationId) : Promise.resolve(null),
+    [organizationId, canManage],
   );
 
   const assignments = useMemo(
@@ -122,7 +122,7 @@ export default function OrganizationTierPanel({ organizationId, canManage }: Org
   };
 
   const openCreate = () => {
-    if (saving) return;
+    if (!canManage || saving) return;
     invalidateAssignmentMutation();
     setForm(createEmptyForm());
     setFormError(null);
@@ -130,7 +130,7 @@ export default function OrganizationTierPanel({ organizationId, canManage }: Org
   };
 
   const openEdit = (assignment: OrganizationTierAssignment) => {
-    if (saving) return;
+    if (!canManage || saving) return;
     invalidateAssignmentMutation();
     setForm({
       assignment_id: assignment.assignment_id,
@@ -167,7 +167,7 @@ export default function OrganizationTierPanel({ organizationId, canManage }: Org
   };
 
   const saveAssignment = async () => {
-    if (saving) return;
+    if (!canManage || saving) return;
     if (!form.tier_id) {
       setFormError('Select a tier.');
       return;
@@ -233,7 +233,7 @@ export default function OrganizationTierPanel({ organizationId, canManage }: Org
   };
 
   const deleteAssignment = async (assignment: OrganizationTierAssignment) => {
-    if (saving) return;
+    if (!canManage || saving) return;
     if (!confirm(`Remove ${assignment.tier_name || assignment.tier_key || assignment.tier_id} from this organization?`)) return;
     const requestOrganizationId = organizationId;
     const requestId = assignmentMutationRequestRef.current + 1;
@@ -256,6 +256,7 @@ export default function OrganizationTierPanel({ organizationId, canManage }: Org
   };
 
   const runSimulation = async (payload: TierPolicySimulationPayload) => {
+    if (!canManage) return;
     const requestOrganizationId = organizationId;
     const requestId = simulationRequestRef.current + 1;
     simulationRequestRef.current = requestId;
@@ -275,6 +276,20 @@ export default function OrganizationTierPanel({ organizationId, canManage }: Org
       }
     }
   };
+
+  if (!canManage) {
+    return (
+      <section className="flex items-start gap-3 rounded-xl border border-gray-200 bg-gray-50 p-4">
+        <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0 text-gray-500" />
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900">Service policy is read-only</h3>
+          <p className="mt-1 text-xs leading-relaxed text-gray-600">
+            Tier assignments are managed by a platform administrator. Organization roles cannot assign, change, or remove tiers.
+          </p>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <div className="space-y-5">

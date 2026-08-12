@@ -140,6 +140,7 @@ async def upsert_tier_capacity_boost(
         action=AuditAction.ADMIN_TIER_CAPACITY_BOOST_UPSERT,
         resource_type="tier_capacity_boost",
         resource_id=f"{payload.pool_key}:{payload.callable_key}:{payload.organization_id}",
+        organization_id=payload.organization_id,
         request_payload=request_payload,
         response_payload=response,
         before=None,
@@ -175,6 +176,7 @@ async def delete_tier_capacity_boost(
         action=AuditAction.ADMIN_TIER_CAPACITY_BOOST_DELETE,
         resource_type="tier_capacity_boost",
         resource_id=f"{pool_key}:{callable_key}:{organization_id}",
+        organization_id=organization_id,
         request_payload={
             "organization_id": organization_id,
             "pool_key": pool_key,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from email.parser import BytesParser
 from email.policy import default
+import hashlib
 import json
 import logging
 import math
@@ -212,18 +213,13 @@ async def enforce_rate_limits(request: Request):
     except RateLimitError:
         raise
     finally:
-        await _release_rate_limits(request)
+        if not bool(getattr(request.state, "_rate_limit_lifecycle_managed", False)):
+            await _release_rate_limits(request)
 
 
 async def _check_and_acquire_rate_limits(request: Request) -> None:
     if bool(getattr(request.state, "_rate_limit_checked", False)):
         return
-    auth = getattr(request.state, "user_api_key", None)
-    if auth is None:
-        request.state._rate_limit_checked = True
-        return
-
-    limiter: LimitCounter = request.app.state.limit_counter
     try:
         body = await request.body()
         request._body = body  # noqa: SLF001 - FastAPI-compatible caching of request body
@@ -236,6 +232,65 @@ async def _check_and_acquire_rate_limits(request: Request) -> None:
             raise InvalidRequestError(message="Could not parse request body for rate limiting") from exc
 
     model = await _extract_model_from_request(request, body)
+    await _acquire_rate_limits_for_values(
+        request,
+        model=model,
+        tokens=tokens,
+        admission_fingerprint=_rate_limit_admission_fingerprint(
+            model=model,
+            payload=body,
+        ),
+    )
+
+
+async def check_and_acquire_rate_limits_for_payload(
+    request: Request,
+    *,
+    model: str | None,
+    payload: Any,
+    token_estimate: int | None = None,
+) -> None:
+    """Admit a validated final payload without rereading the original body."""
+
+    normalized_token_estimate = (
+        estimate_tokens(payload)
+        if token_estimate is None
+        else max(0, int(token_estimate))
+    )
+    await _acquire_rate_limits_for_values(
+        request,
+        model=_normalize_model(model),
+        tokens=normalized_token_estimate,
+        admission_fingerprint=_rate_limit_admission_fingerprint(
+            model=model,
+            payload=payload,
+        ),
+    )
+
+
+async def _acquire_rate_limits_for_values(
+    request: Request,
+    *,
+    model: str | None,
+    tokens: int,
+    admission_fingerprint: str,
+) -> None:
+    if bool(getattr(request.state, "_rate_limit_checked", False)):
+        existing_fingerprint = getattr(request.state, "_rate_limit_admission_fingerprint", None)
+        if existing_fingerprint is not None and existing_fingerprint != admission_fingerprint:
+            raise InvalidRequestError(
+                message="Request changed after rate-limit admission",
+                param="model",
+            )
+        return
+
+    auth = getattr(request.state, "user_api_key", None)
+    if auth is None:
+        request.state._rate_limit_checked = True
+        request.state._rate_limit_admission_fingerprint = admission_fingerprint
+        return
+
+    limiter: LimitCounter = request.app.state.limit_counter
     request.state._rate_limit_model = model
     tier_policy_service = getattr(request.app.state, "tier_policy_service", None)
     tier_policy_mode = get_tier_policy_mode_from_app(request.app)
@@ -283,10 +338,30 @@ async def _check_and_acquire_rate_limits(request: Request) -> None:
         raise
 
     request.state._rate_limit_checked = True
+    request.state._rate_limit_admission_fingerprint = admission_fingerprint
     request.state._rate_limit_lease = lease
     refresher = RateLimitLeaseRefresher(limiter=limiter, lease=lease)
     if refresher.start():
         request.state._rate_limit_lease_refresher = refresher
+
+
+def _rate_limit_admission_fingerprint(*, model: str | None, payload: Any) -> str:
+    if isinstance(payload, bytes):
+        serialized = payload
+    elif isinstance(payload, str):
+        serialized = payload.encode("utf-8")
+    else:
+        serialized = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    digest = hashlib.sha256()
+    digest.update(str(model or "").encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(serialized)
+    return digest.hexdigest()
 
 
 async def _release_rate_limits(request: Request) -> None:

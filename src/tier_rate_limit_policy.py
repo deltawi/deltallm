@@ -26,6 +26,21 @@ class TierLimitControls:
     rate_checks: tuple[RateLimitCheck, ...] = ()
     parallel_checks: tuple[ParallelLimitCheck, ...] = ()
     fair_share_checks: tuple[TierFairShareCheck, ...] = ()
+    capacity_rate_checks: tuple["TierCapacityRateCheck", ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class TierCapacityRateCheck:
+    rate_check: RateLimitCheck
+    pool_key: str
+    callable_key: str
+    organization_id: str
+    tier_key: str | None
+    dimension: Literal["rpm", "tpm"]
+
+    @property
+    def scope(self) -> str:
+        return self.rate_check.scope
 
 
 def build_tier_rate_limit_checks(
@@ -183,13 +198,30 @@ def _build_tier_controls_from_service(
         tokens=tokens,
         enabled=tier_capacity_fair_share_enabled,
     )
+    capacity_rate_checks: list[TierCapacityRateCheck] = []
     if fair_share_check is None:
-        checks.extend(
-            _capacity_pool_rate_limit_checks(
-                pool_policy,
-                tokens=tokens,
-                request_mode=request_mode,
+        pool_rate_checks = _capacity_pool_rate_limit_checks(
+            pool_policy,
+            tokens=tokens,
+            request_mode=request_mode,
+        )
+        checks.extend(pool_rate_checks)
+        pool_key = _normalize_id(getattr(pool_policy, "pool_key", None)) or capacity_pool_key
+        pool_callable_key = (
+            _normalize_id(getattr(pool_policy, "callable_key", None)) or callable_key
+        )
+        source = getattr(model_policy, "source", None)
+        tier_key = _normalize_id(getattr(source, "tier_key", None))
+        capacity_rate_checks.extend(
+            TierCapacityRateCheck(
+                rate_check=check,
+                pool_key=pool_key,
+                callable_key=pool_callable_key,
+                organization_id=organization_id,
+                tier_key=tier_key,
+                dimension="tpm" if check.scope.endswith("_tpm") else "rpm",
             )
+            for check in pool_rate_checks
         )
     pool_parallel_check = _pool_parallel_limit_check(
         pool_policy,
@@ -202,6 +234,7 @@ def _build_tier_controls_from_service(
         rate_checks=tuple(checks),
         parallel_checks=tuple(parallel_checks),
         fair_share_checks=(fair_share_check,) if fair_share_check is not None else (),
+        capacity_rate_checks=tuple(capacity_rate_checks),
     )
 
 

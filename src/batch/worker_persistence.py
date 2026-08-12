@@ -8,13 +8,17 @@ from datetime import UTC, datetime
 import logging
 import random
 from time import perf_counter
-from typing import Any, Awaitable
+from typing import Any, Awaitable, Iterator
 
 from src.batch.endpoints import batch_call_type_for_endpoint
 from src.batch.policy import BatchPolicyLease, acquire_batch_policy_lease, release_batch_policy_lease
 from src.batch.worker_types import BatchItemLeaseLostError, _PreparedChatItem, _PreparedEmbeddingItem
-from src.billing.cost import completion_cost
-from src.billing.tier_pricing import PricingResolution, resolve_deployment_tier_pricing
+from src.billing.tier_pricing import (
+    PricingResolution,
+    TokenBillingResolution,
+    resolve_deployment_tier_pricing,
+    resolve_token_billing_result,
+)
 from src.rate_limit_lease_refresh import RateLimitLeaseRefresher
 
 logger = logging.getLogger(__name__)
@@ -29,6 +33,21 @@ class _PolicyReleaseRetry:
     lease: BatchPolicyLease
     attempt_count: int
     next_attempt_at: float
+
+
+@dataclass(frozen=True, slots=True)
+class _BatchItemCosts:
+    billed_cost: float
+    provider_cost: float
+    pricing: PricingResolution
+    customer_billing: TokenBillingResolution
+    provider_billing: TokenBillingResolution
+
+    def __iter__(self) -> Iterator[float | PricingResolution]:
+        """Preserve the historical three-value internal unpacking contract."""
+        yield self.billed_cost
+        yield self.provider_cost
+        yield self.pricing
 
 
 def _policy_release_retry_delay_seconds(attempt_count: int) -> float:
@@ -117,28 +136,31 @@ class WorkerPersistenceMixin:
         prepared: _PreparedEmbeddingItem | _PreparedChatItem,
         usage: dict[str, Any],
         served_deployment: Any,
-    ) -> tuple[float, float, PricingResolution]:
+    ) -> _BatchItemCosts:
         pricing = self._resolve_batch_item_pricing(
             prepared=prepared,
             served_deployment=served_deployment,
         )
-        billed_cost = completion_cost(
+        customer_billing = resolve_token_billing_result(
+            pricing,
             model=prepared.payload.model,
             usage=usage,
-            cache_hit=False,
-            custom_pricing=pricing.customer_token_pricing,
-            pricing_tier="batch",
-            model_info=pricing.customer_model_info,
+            mode="batch",
         )
-        provider_cost = completion_cost(
+        provider_billing = resolve_token_billing_result(
+            pricing,
             model=prepared.payload.model,
             usage=usage,
-            cache_hit=False,
-            custom_pricing=pricing.provider_token_pricing,
-            pricing_tier="sync",
-            model_info=pricing.provider_model_info,
+            mode="sync",
+            pricing_view="provider",
         )
-        return billed_cost, provider_cost, pricing
+        return _BatchItemCosts(
+            billed_cost=customer_billing.billing.cost,
+            provider_cost=provider_billing.billing.cost,
+            pricing=pricing,
+            customer_billing=customer_billing,
+            provider_billing=provider_billing,
+        )
 
     def _observe_item_execution_latency(
         self, *, status: str, latency_seconds: float, reference: str

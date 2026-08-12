@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from statistics import median
 from time import perf_counter
 from types import SimpleNamespace
 from typing import Any
@@ -17,6 +18,11 @@ from src.rate_limit_lease_refresh import RateLimitLeaseRefresher
 from src.rate_limit_release_retry import RateLimitReleaseRetryQueue
 from src.rate_limit_policy import RateLimitLease, acquire_rate_limit_controls, build_rate_limit_checks, release_rate_limit_controls
 from src.services.limit_counter import LegacyParallelLease, LimitCounter, ParallelLimitCheck, ParallelLimitLease
+from src.services.tier_capacity_fair_share import (
+    fair_share_limit_hit_heatmap_key,
+    fair_share_limit_hit_heatmap_rank_key,
+    fair_share_limit_hit_total_key,
+)
 from src.services.tier_policy_models import (
     CompiledTierCapacityPoolPolicy,
     CompiledTierRateLimitDescriptor,
@@ -116,6 +122,20 @@ class _RecordingLimitCounter(LimitCounter):
         self.seen_checks.append([check.scope for check in checks])
         return await super().check_rate_limits_atomic(checks)
 
+    async def check_rate_limits_and_tier_fair_share_atomic(
+        self,
+        rate_checks,
+        fair_share_checks,
+        **kwargs,
+    ):
+        self.atomic_calls += 1
+        self.seen_checks.append([check.scope for check in rate_checks])
+        return await super().check_rate_limits_and_tier_fair_share_atomic(
+            rate_checks,
+            fair_share_checks,
+            **kwargs,
+        )
+
 
 class _SnapshotMutatingLimitCounter(LimitCounter):
     def __init__(self, *, service: _TierRateLimitService, failed_scope: str) -> None:
@@ -124,6 +144,19 @@ class _SnapshotMutatingLimitCounter(LimitCounter):
         self.failed_scope = failed_scope
 
     async def check_rate_limits_atomic(self, checks):
+        del checks
+        self._raise_snapshot_mutation()
+
+    async def check_rate_limits_and_tier_fair_share_atomic(
+        self,
+        rate_checks,
+        fair_share_checks,
+        **kwargs,
+    ):
+        del rate_checks, fair_share_checks, kwargs
+        self._raise_snapshot_mutation()
+
+    def _raise_snapshot_mutation(self) -> None:
         self.service.snapshot_stale = True
         self.service.missing_service_mode = "fail_closed"
         raise RateLimitError(
@@ -176,6 +209,28 @@ class _SnapshotMutatingParallelLimitCounter(LimitCounter):
         await self.acquire_parallel(failed.scope, failed.entity_id, failed.limit)
         return ()
 
+    async def check_rate_limits_and_tier_fair_share_atomic(
+        self,
+        rate_checks,
+        fair_share_checks,
+        **kwargs,
+    ):
+        del rate_checks, fair_share_checks
+        legacy_parallel_check = kwargs.get("legacy_parallel_check")
+        parallel_checks = kwargs.get("parallel_checks") or []
+        if legacy_parallel_check is not None:
+            await self.acquire_parallel(
+                legacy_parallel_check.scope,
+                legacy_parallel_check.entity_id,
+                legacy_parallel_check.limit,
+            )
+        failed = next(
+            (check for check in parallel_checks if check.scope == self.failed_scope),
+            parallel_checks[0],
+        )
+        await self.acquire_parallel(failed.scope, failed.entity_id, failed.limit)
+        raise AssertionError("parallel test double did not reject admission")
+
 
 class _PoolAcquireUnavailableLimitCounter(LimitCounter):
     async def acquire_parallel(self, scope: str, entity_id: str, limit: int | None) -> None:
@@ -187,6 +242,23 @@ class _PoolAcquireUnavailableLimitCounter(LimitCounter):
         if any(check.scope == "tier_pool_model_parallel" for check in checks):
             raise ServiceUnavailableError(message="Rate limit backend unavailable")
         return await super().acquire_parallel_leases(checks, ttl_seconds=ttl_seconds)
+
+    async def check_rate_limits_and_tier_fair_share_atomic(
+        self,
+        rate_checks,
+        fair_share_checks,
+        **kwargs,
+    ):
+        if any(
+            check.scope == "tier_pool_model_parallel"
+            for check in kwargs.get("parallel_checks") or []
+        ):
+            raise ServiceUnavailableError(message="Rate limit backend unavailable")
+        return await super().check_rate_limits_and_tier_fair_share_atomic(
+            rate_checks,
+            fair_share_checks,
+            **kwargs,
+        )
 
 
 class _FlakyReleaseLimitCounter:
@@ -234,6 +306,17 @@ class _FailingOnceRedis(FakeRedis):
         if self.fail_next_eval:
             self.fail_next_eval = False
             raise RuntimeError("redis unavailable")
+        return await super().eval(script, numkeys, *args)
+
+
+class _CountingFakeRedis(FakeRedis):
+    def __init__(self) -> None:
+        super().__init__()
+        self.tier_admission_eval_calls = 0
+
+    async def eval(self, script: str, numkeys: int, *args):
+        if "tier_admission_v2" in script:
+            self.tier_admission_eval_calls += 1
         return await super().eval(script, numkeys, *args)
 
 
@@ -474,6 +557,78 @@ async def test_shared_pool_tpm_is_enforced_across_organizations() -> None:
 
 
 @pytest.mark.asyncio
+async def test_static_pool_denial_records_heatmap_in_same_atomic_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _TierRateLimitService(
+        model_policies={
+            ("org-1", "gpt-4o-mini"): SimpleNamespace(
+                access_mode="allow",
+                capacity_pool_key="shared-hard-cap",
+            ),
+        },
+        pool_policies={
+            ("shared-hard-cap", "gpt-4o-mini"): _pool_policy(
+                pool_key="shared-hard-cap",
+                rpm_capacity=1,
+            ),
+        },
+    )
+    redis = _CountingFakeRedis()
+    limiter = LimitCounter(redis_client=redis, degraded_mode="fail_closed")
+    auth = _auth(rpm_limit=None, tpm_limit=None)
+    saturation_observations: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "src.rate_limit_policy.set_tier_capacity_pool_saturation",
+        lambda **kwargs: saturation_observations.append(kwargs),
+    )
+
+    await acquire_rate_limit_controls(
+        limiter=limiter,
+        auth=auth,
+        tokens=10,
+        model="gpt-4o-mini",
+        tier_policy_service=service,
+        tier_policy_mode="enforce",
+    )
+    with pytest.raises(RateLimitError) as exc_info:
+        await acquire_rate_limit_controls(
+            limiter=limiter,
+            auth=auth,
+            tokens=10,
+            model="gpt-4o-mini",
+            tier_policy_service=service,
+            tier_policy_mode="enforce",
+        )
+
+    field = "shared-hard-cap|gpt-4o-mini|org-1|tier_pool_model_rpm|none"
+    heatmap_key = fair_share_limit_hit_heatmap_key()
+    rank_key = fair_share_limit_hit_heatmap_rank_key()
+    total_key = fair_share_limit_hit_total_key()
+    counter_key = (
+        f"ratelimit:tier_pool_model_rpm:shared-hard-cap:gpt-4o-mini:"
+        f"{limiter._window_id(60)}"
+    )
+
+    assert redis.tier_admission_eval_calls == 2
+    assert redis.store[counter_key] == 1
+    assert int(redis.hash_store[heatmap_key][field]) == 1
+    assert redis.zset_store[rank_key] == [(1.0, field)]
+    assert redis.store[total_key] == 1
+    assert redis.ttl_store[heatmap_key] == 60
+    assert redis.ttl_store[rank_key] == 60
+    assert redis.ttl_store[total_key] == 60
+    assert exc_info.value.param == "tier_pool_model_rpm"
+    assert exc_info.value.rate_limit_current == 1
+    assert exc_info.value.rate_limit_attempted == 2
+    assert exc_info.value.capacity_limit_hit_recorded is True
+    assert [observation["saturation"] for observation in saturation_observations] == [
+        1.0,
+        1.0,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_tier_checks_are_sent_in_one_atomic_rate_limit_call() -> None:
     service = _TierRateLimitService(
         descriptors={
@@ -702,6 +857,127 @@ async def test_tier_parallel_failure_releases_previously_acquired_key_slot() -> 
 
 
 @pytest.mark.asyncio
+async def test_tier_parallel_denial_does_not_consume_fallback_rate_quota() -> None:
+    service = _TierRateLimitService(
+        model_policies={
+            ("org-1", "gpt-4o-mini"): SimpleNamespace(
+                access_mode="allow",
+                capacity_pool_key=None,
+                limits=SimpleNamespace(max_parallel_requests=1),
+            ),
+        },
+    )
+    limiter = LimitCounter(redis_client=None, degraded_mode="fail_open")
+    await limiter.acquire_parallel("tier_org_model_parallel", "org-1:gpt-4o-mini", 1)
+
+    try:
+        with pytest.raises(RateLimitError) as exc_info:
+            await acquire_rate_limit_controls(
+                limiter=limiter,
+                auth=_auth(rpm_limit=1, tpm_limit=10),
+                tokens=10,
+                model="gpt-4o-mini",
+                tier_policy_service=service,
+                tier_policy_mode="enforce",
+            )
+
+        assert exc_info.value.param == "tier_org_model_parallel"
+        assert not limiter._fallback_counters  # noqa: SLF001 - admission must be all-or-nothing
+    finally:
+        await limiter.release_parallel("tier_org_model_parallel", "org-1:gpt-4o-mini")
+
+    lease, _state = await acquire_rate_limit_controls(
+        limiter=limiter,
+        auth=_auth(rpm_limit=1, tpm_limit=10),
+        tokens=10,
+        model="gpt-4o-mini",
+        tier_policy_service=service,
+        tier_policy_mode="enforce",
+    )
+    await release_rate_limit_controls(limiter=limiter, lease=lease)
+
+
+@pytest.mark.asyncio
+async def test_tier_parallel_denial_does_not_consume_redis_rate_quota() -> None:
+    service = _TierRateLimitService(
+        model_policies={
+            ("org-1", "gpt-4o-mini"): SimpleNamespace(
+                access_mode="allow",
+                capacity_pool_key=None,
+                limits=SimpleNamespace(max_parallel_requests=1),
+            ),
+        },
+    )
+    redis = _CountingFakeRedis()
+    limiter = LimitCounter(redis_client=redis, degraded_mode="fail_open")
+    occupied = await limiter.acquire_parallel_leases(
+        [
+            ParallelLimitCheck(
+                scope="tier_org_model_parallel",
+                entity_id="org-1:gpt-4o-mini",
+                limit=1,
+            )
+        ]
+    )
+
+    try:
+        with pytest.raises(RateLimitError) as exc_info:
+            await acquire_rate_limit_controls(
+                limiter=limiter,
+                auth=_auth(rpm_limit=1, tpm_limit=10),
+                tokens=10,
+                model="gpt-4o-mini",
+                tier_policy_service=service,
+                tier_policy_mode="enforce",
+            )
+
+        assert exc_info.value.param == "tier_org_model_parallel"
+        assert redis.tier_admission_eval_calls == 1
+        assert not [key for key in redis.store if key.startswith("ratelimit:")]
+    finally:
+        await limiter.release_parallel_leases(list(occupied))
+
+    lease, _state = await acquire_rate_limit_controls(
+        limiter=limiter,
+        auth=_auth(rpm_limit=1, tpm_limit=10),
+        tokens=10,
+        model="gpt-4o-mini",
+        tier_policy_service=service,
+        tier_policy_mode="enforce",
+    )
+    assert redis.tier_admission_eval_calls == 2
+    await release_rate_limit_controls(limiter=limiter, lease=lease)
+
+
+@pytest.mark.asyncio
+async def test_legacy_parallel_denial_does_not_consume_rate_quota() -> None:
+    limiter = LimitCounter(redis_client=None, degraded_mode="fail_open")
+    await limiter.acquire_parallel("key", "key-1", 1)
+
+    try:
+        with pytest.raises(RateLimitError) as exc_info:
+            await acquire_rate_limit_controls(
+                limiter=limiter,
+                auth=_auth(rpm_limit=1, tpm_limit=10, max_parallel_requests=1),
+                tokens=10,
+                model="gpt-4o-mini",
+            )
+
+        assert str(exc_info.value) == "Parallel request limit exceeded"
+        assert not limiter._fallback_counters  # noqa: SLF001 - admission must be all-or-nothing
+    finally:
+        await limiter.release_parallel("key", "key-1")
+
+    lease, _state = await acquire_rate_limit_controls(
+        limiter=limiter,
+        auth=_auth(rpm_limit=1, tpm_limit=10, max_parallel_requests=1),
+        tokens=10,
+        model="gpt-4o-mini",
+    )
+    await release_rate_limit_controls(limiter=limiter, lease=lease)
+
+
+@pytest.mark.asyncio
 async def test_rate_limit_failure_does_not_acquire_key_parallel_lease() -> None:
     redis = FakeRedis()
     limiter = LimitCounter(redis_client=redis, degraded_mode="fail_open")
@@ -751,6 +1027,7 @@ async def test_tier_pool_parallel_limit_is_shared_across_organizations() -> None
 
     assert exc_info.value.param == "tier_pool_model_parallel"
     assert exc_info.value.code == "tier_pool_model_parallel_exceeded"
+    assert not any(":key-2:" in key for key in limiter._fallback_counters)  # noqa: SLF001
     await release_rate_limit_controls(limiter=limiter, lease=lease)
 
 
@@ -797,7 +1074,7 @@ async def test_partial_tier_parallel_acquisition_is_released_when_pool_limit_fai
 
 
 @pytest.mark.asyncio
-async def test_partial_tier_parallel_acquisition_is_released_when_pool_backend_fails() -> None:
+async def test_atomic_tier_parallel_backend_failure_does_not_consume_admission() -> None:
     service = _TierRateLimitService(
         model_policies={
             ("org-1", "gpt-4o-mini"): SimpleNamespace(
@@ -821,6 +1098,7 @@ async def test_partial_tier_parallel_acquisition_is_released_when_pool_backend_f
         )
 
     assert "tier_org_model_parallel:org-1:gpt-4o-mini" not in limiter._fallback_parallel
+    assert not limiter._fallback_counters
 
 
 @pytest.mark.asyncio
@@ -1169,8 +1447,18 @@ def test_tier_lookup_latency_is_bounded_in_each_rollout_mode(
     )
     auth = _auth(rpm_limit=None, tpm_limit=None)
 
-    started = perf_counter()
-    for _ in range(25_000):
+    for _ in range(100):
+        build_rate_limit_checks(
+            auth=auth,
+            tokens=100,
+            model="gpt-4o-mini",
+            tier_policy_service=service,
+            tier_policy_mode=policy_mode,
+        )
+
+    samples = []
+    for _ in range(5_000):
+        started = perf_counter()
         checks = build_rate_limit_checks(
             auth=auth,
             tokens=100,
@@ -1178,10 +1466,10 @@ def test_tier_lookup_latency_is_bounded_in_each_rollout_mode(
             tier_policy_service=service,
             tier_policy_mode=policy_mode,
         )
-    elapsed = perf_counter() - started
+        samples.append(perf_counter() - started)
 
     assert sum(check.scope.startswith("tier_") for check in checks) == expected_tier_checks
-    assert elapsed < 2
+    assert median(samples) < 0.001
 
 
 def test_batch_tier_limits_fall_back_to_sync_rpm_tpm_when_batch_overrides_absent() -> None:

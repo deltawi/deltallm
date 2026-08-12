@@ -5,8 +5,14 @@ from types import SimpleNamespace
 import pytest
 
 from src.billing.cost import completion_cost, compute_billing_result
-from src.billing.tier_pricing import resolve_tier_pricing
+from src.billing.tier_pricing import (
+    resolve_deployment_tier_pricing,
+    resolve_tier_pricing,
+    resolve_token_billing_result,
+    resolve_token_quote_pricing,
+)
 from src.models.responses import UserAPIKeyAuth
+from src.router.router import Deployment
 
 
 def _policy(pricing: dict[str, float], *, mode: str = "sync"):
@@ -55,6 +61,381 @@ class _FailingTierPricingService(_TierPricingService):
     def get_pricing_policy(self, organization_id: str, callable_key: str, *, mode: str = "sync"):
         del organization_id, callable_key, mode
         raise RuntimeError("tier pricing backend unavailable")
+
+
+def _deployment(
+    *,
+    model_info: dict[str, object] | None = None,
+    input_cost_per_token: float = 0.0,
+    output_cost_per_token: float = 0.0,
+) -> Deployment:
+    return Deployment(
+        deployment_id="deployment-1",
+        model_name="model-a",
+        deltallm_params={"model": "openai/model-a"},
+        model_info=dict(model_info or {}),
+        input_cost_per_token=input_cost_per_token,
+        output_cost_per_token=output_cost_per_token,
+    )
+
+
+def test_deployment_pricing_ignores_structural_zero_token_defaults() -> None:
+    resolution = resolve_deployment_tier_pricing(
+        auth=UserAPIKeyAuth(api_key="key-1", organization_id="org-1"),
+        model="unknown-model",
+        deployment=_deployment(model_info={"mode": "chat"}),
+        tier_policy_service=None,
+    )
+
+    assert resolution.source == "default"
+    assert resolution.customer_token_pricing is None
+    assert resolution.provider_token_pricing is None
+    assert resolution.customer_pricing_fields == ()
+    assert resolution.provider_pricing_fields == ()
+
+
+def test_deployment_pricing_uses_served_upstream_model_for_catalog_fallback() -> None:
+    deployment = Deployment(
+        deployment_id="deployment-alias",
+        model_name="premium-chat",
+        deltallm_params={
+            "provider": "openai",
+            "model": "openai/gpt-4o-mini",
+        },
+    )
+    resolution = resolve_deployment_tier_pricing(
+        auth=UserAPIKeyAuth(api_key="key-1", organization_id="org-1"),
+        model="premium-chat",
+        deployment=deployment,
+        tier_policy_service=None,
+    )
+
+    provider = resolve_token_billing_result(
+        resolution,
+        model="premium-chat",
+        usage={"prompt_tokens": 100, "completion_tokens": 10},
+        pricing_view="provider",
+    )
+    customer = resolve_token_billing_result(
+        resolution,
+        model="premium-chat",
+        usage={"prompt_tokens": 100, "completion_tokens": 10},
+    )
+
+    assert resolution.callable_model == "premium-chat"
+    assert resolution.provider_model == "gpt-4o-mini"
+    assert provider.billing.unpriced_reason is None
+    assert provider.billing.cost == pytest.approx(0.000021)
+    assert customer.billing.cost == pytest.approx(provider.billing.cost)
+    assert provider.pricing_sources_used == ("default",)
+
+
+def test_deployment_pricing_preserves_explicit_zero_and_legacy_nonzero_prices() -> None:
+    auth = UserAPIKeyAuth(api_key="key-1", organization_id="org-1")
+    explicit_zero = resolve_deployment_tier_pricing(
+        auth=auth,
+        model="unknown-model",
+        deployment=_deployment(model_info={"input_cost_per_token": 0.0}),
+        tier_policy_service=None,
+    )
+    legacy_nonzero = resolve_deployment_tier_pricing(
+        auth=auth,
+        model="unknown-model",
+        deployment=_deployment(input_cost_per_token=0.25),
+        tier_policy_service=None,
+    )
+
+    assert explicit_zero.source == "deployment"
+    assert explicit_zero.customer_token_pricing is not None
+    assert explicit_zero.customer_token_pricing.input_cost_per_token == 0.0
+    assert explicit_zero.customer_pricing_fields == ("input_cost_per_token",)
+    assert legacy_nonzero.source == "deployment"
+    assert legacy_nonzero.customer_token_pricing is not None
+    assert legacy_nonzero.customer_token_pricing.input_cost_per_token == 0.25
+    assert legacy_nonzero.customer_pricing_fields == ("input_cost_per_token",)
+
+
+def test_token_quote_rejects_partial_regular_pricing_instead_of_filling_with_zero() -> None:
+    resolution = resolve_deployment_tier_pricing(
+        auth=UserAPIKeyAuth(api_key="key-1", organization_id="org-1"),
+        model="gpt-4o-mini",
+        deployment=_deployment(model_info={"output_cost_per_token": 0.25}),
+        tier_policy_service=None,
+    )
+
+    quote = resolve_token_quote_pricing(
+        resolution,
+        model="gpt-4o-mini",
+        prompt_tokens=100,
+        completion_tokens=0,
+    )
+
+    assert quote.pricing is None
+    assert quote.unpriced_reason == "no_configured_pricing"
+    assert quote.missing_pricing_fields == ("input_cost_per_token",)
+
+
+def test_token_quote_ignores_cache_only_metadata_for_ordinary_usage() -> None:
+    auth = UserAPIKeyAuth(api_key="key-1", organization_id="org-1")
+    known_resolution = resolve_deployment_tier_pricing(
+        auth=auth,
+        model="gpt-4o-mini",
+        deployment=_deployment(model_info={"input_cost_per_token_cache_hit": 0.25}),
+        tier_policy_service=None,
+    )
+    unknown_resolution = resolve_deployment_tier_pricing(
+        auth=auth,
+        model="unknown-model",
+        deployment=_deployment(model_info={"input_cost_per_token_cache_hit": 0.25}),
+        tier_policy_service=None,
+    )
+
+    known_quote = resolve_token_quote_pricing(
+        known_resolution,
+        model="gpt-4o-mini",
+        prompt_tokens=100,
+        completion_tokens=0,
+    )
+    unknown_quote = resolve_token_quote_pricing(
+        unknown_resolution,
+        model="unknown-model",
+        prompt_tokens=100,
+        completion_tokens=0,
+    )
+
+    assert known_quote.pricing is not None
+    assert known_quote.pricing.input_cost_per_token == 0.00000015
+    assert known_quote.pricing_fields_used == ("input_cost_per_token",)
+    assert known_quote.pricing_sources_used == ("default",)
+    assert unknown_quote.pricing is None
+    assert unknown_quote.missing_pricing_fields == ("input_cost_per_token",)
+
+
+def test_token_quote_preserves_explicit_zero_request_only_pricing() -> None:
+    resolution = resolve_deployment_tier_pricing(
+        auth=UserAPIKeyAuth(api_key="key-1", organization_id="org-1"),
+        model="unknown-model",
+        deployment=_deployment(model_info={"cost_per_request": 0.0}),
+        tier_policy_service=None,
+    )
+
+    quote = resolve_token_quote_pricing(
+        resolution,
+        model="unknown-model",
+        prompt_tokens=100,
+        completion_tokens=50,
+    )
+
+    assert quote.pricing is not None
+    assert quote.pricing.cost_per_request == 0.0
+    assert quote.request_only is True
+    assert quote.pricing_fields_used == ("cost_per_request",)
+    assert quote.pricing_sources_used == ("deployment",)
+
+
+def test_batch_token_quote_applies_multiplier_to_request_only_pricing() -> None:
+    resolution = resolve_deployment_tier_pricing(
+        auth=UserAPIKeyAuth(api_key="key-1", organization_id="org-1"),
+        model="unknown-model",
+        deployment=_deployment(
+            model_info={
+                "cost_per_request": 0.4,
+                "batch_price_multiplier": 0.5,
+            }
+        ),
+        tier_policy_service=None,
+        mode="batch",
+    )
+
+    quote = resolve_token_quote_pricing(
+        resolution,
+        model="unknown-model",
+        prompt_tokens=100,
+        completion_tokens=50,
+        mode="batch",
+    )
+
+    assert quote.pricing is not None
+    assert quote.pricing.cost_per_request == 0.2
+    assert quote.request_only is True
+    assert quote.pricing_fields_used == (
+        "cost_per_request",
+        "batch_price_multiplier",
+    )
+    assert quote.pricing_sources_used == ("deployment",)
+
+
+def test_sync_token_quote_ignores_batch_only_metadata_and_uses_catalog() -> None:
+    resolution = resolve_deployment_tier_pricing(
+        auth=UserAPIKeyAuth(api_key="key-1", organization_id="org-1"),
+        model="gpt-4o-mini",
+        deployment=_deployment(model_info={"batch_input_cost_per_token": 0.25}),
+        tier_policy_service=None,
+    )
+
+    quote = resolve_token_quote_pricing(
+        resolution,
+        model="gpt-4o-mini",
+        prompt_tokens=100,
+        completion_tokens=0,
+        mode="sync",
+    )
+
+    assert quote.pricing is not None
+    assert quote.pricing.input_cost_per_token == 0.00000015
+    assert quote.pricing_fields_used == ("input_cost_per_token",)
+    assert quote.pricing_sources_used == ("default",)
+
+
+def test_token_quote_reports_each_source_that_contributed_to_the_price() -> None:
+    service = _TierPricingService(
+        {("org-1", "model-a", "sync"): _policy({"input_cost_per_token": 0.1})}
+    )
+    resolution = resolve_deployment_tier_pricing(
+        auth=UserAPIKeyAuth(api_key="key-1", organization_id="org-1"),
+        model="model-a",
+        deployment=_deployment(
+            model_info={
+                "input_cost_per_token": 1.0,
+                "output_cost_per_token": 0.2,
+            }
+        ),
+        tier_policy_service=service,
+    )
+
+    quote = resolve_token_quote_pricing(
+        resolution,
+        model="model-a",
+        prompt_tokens=100,
+        completion_tokens=50,
+    )
+
+    assert quote.pricing is not None
+    assert quote.pricing.input_cost_per_token == 0.1
+    assert quote.pricing.output_cost_per_token == 0.2
+    assert quote.pricing_sources_used == ("deployment", "tier")
+
+
+def test_token_billing_ignores_cache_only_pricing_on_live_catalog_request() -> None:
+    resolution = resolve_deployment_tier_pricing(
+        auth=UserAPIKeyAuth(api_key="key-1", organization_id="org-1"),
+        model="gpt-4o-mini",
+        deployment=_deployment(
+            model_info={"input_cost_per_token_cache_hit": 0.25}
+        ),
+        tier_policy_service=None,
+    )
+
+    result = resolve_token_billing_result(
+        resolution,
+        model="gpt-4o-mini",
+        usage={"prompt_tokens": 100, "completion_tokens": 50},
+    )
+
+    assert result.billing.cost == 0.000045
+    assert result.billing.unpriced_reason is None
+    assert result.billing.pricing_fields_used == (
+        "input_cost_per_token",
+        "output_cost_per_token",
+    )
+    assert result.pricing_sources_used == ("default",)
+
+
+def test_token_billing_marks_unknown_cache_only_live_request_unpriced() -> None:
+    resolution = resolve_deployment_tier_pricing(
+        auth=UserAPIKeyAuth(api_key="key-1", organization_id="org-1"),
+        model="unknown-model",
+        deployment=_deployment(
+            model_info={"input_cost_per_token_cache_hit": 0.25}
+        ),
+        tier_policy_service=None,
+    )
+
+    result = resolve_token_billing_result(
+        resolution,
+        model="unknown-model",
+        usage={"prompt_tokens": 100, "completion_tokens": 50},
+    )
+
+    assert result.billing.cost == 0.0
+    assert result.billing.unpriced_reason == "no_configured_pricing"
+    assert result.billing.missing_pricing_fields == (
+        "input_cost_per_token",
+        "output_cost_per_token",
+    )
+
+
+def test_token_billing_combines_cache_override_with_catalog_output() -> None:
+    resolution = resolve_deployment_tier_pricing(
+        auth=UserAPIKeyAuth(api_key="key-1", organization_id="org-1"),
+        model="gpt-4o-mini",
+        deployment=_deployment(
+            model_info={"input_cost_per_token_cache_hit": 0.25}
+        ),
+        tier_policy_service=None,
+    )
+
+    result = resolve_token_billing_result(
+        resolution,
+        model="gpt-4o-mini",
+        usage={"prompt_tokens": 100, "completion_tokens": 50},
+        cache_hit=True,
+    )
+
+    assert result.billing.cost == 25.00003
+    assert result.billing.unpriced_reason is None
+    assert result.billing.pricing_fields_used == (
+        "input_cost_per_token_cache_hit",
+        "output_cost_per_token",
+    )
+    assert result.pricing_sources_used == ("default", "deployment")
+
+
+def test_token_billing_marks_partial_regular_pricing_unpriced() -> None:
+    resolution = resolve_deployment_tier_pricing(
+        auth=UserAPIKeyAuth(api_key="key-1", organization_id="org-1"),
+        model="gpt-4o-mini",
+        deployment=_deployment(model_info={"input_cost_per_token": 0.25}),
+        tier_policy_service=None,
+    )
+
+    result = resolve_token_billing_result(
+        resolution,
+        model="gpt-4o-mini",
+        usage={"prompt_tokens": 100, "completion_tokens": 50},
+    )
+
+    assert result.billing.cost == 0.0
+    assert result.billing.unpriced_reason == "no_configured_pricing"
+    assert result.billing.pricing_fields_used == ("input_cost_per_token",)
+    assert result.missing_pricing_fields == ("output_cost_per_token",)
+
+
+def test_token_billing_provider_view_ignores_customer_tier_override() -> None:
+    service = _TierPricingService(
+        {("org-1", "model-a", "sync"): _policy({"input_cost_per_token": 0.1})}
+    )
+    resolution = resolve_deployment_tier_pricing(
+        auth=UserAPIKeyAuth(api_key="key-1", organization_id="org-1"),
+        model="model-a",
+        deployment=_deployment(
+            model_info={
+                "input_cost_per_token": 1.0,
+                "output_cost_per_token": 2.0,
+            }
+        ),
+        tier_policy_service=service,
+    )
+
+    result = resolve_token_billing_result(
+        resolution,
+        model="model-a",
+        usage={"prompt_tokens": 10, "completion_tokens": 5},
+        pricing_view="provider",
+    )
+
+    assert result.billing.cost == 20.0
+    assert result.pricing_sources_used == ("deployment",)
 
 
 def test_tier_pricing_overrides_customer_price_and_preserves_provider_price() -> None:
@@ -343,6 +724,13 @@ def test_batch_resolution_falls_back_to_sync_tier_policy_when_batch_policy_absen
     ("mode", "usage", "tier_pricing", "expected_cost"),
     [
         ("image_generation", {"images": 2}, {"input_cost_per_image": 0.25}, 0.5),
+        ("image_generation", {"images": 2}, {"output_cost_per_image": 0.4}, 0.8),
+        (
+            "image_generation",
+            {"input_images": 1, "output_images": 2},
+            {"input_cost_per_image": 0.25, "output_cost_per_image": 0.4},
+            1.05,
+        ),
         ("audio_speech", {"input_characters": 1000}, {"input_cost_per_character": 0.002}, 2.0),
         (
             "audio_transcription",

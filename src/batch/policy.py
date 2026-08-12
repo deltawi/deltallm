@@ -95,28 +95,6 @@ async def run_batch_request_preflight(
     started = perf_counter()
     auth = await resolve_batch_job_auth(app, job)
     try:
-        grant_service = getattr(app.state, "callable_target_grant_service", None)
-        ensure_model_allowed(
-            auth,
-            str(getattr(payload, "model", "")),
-            callable_target_grant_service=grant_service,
-            tier_policy_service=getattr(app.state, "tier_policy_service", None),
-            policy_mode=get_callable_target_policy_mode_from_app(app),
-            tier_policy_mode=get_tier_policy_mode_from_app(app),
-            tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(app),
-            emit_shadow_log=True,
-        )
-
-        budget_service = getattr(app.state, "budget_service", None)
-        if budget_service is not None:
-            await budget_service.check_budgets(
-                api_key=getattr(job, "created_by_api_key", None),
-                user_id=auth.user_id,
-                team_id=auth.team_id,
-                organization_id=auth.organization_id,
-                model=str(getattr(payload, "model", "")),
-            )
-
         callback_manager: CallbackManager = getattr(app.state, "callback_manager", None) or CallbackManager()
         data = await callback_manager.execute_pre_call_hooks(
             user_api_key_dict=auth.model_dump(mode="json"),
@@ -134,6 +112,28 @@ async def run_batch_request_preflight(
             )
 
         transformed_payload = payload.__class__.model_validate(data)
+        transformed_model = str(getattr(transformed_payload, "model", ""))
+        grant_service = getattr(app.state, "callable_target_grant_service", None)
+        ensure_model_allowed(
+            auth,
+            transformed_model,
+            callable_target_grant_service=grant_service,
+            tier_policy_service=getattr(app.state, "tier_policy_service", None),
+            policy_mode=get_callable_target_policy_mode_from_app(app),
+            tier_policy_mode=get_tier_policy_mode_from_app(app),
+            tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(app),
+            emit_shadow_log=True,
+        )
+
+        budget_service = getattr(app.state, "budget_service", None)
+        if budget_service is not None:
+            await budget_service.check_budgets(
+                api_key=getattr(job, "created_by_api_key", None),
+                user_id=auth.user_id,
+                team_id=auth.team_id,
+                organization_id=auth.organization_id,
+                model=transformed_model,
+            )
     except Exception as exc:
         decision = classify_batch_retry(exc)
         record_batch_policy_failure(endpoint=endpoint, exc=exc)

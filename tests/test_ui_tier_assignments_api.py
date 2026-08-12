@@ -78,6 +78,7 @@ class _FakeTierAssignmentRepository:
         self.organizations = {"org-1"}
         self.assignments: dict[str, OrganizationTierAssignmentRecord] = {}
         self.upsert_error: str | None = None
+        self.upsert_exception: Exception | None = None
         self.require_active_version_for_enabled = False
         self.upsert_calls: list[dict[str, Any]] = []
         self.locked_assignment_reads: list[tuple[str, str]] = []
@@ -194,6 +195,8 @@ class _FakeTierAssignmentRepository:
             "metadata": metadata,
         }
         self.upsert_calls.append(call)
+        if self.upsert_exception is not None:
+            raise self.upsert_exception
         if self.upsert_error is not None:
             raise ValueError(self.upsert_error)
         if self.require_active_version_for_enabled and enabled:
@@ -306,6 +309,7 @@ class _FakeTierAssignmentTxContext:
         tx.organizations = set(self.root.organizations)
         tx.assignments = dict(self.root.assignments)
         tx.upsert_error = self.root.upsert_error
+        tx.upsert_exception = self.root.upsert_exception
         tx.require_active_version_for_enabled = self.root.require_active_version_for_enabled
         tx.locked_assignment_reads = self.root.locked_assignment_reads
         tx.delete_for_org_calls = self.root.delete_for_org_calls
@@ -570,17 +574,125 @@ async def test_org_tier_assignment_create_audits_non_fatal_tier_policy_reload_fa
 
 
 @pytest.mark.asyncio
-async def test_org_tier_assignment_requires_platform_admin(
+@pytest.mark.parametrize("org_role", [OrganizationRole.OWNER, OrganizationRole.ADMIN])
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        ("GET", "/ui/api/organizations/org-1/tier-assignments", None),
+        (
+            "POST",
+            "/ui/api/organizations/org-1/tier-assignments",
+            {"tier_id": "tier-1", "tier_version_id": "version-1"},
+        ),
+        (
+            "PATCH",
+            "/ui/api/organizations/org-1/tier-assignments/assignment-1",
+            {"enabled": False},
+        ),
+        (
+            "DELETE",
+            "/ui/api/organizations/org-1/tier-assignments/assignment-1",
+            None,
+        ),
+    ],
+)
+async def test_org_tier_assignment_routes_require_platform_admin(
+    client,
+    test_app,
+    monkeypatch,
+    org_role,
+    method,
+    path,
+    payload,
+) -> None:
+    _install_assignment_services(test_app, _FakeTierAssignmentRepository())
+    _set_auth_context(monkeypatch, _make_context(org_role=org_role))
+
+    request_kwargs = {"json": payload} if payload is not None else {}
+    response = await client.request(method, path, **request_kwargs)
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("org_role", [OrganizationRole.OWNER, OrganizationRole.ADMIN])
+async def test_org_roles_cannot_assign_tier_through_organization_create(
+    client,
+    test_app,
+    monkeypatch,
+    org_role,
+) -> None:
+    _set_auth_context(monkeypatch, _make_context(org_role=org_role))
+
+    response = await client.post(
+        "/ui/api/organizations",
+        json={
+            "organization_name": "Unauthorized tier assignment",
+            "primary_tier": {"tier_id": "tier-1"},
+        },
+    )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_org_admin_cannot_send_tier_fields_through_organization_settings(
     client,
     test_app,
     monkeypatch,
 ) -> None:
-    _install_assignment_services(test_app, _FakeTierAssignmentRepository())
+    test_app.state.prisma_manager = SimpleNamespace(client=object())
     _set_auth_context(monkeypatch, _make_context(org_role=OrganizationRole.ADMIN))
 
-    response = await client.get("/ui/api/organizations/org-1/tier-assignments")
+    response = await client.put(
+        "/ui/api/organizations/org-1",
+        json={"primary_tier": {"tier_id": "tier-2"}},
+    )
 
     assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Only platform admins can manage organization tier assignments"
+    )
+
+
+@pytest.mark.asyncio
+async def test_platform_admin_must_use_tier_assignment_endpoint(
+    client,
+    test_app,
+) -> None:
+    test_app.state.prisma_manager = SimpleNamespace(client=object())
+
+    response = await client.put(
+        "/ui/api/organizations/org-1",
+        headers=_headers(test_app),
+        json={"primary_tier": {"tier_id": "tier-2"}},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Tier assignments cannot be changed through organization settings; "
+        "use the organization tier-assignment endpoints"
+    )
+
+
+@pytest.mark.asyncio
+async def test_org_admin_cannot_change_model_specific_organization_policy(
+    client,
+    test_app,
+    monkeypatch,
+) -> None:
+    test_app.state.prisma_manager = SimpleNamespace(client=object())
+    _set_auth_context(monkeypatch, _make_context(org_role=OrganizationRole.ADMIN))
+
+    response = await client.put(
+        "/ui/api/organizations/org-1",
+        json={"model_rpm_limit": None, "model_tpm_limit": None},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Only platform admins can update model-specific organization policy"
+    )
 
 
 @pytest.mark.asyncio
@@ -601,6 +713,53 @@ async def test_org_tier_assignment_primary_conflict_returns_409(client, test_app
     )
     assert key_service.org_invalidation_attempts == []
     assert key_service.org_invalidations == []
+    assert test_app.state.cache_invalidation_outbox_repository.enqueues == []
+    assert audit.sync_calls == []
+
+
+@pytest.mark.asyncio
+async def test_org_tier_assignment_disabled_tier_conflict_returns_409(client, test_app) -> None:
+    repository = _FakeTierAssignmentRepository()
+    repository.upsert_error = "enabled tier assignments require an enabled tier"
+    audit, key_service = _install_assignment_services(test_app, repository)
+
+    response = await client.post(
+        "/ui/api/organizations/org-1/tier-assignments",
+        headers=_headers(test_app),
+        json={"tier_id": "tier-disabled", "assignment_type": "addon"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "enabled tier assignments require an enabled tier"
+    )
+    assert key_service.org_invalidation_attempts == []
+    assert test_app.state.cache_invalidation_outbox_repository.enqueues == []
+    assert audit.sync_calls == []
+
+
+@pytest.mark.asyncio
+async def test_org_tier_assignment_disabled_tier_database_race_returns_409(
+    client,
+    test_app,
+) -> None:
+    repository = _FakeTierAssignmentRepository()
+    repository.upsert_exception = RuntimeError(
+        "enabled tier assignments require an enabled tier"
+    )
+    audit, key_service = _install_assignment_services(test_app, repository)
+
+    response = await client.post(
+        "/ui/api/organizations/org-1/tier-assignments",
+        headers=_headers(test_app),
+        json={"tier_id": "tier-disabled", "assignment_type": "addon"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "enabled tier assignments require an enabled tier"
+    )
+    assert key_service.org_invalidation_attempts == []
     assert test_app.state.cache_invalidation_outbox_repository.enqueues == []
     assert audit.sync_calls == []
 

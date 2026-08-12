@@ -61,6 +61,7 @@ class _FakeTierRepository:
         self.model_policies: dict[str, list[TierModelPolicyRecord]] = {}
         self.capacity_pools: dict[str, list[TierCapacityPoolRecord]] = {}
         self.active_assignment_counts: dict[str, int] = {}
+        self.update_error: str | None = None
         self.publish_error: str | None = None
         self.archive_error: str | None = None
 
@@ -173,6 +174,8 @@ class _FakeTierRepository:
         existing = self.tiers.get(tier_id)
         if existing is None:
             return None
+        if self.update_error is not None:
+            raise RuntimeError(self.update_error)
         updated = replace(
             existing,
             tier_key=tier_key,
@@ -189,6 +192,9 @@ class _FakeTierRepository:
         return self.tiers.pop(tier_id, None) is not None
 
     async def count_active_tier_assignments(self, tier_id: str) -> int:
+        return int(self.active_assignment_counts.get(tier_id, 0))
+
+    async def count_live_or_scheduled_tier_assignments(self, tier_id: str) -> int:
         return int(self.active_assignment_counts.get(tier_id, 0))
 
     async def list_tier_versions(self, tier_id: str) -> list[TierVersionRecord]:
@@ -480,11 +486,59 @@ async def test_tier_admin_create_list_detail_update_and_audit(client, test_app):
 
 
 @pytest.mark.asyncio
-async def test_tier_admin_requires_platform_admin(client, test_app, monkeypatch):
+@pytest.mark.parametrize("org_role", [OrganizationRole.OWNER, OrganizationRole.ADMIN])
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        ("GET", "/ui/api/tiers", None),
+        ("POST", "/ui/api/tiers", {"tier_key": "blocked", "name": "Blocked"}),
+        ("GET", "/ui/api/tiers/tier-1", None),
+        ("PATCH", "/ui/api/tiers/tier-1", {"name": "Blocked"}),
+        ("DELETE", "/ui/api/tiers/tier-1", None),
+        ("POST", "/ui/api/tiers/tier-1/versions", {}),
+        ("GET", "/ui/api/tiers/tier-1/versions/version-1", None),
+        ("POST", "/ui/api/tiers/tier-1/versions/version-1/clone", None),
+        ("PUT", "/ui/api/tiers/tier-1/versions/version-1/model-policies", {"policies": []}),
+        ("PUT", "/ui/api/tiers/tier-1/versions/version-1/capacity-pools", {"pools": []}),
+        ("POST", "/ui/api/tiers/tier-1/versions/version-1/publish", None),
+        ("POST", "/ui/api/tiers/tier-1/versions/version-1/archive", None),
+        ("GET", "/ui/api/tier-capacity/dashboard", None),
+        (
+            "POST",
+            "/ui/api/tier-capacity/boosts",
+            {
+                "organization_id": "org-1",
+                "pool_key": "shared",
+                "callable_key": "gpt-4o-mini",
+            },
+        ),
+        (
+            "DELETE",
+            "/ui/api/tier-capacity/boosts?organization_id=org-1&pool_key=shared&callable_key=gpt-4o-mini",
+            None,
+        ),
+        ("GET", "/ui/api/organizations/org-1/tier-policy-preview", None),
+        (
+            "POST",
+            "/ui/api/organizations/org-1/tier-policy/simulate",
+            {"callable_key": "gpt-4o-mini"},
+        ),
+    ],
+)
+async def test_tier_admin_routes_require_platform_admin(
+    client,
+    test_app,
+    monkeypatch,
+    org_role,
+    method,
+    path,
+    payload,
+):
     test_app.state.tier_repository = _FakeTierRepository()
-    _set_auth_context(monkeypatch, _make_context(org_role=OrganizationRole.ADMIN))
+    _set_auth_context(monkeypatch, _make_context(org_role=org_role))
 
-    response = await client.get("/ui/api/tiers")
+    request_kwargs = {"json": payload} if payload is not None else {}
+    response = await client.request(method, path, **request_kwargs)
 
     assert response.status_code == 403
 
@@ -858,6 +912,47 @@ async def test_tier_admin_delete_rejects_active_assignment(client, test_app):
 
 
 @pytest.mark.asyncio
+async def test_tier_admin_disable_rejects_live_or_scheduled_assignment(client, test_app):
+    repository = _FakeTierRepository()
+    repository.seed_tier()
+    repository.active_assignment_counts["tier-1"] = 1
+    test_app.state.tier_repository = repository
+
+    response = await client.patch(
+        "/ui/api/tiers/tier-1",
+        headers=_headers(test_app),
+        json={"enabled": False},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "Tier has enabled live or scheduled organization assignments"
+    )
+    assert repository.tiers["tier-1"].enabled is True
+
+
+@pytest.mark.asyncio
+async def test_tier_admin_disable_maps_database_race_to_conflict(client, test_app):
+    repository = _FakeTierRepository()
+    repository.seed_tier()
+    repository.update_error = (
+        "cannot disable tier while enabled organization assignments exist"
+    )
+    test_app.state.tier_repository = repository
+
+    response = await client.patch(
+        "/ui/api/tiers/tier-1",
+        headers=_headers(test_app),
+        json={"enabled": False},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "Tier has enabled live or scheduled organization assignments"
+    )
+
+
+@pytest.mark.asyncio
 async def test_tier_admin_publish_non_draft_returns_conflict(client, test_app):
     repository = _FakeTierRepository()
     repository.seed_tier()
@@ -910,6 +1005,59 @@ async def test_tier_capacity_dashboard_endpoint_returns_snapshot_pools(client, t
     assert payload["saturated_pool_count"] == 0
     assert payload["limit_hit_count"] == 0
     assert payload["pool_scan_truncated"] is False
+    assert payload["live_data"] == {
+        "status": "healthy",
+        "redis_available": True,
+        "failed_sections": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_tier_capacity_dashboard_marks_live_values_unavailable_without_redis(
+    client,
+    test_app,
+):
+    pool = CompiledTierCapacityPoolPolicy(
+        pool_key="shared",
+        callable_key="gpt-4o-mini",
+        rpm_capacity=100,
+        tpm_capacity=10_000,
+        max_parallel_requests=20,
+        strategy="weighted_fair",
+        saturation_threshold=0.8,
+        burst_multiplier=None,
+        source_tier_version_ids=("version-1",),
+        source_pool_ids=("pool-1",),
+    )
+    test_app.state.tier_policy_service = _SnapshotTierPolicyService(
+        _capacity_dashboard_snapshot(pool)
+    )
+    test_app.state.redis = None
+
+    response = await client.get(
+        "/ui/api/tier-capacity/dashboard",
+        headers=_headers(test_app),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["live_data"]["status"] == "unavailable"
+    assert payload["live_data"]["redis_available"] is False
+    assert payload["live_data"]["failed_sections"] == [
+        "active_boosts",
+        "cleanup_lag",
+        "limit_hit_heatmap",
+        "limit_hit_total",
+        "pool_usage",
+        "top_orgs",
+    ]
+    assert payload["saturated_pool_count"] is None
+    assert payload["limit_hit_count"] is None
+    assert payload["pools"][0]["rpm_used"] is None
+    assert payload["pools"][0]["tpm_used"] is None
+    assert payload["pools"][0]["active_org_count"] is None
+    assert payload["pools"][0]["active_boost_count"] is None
+    assert payload["pools"][0]["cleanup_lagged"] is None
 
 
 @pytest.mark.asyncio
@@ -969,6 +1117,16 @@ async def test_tier_capacity_boost_endpoint_writes_deletes_and_audits(client, te
     actions = [event.action for event, _ in audit.sync_calls]
     assert AuditAction.ADMIN_TIER_CAPACITY_BOOST_UPSERT.value in actions
     assert AuditAction.ADMIN_TIER_CAPACITY_BOOST_DELETE.value in actions
+    boost_events = [
+        event
+        for event, _ in audit.sync_calls
+        if event.action
+        in {
+            AuditAction.ADMIN_TIER_CAPACITY_BOOST_UPSERT.value,
+            AuditAction.ADMIN_TIER_CAPACITY_BOOST_DELETE.value,
+        }
+    ]
+    assert [event.organization_id for event in boost_events] == ["org-1", "org-1"]
 
 
 @pytest.mark.asyncio

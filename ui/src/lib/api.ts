@@ -1222,6 +1222,76 @@ export interface OrganizationTierAssignmentPayload {
   metadata?: Record<string, unknown> | null;
 }
 
+export interface OrganizationPrimaryTierSummary {
+  assignment_id?: string | null;
+  tier_id?: string | null;
+  tier_key?: string | null;
+  tier_name?: string | null;
+  tier_version_id?: string | null;
+  tier_version_number?: number | null;
+  follows_active_version: boolean;
+}
+
+export interface OrganizationServicePolicy {
+  source: 'tier' | 'legacy';
+  runtime_source: 'tier' | 'legacy';
+  tier_authoritative: boolean;
+  tier_policy_mode: 'disabled' | 'shadow' | 'enforce' | string;
+  primary_tier: OrganizationPrimaryTierSummary | null;
+  active_assignment_count: number;
+  overlay_count: number;
+  hard_caps_configured: boolean;
+  organization_hard_caps: Partial<Record<'rpm_limit' | 'tpm_limit' | 'rph_limit' | 'rpd_limit' | 'tpd_limit', number>>;
+  legacy_model_limits_configured: boolean;
+}
+
+export interface OrganizationRecord {
+  organization_id: string;
+  organization_name?: string | null;
+  max_budget?: number | null;
+  soft_budget?: number | null;
+  spend?: number | null;
+  budget_duration?: string | null;
+  budget_reset_at?: string | null;
+  rpm_limit?: number | null;
+  tpm_limit?: number | null;
+  rph_limit?: number | null;
+  rpd_limit?: number | null;
+  tpd_limit?: number | null;
+  model_rpm_limit?: Record<string, number> | null;
+  model_tpm_limit?: Record<string, number> | null;
+  audit_content_storage_enabled?: boolean | null;
+  service_policy: OrganizationServicePolicy;
+  primary_tier_assignment?: OrganizationTierAssignment;
+  capabilities?: Record<string, boolean>;
+  team_count?: number;
+  member_count?: number;
+  user_count?: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+  [key: string]: unknown;
+}
+
+export interface OrganizationCreatePayload {
+  organization_name: string;
+  legacy_policy_exception?: boolean;
+  primary_tier?: {
+    tier_id: string;
+    tier_version_id?: string | null;
+  };
+  max_budget?: number;
+  soft_budget?: number;
+  budget_duration?: string;
+  budget_reset_at?: string;
+  rpm_limit?: number;
+  tpm_limit?: number;
+  rph_limit?: number;
+  rpd_limit?: number;
+  tpd_limit?: number;
+  audit_content_storage_enabled?: boolean;
+  callable_target_bindings?: Array<{ callable_key: string }>;
+}
+
 export interface TierPolicySnapshotInfo {
   etag: string;
   generated_at: string;
@@ -1289,8 +1359,21 @@ export interface OrganizationTierPolicyPreview {
   model_policies: TierCompiledModelPolicy[];
   pricing_policies: TierCompiledPricingPolicy[];
   rate_limits: TierRateLimitDescriptor[];
+  organization_hard_caps: Partial<Record<
+    'rpm_limit' | 'tpm_limit' | 'rph_limit' | 'rpd_limit' | 'tpd_limit' | 'model_rpm_limit' | 'model_tpm_limit',
+    number | Record<string, number>
+  >>;
+  organization_rate_limits: TierRateLimitDescriptor[];
   capacity_pools: TierCompiledCapacityPool[];
 }
+
+export type TierSimulationBillingMode =
+  | 'chat'
+  | 'embedding'
+  | 'rerank'
+  | 'image_generation'
+  | 'audio_speech'
+  | 'audio_transcription';
 
 export interface TierPolicySimulation {
   organization_id: string;
@@ -1302,6 +1385,8 @@ export interface TierPolicySimulation {
     completion_tokens: number;
     tokens_per_request: number;
     aggregate_tokens: number;
+    billing_mode: TierSimulationBillingMode | null;
+    usage: Record<string, number>;
   };
   access: {
     allowed: boolean;
@@ -1309,9 +1394,42 @@ export interface TierPolicySimulation {
     explicit_policy: boolean;
     tier_keys: string[];
   };
+  decision: {
+    allowed: boolean;
+    reason: string;
+    primary_limiting_scope: string | null;
+    limiting_scopes: string[];
+    basis: 'empty_window_static';
+    live_capacity_evaluated: false;
+  };
   model_policy: TierCompiledModelPolicy | null;
   pricing: TierCompiledPricingPolicy | null;
+  calculated_price: {
+    status: 'available' | 'partial' | 'unavailable';
+    reason: string | null;
+    currency: string;
+    kind: 'exact' | 'range' | null;
+    amount: number | null;
+    minimum_amount: number | null;
+    maximum_amount: number | null;
+    request_count: number;
+    amount_scope: 'aggregate';
+    per_request_amount: number | null;
+    per_request_minimum_amount: number | null;
+    per_request_maximum_amount: number | null;
+    billing_mode: TierSimulationBillingMode | null;
+    usage_snapshot: Record<string, number>;
+    configured_candidate_count: number;
+    priced_candidate_count: number;
+    unpriced_candidate_count: number;
+    unevaluated_candidate_count: number;
+    unpriced_reasons: string[];
+    pricing_sources: string[];
+    basis: 'configured_routes';
+  };
   rate_limits: TierRateLimitDescriptor[];
+  organization_hard_caps: OrganizationTierPolicyPreview['organization_hard_caps'];
+  organization_rate_limits: TierRateLimitDescriptor[];
   capacity_pool: TierCompiledCapacityPool | null;
   capacity_pool_rate_limits: TierRateLimitDescriptor[];
   static_limit_checks: Array<TierRateLimitDescriptor & {
@@ -1325,9 +1443,17 @@ export interface TierPolicySimulation {
 export interface TierPolicySimulationPayload {
   callable_key: string;
   mode?: string;
+  billing_mode?: TierSimulationBillingMode;
   request_count?: number;
   prompt_tokens?: number;
   completion_tokens?: number;
+  input_images?: number;
+  output_images?: number;
+  input_characters?: number;
+  output_characters?: number;
+  input_audio_tokens?: number;
+  output_audio_tokens?: number;
+  duration_seconds?: number;
 }
 
 export interface TierCapacityDashboardOrgUsage {
@@ -1351,18 +1477,18 @@ export interface TierCapacityDashboardPool {
   advanced_fair_share: boolean;
   rpm_capacity?: number | null;
   tpm_capacity?: number | null;
-  rpm_used: number;
-  tpm_used: number;
+  rpm_used: number | null;
+  tpm_used: number | null;
   rpm_saturation?: number | null;
   tpm_saturation?: number | null;
   saturation_threshold?: number | null;
   burst_multiplier?: number | null;
   member_count: number;
-  active_org_count: number;
+  active_org_count: number | null;
   top_orgs: TierCapacityDashboardOrgUsage[];
   active_boosts: TierCapacityDashboardBoost[];
-  active_boost_count: number;
-  cleanup_lagged?: boolean;
+  active_boost_count: number | null;
+  cleanup_lagged?: boolean | null;
 }
 
 export interface TierCapacityLimitHit {
@@ -1385,11 +1511,16 @@ export interface TierCapacityDashboard {
   pool_scan_limit: number;
   pool_scan_truncated: boolean;
   advanced_pool_count: number;
-  saturated_pool_count: number;
+  saturated_pool_count: number | null;
   pool_limit: number;
   truncated: boolean;
-  limit_hit_count: number;
+  limit_hit_count: number | null;
   limit_hit_heatmap: TierCapacityLimitHit[];
+  live_data: {
+    status: 'healthy' | 'partial' | 'unavailable';
+    redis_available: boolean;
+    failed_sections: string[];
+  };
 }
 
 export interface TierCapacityBoostPayload {
@@ -1473,9 +1604,10 @@ export const tiers = {
 
 export const organizations = {
   list: (params?: { search?: string; limit?: number; offset?: number }) =>
-    apiFetch<Paginated<any>>(withQuery('/ui/api/organizations', params as any)),
-  get: (orgId: string) => apiFetch<any>(`/ui/api/organizations/${encodeURIComponent(orgId)}`),
-  create: (payload: any) => apiFetch<any>('/ui/api/organizations', { method: 'POST', json: payload }),
+    apiFetch<Paginated<OrganizationRecord>>(withQuery('/ui/api/organizations', params as any)),
+  get: (orgId: string) => apiFetch<OrganizationRecord>(`/ui/api/organizations/${encodeURIComponent(orgId)}`),
+  create: (payload: OrganizationCreatePayload) =>
+    apiFetch<OrganizationRecord>('/ui/api/organizations', { method: 'POST', json: payload }),
   update: (orgId: string, payload: any) =>
     apiFetch<any>(`/ui/api/organizations/${encodeURIComponent(orgId)}`, { method: 'PUT', json: payload }),
   members: (orgId: string) => apiFetch<any[]>(`/ui/api/organizations/${encodeURIComponent(orgId)}/members`),

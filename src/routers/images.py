@@ -12,7 +12,7 @@ from src.billing.cost import compute_billing_result
 from src.billing.tier_pricing import attach_pricing_metadata, resolve_deployment_tier_pricing
 from src.callbacks import CallbackManager, build_standard_logging_payload
 from src.middleware.auth import require_api_key
-from src.middleware.rate_limit import enforce_rate_limits
+from src.middleware.rate_limit import check_and_acquire_rate_limits_for_payload
 from src.metrics import (
     increment_request,
     increment_request_failure,
@@ -107,7 +107,7 @@ async def _execute_image_generation(
     return data
 
 
-@router.post("/images/generations", dependencies=[Depends(require_api_key), Depends(enforce_rate_limits)])
+@router.post("/images/generations", dependencies=[Depends(require_api_key)])
 async def image_generations(request: Request, payload: ImageGenerationRequest):
     request_start = perf_counter()
     callback_start = datetime.now(tz=UTC)
@@ -133,6 +133,11 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
 
     callback_manager: CallbackManager = getattr(request.app.state, "callback_manager", CallbackManager())
     request_data = payload.model_dump(exclude_none=True)
+    await check_and_acquire_rate_limits_for_payload(
+        request,
+        model=payload.model,
+        payload=request_data,
+    )
 
     app_router = request.app.state.router
     model_group = app_router.resolve_model_group(payload.model)
@@ -173,7 +178,8 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
         data.pop("_model_info", None)
 
         num_images = len(data.get("data", []))
-        usage = {"images": num_images}
+        # `images` remains for router/spend compatibility; generated images are outputs.
+        usage = {"images": num_images, "output_images": num_images}
         await record_router_usage(
             request.app.state.router_state_backend,
             served_deployment.deployment_id,
@@ -198,6 +204,9 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
             model_info=pricing.provider_model_info,
         )
         request_cost = billing.cost
+        provider_cost = (
+            None if provider_billing.unpriced_reason is not None else provider_billing.cost
+        )
         increment_request(
             model=payload.model, api_provider=api_provider,
             api_key=auth.api_key, user=auth.user_id, team=auth.team_id, status_code=200,
@@ -226,8 +235,9 @@ async def image_generations(request: Request, payload: ImageGenerationRequest):
                             "deployment_model": deployment_model,
                         },
                         pricing,
-                        provider_cost=provider_billing.cost,
+                        provider_cost=provider_cost,
                         billing=billing,
+                        provider_billing=provider_billing,
                     ),
                     request,
                 ),

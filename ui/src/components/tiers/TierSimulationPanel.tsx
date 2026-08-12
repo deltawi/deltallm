@@ -1,24 +1,26 @@
 import { Play, ShieldCheck, ShieldX } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useState } from 'react';
-import type { TierPolicySimulation, TierPolicySimulationPayload } from '../../lib/api';
+import type {
+  TierPolicySimulation,
+  TierPolicySimulationPayload,
+  TierSimulationBillingMode,
+} from '../../lib/api';
 import {
   describeRateLimit,
   errorMessage,
+  formatSimulationPerRequestPrice,
+  formatSimulationPrice,
   formatPricingValue,
-  parseNonNegativeIntegerInput,
-  parsePositiveIntegerInput,
   pricingEntries,
   summarizePricing,
   summarizeSimulation,
+  tierSimulationFormToPayload,
+  type TierSimulationFormValues,
 } from '../../lib/tiers';
 
-type SimulationForm = {
+type SimulationForm = TierSimulationFormValues & {
   callable_key: string;
-  mode: string;
-  request_count: string;
-  prompt_tokens: string;
-  completion_tokens: string;
 };
 
 type TierSimulationPanelProps = {
@@ -32,9 +34,19 @@ type TierSimulationPanelProps = {
 const INITIAL_FORM: SimulationForm = {
   callable_key: '',
   mode: 'sync',
+  billing_mode: 'chat',
   request_count: '1',
   prompt_tokens: '1000',
   completion_tokens: '500',
+  audio_prompt_tokens: '0',
+  audio_completion_tokens: '0',
+  input_images: '0',
+  output_images: '1',
+  input_characters: '1000',
+  output_characters: '0',
+  input_audio_tokens: '0',
+  output_audio_tokens: '0',
+  duration_seconds: '60',
 };
 
 export default function TierSimulationPanel({
@@ -51,13 +63,8 @@ export default function TierSimulationPanel({
   const handleRun = async () => {
     try {
       setLocalError(null);
-      await onRun({
-        callable_key: selectedCallable,
-        mode: form.mode,
-        request_count: parsePositiveIntegerInput(form.request_count, 'Requests'),
-        prompt_tokens: parseNonNegativeIntegerInput(form.prompt_tokens, 'Prompt tokens'),
-        completion_tokens: parseNonNegativeIntegerInput(form.completion_tokens, 'Output tokens'),
-      });
+      const payload = tierSimulationFormToPayload(form, selectedCallable);
+      await onRun(payload);
     } catch (err: unknown) {
       setLocalError(errorMessage(err, 'Simulation failed.'));
     }
@@ -96,7 +103,7 @@ export default function TierSimulationPanel({
             </datalist>
           </Field>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Mode">
+            <Field label="Pricing mode">
               <select
                 value={form.mode}
                 onChange={(event) => setForm({ ...form, mode: event.target.value })}
@@ -115,24 +122,88 @@ export default function TierSimulationPanel({
               />
             </Field>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Prompt tokens">
-              <input
-                value={form.prompt_tokens}
-                onChange={(event) => setForm({ ...form, prompt_tokens: event.target.value })}
-                inputMode="numeric"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </Field>
-            <Field label="Output tokens">
-              <input
-                value={form.completion_tokens}
-                onChange={(event) => setForm({ ...form, completion_tokens: event.target.value })}
-                inputMode="numeric"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </Field>
-          </div>
+          <Field label="Workload type">
+            <select
+              value={form.billing_mode}
+              onChange={(event) => setForm({ ...form, billing_mode: event.target.value as TierSimulationBillingMode })}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="chat">Chat / completion</option>
+              <option value="embedding">Embedding</option>
+              <option value="rerank">Rerank</option>
+              <option value="image_generation">Image generation</option>
+              <option value="audio_speech">Audio speech</option>
+              <option value="audio_transcription">Audio transcription</option>
+            </select>
+          </Field>
+          {['chat', 'embedding', 'rerank'].includes(form.billing_mode) ? (
+            <div className="grid grid-cols-2 gap-3">
+              <Field label={form.billing_mode === 'rerank' ? 'Input units / tokens' : 'Prompt tokens'}>
+                <input
+                  value={form.prompt_tokens}
+                  onChange={(event) => setForm({ ...form, prompt_tokens: event.target.value })}
+                  inputMode="numeric"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </Field>
+              {form.billing_mode === 'chat' ? (
+                <Field label="Output tokens">
+                  <input
+                    value={form.completion_tokens}
+                    onChange={(event) => setForm({ ...form, completion_tokens: event.target.value })}
+                    inputMode="numeric"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </Field>
+              ) : null}
+            </div>
+          ) : null}
+          {form.billing_mode === 'image_generation' ? (
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Input images">
+                <input
+                  value={form.input_images}
+                  onChange={(event) => setForm({ ...form, input_images: event.target.value })}
+                  inputMode="numeric"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </Field>
+              <Field label="Generated images">
+                <input
+                  value={form.output_images}
+                  onChange={(event) => setForm({ ...form, output_images: event.target.value })}
+                  inputMode="numeric"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </Field>
+            </div>
+          ) : null}
+          {form.billing_mode === 'audio_speech' ? (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Input characters">
+                  <input
+                    value={form.input_characters}
+                    onChange={(event) => setForm({ ...form, input_characters: event.target.value })}
+                    inputMode="numeric"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </Field>
+                <Field label="Output characters">
+                  <input
+                    value={form.output_characters}
+                    onChange={(event) => setForm({ ...form, output_characters: event.target.value })}
+                    inputMode="numeric"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </Field>
+              </div>
+              <AudioUsageFields form={form} setForm={setForm} includeOutputAudioTokens />
+            </>
+          ) : null}
+          {form.billing_mode === 'audio_transcription' ? (
+            <AudioUsageFields form={form} setForm={setForm} />
+          ) : null}
           {localError || error ? (
             <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">{localError || error}</div>
           ) : null}
@@ -147,16 +218,18 @@ export default function TierSimulationPanel({
             <div className="space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
-                  {simulation.access.allowed
+                  {simulation.decision.allowed
                     ? <ShieldCheck className="h-5 w-5 text-emerald-600" />
                     : <ShieldX className="h-5 w-5 text-red-600" />}
                   <div>
                     <p className="text-sm font-semibold text-gray-900">{summarizeSimulation(simulation)}</p>
-                    <p className="font-mono text-xs text-gray-400">{simulation.access.reason}</p>
+                    <p className="font-mono text-xs text-gray-400">
+                      {simulation.decision.primary_limiting_scope || simulation.decision.reason}
+                    </p>
                   </div>
                 </div>
                 <span className="rounded bg-white px-2 py-1 text-xs font-semibold text-gray-600">
-                  {simulation.mode} · {simulation.request.aggregate_tokens.toLocaleString()} total tokens
+                  {simulation.mode} · {formatBillingMode(simulation.request.billing_mode)} · {summarizeUsage(simulation.request.usage)}
                 </span>
               </div>
 
@@ -175,9 +248,29 @@ export default function TierSimulationPanel({
               ) : null}
 
               <div>
+                <p className="mb-2 text-xs font-semibold uppercase text-gray-400">
+                  Total customer price
+                </p>
+                <p className={`text-sm font-semibold ${simulation.calculated_price.status === 'available' ? 'text-gray-800' : 'text-amber-700'}`}>
+                  {formatSimulationPrice(simulation.calculated_price)}
+                </p>
+                <p className="mt-1 text-xs text-gray-500">
+                  {simulation.calculated_price.request_count}{' '}
+                  {simulation.calculated_price.request_count === 1 ? 'request' : 'requests'} total
+                  {formatSimulationPerRequestPrice(simulation.calculated_price)
+                    ? ` · ${formatSimulationPerRequestPrice(simulation.calculated_price)} per request`
+                    : ''}
+                  . Based on configured routes; live health and routing selection are not evaluated.
+                </p>
+              </div>
+
+              <div>
                 <p className="mb-2 text-xs font-semibold uppercase text-gray-400">Static Limit Checks</p>
+                <p className="mb-2 text-xs text-gray-500">
+                  Assumes an empty rate-limit window. Live fair-share capacity and in-flight requests are not evaluated.
+                </p>
                 {simulation.static_limit_checks.length === 0 ? (
-                  <p className="text-sm text-gray-400">No tier limit checks for this request shape.</p>
+                  <p className="text-sm text-gray-400">No tier, capacity-pool, or organization hard-cap checks apply to this request shape.</p>
                 ) : (
                   <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                     {simulation.static_limit_checks.map((check) => (
@@ -216,4 +309,75 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       {children}
     </label>
   );
+}
+
+function AudioUsageFields({
+  form,
+  setForm,
+  includeOutputAudioTokens = false,
+}: {
+  form: SimulationForm;
+  setForm: (value: SimulationForm) => void;
+  includeOutputAudioTokens?: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      <Field label="Text input tokens">
+        <input
+          value={form.audio_prompt_tokens}
+          onChange={(event) => setForm({ ...form, audio_prompt_tokens: event.target.value })}
+          inputMode="numeric"
+          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      </Field>
+      <Field label="Text output tokens">
+        <input
+          value={form.audio_completion_tokens}
+          onChange={(event) => setForm({ ...form, audio_completion_tokens: event.target.value })}
+          inputMode="numeric"
+          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      </Field>
+      <Field label="Input audio tokens">
+        <input
+          value={form.input_audio_tokens}
+          onChange={(event) => setForm({ ...form, input_audio_tokens: event.target.value })}
+          inputMode="numeric"
+          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      </Field>
+      {includeOutputAudioTokens ? (
+        <Field label="Output audio tokens">
+          <input
+            value={form.output_audio_tokens}
+            onChange={(event) => setForm({ ...form, output_audio_tokens: event.target.value })}
+            inputMode="numeric"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </Field>
+      ) : null}
+      <Field label="Duration seconds">
+        <input
+          value={form.duration_seconds}
+          onChange={(event) => setForm({ ...form, duration_seconds: event.target.value })}
+          inputMode="decimal"
+          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      </Field>
+    </div>
+  );
+}
+
+function formatBillingMode(mode: TierSimulationBillingMode | null): string {
+  if (!mode) return 'unknown workload';
+  return mode.replaceAll('_', ' ');
+}
+
+function summarizeUsage(usage: Record<string, number>): string {
+  const entries = Object.entries(usage).filter(([, value]) => Number(value) > 0);
+  if (entries.length === 0) return 'zero usage';
+  return entries
+    .slice(0, 2)
+    .map(([key, value]) => `${Number(value).toLocaleString()} ${key.replaceAll('_', ' ')}`)
+    .join(' · ');
 }

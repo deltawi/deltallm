@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from datetime import UTC, datetime
 from typing import Any, Mapping, Sequence
 
@@ -66,8 +66,8 @@ class _PoolDashboardCandidate:
     pool: CompiledTierCapacityPoolPolicy
     advanced: bool
     member_count: int
-    rpm_used: int
-    tpm_used: int
+    rpm_used: int | None
+    tpm_used: int | None
     rpm_saturation: float | None
     tpm_saturation: float | None
     heatmap_hits: int
@@ -75,6 +75,34 @@ class _PoolDashboardCandidate:
     @property
     def ref(self) -> _PoolRef:
         return (self.pool.pool_key, self.pool.callable_key)
+
+
+@dataclass(slots=True)
+class _DashboardLiveDataStatus:
+    redis_configured: bool
+    successful_sections: set[str] = dataclass_field(default_factory=set)
+    failed_sections: set[str] = dataclass_field(default_factory=set)
+
+    def success(self, section: str) -> None:
+        if section not in self.failed_sections:
+            self.successful_sections.add(section)
+
+    def failure(self, section: str) -> None:
+        self.successful_sections.discard(section)
+        self.failed_sections.add(section)
+
+    def serialize(self) -> dict[str, Any]:
+        if self.failed_sections and self.successful_sections:
+            status = "partial"
+        elif self.failed_sections:
+            status = "unavailable"
+        else:
+            status = "healthy"
+        return {
+            "status": status,
+            "redis_available": bool(self.redis_configured and self.successful_sections),
+            "failed_sections": sorted(self.failed_sections),
+        }
 
 
 def is_advanced_capacity_pool_strategy(strategy: object) -> bool:
@@ -201,10 +229,12 @@ async def build_tier_capacity_dashboard(
     now_ms = int(timestamp * 1000)
     normalized_top_org_limit = min(DASHBOARD_MAX_TOP_ORG_LIMIT, max(1, int(top_org_limit)))
     normalized_pool_limit = min(DASHBOARD_MAX_POOL_LIMIT, max(1, int(pool_limit)))
+    live_data = _DashboardLiveDataStatus(redis_configured=redis_client is not None)
     heatmap = await _read_limit_hit_heatmap(
         redis_client,
         window_id=window_id,
         limit=DASHBOARD_HEATMAP_LIMIT,
+        live_data=live_data,
     )
     heatmap_hits = _pool_heatmap_hit_map(heatmap)
 
@@ -214,6 +244,7 @@ async def build_tier_capacity_dashboard(
         redis_client=redis_client,
         pools=scanned_pools,
         window_id=window_id,
+        live_data=live_data,
     )
     candidates = _pool_dashboard_candidates(
         snapshot=snapshot,
@@ -228,28 +259,41 @@ async def build_tier_capacity_dashboard(
         candidates=visible_candidates,
         window_id=window_id,
         limit=normalized_top_org_limit,
+        live_data=live_data,
     )
     boosts_by_pool, boost_counts_by_pool = await _active_boosts_for_pools(
         redis_client=redis_client,
         candidates=visible_candidates,
         now_ms=now_ms,
+        live_data=live_data,
     )
     cleanup_lagged_by_pool = await _cleanup_lagged_for_pools(
         redis_client=redis_client,
         candidates=visible_candidates,
+        live_data=live_data,
     )
     visible_pool_summaries = [
         _pool_summary(
             candidate,
-            active_org_count=active_counts_by_pool.get(candidate.ref, 0),
+            active_org_count=active_counts_by_pool.get(candidate.ref),
             top_orgs=top_orgs_by_pool.get(candidate.ref, []),
             active_boosts=boosts_by_pool.get(candidate.ref, []),
-            active_boost_count=boost_counts_by_pool.get(candidate.ref, 0),
-            cleanup_lagged=cleanup_lagged_by_pool.get(candidate.ref, False),
+            active_boost_count=boost_counts_by_pool.get(candidate.ref),
+            cleanup_lagged=cleanup_lagged_by_pool.get(candidate.ref),
         )
         for candidate in visible_candidates
     ]
 
+    limit_hit_count = await _read_limit_hit_total(
+        redis_client,
+        window_id=window_id,
+        fallback_heatmap=heatmap,
+        live_data=live_data,
+    )
+    pool_usage_available = all(
+        candidate.rpm_used is not None and candidate.tpm_used is not None
+        for candidate in candidates
+    )
     return {
         "snapshot": _snapshot_info(tier_policy_service, snapshot),
         "window_seconds": FAIR_SHARE_WINDOW_SECONDS,
@@ -261,15 +305,16 @@ async def build_tier_capacity_dashboard(
         "pool_scan_limit": DASHBOARD_MAX_POOL_SCAN_LIMIT,
         "pool_scan_truncated": len(pools) > len(scanned_pools),
         "advanced_pool_count": sum(1 for pool in pools if is_advanced_capacity_pool_strategy(pool.strategy)),
-        "saturated_pool_count": sum(1 for candidate in candidates if _candidate_is_saturated(candidate)),
+        "saturated_pool_count": (
+            sum(1 for candidate in candidates if _candidate_is_saturated(candidate))
+            if pool_usage_available
+            else None
+        ),
         "pool_limit": normalized_pool_limit,
         "truncated": len(candidates) > len(visible_pool_summaries),
-        "limit_hit_count": await _read_limit_hit_total(
-            redis_client,
-            window_id=window_id,
-            fallback_heatmap=heatmap,
-        ),
+        "limit_hit_count": limit_hit_count,
         "limit_hit_heatmap": heatmap,
+        "live_data": live_data.serialize(),
     }
 
 
@@ -347,8 +392,8 @@ def _window_id(window_seconds: int = FAIR_SHARE_WINDOW_SECONDS, *, timestamp: fl
     return math.floor((timestamp if timestamp is not None else time.time()) / window_seconds)
 
 
-def _ratio(value: int, limit: int | None) -> float | None:
-    if limit is None or limit <= 0:
+def _ratio(value: int | None, limit: int | None) -> float | None:
+    if value is None or limit is None or limit <= 0:
         return None
     return max(0.0, float(value) / float(limit))
 
@@ -378,15 +423,24 @@ def _snapshot_info(tier_policy_service: Any, snapshot: TierPolicySnapshot) -> di
     }
 
 
-async def _mget_ints(redis_client: Any | None, keys: tuple[str, ...]) -> tuple[int, ...]:
-    if redis_client is None:
-        return tuple(0 for _ in keys)
+async def _mget_ints(
+    redis_client: Any | None,
+    keys: tuple[str, ...],
+    *,
+    live_data: _DashboardLiveDataStatus,
+    section: str,
+) -> tuple[int | None, ...]:
     if not keys:
         return ()
+    if redis_client is None:
+        live_data.failure(section)
+        return tuple(None for _ in keys)
     try:
         values = await redis_client.mget(keys)
     except Exception:
-        return tuple(0 for _ in keys)
+        live_data.failure(section)
+        return tuple(None for _ in keys)
+    live_data.success(section)
     return tuple(_int_value(value) for value in values)
 
 
@@ -395,11 +449,17 @@ async def _pool_usage_pairs(
     redis_client: Any | None,
     pools: Sequence[CompiledTierCapacityPoolPolicy],
     window_id: int,
-) -> list[tuple[int, int]]:
+    live_data: _DashboardLiveDataStatus,
+) -> list[tuple[int | None, int | None]]:
     keys: list[str] = []
     for pool in pools:
         keys.extend(_pool_counter_keys(pool, window_id=window_id))
-    values = await _mget_ints(redis_client, tuple(keys))
+    values = await _mget_ints(
+        redis_client,
+        tuple(keys),
+        live_data=live_data,
+        section="pool_usage",
+    )
     return [(values[index], values[index + 1]) for index in range(0, len(values), 2)]
 
 
@@ -440,12 +500,12 @@ def _pool_dashboard_candidates(
     *,
     snapshot: TierPolicySnapshot,
     pools: Sequence[CompiledTierCapacityPoolPolicy],
-    usage_pairs: Sequence[tuple[int, int]],
+    usage_pairs: Sequence[tuple[int | None, int | None]],
     heatmap_hits: Mapping[_PoolRef, int],
 ) -> list[_PoolDashboardCandidate]:
     candidates: list[_PoolDashboardCandidate] = []
     for index, pool in enumerate(pools):
-        rpm_used, tpm_used = usage_pairs[index] if index < len(usage_pairs) else (0, 0)
+        rpm_used, tpm_used = usage_pairs[index] if index < len(usage_pairs) else (None, None)
         pool_ref = (pool.pool_key, pool.callable_key)
         candidates.append(
             _PoolDashboardCandidate(
@@ -479,11 +539,11 @@ def _candidate_is_saturated(candidate: _PoolDashboardCandidate) -> bool:
 def _pool_summary(
     candidate: _PoolDashboardCandidate,
     *,
-    active_org_count: int,
+    active_org_count: int | None,
     top_orgs: list[dict[str, Any]],
     active_boosts: list[dict[str, Any]],
-    active_boost_count: int,
-    cleanup_lagged: bool,
+    active_boost_count: int | None,
+    cleanup_lagged: bool | None,
 ) -> dict[str, Any]:
     pool = candidate.pool
     return {
@@ -514,9 +574,13 @@ async def _top_orgs_for_pools(
     candidates: Sequence[_PoolDashboardCandidate],
     window_id: int,
     limit: int,
-) -> tuple[dict[_PoolRef, list[dict[str, Any]]], dict[_PoolRef, int]]:
-    if redis_client is None or not candidates:
+    live_data: _DashboardLiveDataStatus,
+) -> tuple[dict[_PoolRef, list[dict[str, Any]]], dict[_PoolRef, int | None]]:
+    if not candidates:
         return {}, {}
+    if redis_client is None:
+        live_data.failure("top_orgs")
+        return {}, {candidate.ref: None for candidate in candidates}
     org_limit = max(1, int(limit))
     try:
         pipe = redis_client.pipeline()
@@ -534,7 +598,8 @@ async def _top_orgs_for_pools(
             )
         raw_results = await pipe.execute()
     except Exception:
-        return {}, {}
+        live_data.failure("top_orgs")
+        return {}, {candidate.ref: None for candidate in candidates}
 
     active_counts: dict[_PoolRef, int] = {}
     ranked_orgs: dict[_PoolRef, list[str]] = {}
@@ -568,14 +633,26 @@ async def _top_orgs_for_pools(
                 )
             )
             counter_refs.append((candidate.ref, organization_id))
-    counter_values = await _mget_ints(redis_client, tuple(counter_keys))
+    if not counter_keys:
+        live_data.success("top_orgs")
+        return {candidate.ref: [] for candidate in candidates}, active_counts
+    counter_values = await _mget_ints(
+        redis_client,
+        tuple(counter_keys),
+        live_data=live_data,
+        section="top_orgs",
+    )
+    if any(value is None for value in counter_values):
+        return {candidate.ref: [] for candidate in candidates}, active_counts
 
     rows: list[dict[str, Any]] = []
     top_orgs: dict[_PoolRef, list[dict[str, Any]]] = {candidate.ref: [] for candidate in candidates}
     for index, (pool_ref, organization_id) in enumerate(counter_refs):
         value_index = index * 2
-        rpm_used = counter_values[value_index] if value_index < len(counter_values) else 0
-        tpm_used = counter_values[value_index + 1] if value_index + 1 < len(counter_values) else 0
+        rpm_used = counter_values[value_index] if value_index < len(counter_values) else None
+        tpm_used = counter_values[value_index + 1] if value_index + 1 < len(counter_values) else None
+        if rpm_used is None or tpm_used is None:
+            continue
         rows.append(
             {
                 "pool_ref": pool_ref,
@@ -597,9 +674,13 @@ async def _active_boosts_for_pools(
     redis_client: Any | None,
     candidates: Sequence[_PoolDashboardCandidate],
     now_ms: int,
-) -> tuple[dict[_PoolRef, list[dict[str, Any]]], dict[_PoolRef, int]]:
-    if redis_client is None or not candidates:
+    live_data: _DashboardLiveDataStatus,
+) -> tuple[dict[_PoolRef, list[dict[str, Any]]], dict[_PoolRef, int | None]]:
+    if not candidates:
         return {}, {}
+    if redis_client is None:
+        live_data.failure("active_boosts")
+        return {}, {candidate.ref: None for candidate in candidates}
     boost_limit = DASHBOARD_MAX_ACTIVE_BOOSTS_PER_POOL
     try:
         pipe = redis_client.pipeline()
@@ -610,7 +691,8 @@ async def _active_boosts_for_pools(
             pipe.zrangebyscore(index_key, now_ms, "+inf", start=0, num=boost_limit)
         raw_results = await pipe.execute()
     except Exception:
-        return {}, {}
+        live_data.failure("active_boosts")
+        return {}, {candidate.ref: None for candidate in candidates}
 
     active_counts: dict[_PoolRef, int] = {}
     orgs_by_pool: dict[_PoolRef, list[str]] = {}
@@ -621,6 +703,7 @@ async def _active_boosts_for_pools(
         orgs_by_pool[candidate.ref] = [_text_value(raw_org) for raw_org in raw_orgs]
 
     metadata_refs: list[tuple[_PoolRef, list[str]]] = []
+    metadata_failed = False
     try:
         metadata_pipe = redis_client.pipeline()
         for candidate in candidates:
@@ -632,10 +715,14 @@ async def _active_boosts_for_pools(
             metadata_refs.append((candidate.ref, orgs))
         raw_metadata_results = await metadata_pipe.execute() if metadata_refs else []
     except Exception:
+        live_data.failure("active_boosts")
+        metadata_failed = True
         raw_metadata_results = []
+    else:
+        live_data.success("active_boosts")
 
     boosts_by_pool: dict[_PoolRef, list[dict[str, Any]]] = {}
-    for index, (pool_ref, orgs) in enumerate(metadata_refs):
+    for index, (pool_ref, orgs) in enumerate(metadata_refs if not metadata_failed else ()):
         raw_metadata = _value_at(raw_metadata_results, index, default=()) or ()
         boosts: list[dict[str, Any]] = []
         for org_index, organization_id in enumerate(orgs):
@@ -651,13 +738,22 @@ async def _cleanup_lagged_for_pools(
     *,
     redis_client: Any | None,
     candidates: Sequence[_PoolDashboardCandidate],
-) -> dict[_PoolRef, bool]:
-    if redis_client is None or not candidates:
+    live_data: _DashboardLiveDataStatus,
+) -> dict[_PoolRef, bool | None]:
+    if not candidates:
         return {}
+    if redis_client is None:
+        live_data.failure("cleanup_lag")
+        return {candidate.ref: None for candidate in candidates}
     keys = tuple(fair_share_cleanup_lag_key(*candidate.ref) for candidate in candidates)
-    values = await _mget_ints(redis_client, keys)
+    values = await _mget_ints(
+        redis_client,
+        keys,
+        live_data=live_data,
+        section="cleanup_lag",
+    )
     return {
-        candidate.ref: bool(values[index])
+        candidate.ref: (None if values[index] is None else bool(values[index]))
         for index, candidate in enumerate(candidates)
         if index < len(values)
     }
@@ -668,8 +764,10 @@ async def _read_limit_hit_heatmap(
     *,
     window_id: int,
     limit: int,
+    live_data: _DashboardLiveDataStatus,
 ) -> list[dict[str, Any]]:
     if redis_client is None:
+        live_data.failure("limit_hit_heatmap")
         return []
     normalized_limit = max(1, int(limit))
     heatmap_key = fair_share_limit_hit_heatmap_key(window_id)
@@ -681,6 +779,7 @@ async def _read_limit_hit_heatmap(
             raw_counts = await redis_client.hmget(heatmap_key, fields)
             rows = _heatmap_rows_from_fields(fields, raw_counts)
             if rows:
+                live_data.success("limit_hit_heatmap")
                 return _sort_heatmap_rows(rows)[:normalized_limit]
     except Exception:
         pass
@@ -688,7 +787,9 @@ async def _read_limit_hit_heatmap(
     try:
         raw = await redis_client.hgetall(heatmap_key)
     except Exception:
+        live_data.failure("limit_hit_heatmap")
         return []
+    live_data.success("limit_hit_heatmap")
     rows = _heatmap_rows_from_mapping(raw or {})
     return _sort_heatmap_rows(rows)[:normalized_limit]
 
@@ -698,14 +799,18 @@ async def _read_limit_hit_total(
     *,
     window_id: int,
     fallback_heatmap: Sequence[Mapping[str, Any]],
-) -> int:
+    live_data: _DashboardLiveDataStatus,
+) -> int | None:
     fallback_count = sum(int(row.get("count") or 0) for row in fallback_heatmap)
     if redis_client is None:
-        return fallback_count
+        live_data.failure("limit_hit_total")
+        return None
     try:
         value = await redis_client.get(fair_share_limit_hit_total_key(window_id))
     except Exception:
-        return fallback_count
+        live_data.failure("limit_hit_total")
+        return None
+    live_data.success("limit_hit_total")
     total_count = _int_value(value)
     return total_count if total_count > 0 else fallback_count
 

@@ -19,6 +19,113 @@ def _relative_timestamp(*, days: int) -> datetime:
 
 
 @pytest.mark.asyncio
+async def test_assignment_trigger_rejects_enabled_assignment_for_disabled_tier() -> None:
+    db = await connect_prisma()
+    suffix = uuid4().hex
+    organization_id = f"org-disabled-tier-assignment-{suffix}"
+    tier_id = f"tier-disabled-tier-assignment-{suffix}"
+    active_version_id = f"version-disabled-tier-assignment-{suffix}"
+
+    try:
+        await require_tier_schema(db)
+        await seed_organization(db, organization_id=organization_id)
+        await seed_tier(db, tier_id=tier_id, tier_key=f"disabled-assignment-{suffix}")
+        await seed_tier_version(
+            db,
+            tier_version_id=active_version_id,
+            tier_id=tier_id,
+            version_number=1,
+            status="active",
+        )
+        await db.execute_raw(
+            """
+            UPDATE deltallm_tier
+            SET enabled = FALSE,
+                updated_at = NOW()
+            WHERE tier_id = $1
+            """,
+            tier_id,
+        )
+
+        with pytest.raises(Exception, match="enabled tier"):
+            await seed_assignment(
+                db,
+                assignment_id=f"assignment-rejected-disabled-tier-{suffix}",
+                organization_id=organization_id,
+                tier_id=tier_id,
+                tier_version_id=active_version_id,
+                assignment_type="addon",
+            )
+
+        await seed_assignment(
+            db,
+            assignment_id=f"assignment-history-disabled-tier-{suffix}",
+            organization_id=organization_id,
+            tier_id=tier_id,
+            tier_version_id=active_version_id,
+            assignment_type="addon",
+            enabled=False,
+        )
+    finally:
+        await cleanup(db, organization_id=organization_id, tier_ids=(tier_id,))
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_tier_trigger_rejects_disable_with_scheduled_enabled_assignment() -> None:
+    db = await connect_prisma()
+    suffix = uuid4().hex
+    organization_id = f"org-scheduled-tier-disable-{suffix}"
+    tier_id = f"tier-scheduled-tier-disable-{suffix}"
+    active_version_id = f"version-scheduled-tier-disable-{suffix}"
+
+    try:
+        await require_tier_schema(db)
+        await seed_organization(db, organization_id=organization_id)
+        await seed_tier(db, tier_id=tier_id, tier_key=f"scheduled-disable-{suffix}")
+        await seed_tier_version(
+            db,
+            tier_version_id=active_version_id,
+            tier_id=tier_id,
+            version_number=1,
+            status="active",
+        )
+        await seed_assignment(
+            db,
+            assignment_id=f"assignment-scheduled-tier-disable-{suffix}",
+            organization_id=organization_id,
+            tier_id=tier_id,
+            tier_version_id=active_version_id,
+            starts_at=_relative_timestamp(days=1),
+            ends_at=_relative_timestamp(days=2),
+        )
+
+        with pytest.raises(Exception, match="cannot disable tier"):
+            await db.execute_raw(
+                """
+                UPDATE deltallm_tier
+                SET enabled = FALSE,
+                    updated_at = NOW()
+                WHERE tier_id = $1
+                """,
+                tier_id,
+            )
+
+        rows = await db.query_raw(
+            """
+            SELECT enabled
+            FROM deltallm_tier
+            WHERE tier_id = $1
+            """,
+            tier_id,
+        )
+        assert rows[0]["enabled"] is True
+    finally:
+        await cleanup(db, organization_id=organization_id, tier_ids=(tier_id,))
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_assignment_trigger_requires_active_version_for_unpinned_enabled_assignment() -> None:
     db = await connect_prisma()
     suffix = uuid4().hex

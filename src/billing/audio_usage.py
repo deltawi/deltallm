@@ -23,7 +23,7 @@ def normalize_transcription_usage(
     if duration_seconds is not None and duration_seconds > 0:
         usage["duration_seconds"] = duration_seconds
         billable_duration_seconds = max(
-            _apply_stt_provider_billing_rules(duration_seconds, provider),
+            billable_transcription_duration_seconds(duration_seconds, provider),
             provider_billable_duration_seconds or 0.0,
         )
         if billable_duration_seconds != duration_seconds:
@@ -62,6 +62,8 @@ def billing_metadata(result: BillingResult) -> dict[str, Any]:
         metadata["billing_unit"] = result.billing_unit
     if result.pricing_fields_used:
         metadata["pricing_fields_used"] = list(result.pricing_fields_used)
+    if result.missing_pricing_fields:
+        metadata["missing_pricing_fields"] = list(result.missing_pricing_fields)
     if result.usage_snapshot:
         metadata["usage_snapshot"] = result.usage_snapshot
     if result.unpriced_reason is not None:
@@ -103,6 +105,11 @@ def _extract_speech_token_usage(provider_usage: Mapping[str, Any]) -> dict[str, 
         output_audio_tokens = provider_usage.get("output_tokens")
     if output_audio_tokens is not None:
         usage["output_audio_tokens"] = max(0, int(output_audio_tokens or 0))
+        # TTS providers commonly expose the same generated audio count as both
+        # generic output tokens and audio output tokens. Keep only the specific
+        # dimension so billing neither double-charges nor requires two prices
+        # for one unit of provider usage.
+        usage["completion_tokens"] = 0
     return usage
 
 
@@ -173,10 +180,16 @@ def _first_int(*values: Any) -> int | None:
     return None
 
 
-def _apply_stt_provider_billing_rules(duration_seconds: float, provider: str | None) -> float:
+def billable_transcription_duration_seconds(
+    duration_seconds: float,
+    provider: str | None,
+) -> float:
+    normalized_duration = max(0.0, float(duration_seconds))
+    if normalized_duration == 0:
+        return 0.0
     normalized_provider = (provider or "").strip().lower()
     minimum_billed_seconds = 10.0 if normalized_provider == "groq" else 0.0
-    return max(duration_seconds, minimum_billed_seconds)
+    return max(normalized_duration, minimum_billed_seconds)
 
 
 def _first_float(*values: Any) -> float | None:

@@ -62,3 +62,18 @@ async def test_count_active_tier_assignments_filters_current_enabled_windows() -
     assert "enabled = TRUE" in query
     assert "starts_at IS NULL OR starts_at <= NOW()" in query
     assert "ends_at IS NULL OR ends_at > NOW()" in query
+
+
+@pytest.mark.asyncio
+async def test_count_live_or_scheduled_tier_assignments_includes_future_windows() -> None:
+    prisma = _FakePrisma(active_assignment_count=2)
+    repository = TierRepository(prisma)
+
+    count = await repository.count_live_or_scheduled_tier_assignments("tier-1")
+
+    assert count == 2
+    query, params = prisma.calls[0]
+    assert params == ("tier-1",)
+    assert "enabled = TRUE" in query
+    assert "ends_at IS NULL OR ends_at > NOW()" in query
+    assert "starts_at" not in query

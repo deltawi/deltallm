@@ -9,16 +9,35 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from pydantic import ValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from src.billing.cost import completion_cost
 from src.billing.pricing import normalize_gateway_cache_hit_usage
-from src.billing.tier_pricing import attach_pricing_metadata, resolve_tier_pricing
+from src.billing.tier_pricing import (
+    attach_pricing_metadata,
+    resolve_tier_pricing,
+    resolve_token_billing_result,
+)
+from src.chat.preflight import run_text_preflight
+from src.embedding_preflight import run_embedding_preflight
 from src.middleware.auth import authenticate_request
-from src.middleware.rate_limit import _check_and_acquire_rate_limits, _release_rate_limits
+from src.middleware.errors import proxy_error_response
+from src.middleware.rate_limit import _release_rate_limits
 from src.metrics import increment_request, increment_spend, increment_usage
-from src.providers.resolution import provider_from_model, resolve_provider
-from src.routers.utils import enforce_budget_if_configured, fire_and_forget
+from src.models.errors import ProxyError
+from src.models.requests import (
+    ChatCompletionRequest,
+    CompletionsRequest,
+    EmbeddingRequest,
+    ResponsesRequest,
+)
+from src.providers.resolution import provider_from_model, resolve_provider, resolve_upstream_model
+from src.routers.text_adapters import (
+    completions_to_chat_request,
+    responses_to_chat_request,
+)
+from src.routers.utils import fire_and_forget
+from src.telemetry.request_failures import maybe_log_proxy_error
 
 from .backends.base import CacheBackend, CacheEntry
 from .key_builder import CacheKeyBuilder
@@ -117,12 +136,23 @@ class CacheMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         try:
             await authenticate_request(request)
-            await _check_and_acquire_rate_limits(request)
         except HTTPException as exc:
             headers = getattr(exc, "headers", None) or {}
             return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=headers)
         try:
-            await enforce_budget_if_configured(request, model=str(request_data.get("model") or ""))
+            prepared_data = await self._prepare_request(request, request_data)
+        except ValidationError:
+            # Let FastAPI preserve its endpoint-specific 422 response contract.
+            return await call_next(request)
+        except ProxyError as exc:
+            maybe_log_proxy_error(request, exc)
+            return proxy_error_response(exc)
+
+        if prepared_data is None:
+            return await call_next(request)
+
+        request_data = prepared_data
+        try:
 
             cache_options = parse_cache_options(request_data, self._normalized_headers(request))
             model = str(request_data.get("model") or "unknown")
@@ -135,6 +165,7 @@ class CacheMiddleware(BaseHTTPMiddleware):
                 return response
 
             cache_key = key_builder.build_key_from_payload(request_data, cache_options.custom_key)
+            cache_key = f"endpoint:{endpoint}:{cache_key}"
             cache_key = self._scoped_cache_key(cache_key, request)
             request.state.cache_context = CacheContext(cache_key=cache_key, options=cache_options, model=model)
             request.state.cache_context.hit = False
@@ -204,7 +235,42 @@ class CacheMiddleware(BaseHTTPMiddleware):
             )
             return response
         finally:
-            await _release_rate_limits(request)
+            if not bool(getattr(request.state, "_rate_limit_lifecycle_managed", False)):
+                await _release_rate_limits(request)
+
+    async def _prepare_request(
+        self,
+        request: Request,
+        request_data: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        endpoint = request.url.path
+        if endpoint == "/v1/embeddings":
+            payload = EmbeddingRequest.model_validate(request_data)
+            prepared = await run_embedding_preflight(request=request, payload=payload)
+            return dict(prepared.request_data)
+
+        if endpoint == "/v1/chat/completions":
+            payload = ChatCompletionRequest.model_validate(request_data)
+            canonical_data: dict[str, Any] | None = request_data
+        elif endpoint == "/v1/completions":
+            payload = completions_to_chat_request(
+                CompletionsRequest.model_validate(request_data)
+            )
+            canonical_data = None
+        elif endpoint == "/v1/responses":
+            payload = responses_to_chat_request(
+                ResponsesRequest.model_validate(request_data)
+            )
+            canonical_data = None
+        else:
+            return None
+
+        _auth, _payload, prepared_data, _callbacks, _guardrails = await run_text_preflight(
+            request=request,
+            payload=payload,
+            request_data=canonical_data,
+        )
+        return dict(prepared_data)
 
     def _should_cache(self, request: Request) -> bool:
         return request.method.upper() == "POST" and request.url.path in self.enabled_endpoints
@@ -275,31 +341,40 @@ class CacheMiddleware(BaseHTTPMiddleware):
         pricing = resolve_tier_pricing(
             auth=auth,
             model=model,
+            provider_model=resolve_upstream_model(
+                {"model": deployment_model} if deployment_model is not None else None,
+                fallback_model=model,
+            ),
             tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
             deployment_model_info=pricing_model_info,
             mode="sync",
         )
-        request_cost = completion_cost(
+        customer_billing = resolve_token_billing_result(
+            pricing,
             model=model,
             usage=usage,
             cache_hit=True,
-            custom_pricing=pricing.customer_token_pricing,
         )
-        provider_cost_avoided = completion_cost(
-            model=model,
-            usage=provider_cache_miss_usage(raw_usage),
-            cache_hit=False,
-            custom_pricing=pricing.provider_token_pricing,
-        )
-        provider_cost_avoided_basis = "provider_miss_pricing"
-        if provider_cost_avoided == 0.0 and has_cache_hit_only_pricing(pricing.provider_model_info):
-            provider_cost_avoided = completion_cost(
+        request_cost = customer_billing.billing.cost
+        if has_cache_hit_only_pricing(pricing.provider_model_info):
+            avoided_billing = resolve_token_billing_result(
+                pricing,
                 model=model,
                 usage=usage,
                 cache_hit=True,
-                custom_pricing=pricing.provider_token_pricing,
+                pricing_view="provider",
             )
             provider_cost_avoided_basis = "cache_hit_pricing_fallback"
+        else:
+            avoided_billing = resolve_token_billing_result(
+                pricing,
+                model=model,
+                usage=provider_cache_miss_usage(raw_usage),
+                cache_hit=False,
+                pricing_view="provider",
+            )
+            provider_cost_avoided_basis = "provider_miss_pricing"
+        provider_cost_avoided = avoided_billing.billing.cost
         provider_cost = 0.0
         increment_request(
             model=model,
@@ -335,9 +410,26 @@ class CacheMiddleware(BaseHTTPMiddleware):
                 "cache_cost_basis": "avoided_provider_cost",
                 "provider_cost_avoided": round(float(provider_cost_avoided), 10),
                 "provider_cost_avoided_basis": provider_cost_avoided_basis,
+                "provider_cost_avoided_billing": {
+                    "cost": avoided_billing.billing.cost,
+                    "billing_unit": avoided_billing.billing.billing_unit,
+                    "pricing_fields_used": list(
+                        avoided_billing.billing.pricing_fields_used
+                    ),
+                    "usage_snapshot": dict(
+                        avoided_billing.billing.usage_snapshot
+                    ),
+                    "unpriced_reason": avoided_billing.billing.unpriced_reason,
+                    "missing_pricing_fields": list(
+                        avoided_billing.missing_pricing_fields
+                    ),
+                },
             },
             pricing,
             provider_cost=provider_cost,
+            billing=customer_billing.billing,
+            effective_pricing_sources=customer_billing.pricing_sources_used,
+            missing_pricing_fields=customer_billing.missing_pricing_fields,
         )
         fire_and_forget(
             request.app.state.spend_tracking_service.log_spend(

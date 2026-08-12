@@ -1,5 +1,4 @@
 import { Edit3, Plus, Save, Trash2, X } from 'lucide-react';
-import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 import type { TierModelPolicy } from '../../lib/api';
 import {
@@ -10,11 +9,73 @@ import {
   modelPolicyToForm,
   poolOptionsForCallable,
   pricingProfileForModelMode,
+  pricingProfileLabel,
   summarizePricing,
+  TIER_PRICING_FIELDS,
   type TierCapacityPoolOption,
   type TierModelPolicyForm,
 } from '../../lib/tiers';
+import { TierEditorAccordion, TierField } from './TierEditorControls';
 import TierPricingFields from './TierPricingFields';
+
+type PolicyEditorSection = 'limits' | 'pricing' | 'capacity';
+type PolicyEditorSections = Record<PolicyEditorSection, boolean>;
+
+type RateLimitFormKey =
+  | 'rpm_limit'
+  | 'tpm_limit'
+  | 'rph_limit'
+  | 'rpd_limit'
+  | 'tpd_limit'
+  | 'max_parallel_requests'
+  | 'batch_rpm_limit'
+  | 'batch_tpm_limit';
+
+const CORE_RATE_LIMIT_FIELDS: Array<{ label: string; key: RateLimitFormKey; help: string }> = [
+  {
+    label: 'RPM',
+    key: 'rpm_limit',
+    help: 'Maximum requests per minute for an organization using this model through the tier. Blank means unlimited at this tier layer. Example: 60 allows up to 60 requests in each minute.',
+  },
+  {
+    label: 'TPM',
+    key: 'tpm_limit',
+    help: 'Maximum token usage per minute for an organization using this model through the tier. Blank means unlimited at this tier layer. Example: 100000 allows up to 100,000 tokens per minute.',
+  },
+];
+
+const ADVANCED_RATE_LIMIT_FIELDS: Array<{ label: string; key: RateLimitFormKey; help: string }> = [
+  {
+    label: 'RPH',
+    key: 'rph_limit',
+    help: 'Maximum requests per hour. Use this alongside RPM when short bursts are acceptable but sustained hourly usage must be bounded. Blank means unlimited.',
+  },
+  {
+    label: 'RPD',
+    key: 'rpd_limit',
+    help: 'Maximum requests per day. Example: 10000 permits up to 10,000 requests in the daily window. Blank means unlimited.',
+  },
+  {
+    label: 'TPD',
+    key: 'tpd_limit',
+    help: 'Maximum tokens per day. Example: 5000000 permits up to five million tokens in the daily window. Blank means unlimited.',
+  },
+  {
+    label: 'Parallel requests',
+    key: 'max_parallel_requests',
+    help: 'Maximum requests that may be in flight at the same time for this organization and model. Example: 5 permits five concurrent requests. Blank means unlimited.',
+  },
+  {
+    label: 'Batch RPM',
+    key: 'batch_rpm_limit',
+    help: 'Maximum batch requests per minute. This is separate from synchronous RPM. Blank means unlimited at this tier layer.',
+  },
+  {
+    label: 'Batch TPM',
+    key: 'batch_tpm_limit',
+    help: 'Maximum tokens submitted through batch workloads per minute. This is separate from synchronous TPM. Blank means unlimited at this tier layer.',
+  },
+];
 
 type TierModelPolicyGridProps = {
   policies: TierModelPolicy[];
@@ -41,6 +102,12 @@ export default function TierModelPolicyGrid({
   const [form, setForm] = useState<TierModelPolicyForm>(emptyModelPolicyForm());
   const [localError, setLocalError] = useState<string | null>(null);
   const [bulk, setBulk] = useState({ rpm_limit: '', tpm_limit: '' });
+  const [openSections, setOpenSections] = useState<PolicyEditorSections>({
+    limits: true,
+    pricing: false,
+    capacity: false,
+  });
+  const [advancedLimitsOpen, setAdvancedLimitsOpen] = useState(false);
   const locked = readOnly || saving;
   const inputClassName = 'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500';
 
@@ -61,15 +128,21 @@ export default function TierModelPolicyGrid({
 
   const openNew = () => {
     if (locked) return;
+    const nextForm = emptyModelPolicyForm();
     setEditingIndex('new');
-    setForm(emptyModelPolicyForm());
+    setForm(nextForm);
+    setOpenSections(initialOpenSections(nextForm, true));
+    setAdvancedLimitsOpen(false);
     setLocalError(null);
   };
 
   const openEdit = (policy: TierModelPolicy) => {
     if (locked) return;
+    const nextForm = modelPolicyToForm(policy, pricingProfileForCallable(policy.callable_key));
     setEditingIndex(policies.indexOf(policy));
-    setForm(modelPolicyToForm(policy, pricingProfileForCallable(policy.callable_key)));
+    setForm(nextForm);
+    setOpenSections(initialOpenSections(nextForm, false));
+    setAdvancedLimitsOpen(hasAdvancedLimitValues(nextForm));
     setLocalError(null);
   };
 
@@ -90,7 +163,15 @@ export default function TierModelPolicyGrid({
       setEditingIndex(null);
       setForm(emptyModelPolicyForm());
     } catch (err: unknown) {
-      setLocalError(errorMessage(err, 'Failed to save model policy.'));
+      const message = errorMessage(err, 'Failed to save model policy.');
+      const section = sectionForError(message);
+      setLocalError(message);
+      if (section) {
+        setOpenSections((current) => ({ ...current, [section]: true }));
+      }
+      if (section === 'limits' && isAdvancedLimitError(message)) {
+        setAdvancedLimitsOpen(true);
+      }
     }
   };
 
@@ -135,6 +216,10 @@ export default function TierModelPolicyGrid({
       pricing_profile: inferredPricingProfile || form.pricing_profile,
       capacity_pool_key: keepPool ? form.capacity_pool_key : '',
     });
+  };
+
+  const toggleSection = (section: PolicyEditorSection) => {
+    setOpenSections((current) => ({ ...current, [section]: !current[section] }));
   };
 
   return (
@@ -245,26 +330,38 @@ export default function TierModelPolicyGrid({
               <X className="h-4 w-4" />
             </button>
           </div>
-          <div className="space-y-4">
-            <FormSection
-              title="Target and Access"
-              description="Choose the callable target and whether this tier allows or denies it."
-            >
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_120px_120px]">
-                <Field label="Model or callable key">
+          <div className="space-y-3">
+            <section className="rounded-xl border border-gray-200 bg-white px-4 py-4">
+              <div className="mb-3">
+                <h5 className="text-sm font-semibold text-gray-900">Basics</h5>
+                <p className="mt-0.5 text-xs text-gray-500">Choose the callable target and whether this tier can use it.</p>
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_140px]">
+                <TierField
+                  id="tier-policy-callable-key"
+                  label="Model or callable key"
+                  help="The configured model or route name this policy applies to. Example: gpt-4o-mini. It must match a callable key exposed by the gateway."
+                >
                   <input
+                    id="tier-policy-callable-key"
                     list="tier-policy-callables"
                     value={form.callable_key}
                     onChange={(event) => updateCallableKey(event.target.value)}
+                    placeholder="Select or enter a callable"
                     disabled={locked}
                     className={inputClassName}
                   />
                   <datalist id="tier-policy-callables">
                     {callableOptions.map((option) => <option key={option} value={option} />)}
                   </datalist>
-                </Field>
-                <Field label="Access">
+                </TierField>
+                <TierField
+                  id="tier-policy-access"
+                  label="Access"
+                  help="Allow makes the selected model available through this policy. Deny blocks it when this policy is the effective policy for the organization and model."
+                >
                   <select
+                    id="tier-policy-access"
                     value={form.access_mode}
                     onChange={(event) => setForm({ ...form, access_mode: event.target.value })}
                     disabled={locked}
@@ -273,33 +370,106 @@ export default function TierModelPolicyGrid({
                     <option value="allow">Allow</option>
                     <option value="deny">Deny</option>
                   </select>
-                </Field>
-                <Field label="Priority">
-                  <input value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value })} disabled={locked} className={inputClassName} />
-                </Field>
-                <label className={`flex items-center justify-between rounded-lg border border-gray-200 bg-white px-3 py-2 ${locked ? 'cursor-not-allowed opacity-70' : ''}`}>
-                  <span className="text-xs font-semibold text-gray-500">Enabled</span>
-                  <input
-                    type="checkbox"
-                    checked={form.enabled}
-                    onChange={(event) => setForm({ ...form, enabled: event.target.checked })}
-                    disabled={locked}
-                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                  />
-                </label>
+                </TierField>
+                <TierField
+                  id="tier-policy-enabled"
+                  label="Enabled"
+                  help="Disabled policies remain saved in the tier version but are ignored when effective policies are compiled."
+                >
+                  <div className={`flex h-[38px] items-center justify-between rounded-lg border border-gray-300 bg-white px-3 ${locked ? 'cursor-not-allowed bg-gray-50 opacity-70' : ''}`}>
+                    <span className="text-sm text-gray-600">{form.enabled ? 'On' : 'Off'}</span>
+                    <input
+                      id="tier-policy-enabled"
+                      type="checkbox"
+                      checked={form.enabled}
+                      onChange={(event) => setForm({ ...form, enabled: event.target.checked })}
+                      disabled={locked}
+                      className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                  </div>
+                </TierField>
               </div>
-            </FormSection>
+            </section>
 
-            <FormSection
-              title="Capacity"
-              description="Attach this model policy to a shared pool when provider or GPU capacity is scarce."
+            <TierEditorAccordion
+              title="Usage limits"
+              summary={summarizeLimitForm(form)}
+              description="Set organization-level limits for this model. Blank fields are unlimited at the tier layer; stricter key, team, or provider limits can still apply."
+              open={openSections.limits}
+              onToggle={() => toggleSection('limits')}
             >
-              <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
-                <Field label="Capacity pool">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {CORE_RATE_LIMIT_FIELDS.map((field) => (
+                  <RateLimitField
+                    key={field.key}
+                    field={field}
+                    form={form}
+                    locked={locked}
+                    inputClassName={inputClassName}
+                    onChange={(value) => setForm({ ...form, [field.key]: value })}
+                  />
+                ))}
+              </div>
+              <details
+                key={`${editingIndex}-advanced-limits`}
+                className="rounded-lg border border-gray-200 bg-gray-50 p-3"
+                open={advancedLimitsOpen}
+                onToggle={(event) => setAdvancedLimitsOpen(event.currentTarget.open)}
+              >
+                <summary className="cursor-pointer text-xs font-semibold text-gray-600">
+                  Advanced limits{advancedLimitCount(form) > 0 ? ` · ${advancedLimitCount(form)} configured` : ''}
+                </summary>
+                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {ADVANCED_RATE_LIMIT_FIELDS.map((field) => (
+                    <RateLimitField
+                      key={field.key}
+                      field={field}
+                      form={form}
+                      locked={locked}
+                      inputClassName={inputClassName}
+                      onChange={(value) => setForm({ ...form, [field.key]: value })}
+                    />
+                  ))}
+                </div>
+              </details>
+            </TierEditorAccordion>
+
+            <TierEditorAccordion
+              title="Pricing"
+              summary={summarizePricingForm(form)}
+              description="Choose the billing shape for this model, then set only the customer prices that apply."
+              open={openSections.pricing}
+              onToggle={() => toggleSection('pricing')}
+            >
+              <TierPricingFields
+                key={`${editingIndex}-pricing`}
+                form={form}
+                locked={locked}
+                inputClassName={inputClassName}
+                inferredMode={inferredMode}
+                onChange={setForm}
+              />
+            </TierEditorAccordion>
+
+            <TierEditorAccordion
+              title="Capacity and precedence"
+              summary={summarizeCapacityForm(form)}
+              description="Attach scarce provider or GPU capacity to a shared pool, and adjust precedence only when overlapping tier assignments require it."
+              open={openSections.capacity}
+              onToggle={() => toggleSection('capacity')}
+            >
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(180px,1fr)]">
+                <TierField
+                  id="tier-policy-capacity-pool"
+                  label="Capacity pool"
+                  help="A shared provider-facing ceiling used across organizations. Per-organization model limits still apply. Example: three organizations may each have 500 RPM while sharing one 1,000 RPM pool."
+                >
                   <input
+                    id="tier-policy-capacity-pool"
                     list="tier-policy-pools"
                     value={form.capacity_pool_key}
                     onChange={(event) => setForm({ ...form, capacity_pool_key: event.target.value })}
+                    placeholder="No shared pool"
                     disabled={locked}
                     className={inputClassName}
                   />
@@ -311,51 +481,31 @@ export default function TierModelPolicyGrid({
                       />
                     ))}
                   </datalist>
-                </Field>
-                <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-500">
-                  {form.callable_key && matchingPoolOptions.length > 0
-                    ? `${matchingPoolOptions.length} compatible pool${matchingPoolOptions.length === 1 ? '' : 's'} for this model.`
-                    : form.callable_key
-                      ? 'No compatible pool is defined for this model. Leave empty or create a matching pool above.'
-                      : 'Select a model to see compatible pools.'}
-                </div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {form.callable_key && matchingPoolOptions.length > 0
+                      ? `${matchingPoolOptions.length} compatible pool${matchingPoolOptions.length === 1 ? '' : 's'} for this model.`
+                      : form.callable_key
+                        ? 'No compatible pool exists for this model. Leave blank or create one in Capacity Pools.'
+                        : 'Select a model to see compatible pools.'}
+                  </p>
+                </TierField>
+                <TierField
+                  id="tier-policy-priority"
+                  label="Priority"
+                  help="Tie-breaker when multiple assigned tiers provide a policy for the same model. Assignment type and weight are considered first; if those tie, the higher policy priority wins. Example: 10 beats 0."
+                >
+                  <input
+                    id="tier-policy-priority"
+                    value={form.priority}
+                    onChange={(event) => setForm({ ...form, priority: event.target.value })}
+                    inputMode="numeric"
+                    placeholder="0"
+                    disabled={locked}
+                    className={inputClassName}
+                  />
+                </TierField>
               </div>
-            </FormSection>
-
-            <FormSection
-              title="Rate Limits"
-              description="Set model-level limits for organizations assigned to this tier. Blank means unlimited at this tier layer."
-            >
-              <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
-                {[
-                  ['RPM', 'rpm_limit'],
-                  ['TPM', 'tpm_limit'],
-                  ['RPH', 'rph_limit'],
-                  ['RPD', 'rpd_limit'],
-                  ['TPD', 'tpd_limit'],
-                  ['Parallel', 'max_parallel_requests'],
-                  ['Batch RPM', 'batch_rpm_limit'],
-                  ['Batch TPM', 'batch_tpm_limit'],
-                ].map(([label, key]) => (
-                  <Field key={key} label={label}>
-                    <input
-                      value={form[key as keyof TierModelPolicyForm] as string}
-                      onChange={(event) => setForm({ ...form, [key]: event.target.value })}
-                      disabled={locked}
-                      className={inputClassName}
-                    />
-                  </Field>
-                ))}
-              </div>
-            </FormSection>
-
-            <TierPricingFields
-              form={form}
-              locked={locked}
-              inputClassName={inputClassName}
-              inferredMode={inferredMode}
-              onChange={setForm}
-            />
+            </TierEditorAccordion>
           </div>
 
           <div className="mt-4 flex justify-end">
@@ -375,33 +525,105 @@ export default function TierModelPolicyGrid({
   );
 }
 
-function FormSection({
-  title,
-  description,
-  children,
+function RateLimitField({
+  field,
+  form,
+  locked,
+  inputClassName,
+  onChange,
 }: {
-  title: string;
-  description: string;
-  children: ReactNode;
+  field: { label: string; key: RateLimitFormKey; help: string };
+  form: TierModelPolicyForm;
+  locked: boolean;
+  inputClassName: string;
+  onChange: (value: string) => void;
 }) {
+  const inputId = `tier-policy-${field.key}`;
   return (
-    <section className="space-y-3 border-b border-gray-200 pb-4 last:border-b-0">
-      <div>
-        <h5 className="text-sm font-semibold text-gray-900">{title}</h5>
-        <p className="mt-0.5 text-xs text-gray-500">{description}</p>
-      </div>
-      {children}
-    </section>
+    <TierField id={inputId} label={field.label} help={field.help}>
+      <input
+        id={inputId}
+        value={form[field.key]}
+        onChange={(event) => onChange(event.target.value)}
+        inputMode="numeric"
+        placeholder="Unlimited"
+        disabled={locked}
+        className={inputClassName}
+      />
+    </TierField>
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-xs font-semibold text-gray-500">{label}</span>
-      {children}
-    </label>
-  );
+function initialOpenSections(form: TierModelPolicyForm, isNew: boolean): PolicyEditorSections {
+  return {
+    limits: isNew || hasAnyLimitValues(form),
+    pricing: pricingValueCount(form) > 0,
+    capacity: Boolean(form.capacity_pool_key.trim()) || form.priority.trim() !== '0',
+  };
+}
+
+function hasAnyLimitValues(form: TierModelPolicyForm): boolean {
+  return [...CORE_RATE_LIMIT_FIELDS, ...ADVANCED_RATE_LIMIT_FIELDS]
+    .some((field) => Boolean(form[field.key].trim()));
+}
+
+function hasAdvancedLimitValues(form: TierModelPolicyForm): boolean {
+  return advancedLimitCount(form) > 0;
+}
+
+function advancedLimitCount(form: TierModelPolicyForm): number {
+  return ADVANCED_RATE_LIMIT_FIELDS.filter((field) => Boolean(form[field.key].trim())).length;
+}
+
+function pricingValueCount(form: TierModelPolicyForm): number {
+  return TIER_PRICING_FIELDS.filter((field) => Boolean(String(form[field.formField] || '').trim())).length;
+}
+
+function summarizeLimitForm(form: TierModelPolicyForm): string {
+  const primary = CORE_RATE_LIMIT_FIELDS.flatMap((field) => {
+    const value = form[field.key].trim();
+    return value ? [`${formatInputLimit(value)} ${field.label}`] : [];
+  });
+  const advancedCount = advancedLimitCount(form);
+  if (primary.length === 0 && advancedCount === 0) return 'Unlimited at this tier layer';
+  const parts = primary.length > 0 ? primary : ['RPM/TPM unlimited'];
+  if (advancedCount > 0) parts.push(`${advancedCount} advanced`);
+  return parts.join(' · ');
+}
+
+function summarizePricingForm(form: TierModelPolicyForm): string {
+  const count = pricingValueCount(form);
+  const configured = count === 0 ? 'Not configured' : `${count} price${count === 1 ? '' : 's'} configured`;
+  return `${pricingProfileLabel(form.pricing_profile)} · ${configured}`;
+}
+
+function summarizeCapacityForm(form: TierModelPolicyForm): string {
+  const pool = form.capacity_pool_key.trim() || 'No shared pool';
+  return `${pool} · Priority ${form.priority.trim() || '0'}`;
+}
+
+function formatInputLimit(value: string): string {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed.toLocaleString() : value;
+}
+
+function sectionForError(message: string): PolicyEditorSection | null {
+  const normalized = message.toLowerCase();
+  if (['price', 'pricing', 'cost', 'character', 'audio token', 'image'].some((term) => normalized.includes(term))) {
+    return 'pricing';
+  }
+  if (['capacity', 'pool', 'priority'].some((term) => normalized.includes(term))) {
+    return 'capacity';
+  }
+  if (['rpm', 'tpm', 'rph', 'rpd', 'tpd', 'parallel', 'batch'].some((term) => normalized.includes(term))) {
+    return 'limits';
+  }
+  return null;
+}
+
+function isAdvancedLimitError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return ['rph', 'rpd', 'tpd', 'parallel', 'batch'].some((term) => normalized.includes(term));
 }
 
 function BulkInput({ label, value, disabled, onChange }: { label: string; value: string; disabled: boolean; onChange: (value: string) => void }) {

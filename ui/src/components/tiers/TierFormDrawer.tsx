@@ -98,7 +98,7 @@ export default function TierFormDrawer({
           <label className={`flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 ${saving ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'}`}>
             <span>
               <span className="block text-sm font-medium text-gray-800">Enabled</span>
-              <span className="block text-xs text-gray-500">Disabled tiers stay visible but cannot be used for new rollout.</span>
+              <span className="block text-xs text-gray-500">End or disable every live and scheduled assignment before disabling a tier.</span>
             </span>
             <input
               type="checkbox"

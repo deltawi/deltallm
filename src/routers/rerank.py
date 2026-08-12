@@ -8,11 +8,14 @@ import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from src.billing.cost import compute_billing_result
-from src.billing.tier_pricing import attach_pricing_metadata, resolve_deployment_tier_pricing
+from src.billing.tier_pricing import (
+    attach_pricing_metadata,
+    resolve_deployment_tier_pricing,
+    resolve_token_billing_result,
+)
 from src.callbacks import CallbackManager, build_standard_logging_payload
 from src.middleware.auth import require_api_key
-from src.middleware.rate_limit import enforce_rate_limits
+from src.middleware.rate_limit import check_and_acquire_rate_limits_for_payload
 from src.metrics import (
     increment_request,
     increment_request_failure,
@@ -98,7 +101,7 @@ async def _execute_rerank(
     return data
 
 
-@router.post("/rerank", dependencies=[Depends(require_api_key), Depends(enforce_rate_limits)])
+@router.post("/rerank", dependencies=[Depends(require_api_key)])
 async def rerank(request: Request, payload: RerankRequest):
     request_start = perf_counter()
     callback_start = datetime.now(tz=UTC)
@@ -124,6 +127,11 @@ async def rerank(request: Request, payload: RerankRequest):
 
     callback_manager: CallbackManager = getattr(request.app.state, "callback_manager", CallbackManager())
     request_data = payload.model_dump(exclude_none=True)
+    await check_and_acquire_rate_limits_for_payload(
+        request,
+        model=payload.model,
+        payload=request_data,
+    )
 
     app_router = request.app.state.router
     model_group = app_router.resolve_model_group(payload.model)
@@ -179,17 +187,23 @@ async def rerank(request: Request, payload: RerankRequest):
             tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
             mode="sync",
         )
-        billing = compute_billing_result(
-            mode="rerank",
+        customer_billing = resolve_token_billing_result(
+            pricing,
+            model=payload.model,
             usage=usage,
-            model_info=pricing.customer_model_info,
         )
-        provider_billing = compute_billing_result(
-            mode="rerank",
+        provider_billing = resolve_token_billing_result(
+            pricing,
+            model=payload.model,
             usage=usage,
-            model_info=pricing.provider_model_info,
+            pricing_view="provider",
         )
-        request_cost = billing.cost
+        request_cost = customer_billing.billing.cost
+        provider_cost = (
+            None
+            if provider_billing.billing.unpriced_reason is not None
+            else provider_billing.billing.cost
+        )
         increment_request(
             model=payload.model, api_provider=api_provider,
             api_key=auth.api_key, user=auth.user_id, team=auth.team_id, status_code=200,
@@ -218,8 +232,15 @@ async def rerank(request: Request, payload: RerankRequest):
                             "deployment_model": deployment_model,
                         },
                         pricing,
-                        provider_cost=provider_billing.cost,
-                        billing=billing,
+                        provider_cost=provider_cost,
+                        billing=customer_billing.billing,
+                        provider_billing=provider_billing.billing,
+                        effective_pricing_sources=(
+                            customer_billing.pricing_sources_used
+                        ),
+                        missing_pricing_fields=(
+                            customer_billing.missing_pricing_fields
+                        ),
                     ),
                     request,
                 ),

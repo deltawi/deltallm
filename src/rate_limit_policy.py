@@ -119,6 +119,18 @@ class RateLimitLease:
         self._legacy_parallel_pending = False
 
 
+@dataclass(frozen=True, slots=True)
+class _StaticTierCapacityObservation:
+    pool_key: str
+    callable_key: str
+    organization_id: str
+    tier_key: str | None
+    scope: str
+    dimension: str
+    saturation: float
+    active_org_count: None = None
+
+
 def compute_rate_limit_state(result: RateLimitResult, checks: list[RateLimitCheck]) -> RateLimitState:
     if not result.checks or not result.current_values:
         return RateLimitState()
@@ -317,7 +329,13 @@ async def acquire_rate_limit_controls(
         getattr(auth, "api_key", None),
         getattr(auth, "max_parallel_requests", None),
     )
-    if tier_controls.fair_share_checks:
+    use_unified_admission = bool(
+        tier_controls.fair_share_checks
+        or tier_controls.capacity_rate_checks
+        or legacy_parallel_check is not None
+        or tier_controls.parallel_checks
+    )
+    if use_unified_admission:
         fair_share_started = perf_counter()
         all_parallel_checks = [
             check
@@ -328,6 +346,7 @@ async def acquire_rate_limit_controls(
             admission = await limiter.check_rate_limits_and_tier_fair_share_atomic(
                 checks,
                 list(tier_controls.fair_share_checks),
+                capacity_rate_checks=list(tier_controls.capacity_rate_checks),
                 active_ttl_seconds=tier_capacity_fair_share_active_ttl_seconds,
                 legacy_parallel_check=legacy_parallel_check,
                 parallel_checks=list(tier_controls.parallel_checks),
@@ -335,10 +354,11 @@ async def acquire_rate_limit_controls(
         except RateLimitError as exc:
             decision = getattr(exc, "tier_fair_share_decision", None)
             if decision is not None:
-                observe_tier_capacity_fair_share_latency(
-                    result="denied",
-                    latency_seconds=perf_counter() - fair_share_started,
-                )
+                if tier_controls.fair_share_checks:
+                    observe_tier_capacity_fair_share_latency(
+                        result="denied",
+                        latency_seconds=perf_counter() - fair_share_started,
+                    )
                 await _record_tier_fair_share_decision(
                     decision=decision,
                     allowed=False,
@@ -348,6 +368,24 @@ async def acquire_rate_limit_controls(
                     checks=checks,
                     state=_fair_share_429_state(decision, retry_after=getattr(exc, "retry_after", None)),
                 )
+            elif (
+                static_capacity_check := _capacity_rate_check_for_error(
+                    tier_controls.capacity_rate_checks,
+                    exc,
+                )
+            ) is not None:
+                _record_static_tier_capacity_observation(
+                    static_capacity_check,
+                    outcome="denied",
+                    current_value=int(
+                        getattr(
+                            exc,
+                            "rate_limit_current",
+                            static_capacity_check.rate_check.limit,
+                        )
+                    ),
+                )
+                _annotate_rate_limit_error(exc, checks=checks)
             elif _looks_like_parallel_limit_error(exc, all_parallel_checks):
                 failed_check = _parallel_check_for_error(exc, all_parallel_checks)
                 _ensure_parallel_error_fields(exc, failed_check)
@@ -360,15 +398,20 @@ async def acquire_rate_limit_controls(
                 _annotate_rate_limit_error(exc, checks=checks)
             raise
 
-        observe_tier_capacity_fair_share_latency(
-            result="allowed",
-            latency_seconds=perf_counter() - fair_share_started,
-        )
+        if tier_controls.fair_share_checks:
+            observe_tier_capacity_fair_share_latency(
+                result="allowed",
+                latency_seconds=perf_counter() - fair_share_started,
+            )
         for decision in admission.fair_share_decisions:
             await _record_tier_fair_share_decision(
                 decision=decision,
                 allowed=True,
             )
+        _record_allowed_static_tier_capacity(
+            tier_controls.capacity_rate_checks,
+            admission.rate_result,
+        )
         return RateLimitLease(
             legacy_parallel_lease=admission.legacy_parallel_lease,
             parallel_leases=admission.parallel_leases,
@@ -479,6 +522,64 @@ async def _record_tier_fair_share_decision(
             dimension=dimension,
             saturation=float(getattr(decision, "saturation", 0.0) or 0.0),
         )
+
+
+def _capacity_rate_check_for_error(capacity_checks: tuple[Any, ...], exc: RateLimitError) -> Any | None:
+    failed_scope = str(getattr(exc, "param", "") or "")
+    for capacity_check in capacity_checks:
+        if str(getattr(capacity_check, "scope", "")) == failed_scope:
+            return capacity_check
+    return None
+
+
+def _record_allowed_static_tier_capacity(
+    capacity_checks: tuple[Any, ...],
+    result: RateLimitResult,
+) -> None:
+    for capacity_check in capacity_checks:
+        rate_check = getattr(capacity_check, "rate_check", None)
+        if rate_check is None:
+            continue
+        for index, admitted_check in enumerate(result.checks):
+            if admitted_check is not rate_check and admitted_check != rate_check:
+                continue
+            current_value = result.current_values[index] if index < len(result.current_values) else 0
+            _record_static_tier_capacity_observation(
+                capacity_check,
+                outcome="allowed",
+                current_value=current_value,
+            )
+            break
+
+
+def _record_static_tier_capacity_observation(
+    capacity_check: Any,
+    *,
+    outcome: str,
+    current_value: int,
+) -> None:
+    rate_check = capacity_check.rate_check
+    saturation = (
+        max(0, int(current_value)) / rate_check.limit
+        if int(rate_check.limit) > 0
+        else 0.0
+    )
+    observation = _StaticTierCapacityObservation(
+        pool_key=str(capacity_check.pool_key),
+        callable_key=str(capacity_check.callable_key),
+        organization_id=str(capacity_check.organization_id),
+        tier_key=getattr(capacity_check, "tier_key", None),
+        scope=str(rate_check.scope),
+        dimension=str(capacity_check.dimension),
+        saturation=saturation,
+    )
+    record_tier_capacity_observation(observation, outcome=outcome)
+    set_tier_capacity_pool_saturation(
+        pool_key=observation.pool_key,
+        model=observation.callable_key,
+        dimension=observation.dimension,
+        saturation=saturation,
+    )
 
 
 async def release_rate_limit_controls(*, limiter: LimitCounter, lease: RateLimitLease) -> None:

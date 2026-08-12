@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
 
 from fastapi import Request
+from pydantic import ValidationError
 
 from src.callbacks import CallbackManager
 from src.chat.audit import emit_prompt_resolution_audit_event
 from src.models.errors import InvalidRequestError
 from src.models.request_serialization import dump_request_for_preflight
 from src.models.requests import ChatCompletionRequest
+from src.middleware.rate_limit import check_and_acquire_rate_limits_for_payload
 from src.routers.routing_decision import set_prompt_provenance
 from src.services.model_visibility import (
     ensure_model_allowed,
@@ -20,28 +23,32 @@ from src.services.model_visibility import (
 from src.services.prompt_registry import apply_route_preferences_to_metadata, parse_prompt_reference
 
 
+@dataclass(frozen=True, slots=True)
+class TextPreflightResult:
+    auth: Any
+    payload: ChatCompletionRequest
+    request_data: dict[str, Any]
+    callback_manager: CallbackManager
+    guardrail_middleware: Any
+
+
 async def run_text_preflight(
     *,
     request: Request,
     payload: ChatCompletionRequest,
     request_data: dict[str, Any] | None,
 ) -> tuple[Any, ChatCompletionRequest, dict[str, Any], CallbackManager, Any]:
+    prepared = getattr(request.state, "prepared_text_request", None)
+    if isinstance(prepared, TextPreflightResult):
+        return (
+            prepared.auth,
+            prepared.payload,
+            dict(prepared.request_data),
+            prepared.callback_manager,
+            prepared.guardrail_middleware,
+        )
+
     auth = request.state.user_api_key
-    ensure_model_allowed(
-        auth,
-        payload.model,
-        callable_target_grant_service=getattr(request.app.state, "callable_target_grant_service", None),
-        tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
-        policy_mode=get_callable_target_policy_mode_from_app(request.app),
-        tier_policy_mode=get_tier_policy_mode_from_app(request.app),
-        tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(request.app),
-        emit_shadow_log=True,
-    )
-
-    from src.routers.utils import enforce_budget_if_configured
-
-    await enforce_budget_if_configured(request, model=payload.model, auth=auth)
-
     guardrail_middleware = request.app.state.guardrail_middleware
     callback_manager: CallbackManager = getattr(request.app.state, "callback_manager", CallbackManager())
     data = dict(request_data) if request_data is not None else dump_request_for_preflight(payload)
@@ -120,4 +127,40 @@ async def run_text_preflight(
         user_api_key_dict=auth.model_dump(mode="python"),
         call_type="completion",
     )
-    return auth, ChatCompletionRequest.model_validate(data), data, callback_manager, guardrail_middleware
+    try:
+        transformed_payload = ChatCompletionRequest.model_validate(data)
+    except ValidationError as exc:
+        raise InvalidRequestError(
+            message="Request data was invalid after pre-call policy processing"
+        ) from exc
+    transformed_data = dump_request_for_preflight(transformed_payload)
+
+    ensure_model_allowed(
+        auth,
+        transformed_payload.model,
+        callable_target_grant_service=getattr(request.app.state, "callable_target_grant_service", None),
+        tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
+        policy_mode=get_callable_target_policy_mode_from_app(request.app),
+        tier_policy_mode=get_tier_policy_mode_from_app(request.app),
+        tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(request.app),
+        emit_shadow_log=True,
+    )
+
+    from src.routers.utils import enforce_budget_if_configured
+
+    await enforce_budget_if_configured(request, model=transformed_payload.model, auth=auth)
+    await check_and_acquire_rate_limits_for_payload(
+        request,
+        model=transformed_payload.model,
+        payload=transformed_data,
+    )
+
+    result = TextPreflightResult(
+        auth=auth,
+        payload=transformed_payload,
+        request_data=dict(transformed_data),
+        callback_manager=callback_manager,
+        guardrail_middleware=guardrail_middleware,
+    )
+    request.state.prepared_text_request = result
+    return auth, transformed_payload, dict(transformed_data), callback_manager, guardrail_middleware
