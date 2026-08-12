@@ -14,11 +14,12 @@ import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 
-from src.billing.audio_usage import billing_metadata, normalize_speech_usage
+from src.billing.audio_usage import normalize_speech_usage
 from src.billing.cost import compute_billing_result
+from src.billing.tier_pricing import attach_pricing_metadata, resolve_deployment_tier_pricing
 from src.callbacks import CallbackManager, build_standard_logging_payload
 from src.middleware.auth import require_api_key
-from src.middleware.rate_limit import enforce_rate_limits
+from src.middleware.rate_limit import check_and_acquire_rate_limits_for_payload
 from src.metrics import (
     increment_request,
     increment_request_failure,
@@ -46,7 +47,12 @@ from src.routers.routing_decision import (
     update_served_route_decision,
 )
 from src.routers.utils import enforce_budget_if_configured, fire_and_forget
-from src.services.model_visibility import ensure_model_allowed, get_callable_target_policy_mode_from_app
+from src.services.model_visibility import (
+    ensure_model_allowed,
+    get_callable_target_policy_mode_from_app,
+    get_tier_policy_missing_service_mode_from_app,
+    get_tier_policy_mode_from_app,
+)
 
 router = APIRouter(prefix="/v1", tags=["audio"])
 
@@ -172,7 +178,7 @@ async def _execute_tts(
     }
 
 
-@router.post("/audio/speech", dependencies=[Depends(require_api_key), Depends(enforce_rate_limits)])
+@router.post("/audio/speech", dependencies=[Depends(require_api_key)])
 async def audio_speech(request: Request, payload: AudioSpeechRequest):
     request_start = perf_counter()
     callback_start = datetime.now(tz=UTC)
@@ -188,13 +194,21 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
         auth,
         payload.model,
         callable_target_grant_service=getattr(request.app.state, "callable_target_grant_service", None),
+        tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
         policy_mode=get_callable_target_policy_mode_from_app(request.app),
+        tier_policy_mode=get_tier_policy_mode_from_app(request.app),
+        tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(request.app),
         emit_shadow_log=True,
     )
     await enforce_budget_if_configured(request, model=payload.model, auth=auth)
 
     callback_manager: CallbackManager = getattr(request.app.state, "callback_manager", CallbackManager())
     request_data = payload.model_dump(exclude_none=True)
+    await check_and_acquire_rate_limits_for_payload(
+        request,
+        model=payload.model,
+        payload=request_data,
+    )
 
     app_router = request.app.state.router
     model_group = app_router.resolve_model_group(payload.model)
@@ -233,7 +247,7 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
         api_latency_ms = result["_api_latency_ms"]
         api_base = result["_api_base"]
         deployment_model = result["_deployment_model"]
-        model_info = result["_model_info"]
+        result.pop("_model_info", None)
         effective_format = result["_response_format"]
         billing_payload = result.get("_billing_payload")
 
@@ -248,15 +262,35 @@ async def audio_speech(request: Request, payload: AudioSpeechRequest):
             mode="audio_speech",
             usage=usage,
         )
-        billing = compute_billing_result(mode="audio_speech", usage=usage, model_info=model_info)
+        pricing = resolve_deployment_tier_pricing(
+            auth=auth,
+            model=payload.model,
+            deployment=served_deployment,
+            tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
+            mode="sync",
+        )
+        billing = compute_billing_result(
+            mode="audio_speech",
+            usage=usage,
+            model_info=pricing.customer_model_info,
+        )
+        provider_billing = compute_billing_result(
+            mode="audio_speech",
+            usage=usage,
+            model_info=pricing.provider_model_info,
+        )
         request_cost = billing.cost
         spend_metadata = attach_route_decision(
-            {
-                "api_base": api_base,
-                "provider": api_provider,
-                "deployment_model": deployment_model,
-                "billing": billing_metadata(billing),
-            },
+            attach_pricing_metadata(
+                {
+                    "api_base": api_base,
+                    "provider": api_provider,
+                    "deployment_model": deployment_model,
+                },
+                pricing,
+                provider_cost=provider_billing.cost,
+                billing=billing,
+            ),
             request,
         )
         increment_request(

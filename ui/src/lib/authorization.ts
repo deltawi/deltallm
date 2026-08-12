@@ -2,6 +2,7 @@ export type UIAccess = {
   dashboard: boolean;
   models: boolean;
   model_admin: boolean;
+  tiers: boolean;
   named_credentials: boolean;
   route_groups: boolean;
   prompts: boolean;
@@ -36,6 +37,7 @@ function emptyUiAccess(): UIAccess {
     dashboard: false,
     models: false,
     model_admin: false,
+    tiers: false,
     named_credentials: false,
     route_groups: false,
     prompts: false,
@@ -61,6 +63,7 @@ function fullUiAccess(): UIAccess {
     dashboard: true,
     models: true,
     model_admin: true,
+    tiers: true,
     named_credentials: true,
     route_groups: true,
     prompts: true,
@@ -97,6 +100,7 @@ function deriveUiAccessFromPermissions(session: SessionLike | null | undefined):
     dashboard: isPlatformAdmin || permissions.has('spend.read'),
     models: true,
     model_admin: isPlatformAdmin,
+    tiers: isPlatformAdmin,
     named_credentials: isPlatformAdmin,
     route_groups: isPlatformAdmin,
     prompts: isPlatformAdmin,
@@ -125,7 +129,12 @@ export function resolveUiAccess(
     return fullUiAccess();
   }
   if (session?.ui_access) {
-    return { ...emptyUiAccess(), ...session.ui_access };
+    const access = { ...emptyUiAccess(), ...session.ui_access };
+    if (session.role !== 'platform_admin') {
+      access.tiers = false;
+      access.organization_create = false;
+    }
+    return access;
   }
   return deriveUiAccessFromPermissions(session);
 }
@@ -141,6 +150,7 @@ const DEFAULT_UI_ROUTE_ORDER: Array<[UIAccessKey, string]> = [
   ['teams', '/teams'],
   ['organizations', '/organizations'],
   ['models', '/models'],
+  ['tiers', '/tiers'],
   ['named_credentials', '/named-credentials'],
   ['mcp_servers', '/mcp-servers'],
   ['usage', '/usage'],

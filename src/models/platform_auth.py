@@ -99,6 +99,7 @@ class UIAccessResponse(BaseModel):
     models: bool = False
     model_admin: bool = False
     named_credentials: bool = False
+    tiers: bool = False
     route_groups: bool = False
     prompts: bool = False
     mcp_servers: bool = False

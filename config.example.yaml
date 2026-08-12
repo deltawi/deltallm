@@ -91,6 +91,15 @@ general_settings:
   cache_backend: memory
   cache_ttl: 3600
   cache_max_size: 10000
+  # Organization tier policy compiles into an in-memory snapshot. Enforcement is staged.
+  tier_policy_mode: disabled
+  tier_policy_missing_service_mode: fail_open
+  tier_policy_refresh_interval_seconds: 300
+  tier_policy_refresh_jitter_seconds: 1
+  tier_policy_transition_grace_seconds: 0.05
+  tier_policy_refresh_retry_delay_seconds: 5
+  tier_capacity_fair_share_enabled: false
+  tier_capacity_fair_share_active_ttl_seconds: 10
 
   # Governance notifications are opt-in and disabled by default.
   governance_notifications_enabled: false

@@ -78,6 +78,7 @@ async def test_budget_enforced_for_non_text_endpoints(client, test_app, path, kw
     assert response.status_code == 429
     payload = response.json()["error"]
     assert payload["type"] == "budget_exceeded"
+    assert not [key for key in test_app.state.redis.store if key.startswith("ratelimit:")]
 
 
 @pytest.mark.asyncio
@@ -90,6 +91,7 @@ async def test_budget_enforced_for_audio_transcriptions(client, test_app):
     assert response.status_code == 429
     payload = response.json()["error"]
     assert payload["type"] == "budget_exceeded"
+    assert not [key for key in test_app.state.redis.store if key.startswith("ratelimit:")]
 
 
 @pytest.mark.asyncio

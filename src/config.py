@@ -166,6 +166,7 @@ class ModelInfo(BaseModel):
     output_cost_per_image: float | None = None
     input_cost_per_audio_token: float | None = None
     output_cost_per_audio_token: float | None = None
+    cost_per_request: float | None = None
     output_vector_size: int | None = None
     rpm_limit: int | None = None
     tpm_limit: int | None = None
@@ -456,6 +457,16 @@ class GeneralSettings(BaseModel):
     invitation_token_ttl_hours: int = Field(default=72, ge=1, le=720)
     password_reset_token_ttl_minutes: int = Field(default=60, ge=5, le=1440)
     api_key_auth_cache_ttl_seconds: int = 300
+    cache_invalidation_worker_enabled: bool = True
+    cache_invalidation_worker_poll_interval_seconds: float = Field(default=5.0, gt=0)
+    cache_invalidation_worker_batch_size: int = Field(default=25, ge=1, le=500)
+    cache_invalidation_worker_max_concurrency: int = Field(default=4, ge=1, le=50)
+    cache_invalidation_worker_lease_seconds: int = Field(default=60, ge=5)
+    cache_invalidation_worker_record_timeout_seconds: float = Field(default=10.0, gt=0, le=300)
+    cache_invalidation_max_attempts: int = Field(default=10, ge=1, le=100)
+    cache_invalidation_retry_initial_seconds: int = Field(default=5, ge=1)
+    cache_invalidation_retry_max_seconds: int = Field(default=300, ge=1)
+    cache_invalidation_immediate_timeout_seconds: float = Field(default=0.5, gt=0, le=30)
     governance_notifications_enabled: bool = False
     budget_notifications_enabled: bool = False
     key_lifecycle_notifications_enabled: bool = False
@@ -645,6 +656,14 @@ class GeneralSettings(BaseModel):
     embeddings_batch_gc_interval_seconds: float = 86400.0
     embeddings_batch_gc_scan_limit: int = 200
     callable_target_scope_policy_mode: Literal["legacy", "shadow", "enforce"] = "enforce"
+    tier_policy_mode: Literal["disabled", "shadow", "enforce"] = "disabled"
+    tier_policy_missing_service_mode: Literal["fail_open", "fail_closed"] = "fail_open"
+    tier_policy_refresh_interval_seconds: float = Field(default=300.0, gt=0.0)
+    tier_policy_refresh_jitter_seconds: float = Field(default=1.0, ge=0.0)
+    tier_policy_transition_grace_seconds: float = Field(default=0.05, ge=0.0)
+    tier_policy_refresh_retry_delay_seconds: float = Field(default=5.0, gt=0.0)
+    tier_capacity_fair_share_enabled: bool = False
+    tier_capacity_fair_share_active_ttl_seconds: int = Field(default=10, ge=1, le=300)
     audit_enabled: bool = True
     audit_retention_worker_enabled: bool = True
     audit_retention_interval_seconds: float = 86400.0
@@ -817,6 +836,14 @@ class Settings(BaseSettings):
     redis_degraded_mode: Literal["fail_open", "fail_closed"] = "fail_open"
     salt_key: str | None = None
     callable_target_scope_policy_mode: Literal["legacy", "shadow", "enforce"] = "enforce"
+    tier_policy_mode: Literal["disabled", "shadow", "enforce"] = "disabled"
+    tier_policy_missing_service_mode: Literal["fail_open", "fail_closed"] = "fail_open"
+    tier_policy_refresh_interval_seconds: float = Field(default=300.0, gt=0.0)
+    tier_policy_refresh_jitter_seconds: float = Field(default=1.0, ge=0.0)
+    tier_policy_transition_grace_seconds: float = Field(default=0.05, ge=0.0)
+    tier_policy_refresh_retry_delay_seconds: float = Field(default=5.0, gt=0.0)
+    tier_capacity_fair_share_enabled: bool = False
+    tier_capacity_fair_share_active_ttl_seconds: int = Field(default=10, ge=1, le=300)
 
     @field_validator("master_key")
     @classmethod

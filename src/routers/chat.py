@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-import json
 from time import perf_counter
 from typing import Any, Callable
 
@@ -9,6 +8,7 @@ import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from src.cache.pricing import cache_pricing_snapshot_from_deployment
 from src.cache.streaming import StreamWriteContext
 from src.chat import (
     audit_action_for_path,
@@ -20,8 +20,8 @@ from src.chat import (
     open_stream_with_first_chunk,
     run_text_preflight,
 )
+from src.chat.stream_usage import StreamUsageTracker
 from src.middleware.auth import require_api_key
-from src.middleware.rate_limit import enforce_rate_limits
 from src.mcp.orchestrator import MCPChatOrchestrator, chat_request_has_mcp_tools
 from src.models.errors import InvalidRequestError, ServiceUnavailableError
 from src.models.requests import ChatCompletionRequest
@@ -40,32 +40,7 @@ from src.routers.routing_decision import (
 router = APIRouter(prefix="/v1", tags=["chat"])
 
 
-class _StreamUsageTracker:
-    def __init__(self) -> None:
-        self._usage: dict[str, Any] = {}
-
-    def add_line(self, line: str) -> None:
-        if not line.startswith("data:"):
-            return
-        payload = line[len("data:") :].strip()
-        if not payload or payload == "[DONE]" or '"usage"' not in payload:
-            return
-        try:
-            chunk = json.loads(payload)
-        except json.JSONDecodeError:
-            return
-        if not isinstance(chunk, dict):
-            return
-        usage = chunk.get("usage")
-        if isinstance(usage, dict):
-            self._usage = dict(usage)
-
-    @property
-    def usage(self) -> dict[str, Any]:
-        return dict(self._usage)
-
-
-@router.post("/chat/completions", dependencies=[Depends(require_api_key), Depends(enforce_rate_limits)])
+@router.post("/chat/completions", dependencies=[Depends(require_api_key)])
 async def chat_completions(request: Request, payload: ChatCompletionRequest):
     return await handle_chat_like_request(request, payload)
 
@@ -129,10 +104,11 @@ async def handle_chat_like_request(
                 stream_handler = getattr(request.app.state, "streaming_cache_handler", None)
                 stream_id = None
                 stream_write_context: StreamWriteContext | None = None
-                stream_usage = _StreamUsageTracker()
+                stream_usage = StreamUsageTracker()
                 opened_stream = None
                 served_deployment = None
                 failure_exc: Exception | None = None
+                stream_cache_complete = False
                 try:
                     opened_stream, served_deployment = await request.app.state.failover_manager.execute_with_failover(
                         primary_deployment=primary,
@@ -170,7 +146,7 @@ async def handle_chat_like_request(
                             cache_key=cache_context.cache_key,
                             ttl=cache_ttl,
                             model=payload.model,
-                            pricing=dict(served_deployment.model_info or {}),
+                            pricing=cache_pricing_snapshot_from_deployment(served_deployment),
                             deployment_id=served_deployment.deployment_id,
                             provider=resolve_provider(served_deployment.deltallm_params),
                             deployment_model=str(served_deployment.deltallm_params.get("model") or "") or None,
@@ -179,31 +155,48 @@ async def handle_chat_like_request(
 
                     initial = opened_stream.first_line
                     if initial:
-                        stream_usage.add_line(initial)
+                        line_info = stream_usage.add_line(initial)
                         if stream_id is not None and stream_handler is not None:
                             stream_handler.add_chunk_from_line(stream_id, initial)
-                        out_line = stream_line_transform(initial) if stream_line_transform is not None else initial
-                        if out_line is not None:
-                            yield f"{out_line}\n\n"
+                        if not (
+                            line_info.is_usage_only_chunk
+                            and not opened_stream.client_stream_usage_requested
+                        ):
+                            out_line = stream_line_transform(initial) if stream_line_transform is not None else initial
+                            if out_line is not None:
+                                yield f"{out_line}\n\n"
                     async for line in opened_stream.translated_stream:
                         if not line:
                             continue
 
-                        stream_usage.add_line(line)
+                        line_info = stream_usage.add_line(line)
                         if stream_id is not None and stream_handler is not None:
                             stream_handler.add_chunk_from_line(stream_id, line)
-                            if line.strip() == "data: [DONE]" and stream_write_context is not None:
-                                await stream_handler.finalize_and_store(stream_id, stream_write_context)
+                            if line.strip() == "data: [DONE]":
+                                stream_cache_complete = True
+
+                        if line_info.is_usage_only_chunk and not opened_stream.client_stream_usage_requested:
+                            continue
 
                         out_line = stream_line_transform(line) if stream_line_transform is not None else line
                         if out_line is None:
                             continue
                         yield f"{out_line}\n\n"
+                    resolved_usage = stream_usage.resolve(payload)
+                    if stream_id is not None and stream_handler is not None and stream_write_context is not None:
+                        if stream_cache_complete:
+                            await stream_handler.finalize_and_store(
+                                stream_id,
+                                stream_write_context,
+                                usage=resolved_usage.usage,
+                            )
+                        else:
+                            stream_handler.discard_stream(stream_id)
                     await record_router_usage(
                         request.app.state.router_state_backend,
                         served_deployment.deployment_id,
                         mode="chat",
-                        usage=stream_usage.usage,
+                        usage=resolved_usage.usage,
                     )
                     await emit_stream_success(
                         request=request,
@@ -222,6 +215,8 @@ async def handle_chat_like_request(
                         served_deployment=served_deployment,
                         api_base=api_base_local,
                         params=params,
+                        usage=resolved_usage.usage,
+                        usage_metadata=resolved_usage.metadata(),
                     )
                 except Exception as exc:
                     failure_exc = exc
@@ -291,7 +286,7 @@ async def handle_chat_like_request(
             primary_deployment_id=primary.deployment_id,
             served_deployment_id=served_deployment.deployment_id,
         )
-        request.state.cache_store_pricing = dict(served_deployment.model_info or {})
+        request.state.cache_store_pricing = cache_pricing_snapshot_from_deployment(served_deployment)
         request.state.cache_store_deployment_id = served_deployment.deployment_id
         request.state.cache_store_provider = resolve_provider(served_deployment.deltallm_params)
         request.state.cache_store_deployment_model = str(served_deployment.deltallm_params.get("model") or "") or None

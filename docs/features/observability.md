@@ -70,6 +70,14 @@ Core metrics include:
 | `deltallm_audit_write_failures_total` | Counter | Audit write failures |
 | `deltallm_audit_events_dropped_total` | Counter | Dropped audit events |
 | `deltallm_audit_ingestion_latency_seconds` | Histogram | Audit write latency |
+| `deltallm_tier_policy_shadow_mismatches_total` | Counter | Differences observed while tier policy runs in shadow mode |
+| `deltallm_tier_capacity_requests_total` | Counter | Allowed and denied pool admissions by pool, model, tier, scope, and outcome |
+| `deltallm_tier_capacity_fair_share_decisions_total` | Counter | Advanced fair-share decisions and reasons |
+| `deltallm_tier_capacity_pool_saturation` | Gauge | Current RPM or TPM pool saturation ratio |
+| `deltallm_tier_capacity_pool_active_organizations` | Gauge | Active organizations in advanced fair-share pools |
+| `deltallm_tier_capacity_fair_share_latency_seconds` | Histogram | Advanced fair-share admission latency |
+
+Both static hard caps and advanced fair-share strategies emit `deltallm_tier_capacity_requests_total` and saturation. Capacity request metrics intentionally omit organization IDs to keep Prometheus cardinality bounded; use the admin capacity dashboard for per-organization top-consumer and limit-hit details. Active-organization, fair-share-decision, and fair-share-latency series apply only to `weighted_fair` and `reserved_burst`. See the [Organization Tiers Rollout](../deployment/organization-tiers-rollout.md) runbook for queries and release checks.
 
 ## Callback Integrations
 

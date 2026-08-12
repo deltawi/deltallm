@@ -30,14 +30,19 @@ def _serialize_error(exc: ProxyError) -> dict[str, object]:
     return payload
 
 
+def proxy_error_response(exc: ProxyError) -> JSONResponse:
+    """Build the canonical HTTP response for a gateway error."""
+    headers = {}
+    if isinstance(exc, RateLimitError) and getattr(exc, "retry_after", None):
+        headers["Retry-After"] = str(exc.retry_after)
+    return JSONResponse(status_code=exc.status_code, content=_serialize_error(exc), headers=headers)
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ProxyError)
     async def proxy_error_handler(request: Request, exc: ProxyError) -> JSONResponse:
         maybe_log_proxy_error(request, exc)
-        headers = {}
-        if isinstance(exc, RateLimitError) and getattr(exc, "retry_after", None):
-            headers["Retry-After"] = str(exc.retry_after)
-        return JSONResponse(status_code=exc.status_code, content=_serialize_error(exc), headers=headers)
+        return proxy_error_response(exc)
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:

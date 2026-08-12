@@ -30,6 +30,14 @@ deltallm_prompt_resolution_latency_metric = Histogram(
     registry=get_prometheus_registry(),
 )
 
+deltallm_tier_capacity_fair_share_latency_metric = Histogram(
+    "deltallm_tier_capacity_fair_share_latency_seconds",
+    "Tier capacity fair-share Redis decision latency",
+    ["result"],
+    buckets=[0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1],
+    registry=get_prometheus_registry(),
+)
+
 
 def observe_request_latency(*, model: str, api_provider: str, status_code: int, latency_seconds: float) -> None:
     deltallm_request_total_latency_metric.labels(
@@ -50,4 +58,10 @@ def observe_prompt_resolution_latency(*, source: str, status: str, latency_secon
     deltallm_prompt_resolution_latency_metric.labels(
         source=sanitize_label(source),
         status=sanitize_label(status),
+    ).observe(max(0.0, float(latency_seconds)))
+
+
+def observe_tier_capacity_fair_share_latency(*, result: str, latency_seconds: float) -> None:
+    deltallm_tier_capacity_fair_share_latency_metric.labels(
+        result=sanitize_label(result),
     ).observe(max(0.0, float(latency_seconds)))

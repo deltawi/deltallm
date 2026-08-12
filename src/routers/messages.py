@@ -7,7 +7,6 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from src.middleware.auth import require_api_key
-from src.middleware.rate_limit import enforce_rate_limits
 from src.models.errors import InvalidRequestError
 from src.models.requests import AnthropicMessagesRequest
 from src.routers.anthropic_adapters import (
@@ -34,7 +33,7 @@ def _anthropic_validation_error_response(exc: ValidationError) -> JSONResponse:
     return _anthropic_error_response(status_code=400, error_type="invalid_request_error", message=message)
 
 
-@router.post("/messages", dependencies=[Depends(require_api_key), Depends(enforce_rate_limits)])
+@router.post("/messages", dependencies=[Depends(require_api_key)])
 async def messages(request: Request):
     try:
         request_body = await request.json()

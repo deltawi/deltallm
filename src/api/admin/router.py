@@ -15,6 +15,7 @@ from src.api.admin.endpoints import (
     mcp_router,
     models_router,
     named_credentials_router,
+    organization_tier_assignments_router,
     organizations_router,
     prompt_registry_router,
     rbac_router,
@@ -22,6 +23,9 @@ from src.api.admin.endpoints import (
     service_accounts_router,
     spend_router,
     teams_router,
+    tier_capacity_router,
+    tier_policy_preview_router,
+    tiers_router,
     users_router,
 )
 from src.ui.routes import ui_router as legacy_ui_router
@@ -42,10 +46,14 @@ admin_router.include_router(service_accounts_router)
 admin_router.include_router(teams_router)
 admin_router.include_router(users_router)
 admin_router.include_router(organizations_router)
+admin_router.include_router(organization_tier_assignments_router)
 admin_router.include_router(batches_router)
 admin_router.include_router(batch_create_sessions_router)
 admin_router.include_router(rbac_router)
 admin_router.include_router(guardrails_router)
+admin_router.include_router(tier_capacity_router)
+admin_router.include_router(tiers_router)
+admin_router.include_router(tier_policy_preview_router)
 admin_router.include_router(route_groups_router)
 admin_router.include_router(prompt_registry_router)
 admin_router.include_router(config_router)

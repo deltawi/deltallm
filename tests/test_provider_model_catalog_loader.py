@@ -80,6 +80,26 @@ def test_elevenlabs_catalog_exposes_official_sources_and_metadata() -> None:
     assert transcription_metadata["input_cost_per_second"] == 0.0000611111111111
 
 
+def test_catalog_validation_accepts_request_pricing_metadata() -> None:
+    catalog = ProviderCatalogDocument.model_validate(
+        {
+            "provider": "test",
+            "last_verified_at": "2026-04-01",
+            "source_type": "official_docs",
+            "sources": [{"label": "Test", "url": "https://example.com"}],
+            "models": [
+                {
+                    "id": "flat-priced-image-model",
+                    "supported_modes": ["image_generation"],
+                    "metadata": {"cost_per_request": 0.75},
+                }
+            ],
+        }
+    )
+
+    assert catalog.models[0].metadata["cost_per_request"] == 0.75
+
+
 def test_canonical_catalog_provider_maps_azure_alias() -> None:
     assert canonical_catalog_provider("azure") == "azure_openai"
 

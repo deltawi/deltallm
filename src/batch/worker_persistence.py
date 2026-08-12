@@ -1,28 +1,166 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import contextlib
+from dataclasses import dataclass
 from datetime import UTC, datetime
 import logging
+import random
 from time import perf_counter
-from typing import Any, Awaitable
+from typing import Any, Awaitable, Iterator
 
 from src.batch.endpoints import batch_call_type_for_endpoint
-from src.batch.policy import acquire_batch_policy_lease, release_batch_policy_lease
+from src.batch.policy import BatchPolicyLease, acquire_batch_policy_lease, release_batch_policy_lease
 from src.batch.worker_types import BatchItemLeaseLostError, _PreparedChatItem, _PreparedEmbeddingItem
-from src.billing.cost import ModelPricing
+from src.billing.tier_pricing import (
+    PricingResolution,
+    TokenBillingResolution,
+    resolve_deployment_tier_pricing,
+    resolve_token_billing_result,
+)
+from src.rate_limit_lease_refresh import RateLimitLeaseRefresher
 
 logger = logging.getLogger(__name__)
+_POLICY_RELEASE_RETRY_DRAIN_LIMIT = 16
+_POLICY_RELEASE_RETRY_QUEUE_LIMIT = 1024
+_POLICY_RELEASE_RETRY_INITIAL_SECONDS = 0.5
+_POLICY_RELEASE_RETRY_MAX_SECONDS = 30.0
+
+
+@dataclass(frozen=True, slots=True)
+class _PolicyReleaseRetry:
+    lease: BatchPolicyLease
+    attempt_count: int
+    next_attempt_at: float
+
+
+@dataclass(frozen=True, slots=True)
+class _BatchItemCosts:
+    billed_cost: float
+    provider_cost: float
+    pricing: PricingResolution
+    customer_billing: TokenBillingResolution
+    provider_billing: TokenBillingResolution
+
+    def __iter__(self) -> Iterator[float | PricingResolution]:
+        """Preserve the historical three-value internal unpacking contract."""
+        yield self.billed_cost
+        yield self.provider_cost
+        yield self.pricing
+
+
+def _policy_release_retry_delay_seconds(attempt_count: int) -> float:
+    exponential_delay = _POLICY_RELEASE_RETRY_INITIAL_SECONDS * (2 ** max(0, int(attempt_count)))
+    capped_delay = min(_POLICY_RELEASE_RETRY_MAX_SECONDS, exponential_delay)
+    jitter = random.uniform(0.0, capped_delay * 0.2)
+    return capped_delay + jitter
 
 
 class WorkerPersistenceMixin:
-    def _deployment_pricing(self, deployment) -> ModelPricing | None:  # noqa: ANN001
-        if deployment.input_cost_per_token or deployment.output_cost_per_token:
-            return ModelPricing(
-                input_cost_per_token=deployment.input_cost_per_token,
-                output_cost_per_token=deployment.output_cost_per_token,
+    def _policy_release_retry_queue(self) -> deque[_PolicyReleaseRetry]:
+        queue = getattr(self, "_pending_policy_release_retries", None)
+        if queue is None:
+            queue = deque()
+            self._pending_policy_release_retries = queue
+        return queue
+
+    def _queue_policy_lease_release_retry(
+        self,
+        lease: BatchPolicyLease,
+        *,
+        attempt_count: int = 0,
+    ) -> None:
+        if not lease.rate_limit_lease.pending_parallel_acquisitions:
+            return
+        delay_seconds = _policy_release_retry_delay_seconds(attempt_count)
+        entry = _PolicyReleaseRetry(
+            lease=lease,
+            attempt_count=attempt_count,
+            next_attempt_at=perf_counter() + delay_seconds,
+        )
+        self._insert_policy_release_retry(entry)
+
+    def _insert_policy_release_retry(self, entry: _PolicyReleaseRetry) -> None:
+        queue = self._policy_release_retry_queue()
+        if len(queue) >= _POLICY_RELEASE_RETRY_QUEUE_LIMIT:
+            logger.error(
+                "batch policy release retry queue full pending=%s",
+                len(queue),
             )
-        return None
+            return
+        for index, queued in enumerate(queue):
+            if entry.next_attempt_at < queued.next_attempt_at:
+                queue.insert(index, entry)
+                return
+        queue.append(entry)
+
+    async def _drain_policy_lease_release_retries(
+        self,
+        *,
+        max_releases: int = _POLICY_RELEASE_RETRY_DRAIN_LIMIT,
+    ) -> None:
+        queue = self._policy_release_retry_queue()
+        if not queue:
+            return
+        attempts = 0
+        now = perf_counter()
+        max_attempts = max(0, int(max_releases))
+        while queue and attempts < max_attempts and queue[0].next_attempt_at <= now:
+            retry = queue.popleft()
+            released = await release_batch_policy_lease(app=self.app, lease=retry.lease)
+            attempts += 1
+            if not released:
+                self._queue_policy_lease_release_retry(
+                    retry.lease,
+                    attempt_count=retry.attempt_count + 1,
+                )
+
+    def _resolve_batch_item_pricing(
+        self,
+        *,
+        prepared: _PreparedEmbeddingItem | _PreparedChatItem,
+        served_deployment: Any,
+    ) -> PricingResolution:
+        return resolve_deployment_tier_pricing(
+            auth=prepared.policy_auth,
+            model=prepared.payload.model,
+            deployment=served_deployment,
+            tier_policy_service=getattr(self.app.state, "tier_policy_service", None),
+            mode="batch",
+        )
+
+    def _batch_item_costs(
+        self,
+        *,
+        prepared: _PreparedEmbeddingItem | _PreparedChatItem,
+        usage: dict[str, Any],
+        served_deployment: Any,
+    ) -> _BatchItemCosts:
+        pricing = self._resolve_batch_item_pricing(
+            prepared=prepared,
+            served_deployment=served_deployment,
+        )
+        customer_billing = resolve_token_billing_result(
+            pricing,
+            model=prepared.payload.model,
+            usage=usage,
+            mode="batch",
+        )
+        provider_billing = resolve_token_billing_result(
+            pricing,
+            model=prepared.payload.model,
+            usage=usage,
+            mode="sync",
+            pricing_view="provider",
+        )
+        return _BatchItemCosts(
+            billed_cost=customer_billing.billing.cost,
+            provider_cost=provider_billing.billing.cost,
+            pricing=pricing,
+            customer_billing=customer_billing,
+            provider_billing=provider_billing,
+        )
 
     def _observe_item_execution_latency(
         self, *, status: str, latency_seconds: float, reference: str
@@ -66,11 +204,38 @@ class WorkerPersistenceMixin:
             payload=prepared.payload,
             auth=prepared.policy_auth,
         )
+        self._start_prepared_policy_lease_refresher(prepared)
 
     async def _release_prepared_policy_lease(self, prepared: _PreparedEmbeddingItem | _PreparedChatItem) -> None:
+        await self._stop_prepared_policy_lease_refresher(prepared)
         lease = prepared.policy_lease
+        if lease is None:
+            return
+        released = await release_batch_policy_lease(app=self.app, lease=lease)
+        if released:
+            prepared.policy_lease = None
+            return
+        self._queue_policy_lease_release_retry(lease)
         prepared.policy_lease = None
-        await release_batch_policy_lease(app=self.app, lease=lease)
+
+    def _start_prepared_policy_lease_refresher(self, prepared: _PreparedEmbeddingItem | _PreparedChatItem) -> None:
+        lease = prepared.policy_lease
+        limiter = getattr(getattr(self.app, "state", None), "limit_counter", None)
+        if lease is None or limiter is None:
+            return
+        refresher = RateLimitLeaseRefresher(
+            limiter=limiter,
+            lease=lease.rate_limit_lease,
+        )
+        if refresher.start():
+            prepared.policy_lease_refresher = refresher
+
+    async def _stop_prepared_policy_lease_refresher(self, prepared: _PreparedEmbeddingItem | _PreparedChatItem) -> None:
+        refresher = getattr(prepared, "policy_lease_refresher", None)
+        if refresher is None:
+            return
+        prepared.policy_lease_refresher = None
+        await refresher.stop()
 
     async def _release_prepared_policy_leases(self, prepared_items: list[_PreparedEmbeddingItem] | list[_PreparedChatItem]) -> None:
         for prepared in prepared_items:
@@ -136,6 +301,7 @@ class WorkerPersistenceMixin:
         provider_cost: float,
         api_base: str | None,
         deployment_model: str | None,
+        pricing_metadata: dict[str, Any] | None = None,
         batch_execution_mode: str | None = None,
         microbatch_size: int | None = None,
         microbatch_id: str | None = None,
@@ -159,6 +325,8 @@ class WorkerPersistenceMixin:
             "execution_mode": job.execution_mode,
             "completed_at": datetime.now(tz=UTC).isoformat(),
         }
+        if pricing_metadata:
+            payload["pricing_metadata"] = dict(pricing_metadata)
         if batch_execution_mode is not None:
             payload["batch_execution_mode"] = batch_execution_mode
         if microbatch_size is not None:

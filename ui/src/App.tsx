@@ -10,6 +10,8 @@ import MFAVerify from './pages/MFAVerify';
 import ResetPassword from './pages/ResetPassword';
 import Dashboard from './pages/Dashboard';
 import Models from './pages/Models';
+import Tiers from './pages/Tiers';
+import TierDetail from './pages/TierDetail';
 import ApiKeys from './pages/ApiKeys';
 import Organizations from './pages/Organizations';
 import Teams from './pages/Teams';
@@ -84,6 +86,8 @@ function AppRoutes() {
         <Route path="/models/new" element={uiAccess.model_admin ? <ModelCreate /> : <Navigate to="/models" replace />} />
         <Route path="/models/:deploymentId" element={uiAccess.models ? <ModelDetail /> : <Navigate to="/" replace />} />
         <Route path="/models/:deploymentId/edit" element={uiAccess.model_admin ? <ModelEdit /> : <Navigate to="/models" replace />} />
+        <Route path="/tiers" element={uiAccess.tiers ? <Tiers /> : <Navigate to="/" replace />} />
+        <Route path="/tiers/:tierId" element={uiAccess.tiers ? <TierDetail /> : <Navigate to="/" replace />} />
         <Route path="/named-credentials" element={uiAccess.named_credentials ? <NamedCredentials /> : <Navigate to="/" replace />} />
         <Route path="/route-groups" element={uiAccess.route_groups ? <RouteGroups /> : <Navigate to="/" replace />} />
         <Route path="/route-groups/:groupKey" element={uiAccess.route_groups ? <RouteGroupDetail /> : <Navigate to="/" replace />} />

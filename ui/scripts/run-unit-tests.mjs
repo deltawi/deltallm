@@ -8,9 +8,12 @@ import { build } from 'esbuild';
 const uiRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputDir = path.join(uiRoot, 'node_modules', '.tmp', 'ui-unit-tests');
 const testSources = [
+  'tests/authorization.test.ts',
   'tests/modelFormShared.test.ts',
   'tests/batchDetailResource.test.ts',
   'tests/dashboardRange.test.ts',
+  'tests/organizationPolicy.test.ts',
+  'tests/tierHelpers.test.ts',
 ];
 
 await rm(outputDir, { recursive: true, force: true });

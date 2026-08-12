@@ -3,7 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { useApi } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
 import { resolveUiAccess } from '../lib/authorization';
-import { callableTargets, organizations } from '../lib/api';
+import {
+  callableTargets,
+  organizations,
+  type OrganizationServicePolicy,
+} from '../lib/api';
 import {
   assetAccessLoadErrorMessage,
   buildCatalogAccessGroups,
@@ -15,7 +19,6 @@ import {
   defaultMonthlyResetUtcInputValue,
   toUtcDateTimeLocalInputValue,
 } from '../lib/format';
-import RateLimitSummary from '../components/admin/RateLimitSummary';
 import Modal from '../components/Modal';
 import AssetAccessEditor from '../components/access/AssetAccessEditor';
 import { ContentCard, IndexShell } from '../components/admin/shells';
@@ -64,6 +67,53 @@ function StatusDot({ status }: { status: string }) {
     idle: 'bg-gray-300',
   };
   return <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${map[status] ?? 'bg-gray-300'}`} />;
+}
+
+function ServicePolicySummary({ policy }: { policy?: OrganizationServicePolicy | null }) {
+  if (policy?.source === 'tier') {
+    const primary = policy.primary_tier;
+    return (
+      <div className="space-y-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-700">
+            <Shield className="h-3 w-3" /> {primary?.tier_name || primary?.tier_key || 'Tier managed'}
+          </span>
+          {primary?.tier_version_number != null && (
+            <span className="text-[10px] font-medium text-gray-500">v{primary.tier_version_number}</span>
+          )}
+          {policy.overlay_count > 0 && (
+            <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] font-semibold text-purple-700">
+              +{policy.overlay_count} overlay{policy.overlay_count === 1 ? '' : 's'}
+            </span>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-[10px] text-gray-500">
+          {policy.tier_authoritative ? (
+            primary?.follows_active_version && <span>Follows active version</span>
+          ) : (
+            <span className="rounded bg-amber-50 px-1.5 py-0.5 font-medium text-amber-700">
+              {policy.tier_policy_mode === 'shadow' ? 'Shadow · legacy runtime' : 'Tier disabled · legacy runtime'}
+            </span>
+          )}
+          {policy.hard_caps_configured && (
+            <span className="rounded bg-amber-50 px-1.5 py-0.5 font-medium text-amber-700">Org hard caps</span>
+          )}
+          {policy.legacy_model_limits_configured && (
+            <span className="rounded bg-red-50 px-1.5 py-0.5 font-medium text-red-700">Legacy model caps</span>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      <span className="inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-600">Legacy</span>
+      <p className="text-[10px] text-gray-400">
+        {policy?.hard_caps_configured ? 'Direct access · org hard caps' : 'Direct asset access'}
+      </p>
+    </div>
+  );
 }
 
 function getStatus(row: any): string {
@@ -163,10 +213,14 @@ export default function Organizations() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
+  const editHasTier = editItem?.service_policy?.source === 'tier';
+  const editTierAuthoritative = Boolean(editItem?.service_policy?.tier_authoritative);
 
   const { data: editAssetAccess, error: editAssetAccessError, loading: editAssetAccessLoading } = useApi(
-    () => (editItem ? organizations.assetAccess(editItem.organization_id, { include_targets: false }) : Promise.resolve(null)),
-    [editItem?.organization_id],
+    () => (editItem && !editTierAuthoritative
+      ? organizations.assetAccess(editItem.organization_id, { include_targets: false })
+      : Promise.resolve(null)),
+    [editItem?.organization_id, editTierAuthoritative],
   );
   const currentEditAssetAccess = editItem && isScopedAssetAccessFor(editAssetAccess, {
     scopeType: 'organization',
@@ -175,10 +229,11 @@ export default function Organizations() {
   })
     ? editAssetAccess
     : null;
-  const editAssetAccessPending = isPlatformAdmin && !!editItem && (editAssetAccessLoading || !currentEditAssetAccess);
+  const editAssetAccessPending = isPlatformAdmin && !!editItem && !editTierAuthoritative
+    && (editAssetAccessLoading || !currentEditAssetAccess);
   const { data: callableTargetPage, error: callableTargetPageError, loading: callableTargetPageLoading } = useApi(
     () => (
-      isPlatformAdmin && !!editItem && !form.select_all_current_assets
+      isPlatformAdmin && !!editItem && !editTierAuthoritative && !form.select_all_current_assets
         ? callableTargets.list({
             search: assetSearch || undefined,
             target_type: assetTargetType === 'all' ? undefined : assetTargetType,
@@ -187,11 +242,11 @@ export default function Organizations() {
           })
         : Promise.resolve({ data: [], pagination: { total: 0, limit: assetPageSize, offset: 0, has_more: false } })
     ),
-    [isPlatformAdmin, editItem?.organization_id, form.select_all_current_assets, assetSearch, assetTargetType, assetPageOffset],
+    [isPlatformAdmin, editItem?.organization_id, editTierAuthoritative, form.select_all_current_assets, assetSearch, assetTargetType, assetPageOffset],
   );
   const { data: callableTargetAccessGroups, error: accessGroupError, loading: accessGroupLoading } = useApi(
     () => (
-      isPlatformAdmin && !!editItem && !form.select_all_current_assets
+      isPlatformAdmin && !!editItem && !editTierAuthoritative && !form.select_all_current_assets
         ? callableTargets.listAccessGroups({
             search: assetSearch || undefined,
             include_members: false,
@@ -200,7 +255,7 @@ export default function Organizations() {
           })
         : Promise.resolve({ data: [], pagination: { total: 0, limit: accessGroupPageSize, offset: 0, has_more: false } })
     ),
-    [isPlatformAdmin, editItem?.organization_id, form.select_all_current_assets, assetSearch, accessGroupPageOffset],
+    [isPlatformAdmin, editItem?.organization_id, editTierAuthoritative, form.select_all_current_assets, assetSearch, accessGroupPageOffset],
   );
 
   const resetForm = () => {
@@ -272,13 +327,13 @@ export default function Organizations() {
       }
       const payload: Record<string, unknown> = {
         organization_name: form.organization_name || undefined,
-        max_budget: form.max_budget ? Number(form.max_budget) : undefined,
-        soft_budget: form.soft_budget ? Number(form.soft_budget) : undefined,
-        rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : undefined,
-        tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : undefined,
-        rph_limit: form.rph_limit ? Number(form.rph_limit) : undefined,
-        rpd_limit: form.rpd_limit ? Number(form.rpd_limit) : undefined,
-        tpd_limit: form.tpd_limit ? Number(form.tpd_limit) : undefined,
+        max_budget: form.max_budget ? Number(form.max_budget) : null,
+        soft_budget: form.soft_budget ? Number(form.soft_budget) : null,
+        rpm_limit: form.rpm_limit ? Number(form.rpm_limit) : null,
+        tpm_limit: form.tpm_limit ? Number(form.tpm_limit) : null,
+        rph_limit: form.rph_limit ? Number(form.rph_limit) : null,
+        rpd_limit: form.rpd_limit ? Number(form.rpd_limit) : null,
+        tpd_limit: form.tpd_limit ? Number(form.tpd_limit) : null,
         audit_content_storage_enabled: !!form.audit_content_storage_enabled,
       };
       if (form.monthly_reset_enabled) {
@@ -289,7 +344,7 @@ export default function Organizations() {
         payload.budget_reset_at = null;
       }
       await organizations.update(editItem.organization_id, payload);
-      if (isPlatformAdmin) {
+      if (isPlatformAdmin && !editTierAuthoritative) {
         await organizations.updateAssetAccess(editItem.organization_id, {
           selected_callable_keys: form.select_all_current_assets ? [] : form.selected_callable_keys,
           selected_access_group_keys: form.select_all_current_assets ? [] : form.selected_access_group_keys,
@@ -347,8 +402,9 @@ export default function Organizations() {
   );
   const assetPagePagination = callableTargetPage?.pagination;
   const accessGroupPagination = callableTargetAccessGroups?.pagination;
-  const assetAccessLoading = !form.select_all_current_assets && (callableTargetPageLoading || accessGroupLoading);
-  const assetAccessLoadError = isPlatformAdmin && !!editItem
+  const assetAccessLoading = !editTierAuthoritative && !form.select_all_current_assets
+    && (callableTargetPageLoading || accessGroupLoading);
+  const assetAccessLoadError = isPlatformAdmin && !!editItem && !editTierAuthoritative
     ? assetAccessLoadErrorMessage(
         editAssetAccessError || (!form.select_all_current_assets ? callableTargetPageError || accessGroupError : null),
       )
@@ -441,7 +497,7 @@ export default function Organizations() {
               <tr className="bg-gray-50 border-b border-gray-200">
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Organization</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Budget Usage</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Rate Limits</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Service Policy</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Members</th>
                 <th className="px-4 py-3" />
               </tr>
@@ -508,15 +564,9 @@ export default function Organizations() {
                         <BudgetRing spend={row.spend || 0} budget={row.max_budget ?? null} />
                       </td>
 
-                      {/* Rate limits */}
+                      {/* Service policy */}
                       <td className="px-4 py-3.5">
-                        <RateLimitSummary
-                          rpm_limit={row.rpm_limit}
-                          tpm_limit={row.tpm_limit}
-                          rph_limit={row.rph_limit}
-                          rpd_limit={row.rpd_limit}
-                          tpd_limit={row.tpd_limit}
-                        />
+                        <ServicePolicySummary policy={row.service_policy} />
                       </td>
 
                       {/* Members + teams */}
@@ -603,6 +653,21 @@ export default function Organizations() {
           {(error || assetAccessLoadError) && (
             <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error || assetAccessLoadError}</div>
           )}
+          {editHasTier && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+              <div className="flex items-center gap-2">
+                <Shield className="h-4 w-4 text-blue-700" />
+                <p className="text-sm font-semibold text-blue-900">
+                  Service tier: {editItem?.service_policy?.primary_tier?.tier_name || editItem?.service_policy?.primary_tier?.tier_key || 'Tier managed'}
+                </p>
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-blue-800">
+                {editTierAuthoritative
+                  ? 'Model access and per-model limits come from the tier. The rate fields below are optional organization-wide hard caps.'
+                  : `This tier is staged in ${editItem?.service_policy?.tier_policy_mode || 'rollout'} mode. Legacy Asset Access remains authoritative until tier enforcement; the rate fields below are still organization-wide hard caps.`}
+              </p>
+            </div>
+          )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Organization Name</label>
             <input
@@ -657,7 +722,12 @@ export default function Organizations() {
               </div>
             )}
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <div className="mb-2">
+              <p className="text-sm font-medium text-gray-800">Organization-wide hard caps</p>
+              <p className="text-xs text-gray-400">Optional global ceilings applied in addition to the service tier. Leave blank for no organization cap.</p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">RPM Limit</label>
               <input
@@ -713,6 +783,7 @@ export default function Organizations() {
               />
               <p className="text-xs text-gray-400 mt-1">Tokens per day</p>
             </div>
+            </div>
           </div>
           <label className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg bg-gray-50 cursor-pointer">
             <input
@@ -725,8 +796,14 @@ export default function Organizations() {
               Store request and response payload content in audit logs for this organization.
             </span>
           </label>
-          {isPlatformAdmin && (
+          {isPlatformAdmin && !editTierAuthoritative && (
             <div className="space-y-3">
+              {editHasTier && (
+                <div>
+                  <p className="text-sm font-medium text-gray-800">Runtime Asset Access</p>
+                  <p className="text-xs text-gray-500">Review the legacy access used during tier rollout. In shadow mode, differences from the staged tier are reported as mismatches.</p>
+                </div>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <label className={`rounded-lg border px-3 py-2 text-sm cursor-pointer ${form.select_all_current_assets ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'}`}>
                   <div className="flex items-start gap-2">

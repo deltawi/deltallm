@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, feature/org-tiers]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, feature/org-tiers]
 
 jobs:
   ui-build:
@@ -83,6 +83,11 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/deltallm_test
         run: uv run prisma migrate deploy --schema=./prisma/schema.prisma
+
+      - name: Run tier admission against real Redis
+        env:
+          DELTALLM_TEST_REDIS_URL: redis://localhost:6379/0
+        run: uv run pytest -v -rs tests/services/test_tier_fair_share_redis_integration.py
 
       - name: Run tests
         env:

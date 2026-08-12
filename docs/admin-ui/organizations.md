@@ -42,6 +42,8 @@ Platform admins can bootstrap runtime model and route-group visibility directly 
 
 Organization asset access defines the parent access universe. Grant direct callable targets when the tenant should see specific model names or route groups. Grant access groups when the tenant should see every callable target labelled with a group such as `support`, `finance`, or `beta`.
 
+If the organization uses tiers, the active tier assignment can define the organization's model package. Team, API key, and runtime user Asset Access can still narrow that tier package. Asset Access also remains the control surface for route groups. See [Tiers](tiers.md#tiers-and-asset-access) for examples.
+
 Access-group grants are valid even before a group has current model members. When a model is later labelled with that group and the runtime reloads, the organization can receive the new callable target without adding another direct binding.
 
 Use organization grants deliberately:

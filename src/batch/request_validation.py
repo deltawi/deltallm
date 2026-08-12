@@ -19,6 +19,8 @@ from src.models.requests import ChatCompletionRequest, EmbeddingRequest, MCPTool
 from src.models.responses import UserAPIKeyAuth
 from src.services.callable_target_grants import CallableTargetGrantService
 from src.services.model_visibility import CallableTargetPolicyMode, ensure_batch_model_allowed
+from src.services.tier_model_access import TierPolicyMode
+from src.services.tier_policy_service import TierPolicyService
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +40,9 @@ def parse_batch_input_line(
     seen_custom_ids: set[str],
     callable_target_grant_service: CallableTargetGrantService | None,
     callable_target_scope_policy_mode: CallableTargetPolicyMode | str,
+    tier_policy_service: TierPolicyService | None = None,
+    tier_policy_mode: TierPolicyMode | str = "disabled",
+    tier_policy_missing_service_mode: str = "fail_open",
     model_access_validator: Callable[..., None] = ensure_batch_model_allowed,
 ) -> ParsedBatchInputLine | None:
     endpoint = str(endpoint or "").strip()
@@ -84,7 +89,10 @@ def parse_batch_input_line(
         auth,
         model,
         callable_target_grant_service=callable_target_grant_service,
+        tier_policy_service=tier_policy_service,
         policy_mode=callable_target_scope_policy_mode,
+        tier_policy_mode=tier_policy_mode,
+        tier_policy_missing_service_mode=tier_policy_missing_service_mode,
     )
     return ParsedBatchInputLine(
         line_number=line_number,

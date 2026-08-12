@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from prometheus_client import Counter
+from typing import Any
+
+from prometheus_client import Counter, Gauge
 
 from src.metrics.prometheus import (
     ANONYMOUS_LABEL,
@@ -87,10 +89,38 @@ deltallm_callable_target_policy_fallback_metric = Counter(
     registry=get_prometheus_registry(),
 )
 
+deltallm_tier_policy_shadow_mismatch_metric = Counter(
+    "deltallm_tier_policy_shadow_mismatches_total",
+    "Tier policy shadow mismatches",
+    ["auth_source", "difference_type", "reason"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_tier_capacity_requests_metric = Counter(
+    "deltallm_tier_capacity_requests_total",
+    "Tier capacity-pool requests by outcome and limiting scope",
+    ["pool_key", "model", "tier_key", "scope", "outcome"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_tier_capacity_active_orgs_metric = Gauge(
+    "deltallm_tier_capacity_pool_active_organizations",
+    "Active organizations participating in a tier capacity pool",
+    ["pool_key", "model"],
+    registry=get_prometheus_registry(),
+)
+
 deltallm_config_reload_events_metric = Counter(
     "deltallm_config_reload_events_total",
     "Dynamic config reload events by source and result",
     ["source", "result"],
+    registry=get_prometheus_registry(),
+)
+
+deltallm_tier_capacity_fair_share_decisions_metric = Counter(
+    "deltallm_tier_capacity_fair_share_decisions_total",
+    "Tier capacity fair-share decisions",
+    ["pool_key", "model", "tier_key", "decision", "reason", "scope"],
     registry=get_prometheus_registry(),
 )
 
@@ -227,4 +257,73 @@ def increment_callable_target_policy_fallback(
         policy_mode=sanitize_label(policy_mode),
         auth_source=sanitize_label(auth_source),
         reason=sanitize_label(reason, "none"),
+    ).inc()
+
+
+def increment_tier_policy_shadow_mismatch(
+    *,
+    auth_source: str | None,
+    difference_type: str,
+    reason: str | None,
+) -> None:
+    deltallm_tier_policy_shadow_mismatch_metric.labels(
+        auth_source=sanitize_label(auth_source),
+        difference_type=sanitize_label(difference_type),
+        reason=sanitize_label(reason, "none"),
+    ).inc()
+
+
+def record_tier_capacity_observation(observation: Any, *, outcome: str) -> None:
+    pool_key = str(getattr(observation, "pool_key", "") or "").strip()
+    model = str(getattr(observation, "callable_key", "") or "").strip()
+    if not pool_key or not model:
+        legacy_pool_key, legacy_model = _split_capacity_entity(
+            getattr(observation, "entity_id", "")
+        )
+        pool_key = pool_key or legacy_pool_key
+        model = model or legacy_model
+    scope = sanitize_label(getattr(observation, "scope", None), "unknown")
+    tier_key = sanitize_label(getattr(observation, "tier_key", None), "none")
+    deltallm_tier_capacity_requests_metric.labels(
+        pool_key=sanitize_label(pool_key, "unknown"),
+        model=sanitize_label(model, "unknown"),
+        tier_key=tier_key,
+        scope=scope,
+        outcome=sanitize_label(outcome, "unknown"),
+    ).inc()
+    active_organizations = getattr(
+        observation,
+        "active_org_count",
+        getattr(observation, "active_organizations", None),
+    )
+    if active_organizations is not None:
+        deltallm_tier_capacity_active_orgs_metric.labels(
+            pool_key=sanitize_label(pool_key, "unknown"),
+            model=sanitize_label(model, "unknown"),
+        ).set(max(0, int(active_organizations or 0)))
+
+
+def _split_capacity_entity(entity_id: object) -> tuple[str, str]:
+    pool_key, separator, model = str(entity_id or "").partition(":")
+    if not separator:
+        return pool_key, ""
+    return pool_key, model
+
+
+def increment_tier_capacity_fair_share_decision(
+    *,
+    pool_key: str,
+    model: str,
+    tier_key: str | None,
+    decision: str,
+    reason: str,
+    scope: str,
+) -> None:
+    deltallm_tier_capacity_fair_share_decisions_metric.labels(
+        pool_key=sanitize_label(pool_key),
+        model=sanitize_label(model),
+        tier_key=sanitize_label(tier_key, "none"),
+        decision=sanitize_label(decision),
+        reason=sanitize_label(reason),
+        scope=sanitize_label(scope),
     ).inc()

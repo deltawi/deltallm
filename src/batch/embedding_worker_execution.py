@@ -21,7 +21,6 @@ from src.batch.policy import record_batch_policy_failure, run_batch_request_pref
 from src.batch.retry import BatchResponseShapeError, BatchRetryCategory, BatchRetryDecision, classify_batch_retry
 from src.batch.worker_constants import COMPLETION_OUTBOX_MAX_ATTEMPTS
 from src.batch.worker_types import BatchItemLeaseLostError, _PreparedEmbeddingItem, _RequestShim
-from src.billing.cost import completion_cost
 from src.metrics import (
     increment_batch_microbatch_ineligible_item,
     increment_batch_microbatch_inputs,
@@ -448,24 +447,16 @@ class EmbeddingWorkerExecutionMixin:
                 api_provider=api_provider,
                 model_fallback=deployment_model,
             )
-            deployment_pricing = self._deployment_pricing(served_deployment)
-            model_info = served_deployment.model_info or {}
-            billed_cost = completion_cost(
-                model=prepared.payload.model,
+            item_costs = self._batch_item_costs(
+                prepared=prepared,
                 usage=usage,
-                cache_hit=False,
-                custom_pricing=deployment_pricing,
-                pricing_tier="batch",
-                model_info=model_info,
+                served_deployment=served_deployment,
             )
-            provider_cost = completion_cost(
-                model=prepared.payload.model,
-                usage=usage,
-                cache_hit=False,
-                custom_pricing=deployment_pricing,
-                pricing_tier="sync",
-                model_info=model_info,
-            )
+            billed_cost = item_costs.billed_cost
+            provider_cost = item_costs.provider_cost
+            pricing = item_costs.pricing
+            customer_billing = item_costs.customer_billing
+            provider_billing = item_costs.provider_billing
             served_deployment_id = str(
                 getattr(served_deployment, "deployment_id", None)
                 or getattr(prepared.primary_deployment, "deployment_id", None)
@@ -511,6 +502,18 @@ class EmbeddingWorkerExecutionMixin:
                             provider_cost=provider_cost,
                             api_base=api_base,
                             deployment_model=deployment_model,
+                            pricing_metadata=pricing.spend_metadata(
+                                provider_cost=provider_cost,
+                                billing=customer_billing.billing,
+                                provider_billing=provider_billing.billing,
+                                effective_pricing_sources=(
+                                    customer_billing.pricing_sources_used
+                                ),
+                                missing_pricing_fields=(
+                                    customer_billing.missing_pricing_fields
+                                ),
+                                pricing_tier="batch",
+                            ),
                         ),
                         "outbox_max_attempts": COMPLETION_OUTBOX_MAX_ATTEMPTS,
                     }
@@ -679,8 +682,6 @@ class EmbeddingWorkerExecutionMixin:
             api_provider = resolve_provider(served_deployment.deltallm_params)
             api_base = api_base or served_deployment.deltallm_params.get("api_base")
             deployment_model = deployment_model or (str(served_deployment.deltallm_params.get("model") or "") or None)
-            deployment_pricing = self._deployment_pricing(served_deployment)
-            model_info = served_deployment.model_info or {}
             served_deployment_id = str(
                 getattr(served_deployment, "deployment_id", None)
                 or getattr(first_item.primary_deployment, "deployment_id", None)
@@ -702,22 +703,16 @@ class EmbeddingWorkerExecutionMixin:
                     api_provider=api_provider,
                     model_fallback=deployment_model,
                 )
-                billed_cost = completion_cost(
-                    model=prepared.payload.model,
+                item_costs = self._batch_item_costs(
+                    prepared=prepared,
                     usage=usage,
-                    cache_hit=False,
-                    custom_pricing=deployment_pricing,
-                    pricing_tier="batch",
-                    model_info=model_info,
+                    served_deployment=served_deployment,
                 )
-                provider_cost = completion_cost(
-                    model=prepared.payload.model,
-                    usage=usage,
-                    cache_hit=False,
-                    custom_pricing=deployment_pricing,
-                    pricing_tier="sync",
-                    model_info=model_info,
-                )
+                billed_cost = item_costs.billed_cost
+                provider_cost = item_costs.provider_cost
+                pricing = item_costs.pricing
+                customer_billing = item_costs.customer_billing
+                provider_billing = item_costs.provider_billing
                 completion_rows.append(
                     {
                         "prepared": prepared,
@@ -725,6 +720,18 @@ class EmbeddingWorkerExecutionMixin:
                         "usage": usage,
                         "provider_cost": provider_cost,
                         "billed_cost": billed_cost,
+                        "pricing_metadata": pricing.spend_metadata(
+                            provider_cost=provider_cost,
+                            billing=customer_billing.billing,
+                            provider_billing=provider_billing.billing,
+                            effective_pricing_sources=(
+                                customer_billing.pricing_sources_used
+                            ),
+                            missing_pricing_fields=(
+                                customer_billing.missing_pricing_fields
+                            ),
+                            pricing_tier="batch",
+                        ),
                     }
                 )
 
@@ -765,6 +772,7 @@ class EmbeddingWorkerExecutionMixin:
                             provider_cost=row["provider_cost"],
                             api_base=api_base,
                             deployment_model=deployment_model,
+                            pricing_metadata=row["pricing_metadata"],
                         ),
                         "outbox_max_attempts": COMPLETION_OUTBOX_MAX_ATTEMPTS,
                     }

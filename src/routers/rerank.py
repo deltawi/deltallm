@@ -8,10 +8,14 @@ import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from src.billing.cost import compute_cost
+from src.billing.tier_pricing import (
+    attach_pricing_metadata,
+    resolve_deployment_tier_pricing,
+    resolve_token_billing_result,
+)
 from src.callbacks import CallbackManager, build_standard_logging_payload
 from src.middleware.auth import require_api_key
-from src.middleware.rate_limit import enforce_rate_limits
+from src.middleware.rate_limit import check_and_acquire_rate_limits_for_payload
 from src.metrics import (
     increment_request,
     increment_request_failure,
@@ -39,7 +43,12 @@ from src.routers.routing_decision import (
     update_served_route_decision,
 )
 from src.routers.utils import enforce_budget_if_configured, fire_and_forget
-from src.services.model_visibility import ensure_model_allowed, get_callable_target_policy_mode_from_app
+from src.services.model_visibility import (
+    ensure_model_allowed,
+    get_callable_target_policy_mode_from_app,
+    get_tier_policy_missing_service_mode_from_app,
+    get_tier_policy_mode_from_app,
+)
 
 router = APIRouter(prefix="/v1", tags=["rerank"])
 
@@ -92,7 +101,7 @@ async def _execute_rerank(
     return data
 
 
-@router.post("/rerank", dependencies=[Depends(require_api_key), Depends(enforce_rate_limits)])
+@router.post("/rerank", dependencies=[Depends(require_api_key)])
 async def rerank(request: Request, payload: RerankRequest):
     request_start = perf_counter()
     callback_start = datetime.now(tz=UTC)
@@ -108,13 +117,21 @@ async def rerank(request: Request, payload: RerankRequest):
         auth,
         payload.model,
         callable_target_grant_service=getattr(request.app.state, "callable_target_grant_service", None),
+        tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
         policy_mode=get_callable_target_policy_mode_from_app(request.app),
+        tier_policy_mode=get_tier_policy_mode_from_app(request.app),
+        tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(request.app),
         emit_shadow_log=True,
     )
     await enforce_budget_if_configured(request, model=payload.model, auth=auth)
 
     callback_manager: CallbackManager = getattr(request.app.state, "callback_manager", CallbackManager())
     request_data = payload.model_dump(exclude_none=True)
+    await check_and_acquire_rate_limits_for_payload(
+        request,
+        model=payload.model,
+        payload=request_data,
+    )
 
     app_router = request.app.state.router
     model_group = app_router.resolve_model_group(payload.model)
@@ -152,7 +169,7 @@ async def rerank(request: Request, payload: RerankRequest):
         api_latency_ms = data.pop("_api_latency_ms", 0)
         api_base = data.pop("_api_base", "")
         deployment_model = data.pop("_deployment_model", None)
-        model_info = data.pop("_model_info", {})
+        data.pop("_model_info", None)
 
         doc_count = len(payload.documents)
         query_tokens = len(payload.query.split())
@@ -163,7 +180,30 @@ async def rerank(request: Request, payload: RerankRequest):
             mode="rerank",
             usage={"rerank_units": doc_count},
         )
-        request_cost = compute_cost(mode="rerank", usage=usage, model_info=model_info)
+        pricing = resolve_deployment_tier_pricing(
+            auth=auth,
+            model=payload.model,
+            deployment=served_deployment,
+            tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
+            mode="sync",
+        )
+        customer_billing = resolve_token_billing_result(
+            pricing,
+            model=payload.model,
+            usage=usage,
+        )
+        provider_billing = resolve_token_billing_result(
+            pricing,
+            model=payload.model,
+            usage=usage,
+            pricing_view="provider",
+        )
+        request_cost = customer_billing.billing.cost
+        provider_cost = (
+            None
+            if provider_billing.billing.unpriced_reason is not None
+            else provider_billing.billing.cost
+        )
         increment_request(
             model=payload.model, api_provider=api_provider,
             api_key=auth.api_key, user=auth.user_id, team=auth.team_id, status_code=200,
@@ -185,11 +225,23 @@ async def rerank(request: Request, payload: RerankRequest):
                 usage=usage,
                 cost=request_cost,
                 metadata=attach_route_decision(
-                    {
-                        "api_base": api_base,
-                        "provider": api_provider,
-                        "deployment_model": deployment_model,
-                    },
+                    attach_pricing_metadata(
+                        {
+                            "api_base": api_base,
+                            "provider": api_provider,
+                            "deployment_model": deployment_model,
+                        },
+                        pricing,
+                        provider_cost=provider_cost,
+                        billing=customer_billing.billing,
+                        provider_billing=provider_billing.billing,
+                        effective_pricing_sources=(
+                            customer_billing.pricing_sources_used
+                        ),
+                        missing_pricing_fields=(
+                            customer_billing.missing_pricing_fields
+                        ),
+                    ),
                     request,
                 ),
                 cache_hit=False,

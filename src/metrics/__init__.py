@@ -127,15 +127,24 @@ from src.metrics.counters import (
     increment_request,
     increment_request_failure,
     increment_spend,
+    increment_tier_policy_shadow_mismatch,
+    increment_tier_capacity_fair_share_decision,
     increment_usage,
+    record_tier_capacity_observation,
 )
 from src.metrics.gauges import (
     set_deployment_active_requests,
     set_deployment_cooldown,
     set_deployment_latency_per_output_token,
     set_deployment_state,
+    set_tier_capacity_pool_saturation,
 )
-from src.metrics.histograms import observe_api_latency, observe_prompt_resolution_latency, observe_request_latency
+from src.metrics.histograms import (
+    observe_api_latency,
+    observe_prompt_resolution_latency,
+    observe_request_latency,
+    observe_tier_capacity_fair_share_latency,
+)
 from src.metrics.prometheus import get_prometheus_registry, infer_provider
 
 __all__ = [
@@ -261,14 +270,19 @@ __all__ = [
     "increment_cache_miss",
     "increment_callable_target_policy_shadow_mismatch",
     "increment_callable_target_policy_fallback",
+    "increment_tier_policy_shadow_mismatch",
+    "record_tier_capacity_observation",
+    "increment_tier_capacity_fair_share_decision",
     "increment_config_reload",
     "increment_prompt_cache_lookup",
     "increment_prompt_resolution",
     "observe_request_latency",
     "observe_api_latency",
     "observe_prompt_resolution_latency",
+    "observe_tier_capacity_fair_share_latency",
     "set_deployment_state",
     "set_deployment_latency_per_output_token",
     "set_deployment_active_requests",
     "set_deployment_cooldown",
+    "set_tier_capacity_pool_saturation",
 ]

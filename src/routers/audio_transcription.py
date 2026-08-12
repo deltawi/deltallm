@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
@@ -10,11 +11,12 @@ from fastapi.responses import JSONResponse
 
 from src.audio.elevenlabs_stt import execute_elevenlabs_stt
 from src.audio.transcription_formats import render_srt, render_vtt
-from src.billing.audio_usage import billing_metadata, normalize_transcription_usage
+from src.billing.audio_usage import normalize_transcription_usage
 from src.billing.cost import compute_billing_result
+from src.billing.tier_pricing import attach_pricing_metadata, resolve_deployment_tier_pricing
 from src.callbacks import CallbackManager, build_standard_logging_payload
 from src.middleware.auth import require_api_key
-from src.middleware.rate_limit import enforce_rate_limits
+from src.middleware.rate_limit import check_and_acquire_rate_limits_for_payload
 from src.metrics import (
     increment_request,
     increment_request_failure,
@@ -23,6 +25,7 @@ from src.metrics import (
     observe_request_latency,
 )
 from src.models.errors import InvalidRequestError
+from src.rate_limit_policy import estimate_tokens
 from src.providers.resolution import (
     is_openai_compatible_provider,
     resolve_provider,
@@ -45,7 +48,12 @@ from src.routers.routing_decision import (
     update_served_route_decision,
 )
 from src.routers.utils import enforce_budget_if_configured, fire_and_forget
-from src.services.model_visibility import ensure_model_allowed, get_callable_target_policy_mode_from_app
+from src.services.model_visibility import (
+    ensure_model_allowed,
+    get_callable_target_policy_mode_from_app,
+    get_tier_policy_missing_service_mode_from_app,
+    get_tier_policy_mode_from_app,
+)
 
 DEFAULT_AUDIO_TRANSCRIPTION_TIMEOUT_SECONDS = 600.0
 
@@ -160,7 +168,7 @@ async def _execute_stt(
     return data
 
 
-@router.post("/audio/transcriptions", dependencies=[Depends(require_api_key), Depends(enforce_rate_limits)])
+@router.post("/audio/transcriptions", dependencies=[Depends(require_api_key)])
 async def audio_transcriptions(
     request: Request,
     file: UploadFile = File(...),
@@ -184,7 +192,10 @@ async def audio_transcriptions(
         auth,
         model,
         callable_target_grant_service=getattr(request.app.state, "callable_target_grant_service", None),
+        tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
         policy_mode=get_callable_target_policy_mode_from_app(request.app),
+        tier_policy_mode=get_tier_policy_mode_from_app(request.app),
+        tier_policy_missing_service_mode=get_tier_policy_missing_service_mode_from_app(request.app),
         emit_shadow_log=True,
     )
     await enforce_budget_if_configured(request, model=model, auth=auth)
@@ -195,6 +206,19 @@ async def audio_transcriptions(
     file_content = await file.read()
     filename = file.filename or "audio.wav"
     content_type_str = file.content_type or "application/octet-stream"
+    admission_payload = {
+        **request_data,
+        "filename": filename,
+        "content_type": content_type_str,
+        "file_size": len(file_content),
+        "file_sha256": hashlib.sha256(file_content).hexdigest(),
+    }
+    await check_and_acquire_rate_limits_for_payload(
+        request,
+        model=model,
+        payload=admission_payload,
+        token_estimate=estimate_tokens(request_data) + estimate_tokens(file_content),
+    )
 
     app_router = request.app.state.router
     model_group = app_router.resolve_model_group(model)
@@ -240,7 +264,7 @@ async def audio_transcriptions(
         api_latency_ms = data.pop("_api_latency_ms", 0)
         api_base = data.pop("_api_base", "")
         deployment_model = data.pop("_deployment_model", None)
-        model_info = data.pop("_model_info", {})
+        data.pop("_model_info", None)
         billing_payload = data.pop("_billing_payload", data)
 
         usage = normalize_transcription_usage(
@@ -254,15 +278,35 @@ async def audio_transcriptions(
             mode="audio_transcription",
             usage=usage,
         )
-        billing = compute_billing_result(mode="audio_transcription", usage=usage, model_info=model_info)
+        pricing = resolve_deployment_tier_pricing(
+            auth=auth,
+            model=model,
+            deployment=served_deployment,
+            tier_policy_service=getattr(request.app.state, "tier_policy_service", None),
+            mode="sync",
+        )
+        billing = compute_billing_result(
+            mode="audio_transcription",
+            usage=usage,
+            model_info=pricing.customer_model_info,
+        )
+        provider_billing = compute_billing_result(
+            mode="audio_transcription",
+            usage=usage,
+            model_info=pricing.provider_model_info,
+        )
         request_cost = billing.cost
         spend_metadata = attach_route_decision(
-            {
-                "api_base": api_base,
-                "provider": api_provider,
-                "deployment_model": deployment_model,
-                "billing": billing_metadata(billing),
-            },
+            attach_pricing_metadata(
+                {
+                    "api_base": api_base,
+                    "provider": api_provider,
+                    "deployment_model": deployment_model,
+                },
+                pricing,
+                provider_cost=provider_billing.cost,
+                billing=billing,
+            ),
             request,
         )
         increment_request(

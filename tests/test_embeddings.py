@@ -22,6 +22,18 @@ class RecordingCallback(CustomLogger):
         self.failure += 1
 
 
+class RewritingEmbeddingCallback(CustomLogger):
+    def __init__(self, model: str) -> None:
+        self.model = model
+        self.calls = 0
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):  # noqa: ANN001
+        del user_api_key_dict, cache
+        assert call_type == "embedding"
+        self.calls += 1
+        return {**data, "model": self.model}
+
+
 @pytest.mark.asyncio
 async def test_embeddings_runs_success_callback(client, test_app):
     recorder = RecordingCallback()
@@ -43,6 +55,27 @@ async def test_embeddings_runs_success_callback(client, test_app):
     assert recorder.success == 1
     usage = await test_app.state.router_state_backend.get_usage(deployment_id)
     assert usage == {"rpm": 1, "tpm": 2}
+
+
+@pytest.mark.asyncio
+async def test_embeddings_authorizes_the_model_after_pre_call_transformation(client, test_app):
+    rewriter = RewritingEmbeddingCallback("forbidden-embedding-model")
+    manager = CallbackManager()
+    manager.register_callback(rewriter, callback_type="success")
+    test_app.state.callback_manager = manager
+    headers = {"Authorization": f"Bearer {test_app.state._test_key}"}
+
+    response = await client.post(
+        "/v1/embeddings",
+        headers=headers,
+        json={"model": "text-embedding-3-small", "input": "hello"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["type"] == "permission_denied"
+    assert "forbidden-embedding-model" in response.json()["error"]["message"]
+    assert rewriter.calls == 1
+    assert test_app.state.http_client.post_calls == 0
 
 
 @pytest.mark.asyncio

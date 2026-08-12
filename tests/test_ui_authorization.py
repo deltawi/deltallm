@@ -251,6 +251,7 @@ async def test_auth_me_returns_ui_access(client, test_app):
     assert payload["ui_access"]["named_credentials"] is False
     assert payload["ui_access"]["people_access"] is False
     assert payload["ui_access"]["usage"] is False
+    assert payload["ui_access"]["tiers"] is False
 
 
 @pytest.mark.asyncio
@@ -310,6 +311,7 @@ async def test_auth_me_hides_team_create_for_team_scoped_admin_only(client, test
     assert payload["ui_access"]["keys"] is True
     assert payload["ui_access"]["batches"] is True
     assert payload["ui_access"]["playground"] is True
+    assert payload["ui_access"]["tiers"] is False
 
 
 @pytest.mark.asyncio

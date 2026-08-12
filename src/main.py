@@ -19,6 +19,7 @@ from src.bootstrap import (
     init_runtime_services,
     init_routing_runtime,
     shutdown_audit_runtime,
+    shutdown_auth_runtime,
     shutdown_batch_runtime,
     shutdown_email_runtime,
     shutdown_infrastructure_runtime,
@@ -30,6 +31,7 @@ from src.cache import (
 )
 from src.api.admin import admin_router
 from src.middleware.rate_limit_headers import RateLimitHeaderMiddleware
+from src.middleware.rate_limit_lifecycle import RateLimitLeaseLifecycleMiddleware
 from src.api.v1.router import v1_router
 from src.middleware.errors import register_exception_handlers
 from src.middleware.platform_auth import attach_platform_auth_context
@@ -59,6 +61,7 @@ async def lifespan(app: FastAPI):
         exit_stack.push_async_callback(shutdown_email_runtime, email_runtime)
 
         auth_runtime = await init_auth_runtime(app, cfg)
+        exit_stack.push_async_callback(shutdown_auth_runtime, auth_runtime)
 
         routing_runtime = await init_routing_runtime(
             app,
@@ -100,6 +103,10 @@ def create_app() -> FastAPI:
     async def _platform_auth_context_middleware(request: Request, call_next):
         await attach_platform_auth_context(request)
         return await call_next(request)
+
+    # This must wrap cache and route middleware so streaming rate-limit leases
+    # remain owned until the final response body frame or a disconnect.
+    app.add_middleware(RateLimitLeaseLifecycleMiddleware)
 
     app.include_router(v1_router)
     app.include_router(admin_router)

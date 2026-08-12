@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse, Response
 
 from src.audit.actions import AuditAction
 from src.middleware.auth import authenticate_request, require_api_key
-from src.middleware.rate_limit import enforce_rate_limits
+from src.middleware.rate_limit import check_and_acquire_rate_limits_for_payload
 from src.mcp.capabilities import parse_namespaced_tool_name
 from src.mcp import (
     MCPAccessDeniedError,
@@ -96,7 +96,7 @@ def _initialize_result() -> dict[str, Any]:
     }
 
 
-@router.post("/mcp", dependencies=[Depends(require_api_key), Depends(enforce_rate_limits)])
+@router.post("/mcp", dependencies=[Depends(require_api_key)])
 async def mcp_gateway(request: Request):
     request_start = perf_counter()
     auth = await authenticate_request(request)
@@ -116,6 +116,12 @@ async def mcp_gateway(request: Request):
 
     if not method:
         return _jsonrpc_error(request_id, code=-32600, message="Invalid request")
+
+    await check_and_acquire_rate_limits_for_payload(
+        request,
+        model=None,
+        payload=payload,
+    )
 
     if method.startswith("notifications/"):
         return Response(status_code=202)

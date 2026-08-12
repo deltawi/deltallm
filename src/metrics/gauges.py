@@ -32,6 +32,13 @@ deltallm_deployment_cooldown_metric = Gauge(
     registry=get_prometheus_registry(),
 )
 
+deltallm_tier_capacity_pool_saturation_metric = Gauge(
+    "deltallm_tier_capacity_pool_saturation",
+    "Tier capacity pool saturation ratio by dimension",
+    ["pool_key", "model", "dimension"],
+    registry=get_prometheus_registry(),
+)
+
 
 def set_deployment_state(*, deployment_id: str, model: str, state: int) -> None:
     deltallm_deployment_state_metric.labels(
@@ -59,3 +66,17 @@ def set_deployment_cooldown(*, deployment_id: str, model: str, cooldown: bool) -
         deployment_id=sanitize_label(deployment_id),
         model=sanitize_label(model),
     ).set(1.0 if cooldown else 0.0)
+
+
+def set_tier_capacity_pool_saturation(
+    *,
+    pool_key: str,
+    model: str,
+    dimension: str,
+    saturation: float,
+) -> None:
+    deltallm_tier_capacity_pool_saturation_metric.labels(
+        pool_key=sanitize_label(pool_key),
+        model=sanitize_label(model),
+        dimension=sanitize_label(dimension),
+    ).set(max(0.0, float(saturation)))

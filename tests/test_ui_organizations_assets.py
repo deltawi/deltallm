@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from src.db.callable_targets import CallableTargetBindingRecord
 from src.db.route_groups import RouteGroupBindingRecord, RouteGroupRecord
+from src.db.tiers import OrganizationTierAssignmentRecord
+from src.services.cache_invalidation import CacheInvalidationResult
 from src.services.callable_targets import CallableTarget
 from src.services.asset_ownership import owner_scope_from_metadata
 
@@ -142,6 +145,145 @@ class _FakeAdminDB:
         return []
 
 
+class _TransactionalAdminDB(_FakeAdminDB):
+    def __init__(self) -> None:
+        super().__init__()
+        self.tier_assignments: dict[str, OrganizationTierAssignmentRecord] = {}
+        self.outbox: list[dict[str, Any]] = []
+        self.tx_started = 0
+        self.tx_committed = 0
+        self.tx_rolled_back = 0
+
+    def tx(self):  # noqa: ANN201
+        return _TransactionalAdminDBContext(self)
+
+    async def query_raw(self, query: str, *params):  # noqa: ANN201
+        normalized = " ".join(query.lower().split())
+        if "from deltallm_organizationtierassignment a" in normalized:
+            requested_organization_ids = {str(value) for value in params}
+            return [
+                {
+                    "assignment_id": record.assignment_id,
+                    "organization_id": record.organization_id,
+                    "tier_id": record.tier_id,
+                    "tier_version_id": record.tier_version_id,
+                    "assignment_type": record.assignment_type,
+                    "weight": record.weight,
+                    "tier_key": record.tier_key,
+                    "tier_name": record.tier_name,
+                    "effective_tier_version_id": (
+                        record.tier_version_id or "tier-version-active"
+                    ),
+                    "tier_version_number": record.tier_version_number or 1,
+                }
+                for record in self.tier_assignments.values()
+                if record.enabled and record.organization_id in requested_organization_ids
+            ]
+        return await super().query_raw(query, *params)
+
+
+class _TransactionalAdminDBContext:
+    def __init__(self, root: _TransactionalAdminDB) -> None:
+        self.root = root
+        self.transaction: _TransactionalAdminDB | None = None
+
+    async def __aenter__(self) -> _TransactionalAdminDB:
+        self.root.tx_started += 1
+        transaction = _TransactionalAdminDB()
+        transaction.organizations = {
+            organization_id: dict(organization)
+            for organization_id, organization in self.root.organizations.items()
+        }
+        transaction.tier_assignments = dict(self.root.tier_assignments)
+        transaction.outbox = [dict(item) for item in self.root.outbox]
+        self.transaction = transaction
+        return transaction
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
+        del exc, tb
+        if exc_type is None and self.transaction is not None:
+            self.root.tx_committed += 1
+            self.root.organizations = self.transaction.organizations
+            self.root.tier_assignments = self.transaction.tier_assignments
+            self.root.outbox = self.transaction.outbox
+        else:
+            self.root.tx_rolled_back += 1
+        return False
+
+
+class _CompositeTierRepository:
+    def __init__(
+        self,
+        *,
+        error: str | None = None,
+        db: _TransactionalAdminDB | None = None,
+        allowed_keys: tuple[str, ...] = (),
+    ) -> None:
+        self.error = error
+        self.db = db
+        self.allowed_keys = allowed_keys
+
+    def with_db(self, db: _TransactionalAdminDB):  # noqa: ANN201
+        return _CompositeTierRepository(
+            error=self.error,
+            db=db,
+            allowed_keys=self.allowed_keys,
+        )
+
+    async def get_active_tier_version(self, tier_id: str):  # noqa: ANN201
+        del tier_id
+        return SimpleNamespace(tier_version_id="tier-version-active")
+
+    async def list_model_policies(self, tier_version_id: str):  # noqa: ANN201
+        del tier_version_id
+        return [
+            SimpleNamespace(
+                callable_key=callable_key,
+                enabled=True,
+                access_mode="allow",
+            )
+            for callable_key in self.allowed_keys
+        ]
+
+    async def upsert_org_assignment_in_current_transaction(
+        self,
+        *,
+        organization_id: str,
+        tier_id: str,
+        tier_version_id: str | None,
+        assignment_type: str,
+        enabled: bool,
+        weight: int,
+        starts_at,
+        ends_at,
+        metadata,
+    ) -> OrganizationTierAssignmentRecord:
+        if self.error:
+            raise ValueError(self.error)
+        assert self.db is not None
+        now = datetime.now(tz=UTC)
+        record = OrganizationTierAssignmentRecord(
+            assignment_id="assignment-created-with-org",
+            organization_id=organization_id,
+            tier_id=tier_id,
+            tier_version_id=tier_version_id,
+            assignment_type=assignment_type,
+            enabled=enabled,
+            weight=weight,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            metadata=metadata,
+            tier_key="starter",
+            tier_name="Starter",
+            tier_version_number=None,
+            tier_version_status=None,
+            created_at=now,
+            updated_at=now,
+        )
+        self.db.tier_assignments[record.assignment_id] = record
+        return record
+
+
 def _merge_upsert_metadata(
     existing: Any,
     incoming: Any,
@@ -272,6 +414,381 @@ class _FakeCallableTargetBindingRepository:
             return False
         self.bindings = kept
         return True
+
+
+def _install_tier_managed_organization_create(
+    test_app,  # noqa: ANN001
+    monkeypatch: pytest.MonkeyPatch,
+    db: _TransactionalAdminDB,
+    *,
+    tier_error: str | None = None,
+    tier_mode: str = "enforce",
+    tier_allowed_keys: tuple[str, ...] = (),
+) -> None:
+    test_app.state.prisma_manager = type("Prisma", (), {"client": db})()
+    test_app.state.route_group_repository = _FakeRouteGroupRepository()
+    test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
+    test_app.state.callable_target_catalog = {
+        callable_key: CallableTarget(key=callable_key, target_type="model")
+        for callable_key in tier_allowed_keys
+    }
+    test_app.state.tier_repository = _CompositeTierRepository(
+        error=tier_error,
+        allowed_keys=tier_allowed_keys,
+    )
+    test_app.state.tier_policy_service = SimpleNamespace(mode=tier_mode)
+    setattr(test_app.state.settings, "master_key", "mk-test")
+
+    async def _enqueue(transaction, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        transaction.outbox.append(dict(kwargs))
+        return CacheInvalidationResult(
+            attempted=False,
+            invalidated=False,
+            queued=True,
+            reason="scheduled_for_worker",
+            invalidation_id="invalidation-created-with-org",
+        )
+
+    monkeypatch.setattr(
+        "src.api.admin.endpoints.organizations.enqueue_org_tier_assignment_cache_invalidation",
+        _enqueue,
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_tier_managed_organization_commits_org_assignment_and_outbox_atomically(
+    client,
+    test_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _TransactionalAdminDB()
+    _install_tier_managed_organization_create(test_app, monkeypatch, db)
+
+    response = await client.post(
+        "/ui/api/organizations",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "organization_id": "org-tier-managed",
+            "organization_name": "Tier Managed",
+            "primary_tier": {"tier_id": "tier-starter", "tier_version_id": None},
+            "rpm_limit": 25,
+        },
+    )
+
+    assert response.status_code == 200
+    assert db.tx_started == 1
+    assert db.tx_committed == 1
+    assert db.tx_rolled_back == 0
+    assert "org-tier-managed" in db.organizations
+    assert list(db.tier_assignments) == ["assignment-created-with-org"]
+    assert db.outbox[0]["organization_id"] == "org-tier-managed"
+    payload = response.json()
+    assert payload["primary_tier_assignment"]["tier_id"] == "tier-starter"
+    assert payload["service_policy"]["source"] == "tier"
+    assert payload["service_policy"]["runtime_source"] == "tier"
+    assert payload["service_policy"]["tier_authoritative"] is True
+    assert payload["service_policy"]["primary_tier"]["tier_name"] == "Starter"
+    assert payload["service_policy"]["hard_caps_configured"] is True
+    assert payload["service_policy"]["organization_hard_caps"] == {"rpm_limit": 25}
+
+
+@pytest.mark.asyncio
+async def test_create_tier_managed_organization_rolls_back_org_when_assignment_fails(
+    client,
+    test_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _TransactionalAdminDB()
+    _install_tier_managed_organization_create(
+        test_app,
+        monkeypatch,
+        db,
+        tier_error="enabled tier assignments require an active tier version",
+    )
+
+    response = await client.post(
+        "/ui/api/organizations",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "organization_id": "org-tier-managed",
+            "organization_name": "Tier Managed",
+            "primary_tier": {"tier_id": "tier-without-active-version"},
+        },
+    )
+
+    assert response.status_code == 409
+    assert db.tx_started == 1
+    assert db.tx_committed == 0
+    assert db.tx_rolled_back == 1
+    assert db.organizations == {}
+    assert db.tier_assignments == {}
+    assert db.outbox == []
+
+
+@pytest.mark.asyncio
+async def test_create_tier_managed_organization_mirrors_tier_access_in_shadow_mode(
+    client,
+    test_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _TransactionalAdminDB()
+    _install_tier_managed_organization_create(
+        test_app,
+        monkeypatch,
+        db,
+        tier_mode="shadow",
+        tier_allowed_keys=("gpt-4o-mini", "llama-fast"),
+    )
+
+    response = await client.post(
+        "/ui/api/organizations",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "organization_id": "org-tier-shadow",
+            "organization_name": "Tier Shadow",
+            "primary_tier": {"tier_id": "tier-starter"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert db.tx_committed == 1
+    payload = response.json()
+    assert payload["service_policy"]["source"] == "tier"
+    assert payload["service_policy"]["runtime_source"] == "legacy"
+    assert payload["service_policy"]["tier_authoritative"] is False
+    assert {
+        item["callable_key"] for item in payload["callable_target_bindings"]
+    } == {"gpt-4o-mini", "llama-fast"}
+    assert all(
+        item["metadata"]["source"] == "tier_shadow_mirror"
+        for item in payload["callable_target_bindings"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_tier_managed_organization_rolls_back_when_shadow_mirror_is_invalid(
+    client,
+    test_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _TransactionalAdminDB()
+    _install_tier_managed_organization_create(
+        test_app,
+        monkeypatch,
+        db,
+        tier_mode="shadow",
+        tier_allowed_keys=("missing-callable",),
+    )
+    test_app.state.callable_target_catalog = {}
+
+    response = await client.post(
+        "/ui/api/organizations",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "organization_id": "org-tier-shadow",
+            "organization_name": "Tier Shadow",
+            "primary_tier": {"tier_id": "tier-starter"},
+        },
+    )
+
+    assert response.status_code == 409
+    assert "not currently configured" in response.json()["detail"]
+    assert db.tx_committed == 0
+    assert db.tx_rolled_back == 1
+    assert db.organizations == {}
+    assert db.tier_assignments == {}
+    assert db.outbox == []
+
+
+@pytest.mark.asyncio
+async def test_create_shadow_legacy_organization_requires_explicit_exception(
+    client,
+    test_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _TransactionalAdminDB()
+    _install_tier_managed_organization_create(
+        test_app,
+        monkeypatch,
+        db,
+        tier_mode="shadow",
+    )
+    headers = {"Authorization": "Bearer mk-test"}
+
+    rejected = await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={"organization_id": "org-shadow-legacy", "organization_name": "Legacy"},
+    )
+    assert rejected.status_code == 400
+    assert "legacy_policy_exception is explicitly true" in rejected.json()["detail"]
+    assert db.tx_started == 0
+
+    accepted = await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={
+            "organization_id": "org-shadow-legacy",
+            "organization_name": "Legacy",
+            "legacy_policy_exception": True,
+        },
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["service_policy"]["source"] == "legacy"
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_conflicting_tier_and_legacy_exception(
+    client,
+    test_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _TransactionalAdminDB()
+    _install_tier_managed_organization_create(
+        test_app,
+        monkeypatch,
+        db,
+        tier_mode="shadow",
+    )
+
+    response = await client.post(
+        "/ui/api/organizations",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "organization_id": "org-conflicting-policy",
+            "organization_name": "Conflicting",
+            "primary_tier": {"tier_id": "tier-starter"},
+            "legacy_policy_exception": True,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "legacy_policy_exception cannot be combined with primary_tier"
+    )
+    assert db.tx_started == 0
+
+
+@pytest.mark.asyncio
+async def test_create_organization_requires_primary_tier_in_enforce_mode(
+    client,
+    test_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _TransactionalAdminDB()
+    _install_tier_managed_organization_create(test_app, monkeypatch, db)
+
+    response = await client.post(
+        "/ui/api/organizations",
+        headers={"Authorization": "Bearer mk-test"},
+        json={"organization_name": "Missing Tier"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "primary_tier is required while tier policy mode is enforce"
+    assert db.tx_started == 0
+
+
+@pytest.mark.asyncio
+async def test_create_organization_enforce_mode_preserves_existing_legacy_upsert(
+    client,
+    test_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _TransactionalAdminDB()
+    _install_tier_managed_organization_create(test_app, monkeypatch, db)
+
+    created = await client.post(
+        "/ui/api/organizations",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "organization_id": "org-existing-legacy",
+            "organization_name": "Before",
+            "primary_tier": {"tier_id": "tier-starter"},
+        },
+    )
+    assert created.status_code == 200
+    db.tier_assignments.clear()
+    db.outbox.clear()
+
+    updated = await client.post(
+        "/ui/api/organizations",
+        headers={"Authorization": "Bearer mk-test"},
+        json={
+            "organization_id": "org-existing-legacy",
+            "organization_name": "After",
+        },
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["organization_name"] == "After"
+    assert updated.json()["service_policy"]["source"] == "legacy"
+    assert db.organizations["org-existing-legacy"]["organization_name"] == "After"
+    assert db.tier_assignments == {}
+
+
+@pytest.mark.asyncio
+async def test_authoritative_tier_allows_org_hard_caps_but_rejects_legacy_policy_writes(
+    client,
+    test_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _TransactionalAdminDB()
+    _install_tier_managed_organization_create(test_app, monkeypatch, db)
+    headers = {"Authorization": "Bearer mk-test"}
+
+    created = await client.post(
+        "/ui/api/organizations",
+        headers=headers,
+        json={
+            "organization_id": "org-authoritative",
+            "organization_name": "Authoritative",
+            "primary_tier": {"tier_id": "tier-starter"},
+        },
+    )
+    assert created.status_code == 200
+
+    hard_cap_update = await client.put(
+        "/ui/api/organizations/org-authoritative",
+        headers=headers,
+        json={"rpm_limit": 20},
+    )
+    assert hard_cap_update.status_code == 200
+    assert hard_cap_update.json()["rpm_limit"] == 20
+    assert hard_cap_update.json()["service_policy"]["tier_authoritative"] is True
+
+    db.organizations["org-authoritative"]["model_rpm_limit"] = {"legacy-model": 3}
+    clear_legacy_limits = await client.put(
+        "/ui/api/organizations/org-authoritative",
+        headers=headers,
+        json={"model_rpm_limit": None, "model_tpm_limit": None},
+    )
+    assert clear_legacy_limits.status_code == 200
+    assert db.organizations["org-authoritative"]["model_rpm_limit"] is None
+
+    model_limit_update = await client.put(
+        "/ui/api/organizations/org-authoritative",
+        headers=headers,
+        json={"model_rpm_limit": {"gpt-4o-mini": 5}},
+    )
+    assert model_limit_update.status_code == 409
+    assert "configure them on the tier" in model_limit_update.json()["detail"]
+
+    asset_binding_update = await client.put(
+        "/ui/api/organizations/org-authoritative",
+        headers=headers,
+        json={"callable_target_bindings": []},
+    )
+    assert asset_binding_update.status_code == 409
+    assert "configure model access on the tier" in asset_binding_update.json()["detail"]
+
+    asset_access_update = await client.put(
+        "/ui/api/organizations/org-authoritative/asset-access",
+        headers=headers,
+        json={"selected_callable_keys": [], "select_all_selectable": False},
+    )
+    assert asset_access_update.status_code == 409
+    assert "Asset Access cannot be changed" in asset_access_update.json()["detail"]
 
 
 @pytest.mark.asyncio

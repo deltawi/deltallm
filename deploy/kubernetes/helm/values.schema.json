@@ -262,6 +262,16 @@
             "batch_webhook_allow_http": { "type": "boolean" },
             "batch_webhook_delivery_retention_days": { "type": "integer", "minimum": 1 },
             "batch_webhook_cleanup_max_rows_per_run": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+            "cache_invalidation_worker_enabled": { "type": "boolean" },
+            "cache_invalidation_worker_poll_interval_seconds": { "type": "number", "exclusiveMinimum": 0 },
+            "cache_invalidation_worker_batch_size": { "type": "integer", "minimum": 1, "maximum": 500 },
+            "cache_invalidation_worker_max_concurrency": { "type": "integer", "minimum": 1, "maximum": 50 },
+            "cache_invalidation_worker_lease_seconds": { "type": "integer", "minimum": 5 },
+            "cache_invalidation_worker_record_timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 300 },
+            "cache_invalidation_max_attempts": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "cache_invalidation_retry_initial_seconds": { "type": "integer", "minimum": 1 },
+            "cache_invalidation_retry_max_seconds": { "type": "integer", "minimum": 1 },
+            "cache_invalidation_immediate_timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 30 },
             "embeddings_batch_scheduler_mode": {
               "type": "string",
               "enum": ["fifo_v1", "slice_v1", "model_capacity_v1", "fair_share_v1", "smart_v1"]
@@ -342,6 +352,20 @@
             "embeddings_batch_size_aware_scheduling_enabled": { "type": "boolean" },
             "embeddings_batch_aging_seconds_per_work_unit": { "type": "integer", "minimum": 1 },
             "embeddings_batch_max_age_credit_work_units": { "type": "integer", "minimum": 0 },
+            "tier_policy_mode": {
+              "type": "string",
+              "enum": ["disabled", "shadow", "enforce"]
+            },
+            "tier_policy_missing_service_mode": {
+              "type": "string",
+              "enum": ["fail_open", "fail_closed"]
+            },
+            "tier_policy_refresh_interval_seconds": { "type": "number", "exclusiveMinimum": 0 },
+            "tier_policy_refresh_jitter_seconds": { "type": "number", "minimum": 0 },
+            "tier_policy_transition_grace_seconds": { "type": "number", "minimum": 0 },
+            "tier_policy_refresh_retry_delay_seconds": { "type": "number", "exclusiveMinimum": 0 },
+            "tier_capacity_fair_share_enabled": { "type": "boolean" },
+            "tier_capacity_fair_share_active_ttl_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
             "embeddings_batch_min_large_job_claim_interval_seconds": { "type": "integer", "minimum": 0 },
             "embeddings_batch_small_job_fast_lane_enabled": { "type": "boolean" },
             "embeddings_batch_small_job_max_work_units": { "type": "integer", "minimum": 1 },
