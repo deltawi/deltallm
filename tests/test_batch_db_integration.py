@@ -40,6 +40,7 @@ from src.batch.repository import BatchRepository
 from src.batch.scheduling import (
     BatchModelCapacitySelection,
     BatchModelCapacitySnapshot,
+    advisory_lock_key,
     stable_tenant_scope_id,
 )
 from src.batch.service import BatchService
@@ -4777,14 +4778,22 @@ async def test_db_backed_fair_share_concurrent_claims_do_not_duplicate_flow_or_i
         await repository.set_job_queued(job.batch_id, 1)
 
     claim_dbs = []
+    lock_db = None
+    claim_tasks: list[asyncio.Task[Any]] = []
+    attempt_counts: dict[int, int] = {}
     try:
+        lock_db = await _connect_prisma()
         for _ in expected_tenants:
             claim_dbs.append(await _connect_prisma())
         claim_repositories = [BatchRepository(db) for db in claim_dbs]
+        contention_seen = [asyncio.Event() for _ in claim_repositories]
 
         async def _claim_with_retry(worker_index: int, claim_repository: BatchRepository):
-            result = None
-            for _ in range(12):
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 5.0
+            attempts = 0
+            while True:
+                attempts += 1
                 result = await claim_repository.claim_next_fair_share_work(
                     worker_id=f"w{worker_index}",
                     service_tier="standard",
@@ -4797,27 +4806,60 @@ async def test_db_backed_fair_share_concurrent_claims_do_not_duplicate_flow_or_i
                     base_quantum_work_units=1,
                     max_deficit_multiplier=8,
                 )
+                attempt_counts[worker_index] = attempts
+                if result.result == "flow_lock_busy":
+                    contention_seen[worker_index - 1].set()
                 if result.claim is not None or result.result not in {
                     "flow_lock_busy",
                     "lock_busy",
                     "empty_flow",
                 }:
                     return result
-                await asyncio.sleep(0.01)
-            assert result is not None
-            return result
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    return result
+                await asyncio.sleep(min(0.01, remaining))
 
-        results = await asyncio.gather(
-            *(
-                _claim_with_retry(worker_index, claim_repository)
-                for worker_index, claim_repository in enumerate(claim_repositories, start=1)
+        async with lock_db.tx(timeout=timedelta(seconds=10)) as lock_tx:
+            await lock_tx.execute_raw(
+                "SELECT pg_advisory_xact_lock($1::bigint)",
+                advisory_lock_key("batch_scheduler_flow", "standard", "m1"),
             )
-        )
+            claim_tasks = [
+                asyncio.create_task(_claim_with_retry(worker_index, claim_repository))
+                for worker_index, claim_repository in enumerate(claim_repositories, start=1)
+            ]
+            await asyncio.wait_for(
+                asyncio.gather(*(event.wait() for event in contention_seen)),
+                timeout=2.0,
+            )
+            # Keep the lock beyond the former 12-attempt/10 ms retry allowance so this
+            # test deterministically covers recovery from sustained scheduler contention.
+            await asyncio.sleep(0.2)
+
+        results = await asyncio.gather(*claim_tasks)
     finally:
+        for task in claim_tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*claim_tasks, return_exceptions=True)
         await asyncio.gather(*(db.disconnect() for db in claim_dbs), return_exceptions=True)
+        if lock_db is not None:
+            await lock_db.disconnect()
 
     claims = [result.claim for result in results if result.claim is not None]
-    assert len(claims) == len(expected_tenants)
+    claim_diagnostics = [
+        {
+            "worker_id": f"w{worker_index}",
+            "result": result.result,
+            "tenant_scope_id": (
+                result.claim.tenant_scope_id if result.claim is not None else None
+            ),
+            "attempts": attempt_counts.get(worker_index, 0),
+        }
+        for worker_index, result in enumerate(results, start=1)
+    ]
+    assert len(claims) == len(expected_tenants), claim_diagnostics
     assert {claim.tenant_scope_id for claim in claims} == expected_tenants
 
     claimed_item_ids = [item_id for claim in claims for item_id in claim.item_ids]
