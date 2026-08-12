@@ -1,0 +1,19 @@
+replicaCount: 1
+
+autoscaling:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: false
+
+postgresql:
+  enabled: true
+  auth:
+    username: deltallm
+    password: deltallm
+    database: deltallm
+
+redis:
+  enabled: true
+  auth:
+    enabled: false
