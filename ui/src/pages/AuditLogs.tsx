@@ -286,8 +286,6 @@ export default function AuditLogs() {
     try {
       const url = audit.exportUrl({ ...filterParams, format, limit: 10000 });
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      const masterKey = sessionStorage.getItem('deltallm_master_key');
-      if (masterKey) headers['X-Master-Key'] = masterKey;
       const res = await fetch(url, { credentials: 'include', headers });
       if (!res.ok) throw new Error(`Export failed (${res.status})`);
       const blob = await res.blob();

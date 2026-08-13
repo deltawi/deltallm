@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hmac
 import logging
+import os
 from time import perf_counter
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -12,9 +15,14 @@ from src.audit.actions import AuditAction
 from src.api.audit import emit_control_audit_event
 from src.db.email import EmailOutboxRepository
 from src.db.email_feedback import EmailFeedbackRepository
-from src.middleware.platform_auth import SESSION_COOKIE_NAME, get_platform_auth_context
+from src.middleware.platform_auth import (
+    SESSION_COOKIE_NAME,
+    get_configured_master_key,
+    get_master_session_status,
+    get_platform_auth_context,
+)
 from src.models.errors import RateLimitError
-from src.auth.roles import TeamRole
+from src.auth.roles import PLATFORM_ROLE_PERMISSIONS, PlatformRole, TeamRole
 from src.db.email_tokens import EmailTokenRepository
 from src.models.platform_auth import (
     ChangePasswordRequest,
@@ -25,6 +33,7 @@ from src.models.platform_auth import (
     InvitationAcceptRequest,
     InvitationAcceptResponse,
     InvitationTokenResponse,
+    MasterKeyLoginRequest,
     MFAStartResponse,
     MFAVerifyRequest,
     ResetPasswordRequest,
@@ -33,6 +42,11 @@ from src.models.platform_auth import (
 from src.services.platform_identity_service import AccountInactiveError, LoginSessionCreationError
 from src.services.ui_authorization import build_ui_access, effective_permissions_for_context
 from src.services.sso_state_store import SSOStateStoreError
+from src.services.master_session_service import (
+    MASTER_SESSION_COOKIE_NAME,
+    MasterSessionStatus,
+    MasterSessionStoreUnavailable,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
@@ -44,24 +58,86 @@ _AUTH_FORGOT_PASSWORD_EMAIL_LIMIT_PER_MINUTE = 5
 _AUTH_TOKEN_VALIDATE_IP_LIMIT_PER_MINUTE = 30
 _AUTH_RESET_PASSWORD_IP_LIMIT_PER_MINUTE = 10
 _AUTH_MFA_VERIFY_IP_LIMIT_PER_MINUTE = 20
+_AUTH_MASTER_LOGIN_IP_LIMIT_PER_MINUTE = 20
+_AUTH_SERVICE_UNAVAILABLE_HEADERS = {
+    "Cache-Control": "no-store",
+    "Retry-After": "5",
+    "Vary": "Cookie",
+}
 
 
 def _is_production() -> bool:
-    import os
     return os.getenv("REPL_SLUG") is not None or os.getenv("REPLIT_DEPLOYMENT") == "1"
 
 
-def _set_session_cookie(response: Response, token: str, max_age_seconds: int) -> None:
-    is_prod = _is_production()
+def _request_is_secure(request: Request) -> bool:
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+    return request.url.scheme == "https" or forwarded_proto == "https" or _is_production()
+
+
+def _set_auth_cookie(
+    request: Request,
+    response: Response,
+    *,
+    key: str,
+    token: str,
+    max_age_seconds: int,
+) -> None:
     response.set_cookie(
-        key=SESSION_COOKIE_NAME,
+        key=key,
         value=token,
         max_age=max_age_seconds,
         httponly=True,
-        secure=is_prod,
+        secure=_request_is_secure(request),
         samesite="lax",
         path="/",
     )
+    response.headers["Cache-Control"] = "no-store"
+
+
+def _set_session_cookie(request: Request, response: Response, token: str, max_age_seconds: int) -> None:
+    _set_auth_cookie(
+        request,
+        response,
+        key=SESSION_COOKIE_NAME,
+        token=token,
+        max_age_seconds=max_age_seconds,
+    )
+
+
+def _delete_auth_cookies(response: Response) -> None:
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+    response.delete_cookie(MASTER_SESSION_COOKIE_NAME, path="/")
+    response.headers["Cache-Control"] = "no-store"
+
+
+def _master_session_service(request: Request) -> Any:
+    service = getattr(request.app.state, "master_session_service", None)
+    if service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service unavailable",
+            headers=_AUTH_SERVICE_UNAVAILABLE_HEADERS,
+        )
+    return service
+
+
+def _safe_return_to(value: str | None) -> str:
+    candidate = str(value or "").strip()
+    if not candidate or len(candidate) > 2048:
+        return "/"
+    if not candidate.startswith("/") or candidate.startswith("//") or "\\" in candidate:
+        return "/"
+    if any(ord(character) < 32 for character in candidate):
+        return "/"
+
+    parsed = urlsplit(candidate)
+    if parsed.scheme or parsed.netloc:
+        return "/"
+    normalized_path = parsed.path.rstrip("/") or "/"
+    if normalized_path in {"/login", "/forgot-password", "/reset-password", "/accept-invite"}:
+        return "/"
+    return candidate
 
 
 def _client_ip(request: Request) -> str:
@@ -478,7 +554,8 @@ async def internal_login(request: Request, payload: InternalLoginRequest) -> Res
                 force_password_change=login.context.force_password_change,
             ).model_dump(),
         )
-        _set_session_cookie(response, login.session_token, ttl)
+        _set_session_cookie(request, response, login.session_token, ttl)
+        response.delete_cookie(MASTER_SESSION_COOKIE_NAME, path="/")
         await emit_control_audit_event(
             request=request,
             request_start=request_start,
@@ -505,24 +582,109 @@ async def internal_login(request: Request, payload: InternalLoginRequest) -> Res
         raise
 
 
+@router.post("/master/login")
+async def master_key_login(request: Request, payload: MasterKeyLoginRequest) -> Response:
+    request_start = perf_counter()
+    try:
+        await _enforce_auth_rate_limit(
+            request,
+            scope="auth_master_login_ip",
+            entity_id=_client_ip(request),
+            limit_per_minute=_AUTH_MASTER_LOGIN_IP_LIMIT_PER_MINUTE,
+            detail="Too many login attempts; please try again later",
+        )
+
+        configured = get_configured_master_key(request)
+        provided = payload.master_key.strip()
+        if not configured:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Master key not configured")
+        if not provided or not hmac.compare_digest(provided, configured):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid master key")
+
+        general_settings = getattr(getattr(request.app.state, "app_config", None), "general_settings", None)
+        ttl = int(getattr(general_settings, "auth_session_ttl_hours", 12) * 3600)
+        salt = str(getattr(request.app.state, "salt_key", "") or "")
+        if not salt:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth service unavailable")
+
+        service = _master_session_service(request)
+        try:
+            existing_token = request.cookies.get(MASTER_SESSION_COOKIE_NAME)
+            if existing_token:
+                await service.revoke_session(existing_token)
+            token = await service.create_session(master_key=configured, ttl_seconds=ttl)
+        except MasterSessionStoreUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication service unavailable",
+                headers=_AUTH_SERVICE_UNAVAILABLE_HEADERS,
+            ) from exc
+        response = JSONResponse({"authenticated": True, "auth_mode": "master_key", "role": PlatformRole.ADMIN})
+        _set_auth_cookie(
+            request,
+            response,
+            key=MASTER_SESSION_COOKIE_NAME,
+            token=token,
+            max_age_seconds=ttl,
+        )
+        response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+        await emit_control_audit_event(
+            request=request,
+            request_start=request_start,
+            action=AuditAction.AUTH_MASTER_LOGIN,
+            status="success",
+            actor_type="master_key",
+            actor_id="master_key",
+            resource_type="session",
+            response_payload={"auth_mode": "master_key"},
+            critical=True,
+        )
+        return response
+    except Exception as exc:
+        await emit_control_audit_event(
+            request=request,
+            request_start=request_start,
+            action=AuditAction.AUTH_MASTER_LOGIN,
+            status="error",
+            actor_type="master_key",
+            actor_id="master_key",
+            resource_type="session",
+            error=exc,
+            critical=True,
+        )
+        raise
+
+
 @router.post("/internal/logout")
 async def internal_logout(request: Request) -> Response:
     request_start = perf_counter()
     context = get_platform_auth_context(request)
+    master_session_token = request.cookies.get(MASTER_SESSION_COOKIE_NAME)
     try:
+        if master_session_token:
+            try:
+                await _master_session_service(request).revoke_session(master_session_token)
+            except MasterSessionStoreUnavailable as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Authentication service unavailable",
+                    headers=_AUTH_SERVICE_UNAVAILABLE_HEADERS,
+                ) from exc
+
         service = getattr(request.app.state, "platform_identity_service", None)
         token = request.cookies.get(SESSION_COOKIE_NAME)
         if service is not None and token:
             await service.revoke_session(token)
 
         response = JSONResponse({"logged_out": True})
-        response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+        _delete_auth_cookies(response)
         await emit_control_audit_event(
             request=request,
             request_start=request_start,
             action=AuditAction.AUTH_INTERNAL_LOGOUT,
             status="success",
-            actor_id=context.account_id if context is not None else None,
+            actor_type="master_key" if master_session_token else "platform_account",
+            actor_id="master_key" if master_session_token else (context.account_id if context is not None else None),
             resource_type="session",
             response_payload={"logged_out": True},
             critical=True,
@@ -534,7 +696,8 @@ async def internal_logout(request: Request) -> Response:
             request_start=request_start,
             action=AuditAction.AUTH_INTERNAL_LOGOUT,
             status="error",
-            actor_id=context.account_id if context is not None else None,
+            actor_type="master_key" if master_session_token else "platform_account",
+            actor_id="master_key" if master_session_token else (context.account_id if context is not None else None),
             resource_type="session",
             error=exc,
             critical=True,
@@ -543,9 +706,34 @@ async def internal_logout(request: Request) -> Response:
 
 
 @router.get("/me", response_model=CurrentSessionResponse)
-async def auth_me(request: Request) -> CurrentSessionResponse:
+async def auth_me(request: Request, response: Response) -> CurrentSessionResponse:
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Vary"] = "Cookie"
+    master_session_status = get_master_session_status(request)
+    if master_session_status == MasterSessionStatus.INVALID:
+        response.delete_cookie(MASTER_SESSION_COOKIE_NAME, path="/")
+    if master_session_status == MasterSessionStatus.ACTIVE:
+        effective_permissions = sorted(PLATFORM_ROLE_PERMISSIONS.get(PlatformRole.ADMIN, set()))
+        return CurrentSessionResponse(
+            authenticated=True,
+            auth_mode="master_key",
+            role=PlatformRole.ADMIN,
+            effective_permissions=effective_permissions,
+            ui_access=build_ui_access(
+                authenticated=True,
+                effective_permissions=effective_permissions,
+                organization_memberships=[],
+            ),
+        )
+
     context = get_platform_auth_context(request)
     if context is None:
+        if master_session_status == MasterSessionStatus.UNAVAILABLE:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication service unavailable",
+                headers=_AUTH_SERVICE_UNAVAILABLE_HEADERS,
+            )
         return CurrentSessionResponse(authenticated=False)
 
     effective_permissions = effective_permissions_for_context(context)
@@ -557,6 +745,7 @@ async def auth_me(request: Request) -> CurrentSessionResponse:
     )
     return CurrentSessionResponse(
         authenticated=True,
+        auth_mode="session",
         account_id=context.account_id,
         email=context.email,
         role=context.role,
@@ -834,7 +1023,8 @@ async def accept_invitation(request: Request, payload: InvitationAcceptRequest) 
         ).model_dump()
         response = JSONResponse(status_code=status.HTTP_200_OK, content=response_payload)
         if login.session_established and login.session_token:
-            _set_session_cookie(response, login.session_token, ttl)
+            _set_session_cookie(request, response, login.session_token, ttl)
+            response.delete_cookie(MASTER_SESSION_COOKIE_NAME, path="/")
         await emit_control_audit_event(
             request=request,
             request_start=request_start,
@@ -1088,7 +1278,11 @@ async def sso_config(request: Request):
 
 
 @router.get("/login")
-async def auth_login(request: Request, state: str = Query(default="")):
+async def auth_login(
+    request: Request,
+    state: str = Query(default=""),
+    return_to: str = Query(default="/", max_length=2048),
+):
     handler = getattr(request.app.state, "sso_auth_handler", None)
     state_store = getattr(request.app.state, "sso_state_store", None)
     if handler is None:
@@ -1101,7 +1295,11 @@ async def auth_login(request: Request, state: str = Query(default="")):
 
     code_verifier, code_challenge = handler.generate_pkce_pair()
     try:
-        await state_store.store_code_verifier(state=state, code_verifier=code_verifier)
+        await state_store.store_login_state(
+            state=state,
+            code_verifier=code_verifier,
+            return_to=_safe_return_to(return_to),
+        )
     except SSOStateStoreError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="SSO state storage unavailable") from exc
 
@@ -1133,13 +1331,13 @@ async def auth_callback(request: Request, code: str = Query(default=""), state: 
             detail="Too many SSO callback attempts; please try again later",
         )
         try:
-            code_verifier = await state_store.pop_code_verifier(state=state)
+            login_state = await state_store.pop_login_state(state=state)
         except SSOStateStoreError as exc:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="SSO state storage unavailable") from exc
-        if code_verifier is None:
+        if login_state is None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired SSO state")
 
-        response_payload = await handler.handle_callback(code, code_verifier=code_verifier)
+        response_payload = await handler.handle_callback(code, code_verifier=login_state.code_verifier)
         raw_email = response_payload.get("email")
         if not isinstance(raw_email, str) or not raw_email.strip():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid SSO email")
@@ -1226,8 +1424,10 @@ async def auth_callback(request: Request, code: str = Query(default=""), state: 
 
         ttl = int(getattr(general_settings, "auth_session_ttl_hours", 12) * 3600)
 
-        response = RedirectResponse(url="/", status_code=302)
-        _set_session_cookie(response, login.session_token, ttl)
+        return_to = _safe_return_to(login_state.return_to)
+        response = RedirectResponse(url=return_to, status_code=302)
+        _set_session_cookie(request, response, login.session_token, ttl)
+        response.delete_cookie(MASTER_SESSION_COOKIE_NAME, path="/")
         await emit_control_audit_event(
             request=request,
             request_start=request_start,
@@ -1236,7 +1436,7 @@ async def auth_callback(request: Request, code: str = Query(default=""), state: 
             actor_id=getattr(getattr(login, "context", None), "account_id", None),
             resource_type="session",
             request_payload={"provider": provider},
-            response_payload={"redirect": "/"},
+            response_payload={"redirect": return_to},
             critical=True,
         )
         return response

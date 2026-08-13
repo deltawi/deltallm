@@ -1,11 +1,18 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { auth as authApi, models, setMasterKey } from './api';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { auth as authApi } from './api';
+import {
+  classifySessionCheckError,
+  isValidSessionPayload,
+  type SessionFailure,
+} from './authSession';
 import type { UIAccess } from './authorization';
 
 type AuthMode = 'session' | 'master_key';
+export type AuthStatus = 'loading' | 'authenticated' | 'anonymous' | 'retryable_error' | 'fatal_error';
 
 export interface SessionInfo {
   authenticated: boolean;
+  auth_mode?: AuthMode | null;
   account_id?: string | null;
   email?: string | null;
   role?: string | null;
@@ -19,16 +26,30 @@ export interface SessionInfo {
   force_password_change?: boolean;
 }
 
+type AuthErrorState = Exclude<SessionFailure, { kind: 'anonymous' }>;
+
+interface AuthState {
+  status: AuthStatus;
+  authMode: AuthMode | null;
+  session: SessionInfo | null;
+  error: AuthErrorState | null;
+}
+
 interface AuthContextValue {
   isAuthenticated: boolean;
   isLoading: boolean;
+  authStatus: AuthStatus;
   authMode: AuthMode | null;
   session: SessionInfo | null;
+  authError: AuthErrorState | null;
+  isLoggingOut: boolean;
+  logoutError: string | null;
   mfaSkipped: boolean;
   loginWithCredentials: (email: string, password: string, mfaCode?: string) => Promise<void>;
   loginWithMasterKey: (masterKey: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshSession: () => Promise<void>;
+  retrySession: () => Promise<void>;
   skipMfa: () => void;
 }
 
@@ -71,121 +92,205 @@ function setStoredMfaSkip(value: boolean) {
   }
 }
 
+function authenticatedState(session: SessionInfo): AuthState {
+  return {
+    status: 'authenticated',
+    authMode: session.auth_mode === 'master_key' ? 'master_key' : 'session',
+    session,
+    error: null,
+  };
+}
+
+function anonymousState(): AuthState {
+  return { status: 'anonymous', authMode: null, session: { authenticated: false }, error: null };
+}
+
+function failureState(failure: SessionFailure): AuthState {
+  if (failure.kind === 'anonymous') return anonymousState();
+  return {
+    status: failure.kind === 'retryable' ? 'retryable_error' : 'fatal_error',
+    authMode: null,
+    session: null,
+    error: failure,
+  };
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [isLoading, setIsLoading] = useState(true);
-  const [authMode, setAuthMode] = useState<AuthMode | null>(null);
-  const [session, setSession] = useState<SessionInfo | null>(null);
+  const [state, setState] = useState<AuthState>({
+    status: 'loading',
+    authMode: null,
+    session: null,
+    error: null,
+  });
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
   const [mfaSkipped, setMfaSkipped] = useState(getStoredMfaSkip());
+  const sessionAttemptRef = useRef(0);
+  const logoutInFlightRef = useRef(false);
 
   const refreshSession = useCallback(async () => {
-    const me = await authApi.me();
-    if (me?.authenticated) {
-      setSession(me);
-      setAuthMode('session');
-      setStoredMasterKey(null);
-      setMasterKey(null);
+    const attempt = ++sessionAttemptRef.current;
+    const applyState = (nextState: AuthState) => {
+      if (sessionAttemptRef.current === attempt) setState(nextState);
+    };
+    setState((current) => ({ ...current, status: 'loading', error: null }));
+
+    const handleFailure = (
+      error: unknown,
+      { clearLegacyOnAnonymous }: { clearLegacyOnAnonymous: boolean },
+    ) => {
+      const failure = classifySessionCheckError(error);
+      if (failure.kind === 'anonymous' && clearLegacyOnAnonymous) {
+        setStoredMasterKey(null);
+      }
+      applyState(failureState(failure));
+    };
+
+    let me: unknown;
+    try {
+      me = await authApi.me();
+    } catch (error: unknown) {
+      const failure = classifySessionCheckError(error);
+      if (failure.kind !== 'anonymous') {
+        applyState(failureState(failure));
+        return;
+      }
+      me = { authenticated: false };
+    }
+
+    if (!isValidSessionPayload(me)) {
+      handleFailure(new Error('Invalid session verification response'), { clearLegacyOnAnonymous: false });
       return;
     }
-    setSession(me || { authenticated: false });
-    if (getStoredMasterKey()) {
-      setAuthMode('master_key');
-    } else {
-      setAuthMode(null);
+
+    if (me?.authenticated) {
+      setStoredMasterKey(null);
+      applyState(authenticatedState(me));
+      return;
     }
+
+    const legacyMasterKey = getStoredMasterKey();
+    if (!legacyMasterKey) {
+      applyState(anonymousState());
+      return;
+    }
+
+    try {
+      await authApi.masterLogin(legacyMasterKey);
+    } catch (error: unknown) {
+      handleFailure(error, { clearLegacyOnAnonymous: true });
+      return;
+    }
+
+    try {
+      me = await authApi.me();
+    } catch (error: unknown) {
+      handleFailure(error, { clearLegacyOnAnonymous: true });
+      return;
+    }
+
+    if (!isValidSessionPayload(me)) {
+      handleFailure(new Error('Invalid session verification response'), { clearLegacyOnAnonymous: false });
+      return;
+    }
+
+    if (!me?.authenticated) {
+      setStoredMasterKey(null);
+      applyState(anonymousState());
+      return;
+    }
+
+    setStoredMasterKey(null);
+    applyState(authenticatedState(me));
   }, []);
 
+  const retrySession = useCallback(async () => {
+    await refreshSession();
+  }, [refreshSession]);
+
   useEffect(() => {
-    const mk = getStoredMasterKey();
-    if (mk) setMasterKey(mk);
-    refreshSession()
-      .catch(() => {
-        // If session check fails (backend down), fall back to master key if present.
-        const stored = getStoredMasterKey();
-        if (stored) {
-          setAuthMode('master_key');
-          setSession(null);
-        } else {
-          setAuthMode(null);
-          setSession(null);
-        }
-      })
-      .finally(() => setIsLoading(false));
+    void refreshSession();
+    return () => {
+      sessionAttemptRef.current += 1;
+    };
   }, [refreshSession]);
 
   const loginWithCredentials = useCallback(async (email: string, password: string, mfaCode?: string) => {
     await authApi.internalLogin({ email, password, mfa_code: mfaCode });
-    await refreshSession();
     setStoredMfaSkip(false);
     setMfaSkipped(false);
+    await refreshSession();
   }, [refreshSession]);
 
   const loginWithMasterKey = useCallback(async (key: string) => {
     const value = key.trim();
     if (!value) throw new Error('Master key is required');
 
-    // Set first so validation request uses it.
-    setStoredMasterKey(value);
-    setMasterKey(value);
-
-    try {
-      await models.list();
-    } catch (err: any) {
-      setStoredMasterKey(null);
-      setMasterKey(null);
-      throw err;
-    }
-
-    setAuthMode('master_key');
-    setSession({ authenticated: true, role: 'platform_admin' });
-  }, []);
+    await authApi.masterLogin(value);
+    setStoredMasterKey(null);
+    await refreshSession();
+  }, [refreshSession]);
 
   const logout = useCallback(async () => {
-    const mode = authMode;
-    setAuthMode(null);
-    setSession({ authenticated: false });
-    setStoredMasterKey(null);
-    setMasterKey(null);
-    setStoredMfaSkip(false);
-    setMfaSkipped(false);
-    if (mode === 'session') {
-      try {
-        await authApi.internalLogout();
-      } catch {
-        // ignore
-      }
+    if (logoutInFlightRef.current) return;
+    logoutInFlightRef.current = true;
+    setIsLoggingOut(true);
+    setLogoutError(null);
+    try {
+      await authApi.internalLogout();
+      sessionAttemptRef.current += 1;
+      setStoredMasterKey(null);
+      setStoredMfaSkip(false);
+      setMfaSkipped(false);
+      setState(anonymousState());
+    } catch (error: unknown) {
+      const message = error instanceof Error && error.message
+        ? error.message
+        : 'Sign out could not be completed. Your session is still active.';
+      setLogoutError(message);
+      throw error;
+    } finally {
+      logoutInFlightRef.current = false;
+      setIsLoggingOut(false);
     }
-  }, [authMode]);
+  }, []);
 
   const skipMfa = useCallback(() => {
     setStoredMfaSkip(true);
     setMfaSkipped(true);
   }, []);
 
-  const isAuthenticated = authMode === 'master_key'
-    ? !!getStoredMasterKey()
-    : !!session?.authenticated;
+  const isAuthenticated = state.status === 'authenticated' && !!state.session?.authenticated;
+  const isLoading = state.status === 'loading';
 
   const value = useMemo<AuthContextValue>(() => ({
     isAuthenticated,
     isLoading,
-    authMode,
-    session,
+    authStatus: state.status,
+    authMode: state.authMode,
+    session: state.session,
+    authError: state.error,
+    isLoggingOut,
+    logoutError,
     mfaSkipped,
     loginWithCredentials,
     loginWithMasterKey,
     logout,
     refreshSession,
+    retrySession,
     skipMfa,
   }), [
     isAuthenticated,
     isLoading,
-    authMode,
-    session,
+    state,
+    isLoggingOut,
+    logoutError,
     mfaSkipped,
     loginWithCredentials,
     loginWithMasterKey,
     logout,
     refreshSession,
+    retrySession,
     skipMfa,
   ]);
 

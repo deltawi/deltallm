@@ -9,6 +9,8 @@ const uiRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputDir = path.join(uiRoot, 'node_modules', '.tmp', 'ui-unit-tests');
 const testSources = [
   'tests/authorization.test.ts',
+  'tests/authRedirect.test.ts',
+  'tests/authSession.test.ts',
   'tests/modelFormShared.test.ts',
   'tests/batchDetailResource.test.ts',
   'tests/organizationPolicy.test.ts',

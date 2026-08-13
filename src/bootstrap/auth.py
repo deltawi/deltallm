@@ -30,6 +30,7 @@ from src.services.email_token_service import EmailTokenService
 from src.services.invitation_service import InvitationService
 from src.services.key_service import KeyService
 from src.services.limit_counter import LimitCounter
+from src.services.master_session_service import MasterSessionService
 from src.services.platform_identity_service import PlatformIdentityService
 from src.services.self_registration_provisioning import SelfRegistrationProvisioningService
 from src.services.sso_state_store import SSOStateStore
@@ -118,6 +119,7 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
     statuses = [
         BootstrapStatus("key_service", "ready"),
         BootstrapStatus("platform_identity", "ready"),
+        BootstrapStatus("master_session_store", "ready"),
     ]
     runtime = AuthRuntime()
 
@@ -173,6 +175,10 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
     await app.state.platform_identity_service.ensure_bootstrap_admin(
         email=cfg.general_settings.platform_bootstrap_admin_email,
         password=cfg.general_settings.platform_bootstrap_admin_password,
+    )
+    app.state.master_session_service = MasterSessionService(
+        db_client=app.state.prisma_manager.client,
+        salt=app.state.salt_key,
     )
     app.state.self_registration_provisioning_service = SelfRegistrationProvisioningService(
         db_client=app.state.prisma_manager.client,

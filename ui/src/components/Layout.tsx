@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import {
@@ -29,6 +29,7 @@ import {
 import clsx from 'clsx';
 import { canAccessPage, resolveUiAccess, type UIAccess, type UIAccessKey } from '../lib/authorization';
 import { useDesktopSidebarWidth } from '../lib/useDesktopSidebarWidth';
+import { useToast } from './ToastProvider';
 
 type NavItem = {
   type: 'item';
@@ -125,6 +126,7 @@ function SidebarContent({
   displayEmail,
   displayRole,
   logout,
+  isLoggingOut,
   pathname,
   onNavClick,
   showExpanded,
@@ -136,6 +138,7 @@ function SidebarContent({
   displayEmail: string;
   displayRole: string;
   logout: () => void;
+  isLoggingOut: boolean;
   pathname: string;
   onNavClick?: () => void;
   showExpanded: boolean;
@@ -251,9 +254,12 @@ function SidebarContent({
               </div>
             </div>
             <button
+              type="button"
               onClick={logout}
-              className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors shrink-0"
-              aria-label="Sign out"
+              disabled={isLoggingOut}
+              className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors shrink-0 disabled:cursor-wait disabled:opacity-50"
+              aria-label={isLoggingOut ? 'Signing out' : 'Sign out'}
+              title={isLoggingOut ? 'Signing out…' : 'Sign out'}
             >
               <LogOut className="w-4 h-4" />
             </button>
@@ -274,7 +280,8 @@ function SidebarContent({
 }
 
 export default function Layout() {
-  const { logout, session, authMode } = useAuth();
+  const { logout, isLoggingOut, session, authMode } = useAuth();
+  const { pushToast } = useToast();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const {
@@ -306,6 +313,18 @@ export default function Layout() {
     [uiAccess]
   );
 
+  const handleLogout = useCallback(() => {
+    void logout().catch((error: unknown) => {
+      pushToast({
+        title: 'Sign out failed',
+        message: error instanceof Error && error.message
+          ? error.message
+          : 'Your session is still active. Please try again.',
+        tone: 'error',
+      });
+    });
+  }, [logout, pushToast]);
+
   return (
     <div className="flex h-screen bg-gray-50">
       <aside
@@ -321,7 +340,8 @@ export default function Layout() {
           visibleEntries={visibleEntries}
           displayEmail={displayEmail}
           displayRole={displayRole}
-          logout={logout}
+          logout={handleLogout}
+          isLoggingOut={isLoggingOut}
           pathname={location.pathname}
           showExpanded={showExpanded}
           collapsed={collapsed}
@@ -369,7 +389,8 @@ export default function Layout() {
               visibleEntries={visibleEntries}
               displayEmail={displayEmail}
               displayRole={displayRole}
-              logout={logout}
+              logout={handleLogout}
+              isLoggingOut={isLoggingOut}
               pathname={location.pathname}
               onNavClick={() => setMobileOpen(false)}
               showExpanded={true}
