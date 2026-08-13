@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import type { FormEvent } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import { auth as authApi, type AuthSsoConfig } from '../lib/api';
 import { hasSandboxSelfRegistration } from '../lib/selfRegistration';
+import { returnToFromSearch } from '../lib/authRedirect';
 import { Zap, Mail, KeyRound, Globe } from 'lucide-react';
 
 type Tab = 'credentials' | 'master_key' | 'sso';
@@ -21,6 +22,8 @@ function errorMessage(err: unknown, fallback: string): string {
 
 export default function Login() {
   const { loginWithCredentials, loginWithMasterKey, isLoading } = useAuth();
+  const location = useLocation();
+  const returnTo = returnToFromSearch(location.search);
   const [tab, setTab] = useState<Tab>('credentials');
 
   const [email, setEmail] = useState('');
@@ -103,7 +106,7 @@ export default function Login() {
     setError('');
     try {
       const state = crypto.randomUUID();
-      const { authorize_url } = await authApi.ssoLogin(state);
+      const { authorize_url } = await authApi.ssoLogin(state, returnTo);
       window.location.href = authorize_url;
     } catch (err: unknown) {
       setError(errorMessage(err, 'Failed to start SSO login'));

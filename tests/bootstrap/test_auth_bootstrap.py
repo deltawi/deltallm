@@ -113,6 +113,8 @@ async def test_init_auth_runtime_wires_enabled_handlers(monkeypatch: pytest.Monk
 
     assert app.state.key_service[0] == "key-service"
     assert created["platform_identity_service"].bootstrap_calls == [("admin@example.com", "secret")]
+    assert app.state.master_session_service.db == "db-client"
+    assert app.state.master_session_service.salt == "salt"
     assert app.state.limit_counter[0] == "limit-counter"
     assert app.state.sso_user_repository == "user-repo"
     assert app.state.sso_state_store[0] == "sso-state-store"
@@ -124,6 +126,7 @@ async def test_init_auth_runtime_wires_enabled_handlers(monkeypatch: pytest.Monk
     assert runtime.statuses == (
         BootstrapStatus("key_service", "ready"),
         BootstrapStatus("platform_identity", "ready"),
+        BootstrapStatus("master_session_store", "ready"),
         BootstrapStatus("cache_invalidation_outbox", "ready"),
         BootstrapStatus("cache_invalidation_worker", "disabled"),
         BootstrapStatus("sso_state_store", "ready"),
@@ -167,6 +170,7 @@ async def test_init_auth_runtime_leaves_optional_handlers_disabled(
     assert runtime.statuses == (
         BootstrapStatus("key_service", "ready"),
         BootstrapStatus("platform_identity", "ready"),
+        BootstrapStatus("master_session_store", "ready"),
         BootstrapStatus("cache_invalidation_outbox", "ready"),
         BootstrapStatus("cache_invalidation_worker", "disabled"),
         BootstrapStatus("sso_state_store", "disabled"),

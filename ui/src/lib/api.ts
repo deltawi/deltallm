@@ -1,25 +1,20 @@
 export class ApiError extends Error {
   status: number;
   detail?: unknown;
+  retryAfterSeconds?: number;
 
-  constructor(message: string, status: number, detail?: unknown) {
+  constructor(message: string, status: number, detail?: unknown, retryAfterSeconds?: number) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.detail = detail;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
-}
-
-let masterKey: string | null = null;
-
-export function setMasterKey(value: string | null) {
-  masterKey = value;
 }
 
 function buildHeaders(init?: HeadersInit): HeadersInit {
   const headers = new Headers(init);
   if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-  if (masterKey) headers.set('X-Master-Key', masterKey);
   return headers;
 }
 
@@ -58,7 +53,11 @@ async function apiFetch<T>(path: string, opts?: RequestInit & { json?: unknown }
 
   if (!res.ok) {
     const detail = await parseErrorDetail(res);
-    throw new ApiError(errorMessage(res.status, detail), res.status, detail);
+    const rawRetryAfter = res.headers.get('retry-after');
+    const retryAfterSeconds = rawRetryAfter && /^\d+$/.test(rawRetryAfter)
+      ? Number.parseInt(rawRetryAfter, 10)
+      : undefined;
+    throw new ApiError(errorMessage(res.status, detail), res.status, detail, retryAfterSeconds);
   }
 
   if (res.status === 204) return undefined as T;
@@ -2117,9 +2116,11 @@ export interface AuthSsoConfig {
 }
 
 export const auth = {
-  me: () => apiFetch<any>('/auth/me', { headers: new Headers({ 'Content-Type': 'application/json' }) }),
+  me: () => apiFetch<unknown>('/auth/me', { headers: new Headers({ 'Content-Type': 'application/json' }) }),
   internalLogin: (payload: { email: string; password: string; mfa_code?: string }) =>
     apiFetch<any>('/auth/internal/login', { method: 'POST', json: payload }),
+  masterLogin: (masterKey: string) =>
+    apiFetch<any>('/auth/master/login', { method: 'POST', json: { master_key: masterKey } }),
   internalLogout: () => apiFetch<any>('/auth/internal/logout', { method: 'POST' }),
   changePassword: (current_password: string | null, new_password: string) =>
     apiFetch<any>('/auth/internal/change-password', { method: 'POST', json: { current_password, new_password } }),
@@ -2133,7 +2134,9 @@ export const auth = {
   resetPassword: (token: string, new_password: string) =>
     apiFetch<{ changed: boolean }>('/auth/internal/reset-password', { method: 'POST', json: { token, new_password } }),
   ssoConfig: () => apiFetch<AuthSsoConfig>('/auth/sso-config'),
-  ssoLogin: (state: string) => apiFetch<{ authorize_url: string }>(`/auth/login?state=${encodeURIComponent(state)}`),
+  ssoLogin: (state: string, returnTo = '/') => apiFetch<{ authorize_url: string }>(
+    `/auth/login?state=${encodeURIComponent(state)}&return_to=${encodeURIComponent(returnTo)}`,
+  ),
   mfaEnrollStart: () => apiFetch<{ secret: string; otpauth_url: string }>('/auth/mfa/enroll/start', { method: 'POST' }),
   mfaEnrollConfirm: (code: string) => apiFetch<{ mfa_enabled: boolean }>('/auth/mfa/enroll/confirm', { method: 'POST', json: { code } }),
   mfaVerify: (code: string) => apiFetch<{ mfa_verified: boolean }>('/auth/mfa/verify', { method: 'POST', json: { code } }),

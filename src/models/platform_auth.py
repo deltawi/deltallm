@@ -25,6 +25,10 @@ class InternalLoginRequest(BaseModel):
     mfa_code: str | None = None
 
 
+class MasterKeyLoginRequest(BaseModel):
+    master_key: str
+
+
 class InternalLoginResponse(BaseModel):
     account_id: str
     email: str
@@ -120,6 +124,7 @@ class UIAccessResponse(BaseModel):
 
 class CurrentSessionResponse(BaseModel):
     authenticated: bool
+    auth_mode: str | None = None
     account_id: str | None = None
     email: str | None = None
     role: str | None = None

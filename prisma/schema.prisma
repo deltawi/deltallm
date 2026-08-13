@@ -333,6 +333,20 @@ model DeltaLLM_PlatformSession {
   @@map("deltallm_platformsession")
 }
 
+model DeltaLLM_MasterSession {
+  session_id             String   @id @default(uuid())
+  token_hash             String   @unique
+  master_key_fingerprint String
+  expires_at             DateTime
+  revoked_at             DateTime?
+  created_at             DateTime @default(now())
+  updated_at             DateTime @updatedAt
+  last_seen_at           DateTime @default(now())
+
+  @@index([expires_at])
+  @@map("deltallm_mastersession")
+}
+
 model DeltaLLM_PlatformIdentity {
   identity_id         String   @id @default(uuid())
   account_id          String

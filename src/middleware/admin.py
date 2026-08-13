@@ -7,11 +7,20 @@ from fastapi import Header, HTTPException, Request, status
 
 from src.auth.roles import Permission
 from src.middleware.platform_auth import (
+    get_configured_master_key,
     get_platform_auth_context,
     has_platform_admin_session,
+    has_master_key_session,
     has_scoped_permission,
+    master_key_session_unavailable,
     requires_mfa_verification,
 )
+
+_AUTH_SERVICE_UNAVAILABLE_HEADERS = {
+    "Cache-Control": "no-store",
+    "Retry-After": "5",
+    "Vary": "Cookie",
+}
 
 
 def _extract_bearer_token(authorization: str | None) -> str | None:
@@ -36,16 +45,19 @@ async def require_authenticated(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="MFA verification required")
         return "platform_session"
 
-    configured = None
-    app_config = getattr(request.app.state, "app_config", None)
-    if app_config is not None:
-        configured = getattr(getattr(app_config, "general_settings", None), "master_key", None)
-    if not configured:
-        configured = getattr(getattr(request.app.state, "settings", None), "master_key", None)
+    configured = get_configured_master_key(request)
 
     provided = x_master_key or _extract_bearer_token(authorization)
     if configured and provided and _hmac.compare_digest(provided, configured):
         return configured
+    if has_master_key_session(request):
+        return "master_session"
+    if master_key_session_unavailable(request):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service unavailable",
+            headers=_AUTH_SERVICE_UNAVAILABLE_HEADERS,
+        )
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
@@ -58,18 +70,19 @@ async def require_master_key(
     if has_platform_admin_session(request):
         return "platform_session"
 
-    configured = None
-    app_config = getattr(request.app.state, "app_config", None)
-    if app_config is not None:
-        configured = getattr(getattr(app_config, "general_settings", None), "master_key", None)
-    if not configured:
-        configured = getattr(getattr(request.app.state, "settings", None), "master_key", None)
+    configured = get_configured_master_key(request)
 
     if not configured:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Master key not configured")
 
     provided = x_master_key or _extract_bearer_token(authorization)
     if not provided or not _hmac.compare_digest(provided, configured):
+        if master_key_session_unavailable(request):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication service unavailable",
+                headers=_AUTH_SERVICE_UNAVAILABLE_HEADERS,
+            )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid master key")
 
     return configured
@@ -83,19 +96,22 @@ def require_admin_permission(permission: str) -> Callable:
         organization_id: str | None = None,
         team_id: str | None = None,
     ) -> str:
-        configured = None
-        app_config = getattr(request.app.state, "app_config", None)
-        if app_config is not None:
-            configured = getattr(getattr(app_config, "general_settings", None), "master_key", None)
-        if not configured:
-            configured = getattr(getattr(request.app.state, "settings", None), "master_key", None)
+        configured = get_configured_master_key(request)
 
         provided = x_master_key or _extract_bearer_token(authorization)
         if configured and provided and _hmac.compare_digest(provided, configured):
             return "master_key"
+        if has_master_key_session(request):
+            return "master_session"
 
         context = get_platform_auth_context(request)
         if context is None:
+            if master_key_session_unavailable(request):
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Authentication service unavailable",
+                    headers=_AUTH_SERVICE_UNAVAILABLE_HEADERS,
+                )
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
         if requires_mfa_verification(context):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="MFA verification required")
@@ -124,19 +140,22 @@ def require_any_admin_permission(permissions: tuple[str, ...]) -> Callable:
         authorization: str | None = Header(default=None, alias="Authorization"),
         x_master_key: str | None = Header(default=None, alias="X-Master-Key"),
     ) -> str:
-        configured = None
-        app_config = getattr(request.app.state, "app_config", None)
-        if app_config is not None:
-            configured = getattr(getattr(app_config, "general_settings", None), "master_key", None)
-        if not configured:
-            configured = getattr(getattr(request.app.state, "settings", None), "master_key", None)
+        configured = get_configured_master_key(request)
 
         provided = x_master_key or _extract_bearer_token(authorization)
         if configured and provided and _hmac.compare_digest(provided, configured):
             return "master_key"
+        if has_master_key_session(request):
+            return "master_session"
 
         context = get_platform_auth_context(request)
         if context is None:
+            if master_key_session_unavailable(request):
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Authentication service unavailable",
+                    headers=_AUTH_SERVICE_UNAVAILABLE_HEADERS,
+                )
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
         if requires_mfa_verification(context):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="MFA verification required")

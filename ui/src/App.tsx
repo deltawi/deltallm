@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './lib/auth';
 import Layout from './components/Layout';
 import AcceptInvite from './pages/AcceptInvite';
@@ -40,9 +40,51 @@ import MCPApprovalQueue from './pages/MCPApprovalQueue';
 import Playground from './pages/Playground';
 import { ToastProvider } from './components/ToastProvider';
 import { defaultRouteForUiAccess, resolveUiAccess } from './lib/authorization';
+import { loginPathFor, returnToFromSearch } from './lib/authRedirect';
+
+function SessionVerificationError({
+  message,
+  retryable,
+  onRetry,
+}: {
+  message: string;
+  retryable: boolean;
+  onRetry: () => Promise<void>;
+}) {
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
+      <div className="w-full max-w-md rounded-xl border border-amber-200 bg-white p-6 text-center shadow-sm">
+        <h1 className="text-lg font-semibold text-gray-900">
+          {retryable ? 'Unable to verify your session' : 'Session verification failed'}
+        </h1>
+        <p className="mt-2 text-sm text-gray-600">{message}</p>
+        <button
+          type="button"
+          onClick={() => {
+            if (retryable) void onRetry();
+            else window.location.reload();
+          }}
+          className="mt-5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+        >
+          {retryable ? 'Try again' : 'Reload application'}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function AppRoutes() {
-  const { isAuthenticated, isLoading, session, authMode, mfaSkipped } = useAuth();
+  const {
+    isAuthenticated,
+    isLoading,
+    authStatus,
+    session,
+    authMode,
+    authError,
+    mfaSkipped,
+    retrySession,
+  } = useAuth();
+  const location = useLocation();
   const uiAccess = resolveUiAccess(authMode, session);
   const defaultRoute = defaultRouteForUiAccess(uiAccess);
 
@@ -54,17 +96,30 @@ function AppRoutes() {
     );
   }
 
+  if (!isAuthenticated && authError) {
+    return (
+      <SessionVerificationError
+        message={authError.message}
+        retryable={authStatus === 'retryable_error'}
+        onRetry={retrySession}
+      />
+    );
+  }
+
   if (!isAuthenticated) {
+    const returnTo = `${location.pathname}${location.search}${location.hash}`;
     return (
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/accept-invite" element={<AcceptInvite />} />
-        <Route path="*" element={<Navigate to="/login" replace />} />
+        <Route path="*" element={<Navigate to={loginPathFor(returnTo)} replace />} />
       </Routes>
     );
   }
+
+  const loginReturnTo = returnToFromSearch(location.search, defaultRoute);
 
   if (authMode === 'session' && session?.mfa_enabled && !session?.mfa_verified) {
     return <MFAVerify />;
@@ -112,7 +167,7 @@ function AppRoutes() {
         <Route path="/playground" element={uiAccess.playground ? <Playground /> : <Navigate to="/" replace />} />
         <Route path="/settings" element={uiAccess.settings ? <SettingsPage /> : <Navigate to="/" replace />} />
         <Route path="/access-control" element={<Navigate to={uiAccess.people_access ? "/users" : defaultRoute} replace />} />
-        <Route path="/login" element={<Navigate to={defaultRoute} replace />} />
+        <Route path="/login" element={<Navigate to={loginReturnTo} replace />} />
         <Route path="/forgot-password" element={<Navigate to={defaultRoute} replace />} />
         <Route path="/reset-password" element={<Navigate to={defaultRoute} replace />} />
         <Route path="/accept-invite" element={<Navigate to={defaultRoute} replace />} />
