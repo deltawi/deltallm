@@ -52,6 +52,28 @@ class TierModelPolicyReplaceRequest(_StrictRequest):
     policies: list[TierModelPolicyRequest]
 
 
+class TierModelPolicyCreateRequest(TierModelPolicyRequest):
+    expected_revision: int = Field(ge=0)
+
+
+class TierModelPolicyPatchRequest(_StrictRequest):
+    expected_revision: int = Field(ge=0)
+    enabled: bool | None = None
+    access_mode: str | None = None
+    rpm_limit: int | None = Field(default=None, ge=1)
+    tpm_limit: int | None = Field(default=None, ge=1)
+    rph_limit: int | None = Field(default=None, ge=1)
+    rpd_limit: int | None = Field(default=None, ge=1)
+    tpd_limit: int | None = Field(default=None, ge=1)
+    max_parallel_requests: int | None = Field(default=None, ge=1)
+    batch_rpm_limit: int | None = Field(default=None, ge=1)
+    batch_tpm_limit: int | None = Field(default=None, ge=1)
+    pricing: dict[str, Any] | None = None
+    capacity_pool_key: str | None = None
+    priority: int | None = None
+    metadata: dict[str, Any] | None = None
+
+
 class TierCapacityPoolRequest(_StrictRequest):
     pool_key: str
     callable_key: str
@@ -66,3 +88,27 @@ class TierCapacityPoolRequest(_StrictRequest):
 
 class TierCapacityPoolReplaceRequest(_StrictRequest):
     pools: list[TierCapacityPoolRequest]
+
+
+class TierCapacityPoolCreateRequest(TierCapacityPoolRequest):
+    expected_revision: int = Field(ge=0)
+
+
+class TierCapacityPoolPatchRequest(_StrictRequest):
+    expected_revision: int = Field(ge=0)
+    rpm_capacity: int | None = Field(default=None, ge=1)
+    tpm_capacity: int | None = Field(default=None, ge=1)
+    max_parallel_requests: int | None = Field(default=None, ge=1)
+    strategy: str | None = None
+    saturation_threshold: float | None = Field(default=None, gt=0, le=1)
+    burst_multiplier: float | None = Field(default=None, ge=1)
+    metadata: dict[str, Any] | None = None
+
+
+class TierConfigurationMutationRequest(_StrictRequest):
+    expected_revision: int = Field(ge=0)
+
+
+class TierActivationRequest(_StrictRequest):
+    expected_revision: int = Field(ge=0)
+    expected_active_version_id: str | None

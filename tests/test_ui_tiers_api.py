@@ -10,7 +10,19 @@ import pytest
 from src.audit.actions import AuditAction
 from src.auth.roles import OrganizationRole, PlatformRole
 from src.db.tiers import (
+    TierActivationActiveVersionChangedError,
+    TierActivationConfigurationChangedError,
+    TierBootstrapIdempotencyConflictError,
+    TierBootstrapResult,
+    TierCapacityPoolMutationResult,
+    TierCapacityPoolPage,
     TierCapacityPoolRecord,
+    TierConfigurationStaleError,
+    TierConfigurationPoolInUseError,
+    TierConfigurationVersionNotDraftError,
+    TierConfigurationVersionNotFoundError,
+    TierModelPolicyMutationResult,
+    TierModelPolicyPage,
     TierModelPolicyRecord,
     TierRecord,
     TierVersionRecord,
@@ -64,6 +76,7 @@ class _FakeTierRepository:
         self.update_error: str | None = None
         self.publish_error: str | None = None
         self.archive_error: str | None = None
+        self.bootstrap_requests: dict[tuple[str, str], tuple[str, str, str]] = {}
 
     def seed_tier(
         self,
@@ -161,6 +174,49 @@ class _FakeTierRepository:
         self.tiers[tier_id] = record
         return self._tier_with_counts(record)
 
+    async def create_tier_with_initial_draft(
+        self,
+        *,
+        principal_scope: str,
+        idempotency_key: str,
+        request_hash: str,
+        tier_key: str,
+        name: str,
+        description: str | None,
+        enabled: bool,
+        metadata: dict[str, Any] | None,
+        created_by_account_id: str | None,
+        created_by_kind: str,
+    ) -> TierBootstrapResult:
+        request_key = (principal_scope, idempotency_key)
+        replay = self.bootstrap_requests.get(request_key)
+        if replay is not None:
+            saved_hash, tier_id, version_id = replay
+            if saved_hash != request_hash:
+                raise TierBootstrapIdempotencyConflictError("mismatched replay")
+            tier = await self.get_tier(tier_id)
+            version = self.versions.get(version_id)
+            assert tier is not None and version is not None
+            return TierBootstrapResult(tier, version, "replayed")
+        if await self.get_tier_by_key(tier_key) is not None:
+            raise RuntimeError("duplicate key value violates unique constraint")
+        tier = await self.create_tier(
+            tier_key=tier_key,
+            name=name,
+            description=description,
+            enabled=enabled,
+            metadata=metadata,
+        )
+        version = await self.create_tier_version(
+            tier_id=tier.tier_id,
+            version_number=1,
+            created_by_account_id=created_by_account_id,
+            created_by_kind=created_by_kind,
+        )
+        self.bootstrap_requests[request_key] = (request_hash, tier.tier_id, version.tier_version_id)
+        tier = self._tier_with_counts(self.tiers[tier.tier_id])
+        return TierBootstrapResult(tier, version, "created")
+
     async def update_tier(
         self,
         tier_id: str,
@@ -197,12 +253,42 @@ class _FakeTierRepository:
     async def count_live_or_scheduled_tier_assignments(self, tier_id: str) -> int:
         return int(self.active_assignment_counts.get(tier_id, 0))
 
+    async def count_live_or_scheduled_tier_organizations(self, tier_id: str) -> int:
+        return int(self.active_assignment_counts.get(tier_id, 0))
+
     async def list_tier_versions(self, tier_id: str) -> list[TierVersionRecord]:
         records = [record for record in self.versions.values() if record.tier_id == tier_id]
         return sorted(records, key=lambda item: item.version_number, reverse=True)
 
+    async def list_tier_versions_page(
+        self,
+        tier_id: str,
+        *,
+        statuses: tuple[str, ...],
+        limit: int,
+        offset: int,
+    ) -> tuple[list[TierVersionRecord], int]:
+        records = await self.list_tier_versions(tier_id)
+        if statuses:
+            records = [record for record in records if record.status in statuses]
+        return records[offset : offset + limit], len(records)
+
     async def get_tier_version(self, tier_version_id: str) -> TierVersionRecord | None:
         return self.versions.get(tier_version_id)
+
+    async def get_active_tier_version(self, tier_id: str) -> TierVersionRecord | None:
+        versions = [
+            version
+            for version in self.versions.values()
+            if version.tier_id == tier_id and version.status == "active"
+        ]
+        return max(versions, key=lambda version: version.version_number, default=None)
+
+    async def count_non_expired_enabled_assignments_pinned_to_version(
+        self,
+        tier_version_id: str,
+    ) -> int:
+        return 0
 
     async def create_tier_version(
         self,
@@ -212,6 +298,9 @@ class _FakeTierRepository:
         status: str = "draft",
         published_at=None,  # noqa: ANN001
         published_by_account_id: str | None = None,
+        created_by_account_id: str | None = None,
+        created_by_kind: str = "unknown",
+        source_tier_version_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> TierVersionRecord:
         del published_at, published_by_account_id
@@ -221,6 +310,9 @@ class _FakeTierRepository:
             tier_id=tier_id,
             version_number=version_number,
             status=status,
+            created_by_account_id=created_by_account_id,
+            created_by_kind=created_by_kind,
+            source_tier_version_id=source_tier_version_id,
             metadata=metadata,
             created_at=datetime.now(tz=UTC),
             updated_at=datetime.now(tz=UTC),
@@ -228,11 +320,32 @@ class _FakeTierRepository:
         self.versions[tier_version_id] = record
         return record
 
+    async def create_next_tier_version(
+        self,
+        *,
+        tier_id: str,
+        created_by_account_id: str | None = None,
+        created_by_kind: str = "unknown",
+        metadata: dict[str, Any] | None = None,
+    ) -> TierVersionRecord | None:
+        if tier_id not in self.tiers:
+            return None
+        versions = [version for version in self.versions.values() if version.tier_id == tier_id]
+        return await self.create_tier_version(
+            tier_id=tier_id,
+            version_number=max((version.version_number for version in versions), default=0) + 1,
+            created_by_account_id=created_by_account_id,
+            created_by_kind=created_by_kind,
+            metadata=metadata,
+        )
+
     async def clone_tier_version(
         self,
         *,
         tier_id: str,
         source_tier_version_id: str,
+        created_by_account_id: str | None = None,
+        created_by_kind: str = "unknown",
     ) -> TierVersionRecord | None:
         source = self.versions.get(source_tier_version_id)
         if source is None or source.tier_id != tier_id:
@@ -260,6 +373,9 @@ class _FakeTierRepository:
             tier_id=tier_id,
             version_number=max((version.version_number for version in tier_versions), default=0) + 1,
             status="draft",
+            created_by_account_id=created_by_account_id,
+            created_by_kind=created_by_kind,
+            source_tier_version_id=source_tier_version_id,
             metadata=source.metadata,
             model_policy_count=len(cloned_policies),
             capacity_pool_count=len(cloned_pools),
@@ -296,6 +412,35 @@ class _FakeTierRepository:
         self.versions[tier_version_id] = updated
         return updated
 
+    async def activate_tier_version(
+        self,
+        *,
+        tier_id: str,
+        tier_version_id: str,
+        expected_revision: int,
+        expected_active_version_id: str | None,
+        published_by_account_id: str | None = None,
+    ) -> TierVersionRecord | None:
+        version = self.versions.get(tier_version_id)
+        if version is None or version.tier_id != tier_id:
+            return None
+        if version.configuration_revision != expected_revision:
+            raise TierActivationConfigurationChangedError(
+                expected_revision=expected_revision,
+                current_revision=version.configuration_revision,
+            )
+        active = await self.get_active_tier_version(tier_id)
+        active_id = active.tier_version_id if active else None
+        if active_id != expected_active_version_id:
+            raise TierActivationActiveVersionChangedError(
+                expected_active_version_id=expected_active_version_id,
+                current_active_version_id=active_id,
+            )
+        return await self.publish_tier_version(
+            tier_version_id,
+            published_by_account_id=published_by_account_id,
+        )
+
     async def archive_tier_version(self, tier_version_id: str) -> TierVersionRecord | None:
         if self.archive_error is not None:
             raise ValueError(self.archive_error)
@@ -308,6 +453,152 @@ class _FakeTierRepository:
 
     async def list_model_policies(self, tier_version_id: str) -> list[TierModelPolicyRecord]:
         return list(self.model_policies.get(tier_version_id, []))
+
+    async def list_model_policies_page(
+        self,
+        *,
+        tier_id: str,
+        tier_version_id: str,
+        search: str | None,
+        enabled: bool | None,
+        access_mode: str | None,
+        capacity_pool_key: str | None,
+        sort: str,
+        order: str,
+        limit: int,
+        offset: int,
+    ) -> TierModelPolicyPage | None:
+        version = self.versions.get(tier_version_id)
+        if version is None or version.tier_id != tier_id:
+            return None
+        records = list(self.model_policies.get(tier_version_id, []))
+        if search:
+            lowered = search.lower()
+            records = [
+                record
+                for record in records
+                if lowered in record.callable_key.lower()
+                or lowered in str(record.capacity_pool_key or "").lower()
+            ]
+        if enabled is not None:
+            records = [record for record in records if record.enabled is enabled]
+        if access_mode:
+            records = [record for record in records if record.access_mode == access_mode]
+        if capacity_pool_key:
+            records = [
+                record for record in records if record.capacity_pool_key == capacity_pool_key
+            ]
+        records.sort(
+            key=lambda record: getattr(record, sort),
+            reverse=order == "desc",
+        )
+        return TierModelPolicyPage(
+            tuple(records[offset : offset + limit]),
+            len(records),
+            version.configuration_revision,
+            version.updated_at,
+        )
+
+    async def get_model_policy_for_version(
+        self,
+        *,
+        tier_id: str,
+        tier_version_id: str,
+        tier_model_policy_id: str,
+    ) -> TierModelPolicyRecord | None:
+        version = self.versions.get(tier_version_id)
+        if version is None or version.tier_id != tier_id:
+            return None
+        return next(
+            (
+                policy
+                for policy in self.model_policies.get(tier_version_id, [])
+                if policy.tier_model_policy_id == tier_model_policy_id
+            ),
+            None,
+        )
+
+    async def create_model_policy(
+        self,
+        *,
+        tier_id: str,
+        tier_version_id: str,
+        expected_revision: int,
+        policy: TierModelPolicyRecord,
+    ) -> TierModelPolicyMutationResult:
+        self._guard_configuration(tier_id, tier_version_id, expected_revision)
+        records = self.model_policies.setdefault(tier_version_id, [])
+        created = replace(
+            policy,
+            tier_model_policy_id=f"policy-{len(records) + 1}",
+            tier_version_id=tier_version_id,
+        )
+        records.append(created)
+        version = self._bump_configuration_revision(tier_version_id)
+        return TierModelPolicyMutationResult(
+            created,
+            version.configuration_revision,
+            version.updated_at,
+        )
+
+    async def update_model_policy(
+        self,
+        *,
+        tier_id: str,
+        tier_version_id: str,
+        tier_model_policy_id: str,
+        expected_revision: int,
+        policy: TierModelPolicyRecord,
+    ) -> TierModelPolicyMutationResult:
+        self._guard_configuration(tier_id, tier_version_id, expected_revision)
+        records = self.model_policies.get(tier_version_id, [])
+        index = next(
+            (
+                index
+                for index, current in enumerate(records)
+                if current.tier_model_policy_id == tier_model_policy_id
+            ),
+            None,
+        )
+        if index is None:
+            raise TierConfigurationVersionNotFoundError("model policy not found")
+        updated = replace(
+            policy,
+            tier_model_policy_id=tier_model_policy_id,
+            tier_version_id=tier_version_id,
+        )
+        records[index] = updated
+        version = self._bump_configuration_revision(tier_version_id)
+        return TierModelPolicyMutationResult(
+            updated,
+            version.configuration_revision,
+            version.updated_at,
+        )
+
+    async def delete_model_policy(
+        self,
+        *,
+        tier_id: str,
+        tier_version_id: str,
+        tier_model_policy_id: str,
+        expected_revision: int,
+    ) -> TierModelPolicyMutationResult:
+        self._guard_configuration(tier_id, tier_version_id, expected_revision)
+        records = self.model_policies.get(tier_version_id, [])
+        remaining = [
+            policy
+            for policy in records
+            if policy.tier_model_policy_id != tier_model_policy_id
+        ]
+        if len(remaining) == len(records):
+            raise TierConfigurationVersionNotFoundError("model policy not found")
+        self.model_policies[tier_version_id] = remaining
+        version = self._bump_configuration_revision(tier_version_id)
+        return TierModelPolicyMutationResult(
+            None,
+            version.configuration_revision,
+            version.updated_at,
+        )
 
     async def replace_model_policies(
         self,
@@ -324,6 +615,158 @@ class _FakeTierRepository:
     async def list_capacity_pools(self, tier_version_id: str) -> list[TierCapacityPoolRecord]:
         return list(self.capacity_pools.get(tier_version_id, []))
 
+    async def list_capacity_pools_page(
+        self,
+        *,
+        tier_id: str,
+        tier_version_id: str,
+        search: str | None,
+        strategy: str | None,
+        sort: str,
+        order: str,
+        limit: int,
+        offset: int,
+    ) -> TierCapacityPoolPage | None:
+        version = self.versions.get(tier_version_id)
+        if version is None or version.tier_id != tier_id:
+            return None
+        records = list(self.capacity_pools.get(tier_version_id, []))
+        if search:
+            lowered = search.lower()
+            records = [
+                record
+                for record in records
+                if lowered in record.pool_key.lower()
+                or lowered in record.callable_key.lower()
+            ]
+        if strategy:
+            records = [record for record in records if record.strategy == strategy]
+        records.sort(
+            key=lambda record: getattr(record, sort),
+            reverse=order == "desc",
+        )
+        return TierCapacityPoolPage(
+            tuple(records[offset : offset + limit]),
+            len(records),
+            version.configuration_revision,
+            version.updated_at,
+        )
+
+    async def get_capacity_pool_for_version(
+        self,
+        *,
+        tier_id: str,
+        tier_version_id: str,
+        tier_capacity_pool_id: str,
+    ) -> TierCapacityPoolRecord | None:
+        version = self.versions.get(tier_version_id)
+        if version is None or version.tier_id != tier_id:
+            return None
+        return next(
+            (
+                pool
+                for pool in self.capacity_pools.get(tier_version_id, [])
+                if pool.tier_capacity_pool_id == tier_capacity_pool_id
+            ),
+            None,
+        )
+
+    async def create_capacity_pool(
+        self,
+        *,
+        tier_id: str,
+        tier_version_id: str,
+        expected_revision: int,
+        pool: TierCapacityPoolRecord,
+    ) -> TierCapacityPoolMutationResult:
+        self._guard_configuration(tier_id, tier_version_id, expected_revision)
+        records = self.capacity_pools.setdefault(tier_version_id, [])
+        created = replace(
+            pool,
+            tier_capacity_pool_id=f"pool-{len(records) + 1}",
+            tier_version_id=tier_version_id,
+        )
+        records.append(created)
+        version = self._bump_configuration_revision(tier_version_id)
+        return TierCapacityPoolMutationResult(
+            created,
+            version.configuration_revision,
+            version.updated_at,
+        )
+
+    async def update_capacity_pool(
+        self,
+        *,
+        tier_id: str,
+        tier_version_id: str,
+        tier_capacity_pool_id: str,
+        expected_revision: int,
+        pool: TierCapacityPoolRecord,
+    ) -> TierCapacityPoolMutationResult:
+        self._guard_configuration(tier_id, tier_version_id, expected_revision)
+        records = self.capacity_pools.get(tier_version_id, [])
+        index = next(
+            (
+                index
+                for index, current in enumerate(records)
+                if current.tier_capacity_pool_id == tier_capacity_pool_id
+            ),
+            None,
+        )
+        if index is None:
+            raise TierConfigurationVersionNotFoundError("capacity pool not found")
+        updated = replace(
+            pool,
+            tier_capacity_pool_id=tier_capacity_pool_id,
+            tier_version_id=tier_version_id,
+        )
+        records[index] = updated
+        version = self._bump_configuration_revision(tier_version_id)
+        return TierCapacityPoolMutationResult(
+            updated,
+            version.configuration_revision,
+            version.updated_at,
+        )
+
+    async def delete_capacity_pool(
+        self,
+        *,
+        tier_id: str,
+        tier_version_id: str,
+        tier_capacity_pool_id: str,
+        expected_revision: int,
+    ) -> TierCapacityPoolMutationResult:
+        self._guard_configuration(tier_id, tier_version_id, expected_revision)
+        target = next(
+            (
+                pool
+                for pool in self.capacity_pools.get(tier_version_id, [])
+                if pool.tier_capacity_pool_id == tier_capacity_pool_id
+            ),
+            None,
+        )
+        if target is not None and any(
+            policy.capacity_pool_key == target.pool_key
+            and policy.callable_key == target.callable_key
+            for policy in self.model_policies.get(tier_version_id, [])
+        ):
+            raise TierConfigurationPoolInUseError("capacity pool is in use")
+        records = self.capacity_pools.get(tier_version_id, [])
+        remaining = [
+            pool
+            for pool in records
+            if pool.tier_capacity_pool_id != tier_capacity_pool_id
+        ]
+        if len(remaining) == len(records):
+            raise TierConfigurationVersionNotFoundError("capacity pool not found")
+        self.capacity_pools[tier_version_id] = remaining
+        version = self._bump_configuration_revision(tier_version_id)
+        return TierCapacityPoolMutationResult(
+            None,
+            version.configuration_revision,
+            version.updated_at,
+        )
+
     async def replace_capacity_pools(
         self,
         tier_version_id: str,
@@ -335,6 +778,34 @@ class _FakeTierRepository:
         ]
         self.capacity_pools[tier_version_id] = records
         return records
+
+    def _guard_configuration(
+        self,
+        tier_id: str,
+        tier_version_id: str,
+        expected_revision: int,
+    ) -> TierVersionRecord:
+        version = self.versions.get(tier_version_id)
+        if version is None or version.tier_id != tier_id:
+            raise TierConfigurationVersionNotFoundError("tier version not found")
+        if version.status != "draft":
+            raise TierConfigurationVersionNotDraftError("tier version is not a draft")
+        if version.configuration_revision != expected_revision:
+            raise TierConfigurationStaleError(
+                expected_revision=expected_revision,
+                current_revision=version.configuration_revision,
+            )
+        return version
+
+    def _bump_configuration_revision(self, tier_version_id: str) -> TierVersionRecord:
+        version = self.versions[tier_version_id]
+        updated = replace(
+            version,
+            configuration_revision=version.configuration_revision + 1,
+            updated_at=datetime.now(tz=UTC),
+        )
+        self.versions[tier_version_id] = updated
+        return updated
 
     def _tier_with_counts(self, record: TierRecord) -> TierRecord:
         versions = [
@@ -486,6 +957,365 @@ async def test_tier_admin_create_list_detail_update_and_audit(client, test_app):
 
 
 @pytest.mark.asyncio
+async def test_tier_admin_bootstrap_creates_draft_and_replays_without_duplicate_audit(
+    client,
+    test_app,
+):
+    repository = _FakeTierRepository()
+    audit = _RecordingAuditService()
+    test_app.state.tier_repository = repository
+    test_app.state.audit_service = audit
+    headers = {**_headers(test_app), "Idempotency-Key": "bootstrap-request-1"}
+    payload = {
+        "tier_key": "enterprise",
+        "name": "Enterprise",
+        "description": "Production package",
+        "enabled": True,
+    }
+
+    created_response = await client.post(
+        "/ui/api/tiers/bootstrap", headers=headers, json=payload
+    )
+
+    assert created_response.status_code == 200
+    created = created_response.json()
+    assert created["idempotency_resolution"] == "created"
+    assert created["tier"]["version_count"] == 1
+    assert created["initial_version"]["version_number"] == 1
+    assert created["initial_version"]["status"] == "draft"
+    assert created["initial_version"]["created_by_kind"] == "master_key"
+    assert len(audit.sync_calls) == 2
+
+    replay_response = await client.post(
+        "/ui/api/tiers/bootstrap", headers=headers, json=payload
+    )
+
+    assert replay_response.status_code == 200
+    replay = replay_response.json()
+    assert replay["idempotency_resolution"] == "replayed"
+    assert replay["tier"]["tier_id"] == created["tier"]["tier_id"]
+    assert (
+        replay["initial_version"]["tier_version_id"]
+        == created["initial_version"]["tier_version_id"]
+    )
+    assert len(audit.sync_calls) == 2
+
+    mismatch_response = await client.post(
+        "/ui/api/tiers/bootstrap",
+        headers=headers,
+        json={**payload, "name": "Changed input"},
+    )
+    assert mismatch_response.status_code == 409
+    assert mismatch_response.json()["detail"]["code"] == (
+        "tier_bootstrap_idempotency_conflict"
+    )
+
+
+@pytest.mark.asyncio
+async def test_tier_admin_bootstrap_requires_idempotency_key(client, test_app):
+    test_app.state.tier_repository = _FakeTierRepository()
+
+    response = await client.post(
+        "/ui/api/tiers/bootstrap",
+        headers=_headers(test_app),
+        json={"tier_key": "enterprise", "name": "Enterprise"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Idempotency-Key header is required"
+
+
+@pytest.mark.asyncio
+async def test_tier_admin_row_mutations_use_revision_contract_and_structured_conflicts(
+    client,
+    test_app,
+):
+    repository = _FakeTierRepository()
+    repository.seed_tier()
+    repository.seed_version()
+    audit = _RecordingAuditService()
+    governance_invalidation = _RecordingGovernanceInvalidationService()
+    test_app.state.tier_repository = repository
+    test_app.state.audit_service = audit
+    test_app.state.governance_invalidation_service = governance_invalidation
+    headers = _headers(test_app)
+    base_path = "/ui/api/tiers/tier-1/versions/version-1"
+
+    pool_response = await client.post(
+        f"{base_path}/capacity-pools",
+        headers=headers,
+        json={
+            "expected_revision": 0,
+            "pool_key": "shared",
+            "callable_key": "gpt-4o-mini",
+            "rpm_capacity": 1000,
+            "strategy": "hard_cap",
+        },
+    )
+    assert pool_response.status_code == 200
+    pool = pool_response.json()
+    assert pool["configuration_revision"] == 1
+    pool_id = pool["data"]["tier_capacity_pool_id"]
+
+    policy_response = await client.post(
+        f"{base_path}/model-policies",
+        headers=headers,
+        json={
+            "expected_revision": 1,
+            "callable_key": "gpt-4o-mini",
+            "enabled": True,
+            "access_mode": "allow",
+            "rpm_limit": 100,
+            "capacity_pool_key": "shared",
+            "priority": 10,
+        },
+    )
+    assert policy_response.status_code == 200
+    policy = policy_response.json()
+    assert policy["configuration_revision"] == 2
+    policy_id = policy["data"]["tier_model_policy_id"]
+
+    update_response = await client.patch(
+        f"{base_path}/model-policies/{policy_id}",
+        headers=headers,
+        json={"expected_revision": 2, "rpm_limit": 250},
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["configuration_revision"] == 3
+    assert update_response.json()["data"]["rpm_limit"] == 250
+
+    stale_response = await client.patch(
+        f"{base_path}/model-policies/{policy_id}",
+        headers=headers,
+        json={"expected_revision": 2, "rpm_limit": 300},
+    )
+    assert stale_response.status_code == 409
+    stale = stale_response.json()["detail"]
+    assert stale["code"] == "tier_configuration_stale"
+    assert stale["expected_revision"] == 2
+    assert stale["current_revision"] == 3
+
+    pool_in_use_response = await client.request(
+        "DELETE",
+        f"{base_path}/capacity-pools/{pool_id}",
+        headers=headers,
+        json={"expected_revision": 3},
+    )
+    assert pool_in_use_response.status_code == 409
+    assert pool_in_use_response.json()["detail"]["code"] == "tier_pool_in_use"
+    assert repository.versions["version-1"].configuration_revision == 3
+
+    policy_delete_response = await client.request(
+        "DELETE",
+        f"{base_path}/model-policies/{policy_id}",
+        headers=headers,
+        json={"expected_revision": 3},
+    )
+    assert policy_delete_response.status_code == 200
+    assert policy_delete_response.json()["configuration_revision"] == 4
+
+    pool_delete_response = await client.request(
+        "DELETE",
+        f"{base_path}/capacity-pools/{pool_id}",
+        headers=headers,
+        json={"expected_revision": 4},
+    )
+    assert pool_delete_response.status_code == 200
+    assert pool_delete_response.json()["configuration_revision"] == 5
+
+    wrong_tier_response = await client.patch(
+        f"/ui/api/tiers/tier-other/versions/version-1/model-policies/{policy_id}",
+        headers=headers,
+        json={"expected_revision": 5, "rpm_limit": 400},
+    )
+    assert wrong_tier_response.status_code == 404
+    assert repository.versions["version-1"].configuration_revision == 5
+
+    actions = [event.action for event, _ in audit.sync_calls]
+    assert AuditAction.ADMIN_TIER_CAPACITY_POOL_CREATE.value in actions
+    assert AuditAction.ADMIN_TIER_MODEL_POLICY_CREATE.value in actions
+    assert AuditAction.ADMIN_TIER_MODEL_POLICY_UPDATE.value in actions
+    assert AuditAction.ADMIN_TIER_MODEL_POLICY_DELETE.value in actions
+    assert AuditAction.ADMIN_TIER_CAPACITY_POOL_DELETE.value in actions
+    assert len(governance_invalidation.local_targets) == 5
+
+
+@pytest.mark.asyncio
+async def test_tier_admin_configuration_and_archive_reads_are_paginated(client, test_app):
+    repository = _FakeTierRepository()
+    repository.seed_tier()
+    version = repository.seed_version()
+    repository.versions[version.tier_version_id] = replace(
+        version,
+        configuration_revision=8,
+    )
+    repository.model_policies[version.tier_version_id] = [
+        TierModelPolicyRecord(
+            tier_model_policy_id=f"policy-{index:02d}",
+            tier_version_id=version.tier_version_id,
+            callable_key=f"model-{index:02d}",
+            priority=index,
+        )
+        for index in range(15)
+    ]
+    repository.capacity_pools[version.tier_version_id] = [
+        TierCapacityPoolRecord(
+            tier_capacity_pool_id=f"pool-{index:02d}",
+            tier_version_id=version.tier_version_id,
+            pool_key=f"pool-{index:02d}",
+            callable_key=f"model-{index:02d}",
+        )
+        for index in range(12)
+    ]
+    for index in range(12):
+        repository.seed_version(
+            tier_version_id=f"version-archived-{index:02d}",
+            version_number=index + 2,
+            status="archived",
+        )
+    test_app.state.tier_repository = repository
+    headers = _headers(test_app)
+    base_path = "/ui/api/tiers/tier-1/versions/version-1"
+
+    policies_response = await client.get(
+        f"{base_path}/model-policies?limit=10&offset=10",
+        headers=headers,
+    )
+    assert policies_response.status_code == 200
+    policies = policies_response.json()
+    assert policies["pagination"] == {
+        "total": 15,
+        "limit": 10,
+        "offset": 10,
+        "has_more": False,
+    }
+    assert len(policies["data"]) == 5
+    assert policies["configuration_revision"] == 8
+
+    pools_response = await client.get(
+        f"{base_path}/capacity-pools?limit=10&offset=10",
+        headers=headers,
+    )
+    assert pools_response.status_code == 200
+    pools = pools_response.json()
+    assert pools["pagination"]["total"] == 12
+    assert len(pools["data"]) == 2
+    assert pools["configuration_revision"] == 8
+
+    archived_response = await client.get(
+        "/ui/api/tiers/tier-1/versions?status=archived&limit=10&offset=10",
+        headers=headers,
+    )
+    assert archived_response.status_code == 200
+    archived = archived_response.json()
+    assert archived["pagination"]["total"] == 12
+    assert len(archived["data"]) == 2
+    assert all(record["status"] == "archived" for record in archived["data"])
+
+
+@pytest.mark.asyncio
+async def test_tier_admin_activation_preview_and_guarded_activation(client, test_app):
+    repository = _FakeTierRepository()
+    repository.seed_tier()
+    active = repository.seed_version(
+        tier_version_id="version-live",
+        version_number=1,
+        status="active",
+    )
+    draft = repository.seed_version(
+        tier_version_id="version-draft",
+        version_number=2,
+        status="draft",
+    )
+    repository.versions[draft.tier_version_id] = replace(
+        draft,
+        configuration_revision=2,
+    )
+    repository.active_assignment_counts["tier-1"] = 3
+    repository.model_policies[active.tier_version_id] = [
+        TierModelPolicyRecord(
+            tier_model_policy_id="policy-live",
+            tier_version_id=active.tier_version_id,
+            callable_key="model-a",
+            rpm_limit=100,
+        )
+    ]
+    repository.model_policies[draft.tier_version_id] = [
+        TierModelPolicyRecord(
+            tier_model_policy_id="policy-draft-a",
+            tier_version_id=draft.tier_version_id,
+            callable_key="model-a",
+            rpm_limit=200,
+        ),
+        TierModelPolicyRecord(
+            tier_model_policy_id="policy-draft-b",
+            tier_version_id=draft.tier_version_id,
+            callable_key="model-b",
+        ),
+    ]
+    audit = _RecordingAuditService()
+    governance_invalidation = _RecordingGovernanceInvalidationService()
+    test_app.state.tier_repository = repository
+    test_app.state.audit_service = audit
+    test_app.state.governance_invalidation_service = governance_invalidation
+    headers = _headers(test_app)
+    base_path = "/ui/api/tiers/tier-1/versions/version-draft"
+
+    preview_response = await client.get(
+        f"{base_path}/activation-preview",
+        headers=headers,
+    )
+    assert preview_response.status_code == 200
+    preview = preview_response.json()
+    assert preview["draft_configuration_revision"] == 2
+    assert preview["expected_active_version_id"] == "version-live"
+    assert preview["affected_assignment_count"] == 3
+    assert preview["affected_organization_count"] == 3
+    assert preview["changes"]["policy_added"]["count"] == 1
+    assert preview["changes"]["policy_changed"]["count"] == 1
+    assert preview["can_activate"] is True
+
+    stale_response = await client.post(
+        f"{base_path}/activate",
+        headers=headers,
+        json={
+            "expected_revision": 1,
+            "expected_active_version_id": "version-live",
+        },
+    )
+    assert stale_response.status_code == 409
+    assert stale_response.json()["detail"]["code"] == "tier_configuration_stale"
+
+    active_changed_response = await client.post(
+        f"{base_path}/activate",
+        headers=headers,
+        json={
+            "expected_revision": 2,
+            "expected_active_version_id": "version-other",
+        },
+    )
+    assert active_changed_response.status_code == 409
+    assert active_changed_response.json()["detail"]["code"] == (
+        "tier_activation_active_changed"
+    )
+
+    activate_response = await client.post(
+        f"{base_path}/activate",
+        headers=headers,
+        json={
+            "expected_revision": 2,
+            "expected_active_version_id": "version-live",
+        },
+    )
+    assert activate_response.status_code == 200
+    assert activate_response.json()["status"] == "active"
+    assert repository.versions["version-live"].status == "archived"
+    assert repository.versions["version-draft"].status == "active"
+    assert audit.sync_calls[-1][0].action == AuditAction.ADMIN_TIER_VERSION_ACTIVATE.value
+    assert len(governance_invalidation.local_targets) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("org_role", [OrganizationRole.OWNER, OrganizationRole.ADMIN])
 @pytest.mark.parametrize(
     ("method", "path", "payload"),
@@ -589,7 +1419,7 @@ async def test_tier_admin_version_policy_pool_publish_flow(client, test_app):
     assert version["version_number"] == 1
     assert version["configuration_revision"] == 0
     assert version["created_by_account_id"] is None
-    assert version["created_by_kind"] == "unknown"
+    assert version["created_by_kind"] == "master_key"
     assert version["source_tier_version_id"] is None
     version_id = version["tier_version_id"]
 
