@@ -1170,8 +1170,12 @@ export interface TierVersion {
   tier_id: string;
   version_number: number;
   status: 'draft' | 'active' | 'archived' | string;
+  configuration_revision: number;
   published_at?: string | null;
   published_by_account_id?: string | null;
+  created_by_account_id?: string | null;
+  created_by_kind: 'account' | 'master_key' | 'system' | 'unknown' | string;
+  source_tier_version_id?: string | null;
   metadata?: Record<string, unknown> | null;
   model_policy_count: number;
   capacity_pool_count: number;

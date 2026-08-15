@@ -97,6 +97,9 @@ class TierVersionRepositoryMixin:
         status: str = "draft",
         published_at: datetime | None = None,
         published_by_account_id: str | None = None,
+        created_by_account_id: str | None = None,
+        created_by_kind: str = "unknown",
+        source_tier_version_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> TierVersionRecord:
         version_number = positive_int_or_none(version_number, "version_number")
@@ -109,6 +112,13 @@ class TierVersionRepositoryMixin:
             )
         if published_at is not None or published_by_account_id is not None:
             raise ValueError("draft tier versions cannot include publish metadata")
+        created_by_kind = str(created_by_kind or "unknown").strip().lower()
+        if created_by_kind not in {"account", "master_key", "system", "unknown"}:
+            raise ValueError("created_by_kind is invalid")
+        if created_by_kind == "account" and not created_by_account_id:
+            raise ValueError("account-created tier versions require created_by_account_id")
+        if created_by_kind != "account" and created_by_account_id is not None:
+            raise ValueError("created_by_account_id requires created_by_kind=account")
 
         if self.prisma is None:
             return TierVersionRecord(
@@ -116,8 +126,12 @@ class TierVersionRepositoryMixin:
                 tier_id=tier_id,
                 version_number=version_number,
                 status=status,
+                configuration_revision=0,
                 published_at=published_at,
                 published_by_account_id=published_by_account_id,
+                created_by_account_id=created_by_account_id,
+                created_by_kind=created_by_kind,
+                source_tier_version_id=source_tier_version_id,
                 metadata=metadata,
             )
 
@@ -128,20 +142,42 @@ class TierVersionRepositoryMixin:
                 tier_id,
                 version_number,
                 status,
+                configuration_revision,
                 published_at,
                 published_by_account_id,
+                created_by_account_id,
+                created_by_kind,
+                source_tier_version_id,
                 metadata,
                 created_at,
                 updated_at
             )
-            VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6::jsonb, NOW(), NOW())
+            VALUES (
+                gen_random_uuid()::text,
+                $1,
+                $2,
+                $3,
+                0,
+                $4,
+                $5,
+                $6,
+                $7,
+                $8,
+                $9::jsonb,
+                NOW(),
+                NOW()
+            )
             RETURNING
                 tier_version_id,
                 tier_id,
                 version_number,
                 status,
+                configuration_revision,
                 published_at,
                 published_by_account_id,
+                created_by_account_id,
+                created_by_kind,
+                source_tier_version_id,
                 metadata,
                 created_at,
                 updated_at,
@@ -154,6 +190,9 @@ class TierVersionRepositoryMixin:
             status,
             published_at,
             published_by_account_id,
+            created_by_account_id,
+            created_by_kind,
+            source_tier_version_id,
             json_param(metadata),
         )
         return to_version_record(rows[0])
@@ -226,8 +265,12 @@ class TierVersionRepositoryMixin:
                 v.tier_id,
                 v.version_number,
                 v.status,
+                v.configuration_revision,
                 v.published_at,
                 v.published_by_account_id,
+                v.created_by_account_id,
+                v.created_by_kind,
+                v.source_tier_version_id,
                 v.metadata,
                 v.created_at,
                 v.updated_at,
@@ -365,8 +408,12 @@ class TierVersionRepositoryMixin:
                 v.tier_id,
                 v.version_number,
                 v.status,
+                v.configuration_revision,
                 v.published_at,
                 v.published_by_account_id,
+                v.created_by_account_id,
+                v.created_by_kind,
+                v.source_tier_version_id,
                 v.metadata,
                 v.created_at,
                 v.updated_at,

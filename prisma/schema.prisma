@@ -311,6 +311,7 @@ model DeltaLLM_PlatformAccount {
   email_tokens        DeltaLLM_EmailToken[] @relation("email_token_account")
   created_email_tokens DeltaLLM_EmailToken[] @relation("email_token_creator")
   published_tier_versions DeltaLLM_TierVersion[] @relation("tier_version_publisher")
+  created_tier_versions DeltaLLM_TierVersion[] @relation("tier_version_creator")
 
   @@map("deltallm_platformaccount")
 }
@@ -571,6 +572,7 @@ model DeltaLLM_Tier {
 
   versions    DeltaLLM_TierVersion[]
   assignments DeltaLLM_OrganizationTierAssignment[]
+  creation_request DeltaLLM_TierCreationRequest?
 
   @@index([enabled], map: "deltallm_tier_enabled_idx")
   @@map("deltallm_tier")
@@ -581,14 +583,21 @@ model DeltaLLM_TierVersion {
   tier_id                String
   version_number         Int
   status                 String    @default("draft")
+  configuration_revision Int       @default(0)
   published_at           DateTime?
   published_by_account_id String?
+  created_by_account_id  String?
+  created_by_kind        String    @default("unknown")
+  source_tier_version_id String?
   metadata               Json?
   created_at             DateTime  @default(now())
   updated_at             DateTime  @updatedAt
 
   tier          DeltaLLM_Tier @relation(fields: [tier_id], references: [tier_id], onDelete: Cascade)
   published_by  DeltaLLM_PlatformAccount? @relation("tier_version_publisher", fields: [published_by_account_id], references: [account_id], onDelete: SetNull)
+  created_by    DeltaLLM_PlatformAccount? @relation("tier_version_creator", fields: [created_by_account_id], references: [account_id], onDelete: SetNull)
+  source_version DeltaLLM_TierVersion? @relation("tier_version_source", fields: [source_tier_version_id], references: [tier_version_id], onDelete: SetNull)
+  derived_versions DeltaLLM_TierVersion[] @relation("tier_version_source")
   model_policies DeltaLLM_TierModelPolicy[]
   capacity_pools DeltaLLM_TierCapacityPool[]
   assignments    DeltaLLM_OrganizationTierAssignment[]
@@ -598,7 +607,24 @@ model DeltaLLM_TierVersion {
   @@index([tier_id, status], map: "deltallm_tierversion_tier_status_idx")
   @@index([status], map: "deltallm_tierversion_status_idx")
   @@index([published_by_account_id], map: "deltallm_tierversion_published_by_idx")
+  @@index([created_by_account_id], map: "deltallm_tierversion_created_by_idx")
+  @@index([source_tier_version_id], map: "deltallm_tierversion_source_idx")
   @@map("deltallm_tierversion")
+}
+
+model DeltaLLM_TierCreationRequest {
+  tier_creation_request_id String   @id @default(uuid())
+  principal_scope          String
+  idempotency_key          String
+  request_hash             String
+  tier_id                  String   @unique(map: "deltallm_tiercreationrequest_tier_id_key")
+  created_at               DateTime @default(now())
+
+  tier DeltaLLM_Tier @relation(fields: [tier_id], references: [tier_id], onDelete: Cascade)
+
+  @@unique([principal_scope, idempotency_key], map: "deltallm_tiercreationrequest_scope_key")
+  @@index([created_at], map: "deltallm_tiercreationrequest_created_at_idx")
+  @@map("deltallm_tiercreationrequest")
 }
 
 model DeltaLLM_TierModelPolicy {

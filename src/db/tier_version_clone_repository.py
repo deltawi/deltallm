@@ -18,14 +18,25 @@ class TierVersionCloneRepositoryMixin:
         *,
         tier_id: str,
         source_tier_version_id: str,
+        created_by_account_id: str | None = None,
+        created_by_kind: str = "unknown",
     ) -> TierVersionRecord | None:
         if self.prisma is None:
             return None
+        created_by_kind = str(created_by_kind or "unknown").strip().lower()
+        if created_by_kind not in {"account", "master_key", "system", "unknown"}:
+            raise ValueError("created_by_kind is invalid")
+        if created_by_kind == "account" and not created_by_account_id:
+            raise ValueError("account-created tier versions require created_by_account_id")
+        if created_by_kind != "account" and created_by_account_id is not None:
+            raise ValueError("created_by_account_id requires created_by_kind=account")
         self.require_transactions("clone_tier_version")
         async with self.prisma.tx() as tx:
             return await self.with_db(tx)._clone_tier_version_in_tx(
                 tier_id=tier_id,
                 source_tier_version_id=source_tier_version_id,
+                created_by_account_id=created_by_account_id,
+                created_by_kind=created_by_kind,
             )
 
     async def _clone_tier_version_in_tx(
@@ -33,6 +44,8 @@ class TierVersionCloneRepositoryMixin:
         *,
         tier_id: str,
         source_tier_version_id: str,
+        created_by_account_id: str | None,
+        created_by_kind: str,
     ) -> TierVersionRecord | None:
         tier_rows = await self.prisma.query_raw(
             """
@@ -67,8 +80,12 @@ class TierVersionCloneRepositoryMixin:
                 tier_id,
                 version_number,
                 status,
+                configuration_revision,
                 published_at,
                 published_by_account_id,
+                created_by_account_id,
+                created_by_kind,
+                source_tier_version_id,
                 metadata,
                 created_at,
                 updated_at
@@ -78,9 +95,13 @@ class TierVersionCloneRepositoryMixin:
                 $1,
                 COALESCE(MAX(version_number), 0) + 1,
                 'draft',
+                0,
                 NULL,
                 NULL,
-                $2::jsonb,
+                $2,
+                $3,
+                $4,
+                $5::jsonb,
                 NOW(),
                 NOW()
             FROM deltallm_tierversion
@@ -88,6 +109,9 @@ class TierVersionCloneRepositoryMixin:
             RETURNING tier_version_id
             """,
             tier_id,
+            created_by_account_id,
+            created_by_kind,
+            source_tier_version_id,
             json_param(source.metadata),
         )
         if not created_rows:

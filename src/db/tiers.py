@@ -11,6 +11,7 @@ from src.db.tier_policy_repository import (
 from src.db.tier_records import (
     OrganizationTierAssignmentRecord,
     TierCapacityPoolRecord,
+    TierCreationRequestRecord,
     TierModelPolicyRecord,
     TierPolicyAssignmentRecord,
     TierPolicyLoadResult,
@@ -48,6 +49,7 @@ class TierRepository(
 __all__ = [
     "OrganizationTierAssignmentRecord",
     "TierCapacityPoolRecord",
+    "TierCreationRequestRecord",
     "TierModelPolicyRecord",
     "TierPolicyAssignmentRecord",
     "TierPolicyLoadResult",

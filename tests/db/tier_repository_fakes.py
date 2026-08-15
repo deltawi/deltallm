@@ -151,7 +151,10 @@ class _FakePrisma:
                     status=str(params[2]),
                     published_at=params[3],
                     published_by_account_id=str(params[4]) if params[4] is not None else None,
-                    metadata=params[5],
+                    created_by_account_id=str(params[5]) if params[5] is not None else None,
+                    created_by_kind=str(params[6]),
+                    source_tier_version_id=str(params[7]) if params[7] is not None else None,
+                    metadata=params[8],
                 )
             ]
         if "UPDATE deltallm_tierversion AS v" in sql and "SET status = 'active'" in sql:
@@ -379,8 +382,12 @@ def _version_row(
     tier_id: str = "tier-1",
     version_number: int = 1,
     status: str = "draft",
+    configuration_revision: int = 0,
     published_at: object = None,
     published_by_account_id: str | None = None,
+    created_by_account_id: str | None = None,
+    created_by_kind: str = "unknown",
+    source_tier_version_id: str | None = None,
     metadata: object = None,
 ) -> dict[str, object]:
     return {
@@ -388,8 +395,12 @@ def _version_row(
         "tier_id": tier_id,
         "version_number": version_number,
         "status": status,
+        "configuration_revision": configuration_revision,
         "published_at": published_at,
         "published_by_account_id": published_by_account_id,
+        "created_by_account_id": created_by_account_id,
+        "created_by_kind": created_by_kind,
+        "source_tier_version_id": source_tier_version_id,
         "metadata": metadata,
         "model_policy_count": 0,
         "capacity_pool_count": 0,

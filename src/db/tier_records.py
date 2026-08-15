@@ -56,14 +56,28 @@ class TierRecord:
     updated_at: datetime | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class TierCreationRequestRecord:
+    tier_creation_request_id: str
+    principal_scope: str
+    idempotency_key: str
+    request_hash: str
+    tier_id: str
+    created_at: datetime | None = None
+
+
 @dataclass
 class TierVersionRecord:
     tier_version_id: str
     tier_id: str
     version_number: int
     status: str = "draft"
+    configuration_revision: int = 0
     published_at: datetime | None = None
     published_by_account_id: str | None = None
+    created_by_account_id: str | None = None
+    created_by_kind: str = "unknown"
+    source_tier_version_id: str | None = None
     metadata: dict[str, Any] | None = None
     model_policy_count: int = 0
     capacity_pool_count: int = 0
@@ -168,8 +182,12 @@ def tier_version_select_sql() -> str:
             v.tier_id,
             v.version_number,
             v.status,
+            v.configuration_revision,
             v.published_at,
             v.published_by_account_id,
+            v.created_by_account_id,
+            v.created_by_kind,
+            v.source_tier_version_id,
             v.metadata,
             v.created_at,
             v.updated_at,
@@ -237,15 +255,34 @@ def to_tier_record(row: dict[str, Any]) -> TierRecord:
     )
 
 
+def to_tier_creation_request_record(row: dict[str, Any]) -> TierCreationRequestRecord:
+    return TierCreationRequestRecord(
+        tier_creation_request_id=str(row.get("tier_creation_request_id") or ""),
+        principal_scope=str(row.get("principal_scope") or ""),
+        idempotency_key=str(row.get("idempotency_key") or ""),
+        request_hash=str(row.get("request_hash") or ""),
+        tier_id=str(row.get("tier_id") or ""),
+        created_at=parse_datetime(row.get("created_at")),
+    )
+
+
 def to_version_record(row: dict[str, Any]) -> TierVersionRecord:
     return TierVersionRecord(
         tier_version_id=str(row.get("tier_version_id") or ""),
         tier_id=str(row.get("tier_id") or ""),
         version_number=int(row.get("version_number") or 0),
         status=str(row.get("status") or "draft"),
+        configuration_revision=int(row.get("configuration_revision") or 0),
         published_at=parse_datetime(row.get("published_at")),
         published_by_account_id=str(row.get("published_by_account_id"))
         if row.get("published_by_account_id") is not None
+        else None,
+        created_by_account_id=str(row.get("created_by_account_id"))
+        if row.get("created_by_account_id") is not None
+        else None,
+        created_by_kind=str(row.get("created_by_kind") or "unknown"),
+        source_tier_version_id=str(row.get("source_tier_version_id"))
+        if row.get("source_tier_version_id") is not None
         else None,
         metadata=parse_json_object(row.get("metadata"))
         if row.get("metadata") is not None

@@ -27,6 +27,7 @@ async def require_tier_schema(db: Any) -> None:
     for relation_name in (
         "deltallm_tier",
         "deltallm_tierversion",
+        "deltallm_tiercreationrequest",
         "deltallm_organizationtierassignment",
     ):
         rows = await db.query_raw(
@@ -40,6 +41,15 @@ async def require_tier_schema(db: Any) -> None:
         "deltallm_tierversion_id_tier_key",
         "deltallm_tierversion_version_number_check",
         "deltallm_tierversion_draft_publish_metadata_check",
+        "deltallm_tierversion_configuration_revision_check",
+        "deltallm_tierversion_created_by_kind_check",
+        "deltallm_tierversion_source_not_self_check",
+        "deltallm_tierversion_created_by_fkey",
+        "deltallm_tierversion_source_fkey",
+        "deltallm_tiercreationrequest_principal_scope_check",
+        "deltallm_tiercreationrequest_idempotency_key_check",
+        "deltallm_tiercreationrequest_request_hash_check",
+        "deltallm_tiercreationrequest_tier_id_fkey",
         "deltallm_orgtierassignment_version_matches_tier_fkey",
         "deltallm_tiermodelpolicy_capacity_pool_fkey",
         "deltallm_orgtierassignment_primary_no_overlap",
@@ -54,15 +64,23 @@ async def require_tier_schema(db: Any) -> None:
         )
         assert rows, f"missing tier invariant constraint: {constraint_name}"
 
-    rows = await db.query_raw(
-        """
-        SELECT 1
-        FROM pg_indexes
-        WHERE schemaname = 'public'
-          AND indexname = 'deltallm_tierversion_one_active_per_tier'
-        """
-    )
-    assert rows, "missing one-active-version-per-tier index"
+    for index_name in (
+        "deltallm_tierversion_one_active_per_tier",
+        "deltallm_tierversion_created_by_idx",
+        "deltallm_tierversion_source_idx",
+        "deltallm_tiercreationrequest_scope_key",
+        "deltallm_tiercreationrequest_tier_id_key",
+    ):
+        rows = await db.query_raw(
+            """
+            SELECT 1
+            FROM pg_indexes
+            WHERE schemaname = 'public'
+              AND indexname = $1
+            """,
+            index_name,
+        )
+        assert rows, f"missing tier invariant index: {index_name}"
 
     for trigger_name in (
         "deltallm_orgtierassignment_active_version_guard",

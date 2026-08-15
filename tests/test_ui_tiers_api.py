@@ -587,6 +587,10 @@ async def test_tier_admin_version_policy_pool_publish_flow(client, test_app):
     assert version_response.status_code == 200
     version = version_response.json()
     assert version["version_number"] == 1
+    assert version["configuration_revision"] == 0
+    assert version["created_by_account_id"] is None
+    assert version["created_by_kind"] == "unknown"
+    assert version["source_tier_version_id"] is None
     version_id = version["tier_version_id"]
 
     pools_response = await client.put(

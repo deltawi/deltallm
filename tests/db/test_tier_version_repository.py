@@ -19,16 +19,50 @@ async def test_create_tier_version_maps_counts_and_metadata() -> None:
         tier_id="tier-1",
         version_number=2,
         status="draft",
+        created_by_account_id="acct-creator",
+        created_by_kind="account",
+        source_tier_version_id="ver-source",
         metadata={"notes": "pricing update"},
     )
 
     assert record.tier_id == "tier-1"
     assert record.version_number == 2
     assert record.status == "draft"
+    assert record.configuration_revision == 0
+    assert record.created_by_account_id == "acct-creator"
+    assert record.created_by_kind == "account"
+    assert record.source_tier_version_id == "ver-source"
     assert record.metadata == {"notes": "pricing update"}
     assert record.model_policy_count == 0
     assert record.capacity_pool_count == 0
-    assert json.loads(str(prisma.calls[0][1][5])) == {"notes": "pricing update"}
+    assert json.loads(str(prisma.calls[0][1][8])) == {"notes": "pricing update"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("created_by_account_id", "created_by_kind"),
+    [
+        (None, "account"),
+        ("acct-1", "master_key"),
+        (None, "unsupported"),
+    ],
+)
+async def test_create_tier_version_validates_creator_provenance(
+    created_by_account_id: str | None,
+    created_by_kind: str,
+) -> None:
+    prisma = _FakePrisma()
+    repository = TierRepository(prisma)
+
+    with pytest.raises(ValueError, match="created_by"):
+        await repository.create_tier_version(
+            tier_id="tier-1",
+            version_number=2,
+            created_by_account_id=created_by_account_id,
+            created_by_kind=created_by_kind,
+        )
+
+    assert prisma.calls == []
 
 
 @pytest.mark.asyncio
