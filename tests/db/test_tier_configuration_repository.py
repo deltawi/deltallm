@@ -242,6 +242,7 @@ async def test_capacity_pool_page_uses_server_filters_stable_order_and_revision(
         tier_id="tier-1",
         tier_version_id="ver-1",
         search="shared",
+        callable_key="openai/gpt-4.1",
         strategy="weighted_fair",
         sort="callable_key",
         order="asc",
@@ -253,7 +254,14 @@ async def test_capacity_pool_page_uses_server_filters_stable_order_and_revision(
     assert page.total == 1
     assert page.configuration_revision == 7
     assert page.records[0].tier_capacity_pool_id == "pool-1"
-    assert "p.strategy = $3" in prisma.calls[1][0]
+    assert "p.callable_key = $3" in prisma.calls[1][0]
+    assert "p.strategy = $4" in prisma.calls[1][0]
+    assert prisma.calls[1][1] == (
+        "ver-1",
+        "%shared%",
+        "openai/gpt-4.1",
+        "weighted_fair",
+    )
     assert "ORDER BY p.callable_key ASC, p.tier_capacity_pool_id ASC" in prisma.calls[2][0]
     assert prisma.calls[2][1][-2:] == (25, 0)
 
@@ -739,6 +747,103 @@ async def test_delete_model_policy_uses_compound_scope_and_bumps_once() -> None:
     assert "tier_version_id = $2" in calls[1][0]
     assert calls[1][1] == ("policy-1", "ver-1")
     assert len(calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_bulk_policy_limits_proves_selected_scope_and_bumps_once() -> None:
+    prisma = _ScriptedPrisma(
+        [
+            [_version_row()],
+            [
+                {"tier_model_policy_id": "policy-1"},
+                {"tier_model_policy_id": "policy-2"},
+            ],
+            [
+                {"tier_model_policy_id": "policy-1"},
+                {"tier_model_policy_id": "policy-2"},
+            ],
+            [_revision_row()],
+        ]
+    )
+    repository = TierRepository(prisma)
+
+    result = await repository.bulk_update_model_policy_limits(
+        tier_id="tier-1",
+        tier_version_id="ver-1",
+        expected_revision=4,
+        update_rpm_limit=True,
+        rpm_limit=250,
+        update_tpm_limit=False,
+        tpm_limit=None,
+        tier_model_policy_ids=("policy-1", "policy-2"),
+    )
+
+    assert result.affected_count == 2
+    assert result.configuration_revision == 5
+    calls = prisma.tx_clients[0].calls
+    assert "tier_model_policy_id = ANY($2::text[])" in calls[1][0]
+    assert "FOR UPDATE" in calls[1][0]
+    assert "rpm_limit = $3" in calls[2][0]
+    assert calls[2][1] == ("ver-1", ["policy-1", "policy-2"], 250)
+    assert "configuration_revision = configuration_revision + 1" in calls[3][0]
+
+
+@pytest.mark.asyncio
+async def test_bulk_policy_limits_rejects_any_wrong_scope_without_update_or_bump() -> None:
+    prisma = _ScriptedPrisma(
+        [[_version_row()], [{"tier_model_policy_id": "policy-1"}]]
+    )
+    repository = TierRepository(prisma)
+
+    with pytest.raises(TierConfigurationChildNotFoundError):
+        await repository.bulk_update_model_policy_limits(
+            tier_id="tier-1",
+            tier_version_id="ver-1",
+            expected_revision=4,
+            update_rpm_limit=True,
+            rpm_limit=250,
+            update_tpm_limit=True,
+            tpm_limit=50_000,
+            tier_model_policy_ids=("policy-1", "policy-other"),
+        )
+
+    assert len(prisma.tx_clients[0].calls) == 2
+    assert prisma.tx_rolled_back == 1
+
+
+@pytest.mark.asyncio
+async def test_bulk_policy_limits_updates_complete_filtered_set() -> None:
+    prisma = _ScriptedPrisma(
+        [
+            [_version_row()],
+            [{"tier_model_policy_id": "policy-1"}],
+            [_revision_row()],
+        ]
+    )
+    repository = TierRepository(prisma)
+
+    result = await repository.bulk_update_model_policy_limits(
+        tier_id="tier-1",
+        tier_version_id="ver-1",
+        expected_revision=4,
+        update_rpm_limit=False,
+        rpm_limit=None,
+        update_tpm_limit=True,
+        tpm_limit=None,
+        search="gpt",
+        enabled=True,
+        access_mode="allow",
+        capacity_pool_key="shared",
+    )
+
+    assert result.affected_count == 1
+    sql, params = prisma.tx_clients[0].calls[1]
+    assert "callable_key ILIKE $2" in sql
+    assert "enabled = $3" in sql
+    assert "access_mode = $4" in sql
+    assert "capacity_pool_key = $5" in sql
+    assert "tpm_limit = $6" in sql
+    assert params == ("ver-1", "%gpt%", True, "allow", "shared", None)
 
 
 @pytest.mark.asyncio

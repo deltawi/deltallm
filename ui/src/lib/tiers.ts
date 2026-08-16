@@ -149,7 +149,41 @@ export function formatDateTime(value?: string | null): string {
 
 export function versionLabel(version?: TierVersion | null): string {
   if (!version) return 'No version';
-  return `v${version.version_number} ${version.status}`;
+  const state = version.status === 'active' ? 'Live' : version.status === 'draft' ? 'Draft' : 'Archived';
+  return `${state} v${version.version_number}`;
+}
+
+export type TierConfigurationBadge = {
+  kind: 'active' | 'draft';
+  label: string;
+};
+
+export function tierConfigurationBadges(tier: Tier): TierConfigurationBadge[] {
+  const badges: TierConfigurationBadge[] = [];
+  if (tier.active_version) {
+    badges.push({ kind: 'active', label: `Live v${tier.active_version.version_number}` });
+  } else if (tier.active_version_id) {
+    badges.push({ kind: 'active', label: 'Live' });
+  }
+  if (tier.latest_draft_version) {
+    badges.push({ kind: 'draft', label: `Draft v${tier.latest_draft_version.version_number}` });
+  }
+  return badges;
+}
+
+export function tierConfigurationEmptyLabel(tier: Tier): string | null {
+  if (tierConfigurationBadges(tier).length > 0) return null;
+  return tier.version_count > 0 ? 'No live version' : 'No configuration';
+}
+
+export function tierPackageSummary(tier: Tier) {
+  const version = tier.latest_draft_version || tier.active_version || null;
+  return {
+    modelPolicyCount: version?.model_policy_count || 0,
+    capacityPoolCount: version?.capacity_pool_count || 0,
+    versionNumber: version?.version_number ?? null,
+    versionStatus: tier.latest_draft_version ? 'draft' : tier.active_version ? 'active' : null,
+  };
 }
 
 export function tierAssignmentRequiresActiveVersion(
@@ -172,10 +206,11 @@ export function isAssignableTierVersion(
 }
 
 export function pickEditableVersion(versions: TierVersion[]): TierVersion | null {
-  return versions.find((version) => version.status === 'draft')
-    || versions.find((version) => version.status === 'active')
-    || versions[0]
-    || null;
+  const drafts = versions.filter((version) => version.status === 'draft');
+  if (drafts.length === 1) return drafts[0];
+  const active = versions.find((version) => version.status === 'active') || null;
+  if (drafts.length > 1) return active;
+  return active || versions[0] || null;
 }
 
 export function emptyModelPolicyForm(pricingProfile: TierPricingProfile = 'token'): TierModelPolicyForm {

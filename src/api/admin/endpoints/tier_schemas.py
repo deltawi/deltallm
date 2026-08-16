@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class _StrictRequest(BaseModel):
@@ -72,6 +72,32 @@ class TierModelPolicyPatchRequest(_StrictRequest):
     capacity_pool_key: str | None = None
     priority: int | None = None
     metadata: dict[str, Any] | None = None
+
+
+class TierModelPolicyBulkLimitsRequest(_StrictRequest):
+    expected_revision: int = Field(ge=0)
+    rpm_limit: int | None = Field(default=None, ge=1)
+    tpm_limit: int | None = Field(default=None, ge=1)
+    policy_ids: list[str] | None = None
+    all_filtered: bool = False
+    search: str | None = Field(default=None, max_length=200)
+    enabled: bool | None = None
+    access_mode: str | None = Field(default=None, max_length=40)
+    capacity_pool_key: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def validate_bulk_target_and_values(self) -> TierModelPolicyBulkLimitsRequest:
+        supplied = self.model_fields_set
+        if "rpm_limit" not in supplied and "tpm_limit" not in supplied:
+            raise ValueError("rpm_limit or tpm_limit is required")
+        if self.policy_ids:
+            if self.all_filtered:
+                raise ValueError("choose policy_ids or all_filtered, not both")
+            if any(not str(policy_id or "").strip() for policy_id in self.policy_ids):
+                raise ValueError("policy_ids must contain nonblank IDs")
+        elif not self.all_filtered:
+            raise ValueError("policy_ids or all_filtered=true is required")
+        return self
 
 
 class TierCapacityPoolRequest(_StrictRequest):

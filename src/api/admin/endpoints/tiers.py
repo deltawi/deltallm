@@ -14,6 +14,7 @@ from src.api.admin.endpoints.tier_schemas import (
     TierConfigurationMutationRequest,
     TierCreateRequest,
     TierModelPolicyCreateRequest,
+    TierModelPolicyBulkLimitsRequest,
     TierModelPolicyPatchRequest,
     TierModelPolicyReplaceRequest,
     TierPatchRequest,
@@ -188,9 +189,16 @@ async def bootstrap_tier(
 
 
 @router.get("/ui/api/tiers/{tier_id}", dependencies=_PLATFORM_ADMIN_DEPENDENCY)
-async def get_tier(request: Request, tier_id: str) -> dict[str, Any]:
+async def get_tier(
+    request: Request,
+    tier_id: str,
+    include_versions: bool = Query(default=True),
+) -> dict[str, Any]:
     try:
-        return await _tier_service(request).get_tier_detail(tier_id)
+        return await _tier_service(request).get_tier_detail(
+            tier_id,
+            include_versions=include_versions,
+        )
     except TierAdminError as exc:
         raise _http_error(exc) from exc
 
@@ -439,6 +447,46 @@ async def create_tier_model_policy(
     return response
 
 
+@router.post(
+    "/ui/api/tiers/{tier_id}/versions/{tier_version_id}/model-policies/bulk-limits",
+    dependencies=_PLATFORM_ADMIN_DEPENDENCY,
+)
+async def bulk_update_tier_model_policy_limits(
+    request: Request,
+    tier_id: str,
+    tier_version_id: str,
+    payload: TierModelPolicyBulkLimitsRequest,
+) -> dict[str, Any]:
+    request_start = perf_counter()
+    request_payload = _payload(payload)
+    try:
+        result = await _tier_service(request).bulk_update_model_policy_limits(
+            tier_id,
+            tier_version_id,
+            request_payload,
+        )
+    except TierAdminError as exc:
+        raise _http_error(exc) from exc
+    response = {
+        "affected_count": result.affected_count,
+        **_configuration_mutation_metadata(result),
+    }
+    invalidation = await _reload_tier_policy_for_audit(request)
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_TIER_MODEL_POLICY_BULK_LIMITS,
+        resource_type="tier_model_policy_set",
+        resource_id=tier_version_id,
+        request_payload={"tier_id": tier_id, **request_payload},
+        response_payload={**response, "tier_policy_invalidation": invalidation},
+        before=None,
+        after=response,
+        metadata={"tier_policy_invalidation": invalidation},
+    )
+    return response
+
+
 @router.patch(
     "/ui/api/tiers/{tier_id}/versions/{tier_version_id}/model-policies/{policy_id}",
     dependencies=_PLATFORM_ADMIN_DEPENDENCY,
@@ -598,6 +646,7 @@ async def list_tier_capacity_pools(
     tier_id: str,
     tier_version_id: str,
     search: str | None = Query(default=None, max_length=200),
+    callable_key: str | None = Query(default=None, max_length=300),
     strategy: str | None = Query(default=None, max_length=40),
     sort: str = Query(default="pool_key"),
     order: str = Query(default="asc"),
@@ -609,6 +658,7 @@ async def list_tier_capacity_pools(
             tier_id,
             tier_version_id,
             search=search,
+            callable_key=callable_key,
             strategy=strategy,
             sort=sort,
             order=order,

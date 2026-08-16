@@ -37,7 +37,31 @@ Example: `Growth`.
 
 The editable definition of the tier.
 
-Use draft versions for changes, then publish when ready. This prevents accidental live changes while an admin is still editing model access, pricing, or limits.
+Use draft versions for changes, then activate one when ready. This prevents accidental live changes while an admin is still editing model access, pricing, or limits.
+
+### Version lifecycle in the admin UI
+
+The Tiers catalog shows compact status badges that describe the actual lifecycle state:
+
+| Badge | Meaning |
+| --- | --- |
+| **Live** | The tier has an active version used by assignments |
+| **Draft** | The tier has an editable version that is not live |
+| **Live** + **Draft** | An active version is serving traffic while a separate draft is being prepared |
+
+There is no separate “work in progress” state. Disabled is an availability state and is shown independently from the version badges.
+
+Open a tier to work in its version workspace:
+
+- The version rail keeps the live version, drafts, and paginated archive history visible while you switch between **Models & limits**, **Pricing**, and **Capacity pools**.
+- Active and archived versions are immutable. Choose **New draft** to clone the active version, or **Restore as draft** to clone an archived version into a new editable version. Restoring never rewrites history or moves the live pointer.
+- When more than one draft exists, choose one explicitly. The UI shows its creator, update time, and source version instead of silently opening another admin's work.
+- Activating a draft first shows a change preview and assignment impact. The activation is accepted only if both the draft revision and active-version pointer still match the preview.
+- If another admin changes the same draft, the save is rejected and the editor keeps the unsaved fields open for comparison with the latest server values.
+
+Tier creation creates the tier and Draft v1 atomically. Retrying the same submit after a lost response reuses the same idempotency key and returns the original tier instead of creating a duplicate.
+
+The catalog, model policies, pricing rows, capacity pools, and archived versions use server-backed pagination. Page-size controls are bounded, filters reset to the first page, and the capacity-pool picker performs a bounded lookup for the selected callable rather than loading the entire pool catalog.
 
 ### Model Policy
 
@@ -216,11 +240,11 @@ The dashboard reports `live_data.status` as `healthy`, `partial`, or `unavailabl
 
 1. Open **AI Gateway > Tiers**
 2. Create a tier, such as `Starter`, `Growth`, or `Enterprise`
-3. Create or edit a draft version
+3. Create or choose a draft version
 4. Add model policies for the models in that package
 5. Set prices, RPM, TPM, and capacity pools per model
-6. Publish the version
-7. Create an organization and select the published tier, or open a legacy organization and assign it from **Service Policy**
+6. Review the activation preview and activate the draft
+7. Create an organization and select the active tier, or open a legacy organization and assign it from **Service Policy**
 8. Add only the optional organization-wide budget and hard-cap guardrails that are needed
 9. Review the effective policy preview
 10. Run a simulation for an example request
@@ -264,7 +288,7 @@ Use add-on tiers for exceptions:
 
 Keep capacity pools focused on scarce capacity. A tier can have many model policies, but only premium or constrained models usually need a pool.
 
-Use draft versions for every meaningful change. Publish only after previewing the tier and simulating representative requests.
+Use draft versions for every meaningful change. Activate only after previewing the tier and simulating representative requests.
 
 ## Pricing by Model Type
 
@@ -291,7 +315,7 @@ The Tier editor keeps advanced supported pricing fields available, but only the 
 - Tiers do not replace organization, team, user, or key rate and budget limits.
 - Direct team, API key, and runtime user restrictions can still narrow tier access.
 - Deny or restriction rules should be treated as hard boundaries.
-- Published versions affect assigned organizations.
+- The active version affects assigned organizations.
 - Draft versions are for editing and review.
 - Shared capacity pools protect the platform when several organizations burst at the same time.
 

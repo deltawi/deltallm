@@ -6,8 +6,24 @@ import json
 import pytest
 
 from src.db.tiers import TierRepository
+from src.db.tier_records import to_version_record
 
 from tests.db.tier_repository_fakes import _FakePrisma
+
+
+def test_tier_version_mapper_includes_creator_email() -> None:
+    record = to_version_record(
+        {
+            "tier_version_id": "version-1",
+            "tier_id": "tier-1",
+            "version_number": 1,
+            "created_by_kind": "account",
+            "created_by_account_id": "account-1",
+            "created_by_email": "admin@example.com",
+        }
+    )
+
+    assert record.created_by_email == "admin@example.com"
 
 
 @pytest.mark.asyncio

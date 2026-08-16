@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from src.db.tier_records import (
+    TierCatalogVersionSummaryRecord,
     TierRecord,
     TierVersionRecord,
     tier_version_select_sql,
@@ -165,7 +166,24 @@ class TierBootstrapRepositoryMixin:
         if not request_rows:
             raise RuntimeError("tier bootstrap idempotency insert did not return a row")
         return TierBootstrapResult(
-            tier=replace(tier, version_count=1),
+            tier=replace(
+                tier,
+                version_count=1,
+                draft_count=1,
+                latest_draft_version=TierCatalogVersionSummaryRecord(
+                    tier_version_id=version.tier_version_id,
+                    version_number=version.version_number,
+                    configuration_revision=version.configuration_revision,
+                    model_policy_count=version.model_policy_count,
+                    capacity_pool_count=version.capacity_pool_count,
+                    created_by_account_id=version.created_by_account_id,
+                    created_by_kind=version.created_by_kind,
+                    source_tier_version_id=version.source_tier_version_id,
+                    created_at=version.created_at,
+                    updated_at=version.updated_at,
+                ),
+                last_activity_at=version.updated_at or tier.updated_at,
+            ),
             initial_version=version,
             idempotency_resolution="created",
         )

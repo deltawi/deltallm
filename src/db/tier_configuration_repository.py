@@ -66,6 +66,13 @@ class TierCapacityPoolMutationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class TierModelPolicyBulkMutationResult:
+    affected_count: int
+    configuration_revision: int
+    version_updated_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
 class TierModelPolicyPage:
     records: tuple[TierModelPolicyRecord, ...]
     total: int
@@ -221,6 +228,7 @@ class TierConfigurationRepositoryMixin:
         tier_id: str,
         tier_version_id: str,
         search: str | None = None,
+        callable_key: str | None = None,
         strategy: str | None = None,
         sort: str = "pool_key",
         order: str = "asc",
@@ -254,6 +262,9 @@ class TierConfigurationRepositoryMixin:
                 f"(p.pool_key ILIKE ${len(params)} "
                 f"OR p.callable_key ILIKE ${len(params)})"
             )
+        if callable_key:
+            params.append(callable_key.strip())
+            clauses.append(f"p.callable_key = ${len(params)}")
         if strategy:
             params.append(strategy)
             clauses.append(f"p.strategy = ${len(params)}")
@@ -611,6 +622,132 @@ class TierConfigurationRepositoryMixin:
             version_updated_at=updated_at,
         )
 
+    async def bulk_update_model_policy_limits(
+        self,
+        *,
+        tier_id: str,
+        tier_version_id: str,
+        expected_revision: int,
+        update_rpm_limit: bool,
+        rpm_limit: int | None,
+        update_tpm_limit: bool,
+        tpm_limit: int | None,
+        tier_model_policy_ids: tuple[str, ...] | None = None,
+        search: str | None = None,
+        enabled: bool | None = None,
+        access_mode: str | None = None,
+        capacity_pool_key: str | None = None,
+    ) -> TierModelPolicyBulkMutationResult:
+        self._require_configuration_transactions("bulk_update_model_policy_limits")
+        async with self.prisma.tx() as tx:
+            return await self.with_db(tx)._bulk_update_model_policy_limits_in_tx(
+                tier_id=tier_id,
+                tier_version_id=tier_version_id,
+                expected_revision=expected_revision,
+                update_rpm_limit=update_rpm_limit,
+                rpm_limit=rpm_limit,
+                update_tpm_limit=update_tpm_limit,
+                tpm_limit=tpm_limit,
+                tier_model_policy_ids=tier_model_policy_ids,
+                search=search,
+                enabled=enabled,
+                access_mode=access_mode,
+                capacity_pool_key=capacity_pool_key,
+            )
+
+    async def _bulk_update_model_policy_limits_in_tx(
+        self,
+        *,
+        tier_id: str,
+        tier_version_id: str,
+        expected_revision: int,
+        update_rpm_limit: bool,
+        rpm_limit: int | None,
+        update_tpm_limit: bool,
+        tpm_limit: int | None,
+        tier_model_policy_ids: tuple[str, ...] | None,
+        search: str | None,
+        enabled: bool | None,
+        access_mode: str | None,
+        capacity_pool_key: str | None,
+    ) -> TierModelPolicyBulkMutationResult:
+        if not update_rpm_limit and not update_tpm_limit:
+            raise ValueError("at least one limit must be supplied")
+        version = await self.lock_draft_version_for_configuration_mutation(
+            tier_id=tier_id,
+            tier_version_id=tier_version_id,
+            expected_revision=expected_revision,
+        )
+        clauses = ["tier_version_id = $1"]
+        params: list[Any] = [tier_version_id]
+        if tier_model_policy_ids is not None:
+            policy_ids = tuple(dict.fromkeys(_nonblank_ids(tier_model_policy_ids)))
+            if not policy_ids:
+                raise ValueError("tier_model_policy_ids must not be empty")
+            params.append(list(policy_ids))
+            scoped_rows = await self.prisma.query_raw(
+                """
+                SELECT tier_model_policy_id
+                FROM deltallm_tiermodelpolicy
+                WHERE tier_version_id = $1
+                  AND tier_model_policy_id = ANY($2::text[])
+                FOR UPDATE
+                """,
+                *params,
+            )
+            if len(scoped_rows) != len(policy_ids):
+                raise TierConfigurationChildNotFoundError("model policy not found")
+            clauses.append("tier_model_policy_id = ANY($2::text[])")
+        else:
+            if search:
+                params.append(f"%{search.strip()}%")
+                clauses.append(
+                    f"(callable_key ILIKE ${len(params)} OR "
+                    f"COALESCE(capacity_pool_key, '') ILIKE ${len(params)})"
+                )
+            if enabled is not None:
+                params.append(enabled)
+                clauses.append(f"enabled = ${len(params)}")
+            if access_mode:
+                params.append(access_mode)
+                clauses.append(f"access_mode = ${len(params)}")
+            if capacity_pool_key:
+                params.append(capacity_pool_key)
+                clauses.append(f"capacity_pool_key = ${len(params)}")
+
+        assignments: list[str] = []
+        if update_rpm_limit:
+            params.append(rpm_limit)
+            assignments.append(f"rpm_limit = ${len(params)}")
+        if update_tpm_limit:
+            params.append(tpm_limit)
+            assignments.append(f"tpm_limit = ${len(params)}")
+        assignments.append("updated_at = NOW()")
+        rows = await self.prisma.query_raw(
+            f"""
+            UPDATE deltallm_tiermodelpolicy
+            SET {", ".join(assignments)}
+            WHERE {" AND ".join(clauses)}
+            RETURNING tier_model_policy_id
+            """,
+            *params,
+        )
+        if not rows:
+            return TierModelPolicyBulkMutationResult(
+                affected_count=0,
+                configuration_revision=version.configuration_revision,
+                version_updated_at=version.updated_at,
+            )
+        revision, updated_at = await self._bump_configuration_revision(
+            tier_id=tier_id,
+            tier_version_id=tier_version_id,
+        )
+        return TierModelPolicyBulkMutationResult(
+            affected_count=len(rows),
+            configuration_revision=revision,
+            version_updated_at=updated_at,
+        )
+
     async def create_capacity_pool(
         self,
         *,
@@ -945,6 +1082,13 @@ def _sort_order(value: str) -> str:
     return normalized.upper()
 
 
+def _nonblank_ids(values: tuple[str, ...]) -> tuple[str, ...]:
+    normalized = tuple(str(value or "").strip() for value in values)
+    if any(not value for value in normalized):
+        raise ValueError("tier_model_policy_ids must contain nonblank IDs")
+    return normalized
+
+
 def _prefixed_columns(columns: str, alias: str) -> str:
     return ",\n".join(
         f"{alias}.{column.strip()}"
@@ -1005,5 +1149,6 @@ __all__ = [
     "TierConfigurationVersionNotDraftError",
     "TierConfigurationVersionNotFoundError",
     "TierModelPolicyMutationResult",
+    "TierModelPolicyBulkMutationResult",
     "TierModelPolicyPage",
 ]

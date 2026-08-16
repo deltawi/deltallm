@@ -142,12 +142,46 @@ export function DetailMetricCard({
 }
 
 export function TextTabs<T extends string>({ items, active, onChange }: TextTabsProps<T>) {
+  const focusTab = (current: HTMLButtonElement, index: number) => {
+    current.parentElement
+      ?.querySelector<HTMLElement>(`[role="tab"][data-tab-index="${index}"]`)
+      ?.focus();
+  };
+  const moveFocus = (current: HTMLButtonElement, currentIndex: number, direction: -1 | 1) => {
+    const nextIndex = (currentIndex + direction + items.length) % items.length;
+    onChange(items[nextIndex].id);
+    requestAnimationFrame(() => focusTab(current, nextIndex));
+  };
+
   return (
-    <>
-      {items.map((item) => (
+    <div role="tablist" className="contents">
+      {items.map((item, index) => (
         <button
           key={item.id}
+          type="button"
+          role="tab"
+          aria-selected={active === item.id}
+          tabIndex={active === item.id ? 0 : -1}
+          data-tab-index={index}
           onClick={() => onChange(item.id)}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowLeft') {
+              event.preventDefault();
+              moveFocus(event.currentTarget, index, -1);
+            } else if (event.key === 'ArrowRight') {
+              event.preventDefault();
+              moveFocus(event.currentTarget, index, 1);
+            } else if (event.key === 'Home') {
+              event.preventDefault();
+              onChange(items[0].id);
+              requestAnimationFrame(() => focusTab(event.currentTarget, 0));
+            } else if (event.key === 'End') {
+              event.preventDefault();
+              const lastIndex = items.length - 1;
+              onChange(items[lastIndex].id);
+              requestAnimationFrame(() => focusTab(event.currentTarget, lastIndex));
+            }
+          }}
           className={`border-b-2 pb-3 text-sm font-medium transition-colors ${
             active === item.id
               ? 'border-brand-primary text-brand-primary-ink'
@@ -157,7 +191,7 @@ export function TextTabs<T extends string>({ items, active, onChange }: TextTabs
           {item.label}
         </button>
       ))}
-    </>
+    </div>
   );
 }
 

@@ -1,6 +1,21 @@
 # Tiers UX redesign: code-review remediation plan v2
 
-> Status: implementation-ready planning document. No production code has been changed. This revision incorporates both code-review rounds, resolves the five follow-up findings, and supersedes conflicting decisions in `tiers-ux-redesign-mapping.md` and earlier revisions of this document.
+> Status: core implementation complete in the isolated `feature/tiers-ux-redesign` worktree; release-targeted verification is in progress. This revision incorporates both code-review rounds, resolves the five follow-up findings, and supersedes conflicting decisions in `tiers-ux-redesign-mapping.md` and earlier revisions of this document.
+
+## Implementation checkpoint
+
+Completed in the current worktree:
+
+- revision/provenance schema and migration;
+- atomic, principal-scoped Tier + Draft v1 bootstrap;
+- transaction-safe version numbering and paginated version history;
+- revision-guarded row CRUD, bulk limits, activation preview, and activation;
+- enriched Tier catalog summaries and callable target mode metadata;
+- compact Live/Draft status rules, paginated catalog, persistent version workspace, create/edit drawers, conflict recovery, activation review, and paginated policy/pricing/pool editors;
+- bounded compatible-capacity-pool lookup for the model-policy editor;
+- backend repository/API coverage, UI helper coverage, and real PostgreSQL migration/catalog-query validation.
+
+The legacy replacement and bodyless publish routes remain compatibility-only during the additive rollout stage. Their GA `428` enforcement gate is intentionally not enabled until the redesigned client is deployed and staging telemetry proves there are no remaining legacy callers.
 
 ## 0. Follow-up review closure
 

@@ -130,6 +130,10 @@ class _FakePrisma:
             return [{"total": 1}]
         if "FROM deltallm_tier t" in sql and "ORDER BY t.created_at" in sql:
             return [_tier_row()]
+        if "FROM deltallm_tier t" in sql and (
+            "WHERE t.tier_id = $1" in sql or "WHERE t.tier_key = $1" in sql
+        ):
+            return [_tier_row()]
         if "INSERT INTO deltallm_tier (" in sql:
             return [
                 _tier_row(
@@ -141,6 +145,9 @@ class _FakePrisma:
                     active_version_id=None,
                     version_count=0,
                     assignment_count=0,
+                    draft_count=0,
+                    live_assignment_count=0,
+                    organization_count=0,
                 )
             ]
         if "INSERT INTO deltallm_tierversion" in sql:
@@ -361,6 +368,9 @@ def _tier_row(
     active_version_id: str | None = "ver-active",
     version_count: int = 2,
     assignment_count: int = 3,
+    draft_count: int = 1,
+    live_assignment_count: int = 2,
+    organization_count: int = 2,
 ) -> dict[str, object]:
     return {
         "tier_id": "tier-1",
@@ -370,8 +380,33 @@ def _tier_row(
         "enabled": enabled,
         "metadata": metadata,
         "active_version_id": active_version_id,
+        "active_version_number": 1 if active_version_id else None,
+        "active_configuration_revision": 0 if active_version_id else None,
+        "active_model_policy_count": 1 if active_version_id else None,
+        "active_capacity_pool_count": 1 if active_version_id else None,
+        "active_created_by_account_id": None,
+        "active_created_by_kind": "unknown" if active_version_id else None,
+        "active_created_by_email": None,
+        "active_source_tier_version_id": None,
+        "active_created_at": None,
+        "active_updated_at": None,
+        "draft_version_id": "ver-draft" if draft_count else None,
+        "draft_version_number": 2 if draft_count else None,
+        "draft_configuration_revision": 3 if draft_count else None,
+        "draft_model_policy_count": 2 if draft_count else None,
+        "draft_capacity_pool_count": 1 if draft_count else None,
+        "draft_created_by_account_id": "account-1" if draft_count else None,
+        "draft_created_by_kind": "account" if draft_count else None,
+        "draft_created_by_email": "admin@example.com" if draft_count else None,
+        "draft_source_tier_version_id": active_version_id if draft_count else None,
+        "draft_created_at": None,
+        "draft_updated_at": None,
+        "draft_count": draft_count,
         "version_count": version_count,
         "assignment_count": assignment_count,
+        "live_assignment_count": live_assignment_count,
+        "organization_count": organization_count,
+        "last_activity_at": None,
         "created_at": None,
         "updated_at": None,
     }

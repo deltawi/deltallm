@@ -978,6 +978,29 @@ def test_callable_target_catalog_includes_model_access_groups() -> None:
     assert catalog["gpt-4o-mini"].access_groups == frozenset({"beta", "support"})
 
 
+def test_callable_target_catalog_resolves_and_reports_model_modes() -> None:
+    catalog = build_callable_target_catalog(
+        {
+            "chat": [
+                {"deployment_id": "dep-1", "model_info": {"mode": "Chat"}},
+                {"deployment_id": "dep-2", "model_info": {"mode": "chat"}},
+            ],
+            "mixed": [
+                {"deployment_id": "dep-3", "model_info": {"mode": "chat"}},
+                {"deployment_id": "dep-4", "model_info": {"mode": "embedding"}},
+            ],
+            "unknown": [{"deployment_id": "dep-5", "model_info": {}}],
+        }
+    )
+
+    assert catalog["chat"].mode == "chat"
+    assert catalog["chat"].mode_conflict is False
+    assert catalog["mixed"].mode is None
+    assert catalog["mixed"].mode_conflict is True
+    assert catalog["unknown"].mode is None
+    assert catalog["unknown"].mode_conflict is False
+
+
 def test_callable_target_catalog_disables_access_groups_for_conflicting_public_model(caplog) -> None:
     with caplog.at_level(logging.WARNING):
         catalog = build_callable_target_catalog(

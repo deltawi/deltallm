@@ -75,9 +75,16 @@ class TierAdminService:
             },
         }
 
-    async def get_tier_detail(self, tier_id: str) -> dict[str, Any]:
+    async def get_tier_detail(
+        self,
+        tier_id: str,
+        *,
+        include_versions: bool = True,
+    ) -> dict[str, Any]:
         tier = await self.require_tier(tier_id)
-        versions = await self.repository.list_tier_versions(tier_id)
+        versions = (
+            await self.repository.list_tier_versions(tier_id) if include_versions else []
+        )
         return {
             "tier": serialize_tier(tier),
             "versions": [serialize_tier_version(version) for version in versions],
@@ -563,6 +570,36 @@ class TierAdminService:
             )
         except TierConfigurationMutationError as exc:
             raise _configuration_admin_error(exc) from exc
+
+    async def bulk_update_model_policy_limits(
+        self,
+        tier_id: str,
+        tier_version_id: str,
+        payload: Mapping[str, Any],
+    ) -> Any:
+        try:
+            return await self.repository.bulk_update_model_policy_limits(
+                tier_id=tier_id,
+                tier_version_id=tier_version_id,
+                expected_revision=_expected_revision(payload),
+                update_rpm_limit="rpm_limit" in payload,
+                rpm_limit=payload.get("rpm_limit"),
+                update_tpm_limit="tpm_limit" in payload,
+                tpm_limit=payload.get("tpm_limit"),
+                tier_model_policy_ids=(
+                    tuple(str(value) for value in payload["policy_ids"])
+                    if payload.get("policy_ids")
+                    else None
+                ),
+                search=payload.get("search"),
+                enabled=payload.get("enabled"),
+                access_mode=payload.get("access_mode"),
+                capacity_pool_key=payload.get("capacity_pool_key"),
+            )
+        except ValueError as exc:
+            if isinstance(exc, TierConfigurationMutationError):
+                raise _configuration_admin_error(exc) from exc
+            raise TierAdminValidationError(str(exc)) from exc
 
     async def create_capacity_pool(
         self,

@@ -22,6 +22,7 @@ from src.db.tier_configuration_repository import (
     TierConfigurationVersionNotDraftError,
     TierConfigurationVersionNotFoundError,
     TierModelPolicyMutationResult,
+    TierModelPolicyBulkMutationResult,
     TierModelPolicyPage,
 )
 from src.db.tier_policy_repository import (
@@ -31,6 +32,7 @@ from src.db.tier_policy_repository import (
 from src.db.tier_records import (
     OrganizationTierAssignmentRecord,
     TierCapacityPoolRecord,
+    TierCatalogVersionSummaryRecord,
     TierCreationRequestRecord,
     TierModelPolicyRecord,
     TierPolicyAssignmentRecord,
@@ -79,6 +81,7 @@ __all__ = [
     "TierActivationActiveVersionChangedError",
     "TierActivationConfigurationChangedError",
     "TierCapacityPoolRecord",
+    "TierCatalogVersionSummaryRecord",
     "TierCapacityPoolMutationResult",
     "TierCapacityPoolPage",
     "TierConfigurationChildNotFoundError",
@@ -92,6 +95,7 @@ __all__ = [
     "TierCreationRequestRecord",
     "TierModelPolicyRecord",
     "TierModelPolicyMutationResult",
+    "TierModelPolicyBulkMutationResult",
     "TierModelPolicyPage",
     "TierPolicyAssignmentRecord",
     "TierPolicyLoadResult",

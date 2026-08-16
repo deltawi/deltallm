@@ -23,10 +23,20 @@ async def test_list_tiers_applies_search_enabled_and_pagination() -> None:
     assert rows[0].active_version_id == "ver-active"
     assert rows[0].version_count == 2
     assert rows[0].assignment_count == 3
+    assert rows[0].draft_count == 1
+    assert rows[0].active_version is not None
+    assert rows[0].active_version.version_number == 1
+    assert rows[0].latest_draft_version is not None
+    assert rows[0].latest_draft_version.version_number == 2
+    assert rows[0].latest_draft_version.created_by_email == "admin@example.com"
+    assert rows[0].live_assignment_count == 2
+    assert rows[0].organization_count == 2
     assert prisma.calls[0][1] == ("%pro%", True)
     assert prisma.calls[1][1] == ("%pro%", True, 25, 10)
     assert "ILIKE" in prisma.calls[1][0]
     assert "enabled = $2" in prisma.calls[1][0]
+    assert "LEFT JOIN LATERAL" in prisma.calls[1][0]
+    assert "COUNT(DISTINCT assignment.organization_id)" in prisma.calls[1][0]
 
 
 @pytest.mark.asyncio
