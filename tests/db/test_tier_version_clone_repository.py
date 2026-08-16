@@ -53,8 +53,12 @@ async def test_clone_tier_version_copies_pool_and_policy_rows_against_postgres()
         assert cloned.tier_id == tier_id
         assert cloned.version_number == 8
         assert cloned.status == "draft"
+        assert cloned.configuration_revision == 0
         assert cloned.published_at is None
         assert cloned.published_by_account_id is None
+        assert cloned.created_by_account_id is None
+        assert cloned.created_by_kind == "unknown"
+        assert cloned.source_tier_version_id == source_version_id
         assert cloned.metadata == {"copied_from": "source", "version": 7}
         assert cloned.capacity_pool_count == 1
         assert cloned.model_policy_count == 1

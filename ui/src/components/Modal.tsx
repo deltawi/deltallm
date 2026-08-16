@@ -30,6 +30,9 @@ export default function Modal({ open, onClose, title, children, wide }: ModalPro
 
   useEffect(() => {
     if (!open) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
 
     const getFocusable = () => {
       const dialogElement = dialogRef.current;
@@ -67,7 +70,10 @@ export default function Modal({ open, onClose, title, children, wide }: ModalPro
     };
 
     document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previouslyFocused?.focus();
+    };
   }, [open]);
 
   if (!open) return null;

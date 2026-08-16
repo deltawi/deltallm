@@ -6,8 +6,24 @@ import json
 import pytest
 
 from src.db.tiers import TierRepository
+from src.db.tier_records import to_version_record
 
 from tests.db.tier_repository_fakes import _FakePrisma
+
+
+def test_tier_version_mapper_includes_creator_email() -> None:
+    record = to_version_record(
+        {
+            "tier_version_id": "version-1",
+            "tier_id": "tier-1",
+            "version_number": 1,
+            "created_by_kind": "account",
+            "created_by_account_id": "account-1",
+            "created_by_email": "admin@example.com",
+        }
+    )
+
+    assert record.created_by_email == "admin@example.com"
 
 
 @pytest.mark.asyncio
@@ -19,16 +35,50 @@ async def test_create_tier_version_maps_counts_and_metadata() -> None:
         tier_id="tier-1",
         version_number=2,
         status="draft",
+        created_by_account_id="acct-creator",
+        created_by_kind="account",
+        source_tier_version_id="ver-source",
         metadata={"notes": "pricing update"},
     )
 
     assert record.tier_id == "tier-1"
     assert record.version_number == 2
     assert record.status == "draft"
+    assert record.configuration_revision == 0
+    assert record.created_by_account_id == "acct-creator"
+    assert record.created_by_kind == "account"
+    assert record.source_tier_version_id == "ver-source"
     assert record.metadata == {"notes": "pricing update"}
     assert record.model_policy_count == 0
     assert record.capacity_pool_count == 0
-    assert json.loads(str(prisma.calls[0][1][5])) == {"notes": "pricing update"}
+    assert json.loads(str(prisma.calls[0][1][8])) == {"notes": "pricing update"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("created_by_account_id", "created_by_kind"),
+    [
+        (None, "account"),
+        ("acct-1", "master_key"),
+        (None, "unsupported"),
+    ],
+)
+async def test_create_tier_version_validates_creator_provenance(
+    created_by_account_id: str | None,
+    created_by_kind: str,
+) -> None:
+    prisma = _FakePrisma()
+    repository = TierRepository(prisma)
+
+    with pytest.raises(ValueError, match="created_by"):
+        await repository.create_tier_version(
+            tier_id="tier-1",
+            version_number=2,
+            created_by_account_id=created_by_account_id,
+            created_by_kind=created_by_kind,
+        )
+
+    assert prisma.calls == []
 
 
 @pytest.mark.asyncio
@@ -118,14 +168,17 @@ async def test_get_active_tier_version_filters_active_status() -> None:
 
 
 @pytest.mark.asyncio
-async def test_publish_tier_version_archives_existing_active_version_then_activates_target() -> (
+async def test_activate_tier_version_archives_existing_active_version_then_activates_target() -> (
     None
 ):
     prisma = _FakePrisma(enable_tx=True)
     repository = TierRepository(prisma)
 
-    record = await repository.publish_tier_version(
-        "ver-1",
+    record = await repository.activate_tier_version(
+        tier_id="tier-1",
+        tier_version_id="ver-1",
+        expected_revision=0,
+        expected_active_version_id="ver-active",
         published_by_account_id="acct-1",
     )
 
@@ -137,31 +190,32 @@ async def test_publish_tier_version_archives_existing_active_version_then_activa
     assert prisma.calls == []
     assert prisma.executions == []
     tx = prisma.tx_clients[0]
-    assert "WHERE v.tier_version_id = $1" in tx.calls[0][0]
-    assert "FOR UPDATE OF v" not in tx.calls[0][0]
-    assert "FROM deltallm_tier" in tx.calls[1][0]
-    assert "FOR UPDATE" in tx.calls[1][0]
-    assert tx.calls[1][1] == ("tier-1",)
-    assert "WHERE v.tier_version_id = $1" in tx.calls[2][0]
-    assert "FOR UPDATE OF v" in tx.calls[2][0]
-    assert "v.status = 'active'" in tx.calls[3][0]
-    assert tx.calls[3][1] == ("tier-1", "ver-1")
-    assert "tier_version_id = $1" in tx.calls[4][0]
-    assert tx.calls[4][1] == ("ver-active",)
+    assert "FROM deltallm_tier" in tx.calls[0][0]
+    assert "FOR UPDATE" in tx.calls[0][0]
+    assert tx.calls[0][1] == ("tier-1",)
+    assert "WHERE v.tier_version_id = $1" in tx.calls[1][0]
+    assert "FOR UPDATE OF v" in tx.calls[1][0]
+    assert "v.status = 'active'" in tx.calls[2][0]
+    assert tx.calls[2][1] == ("tier-1", "ver-1")
+    assert "tier_version_id = $1" in tx.calls[3][0]
+    assert tx.calls[3][1] == ("ver-active",)
     assert "UPDATE deltallm_tierversion" in tx.executions[0][0]
     assert tx.executions[0][1] == ("tier-1", "ver-1")
-    assert "SET status = 'active'" in tx.calls[5][0]
-    assert tx.calls[5][1] == ("ver-1", "acct-1")
+    assert "SET status = 'active'" in tx.calls[4][0]
+    assert tx.calls[4][1] == ("ver-1", "acct-1")
 
 
 @pytest.mark.asyncio
-async def test_publish_tier_version_requires_transaction_support() -> None:
+async def test_activate_tier_version_requires_transaction_support() -> None:
     prisma = _FakePrisma()
     repository = TierRepository(prisma)
 
-    with pytest.raises(RuntimeError, match="publish_tier_version"):
-        await repository.publish_tier_version(
-            "ver-1",
+    with pytest.raises(RuntimeError, match="activate_tier_version"):
+        await repository.activate_tier_version(
+            tier_id="tier-1",
+            tier_version_id="ver-1",
+            expected_revision=0,
+            expected_active_version_id="ver-active",
             published_by_account_id="acct-1",
         )
 
@@ -170,12 +224,15 @@ async def test_publish_tier_version_requires_transaction_support() -> None:
 
 
 @pytest.mark.asyncio
-async def test_publish_tier_version_uses_transaction_client_when_available() -> None:
+async def test_activate_tier_version_uses_transaction_client_when_available() -> None:
     prisma = _FakePrisma(enable_tx=True)
     repository = TierRepository(prisma)
 
-    record = await repository.publish_tier_version(
-        "ver-1",
+    record = await repository.activate_tier_version(
+        tier_id="tier-1",
+        tier_version_id="ver-1",
+        expected_revision=0,
+        expected_active_version_id="ver-active",
         published_by_account_id="acct-1",
     )
 
@@ -185,63 +242,78 @@ async def test_publish_tier_version_uses_transaction_client_when_available() -> 
     assert prisma.calls == []
     assert prisma.executions == []
     tx = prisma.tx_clients[0]
-    assert "FOR UPDATE OF v" not in tx.calls[0][0]
-    assert "FROM deltallm_tier" in tx.calls[1][0]
-    assert "FOR UPDATE OF v" in tx.calls[2][0]
-    assert "v.status = 'active'" in tx.calls[3][0]
-    assert "tier_version_id = $1" in tx.calls[4][0]
+    assert "FROM deltallm_tier" in tx.calls[0][0]
+    assert "FOR UPDATE OF v" in tx.calls[1][0]
+    assert "v.status = 'active'" in tx.calls[2][0]
+    assert "tier_version_id = $1" in tx.calls[3][0]
     assert "UPDATE deltallm_tierversion" in tx.executions[0][0]
-    assert "SET status = 'active'" in tx.calls[5][0]
+    assert "SET status = 'active'" in tx.calls[4][0]
 
 
 @pytest.mark.asyncio
-async def test_publish_tier_version_rejects_pinned_assignments_on_current_active() -> None:
+async def test_activate_tier_version_rejects_pinned_assignments_on_current_active() -> None:
     prisma = _FakePrisma(enable_tx=True, pinned_assignment_count=1)
     repository = TierRepository(prisma)
 
     with pytest.raises(ValueError, match="pinned"):
-        await repository.publish_tier_version("ver-1", published_by_account_id="acct-1")
+        await repository.activate_tier_version(
+            tier_id="tier-1",
+            tier_version_id="ver-1",
+            expected_revision=0,
+            expected_active_version_id="ver-active",
+            published_by_account_id="acct-1",
+        )
 
     assert prisma.tx_started == 1
     assert prisma.tx_committed == 0
     assert prisma.tx_rolled_back == 1
     tx = prisma.tx_clients[0]
-    assert "FOR UPDATE OF v" not in tx.calls[0][0]
-    assert "FROM deltallm_tier" in tx.calls[1][0]
-    assert "FOR UPDATE OF v" in tx.calls[2][0]
-    assert "v.status = 'active'" in tx.calls[3][0]
-    assert "tier_version_id = $1" in tx.calls[4][0]
-    assert "ends_at IS NULL OR ends_at > NOW()" in tx.calls[4][0]
+    assert "FROM deltallm_tier" in tx.calls[0][0]
+    assert "FOR UPDATE OF v" in tx.calls[1][0]
+    assert "v.status = 'active'" in tx.calls[2][0]
+    assert "tier_version_id = $1" in tx.calls[3][0]
+    assert "ends_at IS NULL OR ends_at > NOW()" in tx.calls[3][0]
     assert tx.executions == []
     assert all("SET status = 'active'" not in sql for sql, _ in tx.calls)
 
 
 @pytest.mark.asyncio
-async def test_publish_tier_version_rejects_non_draft_target() -> None:
+async def test_activate_tier_version_rejects_non_draft_target() -> None:
     prisma = _FakePrisma(enable_tx=True, version_lookup_status="active")
     repository = TierRepository(prisma)
 
     with pytest.raises(ValueError, match="draft"):
-        await repository.publish_tier_version("ver-1", published_by_account_id="acct-1")
+        await repository.activate_tier_version(
+            tier_id="tier-1",
+            tier_version_id="ver-1",
+            expected_revision=0,
+            expected_active_version_id="ver-active",
+            published_by_account_id="acct-1",
+        )
 
     assert prisma.tx_started == 1
     assert prisma.tx_committed == 0
     assert prisma.tx_rolled_back == 1
     tx = prisma.tx_clients[0]
-    assert len(tx.calls) == 3
-    assert "FOR UPDATE OF v" not in tx.calls[0][0]
-    assert "FROM deltallm_tier" in tx.calls[1][0]
-    assert "FOR UPDATE OF v" in tx.calls[2][0]
+    assert len(tx.calls) == 2
+    assert "FROM deltallm_tier" in tx.calls[0][0]
+    assert "FOR UPDATE OF v" in tx.calls[1][0]
     assert tx.executions == []
 
 
 @pytest.mark.asyncio
-async def test_publish_tier_version_rolls_back_transaction_on_activation_failure() -> None:
+async def test_activate_tier_version_rolls_back_transaction_on_activation_failure() -> None:
     prisma = _FakePrisma(enable_tx=True, fail_on_sql="SET status = 'active'")
     repository = TierRepository(prisma)
 
     with pytest.raises(RuntimeError, match="simulated query failure"):
-        await repository.publish_tier_version("ver-1", published_by_account_id="acct-1")
+        await repository.activate_tier_version(
+            tier_id="tier-1",
+            tier_version_id="ver-1",
+            expected_revision=0,
+            expected_active_version_id="ver-active",
+            published_by_account_id="acct-1",
+        )
 
     assert prisma.tx_started == 1
     assert prisma.tx_committed == 0

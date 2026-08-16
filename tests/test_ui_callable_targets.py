@@ -412,7 +412,11 @@ async def test_list_callable_targets_uses_runtime_catalog(client, test_app):
     test_app.state.callable_target_binding_repository = _FakeCallableTargetBindingRepository()
     test_app.state.callable_target_scope_policy_repository = _FakeCallableTargetScopePolicyRepository()
     test_app.state.callable_target_catalog = {
-        "gpt-4o-mini": CallableTarget(key="gpt-4o-mini", target_type="model"),
+        "gpt-4o-mini": CallableTarget(
+            key="gpt-4o-mini",
+            target_type="model",
+            mode="chat",
+        ),
         "support-fast": CallableTarget(key="support-fast", target_type="route_group"),
     }
 
@@ -422,6 +426,10 @@ async def test_list_callable_targets_uses_runtime_catalog(client, test_app):
     payload = response.json()
     assert payload["pagination"]["total"] == 2
     assert {item["callable_key"] for item in payload["data"]} == {"gpt-4o-mini", "support-fast"}
+    by_key = {item["callable_key"]: item for item in payload["data"]}
+    assert by_key["gpt-4o-mini"]["mode"] == "chat"
+    assert by_key["gpt-4o-mini"]["mode_conflict"] is False
+    assert by_key["support-fast"]["mode"] is None
 
 
 @pytest.mark.asyncio

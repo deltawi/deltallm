@@ -20,8 +20,32 @@ def serialize_tier(record: TierRecord) -> dict[str, Any]:
         "enabled": record.enabled,
         "metadata": _json_value(record.metadata),
         "active_version_id": record.active_version_id,
+        "active_version": _serialize_catalog_version(record.active_version),
+        "latest_draft_version": _serialize_catalog_version(record.latest_draft_version),
+        "draft_count": record.draft_count,
         "version_count": record.version_count,
         "assignment_count": record.assignment_count,
+        "live_assignment_count": record.live_assignment_count,
+        "organization_count": record.organization_count,
+        "last_activity_at": _json_value(record.last_activity_at),
+        "created_at": _json_value(record.created_at),
+        "updated_at": _json_value(record.updated_at),
+    }
+
+
+def _serialize_catalog_version(record: Any) -> dict[str, Any] | None:
+    if record is None:
+        return None
+    return {
+        "tier_version_id": record.tier_version_id,
+        "version_number": record.version_number,
+        "configuration_revision": record.configuration_revision,
+        "model_policy_count": record.model_policy_count,
+        "capacity_pool_count": record.capacity_pool_count,
+        "created_by_account_id": record.created_by_account_id,
+        "created_by_kind": record.created_by_kind,
+        "created_by_email": record.created_by_email,
+        "source_tier_version_id": record.source_tier_version_id,
         "created_at": _json_value(record.created_at),
         "updated_at": _json_value(record.updated_at),
     }
@@ -33,8 +57,13 @@ def serialize_tier_version(record: TierVersionRecord) -> dict[str, Any]:
         "tier_id": record.tier_id,
         "version_number": record.version_number,
         "status": record.status,
+        "configuration_revision": record.configuration_revision,
         "published_at": _json_value(record.published_at),
         "published_by_account_id": record.published_by_account_id,
+        "created_by_account_id": record.created_by_account_id,
+        "created_by_kind": record.created_by_kind,
+        "created_by_email": record.created_by_email,
+        "source_tier_version_id": record.source_tier_version_id,
         "metadata": _json_value(record.metadata),
         "model_policy_count": record.model_policy_count,
         "capacity_pool_count": record.capacity_pool_count,

@@ -149,7 +149,41 @@ export function formatDateTime(value?: string | null): string {
 
 export function versionLabel(version?: TierVersion | null): string {
   if (!version) return 'No version';
-  return `v${version.version_number} ${version.status}`;
+  const state = version.status === 'active' ? 'Live' : version.status === 'draft' ? 'Draft' : 'Archived';
+  return `${state} v${version.version_number}`;
+}
+
+export type TierConfigurationBadge = {
+  kind: 'active' | 'draft';
+  label: string;
+};
+
+export function tierConfigurationBadges(tier: Tier): TierConfigurationBadge[] {
+  const badges: TierConfigurationBadge[] = [];
+  if (tier.active_version) {
+    badges.push({ kind: 'active', label: `Live v${tier.active_version.version_number}` });
+  } else if (tier.active_version_id) {
+    badges.push({ kind: 'active', label: 'Live' });
+  }
+  if (tier.latest_draft_version) {
+    badges.push({ kind: 'draft', label: `Draft v${tier.latest_draft_version.version_number}` });
+  }
+  return badges;
+}
+
+export function tierConfigurationEmptyLabel(tier: Tier): string | null {
+  if (tierConfigurationBadges(tier).length > 0) return null;
+  return tier.version_count > 0 ? 'No live version' : 'No configuration';
+}
+
+export function tierPackageSummary(tier: Tier) {
+  const version = tier.latest_draft_version || tier.active_version || null;
+  return {
+    modelPolicyCount: version?.model_policy_count || 0,
+    capacityPoolCount: version?.capacity_pool_count || 0,
+    versionNumber: version?.version_number ?? null,
+    versionStatus: tier.latest_draft_version ? 'draft' : tier.active_version ? 'active' : null,
+  };
 }
 
 export function tierAssignmentRequiresActiveVersion(
@@ -172,10 +206,11 @@ export function isAssignableTierVersion(
 }
 
 export function pickEditableVersion(versions: TierVersion[]): TierVersion | null {
-  return versions.find((version) => version.status === 'draft')
-    || versions.find((version) => version.status === 'active')
-    || versions[0]
-    || null;
+  const drafts = versions.filter((version) => version.status === 'draft');
+  if (drafts.length === 1) return drafts[0];
+  const active = versions.find((version) => version.status === 'active') || null;
+  if (drafts.length > 1) return active;
+  return active || versions[0] || null;
 }
 
 export function emptyModelPolicyForm(pricingProfile: TierPricingProfile = 'token'): TierModelPolicyForm {
@@ -275,29 +310,6 @@ export function modelPolicyFormToPayload(
   }, existing);
 }
 
-export function modelPolicyToPayload(policy: TierModelPolicy): TierModelPolicyPayload {
-  return withOptionalMetadata({
-    callable_key: policy.callable_key,
-    enabled: policy.enabled,
-    access_mode: policy.access_mode,
-    rpm_limit: policy.rpm_limit ?? null,
-    tpm_limit: policy.tpm_limit ?? null,
-    rph_limit: policy.rph_limit ?? null,
-    rpd_limit: policy.rpd_limit ?? null,
-    tpd_limit: policy.tpd_limit ?? null,
-    max_parallel_requests: policy.max_parallel_requests ?? null,
-    batch_rpm_limit: policy.batch_rpm_limit ?? null,
-    batch_tpm_limit: policy.batch_tpm_limit ?? null,
-    pricing: policy.pricing ?? null,
-    capacity_pool_key: policy.capacity_pool_key ?? null,
-    priority: policy.priority,
-  }, policy);
-}
-
-export function modelPoliciesToPayload(policies: TierModelPolicy[]): TierModelPolicyPayload[] {
-  return policies.map((policy) => modelPolicyToPayload(policy));
-}
-
 export function validateModelPolicyForm(form: TierModelPolicyForm): string | null {
   try {
     modelPolicyFormToPayload(form);
@@ -360,23 +372,6 @@ export function capacityPoolFormToPayload(
     saturation_threshold: parseOptionalRatio(form.saturation_threshold, 'Saturation threshold'),
     burst_multiplier: parseOptionalNumberAtLeast(form.burst_multiplier, 'Burst multiplier', 1),
   }, existing);
-}
-
-export function capacityPoolToPayload(pool: TierCapacityPool): TierCapacityPoolPayload {
-  return withOptionalMetadata({
-    pool_key: pool.pool_key,
-    callable_key: pool.callable_key,
-    rpm_capacity: pool.rpm_capacity ?? null,
-    tpm_capacity: pool.tpm_capacity ?? null,
-    max_parallel_requests: pool.max_parallel_requests ?? null,
-    strategy: pool.strategy,
-    saturation_threshold: pool.saturation_threshold ?? null,
-    burst_multiplier: pool.burst_multiplier ?? null,
-  }, pool);
-}
-
-export function capacityPoolsToPayload(pools: TierCapacityPool[]): TierCapacityPoolPayload[] {
-  return pools.map((pool) => capacityPoolToPayload(pool));
 }
 
 export function poolOptionsForCallable(

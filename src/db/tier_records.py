@@ -42,6 +42,21 @@ def float_or_none(value: Any) -> float | None:
 
 
 @dataclass
+class TierCatalogVersionSummaryRecord:
+    tier_version_id: str
+    version_number: int
+    configuration_revision: int = 0
+    model_policy_count: int = 0
+    capacity_pool_count: int = 0
+    created_by_account_id: str | None = None
+    created_by_kind: str = "unknown"
+    created_by_email: str | None = None
+    source_tier_version_id: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@dataclass
 class TierRecord:
     tier_id: str
     tier_key: str
@@ -50,10 +65,26 @@ class TierRecord:
     enabled: bool = True
     metadata: dict[str, Any] | None = None
     active_version_id: str | None = None
+    active_version: TierCatalogVersionSummaryRecord | None = None
+    latest_draft_version: TierCatalogVersionSummaryRecord | None = None
+    draft_count: int = 0
     version_count: int = 0
     assignment_count: int = 0
+    live_assignment_count: int = 0
+    organization_count: int = 0
+    last_activity_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TierCreationRequestRecord:
+    tier_creation_request_id: str
+    principal_scope: str
+    idempotency_key: str
+    request_hash: str
+    tier_id: str
+    created_at: datetime | None = None
 
 
 @dataclass
@@ -62,8 +93,13 @@ class TierVersionRecord:
     tier_id: str
     version_number: int
     status: str = "draft"
+    configuration_revision: int = 0
     published_at: datetime | None = None
     published_by_account_id: str | None = None
+    created_by_account_id: str | None = None
+    created_by_kind: str = "unknown"
+    created_by_email: str | None = None
+    source_tier_version_id: str | None = None
     metadata: dict[str, Any] | None = None
     model_policy_count: int = 0
     capacity_pool_count: int = 0
@@ -168,8 +204,13 @@ def tier_version_select_sql() -> str:
             v.tier_id,
             v.version_number,
             v.status,
+            v.configuration_revision,
             v.published_at,
             v.published_by_account_id,
+            v.created_by_account_id,
+            v.created_by_kind,
+            creator.email AS created_by_email,
+            v.source_tier_version_id,
             v.metadata,
             v.created_at,
             v.updated_at,
@@ -189,6 +230,8 @@ def tier_version_select_sql() -> str:
                 WHERE a.tier_version_id = v.tier_version_id
             ) AS assignment_count
         FROM deltallm_tierversion v
+        LEFT JOIN deltallm_platformaccount creator
+            ON creator.account_id = v.created_by_account_id
     """
 
 
@@ -218,6 +261,8 @@ def assignment_select_sql() -> str:
 
 
 def to_tier_record(row: dict[str, Any]) -> TierRecord:
+    active_version = _to_catalog_version_summary(row, prefix="active")
+    latest_draft_version = _to_catalog_version_summary(row, prefix="draft")
     return TierRecord(
         tier_id=str(row.get("tier_id") or ""),
         tier_key=str(row.get("tier_key") or ""),
@@ -230,10 +275,62 @@ def to_tier_record(row: dict[str, Any]) -> TierRecord:
         active_version_id=str(row.get("active_version_id"))
         if row.get("active_version_id") is not None
         else None,
+        active_version=active_version,
+        latest_draft_version=latest_draft_version,
+        draft_count=int(row.get("draft_count") or 0),
         version_count=int(row.get("version_count") or 0),
         assignment_count=int(row.get("assignment_count") or 0),
+        live_assignment_count=int(row.get("live_assignment_count") or 0),
+        organization_count=int(row.get("organization_count") or 0),
+        last_activity_at=parse_datetime(row.get("last_activity_at")),
         created_at=parse_datetime(row.get("created_at")),
         updated_at=parse_datetime(row.get("updated_at")),
+    )
+
+
+def _to_catalog_version_summary(
+    row: dict[str, Any],
+    *,
+    prefix: str,
+) -> TierCatalogVersionSummaryRecord | None:
+    tier_version_id = row.get(f"{prefix}_version_id")
+    if tier_version_id is None:
+        return None
+    return TierCatalogVersionSummaryRecord(
+        tier_version_id=str(tier_version_id),
+        version_number=int(row.get(f"{prefix}_version_number") or 0),
+        configuration_revision=int(row.get(f"{prefix}_configuration_revision") or 0),
+        model_policy_count=int(row.get(f"{prefix}_model_policy_count") or 0),
+        capacity_pool_count=int(row.get(f"{prefix}_capacity_pool_count") or 0),
+        created_by_account_id=(
+            str(row.get(f"{prefix}_created_by_account_id"))
+            if row.get(f"{prefix}_created_by_account_id") is not None
+            else None
+        ),
+        created_by_kind=str(row.get(f"{prefix}_created_by_kind") or "unknown"),
+        created_by_email=(
+            str(row.get(f"{prefix}_created_by_email"))
+            if row.get(f"{prefix}_created_by_email") is not None
+            else None
+        ),
+        source_tier_version_id=(
+            str(row.get(f"{prefix}_source_tier_version_id"))
+            if row.get(f"{prefix}_source_tier_version_id") is not None
+            else None
+        ),
+        created_at=parse_datetime(row.get(f"{prefix}_created_at")),
+        updated_at=parse_datetime(row.get(f"{prefix}_updated_at")),
+    )
+
+
+def to_tier_creation_request_record(row: dict[str, Any]) -> TierCreationRequestRecord:
+    return TierCreationRequestRecord(
+        tier_creation_request_id=str(row.get("tier_creation_request_id") or ""),
+        principal_scope=str(row.get("principal_scope") or ""),
+        idempotency_key=str(row.get("idempotency_key") or ""),
+        request_hash=str(row.get("request_hash") or ""),
+        tier_id=str(row.get("tier_id") or ""),
+        created_at=parse_datetime(row.get("created_at")),
     )
 
 
@@ -243,9 +340,20 @@ def to_version_record(row: dict[str, Any]) -> TierVersionRecord:
         tier_id=str(row.get("tier_id") or ""),
         version_number=int(row.get("version_number") or 0),
         status=str(row.get("status") or "draft"),
+        configuration_revision=int(row.get("configuration_revision") or 0),
         published_at=parse_datetime(row.get("published_at")),
         published_by_account_id=str(row.get("published_by_account_id"))
         if row.get("published_by_account_id") is not None
+        else None,
+        created_by_account_id=str(row.get("created_by_account_id"))
+        if row.get("created_by_account_id") is not None
+        else None,
+        created_by_kind=str(row.get("created_by_kind") or "unknown"),
+        created_by_email=str(row.get("created_by_email"))
+        if row.get("created_by_email") is not None
+        else None,
+        source_tier_version_id=str(row.get("source_tier_version_id"))
+        if row.get("source_tier_version_id") is not None
         else None,
         metadata=parse_json_object(row.get("metadata"))
         if row.get("metadata") is not None

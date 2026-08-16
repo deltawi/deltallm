@@ -37,7 +37,31 @@ Example: `Growth`.
 
 The editable definition of the tier.
 
-Use draft versions for changes, then publish when ready. This prevents accidental live changes while an admin is still editing model access, pricing, or limits.
+Use draft versions for changes, then activate one when ready. This prevents accidental live changes while an admin is still editing model access, pricing, or limits.
+
+### Version lifecycle in the admin UI
+
+The Tiers catalog shows compact status badges that describe the actual lifecycle state:
+
+| Badge | Meaning |
+| --- | --- |
+| **Live** | The tier has an active version used by assignments |
+| **Draft** | The tier has an editable version that is not live |
+| **Live** + **Draft** | An active version is serving traffic while a separate draft is being prepared |
+
+There is no separate “work in progress” state. Disabled is an availability state and is shown independently from the version badges.
+
+Open a tier to work in its version workspace:
+
+- The version rail keeps the live version, drafts, and paginated archive history visible while you switch between **Models & limits**, **Pricing**, and **Capacity pools**.
+- Active and archived versions are immutable. Choose **New draft** to clone the active version, or **Restore as draft** to clone an archived version into a new editable version. Restoring never rewrites history or moves the live pointer.
+- When more than one draft exists, choose one explicitly. The UI shows its creator, update time, and source version instead of silently opening another admin's work.
+- Activating a draft first shows a change preview and assignment impact. The activation is accepted only if both the draft revision and active-version pointer still match the preview.
+- If another admin changes the same draft, the save is rejected and the editor keeps the unsaved fields open for comparison with the latest server values.
+
+Tier creation creates the tier and Draft v1 atomically. Retrying the same submit after a lost response reuses the same idempotency key and returns the original tier instead of creating a duplicate.
+
+The catalog, model policies, pricing rows, capacity pools, and archived versions use server-backed pagination. Page-size controls are bounded, filters reset to the first page, and the capacity-pool picker performs a bounded lookup for the selected callable rather than loading the entire pool catalog.
 
 ### Model Policy
 
@@ -87,9 +111,9 @@ Creation behavior follows the effective runtime mode:
 
 Use a custom tier or clone an existing tier when one customer needs different model access, model limits, pricing, or capacity. Do not recreate that policy with organization fields. While an active tier is authoritative in `enforce`, the API rejects new organization-level per-model limit maps and organization Asset Access writes; organization-wide RPM/TPM/RPH/RPD/TPD hard caps remain editable.
 
-If an organization already had legacy per-model RPM/TPM maps before its tier was assigned, its Service Policy card shows a warning because those safety caps still apply alongside the tier. First reproduce any required limits on the tier, publish and preview them, then use **Clear legacy model caps**. The confirmation warns that clearing them before the tier is ready can increase allowed traffic.
+If an organization already had legacy per-model RPM/TPM maps before its tier was assigned, its Service Policy card shows a warning because those safety caps still apply alongside the tier. First reproduce any required limits on the tier, preview and activate them, then use **Clear legacy model caps**. The confirmation warns that clearing them before the tier is ready can increase allowed traffic.
 
-`shadow` evaluates the staged tier but does not enforce it. For a newly created tier-first organization, DeltaLLM atomically snapshots the selected active version's allowed callable targets into legacy Asset Access so requests continue to work. That legacy mirror remains editable and authoritative during rollout; it intentionally does not follow later tier publications, allowing the preview and mismatch telemetry to expose policy changes before enforcement. Creating a new legacy organization through the API in this mode requires `"legacy_policy_exception": true`, matching the explicit migration checkbox in the drawer. `disabled` also keeps legacy Asset Access authoritative even if an assignment has already been staged. Once mode is `enforce`, the tier becomes authoritative and the organization Asset Access editor is hidden.
+`shadow` evaluates the staged tier but does not enforce it. For a newly created tier-first organization, DeltaLLM atomically snapshots the selected active version's allowed callable targets into legacy Asset Access so requests continue to work. That legacy mirror remains editable and authoritative during rollout; it intentionally does not follow later tier activations, allowing the preview and mismatch telemetry to expose policy changes before enforcement. Creating a new legacy organization through the API in this mode requires `"legacy_policy_exception": true`, matching the explicit migration checkbox in the drawer. `disabled` also keeps legacy Asset Access authoritative even if an assignment has already been staged. Once mode is `enforce`, the tier becomes authoritative and the organization Asset Access editor is hidden.
 
 The optional organization RPM, TPM, RPH, RPD, and TPD fields are global hard caps. They apply across all models, teams, and keys in addition to the tier's per-model controls. Leave them blank when no extra organization-wide ceiling is needed. Budgets, budget resets, and audit-content storage also remain organization settings.
 
@@ -208,19 +232,19 @@ Platform admins can inspect current pool utilization and temporarily boost one o
 | `POST` | `/ui/api/tier-capacity/boosts` | Apply a `1`-to-`100` weight multiplier with a Redis TTL of at most seven days |
 | `DELETE` | `/ui/api/tier-capacity/boosts` | Remove a temporary boost |
 
-Boost creation and deletion are written to the audit log and attributed to the affected organization. A boost is runtime state: it expires automatically and does not modify the published tier version. See the [Organization Tiers Rollout Runbook](../deployment/organization-tiers-rollout.md) for API examples, metrics, and troubleshooting.
+Boost creation and deletion are written to the audit log and attributed to the affected organization. A boost is runtime state: it expires automatically and does not modify the active tier version. See the [Organization Tiers Rollout Runbook](../deployment/organization-tiers-rollout.md) for API examples, metrics, and troubleshooting.
 
-The dashboard reports `live_data.status` as `healthy`, `partial`, or `unavailable`. When Redis cannot supply a live section, its numeric values are `null` and the UI shows an em dash; they are never presented as zero. The published pool configuration remains available from the tier snapshot.
+The dashboard reports `live_data.status` as `healthy`, `partial`, or `unavailable`. When Redis cannot supply a live section, its numeric values are `null` and the UI shows an em dash; they are never presented as zero. The active pool configuration remains available from the tier snapshot.
 
 ## Recommended User Journey
 
 1. Open **AI Gateway > Tiers**
 2. Create a tier, such as `Starter`, `Growth`, or `Enterprise`
-3. Create or edit a draft version
+3. Create or choose a draft version
 4. Add model policies for the models in that package
 5. Set prices, RPM, TPM, and capacity pools per model
-6. Publish the version
-7. Create an organization and select the published tier, or open a legacy organization and assign it from **Service Policy**
+6. Review the activation preview and activate the draft
+7. Create an organization and select the active tier, or open a legacy organization and assign it from **Service Policy**
 8. Add only the optional organization-wide budget and hard-cap guardrails that are needed
 9. Review the effective policy preview
 10. Run a simulation for an example request
@@ -264,7 +288,7 @@ Use add-on tiers for exceptions:
 
 Keep capacity pools focused on scarce capacity. A tier can have many model policies, but only premium or constrained models usually need a pool.
 
-Use draft versions for every meaningful change. Publish only after previewing the tier and simulating representative requests.
+Use draft versions for every meaningful change. Activate only after previewing the tier and simulating representative requests.
 
 ## Pricing by Model Type
 
@@ -291,7 +315,7 @@ The Tier editor keeps advanced supported pricing fields available, but only the 
 - Tiers do not replace organization, team, user, or key rate and budget limits.
 - Direct team, API key, and runtime user restrictions can still narrow tier access.
 - Deny or restriction rules should be treated as hard boundaries.
-- Published versions affect assigned organizations.
+- The active version affects assigned organizations.
 - Draft versions are for editing and review.
 - Shared capacity pools protect the platform when several organizations burst at the same time.
 
@@ -304,7 +328,7 @@ You want to sell a Growth plan:
 - `gpt-4o` uses `growth-premium-pool`
 - customer price is lower than pay-as-you-go
 
-Create one `Growth` tier, publish it, and assign it to every Growth customer.
+Create one `Growth` tier, activate it, and assign it to every Growth customer.
 
 When a customer upgrades to Enterprise, assign the Enterprise tier instead of manually changing model access, prices, and limits on that organization.
 
