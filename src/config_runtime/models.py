@@ -11,12 +11,20 @@ from src.db.named_credentials import NamedCredentialRepository
 from src.db.repositories import ModelDeploymentRecord, ModelDeploymentRepository
 from src.db.route_groups import RouteGroupRepository
 from src.providers.resolution import validate_provider_mode_compatibility
-from src.router import RouterConfig, RoutingStrategy, build_deployment_registry, build_route_group_policies
+from src.router import (
+    RouterConfig,
+    RoutingStrategy,
+    build_deployment_registry,
+    build_route_group_policies,
+)
 from src.services.asset_binding_mirror import reload_callable_target_grants_for_app
 from src.services.callable_targets import build_callable_target_catalog
 from src.services.model_deployments import ensure_model_name_available, load_model_registry
 from src.services.organization_callable_target_sync import sync_auto_follow_organization_bindings
 from src.services.route_groups import RouteGroupRuntimeCache, load_route_groups
+
+
+_THEME_GENERAL_FIELDS = frozenset({"instance_name", "ui_branding"})
 
 
 def _normalize_fallbacks(items: list[dict[str, list[str]]]) -> dict[str, list[str]]:
@@ -61,13 +69,17 @@ class ModelHotReloadManager:
             current = self.dynamic_config.get_config()
             model_list = list(current.get("model_list", []))
             model_list.append(deployment)
-            await self.dynamic_config.update_config({"model_list": model_list}, updated_by=updated_by)
+            await self.dynamic_config.update_config(
+                {"model_list": model_list}, updated_by=updated_by
+            )
         else:
             await self.model_repository.create(
                 ModelDeploymentRecord(
                     deployment_id=deployment_id,
                     model_name=str(deployment["model_name"]),
-                    named_credential_id=str(deployment.get("named_credential_id")).strip() or None if deployment.get("named_credential_id") is not None else None,
+                    named_credential_id=str(deployment.get("named_credential_id")).strip() or None
+                    if deployment.get("named_credential_id") is not None
+                    else None,
                     deltallm_params=dict(deployment["deltallm_params"]),
                     model_info=dict(deployment.get("model_info", {})),
                 )
@@ -76,7 +88,9 @@ class ModelHotReloadManager:
             await self._reload_runtime()
         return deployment_id
 
-    async def update_model(self, deployment_id: str, model_config: dict[str, Any], updated_by: str = "admin_api") -> bool:
+    async def update_model(
+        self, deployment_id: str, model_config: dict[str, Any], updated_by: str = "admin_api"
+    ) -> bool:
         deployment = model_config.copy()
         deployment["deployment_id"] = deployment_id
         self._validate_model_config(deployment)
@@ -97,7 +111,9 @@ class ModelHotReloadManager:
                     break
             if not updated:
                 return False
-            await self.dynamic_config.update_config({"model_list": model_list}, updated_by=updated_by)
+            await self.dynamic_config.update_config(
+                {"model_list": model_list}, updated_by=updated_by
+            )
             return True
 
         updated_record = await self.model_repository.update(
@@ -131,14 +147,25 @@ class ModelHotReloadManager:
         if not self._has_runtime_changes(changes):
             return
 
+        current_config = getattr(self.app.state, "app_config", None)
+        if self._is_theme_only_change(current_config, new_config, changes):
+            self._apply_theme_identity_config(new_config)
+            return
+
         await self._invalidate_route_group_cache()
         await self._apply_runtime_config(new_config)
+
+    def _apply_theme_identity_config(self, app_config: AppConfig) -> None:
+        self.app.state.app_config = app_config
+        identity_service = getattr(self.app.state, "platform_identity_service", None)
+        if identity_service is not None and hasattr(identity_service, "totp_issuer"):
+            identity_service.totp_issuer = app_config.general_settings.instance_name
 
     async def _apply_runtime_config(self, app_config: AppConfig) -> None:
         app = self.app
         settings = app.state.settings
 
-        app.state.app_config = app_config
+        self._apply_theme_identity_config(app_config)
         salt_key = resolve_salt_key(app_config, settings)
         model_registry, _ = await self._load_model_registry_compat(
             app_config=app_config,
@@ -156,7 +183,9 @@ class ModelHotReloadManager:
             app.state.model_registry,
             route_groups,
         )
-        new_deployments = build_deployment_registry(app.state.model_registry, route_groups=route_groups)
+        new_deployments = build_deployment_registry(
+            app.state.model_registry, route_groups=route_groups
+        )
         registries = [
             getattr(app.state.router, "deployment_registry", None),
             getattr(app.state.failover_manager, "registry", None),
@@ -179,7 +208,9 @@ class ModelHotReloadManager:
         app.state.failover_manager.config.num_retries = router_settings.num_retries
         app.state.failover_manager.config.retry_after = router_settings.retry_after
         app.state.failover_manager.config.timeout = router_settings.timeout
-        app.state.failover_manager.config.fallbacks = _normalize_fallbacks(app_config.deltallm_settings.fallbacks)
+        app.state.failover_manager.config.fallbacks = _normalize_fallbacks(
+            app_config.deltallm_settings.fallbacks
+        )
 
         if app_config.deltallm_settings.guardrails:
             app.state.guardrail_registry.load_from_config(app_config.deltallm_settings.guardrails)
@@ -204,7 +235,9 @@ class ModelHotReloadManager:
         await self._apply_runtime_config(app_config)
         changed = await sync_auto_follow_organization_bindings(
             db=getattr(getattr(self.app.state, "prisma_manager", None), "client", None),
-            callable_target_binding_repository=getattr(self.app.state, "callable_target_binding_repository", None),
+            callable_target_binding_repository=getattr(
+                self.app.state, "callable_target_binding_repository", None
+            ),
             route_group_repository=getattr(self.app.state, "route_group_repository", None),
             callable_target_catalog=getattr(self.app.state, "callable_target_catalog", None),
         )
@@ -233,9 +266,7 @@ class ModelHotReloadManager:
         }
         signature = inspect.signature(load_model_registry)
         supported_kwargs = {
-            key: value
-            for key, value in kwargs.items()
-            if key in signature.parameters
+            key: value for key, value in kwargs.items() if key in signature.parameters
         }
         return await load_model_registry(
             self.model_repository,
@@ -248,19 +279,19 @@ class ModelHotReloadManager:
     def _repository_update_kwargs(repository: Any, deployment: dict[str, Any]) -> dict[str, Any]:
         kwargs = {
             "model_name": str(deployment["model_name"]),
-            "named_credential_id": str(deployment.get("named_credential_id")).strip() or None if deployment.get("named_credential_id") is not None else None,
+            "named_credential_id": str(deployment.get("named_credential_id")).strip() or None
+            if deployment.get("named_credential_id") is not None
+            else None,
             "deltallm_params": dict(deployment["deltallm_params"]),
             "model_info": dict(deployment.get("model_info", {})),
         }
         signature = inspect.signature(repository.update)
-        return {
-            key: value
-            for key, value in kwargs.items()
-            if key in signature.parameters
-        }
+        return {key: value for key, value in kwargs.items() if key in signature.parameters}
 
     @staticmethod
-    def _build_router_config(router_settings: RouterSettings, route_groups: list[dict[str, Any]] | None = None) -> RouterConfig:
+    def _build_router_config(
+        router_settings: RouterSettings, route_groups: list[dict[str, Any]] | None = None
+    ) -> RouterConfig:
         data = router_settings.model_dump()
         allowed = {
             "num_retries",
@@ -271,7 +302,9 @@ class ModelHotReloadManager:
             "enable_pre_call_checks",
             "model_group_alias",
         }
-        effective_route_groups = route_groups if route_groups is not None else data.get("route_groups", [])
+        effective_route_groups = (
+            route_groups if route_groups is not None else data.get("route_groups", [])
+        )
         return RouterConfig(
             **{key: value for key, value in data.items() if key in allowed},
             route_group_policies=build_route_group_policies(effective_route_groups),
@@ -279,9 +312,44 @@ class ModelHotReloadManager:
 
     @staticmethod
     def _has_runtime_changes(changes: dict[str, list[str]]) -> bool:
-        interesting = {"model_list", "router_settings", "deltallm_settings", "litellm_settings", "general_settings"}
-        touched = set(changes.get("added", [])) | set(changes.get("removed", [])) | set(changes.get("modified", []))
+        interesting = {
+            "model_list",
+            "router_settings",
+            "deltallm_settings",
+            "litellm_settings",
+            "general_settings",
+        }
+        touched = (
+            set(changes.get("added", []))
+            | set(changes.get("removed", []))
+            | set(changes.get("modified", []))
+        )
         return bool(touched & interesting)
+
+    @staticmethod
+    def _is_theme_only_change(
+        current_config: AppConfig | None,
+        new_config: AppConfig,
+        changes: dict[str, list[str]],
+    ) -> bool:
+        if current_config is None:
+            return False
+        touched = (
+            set(changes.get("added", []))
+            | set(changes.get("removed", []))
+            | set(changes.get("modified", []))
+        )
+        if touched != {"general_settings"}:
+            return False
+
+        current_general = current_config.general_settings.model_dump(mode="python")
+        next_general = new_config.general_settings.model_dump(mode="python")
+        changed_general_fields = {
+            key
+            for key in current_general.keys() | next_general.keys()
+            if current_general.get(key) != next_general.get(key)
+        }
+        return bool(changed_general_fields) and changed_general_fields <= _THEME_GENERAL_FIELDS
 
     @staticmethod
     def _validate_model_config(config: dict[str, Any]) -> None:

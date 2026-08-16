@@ -109,7 +109,7 @@ export default function TierModelPolicyGrid({
   });
   const [advancedLimitsOpen, setAdvancedLimitsOpen] = useState(false);
   const locked = readOnly || saving;
-  const inputClassName = 'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500';
+  const inputClassName = 'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500';
 
   const sortedPolicies = useMemo(
     () => [...policies].sort((a, b) => a.callable_key.localeCompare(b.callable_key)),
@@ -234,7 +234,7 @@ export default function TierModelPolicyGrid({
             type="button"
             onClick={openNew}
             disabled={locked}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-1.5 text-xs font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
           >
             <Plus className="h-3.5 w-3.5" />
             Add policy
@@ -384,7 +384,7 @@ export default function TierModelPolicyGrid({
                       checked={form.enabled}
                       onChange={(event) => setForm({ ...form, enabled: event.target.checked })}
                       disabled={locked}
-                      className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      className="h-4 w-4 rounded border-gray-300 text-brand-primary-ink focus:ring-brand-primary"
                     />
                   </div>
                 </TierField>
@@ -513,7 +513,7 @@ export default function TierModelPolicyGrid({
               type="button"
               onClick={saveForm}
               disabled={locked}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
             >
               <Save className="h-4 w-4" />
               Save policies
@@ -635,7 +635,7 @@ function BulkInput({ label, value, disabled, onChange }: { label: string; value:
         onChange={(event) => onChange(event.target.value)}
         placeholder={label}
         disabled={disabled}
-        className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500"
+        className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500"
       />
     </label>
   );

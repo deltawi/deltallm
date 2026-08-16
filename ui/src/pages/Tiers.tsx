@@ -131,7 +131,7 @@ export default function Tiers() {
           type="button"
           onClick={openCreate}
           disabled={saving}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
         >
           <Plus className="h-4 w-4" />
           Create tier
@@ -145,7 +145,7 @@ export default function Tiers() {
               value={searchInput}
               onChange={(event) => setSearchInput(event.target.value)}
               placeholder="Search tiers"
-              className="w-full rounded-lg border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-lg border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
           </div>
           <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1">
@@ -159,7 +159,7 @@ export default function Tiers() {
                 type="button"
                 onClick={() => handleEnabledFilterChange(value as typeof enabled)}
                 className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
-                  enabled === value ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-50'
+                  enabled === value ? 'bg-brand-primary text-brand-on-primary' : 'text-gray-600 hover:bg-gray-50'
                 }`}
               >
                 {label}
@@ -170,8 +170,8 @@ export default function Tiers() {
       )}
       summaryItems={[
         { label: 'Enabled on page', value: summary.enabled, icon: BadgeDollarSign, iconClassName: 'text-emerald-600' },
-        { label: 'Versions on page', value: summary.versions, icon: BadgeDollarSign, iconClassName: 'text-blue-600' },
-        { label: 'Assignments on page', value: summary.assignments, icon: BadgeDollarSign, iconClassName: 'text-violet-600' },
+        { label: 'Versions on page', value: summary.versions, icon: BadgeDollarSign, iconClassName: 'text-brand-primary-ink' },
+        { label: 'Assignments on page', value: summary.assignments, icon: BadgeDollarSign, iconClassName: 'text-brand-secondary-ink' },
       ]}
       notice={error ? (
         <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
@@ -203,7 +203,7 @@ export default function Tiers() {
               {loading ? (
                 <tr>
                   <td colSpan={6} className="px-4 py-10 text-center">
-                    <div className="mx-auto h-6 w-6 animate-spin rounded-full border-b-2 border-blue-600" />
+                    <div className="mx-auto h-6 w-6 animate-spin rounded-full border-b-2 border-brand-primary" />
                   </td>
                 </tr>
               ) : tierRows.length === 0 ? (
@@ -215,7 +215,7 @@ export default function Tiers() {
                   <td className="px-4 py-3">
                     <Link
                       to={`/tiers/${tier.tier_id}`}
-                      className="block rounded focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                      className="block rounded focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2"
                     >
                       <p className="font-semibold text-gray-900">{tier.name}</p>
                       <p className="font-mono text-xs text-gray-400">{tier.tier_key}</p>
@@ -231,7 +231,7 @@ export default function Tiers() {
                     <Link
                       to={`/tiers/${tier.tier_id}`}
                       aria-label={`Open ${tier.name}`}
-                      className="inline-flex rounded p-1 text-gray-300 hover:bg-gray-100 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                      className="inline-flex rounded p-1 text-gray-300 hover:bg-gray-100 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2"
                     >
                       <ChevronRight className="h-4 w-4" />
                     </Link>

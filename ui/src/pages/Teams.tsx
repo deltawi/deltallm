@@ -375,7 +375,7 @@ export default function Teams() {
       action={uiAccess.team_create ? (
         <button
           onClick={() => navigate('/teams/new')}
-          className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+          className="flex items-center gap-1.5 rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary transition-colors hover:bg-brand-primary-hover"
         >
           <Plus className="h-4 w-4" /> Create Team
         </button>
@@ -388,7 +388,7 @@ export default function Teams() {
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Search teams…"
-              className="h-8 w-full rounded-lg border border-gray-300 pl-8 pr-3 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="h-8 w-full rounded-lg border border-gray-300 pl-8 pr-3 text-xs focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
           </div>
           <div className="relative flex items-center gap-1.5">
@@ -396,7 +396,7 @@ export default function Teams() {
             <select
               value={orgFilter}
               onChange={(e) => { setOrgFilter(e.target.value); setPageOffset(0); }}
-              className="h-8 appearance-none rounded-lg border border-gray-300 bg-white pl-8 pr-7 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="h-8 appearance-none rounded-lg border border-gray-300 bg-white pl-8 pr-7 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary"
             >
               <option value="">All organizations</option>
               {orgList.map((o: any) => (
@@ -436,13 +436,13 @@ export default function Teams() {
           label: 'Total teams',
           value: String(pagination?.total ?? items.length),
           icon: Users,
-          iconClassName: 'text-blue-600',
+          iconClassName: 'text-brand-primary-ink',
         },
         {
           label: 'Total members',
           value: String(totalMembers),
           icon: UserPlus,
-          iconClassName: 'text-violet-600',
+          iconClassName: 'text-brand-secondary-ink',
         },
         {
           label: 'Blocked',
@@ -527,7 +527,7 @@ export default function Teams() {
                         <Building2 className="w-3 h-3 text-gray-400 shrink-0" />
                         <span
                           onClick={(e) => { e.stopPropagation(); if (t.organization_id) navigate(`/organizations/${t.organization_id}`); }}
-                          className="cursor-pointer text-xs font-medium text-blue-600 hover:underline"
+                          className="cursor-pointer text-xs font-medium text-brand-primary-ink hover:underline"
                         >
                           {orgNameMap[t.organization_id] || t.organization_id || '—'}
                         </span>
@@ -611,7 +611,7 @@ export default function Teams() {
                 Previous
               </button>
               {totalPages > 0 && (
-                <button className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-600">
+                <button className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-brand-primary-ink">
                   {currentPage}
                 </button>
               )}
@@ -640,7 +640,7 @@ export default function Teams() {
               value={form.team_alias}
               onChange={(e) => setForm({ ...form, team_alias: e.target.value })}
               placeholder="Engineering"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -651,7 +651,7 @@ export default function Teams() {
               <select
                 value={form.organization_id}
                 onChange={(e) => handleOrganizationChange(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary bg-white"
               >
                 <option value="">Select an organization</option>
                 {orgList.map((o: any) => (
@@ -667,7 +667,7 @@ export default function Teams() {
                 type="number"
                 value={form.max_budget}
                 onChange={(e) => setForm({ ...form, max_budget: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
             </div>
           </div>
@@ -679,7 +679,7 @@ export default function Teams() {
                 value={form.rpm_limit}
                 onChange={(e) => setForm({ ...form, rpm_limit: e.target.value })}
                 placeholder="100"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
               <p className="text-xs text-gray-400 mt-1">Requests per minute</p>
             </div>
@@ -690,7 +690,7 @@ export default function Teams() {
                 value={form.tpm_limit}
                 onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })}
                 placeholder="100000"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
               <p className="text-xs text-gray-400 mt-1">Tokens per minute</p>
             </div>
@@ -701,7 +701,7 @@ export default function Teams() {
                 value={form.rph_limit}
                 onChange={(e) => setForm({ ...form, rph_limit: e.target.value })}
                 placeholder="5000"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
               <p className="text-xs text-gray-400 mt-1">Requests per hour</p>
             </div>
@@ -712,7 +712,7 @@ export default function Teams() {
                 value={form.rpd_limit}
                 onChange={(e) => setForm({ ...form, rpd_limit: e.target.value })}
                 placeholder="50000"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
               <p className="text-xs text-gray-400 mt-1">Requests per day</p>
             </div>
@@ -723,7 +723,7 @@ export default function Teams() {
                 value={form.tpd_limit}
                 onChange={(e) => setForm({ ...form, tpd_limit: e.target.value })}
                 placeholder="2000000"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
               <p className="text-xs text-gray-400 mt-1">Tokens per day</p>
             </div>
@@ -767,7 +767,7 @@ export default function Teams() {
             <button
               onClick={handleSave}
               disabled={!form.organization_id || saving || editAssetAccessPending || assetAccessLoading || Boolean(assetAccessLoadError)}
-              className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-4 py-2 text-sm bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {saving ? 'Saving…' : editItem ? 'Save Changes' : 'Create Team'}
             </button>
@@ -799,7 +799,7 @@ export default function Teams() {
               <select
                 value={memberForm.user_role}
                 onChange={(e) => setMemberForm({ ...memberForm, user_role: e.target.value })}
-                className="sm:w-56 px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="sm:w-56 px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary"
               >
                 <option value="team_viewer">Viewer</option>
                 <option value="team_developer">Developer</option>
@@ -808,7 +808,7 @@ export default function Teams() {
               <button
                 onClick={handleAddMember}
                 disabled={!memberForm.user_id.trim()}
-                className="flex items-center justify-center gap-1 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center justify-center gap-1 px-3 py-2 bg-brand-primary text-brand-on-primary rounded-lg text-sm hover:bg-brand-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <UserPlus className="w-4 h-4" /> Add
               </button>

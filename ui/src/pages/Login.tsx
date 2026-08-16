@@ -5,7 +5,10 @@ import { useAuth } from '../lib/auth';
 import { auth as authApi, type AuthSsoConfig } from '../lib/api';
 import { hasSandboxSelfRegistration } from '../lib/selfRegistration';
 import { returnToFromSearch } from '../lib/authRedirect';
-import { Zap, Mail, KeyRound, Globe } from 'lucide-react';
+import { Mail, KeyRound, Globe } from 'lucide-react';
+import BrandLogo from '../components/BrandLogo';
+import Button from '../components/Button';
+import { useBranding } from '../lib/brandingContext';
 
 type Tab = 'credentials' | 'master_key' | 'sso';
 
@@ -22,6 +25,7 @@ function errorMessage(err: unknown, fallback: string): string {
 
 export default function Login() {
   const { loginWithCredentials, loginWithMasterKey, isLoading } = useAuth();
+  const { branding } = useBranding();
   const location = useLocation();
   const returnTo = returnToFromSearch(location.search);
   const [tab, setTab] = useState<Tab>('credentials');
@@ -58,7 +62,7 @@ export default function Login() {
   if (isLoading || ssoLoading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+        <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-brand-primary" />
       </div>
     );
   }
@@ -128,10 +132,8 @@ export default function Login() {
     <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
       <div className="max-w-md w-full">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-600 rounded-2xl mb-4">
-            <Zap className="w-8 h-8 text-white" />
-          </div>
-          <h1 className="text-2xl font-bold text-gray-900">DeltaLLM Admin</h1>
+          <BrandLogo variant="mark" className="mb-4 justify-center" markClassName="h-16 w-16 rounded-2xl" />
+          <h1 className="text-2xl font-bold text-gray-900">{branding.instance_name} Admin</h1>
           <p className="text-gray-500 mt-2">Sign in to continue</p>
         </div>
 
@@ -143,7 +145,7 @@ export default function Login() {
                 onClick={() => { setTab(t.key); setError(''); }}
                 className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-medium transition-colors ${
                   tab === t.key
-                    ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50/50'
+                    ? 'border-b-2 border-brand-primary bg-brand-primary-soft text-brand-primary-ink'
                     : 'text-gray-500 hover:text-gray-700'
                 }`}
               >
@@ -170,7 +172,7 @@ export default function Login() {
                     onChange={(e) => { setEmail(e.target.value); setError(''); }}
                     placeholder="admin@example.com"
                     autoComplete="email"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
                   />
                 </div>
                 <div className="mb-4">
@@ -181,11 +183,11 @@ export default function Login() {
                     onChange={(e) => { setPassword(e.target.value); setError(''); }}
                     placeholder="Enter your password"
                     autoComplete="current-password"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
                   />
                 </div>
                 <div className="mb-4 flex justify-end">
-                  <Link to="/forgot-password" className="text-sm font-medium text-blue-600 hover:text-blue-700">
+                  <Link to="/forgot-password" className="text-sm font-medium text-brand-primary-ink hover:text-brand-primary-ink-hover">
                     Forgot password?
                   </Link>
                 </div>
@@ -199,17 +201,18 @@ export default function Login() {
                       placeholder="6-digit code"
                       autoComplete="one-time-code"
                       maxLength={6}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono tracking-wider"
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm tracking-wider focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
                     />
                   </div>
                 )}
-                <button
+                <Button
                   type="submit"
                   disabled={loading}
-                  className="w-full bg-blue-600 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
+                  size="lg"
+                  fullWidth
                 >
                   {loading ? 'Signing in...' : 'Sign In'}
-                </button>
+                </Button>
               </form>
             )}
 
@@ -221,18 +224,19 @@ export default function Login() {
                     : `Sign in with your organization's ${providerLabel} identity provider.`}
                 </p>
                 {sandboxSelfRegistration ? (
-                  <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                  <div className="rounded-lg border border-brand-primary/20 bg-brand-primary-soft px-3 py-2 text-xs text-brand-primary-ink">
                     Eligible first-time users are placed in an admin-managed developer sandbox with limited budgets, rate limits, and self-service key policy.
                   </div>
                 ) : null}
-                <button
+                <Button
                   onClick={handleSsoLogin}
                   disabled={loading}
-                  className="w-full bg-blue-600 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                  size="lg"
+                  fullWidth
                 >
                   <Globe className="w-4 h-4" />
                   {loading ? 'Redirecting...' : `Sign In with ${providerLabel}`}
-                </button>
+                </Button>
               </div>
             )}
 
@@ -246,16 +250,17 @@ export default function Login() {
                     onChange={(e) => { setMasterKey(e.target.value); setError(''); }}
                     placeholder="sk-..."
                     autoComplete="off"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
                   />
                 </div>
-                <button
+                <Button
                   type="submit"
                   disabled={loading}
-                  className="w-full bg-blue-600 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
+                  size="lg"
+                  fullWidth
                 >
                   {loading ? 'Signing in...' : 'Sign In with Master Key'}
-                </button>
+                </Button>
               </form>
             )}
           </div>

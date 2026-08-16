@@ -90,9 +90,13 @@ class ChatBatchingConfig(BaseModel):
         if self.mode != "sync_microbatch":
             return self
         if (self.upstream_max_batch_size or 0) < 2:
-            raise ValueError("chat_batching.upstream_max_batch_size must be at least 2 when mode is sync_microbatch")
+            raise ValueError(
+                "chat_batching.upstream_max_batch_size must be at least 2 when mode is sync_microbatch"
+            )
         if self.require_homogeneous_params is not True:
-            raise ValueError("chat_batching.require_homogeneous_params=false is not supported for sync_microbatch")
+            raise ValueError(
+                "chat_batching.require_homogeneous_params=false is not supported for sync_microbatch"
+            )
         return self
 
 
@@ -141,7 +145,9 @@ class DeltaLLMParams(BaseModel):
             provider = model_value.split("/", 1)[0].strip().lower() if "/" in model_value else ""
 
         if not supports_custom_openai_compatible_auth(provider):
-            raise ValueError(f"Custom auth headers are not supported for provider '{provider or 'unknown'}'")
+            raise ValueError(
+                f"Custom auth headers are not supported for provider '{provider or 'unknown'}'"
+            )
         return self
 
 
@@ -192,7 +198,9 @@ class ModelDeployment(BaseModel):
 
     model_name: str
     named_credential_id: str | None = None
-    deltallm_params: DeltaLLMParams = Field(validation_alias=AliasChoices("deltallm_params", "litellm_params"))
+    deltallm_params: DeltaLLMParams = Field(
+        validation_alias=AliasChoices("deltallm_params", "litellm_params")
+    )
     model_info: ModelInfo | None = None
     deployment_id: str | None = None
 
@@ -233,7 +241,9 @@ class GuardrailConfig(BaseModel):
     model_config = {"populate_by_name": True}
 
     guardrail_name: str
-    deltallm_params: dict[str, Any] = Field(validation_alias=AliasChoices("deltallm_params", "litellm_params"))
+    deltallm_params: dict[str, Any] = Field(
+        validation_alias=AliasChoices("deltallm_params", "litellm_params")
+    )
 
     @field_validator("deltallm_params")
     @classmethod
@@ -360,7 +370,13 @@ class SelfRegistrationSettings(BaseModel):
             domain = str(raw_domain or "").strip().lower()
             if not domain:
                 continue
-            if "@" in domain or "/" in domain or "\\" in domain or domain.startswith(".") or domain.endswith("."):
+            if (
+                "@" in domain
+                or "/" in domain
+                or "\\" in domain
+                or domain.startswith(".")
+                or domain.endswith(".")
+            ):
                 raise ValueError("allowed_domains entries must be bare email domains")
             if domain not in seen:
                 normalized_domains.append(domain)
@@ -372,9 +388,13 @@ class SelfRegistrationSettings(BaseModel):
         if not self.enabled:
             return self
         if not self.default_org.id:
-            raise ValueError("self_registration.default_org.id is required when self-registration is enabled")
+            raise ValueError(
+                "self_registration.default_org.id is required when self-registration is enabled"
+            )
         if not self.default_team.id:
-            raise ValueError("self_registration.default_team.id is required when self-registration is enabled")
+            raise ValueError(
+                "self_registration.default_team.id is required when self-registration is enabled"
+            )
         if self.mode == "sso_allowed_domain" and not self.allowed_domains:
             raise ValueError(
                 "self_registration.allowed_domains is required when mode is sso_allowed_domain"
@@ -397,10 +417,136 @@ def _validate_master_key_strength(value: str | None) -> str | None:
     return normalized
 
 
+def _normalize_ui_instance_name(value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("instance_name cannot be blank")
+    if any(ord(character) < 32 or ord(character) == 127 for character in normalized):
+        raise ValueError("instance_name cannot contain control characters")
+    return normalized
+
+
+def _normalize_ui_brand_asset_url(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    if len(normalized) > 2048:
+        raise ValueError("branding asset URLs must be at most 2048 characters")
+    if any(ord(character) < 32 or ord(character) == 127 for character in normalized):
+        raise ValueError("branding asset URLs cannot contain control characters")
+    if "\\" in normalized:
+        raise ValueError("branding asset URLs cannot contain backslashes")
+
+    try:
+        parsed = urlsplit(normalized)
+    except ValueError as exc:
+        raise ValueError(
+            "branding asset URLs must use a valid root-relative path or HTTPS URL"
+        ) from exc
+    if normalized.startswith("/"):
+        if normalized.startswith("//") or parsed.scheme or parsed.netloc:
+            raise ValueError("branding asset URLs must use a root-relative path or HTTPS")
+        return normalized
+
+    if parsed.scheme.lower() != "https" or not parsed.netloc:
+        raise ValueError("branding asset URLs must use a root-relative path or HTTPS")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("branding asset URLs cannot contain credentials")
+    try:
+        hostname = parsed.hostname
+        parsed.port
+    except ValueError as exc:
+        raise ValueError("branding asset URLs must contain a valid hostname and port") from exc
+    if (
+        not hostname
+        or any(character.isspace() for character in parsed.netloc)
+        or "%" in parsed.netloc
+    ):
+        raise ValueError("branding asset URLs must contain a valid hostname and port")
+    if ":" not in hostname:
+        ascii_hostname = hostname[:-1] if hostname.endswith(".") else hostname
+        try:
+            ascii_hostname = ascii_hostname.encode("idna").decode("ascii")
+        except UnicodeError as exc:
+            raise ValueError("branding asset URLs must contain a valid hostname") from exc
+        labels = ascii_hostname.split(".")
+        if any(
+            not label
+            or len(label) > 63
+            or label.startswith("-")
+            or label.endswith("-")
+            or not all(
+                character.isascii() and (character.isalnum() or character == "-")
+                for character in label
+            )
+            for label in labels
+        ):
+            raise ValueError("branding asset URLs must contain a valid hostname")
+    return normalized
+
+
+class UIBrandingSettings(BaseModel):
+    logo_mark_url: str | None = None
+    logo_full_url: str | None = None
+    favicon_url: str | None = None
+    primary_color: str = Field(default="#2563EB", pattern=r"^#[0-9A-Fa-f]{6}$")
+    secondary_color: str = Field(default="#7C3AED", pattern=r"^#[0-9A-Fa-f]{6}$")
+    menu_hover_color: str = Field(default="#F9FAFB", pattern=r"^#[0-9A-Fa-f]{6}$")
+
+    @field_validator("logo_mark_url", "logo_full_url", "favicon_url", mode="before")
+    @classmethod
+    def normalize_asset_url(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        return _normalize_ui_brand_asset_url(str(value))
+
+    @field_validator("primary_color", "secondary_color", "menu_hover_color")
+    @classmethod
+    def normalize_color(cls, value: str) -> str:
+        return value.upper()
+
+
+class UIBrandingPayload(UIBrandingSettings):
+    instance_name: str = Field(default="DeltaLLM", min_length=1, max_length=80)
+
+    @field_validator("instance_name")
+    @classmethod
+    def normalize_instance_name(cls, value: str) -> str:
+        return _normalize_ui_instance_name(value)
+
+
+class UIBrandingUpdatePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    instance_name: str = Field(default="DeltaLLM", min_length=1, max_length=80)
+    primary_color: str = Field(default="#2563EB", pattern=r"^#[0-9A-Fa-f]{6}$")
+    secondary_color: str = Field(default="#7C3AED", pattern=r"^#[0-9A-Fa-f]{6}$")
+    menu_hover_color: str = Field(default="#F9FAFB", pattern=r"^#[0-9A-Fa-f]{6}$")
+
+    @field_validator("instance_name")
+    @classmethod
+    def normalize_instance_name(cls, value: str) -> str:
+        return _normalize_ui_instance_name(value)
+
+    @field_validator("primary_color", "secondary_color", "menu_hover_color")
+    @classmethod
+    def normalize_color(cls, value: str) -> str:
+        return value.upper()
+
+
 class GeneralSettings(BaseModel):
     model_config = ConfigDict(hide_input_in_errors=True)
 
-    instance_name: str = "DeltaLLM"
+    instance_name: str = Field(default="DeltaLLM", min_length=1, max_length=80)
+    ui_branding: UIBrandingSettings = Field(default_factory=UIBrandingSettings)
+
+    @field_validator("instance_name")
+    @classmethod
+    def normalize_instance_name(cls, value: str) -> str:
+        return _normalize_ui_instance_name(value)
+
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     master_key: str | None = None
     deltallm_key_header_name: str = "Authorization"
@@ -614,7 +760,9 @@ class GeneralSettings(BaseModel):
     embeddings_batch_scheduler_backfill_scan_limit: int = Field(default=500, ge=1, le=5_000)
     embeddings_batch_stale_lease_sweeper_enabled: bool = True
     embeddings_batch_stale_lease_sweeper_interval_seconds: float = Field(default=60.0, gt=0.0)
-    embeddings_batch_stale_lease_sweeper_failure_interval_seconds: float = Field(default=30.0, gt=0.0)
+    embeddings_batch_stale_lease_sweeper_failure_interval_seconds: float = Field(
+        default=30.0, gt=0.0
+    )
     embeddings_batch_stale_lease_sweeper_page_size: int = Field(default=100, ge=1, le=1_000)
     embeddings_batch_stale_lease_sweeper_max_rows_per_run: int = Field(default=500, ge=1, le=5_000)
     embeddings_batch_scheduler_claim_mode: Literal["job_fifo", "work_slice"] = "job_fifo"
@@ -647,7 +795,9 @@ class GeneralSettings(BaseModel):
         le=1_000,
     )
     embeddings_batch_tenant_scope_preference: str = "organization,team,api_key,user"
-    embeddings_batch_tenant_fair_share_disabled_model_groups: list[str] = Field(default_factory=list)
+    embeddings_batch_tenant_fair_share_disabled_model_groups: list[str] = Field(
+        default_factory=list
+    )
     embeddings_batch_size_aware_scheduling_enabled: bool = False
     embeddings_batch_aging_seconds_per_work_unit: int = Field(default=30, ge=1)
     embeddings_batch_max_age_credit_work_units: int = Field(default=1_000, ge=0)
@@ -804,7 +954,9 @@ class GeneralSettings(BaseModel):
         if self.slack_alerting_enabled:
             from src.notifications.types import NOTIFICATION_ALERT_TYPES
 
-            unknown = [kind for kind in self.slack_alert_kinds if kind not in NOTIFICATION_ALERT_TYPES]
+            unknown = [
+                kind for kind in self.slack_alert_kinds if kind not in NOTIFICATION_ALERT_TYPES
+            ]
             if unknown:
                 allowed = ", ".join(sorted(NOTIFICATION_ALERT_TYPES))
                 raise ValueError(
@@ -818,7 +970,10 @@ class AppConfig(BaseModel):
 
     model_list: list[ModelDeployment] = Field(default_factory=list)
     router_settings: RouterSettings = Field(default_factory=RouterSettings)
-    deltallm_settings: DeltaLLMSettings = Field(default_factory=DeltaLLMSettings, validation_alias=AliasChoices("deltallm_settings", "litellm_settings"))
+    deltallm_settings: DeltaLLMSettings = Field(
+        default_factory=DeltaLLMSettings,
+        validation_alias=AliasChoices("deltallm_settings", "litellm_settings"),
+    )
     general_settings: GeneralSettings = Field(default_factory=GeneralSettings)
 
 
@@ -867,10 +1022,14 @@ class DatabaseConnectionSettings:
 def resolve_salt_key(config: AppConfig, settings: Settings) -> str:
     candidate = config.general_settings.salt_key or settings.salt_key
     if candidate is None or not candidate.strip():
-        raise ValueError("Salt key is required. Set `general_settings.salt_key` or `DELTALLM_SALT_KEY`.")
+        raise ValueError(
+            "Salt key is required. Set `general_settings.salt_key` or `DELTALLM_SALT_KEY`."
+        )
     normalized = candidate.strip()
     if normalized == "change-me":
-        raise ValueError("Insecure salt key is not allowed. Configure a unique non-default salt key.")
+        raise ValueError(
+            "Insecure salt key is not allowed. Configure a unique non-default salt key."
+        )
     return normalized
 
 
@@ -886,10 +1045,14 @@ def _apply_database_pool_settings(database_url: str, *, pool_size: int, pool_tim
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
     query["connection_limit"] = str(pool_size)
     query["pool_timeout"] = str(pool_timeout)
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment)
+    )
 
 
-def resolve_database_settings(config: AppConfig, settings: Settings) -> DatabaseConnectionSettings | None:
+def resolve_database_settings(
+    config: AppConfig, settings: Settings
+) -> DatabaseConnectionSettings | None:
     candidate_url = (
         _normalize_optional_str(settings.database_url)
         or _normalize_optional_str(config.general_settings.database_url)
@@ -962,7 +1125,9 @@ def _safe_config_validation_message(exc: ValidationError) -> str:
     return f"Resolved configuration is invalid. {suffix}"
 
 
-def resolve_app_config_with_secrets(raw_config: dict[str, Any], secret_resolver: Any | None = None) -> AppConfig:
+def resolve_app_config_with_secrets(
+    raw_config: dict[str, Any], secret_resolver: Any | None = None
+) -> AppConfig:
     from src.config_runtime.secrets import SecretResolver
 
     resolver = secret_resolver or SecretResolver()

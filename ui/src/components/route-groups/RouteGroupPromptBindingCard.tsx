@@ -41,7 +41,7 @@ export default function RouteGroupPromptBindingCard({
         <p className="mt-0.5 text-xs text-gray-500">
           Attach a prompt to this group so the gateway resolves it automatically for every request.
           Prompts are created in{' '}
-          <Link to="/prompts" className="text-violet-600 underline hover:text-violet-800">
+          <Link to="/prompts" className="text-brand-secondary-ink underline hover:text-brand-secondary-ink-hover">
             Prompt Registry
           </Link>.
         </p>
@@ -59,7 +59,7 @@ export default function RouteGroupPromptBindingCard({
                 <Tag className="mt-0.5 h-4 w-4 shrink-0 text-violet-400" />
                 <div>
                   <code className="text-sm font-semibold text-violet-900">{b.template_key}</code>
-                  <div className="mt-0.5 text-xs text-violet-600">
+                  <div className="mt-0.5 text-xs text-brand-secondary-ink">
                     label: <strong>{b.label}</strong> · priority {b.priority} · {b.enabled ? 'active' : <span className="text-gray-500">off</span>}
                   </div>
                 </div>
@@ -99,7 +99,7 @@ export default function RouteGroupPromptBindingCard({
               <select
                 value={bindingForm.template_key}
                 onChange={(e) => onBindingFormChange({ ...bindingForm, template_key: e.target.value })}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
               >
                 <option value="">{loadingTemplates ? 'Loading…' : 'Select a prompt'}</option>
                 {templates.map((t) => (
@@ -115,7 +115,7 @@ export default function RouteGroupPromptBindingCard({
                 value={bindingForm.label}
                 onChange={(e) => onBindingFormChange({ ...bindingForm, label: e.target.value })}
                 placeholder="production"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
             </div>
             <div className="w-24">
@@ -125,14 +125,14 @@ export default function RouteGroupPromptBindingCard({
                 onChange={(e) => onBindingFormChange({ ...bindingForm, priority: e.target.value })}
                 placeholder="100"
                 type="number"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
             </div>
             <button
               type="button"
               onClick={onSaveBinding}
               disabled={savingBinding || !bindingForm.template_key.trim()}
-              className="rounded-xl bg-violet-600 px-3 py-2 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
+              className="rounded-xl bg-brand-primary px-3 py-2 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
             >
               {savingBinding ? 'Saving…' : 'Bind'}
             </button>

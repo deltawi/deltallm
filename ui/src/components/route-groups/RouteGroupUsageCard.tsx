@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Brain, Copy, Tag } from 'lucide-react';
+import { useBranding } from '../../lib/brandingContext';
 
 interface BoundPromptSummary {
   templateKey: string;
@@ -20,8 +21,12 @@ function baseUrl(): string {
   return `${typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8000'}/v1`;
 }
 
-function buildCurl(base: string, model: string, mode: string, meta?: Record<string, unknown>): string {
-  const metaStr = meta && Object.keys(meta).length > 0 ? `, "metadata": ${JSON.stringify(meta)}` : '';
+function shellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function buildCurl(base: string, model: string, mode: string, instanceName: string, meta?: Record<string, unknown>): string {
+  const metadata = meta && Object.keys(meta).length > 0 ? { metadata: meta } : {};
   if (mode === 'audio_transcription') {
     return [
       `curl -sS ${base}/audio/transcriptions \\`,
@@ -32,71 +37,85 @@ function buildCurl(base: string, model: string, mode: string, meta?: Record<stri
     ].join('\n');
   }
   if (mode === 'embedding') {
+    const body = { model, input: `Hello from ${instanceName}.`, ...metadata };
     return [
       `curl -sS ${base}/embeddings \\`,
       '  -H "Authorization: Bearer YOUR_API_KEY" \\',
       '  -H "Content-Type: application/json" \\',
-      `  -d '{"model":"${model}","input":"Hello from DeltaLLM."${metaStr}}'`,
+      `  -d ${shellSingleQuote(JSON.stringify(body))}`,
     ].join('\n');
   }
   if (mode === 'image_generation') {
+    const body = { model, prompt: 'A minimal blue robot', size: '1024x1024', ...metadata };
     return [
       `curl -sS ${base}/images/generations \\`,
       '  -H "Authorization: Bearer YOUR_API_KEY" \\',
       '  -H "Content-Type: application/json" \\',
-      `  -d '{"model":"${model}","prompt":"A minimal blue robot","size":"1024x1024"${metaStr}}'`,
+      `  -d ${shellSingleQuote(JSON.stringify(body))}`,
     ].join('\n');
   }
   if (mode === 'rerank') {
+    const body = {
+      model,
+      query: 'Which doc explains ML?',
+      documents: ['Machine learning is AI.', 'The weather is warm.'],
+      top_n: 2,
+    };
     return [
       `curl -sS ${base}/rerank \\`,
       '  -H "Authorization: Bearer YOUR_API_KEY" \\',
       '  -H "Content-Type: application/json" \\',
-      `  -d '{"model":"${model}","query":"Which doc explains ML?","documents":["Machine learning is AI.","The weather is warm."],"top_n":2}'`,
+      `  -d ${shellSingleQuote(JSON.stringify(body))}`,
     ].join('\n');
   }
+  const body = {
+    model,
+    messages: [{ role: 'user', content: 'Say hello in one sentence.' }],
+    ...metadata,
+  };
   return [
     `curl -sS ${base}/chat/completions \\`,
     '  -H "Authorization: Bearer YOUR_API_KEY" \\',
     '  -H "Content-Type: application/json" \\',
-    `  -d '{"model":"${model}","messages":[{"role":"user","content":"Say hello in one sentence."}]${metaStr}}'`,
+    `  -d ${shellSingleQuote(JSON.stringify(body))}`,
   ].join('\n');
 }
 
-function buildPython(base: string, model: string, mode: string, meta?: Record<string, unknown>): string {
+function buildPython(base: string, model: string, mode: string, instanceName: string, meta?: Record<string, unknown>): string {
   const metaLine = meta && Object.keys(meta).length > 0 ? `    metadata=${JSON.stringify(meta)},\n` : '';
   const header = ['from openai import OpenAI', '', 'client = OpenAI(', `    base_url="${base}",`, '    api_key="YOUR_API_KEY",', ')', ''].join('\n');
   if (mode === 'audio_transcription') {
     return `${header}with open("sample.wav", "rb") as f:\n    t = client.audio.transcriptions.create(model="${model}", file=f, response_format="json")\nprint(t.text)`;
   }
   if (mode === 'embedding') {
-    return `${header}r = client.embeddings.create(\n    model="${model}",\n    input="Hello from DeltaLLM.",\n${metaLine})\nprint(r.data[0].embedding[:5])`;
+    return `${header}r = client.embeddings.create(\n    model="${model}",\n    input=${JSON.stringify(`Hello from ${instanceName}.`)},\n${metaLine})\nprint(r.data[0].embedding[:5])`;
   }
   if (mode === 'image_generation') {
     return `${header}r = client.images.generate(\n    model="${model}",\n    prompt="A minimal blue robot",\n    size="1024x1024",\n${metaLine})\nprint(r.data[0].url)`;
   }
   if (mode === 'audio_speech') {
-    return `${header}speech = client.audio.speech.create(\n    model="${model}",\n    voice="alloy",\n    input="Hello from DeltaLLM.",\n${metaLine})\nspeech.stream_to_file("speech.mp3")`;
+    return `${header}speech = client.audio.speech.create(\n    model="${model}",\n    voice="alloy",\n    input=${JSON.stringify(`Hello from ${instanceName}.`)},\n${metaLine})\nspeech.stream_to_file("speech.mp3")`;
   }
   return `${header}r = client.chat.completions.create(\n    model="${model}",\n    messages=[{"role": "user", "content": "Say hello in one sentence."}],\n${metaLine})\nprint(r.choices[0].message.content)`;
 }
 
-function buildJavaScript(base: string, model: string, mode: string, meta?: Record<string, unknown>): string {
+function buildJavaScript(base: string, model: string, mode: string, instanceName: string, meta?: Record<string, unknown>): string {
   const metaLine = meta && Object.keys(meta).length > 0 ? `  metadata: ${JSON.stringify(meta)},\n` : '';
   const header = ['import OpenAI from "openai";', '', 'const client = new OpenAI({', `  baseURL: "${base}",`, '  apiKey: "YOUR_API_KEY",', '});', ''].join('\n');
   if (mode === 'embedding') {
-    return `${header}const r = await client.embeddings.create({\n  model: "${model}",\n  input: "Hello from DeltaLLM.",\n${metaLine}});\nconsole.log(r.data[0].embedding.slice(0, 5));`;
+    return `${header}const r = await client.embeddings.create({\n  model: "${model}",\n  input: ${JSON.stringify(`Hello from ${instanceName}.`)},\n${metaLine}});\nconsole.log(r.data[0].embedding.slice(0, 5));`;
   }
   if (mode === 'image_generation') {
     return `${header}const r = await client.images.generate({\n  model: "${model}",\n  prompt: "A minimal blue robot",\n  size: "1024x1024",\n${metaLine}});\nconsole.log(r.data[0].url);`;
   }
   if (mode === 'audio_speech') {
-    return `${header}const speech = await client.audio.speech.create({\n  model: "${model}",\n  voice: "alloy",\n  input: "Hello from DeltaLLM.",\n${metaLine}});\nconst buf = Buffer.from(await speech.arrayBuffer());\nawait fs.promises.writeFile("speech.mp3", buf);`;
+    return `${header}const speech = await client.audio.speech.create({\n  model: "${model}",\n  voice: "alloy",\n  input: ${JSON.stringify(`Hello from ${instanceName}.`)},\n${metaLine}});\nconst buf = Buffer.from(await speech.arrayBuffer());\nawait fs.promises.writeFile("speech.mp3", buf);`;
   }
   return `${header}const r = await client.chat.completions.create({\n  model: "${model}",\n  messages: [{ role: "user", content: "Say hello in one sentence." }],\n${metaLine}});\nconsole.log(r.choices[0].message.content);`;
 }
 
 export default function RouteGroupUsageCard({ groupKey, mode, liveTrafficEnabled, boundPrompt }: RouteGroupUsageCardProps) {
+  const { branding } = useBranding();
   const [lang, setLang] = useState<Lang>('curl');
   const [copied, setCopied] = useState(false);
 
@@ -107,9 +126,9 @@ export default function RouteGroupUsageCard({ groupKey, mode, liveTrafficEnabled
 
   const base = baseUrl();
   const snippets: Record<Lang, string> = {
-    curl:       buildCurl(base, groupKey, mode, promptMeta),
-    python:     buildPython(base, groupKey, mode, promptMeta),
-    javascript: buildJavaScript(base, groupKey, mode, promptMeta),
+    curl:       buildCurl(base, groupKey, mode, branding.instance_name, promptMeta),
+    python:     buildPython(base, groupKey, mode, branding.instance_name, promptMeta),
+    javascript: buildJavaScript(base, groupKey, mode, branding.instance_name, promptMeta),
   };
 
   const handleCopy = () => {
@@ -139,7 +158,7 @@ export default function RouteGroupUsageCard({ groupKey, mode, liveTrafficEnabled
                 type="button"
                 onClick={() => setLang(l)}
                 className={`rounded-md px-2.5 py-1 text-xs font-semibold transition ${
-                  lang === l ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'
+                  lang === l ? 'bg-brand-primary text-brand-on-primary' : 'text-gray-400 hover:text-gray-200'
                 }`}
               >
                 {l === 'curl' ? 'cURL' : l === 'python' ? 'Python' : 'JavaScript'}

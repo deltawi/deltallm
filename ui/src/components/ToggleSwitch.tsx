@@ -33,7 +33,7 @@ export default function ToggleSwitch({
       role="switch"
       aria-checked={isChecked}
       aria-label={ariaLabel}
-      className="relative h-6 w-10 shrink-0 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+      className="relative h-6 w-10 shrink-0 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
       style={{ background: isChecked ? activeColor : '#d1d5db' }}
     >
       <span

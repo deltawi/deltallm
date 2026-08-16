@@ -427,7 +427,7 @@ export default function RouteGroupDetail() {
           </button>
         </div>
         <div className="flex min-h-[400px] items-center justify-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-blue-600" />
+          <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-brand-primary" />
         </div>
       </div>
     );

@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { auth as authApi } from '../lib/api';
 import PublicAuthShell from '../components/auth/PublicAuthShell';
+import Button from '../components/Button';
 
 export default function ResetPassword() {
   const [params] = useSearchParams();
@@ -62,14 +63,14 @@ export default function ResetPassword() {
     <PublicAuthShell title="Reset Password" description="Choose a new password for your account.">
       {loading ? (
         <div className="flex items-center justify-center py-10">
-          <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-blue-600" />
+          <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-brand-primary" />
         </div>
       ) : !valid ? (
         <div className="space-y-4 text-sm text-gray-700">
           <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-red-700">
             {error || 'This reset link is invalid or has expired.'}
           </div>
-          <Link to="/forgot-password" className="inline-flex text-blue-600 hover:text-blue-700 font-medium">
+          <Link to="/forgot-password" className="inline-flex text-brand-primary-ink hover:text-brand-primary-ink-hover font-medium">
             Request a new reset link
           </Link>
         </div>
@@ -95,18 +96,19 @@ export default function ResetPassword() {
               type="password"
               value={password}
               onChange={(event) => { setPassword(event.target.value); setError(''); }}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
               autoComplete="new-password"
               placeholder="At least 12 characters"
             />
           </div>
-          <button
+          <Button
             type="submit"
-            disabled={saving}
-            className="w-full rounded-lg bg-blue-600 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+            loading={saving}
+            fullWidth
+            size="lg"
           >
             {saving ? 'Updating…' : 'Update Password'}
-          </button>
+          </Button>
         </form>
       )}
     </PublicAuthShell>

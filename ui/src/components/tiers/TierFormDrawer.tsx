@@ -26,7 +26,7 @@ export default function TierFormDrawer({
 }: TierFormDrawerProps) {
   if (!open) return null;
 
-  const inputClassName = 'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500';
+  const inputClassName = 'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500';
 
   return (
     <div className="fixed inset-0 z-50 flex">
@@ -105,7 +105,7 @@ export default function TierFormDrawer({
               checked={values.enabled}
               onChange={(event) => onChange({ ...values, enabled: event.target.checked })}
               disabled={saving}
-              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              className="h-4 w-4 rounded border-gray-300 text-brand-primary-ink focus:ring-brand-primary"
             />
           </label>
         </div>
@@ -123,7 +123,7 @@ export default function TierFormDrawer({
             type="button"
             onClick={onSubmit}
             disabled={saving}
-            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+            className="rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
           >
             {saving ? 'Saving...' : submitLabel}
           </button>

@@ -9,6 +9,10 @@ const uiRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputDir = path.join(uiRoot, 'node_modules', '.tmp', 'ui-unit-tests');
 const testSources = [
   'tests/authorization.test.ts',
+  'tests/branding.test.ts',
+  'tests/brandingApi.test.ts',
+  'tests/brandingComponents.test.ts',
+  'tests/brandingProvider.test.ts',
   'tests/authRedirect.test.ts',
   'tests/authSession.test.ts',
   'tests/modelFormShared.test.ts',
@@ -32,6 +36,8 @@ await build({
   outdir: outputDir,
   entryNames: '[name]',
   bundle: true,
+  external: ['jsdom', 'lucide-react', 'react', 'react-dom', 'react-dom/client', 'react-dom/server'],
+  jsx: 'automatic',
   platform: 'node',
   format: 'esm',
 });

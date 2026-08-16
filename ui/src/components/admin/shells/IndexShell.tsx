@@ -48,7 +48,7 @@ export default function IndexShell({
               </div>
             )}
             <h1 className="flex items-center gap-2 text-xl font-bold text-gray-900">
-              {TitleIcon ? <TitleIcon className="h-5 w-5 text-blue-600" /> : null}
+              {TitleIcon ? <TitleIcon className="h-5 w-5 text-brand-primary-ink" /> : null}
               {title}
               {typeof count === 'number' && (
                 <span className="ml-1 inline-flex h-5 min-w-[1.5rem] items-center justify-center rounded-full bg-gray-100 px-1.5 text-xs font-semibold text-gray-600">

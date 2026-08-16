@@ -4,18 +4,286 @@ import logging
 from time import perf_counter
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 
 from src.auth.roles import Permission
 from src.audit.actions import AuditAction
-from src.api.admin.endpoints.common import emit_admin_mutation_audit, model_entries, to_json_value, get_auth_scope
+from src.api.admin.endpoints.common import (
+    emit_admin_mutation_audit,
+    model_entries,
+    to_json_value,
+    get_auth_scope,
+)
+from src.config import UIBrandingPayload, UIBrandingSettings, UIBrandingUpdatePayload
 from src.middleware.admin import require_admin_permission
 from src.providers.resolution import resolve_provider
+from src.services.ui_branding_assets import (
+    BRANDING_ASSET_MAX_BYTES,
+    UIBrandingAssetService,
+    branding_asset_config_field,
+    branding_asset_url,
+    normalize_asset_kind,
+    validate_branding_asset,
+)
 
 router = APIRouter(tags=["Admin Config"])
 
 
-@router.get("/ui/api/routing", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+def _effective_ui_branding(request: Request) -> UIBrandingPayload:
+    app_config = getattr(request.app.state, "app_config", None)
+    general_settings = getattr(app_config, "general_settings", None)
+    instance_name = str(getattr(general_settings, "instance_name", "DeltaLLM") or "DeltaLLM")
+    ui_branding = getattr(general_settings, "ui_branding", None)
+    if not isinstance(ui_branding, UIBrandingSettings):
+        ui_branding = UIBrandingSettings()
+    return UIBrandingPayload(instance_name=instance_name, **ui_branding.model_dump())
+
+
+@router.get("/ui/api/branding", response_model=UIBrandingPayload)
+async def get_ui_branding(request: Request, response: Response) -> UIBrandingPayload:
+    response.headers["Cache-Control"] = "no-store"
+    return _effective_ui_branding(request)
+
+
+def _branding_asset_service(request: Request) -> UIBrandingAssetService:
+    service = getattr(request.app.state, "ui_branding_asset_service", None)
+    if not isinstance(service, UIBrandingAssetService):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Branding asset service unavailable",
+        )
+    return service
+
+
+def _asset_response_headers(
+    *, content_sha256: str, size_bytes: int, versioned: bool
+) -> dict[str, str]:
+    return {
+        "Cache-Control": "public, max-age=31536000, immutable"
+        if versioned
+        else "public, max-age=60",
+        "Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox",
+        "Content-Length": str(size_bytes),
+        "ETag": f'"{content_sha256}"',
+        "X-Content-Type-Options": "nosniff",
+    }
+
+
+@router.api_route("/ui/api/branding/assets/{asset_key}", methods=["GET", "HEAD"])
+async def get_ui_branding_asset(
+    request: Request,
+    asset_key: str,
+    version: str | None = Query(
+        default=None, alias="v", min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    ),
+    if_none_match: str | None = Header(default=None, alias="If-None-Match"),
+) -> Response:
+    try:
+        normalized_key = normalize_asset_kind(asset_key)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Branding asset not found"
+        ) from exc
+
+    asset = await _branding_asset_service(request).get_asset(
+        normalized_key, expected_sha256=version
+    )
+    if asset is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Branding asset not found"
+        )
+
+    headers = _asset_response_headers(
+        content_sha256=asset.content_sha256,
+        size_bytes=asset.size_bytes,
+        versioned=version is not None,
+    )
+    if if_none_match and headers["ETag"] in {part.strip() for part in if_none_match.split(",")}:
+        not_modified_headers = dict(headers)
+        not_modified_headers.pop("Content-Length", None)
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=not_modified_headers)
+    return Response(
+        content=b"" if request.method == "HEAD" else asset.content,
+        media_type=asset.content_type,
+        headers=headers,
+    )
+
+
+@router.put(
+    "/ui/api/branding",
+    response_model=UIBrandingPayload,
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
+async def update_ui_branding(
+    request: Request, payload: UIBrandingUpdatePayload
+) -> UIBrandingPayload:
+    request_start = perf_counter()
+    dynamic_config = getattr(request.app.state, "dynamic_config_manager", None)
+    if dynamic_config is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Config manager unavailable"
+        )
+
+    before = _effective_ui_branding(request)
+    await dynamic_config.update_config(
+        {
+            "general_settings": {
+                "instance_name": payload.instance_name,
+                "ui_branding": payload.model_dump(
+                    include={"primary_color", "secondary_color", "menu_hover_color"}
+                ),
+            }
+        },
+        updated_by="admin_api",
+    )
+    after = _effective_ui_branding(request)
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_UI_BRANDING_UPDATE,
+        resource_type="ui_branding",
+        request_payload=payload.model_dump(),
+        response_payload=after.model_dump(),
+        before=before.model_dump(),
+        after=after.model_dump(),
+    )
+    return after
+
+
+@router.put(
+    "/ui/api/branding/assets/{asset_key}",
+    response_model=UIBrandingPayload,
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
+async def upload_ui_branding_asset(
+    request: Request,
+    asset_key: str,
+    file: UploadFile = File(...),
+) -> UIBrandingPayload:
+    request_start = perf_counter()
+    try:
+        normalized_key = normalize_asset_kind(asset_key)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Branding asset not found"
+        ) from exc
+
+    try:
+        content = await file.read(BRANDING_ASSET_MAX_BYTES + 1)
+    finally:
+        await file.close()
+    try:
+        asset = validate_branding_asset(normalized_key, content, original_filename=file.filename)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+    dynamic_config = getattr(request.app.state, "dynamic_config_manager", None)
+    if dynamic_config is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Config manager unavailable"
+        )
+    asset_service = _branding_asset_service(request)
+    before = _effective_ui_branding(request)
+    asset_url = branding_asset_url(normalized_key, asset.content_sha256)
+
+    async def persist_asset(db_client: Any) -> None:
+        await asset_service.upsert_in_transaction(db_client, asset, updated_by="admin_api")
+
+    await dynamic_config.update_config(
+        {
+            "general_settings": {
+                "ui_branding": {branding_asset_config_field(normalized_key): asset_url},
+            }
+        },
+        updated_by="admin_api",
+        transaction_mutation=persist_asset,
+    )
+    after = _effective_ui_branding(request)
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_UI_BRANDING_ASSET_UPLOAD,
+        resource_type="ui_branding_asset",
+        resource_id=normalized_key,
+        request_payload={
+            "asset_key": normalized_key,
+            "content_type": asset.content_type,
+            "content_sha256": asset.content_sha256,
+            "size_bytes": asset.size_bytes,
+            "original_filename": asset.original_filename,
+        },
+        response_payload=after.model_dump(),
+        before=before.model_dump(),
+        after=after.model_dump(),
+    )
+    return after
+
+
+@router.delete(
+    "/ui/api/branding/assets/{asset_key}",
+    response_model=UIBrandingPayload,
+    dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))],
+)
+async def delete_ui_branding_asset(request: Request, asset_key: str) -> UIBrandingPayload:
+    request_start = perf_counter()
+    try:
+        normalized_key = normalize_asset_kind(asset_key)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Branding asset not found"
+        ) from exc
+
+    dynamic_config = getattr(request.app.state, "dynamic_config_manager", None)
+    if dynamic_config is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Config manager unavailable"
+        )
+    asset_service = _branding_asset_service(request)
+    before = _effective_ui_branding(request)
+
+    async def delete_asset(db_client: Any) -> None:
+        await asset_service.delete_in_transaction(db_client, normalized_key)
+
+    await dynamic_config.update_config(
+        {
+            "general_settings": {
+                "ui_branding": {branding_asset_config_field(normalized_key): None},
+            }
+        },
+        updated_by="admin_api",
+        transaction_mutation=delete_asset,
+    )
+    after = _effective_ui_branding(request)
+    await emit_admin_mutation_audit(
+        request=request,
+        request_start=request_start,
+        action=AuditAction.ADMIN_UI_BRANDING_ASSET_DELETE,
+        resource_type="ui_branding_asset",
+        resource_id=normalized_key,
+        request_payload={"asset_key": normalized_key},
+        response_payload=after.model_dump(),
+        before=before.model_dump(),
+        after=after.model_dump(),
+    )
+    return after
+
+
+@router.get(
+    "/ui/api/routing", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))]
+)
 async def get_routing(request: Request) -> dict[str, Any]:
     app_config = getattr(request.app.state, "app_config", None)
     router_settings = getattr(app_config, "router_settings", None)
@@ -29,7 +297,9 @@ async def get_routing(request: Request) -> dict[str, Any]:
     deployments: list[dict[str, Any]] = []
     health_by_id: dict[str, dict[str, Any]] = {}
     if isinstance(health_payload, dict):
-        health_by_id = {str(item.get("deployment_id")): item for item in health_payload.get("deployments", [])}
+        health_by_id = {
+            str(item.get("deployment_id")): item for item in health_payload.get("deployments", [])
+        }
 
     for model_name, entries in getattr(request.app.state, "model_registry", {}).items():
         for index, entry in enumerate(entries):
@@ -53,7 +323,10 @@ async def get_routing(request: Request) -> dict[str, Any]:
     if config is not None and isinstance(getattr(config, "fallbacks", None), dict):
         fallback_map = config.fallbacks
 
-    failover_chains = [{"model_group": model, "chain": [model, *fallbacks]} for model, fallbacks in fallback_map.items()]
+    failover_chains = [
+        {"model_group": model, "chain": [model, *fallbacks]}
+        for model, fallbacks in fallback_map.items()
+    ]
     for model_name in getattr(request.app.state, "model_registry", {}):
         if model_name not in fallback_map:
             failover_chains.append({"model_group": model_name, "chain": [model_name]})
@@ -84,12 +357,16 @@ async def get_routing(request: Request) -> dict[str, Any]:
     }
 
 
-@router.put("/ui/api/routing", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.put(
+    "/ui/api/routing", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))]
+)
 async def update_routing(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     request_start = perf_counter()
     dynamic_config = getattr(request.app.state, "dynamic_config_manager", None)
     if dynamic_config is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Config manager unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Config manager unavailable"
+        )
     before = await get_routing(request)
 
     config_update: dict[str, Any] = {}
@@ -111,7 +388,9 @@ async def update_routing(request: Request, payload: dict[str, Any]) -> dict[str,
         if "retry_after" in config_fields:
             router_updates["retry_after"] = float(config_fields["retry_after"])
         if "health_check_enabled" in config_fields:
-            general_updates["background_health_checks"] = bool(config_fields["health_check_enabled"])
+            general_updates["background_health_checks"] = bool(
+                config_fields["health_check_enabled"]
+            )
         if "health_check_interval" in config_fields:
             general_updates["health_check_interval"] = int(config_fields["health_check_interval"])
 
@@ -137,7 +416,9 @@ async def update_routing(request: Request, payload: dict[str, Any]) -> dict[str,
     return response
 
 
-@router.get("/ui/api/settings", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))])
+@router.get(
+    "/ui/api/settings", dependencies=[Depends(require_admin_permission(Permission.CONFIG_READ))]
+)
 async def get_settings(
     request: Request,
     authorization: str | None = Header(default=None, alias="Authorization"),
@@ -160,7 +441,9 @@ async def get_settings(
     }
 
 
-@router.put("/ui/api/settings", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))])
+@router.put(
+    "/ui/api/settings", dependencies=[Depends(require_admin_permission(Permission.PLATFORM_ADMIN))]
+)
 async def update_settings(
     request: Request,
     payload: dict[str, Any],
@@ -170,14 +453,24 @@ async def update_settings(
     request_start = perf_counter()
     dynamic_config = getattr(request.app.state, "dynamic_config_manager", None)
     if dynamic_config is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Config manager unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Config manager unavailable"
+        )
     before = await get_settings(request, authorization=authorization, x_master_key=x_master_key)
 
     config_update: dict[str, Any] = {}
 
-    general_updates = payload.get("general_settings") if isinstance(payload.get("general_settings"), dict) else {}
-    router_updates = payload.get("router_settings") if isinstance(payload.get("router_settings"), dict) else {}
-    deltallm_updates = payload.get("deltallm_settings") if isinstance(payload.get("deltallm_settings"), dict) else {}
+    general_updates = (
+        payload.get("general_settings") if isinstance(payload.get("general_settings"), dict) else {}
+    )
+    router_updates = (
+        payload.get("router_settings") if isinstance(payload.get("router_settings"), dict) else {}
+    )
+    deltallm_updates = (
+        payload.get("deltallm_settings")
+        if isinstance(payload.get("deltallm_settings"), dict)
+        else {}
+    )
 
     if general_updates:
         config_update["general_settings"] = general_updates
@@ -186,7 +479,10 @@ async def update_settings(
     if deltallm_updates:
         if "guardrails" in deltallm_updates and isinstance(deltallm_updates["guardrails"], list):
             deltallm_updates["guardrails"] = [
-                {"guardrail_name": str(item.get("guardrail_name")), "deltallm_params": item.get("deltallm_params", {})}
+                {
+                    "guardrail_name": str(item.get("guardrail_name")),
+                    "deltallm_params": item.get("deltallm_params", {}),
+                }
                 for item in deltallm_updates["guardrails"]
                 if isinstance(item, dict) and isinstance(item.get("deltallm_params"), dict)
             ]

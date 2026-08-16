@@ -285,7 +285,7 @@ const AccessGroupTokenInput = forwardRef<AccessGroupTokenInputHandle, AccessGrou
         className={`flex min-h-[42px] w-full flex-wrap items-center gap-1.5 rounded-lg border bg-white px-2 py-1.5 text-sm focus-within:outline-none focus-within:ring-2 ${
           message
             ? 'border-red-300 focus-within:ring-red-500'
-            : 'border-gray-300 focus-within:ring-blue-500'
+            : 'border-gray-300 focus-within:ring-brand-primary'
         }`}
         onClick={() => inputRef.current?.focus()}
       >
@@ -310,7 +310,7 @@ const AccessGroupTokenInput = forwardRef<AccessGroupTokenInputHandle, AccessGrou
                 className={`rounded-full p-0.5 focus:outline-none focus:ring-2 ${
                   invalid
                     ? 'text-red-500 hover:bg-red-100 focus:ring-red-500'
-                    : 'text-blue-500 hover:bg-blue-100 focus:ring-blue-500'
+                    : 'text-blue-500 hover:bg-blue-100 focus:ring-brand-primary'
                 }`}
                 aria-label={`Remove access group ${groupKey}`}
               >

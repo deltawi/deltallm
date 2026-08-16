@@ -43,7 +43,7 @@ export default function RouteGroupPolicyVersionsCard({
             <select
               value={selectedRollbackVersion ?? ''}
               onChange={(e) => onRollbackVersionChange(e.target.value ? Number(e.target.value) : null)}
-              className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-brand-primary"
             >
               <option value="">Select version to restore</option>
               {canRollbackVersions.map((p) => (

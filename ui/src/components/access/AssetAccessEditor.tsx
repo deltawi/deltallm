@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { AssetAccessGroup, AssetAccessTarget } from '../../lib/api';
+import Button from '../Button';
 
 type AssetAccessMode = 'grant' | 'inherit' | 'restrict';
 type TargetFilter = 'all' | 'model' | 'route_group';
@@ -179,7 +180,7 @@ export default function AssetAccessEditor({
 
       {allowModeSelection && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          <label className={`rounded-lg border px-3 py-2 text-sm ${mode === 'inherit' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'}`}>
+          <label className={`rounded-lg border px-3 py-2 text-sm ${mode === 'inherit' ? 'border-brand-primary bg-blue-50' : 'border-gray-200 bg-white'}`}>
             <div className="flex items-start gap-2">
               <input
                 type="radio"
@@ -195,7 +196,7 @@ export default function AssetAccessEditor({
               </span>
             </div>
           </label>
-          <label className={`rounded-lg border px-3 py-2 text-sm ${mode === 'restrict' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'}`}>
+          <label className={`rounded-lg border px-3 py-2 text-sm ${mode === 'restrict' ? 'border-brand-primary bg-blue-50' : 'border-gray-200 bg-white'}`}>
             <div className="flex items-start gap-2">
               <input
                 type="radio"
@@ -223,24 +224,24 @@ export default function AssetAccessEditor({
       {(primaryActionLabel || secondaryActionLabel) && (
         <div className="flex flex-wrap items-center gap-2">
           {primaryActionLabel && onPrimaryAction && (
-            <button
-              type="button"
+            <Button
+              variant="primary"
+              size="sm"
               onClick={onPrimaryAction}
               disabled={disabled}
-              className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {primaryActionLabel}
-            </button>
+            </Button>
           )}
           {secondaryActionLabel && onSecondaryAction && (
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={onSecondaryAction}
               disabled={disabled}
-              className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {secondaryActionLabel}
-            </button>
+            </Button>
           )}
         </div>
       )}
@@ -258,7 +259,7 @@ export default function AssetAccessEditor({
           }}
           placeholder="Search models and route groups..."
           disabled={disabled}
-          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-500"
+          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-gray-100 disabled:text-gray-500"
         />
         <select
           value={targetType}
@@ -271,7 +272,7 @@ export default function AssetAccessEditor({
             }
           }}
           disabled={disabled}
-          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-500"
+          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-gray-100 disabled:text-gray-500"
         >
           <option value="all">All targets</option>
           <option value="model">Models</option>

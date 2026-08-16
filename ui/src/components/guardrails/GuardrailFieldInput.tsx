@@ -78,7 +78,7 @@ export default function GuardrailFieldInput({ field, value, onChange }: Guardrai
         min={field.min}
         max={field.max}
         step={field.step}
-        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
       />
       {field.help_text ? <p className="mt-1 text-xs text-slate-500">{field.help_text}</p> : null}
     </div>

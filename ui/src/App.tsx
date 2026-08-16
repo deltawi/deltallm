@@ -1,3 +1,4 @@
+import { Component, lazy, Suspense, type ErrorInfo, type ReactNode } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './lib/auth';
 import Layout from './components/Layout';
@@ -18,7 +19,6 @@ import Teams from './pages/Teams';
 import UsersPage from './pages/UsersPage';
 import Usage from './pages/Usage';
 import Guardrails from './pages/Guardrails';
-import SettingsPage from './pages/SettingsPage';
 import BatchJobs from './pages/BatchJobs';
 import BatchJobDetail from './pages/BatchJobDetail';
 import OrganizationDetail from './pages/OrganizationDetail';
@@ -39,8 +39,54 @@ import MCPServerDetail from './pages/MCPServerDetail';
 import MCPApprovalQueue from './pages/MCPApprovalQueue';
 import Playground from './pages/Playground';
 import { ToastProvider } from './components/ToastProvider';
+import BrandingProvider from './components/BrandingProvider';
+import Button from './components/Button';
 import { defaultRouteForUiAccess, resolveUiAccess } from './lib/authorization';
 import { loginPathFor, returnToFromSearch } from './lib/authRedirect';
+
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+
+class RouteChunkBoundary extends Component<
+  { children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('Unable to load route', error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.failed) {
+      return (
+        <div className="flex min-h-64 items-center justify-center px-4">
+          <div className="max-w-md rounded-xl border border-amber-200 bg-white p-6 text-center shadow-sm">
+            <h1 className="text-lg font-semibold text-gray-900">Unable to load settings</h1>
+            <p className="mt-2 text-sm text-gray-600">
+              Reload the application to retry loading this section.
+            </p>
+            <Button className="mt-5" onClick={() => window.location.reload()}>
+              Reload application
+            </Button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function RouteLoading() {
+  return (
+    <div className="flex min-h-64 items-center justify-center" role="status" aria-label="Loading settings">
+      <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-brand-primary" />
+    </div>
+  );
+}
 
 function SessionVerificationError({
   message,
@@ -58,16 +104,15 @@ function SessionVerificationError({
           {retryable ? 'Unable to verify your session' : 'Session verification failed'}
         </h1>
         <p className="mt-2 text-sm text-gray-600">{message}</p>
-        <button
-          type="button"
+        <Button
           onClick={() => {
             if (retryable) void onRetry();
             else window.location.reload();
           }}
-          className="mt-5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          className="mt-5"
         >
           {retryable ? 'Try again' : 'Reload application'}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -91,7 +136,7 @@ function AppRoutes() {
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+        <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-brand-primary" />
       </div>
     );
   }
@@ -165,7 +210,16 @@ function AppRoutes() {
         <Route path="/batches/:batchId" element={uiAccess.batches ? <BatchJobDetail /> : <Navigate to="/" replace />} />
         <Route path="/guardrails" element={uiAccess.guardrails ? <Guardrails /> : <Navigate to="/" replace />} />
         <Route path="/playground" element={uiAccess.playground ? <Playground /> : <Navigate to="/" replace />} />
-        <Route path="/settings" element={uiAccess.settings ? <SettingsPage /> : <Navigate to="/" replace />} />
+        <Route
+          path="/settings"
+          element={uiAccess.settings ? (
+            <RouteChunkBoundary>
+              <Suspense fallback={<RouteLoading />}>
+                <SettingsPage />
+              </Suspense>
+            </RouteChunkBoundary>
+          ) : <Navigate to="/" replace />}
+        />
         <Route path="/access-control" element={<Navigate to={uiAccess.people_access ? "/users" : defaultRoute} replace />} />
         <Route path="/login" element={<Navigate to={loginReturnTo} replace />} />
         <Route path="/forgot-password" element={<Navigate to={defaultRoute} replace />} />
@@ -179,9 +233,11 @@ function AppRoutes() {
 export default function App() {
   return (
     <AuthProvider>
-      <ToastProvider>
-        <AppRoutes />
-      </ToastProvider>
+      <BrandingProvider>
+        <ToastProvider>
+          <AppRoutes />
+        </ToastProvider>
+      </BrandingProvider>
     </AuthProvider>
   );
 }

@@ -22,6 +22,7 @@ import type { RouteGroup } from '../lib/api';
 import { ROUTE_GROUP_MODE_OPTIONS } from '../lib/routeGroups';
 import { useApi } from '../lib/hooks';
 import { useToast } from '../components/ToastProvider';
+import { useBranding } from '../lib/brandingContext';
 
 /* ─── Mode chip ─────────────────────────────────────────────────────────── */
 const MODE_ICONS: Record<string, React.ElementType> = {
@@ -147,7 +148,7 @@ function CreateDrawer({ open, onClose, form, setForm, formError, setFormError, c
               }}
               placeholder="prod-chat-primary"
               data-autofocus="true"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
             <p className="mt-1 text-xs text-gray-400">Stable key used by clients, policies, and bindings.</p>
           </div>
@@ -163,7 +164,7 @@ function CreateDrawer({ open, onClose, form, setForm, formError, setFormError, c
               <select
                 value={form.mode}
                 onChange={(e) => setForm({ ...form, mode: e.target.value })}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
               >
                 {ROUTE_GROUP_MODE_OPTIONS.map((m) => (
                   <option key={m} value={m}>{m.replace(/_/g, ' ')}</option>
@@ -176,7 +177,7 @@ function CreateDrawer({ open, onClose, form, setForm, formError, setFormError, c
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 placeholder="Production Chat"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
             </div>
           </div>
@@ -190,7 +191,7 @@ function CreateDrawer({ open, onClose, form, setForm, formError, setFormError, c
           <button
             onClick={onCreate}
             disabled={creating}
-            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            className="rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
           >
             {creating ? 'Creating…' : 'Create and continue →'}
           </button>
@@ -202,6 +203,7 @@ function CreateDrawer({ open, onClose, form, setForm, formError, setFormError, c
 
 /* ─── Page ───────────────────────────────────────────────────────────────── */
 export default function RouteGroups() {
+  const { branding } = useBranding();
   const navigate = useNavigate();
   const { pushToast } = useToast();
 
@@ -279,11 +281,11 @@ export default function RouteGroups() {
       title="Model Groups"
       titleIcon={Layers}
       count={pagination?.total ?? null}
-      description="Group deployments behind a single key — clients call the group, DeltaLLM routes traffic."
+      description={`Group deployments behind a single key — clients call the group, ${branding.instance_name} routes traffic.`}
       action={(
         <button
           onClick={() => setCreateOpen(true)}
-          className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700"
+          className="inline-flex items-center gap-2 rounded-xl bg-brand-primary px-4 py-2.5 text-sm font-medium text-brand-on-primary shadow-sm hover:bg-brand-primary-hover"
         >
           <Plus className="h-4 w-4" /> Create Group
         </button>
@@ -320,7 +322,7 @@ export default function RouteGroups() {
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             placeholder="Search model groups…"
-            className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-9 pr-4 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-9 pr-4 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
           />
         </div>
       )}
@@ -442,7 +444,7 @@ export default function RouteGroups() {
               {!search && (
                 <button
                   onClick={() => setCreateOpen(true)}
-                  className="mt-3 text-sm text-blue-600 hover:underline"
+                  className="mt-3 text-sm text-brand-primary-ink hover:underline"
                 >
                   Create your first group →
                 </button>

@@ -225,7 +225,7 @@ export default function ApiKeysMobileList({
             placeholder="Search keys..."
             value={searchValue}
             onChange={(e) => onSearchChange(e.target.value)}
-            className="w-full bg-gray-100 border-transparent rounded-lg py-2 pl-9 pr-4 text-sm focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
+            className="w-full bg-gray-100 border-transparent rounded-lg py-2 pl-9 pr-4 text-sm focus:bg-white focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all"
           />
         </div>
       </div>
@@ -275,7 +275,7 @@ export default function ApiKeysMobileList({
                 className={`bg-white rounded-xl border ${expired ? 'border-gray-200 opacity-75' : overBudget ? 'border-red-200' : 'border-gray-200'} shadow-sm overflow-hidden transition-all`}
               >
                 <div
-                  className="p-4 cursor-pointer active:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset rounded-xl"
+                  className="p-4 cursor-pointer active:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-inset rounded-xl"
                   onClick={() => setExpandedId(isOpen ? null : key.token)}
                   onKeyDown={(e) => {
                     if (e.target !== e.currentTarget) return;
@@ -492,7 +492,7 @@ export default function ApiKeysMobileList({
                     ref={idx === 0 ? sheetFirstActionRef : undefined}
                     type="button"
                     onClick={action.onClick}
-                    className={`w-full flex items-center gap-3 px-4 py-3 text-sm rounded-lg active:bg-gray-100 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+                    className={`w-full flex items-center gap-3 px-4 py-3 text-sm rounded-lg active:bg-gray-100 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary ${
                       action.tone === 'danger' ? 'text-red-600' : 'text-gray-700'
                     }`}
                   >
@@ -504,7 +504,7 @@ export default function ApiKeysMobileList({
               <button
                 type="button"
                 onClick={closeSheet}
-                className="w-full mt-1 px-4 py-3 text-sm font-medium text-gray-500 rounded-lg active:bg-gray-100 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                className="w-full mt-1 px-4 py-3 text-sm font-medium text-gray-500 rounded-lg active:bg-gray-100 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
               >
                 Cancel
               </button>

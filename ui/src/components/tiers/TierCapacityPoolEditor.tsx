@@ -33,7 +33,7 @@ export default function TierCapacityPoolEditor({
   const [form, setForm] = useState<TierCapacityPoolForm>(emptyCapacityPoolForm());
   const [localError, setLocalError] = useState<string | null>(null);
   const locked = readOnly || saving;
-  const inputClassName = 'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500';
+  const inputClassName = 'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500';
 
   const sortedPools = useMemo(
     () => [...pools].sort((a, b) => `${a.pool_key}:${a.callable_key}`.localeCompare(`${b.pool_key}:${b.callable_key}`)),
@@ -102,7 +102,7 @@ export default function TierCapacityPoolEditor({
             type="button"
             onClick={openNew}
             disabled={locked}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-1.5 text-xs font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Plus className="h-3.5 w-3.5" />
             Add pool
@@ -323,7 +323,7 @@ export default function TierCapacityPoolEditor({
               type="button"
               onClick={saveForm}
               disabled={locked}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
             >
               <Save className="h-4 w-4" />
               Save pools

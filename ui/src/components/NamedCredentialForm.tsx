@@ -41,7 +41,7 @@ interface NamedCredentialFormProps {
 }
 
 const MASK = '***REDACTED***';
-const inputClass = 'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500';
+const inputClass = 'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary';
 
 function emptyForm(): NamedCredentialFormValues {
   return {
@@ -368,7 +368,7 @@ export default function NamedCredentialForm({
           type="button"
           onClick={() => { void handleSave(); }}
           disabled={saving}
-          className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          className="rounded-lg bg-brand-primary px-3 py-2 text-sm font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
         >
           {saving ? 'Saving...' : editing ? 'Save Changes' : 'Create Credential'}
         </button>

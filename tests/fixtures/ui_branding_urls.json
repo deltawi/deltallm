@@ -1,0 +1,31 @@
+{
+  "valid": [
+    "/branding/logo.svg",
+    "/branding/logo.svg?version=2#mark",
+    "https://cdn.example.com/logo.svg",
+    "https://cdn.example.com:8443/logo.svg",
+    "https://127.0.0.1/logo.svg",
+    "https://[2001:db8::1]/logo.svg",
+    "https://xn--bcher-kva.example/logo.svg"
+  ],
+  "invalid": [
+    "branding/logo.svg",
+    "//cdn.example.com/logo.svg",
+    "https:/cdn.example.com/logo.svg",
+    "https:///cdn.example.com/logo.svg",
+    "http://cdn.example.com/logo.svg",
+    "javascript:alert(1)",
+    "data:image/svg+xml;base64,abc",
+    "https://user:secret@cdn.example.com/logo.svg",
+    "https://exa mple.com/logo.svg",
+    "https://example.com:99999/logo.svg",
+    "https://[2001:db8::1/logo.svg",
+    "https://.example.com/logo.svg",
+    "https://example..com/logo.svg",
+    "https://-example.com/logo.svg",
+    "https://example-.com/logo.svg",
+    "https://%65xample.com/logo.svg",
+    "\\\\server\\logo.svg",
+    "/branding/logo.svg\u007f"
+  ]
+}

@@ -10,7 +10,13 @@ import struct
 from typing import Any
 import urllib.parse
 
-from src.auth.roles import OrganizationRole, PLATFORM_ROLE_PERMISSIONS, Permission, PlatformRole, TeamRole
+from src.auth.roles import (
+    OrganizationRole,
+    PLATFORM_ROLE_PERMISSIONS,
+    Permission,
+    PlatformRole,
+    TeamRole,
+)
 from src.models.platform_auth import PlatformAuthContext
 
 
@@ -43,13 +49,16 @@ class PlatformIdentityService:
         self.db = db_client
         self.salt = salt or "change-me"
         self.session_ttl_hours = session_ttl_hours
+        self.totp_issuer = "DeltaLLM"
 
     def with_db(self, db_client: Any) -> PlatformIdentityService:
-        return PlatformIdentityService(
+        service = PlatformIdentityService(
             db_client=db_client,
             salt=self.salt,
             session_ttl_hours=self.session_ttl_hours,
         )
+        service.totp_issuer = self.totp_issuer
+        return service
 
     async def ensure_bootstrap_admin(self, email: str | None, password: str | None) -> None:
         if self.db is None or not email or not password:
@@ -90,7 +99,9 @@ class PlatformIdentityService:
         if len(raw_password or "") < 12:
             raise ValueError("password must be at least 12 characters")
 
-    async def login_internal(self, email: str, password: str, mfa_code: str | None = None) -> LoginResult | None:
+    async def login_internal(
+        self, email: str, password: str, mfa_code: str | None = None
+    ) -> LoginResult | None:
         if self.db is None:
             return None
 
@@ -119,7 +130,11 @@ class PlatformIdentityService:
         mfa_enabled = bool(row.get("mfa_enabled", False))
         mfa_secret = row.get("mfa_secret")
         if mfa_enabled:
-            if not mfa_code or not isinstance(mfa_secret, str) or not self._verify_totp(mfa_secret, mfa_code):
+            if (
+                not mfa_code
+                or not isinstance(mfa_secret, str)
+                or not self._verify_totp(mfa_secret, mfa_code)
+            ):
                 return None
 
         token = await self._create_session(account_id=row["account_id"], mfa_verified=mfa_enabled)
@@ -590,7 +605,9 @@ class PlatformIdentityService:
             return False
         return await self.mark_session_mfa_verified(session_token)
 
-    async def change_password(self, account_id: str, new_password: str, current_password: str | None = None) -> bool:
+    async def change_password(
+        self, account_id: str, new_password: str, current_password: str | None = None
+    ) -> bool:
         if self.db is None:
             return False
         self.validate_password_policy(new_password)
@@ -635,7 +652,9 @@ class PlatformIdentityService:
         )
         return dict(rows[0]) if rows else None
 
-    async def get_account_by_sso_identity(self, *, provider: str, subject: str) -> dict[str, Any] | None:
+    async def get_account_by_sso_identity(
+        self, *, provider: str, subject: str
+    ) -> dict[str, Any] | None:
         if self.db is None:
             return None
         normalized_provider = str(provider or "sso").strip() or "sso"
@@ -757,7 +776,9 @@ class PlatformIdentityService:
             has_sso_identity=bool(row.get("has_sso_identity")),
         )
 
-    async def ensure_account(self, *, email: str, role: str = PlatformRole.ORG_USER, is_active: bool = False) -> dict[str, Any]:
+    async def ensure_account(
+        self, *, email: str, role: str = PlatformRole.ORG_USER, is_active: bool = False
+    ) -> dict[str, Any]:
         normalized_email = self.normalize_email(email)
         if not normalized_email:
             raise ValueError("email is required")
@@ -824,7 +845,9 @@ class PlatformIdentityService:
         account = await self.get_account_by_email(normalized_email)
         if account is None:
             raise RuntimeError("failed to create account")
-        await self.set_password(account_id=str(account.get("account_id") or ""), new_password=password)
+        await self.set_password(
+            account_id=str(account.get("account_id") or ""), new_password=password
+        )
         created = await self.get_account_by_email(normalized_email)
         if created is None:
             raise RuntimeError("failed to load created account")
@@ -832,7 +855,9 @@ class PlatformIdentityService:
             raise RuntimeError("failed to set account password")
         return created
 
-    async def upsert_organization_membership(self, *, account_id: str, organization_id: str, role: str) -> None:
+    async def upsert_organization_membership(
+        self, *, account_id: str, organization_id: str, role: str
+    ) -> None:
         if self.db is None:
             return
         await self.db.execute_raw(
@@ -944,7 +969,9 @@ class PlatformIdentityService:
         )
         if not rows:
             raise ValueError("account not found")
-        return await self._create_session(account_id=rows[0]["account_id"], mfa_verified=mfa_verified)
+        return await self._create_session(
+            account_id=rows[0]["account_id"], mfa_verified=mfa_verified
+        )
 
     async def _create_session(self, account_id: str, mfa_verified: bool) -> str:
         token = f"psk_{secrets.token_urlsafe(32)}"
@@ -998,9 +1025,10 @@ class PlatformIdentityService:
         return base64.b32encode(secrets.token_bytes(20)).decode("ascii").rstrip("=")
 
     def _totp_uri(self, secret: str, account_name: str) -> str:
-        issuer = "DeltaLLM"
-        label = urllib.parse.quote(f"{issuer}:{account_name}")
-        return f"otpauth://totp/{label}?secret={secret}&issuer={urllib.parse.quote(issuer)}&algorithm=SHA1&digits=6&period=30"
+        issuer = self.totp_issuer
+        label = urllib.parse.quote(f"{issuer}:{account_name}", safe="")
+        encoded_issuer = urllib.parse.quote(issuer, safe="")
+        return f"otpauth://totp/{label}?secret={secret}&issuer={encoded_issuer}&algorithm=SHA1&digits=6&period=30"
 
     def _verify_totp(self, secret: str, code: str) -> bool:
         if not code.isdigit() or len(code) != 6:
@@ -1017,7 +1045,12 @@ class PlatformIdentityService:
         msg = struct.pack(">Q", counter)
         digest = hmac.new(key, msg, hashlib.sha1).digest()
         offset = digest[-1] & 0x0F
-        binary = ((digest[offset] & 0x7F) << 24) | ((digest[offset + 1] & 0xFF) << 16) | ((digest[offset + 2] & 0xFF) << 8) | (digest[offset + 3] & 0xFF)
+        binary = (
+            ((digest[offset] & 0x7F) << 24)
+            | ((digest[offset + 1] & 0xFF) << 16)
+            | ((digest[offset + 2] & 0xFF) << 8)
+            | (digest[offset + 3] & 0xFF)
+        )
         otp = binary % 1_000_000
         return f"{otp:06d}"
 

@@ -9,7 +9,12 @@ from redis.asyncio import Redis
 from src.bootstrap.status import BootstrapStatus
 from src.batch import BatchRepository
 from src.config import get_settings, resolve_database_settings, resolve_salt_key
-from src.config_runtime import DynamicConfigManager, SecretResolver, build_app_config, load_yaml_dict
+from src.config_runtime import (
+    DynamicConfigManager,
+    SecretResolver,
+    build_app_config,
+    load_yaml_dict,
+)
 from src.db.callable_target_access_groups import CallableTargetAccessGroupBindingRepository
 from src.db.callable_targets import CallableTargetBindingRepository
 from src.db.callable_target_policies import CallableTargetScopePolicyRepository
@@ -30,6 +35,7 @@ from src.providers.azure import AzureOpenAIAdapter
 from src.providers.gemini import GeminiAdapter
 from src.providers.openai import OpenAIAdapter
 from src.services.route_groups import RouteGroupRuntimeCache
+from src.services.ui_branding_assets import UIBrandingAssetService
 from src.upstream_http import build_control_http_client, build_upstream_http_client
 
 
@@ -81,6 +87,11 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
     app.state.app_config = cfg
     app.state.salt_key = resolve_salt_key(cfg, settings)
 
+    ui_branding_asset_service = UIBrandingAssetService(prisma_manager.client)
+    await ui_branding_asset_service.initialize(cfg)
+    dynamic_config_manager.subscribe(ui_branding_asset_service.on_config_change)
+    app.state.ui_branding_asset_service = ui_branding_asset_service
+
     http_client = build_upstream_http_client(cfg.general_settings)
     control_http_client = build_control_http_client()
     app.state.upstream_http_settings = cfg.general_settings
@@ -94,11 +105,15 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
 
     app.state.model_deployment_repository = ModelDeploymentRepository(prisma_manager.client)
     app.state.named_credential_repository = NamedCredentialRepository(prisma_manager.client)
-    app.state.callable_target_binding_repository = CallableTargetBindingRepository(prisma_manager.client)
+    app.state.callable_target_binding_repository = CallableTargetBindingRepository(
+        prisma_manager.client
+    )
     app.state.callable_target_access_group_repository = CallableTargetAccessGroupBindingRepository(
         prisma_manager.client
     )
-    app.state.callable_target_scope_policy_repository = CallableTargetScopePolicyRepository(prisma_manager.client)
+    app.state.callable_target_scope_policy_repository = CallableTargetScopePolicyRepository(
+        prisma_manager.client
+    )
     app.state.route_group_repository = RouteGroupRepository(prisma_manager.client)
     app.state.tier_repository = TierRepository(prisma_manager.client)
     app.state.prompt_registry_repository = PromptRegistryRepository(prisma_manager.client)
@@ -122,6 +137,7 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
             BootstrapStatus("redis", "ready"),
             BootstrapStatus("database", "ready"),
             BootstrapStatus("dynamic_config", "ready"),
+            BootstrapStatus("ui_branding_assets", "ready"),
             BootstrapStatus("http_client", "ready"),
             BootstrapStatus("control_http_client", "ready"),
             BootstrapStatus("provider_adapters", "ready"),

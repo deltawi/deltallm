@@ -375,7 +375,7 @@ export default function TierDetail() {
   if (detailLoading || routeDetailPending || (!detail && !detailError)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50">
-        <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-blue-600" />
+        <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-brand-primary" />
       </div>
     );
   }
@@ -384,7 +384,7 @@ export default function TierDetail() {
     return (
       <div className="p-6">
         <p className="text-gray-500">{errorMessage(detailError, 'Tier not found.')}</p>
-        <button type="button" onClick={() => navigate('/tiers')} className="mt-2 text-sm text-blue-600">Back to Tiers</button>
+        <button type="button" onClick={() => navigate('/tiers')} className="mt-2 text-sm text-brand-primary-ink">Back to Tiers</button>
       </div>
     );
   }
@@ -398,8 +398,8 @@ export default function TierDetail() {
         { label: tier.name },
       ]}
       avatar={(
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-blue-600 shadow-sm">
-          <BadgeDollarSign className="h-6 w-6 text-white" />
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-brand-primary shadow-sm">
+          <BadgeDollarSign className="h-6 w-6 text-brand-on-primary" />
         </div>
       )}
       title={tier.name}
@@ -470,7 +470,7 @@ export default function TierDetail() {
                 value={selectedVersionId || ''}
                 onChange={(event) => setSelectedVersionId(event.target.value || null)}
                 disabled={isMutating}
-                className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
               >
                 {versions.map((version) => (
                   <option key={version.tier_version_id} value={version.tier_version_id}>
@@ -483,7 +483,7 @@ export default function TierDetail() {
 
           {versionDetailPending ? (
             <div className="rounded-xl border border-gray-200 bg-white p-8">
-              <div className="mx-auto h-6 w-6 animate-spin rounded-full border-b-2 border-blue-600" />
+              <div className="mx-auto h-6 w-6 animate-spin rounded-full border-b-2 border-brand-primary" />
             </div>
           ) : versionError ? (
             <div className="rounded-xl border border-red-100 bg-red-50 p-4 text-sm text-red-700">

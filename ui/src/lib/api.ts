@@ -12,9 +12,9 @@ export class ApiError extends Error {
   }
 }
 
-function buildHeaders(init?: HeadersInit): HeadersInit {
+function buildHeaders(init?: HeadersInit, body?: BodyInit | null): HeadersInit {
   const headers = new Headers(init);
-  if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  if (!(body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   return headers;
 }
 
@@ -44,11 +44,12 @@ function errorMessage(status: number, detail: unknown): string {
 }
 
 async function apiFetch<T>(path: string, opts?: RequestInit & { json?: unknown }): Promise<T> {
+  const body = opts && 'json' in opts ? JSON.stringify((opts as any).json ?? null) : opts?.body;
   const res = await fetch(path, {
     credentials: 'include',
     ...opts,
-    headers: buildHeaders(opts?.headers),
-    body: opts && 'json' in opts ? JSON.stringify((opts as any).json ?? null) : opts?.body,
+    headers: buildHeaders(opts?.headers, body),
+    body,
   });
 
   if (!res.ok) {
@@ -1606,6 +1607,43 @@ export interface TierCapacityBoostPayload {
 export const settings = {
   get: () => apiFetch<any>('/ui/api/settings'),
   update: (payload: any) => apiFetch<any>('/ui/api/settings', { method: 'PUT', json: payload }),
+};
+
+export interface UIBrandingResponse {
+  instance_name: string;
+  logo_mark_url: string | null;
+  logo_full_url: string | null;
+  favicon_url: string | null;
+  primary_color: string;
+  secondary_color: string;
+  menu_hover_color: string;
+}
+
+export type UIBrandingAssetKind = 'logo_mark' | 'logo_full' | 'favicon';
+
+export type UIBrandingUpdate = Pick<
+  UIBrandingResponse,
+  'instance_name' | 'primary_color' | 'secondary_color' | 'menu_hover_color'
+>;
+
+export const branding = {
+  get: (signal?: AbortSignal) => apiFetch<UIBrandingResponse>('/ui/api/branding', { signal }),
+  update: (payload: UIBrandingUpdate) => apiFetch<UIBrandingResponse>('/ui/api/branding', {
+    method: 'PUT',
+    json: payload,
+  }),
+  uploadAsset: (asset: UIBrandingAssetKind, file: File) => {
+    const body = new FormData();
+    body.append('file', file);
+    return apiFetch<UIBrandingResponse>(`/ui/api/branding/assets/${asset}`, {
+      method: 'PUT',
+      body,
+    });
+  },
+  deleteAsset: (asset: UIBrandingAssetKind) => apiFetch<UIBrandingResponse>(
+    `/ui/api/branding/assets/${asset}`,
+    { method: 'DELETE' },
+  ),
 };
 
 export const tierCapacity = {
