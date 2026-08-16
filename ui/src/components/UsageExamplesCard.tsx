@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import Card from './Card';
+import { useBranding } from '../lib/brandingContext';
 
 export type ExampleLanguage = 'curl' | 'python' | 'javascript';
 export type UsageMode = 'chat' | 'embedding' | 'image_generation' | 'audio_speech' | 'audio_transcription' | 'rerank';
@@ -25,9 +26,14 @@ function gatewayBaseUrl(): string {
   return `${typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8000'}/v1`;
 }
 
+function shellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
 function buildJsonBody(
   modelName: string,
   mode: UsageMode,
+  instanceName: string,
   requestMetadata?: Record<string, unknown>,
 ): Record<string, unknown> {
   const metadata = requestMetadata && Object.keys(requestMetadata).length > 0 ? { metadata: requestMetadata } : {};
@@ -52,7 +58,7 @@ function buildJsonBody(
   if (mode === 'audio_speech') {
     return {
       model: modelName,
-      input: 'Hello from DeltaLLM.',
+      input: `Hello from ${instanceName}.`,
       voice: 'alloy',
       response_format: 'mp3',
       ...metadata,
@@ -80,7 +86,7 @@ function buildJsonBody(
   };
 }
 
-function buildCurlSnippet(baseUrl: string, modelName: string, mode: UsageMode, requestMetadata?: Record<string, unknown>): string {
+function buildCurlSnippet(baseUrl: string, modelName: string, mode: UsageMode, instanceName: string, requestMetadata?: Record<string, unknown>): string {
   if (mode === 'audio_transcription') {
     return [
       `curl -sS ${baseUrl}/audio/transcriptions \\`,
@@ -101,12 +107,12 @@ function buildCurlSnippet(baseUrl: string, modelName: string, mode: UsageMode, r
           : mode === 'rerank'
             ? '/rerank'
             : '/chat/completions';
-  const body = buildJsonBody(modelName, mode, requestMetadata);
+  const body = buildJsonBody(modelName, mode, instanceName, requestMetadata);
   const lines = [
     `curl -sS ${baseUrl}${endpoint} \\`,
     '  -H "Authorization: Bearer YOUR_API_KEY" \\',
     '  -H "Content-Type: application/json" \\',
-    `  -d '${JSON.stringify(body, null, 2)}'`,
+    `  -d ${shellSingleQuote(JSON.stringify(body, null, 2))}`,
   ];
 
   if (mode === 'audio_speech') {
@@ -117,7 +123,7 @@ function buildCurlSnippet(baseUrl: string, modelName: string, mode: UsageMode, r
   return lines.join('\n');
 }
 
-function buildPythonSnippet(baseUrl: string, modelName: string, mode: UsageMode, requestMetadata?: Record<string, unknown>): string {
+function buildPythonSnippet(baseUrl: string, modelName: string, mode: UsageMode, instanceName: string, requestMetadata?: Record<string, unknown>): string {
   if (mode === 'audio_transcription') {
     return [
       'from openai import OpenAI',
@@ -139,7 +145,7 @@ function buildPythonSnippet(baseUrl: string, modelName: string, mode: UsageMode,
   }
 
   if (mode === 'rerank') {
-    const body = buildJsonBody(modelName, mode, requestMetadata);
+    const body = buildJsonBody(modelName, mode, instanceName, requestMetadata);
     return [
       'import requests',
       '',
@@ -155,7 +161,7 @@ function buildPythonSnippet(baseUrl: string, modelName: string, mode: UsageMode,
     ].join('\n');
   }
 
-  const body = buildJsonBody(modelName, mode, requestMetadata);
+  const body = buildJsonBody(modelName, mode, instanceName, requestMetadata);
 
   if (mode === 'embedding') {
     return [
@@ -236,7 +242,7 @@ function buildPythonSnippet(baseUrl: string, modelName: string, mode: UsageMode,
   ].join('\n');
 }
 
-function buildJavaScriptSnippet(baseUrl: string, modelName: string, mode: UsageMode, requestMetadata?: Record<string, unknown>): string {
+function buildJavaScriptSnippet(baseUrl: string, modelName: string, mode: UsageMode, instanceName: string, requestMetadata?: Record<string, unknown>): string {
   if (mode === 'audio_transcription') {
     return [
       'import fs from "fs";',
@@ -258,7 +264,7 @@ function buildJavaScriptSnippet(baseUrl: string, modelName: string, mode: UsageM
   }
 
   if (mode === 'rerank') {
-    const body = buildJsonBody(modelName, mode, requestMetadata);
+    const body = buildJsonBody(modelName, mode, instanceName, requestMetadata);
     return [
       `const response = await fetch("${baseUrl}/rerank", {`,
       '  method: "POST",',
@@ -273,7 +279,7 @@ function buildJavaScriptSnippet(baseUrl: string, modelName: string, mode: UsageM
     ].join('\n');
   }
 
-  const body = buildJsonBody(modelName, mode, requestMetadata);
+  const body = buildJsonBody(modelName, mode, instanceName, requestMetadata);
 
   if (mode === 'embedding') {
     return [
@@ -374,14 +380,15 @@ export default function UsageExamplesCard({
   context,
   requestMetadata,
 }: UsageExamplesCardProps) {
+  const { branding } = useBranding();
   const [language, setLanguage] = useState<ExampleLanguage>('curl');
   const baseUrl = gatewayBaseUrl();
   const normalizedMode = normalizeMode(mode);
 
   const snippets: Record<ExampleLanguage, string> = {
-    curl: buildCurlSnippet(baseUrl, modelName, normalizedMode, requestMetadata),
-    python: buildPythonSnippet(baseUrl, modelName, normalizedMode, requestMetadata),
-    javascript: buildJavaScriptSnippet(baseUrl, modelName, normalizedMode, requestMetadata),
+    curl: buildCurlSnippet(baseUrl, modelName, normalizedMode, branding.instance_name, requestMetadata),
+    python: buildPythonSnippet(baseUrl, modelName, normalizedMode, branding.instance_name, requestMetadata),
+    javascript: buildJavaScriptSnippet(baseUrl, modelName, normalizedMode, branding.instance_name, requestMetadata),
   };
 
   return (
@@ -397,7 +404,7 @@ export default function UsageExamplesCard({
             <select
               value={language}
               onChange={(event) => setLanguage(event.target.value as ExampleLanguage)}
-              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-primary"
             >
               <option value="curl">curl</option>
               <option value="python">Python</option>

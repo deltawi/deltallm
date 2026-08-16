@@ -34,7 +34,7 @@ export default function PromptVersionComposerCard({ value, creating, onChange, o
           <textarea
             value={value.system_prompt}
             onChange={(event) => onChange({ ...value, system_prompt: event.target.value })}
-            className="h-56 w-full rounded-lg border border-gray-300 px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="h-56 w-full rounded-lg border border-gray-300 px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-brand-primary"
           />
           <p className="mt-1 text-xs text-slate-500">Use placeholders like <code>{'{product_name}'}</code> inside the prompt body.</p>
         </div>
@@ -45,7 +45,7 @@ export default function PromptVersionComposerCard({ value, creating, onChange, o
             value={value.variables}
             onChange={(event) => onChange({ ...value, variables: event.target.value })}
             placeholder="product_name, customer_name"
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
           />
           <p className="mt-1 text-xs text-slate-500">Use comma-separated variable names. The registry will build the validation schema for you.</p>
           {variables.length > 0 && (
@@ -67,7 +67,7 @@ export default function PromptVersionComposerCard({ value, creating, onChange, o
               <textarea
                 value={value.model_hints}
                 onChange={(event) => onChange({ ...value, model_hints: event.target.value })}
-                className="h-40 w-full rounded-lg border border-gray-300 px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="h-40 w-full rounded-lg border border-gray-300 px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
             </div>
             <div>
@@ -75,7 +75,7 @@ export default function PromptVersionComposerCard({ value, creating, onChange, o
               <textarea
                 value={value.route_preferences}
                 onChange={(event) => onChange({ ...value, route_preferences: event.target.value })}
-                className="h-40 w-full rounded-lg border border-gray-300 px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="h-40 w-full rounded-lg border border-gray-300 px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
             </div>
           </div>
@@ -100,7 +100,7 @@ export default function PromptVersionComposerCard({ value, creating, onChange, o
             type="button"
             onClick={onCreate}
             disabled={creating}
-            className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+            className="rounded-lg bg-brand-primary px-3 py-2 text-sm text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
           >
             {creating ? 'Creating...' : 'Create Version'}
           </button>

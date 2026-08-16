@@ -86,7 +86,7 @@ export default function TierCapacityDashboardPanel({
             {loading && !dashboard ? (
               <tr>
                 <td colSpan={7} className="px-4 py-8 text-center">
-                  <div className="mx-auto h-5 w-5 animate-spin rounded-full border-b-2 border-blue-600" />
+                  <div className="mx-auto h-5 w-5 animate-spin rounded-full border-b-2 border-brand-primary" />
                 </td>
               </tr>
             ) : pools.length === 0 ? (

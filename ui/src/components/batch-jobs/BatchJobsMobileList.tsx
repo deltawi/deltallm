@@ -266,7 +266,7 @@ export default function BatchJobsMobileList({
             placeholder="Search batch ID or model..."
             value={searchValue}
             onChange={(e) => onSearchChange(e.target.value)}
-            className="w-full bg-gray-100 border-transparent rounded-lg py-2 pl-9 pr-4 text-sm focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
+            className="w-full bg-gray-100 border-transparent rounded-lg py-2 pl-9 pr-4 text-sm focus:bg-white focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all"
           />
         </div>
       </div>
@@ -282,7 +282,7 @@ export default function BatchJobsMobileList({
               onClick={() => onStatusFilterChange(tab.value)}
               aria-pressed={selected}
               className={clsx(
-                'whitespace-nowrap px-3 py-1.5 rounded-full text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500',
+                'whitespace-nowrap px-3 py-1.5 rounded-full text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary',
                 selected
                   ? 'bg-gray-900 text-white'
                   : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50',
@@ -326,7 +326,7 @@ export default function BatchJobsMobileList({
             return (
               <div
                 key={job.batch_id}
-                className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm relative active:bg-gray-50 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset"
+                className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm relative active:bg-gray-50 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-inset"
                 role="button"
                 tabIndex={0}
                 onClick={() => onView(job.batch_id)}
@@ -348,7 +348,7 @@ export default function BatchJobsMobileList({
                     </code>
                     <button
                       type="button"
-                      className="text-gray-400 hover:text-gray-600 p-1 -m-1 rounded shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                      className="text-gray-400 hover:text-gray-600 p-1 -m-1 rounded shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
                       onClick={(e) => { e.stopPropagation(); handleCopy(job.batch_id); }}
                       aria-label="Copy batch id"
                     >
@@ -357,7 +357,7 @@ export default function BatchJobsMobileList({
                   </div>
                   <button
                     type="button"
-                    className="p-1 -mr-1 text-gray-400 hover:text-gray-600 active:bg-gray-100 rounded shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                    className="p-1 -mr-1 text-gray-400 hover:text-gray-600 active:bg-gray-100 rounded shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
                     onClick={(e) => { e.stopPropagation(); openSheet(job, e.currentTarget); }}
                     aria-label="More actions"
                     aria-haspopup="dialog"
@@ -463,7 +463,7 @@ export default function BatchJobsMobileList({
                     type="button"
                     onClick={action.onClick}
                     className={clsx(
-                      'w-full flex items-center gap-3 px-4 py-3 text-sm rounded-lg active:bg-gray-100 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500',
+                      'w-full flex items-center gap-3 px-4 py-3 text-sm rounded-lg active:bg-gray-100 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary',
                       action.tone === 'danger' ? 'text-red-600' : 'text-gray-700',
                     )}
                   >
@@ -475,7 +475,7 @@ export default function BatchJobsMobileList({
               <button
                 type="button"
                 onClick={closeSheet}
-                className="w-full mt-1 px-4 py-3 text-sm font-medium text-gray-500 rounded-lg active:bg-gray-100 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                className="w-full mt-1 px-4 py-3 text-sm font-medium text-gray-500 rounded-lg active:bg-gray-100 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
               >
                 Cancel
               </button>

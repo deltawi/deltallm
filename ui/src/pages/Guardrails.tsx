@@ -25,10 +25,10 @@ function toGuardrailConfigInput(item: GuardrailRecord): GuardrailConfigInput {
 }
 
 const typeStyles: Record<string, { icon: typeof Shield; color: string; bg: string; badge: string }> = {
-  pii: { icon: Fingerprint, color: 'text-violet-600', bg: 'bg-violet-50', badge: 'bg-violet-100 text-violet-700' },
+  pii: { icon: Fingerprint, color: 'text-brand-secondary-ink', bg: 'bg-violet-50', badge: 'bg-violet-100 text-violet-700' },
   prompt_injection: { icon: ShieldAlert, color: 'text-rose-600', bg: 'bg-rose-50', badge: 'bg-rose-100 text-rose-700' },
   toxicity: { icon: MessageSquareWarning, color: 'text-amber-600', bg: 'bg-amber-50', badge: 'bg-amber-100 text-amber-700' },
-  custom: { icon: Code2, color: 'text-blue-600', bg: 'bg-blue-50', badge: 'bg-blue-100 text-blue-700' },
+  custom: { icon: Code2, color: 'text-brand-primary-ink', bg: 'bg-blue-50', badge: 'bg-blue-100 text-blue-700' },
 };
 
 const typeLabels: Record<string, string> = {
@@ -63,7 +63,7 @@ const scopeIcons: Record<ScopeKind, typeof Building2> = {
 };
 
 const scopeColors: Record<ScopeKind, { active: string; text: string; dot: string }> = {
-  organization: { active: 'bg-indigo-50 border-indigo-200 text-indigo-700', text: 'text-indigo-600', dot: 'bg-indigo-500' },
+  organization: { active: 'bg-indigo-50 border-indigo-200 text-indigo-700', text: 'text-brand-secondary-ink', dot: 'bg-indigo-500' },
   team: { active: 'bg-emerald-50 border-emerald-200 text-emerald-700', text: 'text-emerald-600', dot: 'bg-emerald-500' },
   key: { active: 'bg-amber-50 border-amber-200 text-amber-700', text: 'text-amber-600', dot: 'bg-amber-500' },
 };
@@ -148,7 +148,7 @@ export default function Guardrails() {
             setShowForm(true);
           }}
           disabled={catalogLoading || !catalog}
-          className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2.5 text-sm font-medium text-brand-on-primary shadow-sm transition-colors hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
         >
           <Plus className="h-4 w-4" /> Add Guardrail
         </button>
@@ -186,7 +186,7 @@ export default function Guardrails() {
         <div className="rounded-xl border border-gray-200 bg-white p-4">
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50">
-              <ArrowDownUp className="h-[18px] w-[18px] text-blue-600" />
+              <ArrowDownUp className="h-[18px] w-[18px] text-brand-primary-ink" />
             </div>
             <div>
               <p className="text-2xl font-bold text-gray-900">{preCallCount}</p>
@@ -283,7 +283,7 @@ export default function Guardrails() {
                         <Ban className="h-3.5 w-3.5" /> Block
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 text-xs font-medium text-blue-600">
+                      <span className="inline-flex items-center gap-1 text-xs font-medium text-brand-primary-ink">
                         <Eye className="h-3.5 w-3.5" /> Log
                       </span>
                     )}
@@ -293,7 +293,7 @@ export default function Guardrails() {
                   </td>
                   <td className="px-4 py-3.5 text-center">
                     {row.editor.default_on ? (
-                      <ToggleRight className="mx-auto h-6 w-6 text-violet-600" />
+                      <ToggleRight className="mx-auto h-6 w-6 text-brand-secondary-ink" />
                     ) : (
                       <ToggleLeft className="mx-auto h-6 w-6 text-gray-300" />
                     )}
@@ -389,7 +389,7 @@ export default function Guardrails() {
                   value={scopeSearch}
                   onChange={(e) => { setScopeSearch(e.target.value); setShowAll(false); }}
                   placeholder={`Search ${activeScope === 'organization' ? 'organizations' : activeScope === 'team' ? 'teams' : 'API keys'}…`}
-                  className="w-full rounded-lg border border-gray-200 bg-white py-1.5 pl-8 pr-3 text-xs text-gray-700 placeholder:text-gray-400 focus:border-violet-300 focus:outline-none focus:ring-1 focus:ring-violet-200"
+                  className="w-full rounded-lg border border-gray-200 bg-white py-1.5 pl-8 pr-3 text-xs text-gray-700 placeholder:text-gray-400 focus:border-violet-300 focus:outline-none focus:ring-1 focus:ring-brand-primary/20"
                 />
               </div>
               {filteredEntities.length === 0 ? (
@@ -422,7 +422,7 @@ export default function Guardrails() {
                   {hiddenCount > 0 && (
                     <button
                       onClick={() => setShowAll(true)}
-                      className="mt-1 w-full rounded-lg px-3 py-1.5 text-xs font-medium text-violet-600 hover:bg-violet-50 transition-colors"
+                      className="mt-1 w-full rounded-lg px-3 py-1.5 text-xs font-medium text-brand-secondary-ink hover:bg-violet-50 transition-colors"
                     >
                       Show {hiddenCount} more
                     </button>

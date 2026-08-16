@@ -26,7 +26,7 @@ export default function TierPolicyPreviewPanel({
   if (loading) {
     return (
       <div className="rounded-xl border border-gray-200 bg-white p-6 text-center">
-        <div className="mx-auto h-6 w-6 animate-spin rounded-full border-b-2 border-blue-600" />
+        <div className="mx-auto h-6 w-6 animate-spin rounded-full border-b-2 border-brand-primary" />
       </div>
     );
   }
@@ -207,7 +207,7 @@ function PreviewMetric({ icon: Icon, label, value }: { icon: ElementType; label:
   return (
     <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
       <div className="flex items-center gap-2">
-        <Icon className="h-4 w-4 text-blue-600" />
+        <Icon className="h-4 w-4 text-brand-primary-ink" />
         <span className="text-xs font-medium uppercase text-gray-400">{label}</span>
       </div>
       <p className="mt-2 truncate text-sm font-semibold text-gray-900" title={value}>{value}</p>

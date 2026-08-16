@@ -3,6 +3,8 @@ import type { FormEvent } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import { auth as authApi } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import BrandLogo from '../components/BrandLogo';
+import Button from '../components/Button';
 
 export default function MFAVerify() {
   const { refreshSession, logout } = useAuth();
@@ -32,8 +34,9 @@ export default function MFAVerify() {
     <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
       <div className="max-w-md w-full">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-600 rounded-2xl mb-4">
-            <ShieldCheck className="w-8 h-8 text-white" />
+          <BrandLogo variant="expanded" className="mb-6 justify-center" />
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-brand-primary rounded-2xl mb-4">
+            <ShieldCheck className="w-8 h-8 text-brand-on-primary" />
           </div>
           <h1 className="text-2xl font-bold text-gray-900">Verify Your Session</h1>
           <p className="text-gray-500 mt-2">Enter the code from your authenticator app to continue.</p>
@@ -56,25 +59,29 @@ export default function MFAVerify() {
                 placeholder="Enter 6-digit code"
                 autoComplete="one-time-code"
                 maxLength={6}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono tracking-wider text-center text-lg"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent font-mono tracking-wider text-center text-lg"
               />
             </div>
-            <button
+            <Button
               type="submit"
-              disabled={loading || code.length !== 6}
-              className="w-full bg-blue-600 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
+              loading={loading}
+              disabled={code.length !== 6}
+              fullWidth
+              size="lg"
             >
               {loading ? 'Verifying...' : 'Verify MFA'}
-            </button>
+            </Button>
           </form>
 
-          <button
-            type="button"
+          <Button
+            variant="secondary"
             onClick={() => { void logout(); }}
-            className="mt-4 w-full border border-gray-300 text-gray-700 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+            className="mt-4"
+            fullWidth
+            size="lg"
           >
             Sign Out
-          </button>
+          </Button>
         </div>
       </div>
     </div>

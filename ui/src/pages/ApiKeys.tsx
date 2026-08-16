@@ -102,7 +102,7 @@ function BudgetBar({ spend, max_budget }: { spend: number; max_budget: number | 
 function PolicyHint({ label, value }: { label: string; value: string | null }) {
   if (!value) return null;
   return (
-    <span className="inline-flex items-center gap-1 text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
+    <span className="inline-flex items-center gap-1 text-xs text-brand-primary-ink bg-blue-50 px-2 py-0.5 rounded-full">
       <Info className="w-3 h-3" /> {label}: {value}
     </span>
   );
@@ -631,7 +631,7 @@ export default function ApiKeys() {
         </>
       )}
       action={canCreate ? (
-        <button onClick={openCreate} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700">
+        <button onClick={openCreate} className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary transition-colors hover:bg-brand-primary-hover">
           <Plus className="h-4 w-4" /> {myKeysMode && !isAdmin ? 'Create Personal Key' : 'Create Key'}
         </button>
       ) : null}
@@ -644,13 +644,13 @@ export default function ApiKeys() {
             <div className="inline-flex rounded-lg border border-gray-300 bg-white p-0.5">
               <button
                 onClick={() => { setViewTab('all'); setPageOffset(0); }}
-                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${viewTab === 'all' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-50'}`}
+                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${viewTab === 'all' ? 'bg-brand-primary text-brand-on-primary shadow-sm' : 'text-gray-600 hover:bg-gray-50'}`}
               >
                 <List className="w-3.5 h-3.5" /> All Keys
               </button>
               <button
                 onClick={() => { setViewTab('my'); setPageOffset(0); }}
-                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${viewTab === 'my' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-50'}`}
+                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${viewTab === 'my' ? 'bg-brand-primary text-brand-on-primary shadow-sm' : 'text-gray-600 hover:bg-gray-50'}`}
               >
                 <Key className="w-3.5 h-3.5" /> My Keys
               </button>
@@ -660,7 +660,7 @@ export default function ApiKeys() {
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             placeholder="Search keys..."
-            className="hidden md:block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 sm:w-72"
+            className="hidden md:block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary sm:w-72"
           />
         </div>
       )}
@@ -694,11 +694,11 @@ export default function ApiKeys() {
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Key Name *</label>
-            <input data-autofocus="true" value={form.key_name} onChange={(e) => setForm({ ...form, key_name: e.target.value })} placeholder="my-key" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <input data-autofocus="true" value={form.key_name} onChange={(e) => setForm({ ...form, key_name: e.target.value })} placeholder="my-key" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary" />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Team *</label>
-            <select value={form.team_id} onChange={(e) => handleTeamChange(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+            <select value={form.team_id} onChange={(e) => handleTeamChange(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary bg-white">
               <option value="">Select a team</option>
               {form.team_id && !createTeamOptions.some((team) => team.team_id === form.team_id) && (
                 <option value={form.team_id} disabled>{form.team_id} (inaccessible)</option>
@@ -731,7 +731,7 @@ export default function ApiKeys() {
                   <PolicyHint label="Max expiry" value={`${selectedTeamPolicy.self_service_max_expiry_days} days`} />
                 )}
                 {!selectedTeamPolicy.self_service_max_keys_per_user && !selectedTeamPolicy.self_service_budget_ceiling && !selectedTeamPolicy.self_service_require_expiry && !selectedTeamPolicy.self_service_max_expiry_days && (
-                  <span className="text-xs text-blue-600">No additional constraints</span>
+                  <span className="text-xs text-brand-primary-ink">No additional constraints</span>
                 )}
               </div>
             </div>
@@ -742,7 +742,7 @@ export default function ApiKeys() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Owned By *</label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <label className={`flex items-start gap-3 rounded-lg border px-3 py-2 cursor-pointer ${form.owner_mode === 'self' ? 'border-blue-500 bg-blue-50' : 'border-gray-200'}`}>
+                  <label className={`flex items-start gap-3 rounded-lg border px-3 py-2 cursor-pointer ${form.owner_mode === 'self' ? 'border-brand-primary bg-blue-50' : 'border-gray-200'}`}>
                     <input
                       type="radio"
                       name="owner_mode"
@@ -756,7 +756,7 @@ export default function ApiKeys() {
                       <span className="block text-xs text-gray-500">Use your current admin account as the owner.</span>
                     </span>
                   </label>
-                  <label className={`flex items-start gap-3 rounded-lg border px-3 py-2 cursor-pointer ${form.owner_mode === 'service_account' ? 'border-blue-500 bg-blue-50' : 'border-gray-200'}`}>
+                  <label className={`flex items-start gap-3 rounded-lg border px-3 py-2 cursor-pointer ${form.owner_mode === 'service_account' ? 'border-brand-primary bg-blue-50' : 'border-gray-200'}`}>
                     <input
                       type="radio"
                       name="owner_mode"
@@ -787,7 +787,7 @@ export default function ApiKeys() {
                         value={form.owner_service_account_id}
                         onChange={(e) => setForm({ ...form, owner_service_account_id: e.target.value })}
                         disabled={!form.team_id || serviceAccountsLoading}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white disabled:bg-gray-50 disabled:text-gray-500"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary bg-white disabled:bg-gray-50 disabled:text-gray-500"
                       >
                         <option value="">{!form.team_id ? 'Select a team first' : 'Select a service account'}</option>
                         {form.owner_service_account_id && !availableServiceAccounts.some((item) => item.service_account_id === form.owner_service_account_id) && (
@@ -814,7 +814,7 @@ export default function ApiKeys() {
                         onChange={(e) => setNewServiceAccountName(e.target.value)}
                         placeholder="ci-runner"
                         disabled={!form.team_id || creatingServiceAccount}
-                        className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50 disabled:text-gray-500"
+                        className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-gray-50 disabled:text-gray-500"
                       />
                       <button
                         type="button"
@@ -845,28 +845,28 @@ export default function ApiKeys() {
                 value={form.max_budget}
                 onChange={(e) => setForm({ ...form, max_budget: e.target.value })}
                 max={isSelfServiceCreate && selectedTeamPolicy?.self_service_budget_ceiling != null ? selectedTeamPolicy.self_service_budget_ceiling : undefined}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">RPM Limit</label>
-              <input type="number" value={form.rpm_limit} onChange={(e) => setForm({ ...form, rpm_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <input type="number" value={form.rpm_limit} onChange={(e) => setForm({ ...form, rpm_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">TPM Limit</label>
-              <input type="number" value={form.tpm_limit} onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <input type="number" value={form.tpm_limit} onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">RPH Limit</label>
-              <input type="number" value={form.rph_limit} onChange={(e) => setForm({ ...form, rph_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Requests per hour" />
+              <input type="number" value={form.rph_limit} onChange={(e) => setForm({ ...form, rph_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary" placeholder="Requests per hour" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">RPD Limit</label>
-              <input type="number" value={form.rpd_limit} onChange={(e) => setForm({ ...form, rpd_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Requests per day" />
+              <input type="number" value={form.rpd_limit} onChange={(e) => setForm({ ...form, rpd_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary" placeholder="Requests per day" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">TPD Limit</label>
-              <input type="number" value={form.tpd_limit} onChange={(e) => setForm({ ...form, tpd_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Tokens per day" />
+              <input type="number" value={form.tpd_limit} onChange={(e) => setForm({ ...form, tpd_limit: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary" placeholder="Tokens per day" />
             </div>
           </div>
 
@@ -885,7 +885,7 @@ export default function ApiKeys() {
                 type="datetime-local"
                 value={form.expires}
                 onChange={(e) => setForm({ ...form, expires: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
             </div>
           )}
@@ -927,7 +927,7 @@ export default function ApiKeys() {
           {(error || assetAccessLoadError) && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error || assetAccessLoadError}</div>}
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={closeEditor} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-            <button onClick={editItem ? handleUpdate : handleCreate} disabled={saving || !form.team_id || editAssetAccessPending || assetAccessLoading || Boolean(assetAccessLoadError)} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">{saving ? 'Saving...' : editItem ? 'Save Changes' : 'Create Key'}</button>
+            <button onClick={editItem ? handleUpdate : handleCreate} disabled={saving || !form.team_id || editAssetAccessPending || assetAccessLoading || Boolean(assetAccessLoadError)} className="px-4 py-2 text-sm bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50">{saving ? 'Saving...' : editItem ? 'Save Changes' : 'Create Key'}</button>
           </div>
         </div>
       </Modal>
@@ -942,7 +942,7 @@ export default function ApiKeys() {
             </button>
           </div>
           <div className="flex justify-end mt-4">
-            <button onClick={() => setCreatedKey(null)} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">Done</button>
+            <button onClick={() => setCreatedKey(null)} className="px-4 py-2 text-sm bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors">Done</button>
           </div>
         </div>
       </Modal>

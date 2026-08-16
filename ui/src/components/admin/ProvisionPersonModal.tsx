@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import Modal from '../Modal';
 import { rbac, type ProvisionPersonResponse } from '../../lib/api';
 import { useToast } from '../ToastProvider';
+import Button from '../Button';
 
 type ProvisionMode = 'invite_email' | 'create_account';
 type ScopeType = 'none' | 'organization' | 'team';
@@ -186,7 +187,7 @@ export default function ProvisionPersonModal({
               placeholder="user@example.com"
               autoComplete="email"
               data-autofocus="true"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
           </div>
         </section>
@@ -228,7 +229,7 @@ export default function ProvisionPersonModal({
             <select
               value={platformRole}
               onChange={(event) => { setPlatformRole(event.target.value); setError(''); }}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
             >
               {PLATFORM_ROLES.filter((item) => mode === 'create_account' || item.value !== 'platform_admin').map((item) => (
                 <option key={item.value} value={item.value}>
@@ -245,7 +246,7 @@ export default function ProvisionPersonModal({
                 <select
                   value={scopeType}
                   onChange={(event) => { setScopeType(event.target.value as ScopeType); setError(''); }}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
                 >
                   <option value="none">No initial scope</option>
                   <option value="organization">Organization</option>
@@ -260,7 +261,7 @@ export default function ProvisionPersonModal({
                     <select
                       value={organizationId}
                       onChange={(event) => { setOrganizationId(event.target.value); setError(''); }}
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
                     >
                       {orgList.map((item) => (
                         <option key={item.organization_id} value={item.organization_id}>
@@ -274,7 +275,7 @@ export default function ProvisionPersonModal({
                     <select
                       value={organizationRole}
                       onChange={(event) => setOrganizationRole(event.target.value)}
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
                     >
                       {ORGANIZATION_ROLES.map((item) => (
                         <option key={item.value} value={item.value}>
@@ -293,7 +294,7 @@ export default function ProvisionPersonModal({
                     <select
                       value={teamId}
                       onChange={(event) => { setTeamId(event.target.value); setError(''); }}
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
                     >
                       {teamList.map((item) => (
                         <option key={item.team_id} value={item.team_id}>
@@ -307,7 +308,7 @@ export default function ProvisionPersonModal({
                     <select
                       value={teamRole}
                       onChange={(event) => setTeamRole(event.target.value)}
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
                     >
                       {TEAM_ROLES.map((item) => (
                         <option key={item.value} value={item.value}>
@@ -340,7 +341,7 @@ export default function ProvisionPersonModal({
                 onChange={(event) => { setPassword(event.target.value); setError(''); }}
                 placeholder="At least 12 characters"
                 autoComplete="new-password"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
             </div>
             <label className="flex items-center gap-2 text-sm text-gray-700">
@@ -356,22 +357,15 @@ export default function ProvisionPersonModal({
         ) : null}
 
         <div className="flex items-center justify-end gap-3">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={saving}
-            className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
-          >
+          <Button variant="secondary" onClick={onClose} disabled={saving}>
             Cancel
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
             onClick={submit}
-            disabled={saving}
-            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+            loading={saving}
           >
             {saving ? 'Saving…' : mode === 'invite_email' ? 'Send Invitation' : 'Create Account'}
-          </button>
+          </Button>
         </div>
       </div>
     </Modal>

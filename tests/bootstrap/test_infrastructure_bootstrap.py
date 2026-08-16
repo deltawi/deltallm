@@ -4,7 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.bootstrap.infrastructure import init_infrastructure_runtime, shutdown_infrastructure_runtime
+from src.bootstrap.infrastructure import (
+    init_infrastructure_runtime,
+    shutdown_infrastructure_runtime,
+)
 
 
 @pytest.mark.asyncio
@@ -17,6 +20,7 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
             self.redis_client = redis_client
             self.file_config = file_config
             self.closed = False
+            self.subscribers = []
 
         async def initialize(self) -> None:
             created["dynamic_initialized"] = True
@@ -34,6 +38,9 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
                 ),
                 deltallm_settings=SimpleNamespace(),
             )
+
+        def subscribe(self, callback) -> None:  # noqa: ANN001
+            self.subscribers.append(callback)
 
         async def close(self) -> None:
             self.closed = True
@@ -76,6 +83,17 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
         async def disconnect(self) -> None:
             self.disconnected = True
 
+    class FakeUIBrandingAssetService:
+        def __init__(self, db_client) -> None:  # noqa: ANN001
+            self.db_client = db_client
+            self.initialized_with = None
+
+        async def initialize(self, cfg) -> None:  # noqa: ANN001
+            self.initialized_with = cfg
+
+        async def on_config_change(self, cfg, changes) -> None:  # noqa: ANN001
+            del cfg, changes
+
     monkeypatch.setattr(
         "src.bootstrap.infrastructure.get_settings",
         lambda: SimpleNamespace(
@@ -89,7 +107,9 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
             redis_password=None,
         ),
     )
-    monkeypatch.setattr("src.bootstrap.infrastructure.load_yaml_dict", lambda path: {"loaded_from": path})
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.load_yaml_dict", lambda path: {"loaded_from": path}
+    )
     monkeypatch.setattr(
         "src.bootstrap.infrastructure.build_app_config",
         lambda file_config, secret_resolver: SimpleNamespace(  # noqa: ARG005
@@ -105,21 +125,52 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
             deltallm_settings=SimpleNamespace(),
         ),
     )
-    monkeypatch.setattr("src.bootstrap.infrastructure.DynamicConfigManager", FakeDynamicConfigManager)
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.DynamicConfigManager", FakeDynamicConfigManager
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.UIBrandingAssetService", FakeUIBrandingAssetService
+    )
     monkeypatch.setattr("src.bootstrap.infrastructure.Redis", FakeRedis)
     monkeypatch.setattr("src.bootstrap.infrastructure.prisma_manager", FakePrismaManager())
-    monkeypatch.setattr("src.bootstrap.infrastructure.resolve_salt_key", lambda cfg, settings: "salt")  # noqa: ARG005
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.resolve_salt_key", lambda cfg, settings: "salt"
+    )  # noqa: ARG005
     monkeypatch.setattr("src.upstream_http.httpx.AsyncClient", FakeHTTPClient)
-    monkeypatch.setattr("src.bootstrap.infrastructure.OpenAIAdapter", lambda client: ("openai", client))
-    monkeypatch.setattr("src.bootstrap.infrastructure.AzureOpenAIAdapter", lambda client: ("azure", client))
-    monkeypatch.setattr("src.bootstrap.infrastructure.AnthropicAdapter", lambda client: ("anthropic", client))
-    monkeypatch.setattr("src.bootstrap.infrastructure.GeminiAdapter", lambda client: ("gemini", client))
-    monkeypatch.setattr("src.bootstrap.infrastructure.BedrockAdapter", lambda client: ("bedrock", client))
-    monkeypatch.setattr("src.bootstrap.infrastructure.RouteGroupRuntimeCache", lambda redis_client: ("route-cache", redis_client))
-    monkeypatch.setattr("src.bootstrap.infrastructure.ModelDeploymentRepository", lambda client: ("model-repo", client))
-    monkeypatch.setattr("src.bootstrap.infrastructure.RouteGroupRepository", lambda client: ("route-group-repo", client))
-    monkeypatch.setattr("src.bootstrap.infrastructure.PromptRegistryRepository", lambda client: ("prompt-repo", client))
-    monkeypatch.setattr("src.bootstrap.infrastructure.MCPRepository", lambda client: ("mcp-repo", client))
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.OpenAIAdapter", lambda client: ("openai", client)
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.AzureOpenAIAdapter", lambda client: ("azure", client)
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.AnthropicAdapter", lambda client: ("anthropic", client)
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.GeminiAdapter", lambda client: ("gemini", client)
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.BedrockAdapter", lambda client: ("bedrock", client)
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.RouteGroupRuntimeCache",
+        lambda redis_client: ("route-cache", redis_client),
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.ModelDeploymentRepository",
+        lambda client: ("model-repo", client),
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.RouteGroupRepository",
+        lambda client: ("route-group-repo", client),
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.PromptRegistryRepository",
+        lambda client: ("prompt-repo", client),
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.MCPRepository", lambda client: ("mcp-repo", client)
+    )
     monkeypatch.setattr(
         "src.bootstrap.infrastructure.BatchRepository",
         lambda client, **kwargs: ("batch-repo", client, kwargs),
@@ -137,10 +188,14 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
     assert app.state.prisma_manager.database_settings.pool_size == 25
     assert app.state.prisma_manager.database_settings.pool_timeout == 45
     assert app.state.prisma_manager.database_settings.url == (
-        "postgresql://env-user:env-pass@env-host:5432/env-db"
-        "?connection_limit=25&pool_timeout=45"
+        "postgresql://env-user:env-pass@env-host:5432/env-db?connection_limit=25&pool_timeout=45"
     )
     assert app.state.dynamic_config_manager is runtime.dynamic_config_manager
+    assert app.state.ui_branding_asset_service.db_client == "db-client"
+    assert app.state.ui_branding_asset_service.initialized_with is app.state.app_config
+    assert app.state.dynamic_config_manager.subscribers == [
+        app.state.ui_branding_asset_service.on_config_change
+    ]
     assert app.state.salt_key == "salt"
     assert runtime.http_client.timeout.connect == 7
     assert runtime.http_client.timeout.read == 301

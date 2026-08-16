@@ -71,7 +71,7 @@ export default function InvitationPanel({
 
       {loading ? (
         <div className="flex items-center justify-center py-12">
-          <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-blue-600" />
+          <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-brand-primary" />
         </div>
       ) : items.length === 0 ? (
         <div className="px-5 py-14 text-center text-sm text-gray-500">
@@ -118,7 +118,7 @@ export default function InvitationPanel({
                           type="button"
                           onClick={() => onResend(item.invitation_id)}
                           disabled={!isActive || saving}
-                          className="text-sm font-medium text-blue-600 hover:text-blue-800 disabled:cursor-not-allowed disabled:text-gray-300"
+                          className="text-sm font-medium text-brand-primary-ink hover:text-brand-primary-ink-hover disabled:cursor-not-allowed disabled:text-gray-300"
                         >
                           Resend
                         </button>

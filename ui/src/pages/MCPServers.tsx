@@ -212,9 +212,9 @@ export default function MCPServers() {
   };
 
   const stats = [
-    { label: 'Total Servers', value: pagination?.total ?? servers.length, icon: Server, color: 'text-blue-600', bg: 'bg-blue-100' },
+    { label: 'Total Servers', value: pagination?.total ?? servers.length, icon: Server, color: 'text-brand-primary-ink', bg: 'bg-blue-100' },
     { label: 'Healthy', value: healthyCount, icon: HeartPulse, color: 'text-emerald-600', bg: 'bg-emerald-100' },
-    { label: 'Tools Exposed', value: totalTools, icon: Wrench, color: 'text-violet-600', bg: 'bg-violet-100' },
+    { label: 'Tools Exposed', value: totalTools, icon: Wrench, color: 'text-brand-secondary-ink', bg: 'bg-violet-100' },
     { label: 'Org-Owned', value: orgOwnedCount, icon: Building2, color: 'text-amber-600', bg: 'bg-amber-100' },
   ];
 
@@ -233,7 +233,7 @@ export default function MCPServers() {
         <button
           type="button"
           onClick={() => setCreateOpen(true)}
-          className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-700"
+          className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2.5 text-sm font-medium text-brand-on-primary shadow-sm transition-colors hover:bg-brand-primary-hover"
         >
           <Plus className="h-4 w-4" />
           Register server
@@ -268,7 +268,7 @@ export default function MCPServers() {
               placeholder="Search servers..."
               value={searchInput}
               onChange={(event) => setSearchInput(event.target.value)}
-              className="w-full rounded-lg border border-gray-200 bg-gray-50 py-2 pl-9 pr-4 text-sm transition focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+              className="w-full rounded-lg border border-gray-200 bg-gray-50 py-2 pl-9 pr-4 text-sm transition focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-brand-primary/30"
             />
           </div>
           <div className="flex items-center gap-2">
@@ -290,7 +290,7 @@ export default function MCPServers() {
                     setPageOffset(0);
                   }}
                   className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
-                    enabledFilter === value ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-50'
+                    enabledFilter === value ? 'bg-brand-primary text-brand-on-primary shadow-sm' : 'text-gray-600 hover:bg-gray-50'
                   }`}
                 >
                   {label}
@@ -300,7 +300,7 @@ export default function MCPServers() {
             <button
               type="button"
               onClick={() => refetch()}
-              className="rounded-lg p-2 text-gray-400 transition hover:bg-blue-50 hover:text-blue-600"
+              className="rounded-lg p-2 text-gray-400 transition hover:bg-blue-50 hover:text-brand-primary-ink"
               title="Refresh list"
             >
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
@@ -403,7 +403,7 @@ export default function MCPServers() {
                                 title="Refresh tools"
                                 disabled={refreshingId === server.mcp_server_id}
                                 onClick={(event) => void handleRefreshTools(server, event)}
-                                className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-blue-50 hover:text-blue-600 disabled:opacity-50"
+                                className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-blue-50 hover:text-brand-primary-ink disabled:opacity-50"
                               >
                                 <RefreshCw className={`h-3.5 w-3.5 ${refreshingId === server.mcp_server_id ? 'animate-spin' : ''}`} />
                               </button>
@@ -509,7 +509,7 @@ export default function MCPServers() {
                 void handleCreate();
               }}
               disabled={creating}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              className="rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
             >
               {creating ? 'Creating…' : 'Create Server'}
             </button>

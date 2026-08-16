@@ -144,7 +144,7 @@ function FormField({ label, children }: { label: string; children: ReactNode }) 
 }
 
 const inputCls =
-  'w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 transition focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30';
+  'w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 transition focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-brand-primary/30';
 const selectCls = inputCls;
 const APPROVALS_LIMIT = 20;
 
@@ -476,7 +476,7 @@ export default function MCPServerDetail() {
           <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
           <div className="flex flex-col items-start justify-between gap-6 p-6 md:p-8 lg:flex-row lg:items-center">
             <div className="flex flex-col gap-5 sm:flex-row">
-              <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-blue-600 shadow-sm">
+              <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-brand-primary-ink shadow-sm">
                 <Globe className="h-7 w-7" />
               </div>
               <div className="space-y-2">
@@ -527,7 +527,7 @@ export default function MCPServerDetail() {
                       setCopied(true);
                       window.setTimeout(() => setCopied(false), 2000);
                     }}
-                    className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-blue-50 hover:text-blue-600"
+                    className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-blue-50 hover:text-brand-primary-ink"
                     title="Copy URL"
                   >
                     {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
@@ -584,12 +584,12 @@ export default function MCPServerDetail() {
 
           <div className="grid grid-cols-2 border-t border-gray-100 md:grid-cols-4">
             {[
-              { label: 'Tools', value: server.tool_count, icon: Zap, color: 'text-violet-600', bg: 'bg-violet-50', border: 'border-violet-100' },
+              { label: 'Tools', value: server.tool_count, icon: Zap, color: 'text-brand-secondary-ink', bg: 'bg-violet-50', border: 'border-violet-100' },
               {
                 label: 'Calls 24h',
                 value: operations ? operations.summary.total_calls : '—',
                 icon: Activity,
-                color: 'text-blue-600',
+                color: 'text-brand-primary-ink',
                 bg: 'bg-blue-50',
                 border: 'border-blue-100',
               },
@@ -605,7 +605,7 @@ export default function MCPServerDetail() {
                 label: 'Avg latency',
                 value: operations ? `${Math.round(operations.summary.avg_latency_ms)}ms` : latencyMs != null ? `${latencyMs}ms` : '—',
                 icon: BarChart2,
-                color: 'text-blue-600',
+                color: 'text-brand-primary-ink',
                 bg: 'bg-blue-50',
                 border: 'border-blue-100',
               },
@@ -633,7 +633,7 @@ export default function MCPServerDetail() {
                 onClick={() => setActiveTab(tab.id)}
                 className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-5 py-4 text-sm font-medium transition-colors ${
                   activeTab === tab.id
-                    ? 'border-blue-600 bg-blue-50/40 text-blue-600'
+                    ? 'border-brand-primary bg-blue-50/40 text-brand-primary-ink'
                     : 'border-transparent text-gray-500 hover:bg-gray-50 hover:text-gray-800'
                 }`}
               >
@@ -663,7 +663,7 @@ export default function MCPServerDetail() {
                       onClick={() => setToolFilter(filterValue)}
                       className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
                         toolFilter === filterValue
-                          ? 'border-blue-600 bg-blue-600 text-white shadow-sm'
+                          ? 'border-brand-primary bg-brand-primary text-brand-on-primary shadow-sm'
                           : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
                       }`}
                     >
@@ -770,7 +770,7 @@ export default function MCPServerDetail() {
                       setEditingBindingId(null);
                       setShowBindingForm(true);
                     }}
-                    className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-blue-700"
+                    className="flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-xs font-medium text-brand-on-primary transition hover:bg-brand-primary-hover"
                   >
                     <Plus className="h-3.5 w-3.5" />
                     {showBindingForm && editingBindingId === null ? 'Close' : 'Add binding'}
@@ -837,7 +837,7 @@ export default function MCPServerDetail() {
                       type="button"
                       onClick={() => void handleSaveBinding()}
                       disabled={savingBinding || !bindingForm.scope_id.trim()}
-                      className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                      className="rounded-lg bg-brand-primary px-4 py-2 text-xs font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
                     >
                       {savingBinding ? 'Saving…' : editingBindingId ? 'Save Changes' : 'Save Binding'}
                     </button>
@@ -886,7 +886,7 @@ export default function MCPServerDetail() {
                                 <button
                                   type="button"
                                   onClick={() => handleEditBinding(binding)}
-                                  className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-blue-50 hover:text-blue-600"
+                                  className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-blue-50 hover:text-brand-primary-ink"
                                 >
                                   <Pencil className="h-3.5 w-3.5" />
                                 </button>
@@ -924,7 +924,7 @@ export default function MCPServerDetail() {
                       setEditingPolicyId(null);
                       setShowPolicyForm(true);
                     }}
-                    className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-blue-700"
+                    className="flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-xs font-medium text-brand-on-primary transition hover:bg-brand-primary-hover"
                   >
                     <Plus className="h-3.5 w-3.5" />
                     {showPolicyForm && editingPolicyId === null ? 'Close' : 'Add policy'}
@@ -1037,7 +1037,7 @@ export default function MCPServerDetail() {
                       type="button"
                       onClick={() => void handleSavePolicy()}
                       disabled={savingPolicy || !policyForm.tool_name.trim() || !policyForm.scope_id.trim()}
-                      className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                      className="rounded-lg bg-brand-primary px-4 py-2 text-xs font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
                     >
                       {savingPolicy ? 'Saving…' : editingPolicyId ? 'Save Changes' : 'Save Policy'}
                     </button>
@@ -1103,7 +1103,7 @@ export default function MCPServerDetail() {
                                 <button
                                   type="button"
                                   onClick={() => handleEditPolicy(policy)}
-                                  className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-blue-50 hover:text-blue-600"
+                                  className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-blue-50 hover:text-brand-primary-ink"
                                 >
                                   <Pencil className="h-3.5 w-3.5" />
                                 </button>
@@ -1237,7 +1237,7 @@ export default function MCPServerDetail() {
                       type="button"
                       onClick={() => void handleSave()}
                       disabled={saving}
-                      className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:opacity-50"
+                      className="flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary transition hover:bg-brand-primary-hover disabled:opacity-50"
                     >
                       <Save className="h-4 w-4" />
                       {saving ? 'Saving…' : 'Save changes'}

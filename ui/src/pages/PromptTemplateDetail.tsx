@@ -12,6 +12,10 @@ import PromptRolloutCard from '../components/prompt-registry/PromptRolloutCard';
 import PromptTestingCard from '../components/prompt-registry/PromptTestingCard';
 import PromptHistoryCard from '../components/prompt-registry/PromptHistoryCard';
 import { RecordDetailShell } from '../components/admin/shells';
+import { useBranding } from '../lib/brandingContext';
+import { DEFAULT_BRANDING } from '../lib/branding';
+
+const DEFAULT_RENDER_VARIABLES = JSON.stringify({ product_name: DEFAULT_BRANDING.instance_name }, null, 2);
 
 function parseJsonObject(value: string, fieldName: string): Record<string, unknown> {
   try {
@@ -51,6 +55,7 @@ function buildVariablesSchema(rawVariables: string): Record<string, unknown> {
 }
 
 export default function PromptTemplateDetail() {
+  const { branding } = useBranding();
   const { templateKey } = useParams<{ templateKey: string }>();
   const navigate = useNavigate();
   const { pushToast } = useToast();
@@ -73,7 +78,7 @@ export default function PromptTemplateDetail() {
   const [renderForm, setRenderForm] = useState({
     label: 'production',
     version: '',
-    variables: '{\n  "product_name": "DeltaLLM"\n}',
+    variables: DEFAULT_RENDER_VARIABLES,
   });
   const [renderResult, setRenderResult] = useState<any>(null);
   const [rendering, setRendering] = useState(false);
@@ -83,6 +88,12 @@ export default function PromptTemplateDetail() {
   const template = detail.data?.template;
   const versions = detail.data?.versions || [];
   const labels = detail.data?.labels || [];
+
+  useEffect(() => {
+    setRenderForm((current) => current.variables === DEFAULT_RENDER_VARIABLES
+      ? { ...current, variables: JSON.stringify({ product_name: branding.instance_name }, null, 2) }
+      : current);
+  }, [branding.instance_name]);
 
   useEffect(() => {
     if (!template) return;
@@ -96,7 +107,7 @@ export default function PromptTemplateDetail() {
   if (detail.loading) {
     return (
       <div className="p-6 flex items-center justify-center min-h-[300px]">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-primary" />
       </div>
     );
   }
@@ -298,7 +309,7 @@ export default function PromptTemplateDetail() {
                 <input
                   value={templateForm.name}
                   onChange={(event) => setTemplateForm({ ...templateForm, name: event.target.value })}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                 />
               </div>
               <div className="lg:col-span-2">
@@ -306,7 +317,7 @@ export default function PromptTemplateDetail() {
                 <textarea
                   value={templateForm.description}
                   onChange={(event) => setTemplateForm({ ...templateForm, description: event.target.value })}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                 />
               </div>
             </div>
@@ -318,7 +329,7 @@ export default function PromptTemplateDetail() {
                 <input
                   value={templateForm.owner_scope}
                   onChange={(event) => setTemplateForm({ ...templateForm, owner_scope: event.target.value })}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                 />
               </div>
             </details>
@@ -328,7 +339,7 @@ export default function PromptTemplateDetail() {
                 type="button"
                 onClick={handleUpdateTemplate}
                 disabled={savingTemplate}
-                className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+                className="rounded-lg bg-brand-primary px-3 py-2 text-sm text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
               >
                 {savingTemplate ? 'Saving...' : 'Save Template'}
               </button>

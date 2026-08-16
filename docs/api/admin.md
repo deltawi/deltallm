@@ -264,6 +264,11 @@ Access-group binding upserts use this payload:
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
+| `GET` | `/ui/api/branding` | Read the public, non-secret Theme projection (no authentication required) |
+| `PUT` | `/ui/api/branding` | Update the installation Theme (platform admin only) |
+| `GET` | `/ui/api/branding/assets/{logo_mark\|logo_full\|favicon}` | Read a versioned public branding asset from the replica-local cache |
+| `PUT` | `/ui/api/branding/assets/{logo_mark\|logo_full\|favicon}` | Upload and persist a branding asset BLOB (platform admin only) |
+| `DELETE` | `/ui/api/branding/assets/{logo_mark\|logo_full\|favicon}` | Remove a branding asset BLOB (platform admin only) |
 | `GET` | `/ui/api/routing` | Read routing config |
 | `PUT` | `/ui/api/routing` | Update routing config |
 | `GET` | `/ui/api/settings` | Read gateway settings |

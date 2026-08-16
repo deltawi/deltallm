@@ -33,6 +33,7 @@ import { modeEmptyCopy, modeEndpoint, modeShortLabel } from './types';
 import type { ChatEngine } from './useChatEngine';
 import type { TTSEngine } from './useTTSEngine';
 import type { STTEngine } from './useSTTEngine';
+import { useBranding } from '../../lib/brandingContext';
 
 interface SharedProps {
   mode: PlaygroundMode;
@@ -176,7 +177,7 @@ function ChatMobileBubble({
       <div className="flex-none">
         <div
           className={`w-7 h-7 rounded-full flex items-center justify-center shadow-sm ${
-            isUser ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-700'
+            isUser ? 'bg-brand-primary text-brand-on-primary' : 'bg-white border border-gray-200 text-gray-700'
           }`}
         >
           {isUser ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
@@ -189,7 +190,7 @@ function ChatMobileBubble({
         </div>
         <div
           className={`relative px-3 py-2 rounded-2xl text-[13px] leading-relaxed shadow-sm ${
-            isUser ? 'bg-blue-600 text-white rounded-tr-sm' : 'bg-white border border-gray-200 text-gray-800 rounded-tl-sm'
+            isUser ? 'bg-brand-primary text-brand-on-primary rounded-tr-sm' : 'bg-white border border-gray-200 text-gray-800 rounded-tl-sm'
           }`}
         >
           <div className="space-y-2 whitespace-pre-wrap">
@@ -247,6 +248,7 @@ function ChatMobileView({
   apiKey: string;
   selectedModel: ModelOption | null;
 }) {
+  const { branding } = useBranding();
   const { messages, input, setInput, isStreaming, error, copiedId, handleSend, handleStop, copyToClipboard } = chat;
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -275,11 +277,11 @@ function ChatMobileView({
         {empty ? (
           <div className="flex flex-col items-center justify-center h-full text-center px-4 py-12">
             <div className="w-14 h-14 bg-blue-50 rounded-2xl flex items-center justify-center mb-4 ring-1 ring-blue-100">
-              <Sparkles className="h-7 w-7 text-blue-600" />
+              <Sparkles className="h-7 w-7 text-brand-primary-ink" />
             </div>
             <h2 className="text-base font-semibold text-gray-900 mb-1.5">Start a conversation</h2>
             <p className="text-xs text-gray-500 mb-5 leading-relaxed">
-              Test your configured models in real-time through the DeltaLLM gateway.
+              Test your configured models in real-time through the {branding.instance_name} gateway.
             </p>
             <div className="grid grid-cols-1 gap-2 w-full">
               {STARTER_CHIPS.map((chip) => (
@@ -351,7 +353,7 @@ function ChatMobileView({
             <button
               onClick={handleSend}
               disabled={!input.trim() || !apiKey || !selectedModel}
-              className="w-9 h-9 flex items-center justify-center text-white bg-blue-600 active:bg-blue-700 disabled:bg-gray-200 disabled:text-gray-400 rounded-lg shadow-sm flex-none"
+              className="w-9 h-9 flex items-center justify-center text-brand-on-primary bg-brand-primary active:bg-brand-primary-hover disabled:bg-gray-200 disabled:text-gray-400 rounded-lg shadow-sm flex-none"
               aria-label="Send"
               title="Send"
             >
@@ -426,7 +428,7 @@ function TTSMobileView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
             value={voice}
             onChange={(e) => setVoice(e.target.value)}
             placeholder="e.g. alloy, nova, autumn"
-            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary"
           />
         )}
       </div>
@@ -444,7 +446,7 @@ function TTSMobileView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
             step="0.25"
             value={speed}
             onChange={(e) => setSpeed(parseFloat(e.target.value))}
-            className="w-full accent-blue-600 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+            className="w-full accent-brand-primary h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer"
           />
         </div>
         <div>
@@ -477,14 +479,14 @@ function TTSMobileView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
           onChange={(e) => setText(e.target.value.slice(0, 4096))}
           rows={5}
           placeholder="Enter the text you want to convert to speech..."
-          className="w-full p-2.5 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none leading-relaxed"
+          className="w-full p-2.5 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary resize-none leading-relaxed"
         />
       </div>
 
       <button
         onClick={handleGenerate}
         disabled={!text.trim() || isGenerating || !apiKey}
-        className="w-full flex items-center justify-center gap-2 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg active:bg-blue-700 disabled:bg-gray-200 disabled:text-gray-400 shadow-sm"
+        className="w-full flex items-center justify-center gap-2 py-2.5 bg-brand-primary text-brand-on-primary text-sm font-medium rounded-lg active:bg-brand-primary-hover disabled:bg-gray-200 disabled:text-gray-400 shadow-sm"
       >
         {isGenerating ? (
           <>
@@ -518,7 +520,7 @@ function TTSMobileView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 min-w-0">
               <div className="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center flex-none">
-                <FileAudio className="w-4 h-4 text-blue-600" />
+                <FileAudio className="w-4 h-4 text-brand-primary-ink" />
               </div>
               <div className="min-w-0">
                 <div className="text-sm font-medium text-gray-900 truncate">Generated Audio</div>
@@ -540,7 +542,7 @@ function TTSMobileView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
           <div className="flex items-center gap-3">
             <button
               onClick={togglePlay}
-              className="w-9 h-9 flex-none rounded-full bg-blue-600 text-white flex items-center justify-center active:bg-blue-700 shadow-sm"
+              className="w-9 h-9 flex-none rounded-full bg-brand-primary text-brand-on-primary flex items-center justify-center active:bg-brand-primary-hover shadow-sm"
               aria-label={isPlaying ? 'Pause' : 'Play'}
             >
               {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
@@ -553,7 +555,7 @@ function TTSMobileView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
                   seekTo((e.clientX - rect.left) / rect.width);
                 }}
               >
-                <div className="h-full bg-blue-600 rounded-full transition-all duration-100" style={{ width: `${progress}%` }} />
+                <div className="h-full bg-brand-primary rounded-full transition-all duration-100" style={{ width: `${progress}%` }} />
               </div>
               <div className="flex items-center justify-between mt-1">
                 <span className="text-[10px] font-mono text-gray-500">
@@ -680,7 +682,7 @@ function STTMobileView({ apiKey, stt }: { apiKey: string; stt: STTEngine }) {
           value={outputPrompt}
           onChange={(e) => setOutputPrompt(e.target.value)}
           placeholder="Guide the model style..."
-          className="w-full bg-white border border-gray-200 rounded-md py-2 px-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full bg-white border border-gray-200 rounded-md py-2 px-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary"
         />
       </div>
 
@@ -698,7 +700,7 @@ function STTMobileView({ apiKey, stt }: { apiKey: string; stt: STTEngine }) {
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="text-[11px] font-medium text-blue-600 active:text-blue-700"
+                className="text-[11px] font-medium text-brand-primary-ink active:text-blue-700"
               >
                 Change
               </button>
@@ -746,7 +748,7 @@ function STTMobileView({ apiKey, stt }: { apiKey: string; stt: STTEngine }) {
         <button
           onClick={handleTranscribe}
           disabled={isTranscribing || !apiKey}
-          className="w-full flex items-center justify-center gap-2 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg active:bg-blue-700 disabled:bg-gray-200 disabled:text-gray-400 shadow-sm"
+          className="w-full flex items-center justify-center gap-2 py-2.5 bg-brand-primary text-brand-on-primary text-sm font-medium rounded-lg active:bg-brand-primary-hover disabled:bg-gray-200 disabled:text-gray-400 shadow-sm"
         >
           {isTranscribing ? (
             <>
@@ -869,7 +871,7 @@ export default function PlaygroundMobile({
       {/* Sticky app bar */}
       <header className="flex-none sticky top-0 z-20 bg-white border-b border-gray-200 px-3 h-12 flex items-center justify-between">
         <div className="flex items-center gap-1.5 min-w-0">
-          <Sparkles className="w-4 h-4 text-blue-600 flex-none" />
+          <Sparkles className="w-4 h-4 text-brand-primary-ink flex-none" />
           <h1 className="font-semibold text-base truncate">Playground</h1>
         </div>
         <div className="flex items-center gap-1">
@@ -927,7 +929,7 @@ export default function PlaygroundMobile({
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               placeholder="sk-..."
-              className="w-full bg-white border border-gray-200 rounded-md py-2 pl-8 pr-8 text-sm text-gray-700 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 truncate"
+              className="w-full bg-white border border-gray-200 rounded-md py-2 pl-8 pr-8 text-sm text-gray-700 font-mono focus:outline-none focus:ring-2 focus:ring-brand-primary truncate"
             />
             <button
               onClick={() => setShowApiKey(!showApiKey)}
@@ -967,7 +969,7 @@ export default function PlaygroundMobile({
         <div className="flex-1 flex items-center justify-center bg-gray-50/50 p-6">
           <div className="max-w-sm rounded-2xl border border-dashed border-gray-300 bg-white px-6 py-8 text-center shadow-sm">
             <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50">
-              <Sparkles className="h-6 w-6 text-blue-600" />
+              <Sparkles className="h-6 w-6 text-brand-primary-ink" />
             </div>
             <h2 className="mb-1 text-base font-semibold text-gray-900">{modeShortLabel(mode)} unavailable</h2>
             <p className="text-xs leading-5 text-gray-500">{modeEmptyCopy(mode)}</p>
@@ -985,7 +987,7 @@ export default function PlaygroundMobile({
       >
         <div className="sticky top-0 bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between rounded-t-2xl">
           <h3 id="playground-params-title" className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-            <SlidersHorizontal className="w-4 h-4 text-blue-600" />
+            <SlidersHorizontal className="w-4 h-4 text-brand-primary-ink" />
             Parameters
           </h3>
           <button
@@ -1004,7 +1006,7 @@ export default function PlaygroundMobile({
             <textarea
               value={params.systemPrompt}
               onChange={(e) => setParams((p) => ({ ...p, systemPrompt: e.target.value }))}
-              className="w-full h-20 p-2.5 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+              className="w-full h-20 p-2.5 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary resize-none"
             />
           </div>
           <div>
@@ -1019,7 +1021,7 @@ export default function PlaygroundMobile({
               step="0.1"
               value={params.temperature}
               onChange={(e) => setParams((p) => ({ ...p, temperature: parseFloat(e.target.value) }))}
-              className="w-full accent-blue-600 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+              className="w-full accent-brand-primary h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer"
             />
           </div>
           <div>
@@ -1034,7 +1036,7 @@ export default function PlaygroundMobile({
               step="0.05"
               value={params.topP}
               onChange={(e) => setParams((p) => ({ ...p, topP: parseFloat(e.target.value) }))}
-              className="w-full accent-blue-600 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+              className="w-full accent-brand-primary h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer"
             />
           </div>
           <div>
@@ -1043,7 +1045,7 @@ export default function PlaygroundMobile({
               type="number"
               value={params.maxTokens}
               onChange={(e) => setParams((p) => ({ ...p, maxTokens: parseInt(e.target.value) || 0 }))}
-              className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -1056,7 +1058,7 @@ export default function PlaygroundMobile({
                 max={2}
                 step={0.1}
                 onChange={(e) => setParams((p) => ({ ...p, freqPenalty: parseFloat(e.target.value) || 0 }))}
-                className="w-full px-2.5 py-2 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-2.5 py-2 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
             </div>
             <div>
@@ -1068,13 +1070,13 @@ export default function PlaygroundMobile({
                 max={2}
                 step={0.1}
                 onChange={(e) => setParams((p) => ({ ...p, presPenalty: parseFloat(e.target.value) || 0 }))}
-                className="w-full px-2.5 py-2 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-2.5 py-2 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
             </div>
           </div>
           <button
             onClick={() => setShowParams(false)}
-            className="w-full py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg active:bg-blue-700"
+            className="w-full py-2.5 bg-brand-primary text-brand-on-primary text-sm font-medium rounded-lg active:bg-brand-primary-hover"
             type="button"
           >
             Done
@@ -1092,7 +1094,7 @@ export default function PlaygroundMobile({
       >
         <div className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between rounded-t-2xl">
           <h3 id="playground-inspect-title" className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-            <Activity className="w-4 h-4 text-blue-600" />
+            <Activity className="w-4 h-4 text-brand-primary-ink" />
             Inspect
           </h3>
           <button
@@ -1265,7 +1267,7 @@ export default function PlaygroundMobile({
                     <div className="text-sm font-medium text-gray-900 truncate">{m.name}</div>
                     <div className="text-[11px] text-gray-500 truncate">{m.provider}</div>
                   </div>
-                  {isSelected && <Check className="w-4 h-4 text-blue-600 flex-none" />}
+                  {isSelected && <Check className="w-4 h-4 text-brand-primary-ink flex-none" />}
                 </button>
               );
             })
@@ -1280,7 +1282,7 @@ function Row({ label, value, mono = false }: { label: string; value: string; mon
   return (
     <div className="flex items-center justify-between text-xs gap-3">
       <span className="text-gray-500 flex-none">{label}</span>
-      <span className={`text-gray-900 font-medium truncate ${mono ? 'font-mono text-blue-600 text-[10px]' : ''}`}>
+      <span className={`text-gray-900 font-medium truncate ${mono ? 'font-mono text-brand-primary-ink text-[10px]' : ''}`}>
         {value}
       </span>
     </div>

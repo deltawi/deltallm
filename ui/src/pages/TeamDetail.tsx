@@ -403,7 +403,7 @@ export default function TeamDetail() {
   if (teamLoading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-primary" />
       </div>
     );
   }
@@ -412,7 +412,7 @@ export default function TeamDetail() {
     return (
       <div className="p-6">
         <p className="text-gray-500">Team not found.</p>
-        <Link to="/teams" className="text-indigo-600 text-sm mt-2 inline-block">← Back to Teams</Link>
+        <Link to="/teams" className="text-brand-secondary-ink text-sm mt-2 inline-block">← Back to Teams</Link>
       </div>
     );
   }
@@ -619,7 +619,7 @@ export default function TeamDetail() {
                 <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
                   <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
                     <h3 className="text-sm font-semibold text-gray-900">Top Spenders</h3>
-                    <button onClick={() => setTab('members')} className="text-xs text-indigo-600 hover:underline">
+                    <button onClick={() => setTab('members')} className="text-xs text-brand-secondary-ink hover:underline">
                       View all →
                     </button>
                   </div>
@@ -653,7 +653,7 @@ export default function TeamDetail() {
             {/* Sidebar */}
             <div className="space-y-4">
               {/* Team Info / Settings */}
-              <div className={`bg-white rounded-xl border p-4 transition-colors ${isEditingSettings ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-gray-200'}`}>
+              <div className={`bg-white rounded-xl border p-4 transition-colors ${isEditingSettings ? 'border-indigo-300 ring-1 ring-brand-primary/20' : 'border-gray-200'}`}>
                 <div className="flex items-center justify-between mb-3">
                   <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Team Info</h4>
                   {!isEditingSettings && (
@@ -676,7 +676,7 @@ export default function TeamDetail() {
                       <input
                         value={form.team_alias}
                         onChange={(e) => setForm({ ...form, team_alias: e.target.value })}
-                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                       />
                     </div>
                     <div>
@@ -685,7 +685,7 @@ export default function TeamDetail() {
                         type="number"
                         value={form.max_budget}
                         onChange={(e) => setForm({ ...form, max_budget: e.target.value })}
-                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                         placeholder="No limit"
                       />
                     </div>
@@ -696,7 +696,7 @@ export default function TeamDetail() {
                           type="number"
                           value={form.rpm_limit}
                           onChange={(e) => setForm({ ...form, rpm_limit: e.target.value })}
-                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                           placeholder="Unlimited"
                         />
                       </div>
@@ -706,7 +706,7 @@ export default function TeamDetail() {
                           type="number"
                           value={form.tpm_limit}
                           onChange={(e) => setForm({ ...form, tpm_limit: e.target.value })}
-                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                           placeholder="Unlimited"
                         />
                       </div>
@@ -716,7 +716,7 @@ export default function TeamDetail() {
                           type="number"
                           value={form.rph_limit}
                           onChange={(e) => setForm({ ...form, rph_limit: e.target.value })}
-                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                           placeholder="Unlimited"
                         />
                       </div>
@@ -726,7 +726,7 @@ export default function TeamDetail() {
                           type="number"
                           value={form.rpd_limit}
                           onChange={(e) => setForm({ ...form, rpd_limit: e.target.value })}
-                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                           placeholder="Unlimited"
                         />
                       </div>
@@ -736,7 +736,7 @@ export default function TeamDetail() {
                           type="number"
                           value={form.tpd_limit}
                           onChange={(e) => setForm({ ...form, tpd_limit: e.target.value })}
-                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                           placeholder="Unlimited"
                         />
                       </div>
@@ -751,7 +751,7 @@ export default function TeamDetail() {
                       <button
                         onClick={handleSaveSettings}
                         disabled={saving}
-                        className="flex-1 px-3 py-1.5 text-xs text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+                        className="flex-1 px-3 py-1.5 text-xs text-brand-on-primary bg-brand-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
                       >
                         {saving ? 'Saving…' : 'Save'}
                       </button>
@@ -765,7 +765,7 @@ export default function TeamDetail() {
                         {canAccessOrganizations ? (
                           <button
                             onClick={() => navigate(`/organizations/${team.organization_id}`)}
-                            className="text-xs font-medium text-indigo-600 hover:underline"
+                            className="text-xs font-medium text-brand-secondary-ink hover:underline"
                           >
                             {orgName}
                           </button>
@@ -831,7 +831,7 @@ export default function TeamDetail() {
               {/* Asset Access summary */}
               <div className="bg-white rounded-xl border border-gray-200 p-4">
                 <div className="flex items-center gap-1.5 mb-3">
-                  <Shield className="w-3.5 h-3.5 text-indigo-600" />
+                  <Shield className="w-3.5 h-3.5 text-brand-secondary-ink" />
                   <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Asset Access</h4>
                   <Info className="w-3.5 h-3.5 text-gray-400" />
                 </div>
@@ -863,17 +863,17 @@ export default function TeamDetail() {
                 )}
                 <button
                   onClick={() => setTab('assets')}
-                  className="text-xs text-indigo-600 hover:underline font-medium"
+                  className="text-xs text-brand-secondary-ink hover:underline font-medium"
                 >
                   Manage asset access →
                 </button>
               </div>
 
               {/* Self-Service Key Policy */}
-              {canManageSelfServicePolicy && <div className={`bg-white rounded-xl border p-4 transition-colors ${isEditingPolicy ? 'border-indigo-300 ring-1 ring-indigo-200' : 'border-gray-200'}`}>
+              {canManageSelfServicePolicy && <div className={`bg-white rounded-xl border p-4 transition-colors ${isEditingPolicy ? 'border-indigo-300 ring-1 ring-brand-primary/20' : 'border-gray-200'}`}>
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-1.5">
-                    <Key className="w-3.5 h-3.5 text-indigo-600" />
+                    <Key className="w-3.5 h-3.5 text-brand-secondary-ink" />
                     <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Self-Service Keys</h4>
                   </div>
                   {!isEditingPolicy && canManageSelfServicePolicy && (
@@ -899,7 +899,7 @@ export default function TeamDetail() {
                         className="focus:outline-none"
                       >
                         {policyForm.self_service_keys_enabled
-                          ? <ToggleRight className="w-6 h-6 text-indigo-600" />
+                          ? <ToggleRight className="w-6 h-6 text-brand-secondary-ink" />
                           : <ToggleLeft className="w-6 h-6 text-gray-400" />}
                       </button>
                     </label>
@@ -911,7 +911,7 @@ export default function TeamDetail() {
                             type="number"
                             value={policyForm.self_service_max_keys_per_user}
                             onChange={(e) => setPolicyForm({ ...policyForm, self_service_max_keys_per_user: e.target.value })}
-                            className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                             placeholder="Unlimited"
                             min="1"
                           />
@@ -922,7 +922,7 @@ export default function TeamDetail() {
                             type="number"
                             value={policyForm.self_service_budget_ceiling}
                             onChange={(e) => setPolicyForm({ ...policyForm, self_service_budget_ceiling: e.target.value })}
-                            className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                             placeholder="No ceiling"
                             min="0"
                             step="0.01"
@@ -936,7 +936,7 @@ export default function TeamDetail() {
                             className="focus:outline-none"
                           >
                             {policyForm.self_service_require_expiry
-                              ? <ToggleRight className="w-6 h-6 text-indigo-600" />
+                              ? <ToggleRight className="w-6 h-6 text-brand-secondary-ink" />
                               : <ToggleLeft className="w-6 h-6 text-gray-400" />}
                           </button>
                         </label>
@@ -946,7 +946,7 @@ export default function TeamDetail() {
                             type="number"
                             value={policyForm.self_service_max_expiry_days}
                             onChange={(e) => setPolicyForm({ ...policyForm, self_service_max_expiry_days: e.target.value })}
-                            className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                             placeholder="No limit"
                             min="1"
                           />
@@ -963,7 +963,7 @@ export default function TeamDetail() {
                       <button
                         onClick={handleSavePolicy}
                         disabled={policySaving}
-                        className="flex-1 px-3 py-1.5 text-xs text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+                        className="flex-1 px-3 py-1.5 text-xs text-brand-on-primary bg-brand-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
                       >
                         {policySaving ? 'Saving…' : 'Save'}
                       </button>
@@ -1029,7 +1029,7 @@ export default function TeamDetail() {
                   </Link>
                   <button
                     onClick={() => { setMemberSearch(''); setMemberForm({ user_id: '', user_email: '', user_role: 'team_viewer' }); setShowAddMember(true); }}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors"
                   >
                     <UserPlus className="w-3.5 h-3.5" /> Add Member
                   </button>
@@ -1061,9 +1061,9 @@ export default function TeamDetail() {
                       {canManageMembers ? (
                         <>
                           {' '}
-                          <button onClick={() => setShowAddMember(true)} className="text-indigo-600 hover:underline">Add the first one</button>
+                          <button onClick={() => setShowAddMember(true)} className="text-brand-secondary-ink hover:underline">Add the first one</button>
                           {' '}or{' '}
-                          <Link to={`/users?invite_team_id=${encodeURIComponent(teamId || '')}`} className="text-indigo-600 hover:underline">
+                          <Link to={`/users?invite_team_id=${encodeURIComponent(teamId || '')}`} className="text-brand-secondary-ink hover:underline">
                             invite by email
                           </Link>
                         </>
@@ -1130,7 +1130,7 @@ export default function TeamDetail() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
             <div className="lg:col-span-2 space-y-4">
               {isEditingAssets ? (
-                <div className="bg-white rounded-xl border border-indigo-300 ring-1 ring-indigo-200 p-5 space-y-4">
+                <div className="bg-white rounded-xl border border-indigo-300 ring-1 ring-brand-primary/20 p-5 space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-semibold text-gray-900">Edit Asset Access</h3>
                     <button
@@ -1179,7 +1179,7 @@ export default function TeamDetail() {
                     <button
                       onClick={handleSaveAssets}
                       disabled={saving || !form.organization_id || teamAssetAccessPending || assetAccessLoading || Boolean(assetAccessLoadError)}
-                      className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+                      className="px-4 py-2 text-sm bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
                     >
                       {saving ? 'Saving…' : 'Save Changes'}
                     </button>
@@ -1187,7 +1187,7 @@ export default function TeamDetail() {
                 </div>
               ) : !currentTeamAssetTargetsFull && teamAssetTargetsLoading ? (
                 <div className="bg-white rounded-xl border border-gray-200 p-8 flex items-center justify-center">
-                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600" />
+                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-brand-primary" />
                 </div>
               ) : assetMode === 'inherit' ? (
                 <div className="bg-white rounded-xl border border-gray-200 p-5">
@@ -1215,7 +1215,7 @@ export default function TeamDetail() {
                   {/* Granted */}
                   <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
                     <div className="px-5 py-4 border-b border-gray-200 flex items-center gap-2">
-                      <Lock className="w-4 h-4 text-indigo-600" />
+                      <Lock className="w-4 h-4 text-brand-secondary-ink" />
                       <h3 className="text-sm font-semibold text-gray-900">Accessible to this team</h3>
                       <span className="ml-auto inline-flex items-center justify-center min-w-[1.5rem] h-5 px-1.5 rounded-full bg-gray-100 text-xs font-semibold text-gray-600">
                         {accessibleTargets.length}
@@ -1226,9 +1226,9 @@ export default function TeamDetail() {
                         ? <p className="text-sm text-gray-400 text-center py-4">No assets accessible yet.</p>
                         : accessibleTargets.map((t: any) => (
                           <div key={t.callable_key} className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-indigo-50 border border-indigo-100">
-                            <CheckCircle2 className="w-4 h-4 text-indigo-600 shrink-0" />
+                            <CheckCircle2 className="w-4 h-4 text-brand-secondary-ink shrink-0" />
                             <span className="text-sm font-medium text-gray-800">{t.callable_key}</span>
-                            <span className="text-xs px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-600">{t.target_type}</span>
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-indigo-100 text-brand-secondary-ink">{t.target_type}</span>
                             {Array.isArray(t.via_access_groups) && t.via_access_groups.length > 0 && (
                               <span className="text-xs px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">
                                 via {t.via_access_groups.join(', ')}
@@ -1271,10 +1271,10 @@ export default function TeamDetail() {
                 <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Access Policy</h4>
                 <div className="space-y-2">
                   <div className={`flex items-start gap-2 p-2.5 rounded-lg border-2 ${
-                    assetMode === 'restrict' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-300 bg-gray-50'
+                    assetMode === 'restrict' ? 'border-brand-primary bg-indigo-50' : 'border-gray-300 bg-gray-50'
                   }`}>
                     {assetMode === 'restrict'
-                      ? <Lock className="w-4 h-4 text-indigo-600 mt-0.5 shrink-0" />
+                      ? <Lock className="w-4 h-4 text-brand-secondary-ink mt-0.5 shrink-0" />
                       : <Unlock className="w-4 h-4 text-gray-500 mt-0.5 shrink-0" />}
                     <div>
                       <p className={`text-xs font-semibold ${assetMode === 'restrict' ? 'text-indigo-800' : 'text-gray-700'}`}>
@@ -1293,7 +1293,7 @@ export default function TeamDetail() {
               {!isEditingAssets && canManageAssets && (
                 <button
                   onClick={openEditAssets}
-                  className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                  className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors"
                 >
                   <Pencil className="w-3.5 h-3.5" /> Edit Asset Selection
                 </button>
@@ -1333,7 +1333,7 @@ export default function TeamDetail() {
             <select
               value={memberForm.user_role}
               onChange={(e) => setMemberForm({ ...memberForm, user_role: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary bg-white"
             >
               <option value="team_viewer">Viewer</option>
               <option value="team_developer">Developer</option>
@@ -1346,7 +1346,7 @@ export default function TeamDetail() {
             <button
               onClick={handleAddMember}
               disabled={saving || !memberForm.user_id.trim()}
-              className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+              className="px-4 py-2 text-sm bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50"
             >
               Add Member
             </button>

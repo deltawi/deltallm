@@ -304,7 +304,7 @@ export default function OrganizationTierPanel({ organizationId, canManage }: Org
               type="button"
               onClick={openCreate}
               disabled={saving}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-1.5 text-xs font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
             >
               <Plus className="h-3.5 w-3.5" />
               Assign tier

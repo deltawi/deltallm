@@ -121,7 +121,7 @@ export default function PromptRegistry() {
       action={(
         <button
           onClick={() => setCreateOpen(true)}
-          className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+          className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary transition-colors hover:bg-brand-primary-hover"
         >
           <Plus className="h-4 w-4" />
           Create Prompt
@@ -161,7 +161,7 @@ export default function PromptRegistry() {
           value={searchInput}
           onChange={(event) => setSearchInput(event.target.value)}
           placeholder="Search prompts..."
-          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 sm:w-80"
+          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary sm:w-80"
         />
       )}
     >
@@ -204,7 +204,7 @@ export default function PromptRegistry() {
                 }}
                 placeholder="support.reply"
                 data-autofocus="true"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
               <p className="mt-1 text-xs text-gray-500">Use a stable key that labels, bindings, and requests can reference.</p>
             </div>
@@ -215,7 +215,7 @@ export default function PromptRegistry() {
                 value={form.name}
                 onChange={(event) => setForm({ ...form, name: event.target.value })}
                 placeholder="Support Reply Prompt"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
             </div>
           </div>
@@ -229,7 +229,7 @@ export default function PromptRegistry() {
                   value={form.description}
                   onChange={(event) => setForm({ ...form, description: event.target.value })}
                   placeholder="Used for customer support responses."
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                 />
               </div>
               <div>
@@ -238,7 +238,7 @@ export default function PromptRegistry() {
                   value={form.owner_scope}
                   onChange={(event) => setForm({ ...form, owner_scope: event.target.value })}
                   placeholder="platform / team:ops / org:acme"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                 />
               </div>
             </div>
@@ -251,7 +251,7 @@ export default function PromptRegistry() {
             <button
               onClick={handleCreate}
               disabled={creating}
-              className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+              className="rounded-lg bg-brand-primary px-3 py-2 text-sm text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
             >
               {creating ? 'Creating...' : 'Create and Continue'}
             </button>

@@ -717,7 +717,7 @@ export default function Usage() {
               <select
                 value={activeView}
                 onChange={(event) => handleViewChange(event.target.value as SpendView)}
-                className="h-10 rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="h-10 rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                 aria-label="Usage reporting scope"
               >
                 {availableViews.map((view) => (
@@ -798,8 +798,8 @@ export default function Usage() {
           <div className="mb-6 flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
             {canViewLogs ? (
               <div className="flex gap-2">
-                <button type="button" aria-pressed={tab === 'overview'} onClick={() => setTab('overview')} className={`rounded-lg px-4 py-2 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${tab === 'overview' ? 'bg-blue-600 text-white' : 'border bg-white text-gray-700 hover:bg-gray-50'}`}>Overview</button>
-                <button type="button" aria-pressed={tab === 'logs'} onClick={() => setTab('logs')} className={`rounded-lg px-4 py-2 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${tab === 'logs' ? 'bg-blue-600 text-white' : 'border bg-white text-gray-700 hover:bg-gray-50'}`}>Request Logs</button>
+                <button type="button" aria-pressed={tab === 'overview'} onClick={() => setTab('overview')} className={`rounded-lg px-4 py-2 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary ${tab === 'overview' ? 'bg-brand-primary text-brand-on-primary' : 'border bg-white text-gray-700 hover:bg-gray-50'}`}>Overview</button>
+                <button type="button" aria-pressed={tab === 'logs'} onClick={() => setTab('logs')} className={`rounded-lg px-4 py-2 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary ${tab === 'logs' ? 'bg-brand-primary text-brand-on-primary' : 'border bg-white text-gray-700 hover:bg-gray-50'}`}>Request Logs</button>
               </div>
             ) : <div />}
 
@@ -816,7 +816,7 @@ export default function Usage() {
                     value: Number(e.target.value) as ReportingAutoRefreshMs,
                   })}
                   disabled={refreshControlDisabled}
-                  className="rounded-full border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+                  className="rounded-full border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
                   aria-label="Auto refresh interval"
                 >
                   {autoRefreshOptions.map((option) => (
@@ -830,7 +830,7 @@ export default function Usage() {
                   onClick={() => triggerRefresh(true)}
                   disabled={refreshControlDisabled}
                   aria-label="Refresh usage now"
-                  className="rounded-full border border-gray-300 bg-white p-2 text-gray-600 shadow-sm hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-300"
+                  className="rounded-full border border-gray-300 bg-white p-2 text-gray-600 shadow-sm hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-300"
                 >
                   <RefreshCw className={`h-4 w-4 ${refreshActive ? 'animate-spin' : ''}`} />
                 </button>
@@ -991,7 +991,7 @@ export default function Usage() {
                         onClick={handlePreviousLogsPage}
                         disabled={logsPage === 0 || logsLoading}
                         aria-label="Previous request logs page"
-                        className="rounded-lg p-1.5 hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-30"
+                        className="rounded-lg p-1.5 hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary disabled:cursor-not-allowed disabled:opacity-30"
                       >
                         <ChevronLeft className="h-4 w-4" />
                       </button>
@@ -1001,7 +1001,7 @@ export default function Usage() {
                         onClick={handleNextLogsPage}
                         disabled={!logsPagination?.has_more || (supportsCursorLogs && !logsPagination.next_cursor) || logsLoading}
                         aria-label="Next request logs page"
-                        className="rounded-lg p-1.5 hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-30"
+                        className="rounded-lg p-1.5 hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary disabled:cursor-not-allowed disabled:opacity-30"
                       >
                         <ChevronRight className="h-4 w-4" />
                       </button>

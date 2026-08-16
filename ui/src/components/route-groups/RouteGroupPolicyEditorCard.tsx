@@ -70,7 +70,7 @@ export default function RouteGroupPolicyEditorCard({
             type="button"
             onClick={onPublish}
             disabled={isPolicyBusy || !hasMembers}
-            className="rounded-xl bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+            className="rounded-xl bg-brand-primary px-3 py-1.5 text-xs font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
           >
             {policyAction === 'publish-json' ? 'Publishing…' : 'Publish'}
           </button>
@@ -109,7 +109,7 @@ export default function RouteGroupPolicyEditorCard({
             value={policyText}
             onChange={(e) => onPolicyTextChange(e.target.value)}
             rows={8}
-            className="w-full rounded-xl border border-gray-200 bg-gray-950 px-4 py-3 font-mono text-xs text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full rounded-xl border border-gray-200 bg-gray-950 px-4 py-3 font-mono text-xs text-gray-100 focus:outline-none focus:ring-2 focus:ring-brand-primary"
           />
         ) : (
           <pre className="max-h-52 overflow-auto rounded-xl border border-gray-200 bg-gray-950 px-4 py-3 text-xs font-mono text-gray-100">

@@ -107,7 +107,7 @@ function HelpTip({ label, children }: { label: string; children: React.ReactNode
       <button
         type="button"
         aria-label={`About ${label}`}
-        className="rounded-full text-gray-400 transition-colors hover:text-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        className="rounded-full text-gray-400 transition-colors hover:text-brand-primary-ink focus:outline-none focus:ring-2 focus:ring-brand-primary"
       >
         <Info className="h-3.5 w-3.5" />
       </button>
@@ -133,7 +133,7 @@ function StepMarker({ number, label, active, complete }: {
         complete
           ? 'bg-emerald-100 text-emerald-700'
           : active
-            ? 'bg-blue-600 text-white'
+            ? 'bg-brand-primary text-brand-on-primary'
             : 'bg-gray-100 text-gray-400'
       }`}>
         {complete ? <Check className="h-3.5 w-3.5" /> : number}
@@ -149,9 +149,9 @@ function BackgroundList({ items }: { items: Array<Record<string, unknown>> }) {
       <div className="border-b border-gray-200 bg-white px-6 py-4">
         <div className="flex items-center justify-between">
           <h1 className="flex items-center gap-2 text-xl font-bold text-gray-900">
-            <Building2 className="h-5 w-5 text-blue-600" /> Organizations
+            <Building2 className="h-5 w-5 text-brand-primary-ink" /> Organizations
           </h1>
-          <span className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white opacity-50">
+          <span className="rounded-lg bg-brand-primary px-3 py-2 text-sm font-medium text-brand-on-primary opacity-50">
             + Create Organization
           </span>
         </div>
@@ -233,7 +233,7 @@ function TierSummary({ tier, detail, loading, policyMode }: {
             {tier.description || 'No tier description has been added yet.'}
           </p>
         </div>
-        <Shield className="h-5 w-5 shrink-0 text-blue-600" />
+        <Shield className="h-5 w-5 shrink-0 text-brand-primary-ink" />
       </div>
 
       {loading ? (
@@ -580,7 +580,7 @@ export default function OrganizationCreate() {
                   onBlur={() => setNameError(!name.trim())}
                   placeholder="e.g. Acme Corp"
                   className={`w-full rounded-lg border px-3 py-2.5 text-sm focus:outline-none focus:ring-2 ${
-                    nameError ? 'border-red-400 focus:ring-red-400' : 'border-gray-300 focus:ring-blue-500'
+                    nameError ? 'border-red-400 focus:ring-red-400' : 'border-gray-300 focus:ring-brand-primary'
                   }`}
                 />
                 {nameError && <p className="mt-1 text-xs text-red-600">Organization name is required.</p>}
@@ -641,7 +641,7 @@ export default function OrganizationCreate() {
                           value={selectedTierId}
                           onChange={(event) => setSelectedTierId(event.target.value)}
                           disabled={tiersLoading || availableTiers.length === 0}
-                          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50"
+                          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-gray-50"
                         >
                           {availableTiers.length === 0 && <option value="">No active tiers available</option>}
                           {availableTiers.map((tier) => (
@@ -688,7 +688,7 @@ export default function OrganizationCreate() {
                       href="/tiers"
                       target="_blank"
                       rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
+                      className="inline-flex items-center gap-1 text-xs font-medium text-brand-primary-ink hover:text-brand-primary-ink-hover"
                     >
                       Create or customize a tier <ExternalLink className="h-3 w-3" />
                     </a>
@@ -732,7 +732,7 @@ export default function OrganizationCreate() {
                         step="0.01"
                         value={budgetValue}
                         onChange={(event) => setBudgetValue(event.target.value)}
-                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                       />
                     </div>
                     <div>
@@ -744,13 +744,13 @@ export default function OrganizationCreate() {
                         step="0.01"
                         value={softBudgetValue}
                         onChange={(event) => setSoftBudgetValue(event.target.value)}
-                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                       />
                     </div>
                     <div className="sm:col-span-2 rounded-lg border border-gray-200 bg-gray-50 p-3">
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex items-center gap-2 text-sm font-medium text-gray-800">
-                          <CalendarDays className="h-4 w-4 text-blue-600" /> Monthly reset
+                          <CalendarDays className="h-4 w-4 text-brand-primary-ink" /> Monthly reset
                         </div>
                         <ToggleSwitch checked={monthlyResetEnabled} onCheckedChange={handleMonthlyResetToggle} aria-label="Toggle monthly budget reset" />
                       </div>
@@ -762,7 +762,7 @@ export default function OrganizationCreate() {
                             type="datetime-local"
                             value={budgetResetAt}
                             onChange={(event) => setBudgetResetAt(event.target.value)}
-                            className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                           />
                         </div>
                       )}
@@ -816,7 +816,7 @@ export default function OrganizationCreate() {
                               value={hardCaps[cap.field]}
                               onChange={(event) => setHardCaps((current) => ({ ...current, [cap.field]: event.target.value }))}
                               placeholder={cap.placeholder}
-                              className="w-full rounded-lg border border-gray-300 px-3 py-2 pr-14 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              className="w-full rounded-lg border border-gray-300 px-3 py-2 pr-14 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                             />
                             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-gray-400">{cap.unit}</span>
                           </div>
@@ -830,7 +830,7 @@ export default function OrganizationCreate() {
               <section className="rounded-xl border border-gray-200 bg-white p-4">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-start gap-3">
-                    <Shield className="mt-0.5 h-4 w-4 text-blue-600" />
+                    <Shield className="mt-0.5 h-4 w-4 text-brand-primary-ink" />
                     <div>
                       <p className="text-sm font-semibold text-gray-900">Audit content storage</p>
                       <p className="mt-0.5 text-xs leading-relaxed text-gray-500">Store request and response payloads for compliance review. Enable only when your retention policy permits it.</p>
@@ -850,7 +850,7 @@ export default function OrganizationCreate() {
                     </div>
                   </div>
                   <div className="mb-3 grid grid-cols-2 gap-2">
-                    <label className={`cursor-pointer rounded-lg border p-3 text-xs ${selectAll ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'}`}>
+                    <label className={`cursor-pointer rounded-lg border p-3 text-xs ${selectAll ? 'border-brand-primary bg-blue-50' : 'border-gray-200 bg-white'}`}>
                       <input
                         type="radio"
                         name="legacy-asset-strategy"
@@ -860,7 +860,7 @@ export default function OrganizationCreate() {
                       />
                       Allow all, including future assets
                     </label>
-                    <label className={`cursor-pointer rounded-lg border p-3 text-xs ${!selectAll ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'}`}>
+                    <label className={`cursor-pointer rounded-lg border p-3 text-xs ${!selectAll ? 'border-brand-primary bg-blue-50' : 'border-gray-200 bg-white'}`}>
                       <input
                         type="radio"
                         name="legacy-asset-strategy"
@@ -959,7 +959,7 @@ export default function OrganizationCreate() {
                     type="button"
                     onClick={continueToGuardrails}
                     disabled={!canContinue}
-                    className="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex items-center gap-1 rounded-lg bg-brand-primary px-3 py-2 text-xs font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Continue <ChevronRight className="h-3.5 w-3.5" />
                   </button>
@@ -978,7 +978,7 @@ export default function OrganizationCreate() {
                     type="button"
                     onClick={handleCreate}
                     disabled={!canCreate || saving}
-                    className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="rounded-lg bg-brand-primary px-4 py-2 text-xs font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {saving ? 'Creating…' : 'Create organization'}
                   </button>

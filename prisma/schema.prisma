@@ -545,6 +545,20 @@ model DeltaLLM_Config {
   @@map("deltallm_config")
 }
 
+model DeltaLLM_UIBrandingAsset {
+  asset_key         String   @id
+  content_type      String
+  content           Bytes
+  content_sha256    String
+  size_bytes        Int
+  original_filename String?
+  updated_by        String?
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  @@map("deltallm_ui_branding_asset")
+}
+
 model DeltaLLM_Tier {
   tier_id     String   @id @default(uuid())
   tier_key    String   @unique(map: "deltallm_tier_tier_key_key")

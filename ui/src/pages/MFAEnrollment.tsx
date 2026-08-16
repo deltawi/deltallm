@@ -3,6 +3,8 @@ import type { FormEvent } from 'react';
 import { useAuth } from '../lib/auth';
 import { auth as authApi } from '../lib/api';
 import { ShieldCheck, Copy, Check } from 'lucide-react';
+import BrandLogo from '../components/BrandLogo';
+import Button from '../components/Button';
 
 export default function MFAEnrollment() {
   const { refreshSession, skipMfa } = useAuth();
@@ -62,17 +64,18 @@ export default function MFAEnrollment() {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
         <div className="max-w-md w-full text-center">
+          <BrandLogo variant="expanded" className="mb-8 justify-center" />
           <div className="inline-flex items-center justify-center w-16 h-16 bg-green-500 rounded-2xl mb-4">
             <Check className="w-8 h-8 text-white" />
           </div>
           <h1 className="text-2xl font-bold text-gray-900 mb-2">MFA Enabled</h1>
           <p className="text-gray-500 mb-6">Two-factor authentication is now active on your account.</p>
-          <button
+          <Button
             onClick={async () => { await refreshSession(); skipMfa(); }}
-            className="bg-blue-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+            size="lg"
           >
             Continue to Dashboard
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -82,8 +85,9 @@ export default function MFAEnrollment() {
     <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
       <div className="max-w-md w-full">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-600 rounded-2xl mb-4">
-            <ShieldCheck className="w-8 h-8 text-white" />
+          <BrandLogo variant="expanded" className="mb-6 justify-center" />
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-brand-primary rounded-2xl mb-4">
+            <ShieldCheck className="w-8 h-8 text-brand-on-primary" />
           </div>
           <h1 className="text-2xl font-bold text-gray-900">
             {step === 'prompt' ? 'Enable Two-Factor Authentication' : 'Set Up Your Authenticator'}
@@ -107,19 +111,22 @@ export default function MFAEnrollment() {
               <p className="text-sm text-gray-600">
                 Two-factor authentication adds an extra layer of security by requiring a code from your authenticator app when signing in.
               </p>
-              <button
+              <Button
                 onClick={handleStartEnroll}
-                disabled={loading}
-                className="w-full bg-blue-600 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
+                loading={loading}
+                fullWidth
+                size="lg"
               >
                 {loading ? 'Setting up...' : 'Set Up MFA'}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="secondary"
                 onClick={handleSkip}
-                className="w-full border border-gray-300 text-gray-700 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+                fullWidth
+                size="lg"
               >
                 Skip for Now
-              </button>
+              </Button>
             </div>
           ) : (
             <form onSubmit={handleConfirm} className="space-y-4">
@@ -159,16 +166,18 @@ export default function MFAEnrollment() {
                   placeholder="Enter 6-digit code"
                   autoComplete="one-time-code"
                   maxLength={6}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono tracking-wider text-center text-lg"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent font-mono tracking-wider text-center text-lg"
                 />
               </div>
-              <button
+              <Button
                 type="submit"
-                disabled={loading || code.length !== 6}
-                className="w-full bg-blue-600 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
+                loading={loading}
+                disabled={code.length !== 6}
+                fullWidth
+                size="lg"
               >
                 {loading ? 'Verifying...' : 'Verify & Enable MFA'}
-              </button>
+              </Button>
             </form>
           )}
         </div>

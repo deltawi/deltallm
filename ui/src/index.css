@@ -2,6 +2,23 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --brand-primary: 37 99 235;
+  --brand-primary-ink: 37 99 235;
+  --brand-primary-ink-hover: 32 85 202;
+  --brand-primary-hover: 32 85 202;
+  --brand-primary-soft: 233 239 253;
+  --brand-on-primary: 255 255 255;
+  --brand-secondary: 124 58 237;
+  --brand-secondary-ink: 124 58 237;
+  --brand-secondary-ink-hover: 107 50 204;
+  --brand-secondary-hover: 107 50 204;
+  --brand-secondary-soft: 245 239 254;
+  --brand-on-secondary: 255 255 255;
+  --brand-menu-hover: 249 250 251;
+  --brand-menu-hover-foreground: 17 24 39;
+}
+
 body {
   margin: 0;
   font-family: 'Inter', system-ui, -apple-system, sans-serif;

@@ -71,8 +71,7 @@ def _cache_invalidation_worker_config(general_settings: Any) -> CacheInvalidatio
         getattr(general_settings, "cache_invalidation_worker_lease_seconds", 60) or 60
     )
     configured_record_timeout_seconds = float(
-        getattr(general_settings, "cache_invalidation_worker_record_timeout_seconds", 10.0)
-        or 10.0
+        getattr(general_settings, "cache_invalidation_worker_record_timeout_seconds", 10.0) or 10.0
     )
     record_timeout_seconds = min(
         max(0.001, configured_record_timeout_seconds),
@@ -153,7 +152,9 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
     )
     if cache_invalidation_worker_enabled and app.state.redis is None:
         app.state.cache_invalidation_worker = None
-        statuses.append(BootstrapStatus("cache_invalidation_worker", "degraded", "redis unavailable"))
+        statuses.append(
+            BootstrapStatus("cache_invalidation_worker", "degraded", "redis unavailable")
+        )
     elif cache_invalidation_worker_enabled:
         runtime.cache_invalidation_worker = CacheInvalidationWorker(
             repository=cache_invalidation_repository,
@@ -171,6 +172,9 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
         db_client=app.state.prisma_manager.client,
         salt=app.state.salt_key,
         session_ttl_hours=cfg.general_settings.auth_session_ttl_hours,
+    )
+    app.state.platform_identity_service.totp_issuer = str(
+        getattr(cfg.general_settings, "instance_name", "DeltaLLM") or "DeltaLLM"
     )
     await app.state.platform_identity_service.ensure_bootstrap_admin(
         email=cfg.general_settings.platform_bootstrap_admin_email,

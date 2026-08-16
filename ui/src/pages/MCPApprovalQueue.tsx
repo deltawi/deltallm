@@ -149,7 +149,7 @@ export default function MCPApprovalQueue() {
                   setOffset(0);
                 }}
                 className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                  statusFilter === tab.value ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-100'
+                  statusFilter === tab.value ? 'bg-brand-primary text-brand-on-primary shadow-sm' : 'text-gray-600 hover:bg-gray-100'
                 }`}
               >
                 {tab.label}

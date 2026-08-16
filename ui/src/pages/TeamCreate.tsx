@@ -43,7 +43,7 @@ function InheritBadge({ value, unit }: { value: number | null | undefined; unit:
     return <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">Unlimited from org</span>;
   }
   return (
-    <span className="text-xs bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full">
+    <span className="text-xs bg-indigo-50 text-brand-secondary-ink px-2 py-0.5 rounded-full">
       Org limit: {value.toLocaleString()} {unit}
     </span>
   );
@@ -57,14 +57,14 @@ function BgList({ items }: { items: any[] }) {
       <div className="bg-white border-b border-gray-200 px-6 py-4">
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-            <Users className="w-5 h-5 text-indigo-600" /> Teams
+            <Users className="w-5 h-5 text-brand-secondary-ink" /> Teams
             {items.length > 0 && (
               <span className="inline-flex items-center justify-center min-w-[1.5rem] h-5 px-1.5 rounded-full bg-gray-100 text-xs font-semibold text-gray-600 ml-1">
                 {items.length}+
               </span>
             )}
           </h1>
-          <span className="px-3 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg opacity-50">
+          <span className="px-3 py-2 text-sm font-medium text-brand-on-primary bg-brand-primary rounded-lg opacity-50">
             + Create Team
           </span>
         </div>
@@ -375,7 +375,7 @@ export default function TeamCreate() {
                     value={selectedOrgId}
                     onChange={(e) => handleOrgChange(e.target.value)}
                     disabled={saving}
-                    className="w-full pl-8 pr-4 py-2 text-sm border border-gray-300 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 appearance-none disabled:opacity-50"
+                    className="w-full pl-8 pr-4 py-2 text-sm border border-gray-300 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-primary appearance-none disabled:opacity-50"
                   >
                     <option value="">Select an organization…</option>
                     {orgList.map((o: any) => (
@@ -438,7 +438,7 @@ export default function TeamCreate() {
                   onBlur={() => setNameError(!teamName.trim())}
                   placeholder="e.g. Engineering, Data Science…"
                   disabled={saving}
-                  className={`w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors disabled:opacity-50 ${
+                  className={`w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary transition-colors disabled:opacity-50 ${
                     nameError ? 'border-red-400 focus:ring-red-400' : 'border-gray-300'
                   }`}
                 />
@@ -491,7 +491,7 @@ export default function TeamCreate() {
                         type="number"
                         min="0"
                         step="0.01"
-                        className="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        className="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                       />
                     </div>
                     {selectedOrg?.max_budget != null && (
@@ -529,7 +529,7 @@ export default function TeamCreate() {
                       placeholder={selectedOrg?.rpm_limit ? `max ${selectedOrg.rpm_limit.toLocaleString()}` : 'unlimited'}
                       type="number"
                       min="1"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                     />
                   </div>
                 )}
@@ -539,7 +539,7 @@ export default function TeamCreate() {
               <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
-                    <TrendingUp className="w-4 h-4 text-indigo-600" />
+                    <TrendingUp className="w-4 h-4 text-brand-secondary-ink" />
                     <div>
                       <p className="text-sm font-medium text-gray-800">TPM limit</p>
                       <InheritBadge value={selectedOrg?.tpm_limit} unit="TPM" />
@@ -561,7 +561,7 @@ export default function TeamCreate() {
                       placeholder={selectedOrg?.tpm_limit ? `max ${selectedOrg.tpm_limit.toLocaleString()}` : 'unlimited'}
                       type="number"
                       min="1"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                     />
                   </div>
                 )}
@@ -719,27 +719,27 @@ export default function TeamCreate() {
                   className={`flex flex-col items-start gap-1.5 p-3.5 rounded-xl border-2 text-left transition-all disabled:opacity-50 ${
                     assetMode === mode
                       ? mode === 'inherit'
-                        ? 'border-blue-500 bg-blue-50'
-                        : 'border-indigo-500 bg-indigo-50'
+                        ? 'border-brand-primary bg-brand-primary-soft'
+                        : 'border-brand-secondary bg-brand-secondary-soft'
                       : 'border-gray-200 bg-white hover:border-gray-300'
                   }`}
                 >
                   <div className="flex items-center gap-2 w-full">
                     {mode === 'inherit'
-                      ? <Unlock className={`w-4 h-4 ${assetMode === mode ? 'text-blue-600' : 'text-gray-400'}`} />
-                      : <Lock className={`w-4 h-4 ${assetMode === mode ? 'text-indigo-600' : 'text-gray-400'}`} />}
+                      ? <Unlock className={`w-4 h-4 ${assetMode === mode ? 'text-brand-primary-ink' : 'text-gray-400'}`} />
+                      : <Lock className={`w-4 h-4 ${assetMode === mode ? 'text-brand-secondary-ink' : 'text-gray-400'}`} />}
                     <span className={`text-sm font-semibold ${
                       assetMode === mode
-                        ? mode === 'inherit' ? 'text-blue-800' : 'text-indigo-800'
+                        ? mode === 'inherit' ? 'text-brand-primary-ink' : 'text-brand-secondary-ink'
                         : 'text-gray-700'
                     }`}>
                       {mode === 'inherit' ? 'Inherit' : 'Restrict'}
                     </span>
                     {assetMode === mode && (
                       <span className={`ml-auto w-4 h-4 rounded-full flex items-center justify-center shrink-0 ${
-                        mode === 'inherit' ? 'bg-blue-600' : 'bg-indigo-600'
+                        mode === 'inherit' ? 'bg-brand-primary' : 'bg-brand-secondary'
                       }`}>
-                        <Check className="w-2.5 h-2.5 text-white" />
+                        <Check className={`w-2.5 h-2.5 ${mode === 'inherit' ? 'text-brand-on-primary' : 'text-brand-on-secondary'}`} />
                       </span>
                     )}
                   </div>
@@ -862,7 +862,7 @@ export default function TeamCreate() {
               <button
                 onClick={handleCreate}
                 disabled={saving || !isReady || assetAccessLoading || Boolean(assetAccessLoadError)}
-                className="px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-3 py-1.5 text-xs font-medium text-brand-on-primary bg-brand-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {saving ? 'Creating…' : 'Create Team'}
               </button>
