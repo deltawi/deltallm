@@ -685,57 +685,6 @@ class TierAdminService:
         except TierConfigurationMutationError as exc:
             raise _configuration_admin_error(exc) from exc
 
-    async def replace_model_policies(
-        self,
-        tier_id: str,
-        tier_version_id: str,
-        policies: Sequence[Mapping[str, Any]],
-    ) -> list[TierModelPolicyRecord]:
-        version = await self.require_version_for_tier(tier_id, tier_version_id)
-        _require_draft_version(version)
-        records = normalize_model_policy_records(tier_version_id, policies)
-        await self._validate_model_policy_pool_references(tier_version_id, records)
-
-        try:
-            return await self.repository.replace_model_policies(tier_version_id, records)
-        except ValueError as exc:
-            raise TierAdminConflictError(str(exc)) from exc
-
-    async def replace_capacity_pools(
-        self,
-        tier_id: str,
-        tier_version_id: str,
-        pools: Sequence[Mapping[str, Any]],
-    ) -> list[TierCapacityPoolRecord]:
-        version = await self.require_version_for_tier(tier_id, tier_version_id)
-        _require_draft_version(version)
-        records = normalize_capacity_pool_records(tier_version_id, pools)
-        await self._validate_referenced_capacity_pools_are_preserved(tier_version_id, records)
-
-        try:
-            return await self.repository.replace_capacity_pools(tier_version_id, records)
-        except ValueError as exc:
-            raise TierAdminConflictError(str(exc)) from exc
-
-    async def publish_tier_version(
-        self,
-        tier_id: str,
-        tier_version_id: str,
-        *,
-        published_by_account_id: str | None,
-    ) -> TierVersionRecord:
-        await self.require_version_for_tier(tier_id, tier_version_id)
-        try:
-            version = await self.repository.publish_tier_version(
-                tier_version_id,
-                published_by_account_id=published_by_account_id,
-            )
-        except ValueError as exc:
-            raise TierAdminConflictError(str(exc)) from exc
-        if version is None:
-            raise TierAdminNotFoundError("Tier version not found")
-        return version
-
     async def archive_tier_version(
         self,
         tier_id: str,
@@ -765,39 +714,6 @@ class TierAdminService:
         if version is None or version.tier_id != tier_id:
             raise TierAdminNotFoundError("Tier version not found")
         return version
-
-    async def _validate_model_policy_pool_references(
-        self,
-        tier_version_id: str,
-        policies: Sequence[TierModelPolicyRecord],
-    ) -> None:
-        pools = await self.repository.list_capacity_pools(tier_version_id)
-        pool_refs = {(pool.pool_key, pool.callable_key) for pool in pools}
-        for policy in policies:
-            if policy.capacity_pool_key is None:
-                continue
-            if (policy.capacity_pool_key, policy.callable_key) not in pool_refs:
-                raise TierAdminValidationError(
-                    "capacity_pool_key must reference a pool for the same callable_key"
-                )
-
-    async def _validate_referenced_capacity_pools_are_preserved(
-        self,
-        tier_version_id: str,
-        pools: Sequence[TierCapacityPoolRecord],
-    ) -> None:
-        policies = await self.repository.list_model_policies(tier_version_id)
-        referenced = {
-            (policy.capacity_pool_key, policy.callable_key)
-            for policy in policies
-            if policy.capacity_pool_key is not None
-        }
-        incoming = {(pool.pool_key, pool.callable_key) for pool in pools}
-        if not referenced.issubset(incoming):
-            raise TierAdminConflictError(
-                "Cannot remove a capacity pool referenced by draft model policies"
-            )
-
 
 def _activation_changes(
     *,
@@ -891,11 +807,6 @@ def _pool_fingerprint(record: TierCapacityPoolRecord) -> str:
         sort_keys=True,
         separators=(",", ":"),
     )
-
-
-def _require_draft_version(version: TierVersionRecord) -> None:
-    if version.status != "draft":
-        raise TierAdminConflictError("Tier version policies can only be changed while draft")
 
 
 def _expected_revision(payload: Mapping[str, Any]) -> int:

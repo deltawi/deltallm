@@ -1949,21 +1949,6 @@ export const tiers = {
     `/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/activate`,
     { method: 'POST', json: payload },
   ),
-  /** @deprecated Use row-level policy mutations with expected_revision. */
-  replaceModelPolicies: (tierId: string, versionId: string, policies: TierModelPolicyPayload[]) =>
-    apiFetch<{ data: TierModelPolicy[] }>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/model-policies`, {
-      method: 'PUT',
-      json: { policies },
-    }),
-  /** @deprecated Use row-level capacity-pool mutations with expected_revision. */
-  replaceCapacityPools: (tierId: string, versionId: string, pools: TierCapacityPoolPayload[]) =>
-    apiFetch<{ data: TierCapacityPool[] }>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/capacity-pools`, {
-      method: 'PUT',
-      json: { pools },
-    }),
-  /** @deprecated Use activationPreview and activateVersion. */
-  publishVersion: (tierId: string, versionId: string) =>
-    apiFetch<TierVersion>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/publish`, { method: 'POST' }),
   archiveVersion: (tierId: string, versionId: string) =>
     apiFetch<TierVersion>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/archive`, { method: 'POST' }),
 };

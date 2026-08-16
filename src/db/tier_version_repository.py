@@ -200,7 +200,7 @@ class TierVersionRepositoryMixin:
         status = str(status or "draft").strip().lower()
         if status != "draft":
             raise ValueError(
-                "tier versions must be created as draft; use publish_tier_version to activate"
+                "tier versions must be created as draft; use activate_tier_version to activate"
             )
         if published_at is not None or published_by_account_id is not None:
             raise ValueError("draft tier versions cannot include publish metadata")
@@ -386,39 +386,6 @@ class TierVersionRepositoryMixin:
             json_param(metadata),
         )
         return to_version_record(rows[0]) if rows else None
-    async def publish_tier_version(
-        self,
-        tier_version_id: str,
-        *,
-        published_by_account_id: str | None = None,
-    ) -> TierVersionRecord | None:
-        if self.prisma is None:
-            return None
-        self.require_transactions("publish_tier_version")
-        async with self.prisma.tx() as tx:
-            return await self.with_db(tx)._publish_tier_version_in_tx(
-                tier_version_id,
-                published_by_account_id=published_by_account_id,
-            )
-
-    async def _publish_tier_version_in_tx(
-        self,
-        tier_version_id: str,
-        *,
-        published_by_account_id: str | None,
-    ) -> TierVersionRecord | None:
-        version = await self._lock_tier_then_version_for_lifecycle(tier_version_id)
-        if version is None:
-            return None
-        if version.status != "draft":
-            raise ValueError("only draft tier versions can be published")
-
-        return await self._activate_locked_tier_version(
-            version,
-            published_by_account_id=published_by_account_id,
-            expected_active_version_id=None,
-            enforce_active_guard=False,
-        )
 
     async def activate_tier_version(
         self,
@@ -470,7 +437,6 @@ class TierVersionRepositoryMixin:
             version,
             published_by_account_id=published_by_account_id,
             expected_active_version_id=expected_active_version_id,
-            enforce_active_guard=True,
         )
 
     async def _activate_locked_tier_version(
@@ -479,7 +445,6 @@ class TierVersionRepositoryMixin:
         *,
         published_by_account_id: str | None,
         expected_active_version_id: str | None,
-        enforce_active_guard: bool,
     ) -> TierVersionRecord | None:
         tier_version_id = version.tier_version_id
 
@@ -487,7 +452,7 @@ class TierVersionRepositoryMixin:
             tier_id=version.tier_id,
             exclude_tier_version_id=tier_version_id,
         )
-        if enforce_active_guard and current_active_version_id != expected_active_version_id:
+        if current_active_version_id != expected_active_version_id:
             raise TierActivationActiveVersionChangedError(
                 expected_active_version_id=expected_active_version_id,
                 current_active_version_id=current_active_version_id,
@@ -500,7 +465,7 @@ class TierVersionRepositoryMixin:
             )
             if pinned_assignment_count:
                 raise ValueError(
-                    "cannot publish tier version while enabled assignments are pinned "
+                    "cannot activate tier version while enabled assignments are pinned "
                     "to the current active version"
                 )
 

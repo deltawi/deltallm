@@ -10,13 +10,11 @@ from src.api.admin.endpoints.tier_schemas import (
     TierActivationRequest,
     TierCapacityPoolCreateRequest,
     TierCapacityPoolPatchRequest,
-    TierCapacityPoolReplaceRequest,
     TierConfigurationMutationRequest,
     TierCreateRequest,
     TierModelPolicyCreateRequest,
     TierModelPolicyBulkLimitsRequest,
     TierModelPolicyPatchRequest,
-    TierModelPolicyReplaceRequest,
     TierPatchRequest,
     TierVersionCreateRequest,
 )
@@ -589,54 +587,6 @@ async def delete_tier_model_policy(
     return response
 
 
-@router.put(
-    "/ui/api/tiers/{tier_id}/versions/{tier_version_id}/model-policies",
-    dependencies=_PLATFORM_ADMIN_DEPENDENCY,
-)
-async def replace_tier_model_policies(
-    request: Request,
-    tier_id: str,
-    tier_version_id: str,
-    payload: TierModelPolicyReplaceRequest,
-) -> dict[str, Any]:
-    request_start = perf_counter()
-    service = _tier_service(request)
-    request_payload = _payload(payload)
-    policies_payload = request_payload["policies"]
-    before_detail: dict[str, Any] | None = None
-    try:
-        before_detail = await service.get_tier_version_detail(tier_id, tier_version_id)
-        records = await service.replace_model_policies(
-            tier_id,
-            tier_version_id,
-            policies_payload,
-        )
-    except TierAdminError as exc:
-        raise _http_error(exc) from exc
-
-    response = {"data": [serialize_model_policy(record) for record in records]}
-    tier_policy_invalidation = await _reload_tier_policy_for_audit(request)
-    await emit_admin_mutation_audit(
-        request=request,
-        request_start=request_start,
-        action=AuditAction.ADMIN_TIER_MODEL_POLICIES_REPLACE,
-        resource_type="tier_model_policy_set",
-        resource_id=tier_version_id,
-        request_payload={
-            "tier_id": tier_id,
-            "policy_count": len(policies_payload),
-        },
-        response_payload={
-            "policy_count": len(response["data"]),
-            "tier_policy_invalidation": tier_policy_invalidation,
-        },
-        before={"policy_count": len(before_detail["model_policies"]) if before_detail else 0},
-        after={"policy_count": len(response["data"])},
-        metadata={"tier_policy_invalidation": tier_policy_invalidation},
-    )
-    return response
-
-
 @router.get(
     "/ui/api/tiers/{tier_id}/versions/{tier_version_id}/capacity-pools",
     dependencies=_PLATFORM_ADMIN_DEPENDENCY,
@@ -813,51 +763,6 @@ async def delete_tier_capacity_pool(
     return response
 
 
-@router.put(
-    "/ui/api/tiers/{tier_id}/versions/{tier_version_id}/capacity-pools",
-    dependencies=_PLATFORM_ADMIN_DEPENDENCY,
-)
-async def replace_tier_capacity_pools(
-    request: Request,
-    tier_id: str,
-    tier_version_id: str,
-    payload: TierCapacityPoolReplaceRequest,
-) -> dict[str, Any]:
-    request_start = perf_counter()
-    service = _tier_service(request)
-    request_payload = _payload(payload)
-    pools_payload = request_payload["pools"]
-    before_detail: dict[str, Any] | None = None
-    try:
-        before_detail = await service.get_tier_version_detail(tier_id, tier_version_id)
-        records = await service.replace_capacity_pools(
-            tier_id,
-            tier_version_id,
-            pools_payload,
-        )
-    except TierAdminError as exc:
-        raise _http_error(exc) from exc
-
-    response = {"data": [serialize_capacity_pool(record) for record in records]}
-    tier_policy_invalidation = await _reload_tier_policy_for_audit(request)
-    await emit_admin_mutation_audit(
-        request=request,
-        request_start=request_start,
-        action=AuditAction.ADMIN_TIER_CAPACITY_POOLS_REPLACE,
-        resource_type="tier_capacity_pool_set",
-        resource_id=tier_version_id,
-        request_payload={"tier_id": tier_id, "pool_count": len(pools_payload)},
-        response_payload={
-            "pool_count": len(response["data"]),
-            "tier_policy_invalidation": tier_policy_invalidation,
-        },
-        before={"pool_count": len(before_detail["capacity_pools"]) if before_detail else 0},
-        after={"pool_count": len(response["data"])},
-        metadata={"tier_policy_invalidation": tier_policy_invalidation},
-    )
-    return response
-
-
 @router.get(
     "/ui/api/tiers/{tier_id}/versions/{tier_version_id}/activation-preview",
     dependencies=_PLATFORM_ADMIN_DEPENDENCY,
@@ -916,46 +821,6 @@ async def activate_tier_version(
         before=before,
         after=response,
         metadata={"tier_policy_invalidation": invalidation},
-    )
-    return response
-
-
-@router.post(
-    "/ui/api/tiers/{tier_id}/versions/{tier_version_id}/publish",
-    dependencies=_PLATFORM_ADMIN_DEPENDENCY,
-)
-async def publish_tier_version(
-    request: Request,
-    tier_id: str,
-    tier_version_id: str,
-) -> dict[str, Any]:
-    request_start = perf_counter()
-    service = _tier_service(request)
-    try:
-        before = serialize_tier_version(
-            await service.require_version_for_tier(tier_id, tier_version_id)
-        )
-        published = await service.publish_tier_version(
-            tier_id,
-            tier_version_id,
-            published_by_account_id=_actor_account_id(request),
-        )
-    except TierAdminError as exc:
-        raise _http_error(exc) from exc
-
-    response = serialize_tier_version(published)
-    tier_policy_invalidation = await _reload_tier_policy_for_audit(request)
-    await emit_admin_mutation_audit(
-        request=request,
-        request_start=request_start,
-        action=AuditAction.ADMIN_TIER_VERSION_PUBLISH,
-        resource_type="tier_version",
-        resource_id=tier_version_id,
-        request_payload={"tier_id": tier_id},
-        response_payload={**response, "tier_policy_invalidation": tier_policy_invalidation},
-        before=before,
-        after=response,
-        metadata={"tier_policy_invalidation": tier_policy_invalidation},
     )
     return response
 

@@ -48,10 +48,6 @@ class TierModelPolicyRequest(_StrictRequest):
     metadata: dict[str, Any] | None = None
 
 
-class TierModelPolicyReplaceRequest(_StrictRequest):
-    policies: list[TierModelPolicyRequest]
-
-
 class TierModelPolicyCreateRequest(TierModelPolicyRequest):
     expected_revision: int = Field(ge=0)
 
@@ -110,10 +106,6 @@ class TierCapacityPoolRequest(_StrictRequest):
     saturation_threshold: float | None = Field(default=None, gt=0, le=1)
     burst_multiplier: float | None = Field(default=None, ge=1)
     metadata: dict[str, Any] | None = None
-
-
-class TierCapacityPoolReplaceRequest(_StrictRequest):
-    pools: list[TierCapacityPoolRequest]
 
 
 class TierCapacityPoolCreateRequest(TierCapacityPoolRequest):

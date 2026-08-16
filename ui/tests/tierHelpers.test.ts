@@ -7,13 +7,9 @@ import {
   formatSimulationPrice,
   capacityPoolFormWithStrategy,
   capacityPoolFormToPayload,
-  capacityPoolsToPayload,
-  capacityPoolToPayload,
   isAssignableTierVersion,
   modelPolicyFormToPayload,
-  modelPoliciesToPayload,
   modelPolicyToForm,
-  modelPolicyToPayload,
   parseNonNegativeIntegerInput,
   parsePositiveIntegerInput,
   pickEditableVersion,
@@ -185,7 +181,7 @@ test('modelPolicyFormToPayload supports image and audio pricing fields', () => {
   });
 });
 
-test('model policy payload helpers preserve metadata and strip response-only fields', () => {
+test('model policy form payload preserves existing metadata and pricing', () => {
   const existing = {
     tier_model_policy_id: 'policy-1',
     tier_version_id: 'version-1',
@@ -205,14 +201,9 @@ test('model policy payload helpers preserve metadata and strip response-only fie
     ...modelPolicyToForm(existing),
     rpm_limit: '240',
   }, existing);
-  const sanitized = modelPolicyToPayload(existing);
 
   assert.deepEqual(fromForm.metadata, { source: 'api' });
   assert.deepEqual(fromForm.pricing, { input_cost_per_token: 0.01 });
-  assert.deepEqual(sanitized.metadata, { source: 'api' });
-  assert.equal('tier_model_policy_id' in sanitized, false);
-  assert.equal('created_at' in sanitized, false);
-  assert.deepEqual(modelPoliciesToPayload([existing])[0], sanitized);
 });
 
 test('modelPolicyFormToPayload preserves hidden pricing keys while editing visible fields', () => {
@@ -348,7 +339,7 @@ test('capacityPoolFormToPayload normalizes optional shared capacity fields', () 
   assert.equal(payload.saturation_threshold, 0.9);
 });
 
-test('capacity pool payload helpers preserve metadata and strip response-only fields', () => {
+test('capacity pool form payload preserves existing metadata', () => {
   const existing = {
     tier_capacity_pool_id: 'pool-1',
     tier_version_id: 'version-1',
@@ -370,13 +361,8 @@ test('capacity pool payload helpers preserve metadata and strip response-only fi
     callable_key: 'gpt-4o-mini',
     rpm_capacity: '1200',
   }, existing);
-  const sanitized = capacityPoolToPayload(existing);
 
   assert.deepEqual(fromForm.metadata, { source: 'api' });
-  assert.deepEqual(sanitized.metadata, { source: 'api' });
-  assert.equal('tier_capacity_pool_id' in sanitized, false);
-  assert.equal('created_at' in sanitized, false);
-  assert.deepEqual(capacityPoolsToPayload([existing])[0], sanitized);
 });
 
 test('capacity pool strategy helper fills only relevant safe defaults', () => {

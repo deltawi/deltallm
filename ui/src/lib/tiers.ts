@@ -310,29 +310,6 @@ export function modelPolicyFormToPayload(
   }, existing);
 }
 
-export function modelPolicyToPayload(policy: TierModelPolicy): TierModelPolicyPayload {
-  return withOptionalMetadata({
-    callable_key: policy.callable_key,
-    enabled: policy.enabled,
-    access_mode: policy.access_mode,
-    rpm_limit: policy.rpm_limit ?? null,
-    tpm_limit: policy.tpm_limit ?? null,
-    rph_limit: policy.rph_limit ?? null,
-    rpd_limit: policy.rpd_limit ?? null,
-    tpd_limit: policy.tpd_limit ?? null,
-    max_parallel_requests: policy.max_parallel_requests ?? null,
-    batch_rpm_limit: policy.batch_rpm_limit ?? null,
-    batch_tpm_limit: policy.batch_tpm_limit ?? null,
-    pricing: policy.pricing ?? null,
-    capacity_pool_key: policy.capacity_pool_key ?? null,
-    priority: policy.priority,
-  }, policy);
-}
-
-export function modelPoliciesToPayload(policies: TierModelPolicy[]): TierModelPolicyPayload[] {
-  return policies.map((policy) => modelPolicyToPayload(policy));
-}
-
 export function validateModelPolicyForm(form: TierModelPolicyForm): string | null {
   try {
     modelPolicyFormToPayload(form);
@@ -395,23 +372,6 @@ export function capacityPoolFormToPayload(
     saturation_threshold: parseOptionalRatio(form.saturation_threshold, 'Saturation threshold'),
     burst_multiplier: parseOptionalNumberAtLeast(form.burst_multiplier, 'Burst multiplier', 1),
   }, existing);
-}
-
-export function capacityPoolToPayload(pool: TierCapacityPool): TierCapacityPoolPayload {
-  return withOptionalMetadata({
-    pool_key: pool.pool_key,
-    callable_key: pool.callable_key,
-    rpm_capacity: pool.rpm_capacity ?? null,
-    tpm_capacity: pool.tpm_capacity ?? null,
-    max_parallel_requests: pool.max_parallel_requests ?? null,
-    strategy: pool.strategy,
-    saturation_threshold: pool.saturation_threshold ?? null,
-    burst_multiplier: pool.burst_multiplier ?? null,
-  }, pool);
-}
-
-export function capacityPoolsToPayload(pools: TierCapacityPool[]): TierCapacityPoolPayload[] {
-  return pools.map((pool) => capacityPoolToPayload(pool));
 }
 
 export function poolOptionsForCallable(

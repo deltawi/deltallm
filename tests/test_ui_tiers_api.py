@@ -76,7 +76,6 @@ class _FakeTierRepository:
         self.capacity_pools: dict[str, list[TierCapacityPoolRecord]] = {}
         self.active_assignment_counts: dict[str, int] = {}
         self.update_error: str | None = None
-        self.publish_error: str | None = None
         self.archive_error: str | None = None
         self.bootstrap_requests: dict[tuple[str, str], tuple[str, str, str]] = {}
 
@@ -389,31 +388,6 @@ class _FakeTierRepository:
         self.capacity_pools[tier_version_id] = cloned_pools
         return record
 
-    async def publish_tier_version(
-        self,
-        tier_version_id: str,
-        *,
-        published_by_account_id: str | None = None,
-    ) -> TierVersionRecord | None:
-        if self.publish_error is not None:
-            raise ValueError(self.publish_error)
-        record = self.versions.get(tier_version_id)
-        if record is None:
-            return None
-        if record.status != "draft":
-            raise ValueError("only draft tier versions can be published")
-        for version_id, version in list(self.versions.items()):
-            if version.tier_id == record.tier_id and version.status == "active":
-                self.versions[version_id] = replace(version, status="archived")
-        updated = replace(
-            record,
-            status="active",
-            published_at=datetime.now(tz=UTC),
-            published_by_account_id=published_by_account_id,
-        )
-        self.versions[tier_version_id] = updated
-        return updated
-
     async def activate_tier_version(
         self,
         *,
@@ -438,10 +412,19 @@ class _FakeTierRepository:
                 expected_active_version_id=expected_active_version_id,
                 current_active_version_id=active_id,
             )
-        return await self.publish_tier_version(
-            tier_version_id,
+        if version.status != "draft":
+            raise ValueError("only draft tier versions can be activated")
+        for version_id, record in list(self.versions.items()):
+            if record.tier_id == tier_id and record.status == "active":
+                self.versions[version_id] = replace(record, status="archived")
+        activated = replace(
+            version,
+            status="active",
+            published_at=datetime.now(tz=UTC),
             published_by_account_id=published_by_account_id,
         )
+        self.versions[tier_version_id] = activated
+        return activated
 
     async def archive_tier_version(self, tier_version_id: str) -> TierVersionRecord | None:
         if self.archive_error is not None:
@@ -655,18 +638,6 @@ class _FakeTierRepository:
             version.updated_at,
         )
 
-    async def replace_model_policies(
-        self,
-        tier_version_id: str,
-        policies: list[TierModelPolicyRecord],
-    ) -> list[TierModelPolicyRecord]:
-        records = [
-            replace(policy, tier_model_policy_id=f"policy-{index + 1}")
-            for index, policy in enumerate(policies)
-        ]
-        self.model_policies[tier_version_id] = records
-        return records
-
     async def list_capacity_pools(self, tier_version_id: str) -> list[TierCapacityPoolRecord]:
         return list(self.capacity_pools.get(tier_version_id, []))
 
@@ -824,18 +795,6 @@ class _FakeTierRepository:
             version.configuration_revision,
             version.updated_at,
         )
-
-    async def replace_capacity_pools(
-        self,
-        tier_version_id: str,
-        pools: list[TierCapacityPoolRecord],
-    ) -> list[TierCapacityPoolRecord]:
-        records = [
-            replace(pool, tier_capacity_pool_id=f"pool-{index + 1}")
-            for index, pool in enumerate(pools)
-        ]
-        self.capacity_pools[tier_version_id] = records
-        return records
 
     def _guard_configuration(
         self,
@@ -1585,9 +1544,6 @@ async def test_tier_admin_activation_preview_and_guarded_activation(client, test
             "/ui/api/tiers/tier-1/versions/version-1/activate",
             {"expected_revision": 0, "expected_active_version_id": None},
         ),
-        ("PUT", "/ui/api/tiers/tier-1/versions/version-1/model-policies", {"policies": []}),
-        ("PUT", "/ui/api/tiers/tier-1/versions/version-1/capacity-pools", {"pools": []}),
-        ("POST", "/ui/api/tiers/tier-1/versions/version-1/publish", None),
         ("POST", "/ui/api/tiers/tier-1/versions/version-1/archive", None),
         ("GET", "/ui/api/tier-capacity/dashboard", None),
         (
@@ -1660,7 +1616,7 @@ async def test_tier_admin_duplicate_key_returns_conflict(client, test_app):
 
 
 @pytest.mark.asyncio
-async def test_tier_admin_version_policy_pool_publish_flow(client, test_app):
+async def test_tier_admin_version_policy_pool_activation_flow(client, test_app):
     repository = _FakeTierRepository()
     repository.seed_tier()
     audit = _RecordingAuditService()
@@ -1680,50 +1636,45 @@ async def test_tier_admin_version_policy_pool_publish_flow(client, test_app):
     assert version["source_tier_version_id"] is None
     version_id = version["tier_version_id"]
 
-    pools_response = await client.put(
+    pools_response = await client.post(
         f"/ui/api/tiers/tier-1/versions/{version_id}/capacity-pools",
         headers=headers,
         json={
-            "pools": [
-                {
-                    "pool_key": "shared",
-                    "callable_key": "gpt-4o-mini",
-                    "rpm_capacity": 1000,
-                    "tpm_capacity": 500000,
-                    "strategy": "weighted_fair",
-                    "saturation_threshold": 0.8,
-                    "burst_multiplier": 1.5,
-                }
-            ]
+            "expected_revision": 0,
+            "pool_key": "shared",
+            "callable_key": "gpt-4o-mini",
+            "rpm_capacity": 1000,
+            "tpm_capacity": 500000,
+            "strategy": "weighted_fair",
+            "saturation_threshold": 0.8,
+            "burst_multiplier": 1.5,
         },
     )
     assert pools_response.status_code == 200
-    assert pools_response.json()["data"][0]["pool_key"] == "shared"
+    assert pools_response.json()["data"]["pool_key"] == "shared"
 
-    policies_response = await client.put(
+    policies_response = await client.post(
         f"/ui/api/tiers/tier-1/versions/{version_id}/model-policies",
         headers=headers,
         json={
-            "policies": [
-                {
-                    "callable_key": "gpt-4o-mini",
-                    "rpm_limit": 100,
-                    "tpm_limit": 10000,
-                    "pricing": {"input_cost_per_token": 0.000001},
-                    "capacity_pool_key": "shared",
-                }
-            ]
+            "expected_revision": 1,
+            "callable_key": "gpt-4o-mini",
+            "rpm_limit": 100,
+            "tpm_limit": 10000,
+            "pricing": {"input_cost_per_token": 0.000001},
+            "capacity_pool_key": "shared",
         },
     )
     assert policies_response.status_code == 200
-    assert policies_response.json()["data"][0]["pricing"] == {"input_cost_per_token": 0.000001}
+    assert policies_response.json()["data"]["pricing"] == {"input_cost_per_token": 0.000001}
 
-    publish_response = await client.post(
-        f"/ui/api/tiers/tier-1/versions/{version_id}/publish",
+    activate_response = await client.post(
+        f"/ui/api/tiers/tier-1/versions/{version_id}/activate",
         headers=headers,
+        json={"expected_revision": 2, "expected_active_version_id": None},
     )
-    assert publish_response.status_code == 200
-    assert publish_response.json()["status"] == "active"
+    assert activate_response.status_code == 200
+    assert activate_response.json()["status"] == "active"
 
     detail = await client.get(f"/ui/api/tiers/tier-1/versions/{version_id}", headers=headers)
     assert detail.status_code == 200
@@ -1732,9 +1683,9 @@ async def test_tier_admin_version_policy_pool_publish_flow(client, test_app):
 
     actions = [event.action for event, _ in audit.sync_calls]
     assert AuditAction.ADMIN_TIER_VERSION_CREATE.value in actions
-    assert AuditAction.ADMIN_TIER_CAPACITY_POOLS_REPLACE.value in actions
-    assert AuditAction.ADMIN_TIER_MODEL_POLICIES_REPLACE.value in actions
-    assert AuditAction.ADMIN_TIER_VERSION_PUBLISH.value in actions
+    assert AuditAction.ADMIN_TIER_CAPACITY_POOL_CREATE.value in actions
+    assert AuditAction.ADMIN_TIER_MODEL_POLICY_CREATE.value in actions
+    assert AuditAction.ADMIN_TIER_VERSION_ACTIVATE.value in actions
     assert governance_invalidation.local_targets == [
         ("tier_policy",),
         ("tier_policy",),
@@ -1865,127 +1816,36 @@ async def test_tier_admin_update_audits_non_fatal_tier_policy_reload_failure(
 
 
 @pytest.mark.asyncio
-async def test_tier_admin_replace_requires_explicit_policy_and_pool_lists(client, test_app):
+async def test_legacy_tier_mutation_routes_are_removed(client, test_app):
     repository = _FakeTierRepository()
     repository.seed_tier()
     repository.seed_version()
-    repository.model_policies["version-1"] = [
-        TierModelPolicyRecord(
-            tier_model_policy_id="policy-1",
-            tier_version_id="version-1",
-            callable_key="gpt-4o-mini",
-        )
-    ]
-    repository.capacity_pools["version-1"] = [
-        TierCapacityPoolRecord(
-            tier_capacity_pool_id="pool-1",
-            tier_version_id="version-1",
-            pool_key="shared",
-            callable_key="gpt-4o-mini",
-        )
-    ]
     test_app.state.tier_repository = repository
-    test_app.state.audit_service = _RecordingAuditService()
     headers = _headers(test_app)
+    base_path = "/ui/api/tiers/tier-1/versions/version-1"
 
     policies_response = await client.put(
-        "/ui/api/tiers/tier-1/versions/version-1/model-policies",
-        headers=headers,
-        json={},
-    )
-    pools_response = await client.put(
-        "/ui/api/tiers/tier-1/versions/version-1/capacity-pools",
-        headers=headers,
-        json={},
-    )
-
-    assert policies_response.status_code == 422
-    assert pools_response.status_code == 422
-    assert [policy.callable_key for policy in repository.model_policies["version-1"]] == [
-        "gpt-4o-mini"
-    ]
-    assert [pool.pool_key for pool in repository.capacity_pools["version-1"]] == ["shared"]
-
-    clear_policies_response = await client.put(
-        "/ui/api/tiers/tier-1/versions/version-1/model-policies",
+        f"{base_path}/model-policies",
         headers=headers,
         json={"policies": []},
     )
-    clear_pools_response = await client.put(
-        "/ui/api/tiers/tier-1/versions/version-1/capacity-pools",
+    pools_response = await client.put(
+        f"{base_path}/capacity-pools",
         headers=headers,
         json={"pools": []},
     )
+    publish_response = await client.post(f"{base_path}/publish", headers=headers)
 
-    assert clear_policies_response.status_code == 200
-    assert clear_policies_response.json()["data"] == []
-    assert clear_pools_response.status_code == 200
-    assert clear_pools_response.json()["data"] == []
-    assert repository.model_policies["version-1"] == []
-    assert repository.capacity_pools["version-1"] == []
-
-
-@pytest.mark.asyncio
-async def test_tier_admin_model_policy_rejects_missing_capacity_pool(client, test_app):
-    repository = _FakeTierRepository()
-    repository.seed_tier()
-    repository.seed_version()
-    test_app.state.tier_repository = repository
-
-    response = await client.put(
-        "/ui/api/tiers/tier-1/versions/version-1/model-policies",
-        headers=_headers(test_app),
-        json={
-            "policies": [
-                {
-                    "callable_key": "gpt-4o-mini",
-                    "capacity_pool_key": "shared",
-                }
-            ]
-        },
-    )
-
-    assert response.status_code == 400
-    assert (
-        response.json()["detail"]
-        == "capacity_pool_key must reference a pool for the same callable_key"
-    )
-
-
-@pytest.mark.asyncio
-async def test_tier_admin_capacity_pool_replace_preserves_referenced_pools(client, test_app):
-    repository = _FakeTierRepository()
-    repository.seed_tier()
-    repository.seed_version()
-    repository.capacity_pools["version-1"] = [
-        TierCapacityPoolRecord(
-            tier_capacity_pool_id="pool-1",
-            tier_version_id="version-1",
-            pool_key="shared",
-            callable_key="gpt-4o-mini",
-        )
-    ]
-    repository.model_policies["version-1"] = [
-        TierModelPolicyRecord(
-            tier_model_policy_id="policy-1",
-            tier_version_id="version-1",
-            callable_key="gpt-4o-mini",
-            capacity_pool_key="shared",
-        )
-    ]
-    test_app.state.tier_repository = repository
-
-    response = await client.put(
-        "/ui/api/tiers/tier-1/versions/version-1/capacity-pools",
-        headers=_headers(test_app),
-        json={"pools": []},
-    )
-
-    assert response.status_code == 409
-    assert (
-        response.json()["detail"]
-        == "Cannot remove a capacity pool referenced by draft model policies"
-    )
+    openapi_paths = test_app.openapi()["paths"]
+    policies_path = "/ui/api/tiers/{tier_id}/versions/{tier_version_id}/model-policies"
+    pools_path = "/ui/api/tiers/{tier_id}/versions/{tier_version_id}/capacity-pools"
+    publish_path = "/ui/api/tiers/{tier_id}/versions/{tier_version_id}/publish"
+    assert "put" not in openapi_paths[policies_path]
+    assert "put" not in openapi_paths[pools_path]
+    assert publish_path not in openapi_paths
+    assert policies_response.status_code == 405
+    assert pools_response.status_code == 405
+    assert publish_response.status_code == 405
 
 
 @pytest.mark.asyncio
@@ -2041,22 +1901,6 @@ async def test_tier_admin_disable_maps_database_race_to_conflict(client, test_ap
     assert response.json()["detail"] == (
         "Tier has enabled live or scheduled organization assignments"
     )
-
-
-@pytest.mark.asyncio
-async def test_tier_admin_publish_non_draft_returns_conflict(client, test_app):
-    repository = _FakeTierRepository()
-    repository.seed_tier()
-    repository.seed_version(status="active")
-    test_app.state.tier_repository = repository
-
-    response = await client.post(
-        "/ui/api/tiers/tier-1/versions/version-1/publish",
-        headers=_headers(test_app),
-    )
-
-    assert response.status_code == 409
-    assert response.json()["detail"] == "only draft tier versions can be published"
 
 
 @pytest.mark.asyncio

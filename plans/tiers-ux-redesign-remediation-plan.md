@@ -1,6 +1,8 @@
 # Tiers UX redesign: code-review remediation plan v2
 
 > Status: core implementation complete in the isolated `feature/tiers-ux-redesign` worktree; release-targeted verification is in progress. This revision incorporates both code-review rounds, resolves the five follow-up findings, and supersedes conflicting decisions in `tiers-ux-redesign-mapping.md` and earlier revisions of this document.
+>
+> Removal decision (2026-08-16): after the redesigned client and browser smoke test proved the guarded row-level workflow, immediate breaking removal was authorized. Any compatibility-stage instruction below is retained as historical rollout rationale but is superseded: collection replacement PUTs and bodyless `/publish` were deleted rather than gated.
 
 ## Implementation checkpoint
 
@@ -15,7 +17,7 @@ Completed in the current worktree:
 - bounded compatible-capacity-pool lookup for the model-policy editor;
 - backend repository/API coverage, UI helper coverage, and real PostgreSQL migration/catalog-query validation.
 
-The legacy replacement and bodyless publish routes remain compatibility-only during the additive rollout stage. Their GA `428` enforcement gate is intentionally not enabled until the redesigned client is deployed and staging telemetry proves there are no remaining legacy callers.
+The legacy replacement and bodyless publish routes, their request schemas, service/repository implementations, client methods, audit actions, and compatibility tests have been removed. Guarded row-level mutations and `/activate` are the only supported configuration and activation paths.
 
 ## 0. Follow-up review closure
 
@@ -120,7 +122,7 @@ Semantics:
 - A newly created blank version starts at revision `0`.
 - A cloned/restored version also starts at revision `0`; its copied contents are its initial configuration.
 - Each successful policy/pool create, update, delete, or bulk mutation increments revision exactly once.
-- Lifecycle-only changes such as publish/archive update `updated_at` but do not increment configuration revision.
+- Lifecycle-only changes such as activation/archive update `updated_at` but do not increment configuration revision.
 - `created_by_account_id` is populated for platform-session admins.
 - Master-key creation records `created_by_kind='master_key'` with no account ID.
 - Existing rows are backfilled as `created_by_kind='unknown'`; do not infer a creator from the publisher.
@@ -634,7 +636,7 @@ On `tier_configuration_stale`:
 | Two admins save revision 4 | First succeeds with revision 5; second gets `409`, no row is overwritten |
 | Policy/pool ID belongs to another Tier or version | Scoped `404`; neither child row nor either version revision changes |
 | Policy is saved while its pool is concurrently removed | Version lock serializes operations; the later operation revalidates against current state |
-| Draft is published while an editor is open | Next edit gets non-draft conflict; UI refetches and becomes read-only |
+| Draft is activated while an editor is open | Next edit gets non-draft conflict; UI refetches and becomes read-only |
 | Bootstrap response is lost | Same idempotency key returns the original tier and Draft v1 |
 | Two requests simultaneously use the same principal/key | Second waits on the transaction advisory lock, then replays the first committed Tier/v1 |
 | Bootstrap key is reused for different form data | `409` with idempotency-conflict code; no mutation |

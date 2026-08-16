@@ -111,9 +111,9 @@ Creation behavior follows the effective runtime mode:
 
 Use a custom tier or clone an existing tier when one customer needs different model access, model limits, pricing, or capacity. Do not recreate that policy with organization fields. While an active tier is authoritative in `enforce`, the API rejects new organization-level per-model limit maps and organization Asset Access writes; organization-wide RPM/TPM/RPH/RPD/TPD hard caps remain editable.
 
-If an organization already had legacy per-model RPM/TPM maps before its tier was assigned, its Service Policy card shows a warning because those safety caps still apply alongside the tier. First reproduce any required limits on the tier, publish and preview them, then use **Clear legacy model caps**. The confirmation warns that clearing them before the tier is ready can increase allowed traffic.
+If an organization already had legacy per-model RPM/TPM maps before its tier was assigned, its Service Policy card shows a warning because those safety caps still apply alongside the tier. First reproduce any required limits on the tier, preview and activate them, then use **Clear legacy model caps**. The confirmation warns that clearing them before the tier is ready can increase allowed traffic.
 
-`shadow` evaluates the staged tier but does not enforce it. For a newly created tier-first organization, DeltaLLM atomically snapshots the selected active version's allowed callable targets into legacy Asset Access so requests continue to work. That legacy mirror remains editable and authoritative during rollout; it intentionally does not follow later tier publications, allowing the preview and mismatch telemetry to expose policy changes before enforcement. Creating a new legacy organization through the API in this mode requires `"legacy_policy_exception": true`, matching the explicit migration checkbox in the drawer. `disabled` also keeps legacy Asset Access authoritative even if an assignment has already been staged. Once mode is `enforce`, the tier becomes authoritative and the organization Asset Access editor is hidden.
+`shadow` evaluates the staged tier but does not enforce it. For a newly created tier-first organization, DeltaLLM atomically snapshots the selected active version's allowed callable targets into legacy Asset Access so requests continue to work. That legacy mirror remains editable and authoritative during rollout; it intentionally does not follow later tier activations, allowing the preview and mismatch telemetry to expose policy changes before enforcement. Creating a new legacy organization through the API in this mode requires `"legacy_policy_exception": true`, matching the explicit migration checkbox in the drawer. `disabled` also keeps legacy Asset Access authoritative even if an assignment has already been staged. Once mode is `enforce`, the tier becomes authoritative and the organization Asset Access editor is hidden.
 
 The optional organization RPM, TPM, RPH, RPD, and TPD fields are global hard caps. They apply across all models, teams, and keys in addition to the tier's per-model controls. Leave them blank when no extra organization-wide ceiling is needed. Budgets, budget resets, and audit-content storage also remain organization settings.
 
@@ -232,9 +232,9 @@ Platform admins can inspect current pool utilization and temporarily boost one o
 | `POST` | `/ui/api/tier-capacity/boosts` | Apply a `1`-to-`100` weight multiplier with a Redis TTL of at most seven days |
 | `DELETE` | `/ui/api/tier-capacity/boosts` | Remove a temporary boost |
 
-Boost creation and deletion are written to the audit log and attributed to the affected organization. A boost is runtime state: it expires automatically and does not modify the published tier version. See the [Organization Tiers Rollout Runbook](../deployment/organization-tiers-rollout.md) for API examples, metrics, and troubleshooting.
+Boost creation and deletion are written to the audit log and attributed to the affected organization. A boost is runtime state: it expires automatically and does not modify the active tier version. See the [Organization Tiers Rollout Runbook](../deployment/organization-tiers-rollout.md) for API examples, metrics, and troubleshooting.
 
-The dashboard reports `live_data.status` as `healthy`, `partial`, or `unavailable`. When Redis cannot supply a live section, its numeric values are `null` and the UI shows an em dash; they are never presented as zero. The published pool configuration remains available from the tier snapshot.
+The dashboard reports `live_data.status` as `healthy`, `partial`, or `unavailable`. When Redis cannot supply a live section, its numeric values are `null` and the UI shows an em dash; they are never presented as zero. The active pool configuration remains available from the tier snapshot.
 
 ## Recommended User Journey
 
@@ -328,7 +328,7 @@ You want to sell a Growth plan:
 - `gpt-4o` uses `growth-premium-pool`
 - customer price is lower than pay-as-you-go
 
-Create one `Growth` tier, publish it, and assign it to every Growth customer.
+Create one `Growth` tier, activate it, and assign it to every Growth customer.
 
 When a customer upgrades to Enterprise, assign the Enterprise tier instead of manually changing model access, prices, and limits on that organization.
 
