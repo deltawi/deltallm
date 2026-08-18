@@ -1215,6 +1215,9 @@ async def test_unverified_mfa_session_is_blocked_until_mfa_verify(client, test_a
         async def summarize_status_counts(self):  # noqa: ANN201
             return []
 
+        async def count_delivery_audits_by_status(self) -> dict[str, int]:
+            return {}
+
         async def list_recent(self, *, limit: int = 20):  # noqa: ANN201
             del limit
             return []

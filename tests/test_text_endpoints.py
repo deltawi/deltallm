@@ -132,6 +132,7 @@ def test_responses_to_chat_request_preserves_mcp_tools() -> None:
 async def test_responses_with_mcp_tool_auto_executes(client, test_app):
     gateway = _FakeMCPGateway()
     test_app.state.mcp_gateway_service = gateway
+    test_app.state.audit_service = _RecordingAuditService()
     upstream_calls: list[dict[str, object]] = []
 
     async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
