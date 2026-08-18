@@ -25,6 +25,9 @@ from src.services.organization_callable_target_sync import sync_auto_follow_orga
 from src.services.route_groups import RouteGroupRuntimeCache, load_route_groups
 
 
+_THEME_GENERAL_FIELDS = frozenset({"instance_name", "ui_branding"})
+
+
 def _normalize_fallbacks(items: list[dict[str, list[str]]]) -> dict[str, list[str]]:
     merged: dict[str, list[str]] = {}
     for item in items:
@@ -145,13 +148,25 @@ class ModelHotReloadManager:
         if not self._has_runtime_changes(changes):
             return
 
+        current_config = getattr(self.app.state, "app_config", None)
+        if self._is_theme_only_change(current_config, new_config, changes):
+            self._apply_theme_identity_config(new_config)
+            return
+
         await self._invalidate_route_group_cache()
         await self._apply_runtime_config(new_config)
+
+    def _apply_theme_identity_config(self, app_config: AppConfig) -> None:
+        self.app.state.app_config = app_config
+        identity_service = getattr(self.app.state, "platform_identity_service", None)
+        if identity_service is not None and hasattr(identity_service, "totp_issuer"):
+            identity_service.totp_issuer = app_config.general_settings.instance_name
 
     async def _apply_runtime_config(self, app_config: AppConfig) -> None:
         app = self.app
         settings = app.state.settings
 
+        self._apply_theme_identity_config(app_config)
         salt_key = resolve_salt_key(app_config, settings)
         model_registry, _ = await self._load_model_registry_compat(
             app_config=app_config,
@@ -389,6 +404,31 @@ class ModelHotReloadManager:
             | set(changes.get("modified", []))
         )
         return bool(touched & interesting)
+
+    @staticmethod
+    def _is_theme_only_change(
+        current_config: AppConfig | None,
+        new_config: AppConfig,
+        changes: dict[str, list[str]],
+    ) -> bool:
+        if current_config is None:
+            return False
+        touched = (
+            set(changes.get("added", []))
+            | set(changes.get("removed", []))
+            | set(changes.get("modified", []))
+        )
+        if touched != {"general_settings"}:
+            return False
+
+        current_general = current_config.general_settings.model_dump(mode="python")
+        next_general = new_config.general_settings.model_dump(mode="python")
+        changed_general_fields = {
+            key
+            for key in current_general.keys() | next_general.keys()
+            if current_general.get(key) != next_general.get(key)
+        }
+        return bool(changed_general_fields) and changed_general_fields <= _THEME_GENERAL_FIELDS
 
     @staticmethod
     def _validate_model_config(config: dict[str, Any]) -> None:

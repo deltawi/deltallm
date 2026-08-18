@@ -417,10 +417,136 @@ def _validate_master_key_strength(value: str | None) -> str | None:
     return normalized
 
 
+def _normalize_ui_instance_name(value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("instance_name cannot be blank")
+    if any(ord(character) < 32 or ord(character) == 127 for character in normalized):
+        raise ValueError("instance_name cannot contain control characters")
+    return normalized
+
+
+def _normalize_ui_brand_asset_url(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    if len(normalized) > 2048:
+        raise ValueError("branding asset URLs must be at most 2048 characters")
+    if any(ord(character) < 32 or ord(character) == 127 for character in normalized):
+        raise ValueError("branding asset URLs cannot contain control characters")
+    if "\\" in normalized:
+        raise ValueError("branding asset URLs cannot contain backslashes")
+
+    try:
+        parsed = urlsplit(normalized)
+    except ValueError as exc:
+        raise ValueError(
+            "branding asset URLs must use a valid root-relative path or HTTPS URL"
+        ) from exc
+    if normalized.startswith("/"):
+        if normalized.startswith("//") or parsed.scheme or parsed.netloc:
+            raise ValueError("branding asset URLs must use a root-relative path or HTTPS")
+        return normalized
+
+    if parsed.scheme.lower() != "https" or not parsed.netloc:
+        raise ValueError("branding asset URLs must use a root-relative path or HTTPS")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("branding asset URLs cannot contain credentials")
+    try:
+        hostname = parsed.hostname
+        parsed.port
+    except ValueError as exc:
+        raise ValueError("branding asset URLs must contain a valid hostname and port") from exc
+    if (
+        not hostname
+        or any(character.isspace() for character in parsed.netloc)
+        or "%" in parsed.netloc
+    ):
+        raise ValueError("branding asset URLs must contain a valid hostname and port")
+    if ":" not in hostname:
+        ascii_hostname = hostname[:-1] if hostname.endswith(".") else hostname
+        try:
+            ascii_hostname = ascii_hostname.encode("idna").decode("ascii")
+        except UnicodeError as exc:
+            raise ValueError("branding asset URLs must contain a valid hostname") from exc
+        labels = ascii_hostname.split(".")
+        if any(
+            not label
+            or len(label) > 63
+            or label.startswith("-")
+            or label.endswith("-")
+            or not all(
+                character.isascii() and (character.isalnum() or character == "-")
+                for character in label
+            )
+            for label in labels
+        ):
+            raise ValueError("branding asset URLs must contain a valid hostname")
+    return normalized
+
+
+class UIBrandingSettings(BaseModel):
+    logo_mark_url: str | None = None
+    logo_full_url: str | None = None
+    favicon_url: str | None = None
+    primary_color: str = Field(default="#2563EB", pattern=r"^#[0-9A-Fa-f]{6}$")
+    secondary_color: str = Field(default="#7C3AED", pattern=r"^#[0-9A-Fa-f]{6}$")
+    menu_hover_color: str = Field(default="#F9FAFB", pattern=r"^#[0-9A-Fa-f]{6}$")
+
+    @field_validator("logo_mark_url", "logo_full_url", "favicon_url", mode="before")
+    @classmethod
+    def normalize_asset_url(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        return _normalize_ui_brand_asset_url(str(value))
+
+    @field_validator("primary_color", "secondary_color", "menu_hover_color")
+    @classmethod
+    def normalize_color(cls, value: str) -> str:
+        return value.upper()
+
+
+class UIBrandingPayload(UIBrandingSettings):
+    instance_name: str = Field(default="DeltaLLM", min_length=1, max_length=80)
+
+    @field_validator("instance_name")
+    @classmethod
+    def normalize_instance_name(cls, value: str) -> str:
+        return _normalize_ui_instance_name(value)
+
+
+class UIBrandingUpdatePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    instance_name: str = Field(default="DeltaLLM", min_length=1, max_length=80)
+    primary_color: str = Field(default="#2563EB", pattern=r"^#[0-9A-Fa-f]{6}$")
+    secondary_color: str = Field(default="#7C3AED", pattern=r"^#[0-9A-Fa-f]{6}$")
+    menu_hover_color: str = Field(default="#F9FAFB", pattern=r"^#[0-9A-Fa-f]{6}$")
+
+    @field_validator("instance_name")
+    @classmethod
+    def normalize_instance_name(cls, value: str) -> str:
+        return _normalize_ui_instance_name(value)
+
+    @field_validator("primary_color", "secondary_color", "menu_hover_color")
+    @classmethod
+    def normalize_color(cls, value: str) -> str:
+        return value.upper()
+
+
 class GeneralSettings(BaseModel):
     model_config = ConfigDict(hide_input_in_errors=True)
 
-    instance_name: str = "DeltaLLM"
+    instance_name: str = Field(default="DeltaLLM", min_length=1, max_length=80)
+    ui_branding: UIBrandingSettings = Field(default_factory=UIBrandingSettings)
+
+    @field_validator("instance_name")
+    @classmethod
+    def normalize_instance_name(cls, value: str) -> str:
+        return _normalize_ui_instance_name(value)
+
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     master_key: str | None = None
     deltallm_key_header_name: str = "Authorization"

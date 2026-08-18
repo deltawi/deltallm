@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import {
@@ -29,6 +29,8 @@ import {
 import clsx from 'clsx';
 import { canAccessPage, resolveUiAccess, type UIAccess, type UIAccessKey } from '../lib/authorization';
 import { useDesktopSidebarWidth } from '../lib/useDesktopSidebarWidth';
+import BrandLogo from './BrandLogo';
+import { useToast } from './ToastProvider';
 
 type NavItem = {
   type: 'item';
@@ -97,7 +99,7 @@ function canViewItem(item: NavItem, uiAccess: UIAccess) {
 function RoleBadge({ role }: { role: string }) {
   const label = role === 'platform_admin' ? 'Admin' : 'User';
   return (
-    <span className="inline-block px-1.5 py-0.5 text-[10px] font-medium text-violet-700 bg-violet-50 rounded-sm">
+    <span className="inline-block rounded-sm bg-brand-secondary-soft px-1.5 py-0.5 text-[10px] font-medium text-brand-secondary-ink">
       {label}
     </span>
   );
@@ -108,15 +110,15 @@ function navItemClass(isActive: boolean, isCollapsed: boolean) {
     return clsx(
       'flex items-center justify-center w-10 py-2 mx-auto rounded-lg text-sm font-medium transition-colors',
       isActive
-        ? 'bg-violet-50 text-violet-700'
-        : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+        ? 'bg-brand-secondary-soft text-brand-secondary-ink'
+        : 'text-gray-600 hover:bg-brand-menu-hover hover:text-brand-menu-hover-foreground'
     );
   }
   return clsx(
     'flex w-full min-w-0 items-center gap-3 px-4 py-2 text-sm font-medium transition-colors border-l-2',
     isActive
-      ? 'bg-violet-50 text-violet-700 border-violet-600'
-      : 'text-gray-600 border-transparent hover:bg-gray-50 hover:text-gray-900'
+      ? 'border-brand-secondary bg-brand-secondary-soft text-brand-secondary-ink'
+      : 'border-transparent text-gray-600 hover:bg-brand-menu-hover hover:text-brand-menu-hover-foreground'
   );
 }
 
@@ -125,6 +127,7 @@ function SidebarContent({
   displayEmail,
   displayRole,
   logout,
+  isLoggingOut,
   pathname,
   onNavClick,
   showExpanded,
@@ -136,6 +139,7 @@ function SidebarContent({
   displayEmail: string;
   displayRole: string;
   logout: () => void;
+  isLoggingOut: boolean;
   pathname: string;
   onNavClick?: () => void;
   showExpanded: boolean;
@@ -151,12 +155,10 @@ function SidebarContent({
           showExpanded ? 'flex items-center justify-between' : 'flex flex-col items-center gap-2',
         )}
       >
-        <div className={clsx('flex items-center gap-2.5 min-w-0', !showExpanded && 'justify-center w-full')}>
-          <div className="w-8 h-8 rounded-[10px] bg-violet-100 border border-violet-200/60 flex items-center justify-center shrink-0 shadow-sm">
-            <Zap className="w-4 h-4 text-violet-600 fill-violet-600" />
-          </div>
-          {showExpanded && <span className="text-lg font-bold text-gray-900 truncate">DeltaLLM</span>}
-        </div>
+        <BrandLogo
+          variant={showExpanded ? 'expanded' : 'mark'}
+          className={clsx(!showExpanded && 'w-full justify-center')}
+        />
         {canCollapse && showExpanded && (
           <button
             type="button"
@@ -196,7 +198,7 @@ function SidebarContent({
                   title={!showExpanded ? entry.label : undefined}
                   className={() => navItemClass(active, !showExpanded)}
                 >
-                  <Icon className={clsx('w-4 h-4 shrink-0', active ? 'text-violet-600' : 'text-gray-400')} />
+                  <Icon className={clsx('w-4 h-4 shrink-0', active ? 'text-brand-secondary-ink' : 'text-gray-400')} />
                   {showExpanded && <span className="min-w-0 truncate">{entry.label}</span>}
                 </NavLink>
               </div>
@@ -225,7 +227,7 @@ function SidebarContent({
                       title={!showExpanded ? child.label : undefined}
                       className={() => navItemClass(active, !showExpanded)}
                     >
-                      <ChildIcon className={clsx('w-4 h-4 shrink-0', active ? 'text-violet-600' : 'text-gray-400')} />
+                      <ChildIcon className={clsx('w-4 h-4 shrink-0', active ? 'text-brand-secondary-ink' : 'text-gray-400')} />
                       {showExpanded && <span className="min-w-0 truncate">{child.label}</span>}
                     </NavLink>
                   );
@@ -251,9 +253,12 @@ function SidebarContent({
               </div>
             </div>
             <button
+              type="button"
               onClick={logout}
-              className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors shrink-0"
-              aria-label="Sign out"
+              disabled={isLoggingOut}
+              className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors shrink-0 disabled:cursor-wait disabled:opacity-50"
+              aria-label={isLoggingOut ? 'Signing out' : 'Sign out'}
+              title={isLoggingOut ? 'Signing out…' : 'Sign out'}
             >
               <LogOut className="w-4 h-4" />
             </button>
@@ -274,7 +279,8 @@ function SidebarContent({
 }
 
 export default function Layout() {
-  const { logout, session, authMode } = useAuth();
+  const { logout, isLoggingOut, session, authMode } = useAuth();
+  const { pushToast } = useToast();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const {
@@ -306,6 +312,18 @@ export default function Layout() {
     [uiAccess]
   );
 
+  const handleLogout = useCallback(() => {
+    void logout().catch((error: unknown) => {
+      pushToast({
+        title: 'Sign out failed',
+        message: error instanceof Error && error.message
+          ? error.message
+          : 'Your session is still active. Please try again.',
+        tone: 'error',
+      });
+    });
+  }, [logout, pushToast]);
+
   return (
     <div className="flex h-screen bg-gray-50">
       <aside
@@ -321,7 +339,8 @@ export default function Layout() {
           visibleEntries={visibleEntries}
           displayEmail={displayEmail}
           displayRole={displayRole}
-          logout={logout}
+          logout={handleLogout}
+          isLoggingOut={isLoggingOut}
           pathname={location.pathname}
           showExpanded={showExpanded}
           collapsed={collapsed}
@@ -340,13 +359,13 @@ export default function Layout() {
             <span
               className={clsx(
                 'absolute inset-y-0 right-0 w-px transition-colors',
-                isResizing ? 'bg-violet-500' : 'bg-transparent group-hover:bg-gray-300'
+                isResizing ? 'bg-brand-secondary' : 'bg-transparent group-hover:bg-gray-300'
               )}
             />
             <span
               className={clsx(
                 'pointer-events-none absolute right-0.5 top-1/2 flex h-10 w-3 -translate-y-1/2 items-center justify-center rounded-full border bg-white text-[8px] text-gray-400 opacity-0 shadow-sm transition-opacity',
-                isResizing ? 'opacity-100 border-violet-400 text-violet-500' : 'border-gray-200 group-hover:opacity-100'
+                isResizing ? 'border-brand-secondary text-brand-secondary-ink opacity-100' : 'border-gray-200 group-hover:opacity-100'
               )}
             >
               ||
@@ -369,7 +388,8 @@ export default function Layout() {
               visibleEntries={visibleEntries}
               displayEmail={displayEmail}
               displayRole={displayRole}
-              logout={logout}
+              logout={handleLogout}
+              isLoggingOut={isLoggingOut}
               pathname={location.pathname}
               onNavClick={() => setMobileOpen(false)}
               showExpanded={true}
@@ -386,12 +406,12 @@ export default function Layout() {
           <button onClick={() => setMobileOpen(true)} className="p-1.5 hover:bg-gray-100 rounded-lg">
             <Menu className="w-5 h-5 text-gray-700" />
           </button>
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-[8px] bg-violet-100 border border-violet-200/60 flex items-center justify-center shadow-sm">
-              <Zap className="w-3.5 h-3.5 text-violet-600 fill-violet-600" />
-            </div>
-            <span className="font-semibold text-gray-900">DeltaLLM</span>
-          </div>
+          <BrandLogo
+            variant="expanded"
+            markClassName="h-7 w-7 rounded-[8px]"
+            fullClassName="h-7 max-w-[10rem]"
+            nameClassName="text-base font-semibold"
+          />
         </header>
         <main className="flex-1 overflow-auto">
           <Outlet />

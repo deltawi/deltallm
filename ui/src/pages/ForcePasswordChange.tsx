@@ -3,6 +3,8 @@ import type { FormEvent } from 'react';
 import { useAuth } from '../lib/auth';
 import { auth as authApi } from '../lib/api';
 import { Lock } from 'lucide-react';
+import BrandLogo from '../components/BrandLogo';
+import Button from '../components/Button';
 
 export default function ForcePasswordChange() {
   const { logout, refreshSession } = useAuth();
@@ -40,6 +42,7 @@ export default function ForcePasswordChange() {
     <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
       <div className="max-w-md w-full">
         <div className="text-center mb-8">
+          <BrandLogo variant="expanded" className="mb-6 justify-center" />
           <div className="inline-flex items-center justify-center w-16 h-16 bg-amber-500 rounded-2xl mb-4">
             <Lock className="w-8 h-8 text-white" />
           </div>
@@ -61,7 +64,7 @@ export default function ForcePasswordChange() {
               onChange={(e) => setCurrentPassword(e.target.value)}
               placeholder="Enter current password"
               autoComplete="current-password"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
             />
           </div>
           <div className="mb-4">
@@ -72,7 +75,7 @@ export default function ForcePasswordChange() {
               onChange={(e) => setNewPassword(e.target.value)}
               placeholder="At least 12 characters"
               autoComplete="new-password"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
             />
           </div>
           <div className="mb-4">
@@ -83,24 +86,26 @@ export default function ForcePasswordChange() {
               onChange={(e) => setConfirmPassword(e.target.value)}
               placeholder="Repeat new password"
               autoComplete="new-password"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
             />
           </div>
           <div className="flex gap-3">
-            <button
-              type="button"
+            <Button
+              variant="secondary"
               onClick={logout}
-              className="flex-1 border border-gray-300 text-gray-700 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+              className="flex-1"
+              size="lg"
             >
               Sign Out
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
-              disabled={loading}
-              className="flex-1 bg-blue-600 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
+              loading={loading}
+              className="flex-1"
+              size="lg"
             >
               {loading ? 'Updating...' : 'Update Password'}
-            </button>
+            </Button>
           </div>
         </form>
       </div>

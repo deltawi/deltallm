@@ -40,6 +40,7 @@ from src.providers.azure import AzureOpenAIAdapter
 from src.providers.gemini import GeminiAdapter
 from src.providers.openai import OpenAIAdapter
 from src.services.route_groups import RouteGroupRuntimeCache
+from src.services.ui_branding_assets import UIBrandingAssetService
 from src.upstream_http import build_control_http_client, build_upstream_http_client
 
 
@@ -121,6 +122,11 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
             raise RuntimeError("durable telemetry ingestion requires the Prisma client")
         telemetry_database_connected = True
 
+    ui_branding_asset_service = UIBrandingAssetService(prisma_manager.client)
+    await ui_branding_asset_service.initialize(cfg)
+    dynamic_config_manager.subscribe(ui_branding_asset_service.on_config_change)
+    app.state.ui_branding_asset_service = ui_branding_asset_service
+
     http_client = build_upstream_http_client(cfg.general_settings)
     control_http_client = build_control_http_client()
     app.state.upstream_http_settings = cfg.general_settings
@@ -167,6 +173,7 @@ async def init_infrastructure_runtime(app: Any) -> InfrastructureRuntime:
             BootstrapStatus("redis", "ready"),
             BootstrapStatus("database", "ready"),
             BootstrapStatus("dynamic_config", "ready"),
+            BootstrapStatus("ui_branding_assets", "ready"),
             BootstrapStatus("http_client", "ready"),
             BootstrapStatus("control_http_client", "ready"),
             BootstrapStatus("provider_adapters", "ready"),

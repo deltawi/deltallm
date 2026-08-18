@@ -54,11 +54,11 @@ type IconTabsProps<T extends string> = {
 };
 
 const toneClasses: Record<DetailStatTone, { bg: string; icon: string }> = {
-  blue: { bg: 'bg-blue-50', icon: 'text-blue-600' },
+  blue: { bg: 'bg-blue-50', icon: 'text-brand-primary-ink' },
   green: { bg: 'bg-green-50', icon: 'text-green-500' },
   amber: { bg: 'bg-amber-50', icon: 'text-amber-500' },
-  violet: { bg: 'bg-violet-50', icon: 'text-violet-600' },
-  indigo: { bg: 'bg-indigo-50', icon: 'text-indigo-600' },
+  violet: { bg: 'bg-violet-50', icon: 'text-brand-secondary-ink' },
+  indigo: { bg: 'bg-indigo-50', icon: 'text-brand-secondary-ink' },
   gray: { bg: 'bg-gray-100', icon: 'text-gray-500' },
 };
 
@@ -142,22 +142,56 @@ export function DetailMetricCard({
 }
 
 export function TextTabs<T extends string>({ items, active, onChange }: TextTabsProps<T>) {
+  const focusTab = (current: HTMLButtonElement, index: number) => {
+    current.parentElement
+      ?.querySelector<HTMLElement>(`[role="tab"][data-tab-index="${index}"]`)
+      ?.focus();
+  };
+  const moveFocus = (current: HTMLButtonElement, currentIndex: number, direction: -1 | 1) => {
+    const nextIndex = (currentIndex + direction + items.length) % items.length;
+    onChange(items[nextIndex].id);
+    requestAnimationFrame(() => focusTab(current, nextIndex));
+  };
+
   return (
-    <>
-      {items.map((item) => (
+    <div role="tablist" className="contents">
+      {items.map((item, index) => (
         <button
           key={item.id}
+          type="button"
+          role="tab"
+          aria-selected={active === item.id}
+          tabIndex={active === item.id ? 0 : -1}
+          data-tab-index={index}
           onClick={() => onChange(item.id)}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowLeft') {
+              event.preventDefault();
+              moveFocus(event.currentTarget, index, -1);
+            } else if (event.key === 'ArrowRight') {
+              event.preventDefault();
+              moveFocus(event.currentTarget, index, 1);
+            } else if (event.key === 'Home') {
+              event.preventDefault();
+              onChange(items[0].id);
+              requestAnimationFrame(() => focusTab(event.currentTarget, 0));
+            } else if (event.key === 'End') {
+              event.preventDefault();
+              const lastIndex = items.length - 1;
+              onChange(items[lastIndex].id);
+              requestAnimationFrame(() => focusTab(event.currentTarget, lastIndex));
+            }
+          }}
           className={`border-b-2 pb-3 text-sm font-medium transition-colors ${
             active === item.id
-              ? 'border-blue-600 text-blue-600'
+              ? 'border-brand-primary text-brand-primary-ink'
               : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
           }`}
         >
           {item.label}
         </button>
       ))}
-    </>
+    </div>
   );
 }
 
@@ -188,7 +222,7 @@ export function IconTabs<T extends string>({
               onClick={() => onChange(item.id)}
               className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-5 py-4 text-sm font-medium transition-colors ${
                 active === item.id
-                  ? 'border-blue-600 bg-blue-50/40 text-blue-600'
+                  ? 'border-brand-primary bg-blue-50/40 text-brand-primary-ink'
                   : 'border-transparent text-gray-500 hover:bg-gray-50 hover:text-gray-800'
               }`}
             >
@@ -221,7 +255,7 @@ export function IconTabs<T extends string>({
             onClick={() => onChange(item.id)}
             className={`flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-sm font-medium transition ${
               active === item.id
-                ? 'border-blue-600 text-blue-600'
+                ? 'border-brand-primary text-brand-primary-ink'
                 : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >

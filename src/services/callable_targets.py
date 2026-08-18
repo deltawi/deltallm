@@ -19,6 +19,8 @@ class CallableTarget:
     key: str
     target_type: Literal["model", "route_group"]
     access_groups: frozenset[str] = frozenset()
+    mode: str | None = None
+    mode_conflict: bool = False
 
 
 def build_callable_target_catalog(
@@ -32,10 +34,13 @@ def build_callable_target_catalog(
         key = str(model_name).strip()
         if not key:
             continue
+        mode, mode_conflict = _model_mode(entries)
         catalog[key] = CallableTarget(
             key=key,
             target_type="model",
             access_groups=_model_access_groups(key, entries),
+            mode=mode,
+            mode_conflict=mode_conflict,
         )
 
     if not route_groups:
@@ -94,6 +99,19 @@ def _model_access_groups(model_name: str, entries: list[dict[str, object]]) -> f
             )
             return frozenset()
     return resolved or frozenset()
+
+
+def _model_mode(entries: list[dict[str, object]]) -> tuple[str | None, bool]:
+    modes = {
+        str(model_info.get("mode") or "").strip().lower()
+        for entry in entries
+        if isinstance(entry, Mapping)
+        for model_info in [entry.get("model_info")]
+        if isinstance(model_info, Mapping) and str(model_info.get("mode") or "").strip()
+    }
+    if len(modes) == 1:
+        return next(iter(modes)), False
+    return None, len(modes) > 1
 
 
 def _route_group_access_groups(group: dict[str, object]) -> frozenset[str]:

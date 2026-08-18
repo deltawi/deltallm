@@ -35,7 +35,7 @@ function FormField({ label, children }: { label: string; children: ReactNode }) 
 }
 
 const inputCls =
-  'w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 transition focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30';
+  'w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 transition focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-brand-primary/30';
 const selectCls = inputCls;
 
 type MCPBindingsSectionProps = {
@@ -78,7 +78,7 @@ export default function MCPBindingsSection({
           <button
             type="button"
             onClick={onToggleCreate}
-            className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-blue-700"
+            className="flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-xs font-medium text-brand-on-primary transition hover:bg-brand-primary-hover"
           >
             <Plus className="h-3.5 w-3.5" />
             {showForm && editingBindingId === null ? 'Close' : 'Add binding'}
@@ -154,7 +154,7 @@ export default function MCPBindingsSection({
               type="button"
               onClick={onSave}
               disabled={saving || !form.scope_id.trim()}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              className="rounded-lg bg-brand-primary px-4 py-2 text-xs font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
             >
               {saving ? 'Saving…' : editingBindingId ? 'Save Changes' : 'Save Binding'}
             </button>
@@ -203,7 +203,7 @@ export default function MCPBindingsSection({
                         <button
                           type="button"
                           onClick={() => onEdit(binding)}
-                          className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-blue-50 hover:text-blue-600"
+                          className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-blue-50 hover:text-brand-primary-ink"
                         >
                           <Pencil className="h-3.5 w-3.5" />
                         </button>

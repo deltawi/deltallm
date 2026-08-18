@@ -9,6 +9,10 @@ from src.config import AppConfig
 from src.models.platform_auth import PlatformAuthContext
 from src.models.errors import RateLimitError
 from src.services.platform_identity_service import AccountInactiveError, LoginSessionCreationError
+from src.services.master_session_service import (
+    MasterSessionStatus,
+    MasterSessionStoreUnavailable,
+)
 from src.services.sso_state_store import SSOStateStore
 
 
@@ -246,6 +250,49 @@ class _RecordingAuditService:
         return None
 
 
+class _StubMasterSessionService:
+    def __init__(self, *, master_key: str) -> None:
+        self.master_key = master_key
+        self.active_tokens: set[str] = set()
+        self.created_tokens: list[str] = []
+        self.revoked_tokens: list[str] = []
+        self.validation_unavailable = False
+        self.create_unavailable = False
+        self.revoke_unavailable = False
+
+    async def create_session(self, *, master_key: str, ttl_seconds: int) -> str:
+        assert master_key == self.master_key
+        assert ttl_seconds > 0
+        if self.create_unavailable:
+            raise MasterSessionStoreUnavailable("database unavailable")
+        token = f"dms_test_session_{len(self.created_tokens) + 1}"
+        self.created_tokens.append(token)
+        self.active_tokens.add(token)
+        return token
+
+    async def validate_session(self, token: str | None, *, master_key: str | None) -> MasterSessionStatus:
+        if self.validation_unavailable:
+            return MasterSessionStatus.UNAVAILABLE
+        if master_key != self.master_key or token not in self.active_tokens:
+            return MasterSessionStatus.INVALID
+        return MasterSessionStatus.ACTIVE
+
+    async def revoke_session(self, token: str | None) -> None:
+        if self.revoke_unavailable:
+            raise MasterSessionStoreUnavailable("database unavailable")
+        if token:
+            self.revoked_tokens.append(token)
+            self.active_tokens.discard(token)
+
+
+def _configure_master_session(test_app, master_key: str = "mk-browser-session") -> _StubMasterSessionService:
+    setattr(test_app.state.settings, "master_key", master_key)
+    test_app.state.salt_key = "master-session-test-salt"
+    service = _StubMasterSessionService(master_key=master_key)
+    test_app.state.master_session_service = service
+    return service
+
+
 def _self_registration_app_config(
     *,
     enabled: bool,
@@ -326,6 +373,171 @@ async def test_auth_jwt_fallback_allows_request(client, test_app):
 
 
 @pytest.mark.asyncio
+async def test_master_key_login_persists_as_http_only_cookie_session(client, test_app):
+    service = _configure_master_session(test_app)
+
+    login = await client.post("/auth/master/login", json={"master_key": "mk-browser-session"})
+
+    assert login.status_code == 200
+    assert login.json()["auth_mode"] == "master_key"
+    set_cookie = login.headers.get("set-cookie", "")
+    assert "deltallm_master_session=" in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert "SameSite=lax" in set_cookie
+    assert "mk-browser-session" not in set_cookie
+    assert login.headers["cache-control"] == "no-store"
+    issued_token = login.cookies.get("deltallm_master_session")
+    assert issued_token in service.active_tokens
+
+    me = await client.get("/auth/me")
+    assert me.status_code == 200
+    assert me.json()["authenticated"] is True
+    assert me.json()["auth_mode"] == "master_key"
+    assert me.json()["role"] == "platform_admin"
+    assert me.json()["ui_access"]["settings"] is True
+    assert me.headers["cache-control"] == "no-store"
+    assert me.headers["vary"] == "Cookie"
+
+    protected = await client.get("/ui/api/models")
+    assert protected.status_code == 200
+    scope_protected = await client.get("/ui/api/batches/feature-status")
+    assert scope_protected.status_code == 200
+
+    logout = await client.post("/auth/internal/logout")
+    assert logout.status_code == 200
+    assert "deltallm_master_session=" in logout.headers.get("set-cookie", "")
+    assert issued_token in service.revoked_tokens
+    assert issued_token not in service.active_tokens
+
+    replay_headers = {"Cookie": f"deltallm_master_session={issued_token}"}
+    after_logout = await client.get("/auth/me", headers=replay_headers)
+    assert after_logout.status_code == 200
+    assert after_logout.json()["authenticated"] is False
+    replay_protected = await client.get("/ui/api/models", headers=replay_headers)
+    assert replay_protected.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_master_key_login_rejects_invalid_key_and_secures_forwarded_https_cookie(client, test_app):
+    _configure_master_session(test_app)
+
+    invalid = await client.post("/auth/master/login", json={"master_key": "wrong"})
+    assert invalid.status_code == 401
+    assert "deltallm_master_session=" not in invalid.headers.get("set-cookie", "")
+
+    secure = await client.post(
+        "/auth/master/login",
+        headers={"X-Forwarded-Proto": "https"},
+        json={"master_key": "mk-browser-session"},
+    )
+    assert secure.status_code == 200
+    assert "Secure" in secure.headers.get("set-cookie", "")
+
+
+@pytest.mark.asyncio
+async def test_master_key_login_revokes_replaced_browser_session(client, test_app):
+    service = _configure_master_session(test_app)
+
+    first = await client.post("/auth/master/login", json={"master_key": "mk-browser-session"})
+    first_token = first.cookies.get("deltallm_master_session")
+    second = await client.post("/auth/master/login", json={"master_key": "mk-browser-session"})
+    second_token = second.cookies.get("deltallm_master_session")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first_token != second_token
+    assert first_token in service.revoked_tokens
+    assert first_token not in service.active_tokens
+    assert second_token in service.active_tokens
+
+
+@pytest.mark.asyncio
+async def test_master_session_store_outage_is_not_treated_as_anonymous(client, test_app):
+    service = _configure_master_session(test_app)
+    login = await client.post("/auth/master/login", json={"master_key": "mk-browser-session"})
+    assert login.status_code == 200
+
+    service.validation_unavailable = True
+
+    me = await client.get("/auth/me")
+    protected = await client.get("/ui/api/models")
+    break_glass = await client.get(
+        "/ui/api/models",
+        headers={"X-Master-Key": "mk-browser-session"},
+    )
+
+    assert me.status_code == 503
+    assert me.json()["detail"] == "Authentication service unavailable"
+    assert me.headers["cache-control"] == "no-store"
+    assert me.headers["retry-after"] == "5"
+    assert me.headers["vary"] == "Cookie"
+    assert protected.status_code == 503
+    assert break_glass.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_platform_session_remains_available_during_master_session_store_outage(client, test_app):
+    service = _configure_master_session(test_app)
+    login = await client.post("/auth/master/login", json={"master_key": "mk-browser-session"})
+    master_token = login.cookies.get("deltallm_master_session")
+    service.validation_unavailable = True
+
+    class _PlatformIdentityService:
+        async def get_context_for_session(self, token: str) -> PlatformAuthContext:
+            assert token == "platform-session-token"
+            return PlatformAuthContext(
+                account_id="acct-platform-admin",
+                email="admin@example.com",
+                role="platform_admin",
+                mfa_enabled=False,
+                mfa_verified=True,
+            )
+
+    test_app.state.platform_identity_service = _PlatformIdentityService()
+    headers = {
+        "Cookie": (
+            f"deltallm_master_session={master_token}; "
+            "deltallm_session=platform-session-token"
+        )
+    }
+
+    me = await client.get("/auth/me", headers=headers)
+    protected = await client.get("/ui/api/models", headers=headers)
+
+    assert me.status_code == 200
+    assert me.json()["authenticated"] is True
+    assert me.json()["auth_mode"] == "session"
+    assert protected.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_master_logout_failure_preserves_browser_session(client, test_app):
+    service = _configure_master_session(test_app)
+    login = await client.post("/auth/master/login", json={"master_key": "mk-browser-session"})
+    issued_token = login.cookies.get("deltallm_master_session")
+    service.revoke_unavailable = True
+
+    logout = await client.post("/auth/internal/logout")
+
+    assert logout.status_code == 503
+    assert logout.json()["detail"] == "Authentication service unavailable"
+    assert "deltallm_master_session=" not in logout.headers.get("set-cookie", "")
+    assert issued_token in service.active_tokens
+    assert client.cookies.get("deltallm_master_session") == issued_token
+
+
+@pytest.mark.asyncio
+async def test_master_login_store_failure_does_not_issue_cookie(client, test_app):
+    service = _configure_master_session(test_app)
+    service.create_unavailable = True
+
+    response = await client.post("/auth/master/login", json={"master_key": "mk-browser-session"})
+
+    assert response.status_code == 503
+    assert "deltallm_master_session=" not in response.headers.get("set-cookie", "")
+
+
+@pytest.mark.asyncio
 async def test_auth_login_and_callback_routes(client, test_app):
     class StubSSOHandler:
         def generate_pkce_pair(self):
@@ -352,18 +564,43 @@ async def test_auth_login_and_callback_routes(client, test_app):
     test_app.state.platform_identity_service = StubIdentityService()
     test_app.state.sso_state_store = SSOStateStore(redis_client=test_app.state.redis, ttl_seconds=600)
 
-    login = await client.get("/auth/login", params={"state": "abc"})
+    return_to = "/models/deployment-1?tab=usage#cost"
+    login = await client.get("/auth/login", params={"state": "abc", "return_to": return_to})
     assert login.status_code == 200
     assert "sso.example.com" in login.json()["authorize_url"]
 
     callback = await client.get("/auth/callback", params={"code": "oauth-code", "state": "abc"})
     assert callback.status_code == 302
-    assert callback.headers["location"] == "/"
+    assert callback.headers["location"] == return_to
     assert "deltallm_session=session-token" in callback.headers.get("set-cookie", "")
 
     replay = await client.get("/auth/callback", params={"code": "oauth-code", "state": "abc"})
     assert replay.status_code == 400
     assert replay.json()["detail"] == "Invalid or expired SSO state"
+
+    unsafe_login = await client.get(
+        "/auth/login",
+        params={"state": "unsafe", "return_to": "//evil.example/path"},
+    )
+    assert unsafe_login.status_code == 200
+    unsafe_callback = await client.get(
+        "/auth/callback",
+        params={"code": "oauth-code", "state": "unsafe"},
+    )
+    assert unsafe_callback.status_code == 302
+    assert unsafe_callback.headers["location"] == "/"
+
+    loop_login = await client.get(
+        "/auth/login",
+        params={"state": "loop", "return_to": "/login/?returnTo=/models"},
+    )
+    assert loop_login.status_code == 200
+    loop_callback = await client.get(
+        "/auth/callback",
+        params={"code": "oauth-code", "state": "loop"},
+    )
+    assert loop_callback.status_code == 302
+    assert loop_callback.headers["location"] == "/"
 
 
 @pytest.mark.asyncio

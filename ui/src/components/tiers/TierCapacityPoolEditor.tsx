@@ -1,6 +1,6 @@
-import { Edit3, Plus, Save, Trash2, X } from 'lucide-react';
+import { Edit3, Plus, Save, Search, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import type { TierCapacityPool } from '../../lib/api';
+import type { Pagination, TierCapacityPool, TierCapacityPoolPayload } from '../../lib/api';
 import {
   capacityPoolFormWithStrategy,
   capacityPoolFormToPayload,
@@ -11,45 +11,79 @@ import {
   type TierCapacityPoolForm,
 } from '../../lib/tiers';
 import { TierField } from './TierEditorControls';
+import TierEditorDrawer from './TierEditorDrawer';
+import TierPagination from './TierPagination';
 
 type TierCapacityPoolEditorProps = {
   pools: TierCapacityPool[];
+  pagination: Pagination;
+  pageSize: number;
+  searchInput: string;
+  strategyFilter: 'all' | 'hard_cap' | 'weighted_fair' | 'reserved_burst';
   callableOptions?: string[];
   readOnly: boolean;
   saving: boolean;
   error: string | null;
-  onSave: (pools: TierCapacityPool[]) => Promise<void>;
+  conflict?: string | null;
+  onSearchInputChange: (value: string) => void;
+  onStrategyFilterChange: (value: 'all' | 'hard_cap' | 'weighted_fair' | 'reserved_burst') => void;
+  onPageChange: (offset: number) => void;
+  onPageSizeChange: (pageSize: number) => void;
+  onCreate: (pool: TierCapacityPoolPayload) => Promise<void>;
+  onUpdate: (existing: TierCapacityPool, pool: TierCapacityPoolPayload) => Promise<void>;
+  onDelete: (pool: TierCapacityPool) => Promise<void>;
+  onReviewLatest?: () => void;
+  onDiscardConflict?: () => void;
 };
 
 export default function TierCapacityPoolEditor({
   pools,
+  pagination,
+  pageSize,
+  searchInput,
+  strategyFilter,
   callableOptions = [],
   readOnly,
   saving,
   error,
-  onSave,
+  conflict,
+  onSearchInputChange,
+  onStrategyFilterChange,
+  onPageChange,
+  onPageSizeChange,
+  onCreate,
+  onUpdate,
+  onDelete,
+  onReviewLatest,
+  onDiscardConflict,
 }: TierCapacityPoolEditorProps) {
-  const [editingIndex, setEditingIndex] = useState<number | 'new' | null>(null);
+  const [editingPool, setEditingPool] = useState<TierCapacityPool | 'new' | null>(null);
   const [form, setForm] = useState<TierCapacityPoolForm>(emptyCapacityPoolForm());
   const [localError, setLocalError] = useState<string | null>(null);
   const locked = readOnly || saving;
-  const inputClassName = 'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500';
+  const inputClassName = 'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500';
 
   const sortedPools = useMemo(
     () => [...pools].sort((a, b) => `${a.pool_key}:${a.callable_key}`.localeCompare(`${b.pool_key}:${b.callable_key}`)),
     [pools],
   );
+  const latestEditingPool = editingPool && typeof editingPool === 'object'
+    ? pools.find((pool) => pool.tier_capacity_pool_id === editingPool.tier_capacity_pool_id) || null
+    : null;
+  const conflictDifferences = latestEditingPool
+    ? poolFormDifferences(capacityPoolToForm(latestEditingPool), form)
+    : [];
 
   const openNew = () => {
     if (locked) return;
-    setEditingIndex('new');
+    setEditingPool('new');
     setForm(emptyCapacityPoolForm());
     setLocalError(null);
   };
 
   const openEdit = (pool: TierCapacityPool) => {
     if (locked) return;
-    setEditingIndex(pools.indexOf(pool));
+    setEditingPool(pool);
     setForm(capacityPoolToForm(pool));
     setLocalError(null);
   };
@@ -57,18 +91,21 @@ export default function TierCapacityPoolEditor({
   const saveForm = async () => {
     if (locked) return;
     try {
-      const existing = typeof editingIndex === 'number' ? pools[editingIndex] : null;
+      const existing = editingPool && typeof editingPool === 'object'
+        ? pools.find((pool) => pool.tier_capacity_pool_id === editingPool.tier_capacity_pool_id) || editingPool
+        : null;
       const payload = capacityPoolFormToPayload(form, existing);
       if (!payload.pool_key || !payload.callable_key) {
         setLocalError('Pool key and model key are required.');
         return;
       }
       setLocalError(null);
-      const next = editingIndex === 'new'
-        ? [...pools, payload]
-        : pools.map((item, index) => index === editingIndex ? payload : item);
-      await onSave(next);
-      setEditingIndex(null);
+      if (editingPool === 'new') {
+        await onCreate(payload);
+      } else if (existing) {
+        await onUpdate(existing, payload);
+      }
+      setEditingPool(null);
       setForm(emptyCapacityPoolForm());
     } catch (err: unknown) {
       setLocalError(errorMessage(err, 'Failed to save capacity pool.'));
@@ -80,7 +117,7 @@ export default function TierCapacityPoolEditor({
     if (!confirm(`Remove capacity pool ${pool.pool_key} for ${pool.callable_key}?`)) return;
     try {
       setLocalError(null);
-      await onSave(pools.filter((item) => item !== pool));
+      await onDelete(pool);
     } catch (err: unknown) {
       setLocalError(errorMessage(err, 'Failed to remove capacity pool.'));
     }
@@ -102,7 +139,7 @@ export default function TierCapacityPoolEditor({
             type="button"
             onClick={openNew}
             disabled={locked}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-1.5 text-xs font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Plus className="h-3.5 w-3.5" />
             Add pool
@@ -115,6 +152,56 @@ export default function TierCapacityPoolEditor({
           {localError || error}
         </div>
       ) : null}
+
+      {conflict ? (
+        <div className="mx-4 mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-900" role="alert">
+          <p className="font-semibold">Another admin changed this draft.</p>
+          <p className="mt-0.5 text-xs">{conflict} Your unsaved pool fields are still open.</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {onReviewLatest ? (
+              <button type="button" onClick={onReviewLatest} className="rounded-md bg-amber-900 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-amber-950">Review latest</button>
+            ) : null}
+            {onDiscardConflict ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingPool(null);
+                  setForm(emptyCapacityPoolForm());
+                  setLocalError(null);
+                  onDiscardConflict();
+                }}
+                className="rounded-md border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100"
+              >
+                Discard my unsaved changes
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="flex flex-col gap-2 border-b border-gray-100 px-4 py-3 sm:flex-row">
+        <label className="relative min-w-0 flex-1">
+          <span className="sr-only">Search capacity pools</span>
+          <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+          <input
+            value={searchInput}
+            onChange={(event) => onSearchInputChange(event.target.value)}
+            placeholder="Search pool or model"
+            className="w-full rounded-lg border border-gray-300 py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+          />
+        </label>
+        <select
+          aria-label="Filter capacity pools by strategy"
+          value={strategyFilter}
+          onChange={(event) => onStrategyFilterChange(event.target.value as typeof strategyFilter)}
+          className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
+        >
+          <option value="all">All strategies</option>
+          <option value="hard_cap">Hard cap</option>
+          <option value="weighted_fair">Weighted fair</option>
+          <option value="reserved_burst">Reserved burst</option>
+        </select>
+      </div>
 
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -149,7 +236,7 @@ export default function TierCapacityPoolEditor({
                       onClick={() => openEdit(pool)}
                       disabled={locked}
                       className="rounded p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-40"
-                      title="Edit pool"
+                      aria-label={`Edit ${pool.pool_key} for ${pool.callable_key}`}
                     >
                       <Edit3 className="h-3.5 w-3.5" />
                     </button>
@@ -158,7 +245,7 @@ export default function TierCapacityPoolEditor({
                       onClick={() => removePool(pool)}
                       disabled={locked}
                       className="rounded p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
-                      title="Remove pool"
+                      aria-label={`Remove ${pool.pool_key} for ${pool.callable_key}`}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
@@ -170,19 +257,57 @@ export default function TierCapacityPoolEditor({
         </table>
       </div>
 
-      {editingIndex !== null ? (
-        <div className="border-t border-gray-100 bg-gray-50 p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <h4 className="text-sm font-semibold text-gray-900">{editingIndex === 'new' ? 'Add pool' : 'Edit pool'}</h4>
-            <button
-              type="button"
-              onClick={() => setEditingIndex(null)}
-              disabled={saving}
-              className="rounded p-1 text-gray-400 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
+      <TierPagination
+        pagination={pagination}
+        pageSize={pageSize}
+        onPageChange={onPageChange}
+        onPageSizeChange={onPageSizeChange}
+        disabled={saving}
+        itemLabel="capacity pools"
+      />
+
+      {editingPool !== null ? (
+        <TierEditorDrawer
+          title={editingPool === 'new' ? 'Add capacity pool' : `Edit ${editingPool.pool_key}`}
+          description="Set the shared model capacity envelope and its fair-share behavior."
+          saving={saving}
+          onClose={() => setEditingPool(null)}
+        >
+          {conflict ? (
+            <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-900" role="alert">
+              <p className="font-semibold">Another admin changed this draft.</p>
+              <p className="mt-0.5 text-xs">{conflict} Your unsaved pool fields remain in this editor.</p>
+              {editingPool !== 'new' ? (
+                latestEditingPool ? (
+                  <PoolConflictDifferences differences={conflictDifferences} />
+                ) : (
+                  <p className="mt-2 rounded-md bg-white/70 px-2 py-1.5 text-xs">The pool is not present on this server page. It may have been removed or moved out of the current filters.</p>
+                )
+              ) : null}
+              <div className="mt-2 flex flex-wrap gap-2">
+                {onReviewLatest ? <button type="button" onClick={onReviewLatest} className="rounded-md bg-amber-900 px-2.5 py-1.5 text-xs font-semibold text-white">Review latest</button> : null}
+                {onDiscardConflict ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingPool(null);
+                      setForm(emptyCapacityPoolForm());
+                      setLocalError(null);
+                      onDiscardConflict();
+                    }}
+                    className="rounded-md border border-amber-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-amber-900"
+                  >
+                    Discard my unsaved changes
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+          {error || localError ? (
+            <div className="mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+              {localError || error}
+            </div>
+          ) : null}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
             <TierField
               id="tier-pool-key"
@@ -194,7 +319,7 @@ export default function TierCapacityPoolEditor({
                 value={form.pool_key}
                 onChange={(event) => setForm({ ...form, pool_key: event.target.value })}
                 placeholder="shared-chat"
-                disabled={locked}
+                disabled={locked || editingPool !== 'new'}
                 className={inputClassName}
               />
             </TierField>
@@ -209,7 +334,7 @@ export default function TierCapacityPoolEditor({
                 value={form.callable_key}
                 onChange={(event) => setForm({ ...form, callable_key: event.target.value })}
                 placeholder="Select or enter a callable"
-                disabled={locked}
+                disabled={locked || editingPool !== 'new'}
                 className={inputClassName}
               />
               <datalist id="tier-pool-callables">
@@ -316,31 +441,80 @@ export default function TierCapacityPoolEditor({
             ) : null}
           </div>
           <p className="mt-3 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
-            {capacityStrategyDescription(form.strategy)}
+            {capacityStrategyDescription(
+              form.strategy,
+              form.saturation_threshold,
+              form.burst_multiplier,
+            )}
           </p>
           <div className="mt-4 flex justify-end">
             <button
               type="button"
               onClick={saveForm}
               disabled={locked}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
             >
               <Save className="h-4 w-4" />
-              Save pools
+              {editingPool === 'new' ? 'Add pool' : 'Save pool'}
             </button>
           </div>
-        </div>
+        </TierEditorDrawer>
       ) : null}
     </section>
   );
 }
 
-function capacityStrategyDescription(strategy: string): string {
+function capacityStrategyDescription(
+  strategy: string,
+  saturationThreshold: string,
+  burstMultiplier: string,
+): string {
+  const threshold = saturationThreshold.trim() || '0.85';
+  const thresholdPercent = Number.isFinite(Number(threshold))
+    ? `${Math.round(Number(threshold) * 100)}%`
+    : threshold;
+  const multiplier = burstMultiplier.trim() || '1.2';
   if (strategy === 'weighted_fair') {
-    return 'Weighted fair: active organizations may borrow idle capacity below 85% utilization; above it, assignment weights determine protected shares.';
+    return `Weighted fair: active organizations may borrow idle capacity below ${thresholdPercent} utilization; above it, assignment weights determine protected shares.`;
   }
   if (strategy === 'reserved_burst') {
-    return 'Reserved burst: weighted fair sharing applies near saturation, with a default 1.2× burst entitlement that still cannot exceed the pool ceiling.';
+    return `Reserved burst: weighted fair sharing applies at ${thresholdPercent} utilization, with a ${multiplier}× burst entitlement that still cannot exceed the pool ceiling.`;
   }
   return 'Hard cap: only the shared RPM, TPM, and parallel ceilings are enforced; no per-organization fair-share calculation is applied.';
+}
+
+type PoolFormDifference = { field: string; server: string; local: string };
+
+function poolFormDifferences(
+  server: TierCapacityPoolForm,
+  local: TierCapacityPoolForm,
+): PoolFormDifference[] {
+  return (Object.keys(local) as Array<keyof TierCapacityPoolForm>).flatMap((field) => {
+    if (server[field] === local[field]) return [];
+    return [{
+      field: field.replaceAll('_', ' ').replace(/\b\w/g, (character) => character.toUpperCase()),
+      server: server[field].trim() || 'Blank',
+      local: local[field].trim() || 'Blank',
+    }];
+  });
+}
+
+function PoolConflictDifferences({ differences }: { differences: PoolFormDifference[] }) {
+  if (differences.length === 0) {
+    return <p className="mt-2 text-xs">The visible row now matches your open fields; refresh may have affected another pool.</p>;
+  }
+  return (
+    <div className="mt-2 overflow-hidden rounded-md border border-amber-200 bg-white/80">
+      <div className="grid grid-cols-[minmax(100px,1fr)_minmax(0,1fr)_minmax(0,1fr)] gap-2 border-b border-amber-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+        <span>Field</span><span>Server now</span><span>Your value</span>
+      </div>
+      {differences.map((difference) => (
+        <div key={difference.field} className="grid grid-cols-[minmax(100px,1fr)_minmax(0,1fr)_minmax(0,1fr)] gap-2 border-b border-amber-100 px-2 py-1.5 text-[11px] last:border-b-0">
+          <span className="font-semibold">{difference.field}</span>
+          <span className="truncate" title={difference.server}>{difference.server}</span>
+          <span className="truncate" title={difference.local}>{difference.local}</span>
+        </div>
+      ))}
+    </div>
+  );
 }

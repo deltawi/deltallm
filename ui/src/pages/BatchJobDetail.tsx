@@ -448,7 +448,7 @@ export default function BatchJobDetail() {
   if ((loading && !resource) || (resourceBatchId && resourceBatchId !== batchId)) {
     return (
       <div className="flex items-center justify-center py-24">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-primary" />
       </div>
     );
   }
@@ -744,7 +744,7 @@ export default function BatchJobDetail() {
             <div className="space-y-3">
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-blue-50 rounded-lg">
-                  <Clock className="w-4 h-4 text-blue-600" />
+                  <Clock className="w-4 h-4 text-brand-primary-ink" />
                 </div>
                 <div>
                   <p className="text-xs text-gray-500">Duration</p>
@@ -842,7 +842,7 @@ function ExpandedItemView({
     return (
       <div className="border-t border-gray-100 bg-gray-50 p-4">
         <div className="flex items-center gap-2 text-sm text-gray-500">
-          <div className="h-4 w-4 animate-spin rounded-full border-b-2 border-blue-600" />
+          <div className="h-4 w-4 animate-spin rounded-full border-b-2 border-brand-primary" />
           Loading item payload...
         </div>
       </div>

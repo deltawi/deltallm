@@ -1,4 +1,5 @@
 import Modal from './Modal';
+import Button from './Button';
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -28,24 +29,17 @@ export default function ConfirmDialog({
       <div className="space-y-4">
         <p className="text-sm text-gray-600">{description}</p>
         <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={confirming}
-            className="px-3 py-2 text-sm rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-          >
+          <Button variant="secondary" size="sm" onClick={onClose} disabled={confirming}>
             {cancelLabel}
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant={destructive ? 'danger' : 'primary'}
+            size="sm"
             onClick={onConfirm}
-            disabled={confirming}
-            className={`px-3 py-2 text-sm rounded-lg text-white disabled:opacity-50 ${
-              destructive ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'
-            }`}
+            loading={confirming}
           >
             {confirming ? 'Working...' : confirmLabel}
-          </button>
+          </Button>
         </div>
       </div>
     </Modal>

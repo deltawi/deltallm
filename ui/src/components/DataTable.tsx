@@ -35,7 +35,7 @@ export default function DataTable<T extends Record<string, any>>({
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-primary" />
       </div>
     );
   }
@@ -82,7 +82,7 @@ export default function DataTable<T extends Record<string, any>>({
                   }}
                   tabIndex={onRowClick ? 0 : undefined}
                   aria-label={onRowClick ? 'Open row details' : undefined}
-                  className={`border-b border-gray-100 ${onRowClick ? 'cursor-pointer hover:bg-gray-50 focus:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-inset' : ''}`}
+                  className={`border-b border-gray-100 ${onRowClick ? 'cursor-pointer hover:bg-gray-50 focus:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-inset' : ''}`}
                 >
                   {columns.map((col) => (
                     <td key={col.key} className={`py-3 px-4 text-sm text-gray-700 ${col.className || ''}`}>

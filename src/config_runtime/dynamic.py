@@ -16,6 +16,9 @@ from src.metrics import increment_batch_scheduler_rollback, increment_config_rel
 logger = logging.getLogger(__name__)
 
 ConfigSubscriber = Callable[[AppConfig, dict[str, list[str]]], Awaitable[None] | None]
+ConfigTransactionMutation = Callable[[Any], Awaitable[None]]
+_CONFIG_ROW_NAME = "proxy_config"
+_CONFIG_ADVISORY_LOCK_NAME = "deltallm_config:proxy_config"
 _FIELD_SET_SENSITIVE_GENERAL_SETTINGS = frozenset(
     {
         "embeddings_batch_scheduler_mode",
@@ -134,25 +137,130 @@ class DynamicConfigManager:
     def get_config_generation(self) -> int:
         return self._config_generation
 
-    async def update_config(self, config_update: dict[str, Any], updated_by: str) -> None:
+    async def update_config(
+        self,
+        config_update: dict[str, Any],
+        updated_by: str,
+        *,
+        transaction_mutation: ConfigTransactionMutation | None = None,
+    ) -> None:
         async with self._update_lock:
-            next_db_config = deep_merge(self._db_config, config_update)
-            next_app_config = self._build_app_config(next_db_config)
-            self._reject_startup_only_changes(next_app_config)
             previous_db_config = deepcopy(self._db_config)
-            await self._store_db_config(next_db_config, updated_by=updated_by)
+            next_db_config, next_app_config = await self._persist_merged_config(
+                config_update,
+                updated_by=updated_by,
+                transaction_mutation=transaction_mutation,
+            )
             try:
                 await self._apply_db_config(next_db_config, app_config=next_app_config)
             except Exception:
-                try:
-                    await self._store_db_config(
-                        previous_db_config,
+                if transaction_mutation is None:
+                    await self._restore_db_config_if_current(
+                        expected_config=next_db_config,
+                        previous_config=previous_db_config,
                         updated_by=f"rollback:{updated_by}",
                     )
-                except Exception:
-                    logger.exception("failed rolling back rejected dynamic config")
                 raise
             await self._publish_reload_event(event_type="config_updated")
+
+    async def _persist_merged_config(
+        self,
+        config_update: dict[str, Any],
+        *,
+        updated_by: str,
+        transaction_mutation: ConfigTransactionMutation | None = None,
+    ) -> tuple[dict[str, Any], AppConfig]:
+        if self.db is None:
+            if transaction_mutation is not None:
+                raise DynamicConfigPersistenceError(
+                    "database-backed config mutation requires a database"
+                )
+            next_db_config = deep_merge(self._db_config, config_update)
+            next_app_config = self._build_app_config(next_db_config)
+            if self._config_generation > 0:
+                self._reject_startup_only_changes(next_app_config)
+            return next_db_config, next_app_config
+
+        transaction_factory = getattr(self.db, "tx", None)
+        if not callable(transaction_factory):
+            # Lightweight test doubles and compatibility clients may not expose
+            # transactions. Re-read before merging so they still avoid stale
+            # process-local state; production Prisma clients use the locked path.
+            current_db_config = await self._load_from_db()
+            next_db_config = deep_merge(current_db_config, config_update)
+            next_app_config = self._build_app_config(next_db_config)
+            if self._config_generation > 0:
+                self._reject_startup_only_changes(next_app_config)
+            if transaction_mutation is not None:
+                await transaction_mutation(self.db)
+            await self._store_db_config(next_db_config, updated_by=updated_by)
+            return next_db_config, next_app_config
+
+        try:
+            async with transaction_factory() as transaction:
+                # A transaction-scoped advisory lock also serializes creation of
+                # the singleton row, where SELECT ... FOR UPDATE has no row to lock.
+                await transaction.query_raw(
+                    "SELECT pg_advisory_xact_lock(hashtext(CAST($1 AS TEXT)))::text AS locked",
+                    _CONFIG_ADVISORY_LOCK_NAME,
+                )
+                current_db_config = await self._load_from_db_client(transaction, for_update=True)
+                next_db_config = deep_merge(current_db_config, config_update)
+                next_app_config = self._build_app_config(next_db_config)
+                if self._config_generation > 0:
+                    self._reject_startup_only_changes(next_app_config)
+                if transaction_mutation is not None:
+                    await transaction_mutation(transaction)
+                await self._store_db_config(
+                    next_db_config,
+                    updated_by=updated_by,
+                    db_client=transaction,
+                )
+        except (
+            DynamicConfigPersistenceError,
+            DynamicConfigRestartRequiredError,
+            DynamicConfigValidationError,
+        ):
+            raise
+        except Exception as exc:
+            logger.warning("failed to persist dynamic config transaction: %s", exc)
+            raise DynamicConfigPersistenceError("failed to persist dynamic config") from exc
+
+        return next_db_config, next_app_config
+
+    async def _restore_db_config_if_current(
+        self,
+        *,
+        expected_config: dict[str, Any],
+        previous_config: dict[str, Any],
+        updated_by: str,
+    ) -> None:
+        if self.db is None:
+            return
+
+        try:
+            transaction_factory = getattr(self.db, "tx", None)
+            if not callable(transaction_factory):
+                current_config = await self._load_from_db()
+                if current_config == expected_config:
+                    await self._store_db_config(previous_config, updated_by=updated_by)
+                return
+
+            async with transaction_factory() as transaction:
+                await transaction.query_raw(
+                    "SELECT pg_advisory_xact_lock(hashtext(CAST($1 AS TEXT)))::text AS locked",
+                    _CONFIG_ADVISORY_LOCK_NAME,
+                )
+                current_config = await self._load_from_db_client(transaction, for_update=True)
+                if current_config != expected_config:
+                    return
+                await self._store_db_config(
+                    previous_config,
+                    updated_by=updated_by,
+                    db_client=transaction,
+                )
+        except Exception:
+            logger.exception("failed rolling back rejected dynamic config")
 
     async def publish_model_updated(self) -> None:
         await self._publish_reload_event(event_type="model_updated")
@@ -322,21 +430,25 @@ class DynamicConfigManager:
             return deepcopy(self._db_config)
 
         try:
-            rows = await self.db.query_raw(
-                """
-                SELECT config_value
-                FROM deltallm_config
-                WHERE config_name = $1
-                LIMIT 1
-                """,
-                "proxy_config",
-            )
+            return await self._load_from_db_client(self.db)
         except Exception as exc:
             if allow_stale_on_error:
                 logger.debug("failed loading config from db, using stale dynamic config: %s", exc)
                 return deepcopy(self._db_config)
             raise DynamicConfigLoadError("failed loading dynamic config from db") from exc
 
+    @staticmethod
+    async def _load_from_db_client(db_client: Any, *, for_update: bool = False) -> dict[str, Any]:
+        lock_clause = " FOR UPDATE" if for_update else ""
+        rows = await db_client.query_raw(
+            f"""
+            SELECT config_value
+            FROM deltallm_config
+            WHERE config_name = $1
+            LIMIT 1{lock_clause}
+            """,
+            _CONFIG_ROW_NAME,
+        )
         if not rows:
             return {}
 
@@ -356,13 +468,20 @@ class DynamicConfigManager:
 
         return payload if isinstance(payload, dict) else {}
 
-    async def _store_db_config(self, config: dict[str, Any], updated_by: str) -> None:
-        if self.db is None:
+    async def _store_db_config(
+        self,
+        config: dict[str, Any],
+        updated_by: str,
+        *,
+        db_client: Any | None = None,
+    ) -> None:
+        client = db_client or self.db
+        if client is None:
             return
 
         payload = json.dumps(config)
         try:
-            await self.db.execute_raw(
+            await client.execute_raw(
                 """
                 INSERT INTO deltallm_config (config_name, config_value, updated_by, updated_at)
                 VALUES ($1, $2, $3, NOW())
@@ -371,7 +490,7 @@ class DynamicConfigManager:
                     updated_by = EXCLUDED.updated_by,
                     updated_at = NOW()
                 """,
-                "proxy_config",
+                _CONFIG_ROW_NAME,
                 payload,
                 updated_by,
             )

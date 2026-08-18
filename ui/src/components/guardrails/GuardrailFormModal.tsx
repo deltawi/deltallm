@@ -14,6 +14,8 @@ import {
   type GuardrailFormState,
 } from '../../lib/guardrails';
 import GuardrailFieldInput from './GuardrailFieldInput';
+import Button from '../Button';
+import { useBranding } from '../../lib/brandingContext';
 
 interface GuardrailFormModalProps {
   open: boolean;
@@ -24,6 +26,7 @@ interface GuardrailFormModalProps {
 }
 
 export default function GuardrailFormModal({ open, item, catalog, onClose, onSave }: GuardrailFormModalProps) {
+  const { branding } = useBranding();
   const [form, setForm] = useState<GuardrailFormState | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -137,7 +140,7 @@ export default function GuardrailFormModal({ open, item, catalog, onClose, onSav
 
           {presidioCapability && presidioCapability.engine_mode !== 'full' ? (
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800">
-              Full Presidio packages are not installed. DeltaLLM is using limited regex fallback mode.
+              Full Presidio packages are not installed. {branding.instance_name} is using limited regex fallback mode.
               Build Docker with <code className="rounded bg-amber-100 px-1 py-0.5">INSTALL_PRESIDIO=true</code> or
               install the optional extra with <code className="rounded bg-amber-100 px-1 py-0.5">uv sync --extra guardrails-presidio</code>.
             </div>
@@ -151,7 +154,7 @@ export default function GuardrailFormModal({ open, item, catalog, onClose, onSav
               onChange={(event) => setForm({ ...form, guardrailName: event.target.value })}
               placeholder="presidio-pii"
               disabled={Boolean(item)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-500"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:bg-slate-50 disabled:text-slate-500"
             />
           </div>
 
@@ -208,7 +211,7 @@ export default function GuardrailFormModal({ open, item, catalog, onClose, onSav
                 value={form.classPath}
                 onChange={(event) => setForm({ ...form, classPath: event.target.value })}
                 placeholder="src.guardrails.custom.MyGuardrail"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
               <p className="mt-1 text-xs text-slate-500">Use this only for custom runtime guardrails that are already available in the backend codebase.</p>
             </div>
@@ -220,7 +223,7 @@ export default function GuardrailFormModal({ open, item, catalog, onClose, onSav
               <select
                 value={form.mode}
                 onChange={(event) => setForm({ ...form, mode: event.target.value as typeof form.mode })}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
               >
                 {modeOptions.map((mode) => (
                   <option key={mode} value={mode}>
@@ -234,7 +237,7 @@ export default function GuardrailFormModal({ open, item, catalog, onClose, onSav
               <select
                 value={form.defaultAction}
                 onChange={(event) => setForm({ ...form, defaultAction: event.target.value as typeof form.defaultAction })}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
               >
                 {actionOptions.map((action) => (
                   <option key={action} value={action}>
@@ -330,7 +333,7 @@ export default function GuardrailFormModal({ open, item, catalog, onClose, onSav
                           value={form.additionalParamsText}
                           onChange={(event) => setForm({ ...form, additionalParamsText: event.target.value })}
                           placeholder='{"custom_flag": true}'
-                          className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-brand-primary"
                         />
                       </div>
                     </div>
@@ -348,27 +351,21 @@ export default function GuardrailFormModal({ open, item, catalog, onClose, onSav
                 value={form.additionalParamsText}
                 onChange={(event) => setForm({ ...form, additionalParamsText: event.target.value })}
                 placeholder='{"threshold": 0.5}'
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
             </div>
           ) : null}
 
           <div className="flex justify-end gap-3 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-lg px-4 py-2 text-sm text-slate-700 transition-colors hover:bg-slate-100"
-            >
+            <Button variant="secondary" onClick={onClose} disabled={saving}>
               Cancel
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
               onClick={submit}
-              disabled={saving}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+              loading={saving}
             >
               {saving ? 'Saving…' : item ? 'Save changes' : 'Create'}
-            </button>
+            </Button>
           </div>
         </div>
       )}

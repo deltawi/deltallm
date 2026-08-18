@@ -168,7 +168,13 @@ def _scope_policy_payload(policy: Any) -> dict[str, Any]:
 
 
 def _callable_target_payload(target: CallableTarget, *, binding_count: int = 0) -> dict[str, Any]:
-    return {"callable_key": target.key, "target_type": target.target_type, "binding_count": binding_count}
+    return {
+        "callable_key": target.key,
+        "target_type": target.target_type,
+        "binding_count": binding_count,
+        "mode": target.mode,
+        "mode_conflict": target.mode_conflict,
+    }
 
 
 def _access_group_payload(

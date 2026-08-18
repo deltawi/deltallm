@@ -102,7 +102,7 @@ export default function ScopedGuardrailEditor({ scope, entityId, entityLabel, on
     <div className="bg-white border border-gray-200 rounded-xl p-6 space-y-5">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Shield className="w-5 h-5 text-blue-600" />
+          <Shield className="w-5 h-5 text-brand-primary-ink" />
           <h3 className="font-semibold text-gray-900">
             {scopeLabel} Guardrails
           </h3>
@@ -131,7 +131,7 @@ export default function ScopedGuardrailEditor({ scope, entityId, entityLabel, on
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-1.5">Resolution Mode</label>
         <div className="flex gap-3">
-          <label className={`flex items-center gap-2 px-4 py-2.5 rounded-lg border cursor-pointer text-sm ${config.mode === 'inherit' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 hover:bg-gray-50'}`}>
+          <label className={`flex items-center gap-2 px-4 py-2.5 rounded-lg border cursor-pointer text-sm ${config.mode === 'inherit' ? 'border-brand-primary bg-blue-50 text-blue-700' : 'border-gray-200 hover:bg-gray-50'}`}>
             <input type="radio" name={`mode-${entityId}`} value="inherit" checked={config.mode === 'inherit'} onChange={() => setConfig({ ...config, mode: 'inherit' })} className="sr-only" />
             <span className="font-medium">Inherit</span>
           </label>
@@ -153,7 +153,7 @@ export default function ScopedGuardrailEditor({ scope, entityId, entityLabel, on
             {config.mode === 'override' ? 'Active Guardrails' : 'Additional Guardrails (Include)'}
           </label>
           <div className="relative">
-            <button onClick={() => setAddingTo(addingTo === 'include' ? null : 'include')} className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 px-2 py-1 rounded hover:bg-blue-50" disabled={unusedGuardrails.length === 0}>
+            <button onClick={() => setAddingTo(addingTo === 'include' ? null : 'include')} className="flex items-center gap-1 text-xs text-brand-primary-ink hover:text-brand-primary-ink-hover px-2 py-1 rounded hover:bg-blue-50" disabled={unusedGuardrails.length === 0}>
               <Plus className="w-3 h-3" /> Add <ChevronDown className="w-3 h-3" />
             </button>
             {addingTo === 'include' && unusedGuardrails.length > 0 && (
@@ -210,7 +210,7 @@ export default function ScopedGuardrailEditor({ scope, entityId, entityLabel, on
       )}
 
       <div className="flex justify-end pt-2 border-t border-gray-100">
-        <button onClick={handleSave} disabled={saving} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">
+        <button onClick={handleSave} disabled={saving} className="px-4 py-2 text-sm bg-brand-primary text-brand-on-primary rounded-lg hover:bg-brand-primary-hover transition-colors disabled:opacity-50">
           {saving ? 'Saving...' : 'Save Configuration'}
         </button>
       </div>

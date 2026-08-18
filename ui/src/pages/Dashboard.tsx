@@ -353,7 +353,7 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-5" aria-busy={analyticsLoading}>
           <div className={`flex items-start gap-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-opacity ${isUpdating ? 'opacity-60' : ''}`}>
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-violet-50">
-              <DollarSign className="h-5 w-5 text-violet-600" />
+              <DollarSign className="h-5 w-5 text-brand-secondary-ink" />
             </div>
             <div className="min-w-0">
               <p className="text-sm font-medium text-gray-500">Total Spend</p>
@@ -370,7 +370,7 @@ export default function Dashboard() {
 
           <div className={`flex items-start gap-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-opacity ${isUpdating ? 'opacity-60' : ''}`}>
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-50">
-              <Zap className="h-5 w-5 text-blue-600" />
+              <Zap className="h-5 w-5 text-brand-primary-ink" />
             </div>
             <div className="min-w-0">
               <p className="text-sm font-medium text-gray-500">Total Requests</p>

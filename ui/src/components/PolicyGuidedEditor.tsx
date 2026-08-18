@@ -96,11 +96,11 @@ export default function PolicyGuidedEditor({
                 onClick={() => setStrategy(s)}
                 className={`flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition-all ${
                   sel
-                    ? 'border-blue-600 bg-blue-50 text-blue-700 shadow-sm'
+                    ? 'border-brand-primary bg-blue-50 text-blue-700 shadow-sm'
                     : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
                 }`}
               >
-                <Icon className={`h-4 w-4 ${sel ? 'text-blue-600' : 'text-slate-400'}`} />
+                <Icon className={`h-4 w-4 ${sel ? 'text-brand-primary-ink' : 'text-slate-400'}`} />
                 {meta.label}
               </button>
             );
@@ -143,14 +143,14 @@ export default function PolicyGuidedEditor({
                         max="100"
                         value={w}
                         onChange={(e) => setWeights((prev) => ({ ...prev, [id]: Number(e.target.value) }))}
-                        className="w-full accent-blue-600"
+                        className="w-full accent-brand-primary"
                       />
                       <div className="relative">
                         <input
                           type="number"
                           value={w}
                           onChange={(e) => setWeights((prev) => ({ ...prev, [id]: Number(e.target.value) }))}
-                          className="w-16 rounded-md border border-slate-200 py-1 pl-2 pr-6 text-sm text-right focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                          className="w-16 rounded-md border border-slate-200 py-1 pl-2 pr-6 text-sm text-right focus:border-brand-primary focus:ring-1 focus:ring-brand-primary focus:outline-none"
                         />
                         <span className="absolute right-2 top-1.5 text-xs text-slate-400">%</span>
                       </div>
@@ -162,7 +162,7 @@ export default function PolicyGuidedEditor({
                     aria-checked={included}
                     onClick={() => toggleMember(id)}
                     className={`h-5 w-5 shrink-0 rounded border-2 flex items-center justify-center transition-colors ${
-                      included ? 'border-blue-600 bg-blue-600' : 'border-slate-300 bg-white hover:border-blue-400'
+                      included ? 'border-brand-primary bg-brand-primary' : 'border-slate-300 bg-white hover:border-blue-400'
                     }`}
                   >
                     {included && <CheckIcon />}
@@ -186,7 +186,7 @@ export default function PolicyGuidedEditor({
               value={values.timeoutMs}
               onChange={(e) => updateValue('timeoutMs', e.target.value)}
               placeholder="10000"
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-brand-primary focus:border-brand-primary"
             />
           </label>
           <label className="space-y-1">
@@ -195,7 +195,7 @@ export default function PolicyGuidedEditor({
               value={values.retryMaxAttempts}
               onChange={(e) => updateValue('retryMaxAttempts', e.target.value)}
               placeholder="2"
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-brand-primary focus:border-brand-primary"
             />
           </label>
           <label className="space-y-1 md:col-span-2">
@@ -204,7 +204,7 @@ export default function PolicyGuidedEditor({
               value={values.retryableErrors}
               onChange={(e) => updateValue('retryableErrors', e.target.value)}
               placeholder="timeout,5xx,rate_limit"
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-brand-primary focus:border-brand-primary"
             />
             <span className="block text-xs text-slate-500">Comma-separated error classes to retry.</span>
           </label>

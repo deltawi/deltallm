@@ -837,6 +837,7 @@ async def test_chat_completion_with_mcp_tool_failure_emits_error_audit(client, t
 @pytest.mark.asyncio
 async def test_chat_completion_with_mcp_tool_rate_limit_returns_429(client, test_app):
     test_app.state.mcp_gateway_service = _RateLimitedMCPGateway()
+    test_app.state.audit_service = _RecordingAuditService()
 
     async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
         del url, headers, timeout
@@ -950,6 +951,7 @@ async def test_chat_completion_with_mcp_tool_manual_approval_returns_400(client,
 @pytest.mark.asyncio
 async def test_chat_completion_with_mcp_tool_timeout_returns_503(client, test_app):
     test_app.state.mcp_gateway_service = _TimeoutMCPGateway()
+    test_app.state.audit_service = _RecordingAuditService()
 
     async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201
         del url, headers, timeout
@@ -1008,6 +1010,7 @@ async def test_chat_completion_with_local_mcp_gateway_error_does_not_affect_depl
     client, test_app
 ):
     test_app.state.mcp_gateway_service = _BuggyMCPGateway()
+    test_app.state.audit_service = _RecordingAuditService()
     deployment = test_app.state.router.deployment_registry["gpt-4o-mini"][0]
 
     async def post(url, headers, json, timeout):  # noqa: ANN001, ANN201

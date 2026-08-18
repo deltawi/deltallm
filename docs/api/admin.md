@@ -130,12 +130,17 @@ Tier administration requires platform-admin permission.
 |--------|----------|---------|
 | `GET`, `POST` | `/ui/api/tiers` | List or create tiers |
 | `GET`, `PATCH`, `DELETE` | `/ui/api/tiers/{tier_id}` | Read, update, or delete a tier |
-| `POST` | `/ui/api/tiers/{tier_id}/versions` | Create a draft version |
+| `POST` | `/ui/api/tiers/bootstrap` | Atomically create a tier and its first draft |
+| `GET`, `POST` | `/ui/api/tiers/{tier_id}/versions` | List versions or create a draft version |
 | `GET` | `/ui/api/tiers/{tier_id}/versions/{tier_version_id}` | Read a version and its policies |
 | `POST` | `/ui/api/tiers/{tier_id}/versions/{tier_version_id}/clone` | Clone a version into a draft |
-| `PUT` | `/ui/api/tiers/{tier_id}/versions/{tier_version_id}/model-policies` | Replace the draft's model policies |
-| `PUT` | `/ui/api/tiers/{tier_id}/versions/{tier_version_id}/capacity-pools` | Replace the draft's capacity pools |
-| `POST` | `/ui/api/tiers/{tier_id}/versions/{tier_version_id}/publish` | Publish a version |
+| `GET`, `POST` | `/ui/api/tiers/{tier_id}/versions/{tier_version_id}/model-policies` | List or create model policies |
+| `PATCH`, `DELETE` | `/ui/api/tiers/{tier_id}/versions/{tier_version_id}/model-policies/{policy_id}` | Update or delete a model policy |
+| `POST` | `/ui/api/tiers/{tier_id}/versions/{tier_version_id}/model-policies/bulk-limits` | Update request limits in bulk |
+| `GET`, `POST` | `/ui/api/tiers/{tier_id}/versions/{tier_version_id}/capacity-pools` | List or create capacity pools |
+| `PATCH`, `DELETE` | `/ui/api/tiers/{tier_id}/versions/{tier_version_id}/capacity-pools/{pool_id}` | Update or delete a capacity pool |
+| `GET` | `/ui/api/tiers/{tier_id}/versions/{tier_version_id}/activation-preview` | Preview activation impact and concurrency guards |
+| `POST` | `/ui/api/tiers/{tier_id}/versions/{tier_version_id}/activate` | Activate a draft using revision and active-version guards |
 | `POST` | `/ui/api/tiers/{tier_id}/versions/{tier_version_id}/archive` | Archive a version |
 | `GET`, `POST` | `/ui/api/organizations/{organization_id}/tier-assignments` | List or create assignments |
 | `PATCH`, `DELETE` | `/ui/api/organizations/{organization_id}/tier-assignments/{assignment_id}` | Update or remove an assignment |
@@ -264,6 +269,11 @@ Access-group binding upserts use this payload:
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
+| `GET` | `/ui/api/branding` | Read the public, non-secret Theme projection (no authentication required) |
+| `PUT` | `/ui/api/branding` | Update the installation Theme (platform admin only) |
+| `GET` | `/ui/api/branding/assets/{logo_mark\|logo_full\|favicon}` | Read a versioned public branding asset from the replica-local cache |
+| `PUT` | `/ui/api/branding/assets/{logo_mark\|logo_full\|favicon}` | Upload and persist a branding asset BLOB (platform admin only) |
+| `DELETE` | `/ui/api/branding/assets/{logo_mark\|logo_full\|favicon}` | Remove a branding asset BLOB (platform admin only) |
 | `GET` | `/ui/api/routing` | Read routing config |
 | `PUT` | `/ui/api/routing` | Update routing config |
 | `GET` | `/ui/api/settings` | Read gateway settings |

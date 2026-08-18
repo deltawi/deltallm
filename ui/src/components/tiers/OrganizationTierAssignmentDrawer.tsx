@@ -37,7 +37,7 @@ export default function OrganizationTierAssignmentDrawer({
   onClose,
   onSave,
 }: OrganizationTierAssignmentDrawerProps) {
-  const inputClassName = 'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500';
+  const inputClassName = 'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500';
   const selectedTier = tierOptions.find((tier) => tier.tier_id === form.tier_id);
   const enabledTierConflict = form.enabled && selectedTier?.enabled === false;
 
@@ -102,12 +102,12 @@ export default function OrganizationTierAssignmentDrawer({
           </div>
           <label className={`flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 ${saving ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'}`}>
             <span className="text-sm font-medium text-gray-800">Enabled</span>
-            <input type="checkbox" checked={form.enabled} onChange={(event) => onChange({ ...form, enabled: event.target.checked })} disabled={saving} className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+            <input type="checkbox" checked={form.enabled} onChange={(event) => onChange({ ...form, enabled: event.target.checked })} disabled={saving} className="h-4 w-4 rounded border-gray-300 text-brand-primary-ink focus:ring-brand-primary" />
           </label>
         </div>
         <div className="flex justify-end gap-2 border-t border-gray-200 px-5 py-4">
           <button type="button" onClick={onClose} disabled={saving} className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50">Cancel</button>
-          <button type="button" onClick={onSave} disabled={saving || enabledTierConflict} className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
+          <button type="button" onClick={onSave} disabled={saving || enabledTierConflict} className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50">
             <Save className="h-4 w-4" />
             {saving ? 'Saving...' : 'Save'}
           </button>

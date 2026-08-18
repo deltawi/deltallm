@@ -28,6 +28,12 @@ from src.upstream_auth import (
 
 logger = logging.getLogger(__name__)
 
+_AUTH_SERVICE_UNAVAILABLE_HEADERS = {
+    "Cache-Control": "no-store",
+    "Retry-After": "5",
+    "Vary": "Cookie",
+}
+
 _INLINE_SECRET_FIELDS = {
     "api_key",
     "aws_access_key_id",
@@ -80,12 +86,13 @@ def get_auth_scope(
     required_permission: str | None = None,
     any_permission: list[str] | None = None,
 ) -> AuthScope:
-    configured = None
-    app_config = getattr(request.app.state, "app_config", None)
-    if app_config is not None:
-        configured = getattr(getattr(app_config, "general_settings", None), "master_key", None)
-    if not configured:
-        configured = getattr(getattr(request.app.state, "settings", None), "master_key", None)
+    from src.middleware.platform_auth import (
+        get_configured_master_key,
+        has_master_key_session,
+        master_key_session_unavailable,
+    )
+
+    configured = get_configured_master_key(request)
 
     if authorization and authorization.lower().startswith("bearer "):
         provided = authorization.split(" ", 1)[1].strip()
@@ -95,6 +102,8 @@ def get_auth_scope(
     import hmac as _hmac
     if configured and provided and _hmac.compare_digest(provided, configured):
         return AuthScope(is_platform_admin=True)
+    if has_master_key_session(request):
+        return AuthScope(is_platform_admin=True)
 
     from src.middleware.platform_auth import get_platform_auth_context
     from src.middleware.platform_auth import requires_mfa_verification
@@ -102,6 +111,12 @@ def get_auth_scope(
 
     context = get_platform_auth_context(request)
     if context is None:
+        if master_key_session_unavailable(request):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication service unavailable",
+                headers=_AUTH_SERVICE_UNAVAILABLE_HEADERS,
+            )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
     if requires_mfa_verification(context):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="MFA verification required")

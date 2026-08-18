@@ -104,7 +104,7 @@ export default function PromptRolloutCard({
               type="button"
               onClick={onAssignLabel}
               disabled={assigningLabel || !hasVersions}
-              className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+              className="rounded-lg bg-brand-primary px-3 py-2 text-sm text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
             >
               {assigningLabel ? 'Registering...' : 'Register Label'}
             </button>

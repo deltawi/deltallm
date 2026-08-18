@@ -209,7 +209,7 @@ export default function NamedCredentials() {
         <button
           type="button"
           onClick={() => { setFormError(null); setCreateOpen(true); }}
-          className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+          className="inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary transition-colors hover:bg-brand-primary-hover"
         >
           <Plus className="h-4 w-4" />
           New Credential
@@ -228,13 +228,13 @@ export default function NamedCredentials() {
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Search credentials..."
-              className="h-9 w-full rounded-lg border border-gray-300 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="h-9 w-full rounded-lg border border-gray-300 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
           </div>
           <select
             value={providerFilter}
             onChange={(e) => setProviderFilter(e.target.value)}
-            className="h-9 rounded-lg border border-gray-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="h-9 rounded-lg border border-gray-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
           >
             <option value="">All providers</option>
             {providerPresets.map((preset) => (
@@ -359,7 +359,7 @@ export default function NamedCredentials() {
             <input
               value={conversionName}
               onChange={(e) => setConversionName(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
           </div>
           {convertTarget ? (
@@ -381,7 +381,7 @@ export default function NamedCredentials() {
               type="button"
               onClick={() => { void handleConvert(); }}
               disabled={converting || !conversionName.trim()}
-              className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              className="rounded-lg bg-brand-primary px-3 py-2 text-sm font-medium text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
             >
               {converting ? 'Converting...' : 'Convert'}
             </button>

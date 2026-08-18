@@ -31,7 +31,7 @@ export default function RouteGroupSettingsCard({ form, saving, onChange, onSave 
             value={form.name}
             onChange={(e) => onChange({ ...form, name: e.target.value })}
             placeholder="e.g. Production Chat"
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
           />
         </div>
         <div>
@@ -39,7 +39,7 @@ export default function RouteGroupSettingsCard({ form, saving, onChange, onSave 
           <select
             value={form.mode}
             onChange={(e) => onChange({ ...form, mode: e.target.value })}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
           >
             {ROUTE_GROUP_MODE_OPTIONS.map((m) => (
               <option key={m} value={m}>
@@ -74,7 +74,7 @@ export default function RouteGroupSettingsCard({ form, saving, onChange, onSave 
           type="button"
           onClick={onSave}
           disabled={saving}
-          className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-xl bg-brand-primary px-4 py-2 text-sm font-semibold text-brand-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
         >
           <Save className="h-4 w-4" />
           {saving ? 'Saving…' : 'Save Settings'}

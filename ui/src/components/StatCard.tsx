@@ -19,7 +19,7 @@ export default function StatCard({ title, value, subtitle, icon, trend }: StatCa
           {subtitle && <p className="text-xs text-gray-400 mt-1">{subtitle}</p>}
           {trend && <p className="text-xs text-green-600 mt-1">{trend}</p>}
         </div>
-        {icon && <div className="hidden shrink-0 rounded-lg bg-blue-50 p-2 text-blue-600 sm:block">{icon}</div>}
+        {icon && <div className="hidden shrink-0 rounded-lg bg-blue-50 p-2 text-brand-primary-ink sm:block">{icon}</div>}
       </div>
     </div>
   );

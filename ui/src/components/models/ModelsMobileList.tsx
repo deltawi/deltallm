@@ -288,7 +288,7 @@ export default function ModelsMobileList({
             placeholder="Search models..."
             value={searchValue}
             onChange={(e) => onSearchChange(e.target.value)}
-            className="w-full bg-gray-100 border-transparent rounded-lg py-2 pl-9 pr-4 text-sm focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
+            className="w-full bg-gray-100 border-transparent rounded-lg py-2 pl-9 pr-4 text-sm focus:bg-white focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all"
           />
         </div>
       </div>
@@ -303,7 +303,7 @@ export default function ModelsMobileList({
               type="button"
               onClick={() => onFilterChange(f.value)}
               aria-pressed={selected}
-              className={`whitespace-nowrap px-3 py-1.5 rounded-full text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+              className={`whitespace-nowrap px-3 py-1.5 rounded-full text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary ${
                 selected
                   ? 'bg-gray-900 text-white'
                   : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -360,7 +360,7 @@ export default function ModelsMobileList({
             return (
               <div
                 key={model.deployment_id}
-                className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm relative active:bg-gray-50 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset"
+                className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm relative active:bg-gray-50 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-inset"
                 role="button"
                 tabIndex={0}
                 onClick={() => onView(model.deployment_id)}
@@ -396,7 +396,7 @@ export default function ModelsMobileList({
                   </div>
                   <button
                     type="button"
-                    className="p-1 -mr-1 text-gray-400 hover:text-gray-600 active:bg-gray-100 rounded shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                    className="p-1 -mr-1 text-gray-400 hover:text-gray-600 active:bg-gray-100 rounded shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
                     onClick={(e) => { e.stopPropagation(); openSheet(model, e.currentTarget); }}
                     aria-label="More actions"
                     aria-haspopup="dialog"
@@ -411,7 +411,7 @@ export default function ModelsMobileList({
                   </code>
                   <button
                     type="button"
-                    className="text-gray-400 hover:text-gray-600 p-1.5 -m-1 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                    className="text-gray-400 hover:text-gray-600 p-1.5 -m-1 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
                     onClick={(e) => { e.stopPropagation(); handleCopy(model.deployment_id); }}
                     aria-label="Copy deployment id"
                   >
@@ -497,7 +497,7 @@ export default function ModelsMobileList({
                     ref={idx === 0 ? sheetFirstActionRef : undefined}
                     type="button"
                     onClick={action.onClick}
-                    className={`w-full flex items-center gap-3 px-4 py-3 text-sm rounded-lg active:bg-gray-100 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+                    className={`w-full flex items-center gap-3 px-4 py-3 text-sm rounded-lg active:bg-gray-100 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary ${
                       action.tone === 'danger' ? 'text-red-600' : 'text-gray-700'
                     }`}
                   >
@@ -509,7 +509,7 @@ export default function ModelsMobileList({
               <button
                 type="button"
                 onClick={closeSheet}
-                className="w-full mt-1 px-4 py-3 text-sm font-medium text-gray-500 rounded-lg active:bg-gray-100 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                className="w-full mt-1 px-4 py-3 text-sm font-medium text-gray-500 rounded-lg active:bg-gray-100 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
               >
                 Cancel
               </button>

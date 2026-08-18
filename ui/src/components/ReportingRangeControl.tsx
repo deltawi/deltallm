@@ -145,7 +145,7 @@ export default function ReportingRangeControl({
               aria-pressed={selected}
               disabled={disabled}
               onClick={() => handleSelection(option.key)}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 ${
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary disabled:cursor-not-allowed disabled:opacity-50 ${
                 selected ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-900'
               }`}
             >
@@ -161,7 +161,7 @@ export default function ReportingRangeControl({
             aria-controls={dialogId}
             disabled={disabled}
             onClick={(event) => openCustom(event.currentTarget)}
-            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 ${
+            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary disabled:cursor-not-allowed disabled:opacity-50 ${
               value === 'custom' || customOpen ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-900'
             }`}
           >
@@ -182,7 +182,7 @@ export default function ReportingRangeControl({
             event.target.value as CompactReportingRangeSelection,
             event.currentTarget,
           )}
-          className="min-w-0 flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+          className="min-w-0 flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
         >
           {REPORTING_RANGE_OPTIONS.map((option) => (
             <option key={option.key} value={option.key}>{option.label}</option>
@@ -219,7 +219,7 @@ export default function ReportingRangeControl({
                   setDraftStartDate(event.target.value);
                   setCustomTouched(true);
                 }}
-                className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-normal text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-normal text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
             </label>
             <label className="text-xs font-medium text-gray-600">
@@ -232,7 +232,7 @@ export default function ReportingRangeControl({
                   setDraftEndDate(event.target.value);
                   setCustomTouched(true);
                 }}
-                className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-normal text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-normal text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
             </label>
           </div>
@@ -245,7 +245,7 @@ export default function ReportingRangeControl({
             <button
               type="button"
               onClick={() => closeCustom(true)}
-              className="rounded-lg px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              className="rounded-lg px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary"
             >
               Cancel
             </button>
@@ -253,7 +253,7 @@ export default function ReportingRangeControl({
               type="button"
               disabled={Boolean(validationError)}
               onClick={handleApply}
-              className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-blue-300"
+              className="rounded-lg bg-brand-primary px-3 py-2 text-sm font-medium text-brand-on-primary hover:bg-brand-primary-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Apply range
             </button>

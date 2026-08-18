@@ -1,25 +1,36 @@
 export class ApiError extends Error {
   status: number;
   detail?: unknown;
+  retryAfterSeconds?: number;
 
-  constructor(message: string, status: number, detail?: unknown) {
+  constructor(message: string, status: number, detail?: unknown, retryAfterSeconds?: number) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.detail = detail;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
-let masterKey: string | null = null;
-
-export function setMasterKey(value: string | null) {
-  masterKey = value;
+export interface StructuredApiErrorDetail {
+  code?: string;
+  message?: string;
+  [key: string]: unknown;
 }
 
-function buildHeaders(init?: HeadersInit): HeadersInit {
+export function structuredApiErrorDetail(error: unknown): StructuredApiErrorDetail | null {
+  if (!(error instanceof ApiError) || !error.detail || typeof error.detail !== 'object') {
+    return null;
+  }
+  const wrapper = error.detail as { detail?: unknown };
+  const detail = wrapper.detail;
+  if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return null;
+  return detail as StructuredApiErrorDetail;
+}
+
+function buildHeaders(init?: HeadersInit, body?: BodyInit | null): HeadersInit {
   const headers = new Headers(init);
-  if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-  if (masterKey) headers.set('X-Master-Key', masterKey);
+  if (!(body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   return headers;
 }
 
@@ -43,22 +54,31 @@ function errorMessage(status: number, detail: unknown): string {
   if (detail && typeof detail === 'object' && 'detail' in (detail as any)) {
     const d = (detail as any).detail;
     if (typeof d === 'string' && d.trim()) return d;
+    if (d && typeof d === 'object' && 'message' in d) {
+      const message = (d as { message?: unknown }).message;
+      if (typeof message === 'string' && message.trim()) return message;
+    }
   }
   if (typeof detail === 'string' && detail.trim()) return detail;
   return `Request failed (${status})`;
 }
 
 async function apiFetch<T>(path: string, opts?: RequestInit & { json?: unknown }): Promise<T> {
+  const body = opts && 'json' in opts ? JSON.stringify((opts as any).json ?? null) : opts?.body;
   const res = await fetch(path, {
     credentials: 'include',
     ...opts,
-    headers: buildHeaders(opts?.headers),
-    body: opts && 'json' in opts ? JSON.stringify((opts as any).json ?? null) : opts?.body,
+    headers: buildHeaders(opts?.headers, body),
+    body,
   });
 
   if (!res.ok) {
     const detail = await parseErrorDetail(res);
-    throw new ApiError(errorMessage(res.status, detail), res.status, detail);
+    const rawRetryAfter = res.headers.get('retry-after');
+    const retryAfterSeconds = rawRetryAfter && /^\d+$/.test(rawRetryAfter)
+      ? Number.parseInt(rawRetryAfter, 10)
+      : undefined;
+    throw new ApiError(errorMessage(res.status, detail), res.status, detail, retryAfterSeconds);
   }
 
   if (res.status === 204) return undefined as T;
@@ -550,6 +570,8 @@ export interface CallableTargetListItem {
   callable_key: string;
   target_type: 'model' | 'route_group';
   binding_count: number;
+  mode?: string | null;
+  mode_conflict?: boolean;
 }
 
 export interface CallableTargetAccessGroupListItem {
@@ -1149,8 +1171,28 @@ export interface Tier {
   enabled: boolean;
   metadata?: Record<string, unknown> | null;
   active_version_id?: string | null;
+  active_version?: TierCatalogVersionSummary | null;
+  latest_draft_version?: TierCatalogVersionSummary | null;
+  draft_count?: number;
   version_count: number;
   assignment_count: number;
+  live_assignment_count?: number;
+  organization_count?: number;
+  last_activity_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface TierCatalogVersionSummary {
+  tier_version_id: string;
+  version_number: number;
+  configuration_revision: number;
+  model_policy_count: number;
+  capacity_pool_count: number;
+  created_by_account_id?: string | null;
+  created_by_kind: 'account' | 'master_key' | 'system' | 'unknown' | string;
+  created_by_email?: string | null;
+  source_tier_version_id?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -1170,8 +1212,13 @@ export interface TierVersion {
   tier_id: string;
   version_number: number;
   status: 'draft' | 'active' | 'archived' | string;
+  configuration_revision: number;
   published_at?: string | null;
   published_by_account_id?: string | null;
+  created_by_account_id?: string | null;
+  created_by_kind: 'account' | 'master_key' | 'system' | 'unknown' | string;
+  created_by_email?: string | null;
+  source_tier_version_id?: string | null;
   metadata?: Record<string, unknown> | null;
   model_policy_count: number;
   capacity_pool_count: number;
@@ -1225,6 +1272,28 @@ export interface TierModelPolicyPayload {
   metadata?: Record<string, unknown> | null;
 }
 
+export type TierModelPolicyCreatePayload = TierModelPolicyPayload & {
+  expected_revision: number;
+};
+
+export type TierModelPolicyPatchPayload = Partial<
+  Omit<TierModelPolicyPayload, 'callable_key'>
+> & {
+  expected_revision: number;
+};
+
+export interface TierModelPolicyBulkLimitsPayload {
+  expected_revision: number;
+  rpm_limit?: number | null;
+  tpm_limit?: number | null;
+  policy_ids?: string[];
+  all_filtered?: boolean;
+  search?: string;
+  enabled?: boolean;
+  access_mode?: string;
+  capacity_pool_key?: string;
+}
+
 export interface TierCapacityPool {
   tier_capacity_pool_id?: string;
   tier_version_id?: string;
@@ -1253,6 +1322,16 @@ export interface TierCapacityPoolPayload {
   metadata?: Record<string, unknown> | null;
 }
 
+export type TierCapacityPoolCreatePayload = TierCapacityPoolPayload & {
+  expected_revision: number;
+};
+
+export type TierCapacityPoolPatchPayload = Partial<
+  Omit<TierCapacityPoolPayload, 'pool_key' | 'callable_key'>
+> & {
+  expected_revision: number;
+};
+
 export interface TierDetail {
   tier: Tier;
   versions: TierVersion[];
@@ -1262,6 +1341,62 @@ export interface TierVersionDetail {
   tier_version: TierVersion;
   model_policies: TierModelPolicy[];
   capacity_pools: TierCapacityPool[];
+}
+
+export interface TierBootstrapResponse {
+  tier: Tier;
+  initial_version: TierVersion;
+  idempotency_resolution: 'created' | 'replayed';
+}
+
+export interface TierConfigurationPage<T> extends Paginated<T> {
+  configuration_revision: number;
+  version_updated_at?: string | null;
+}
+
+export interface TierConfigurationMutationResult<T> {
+  data: T;
+  configuration_revision: number;
+  version_updated_at?: string | null;
+}
+
+export interface TierConfigurationDeleteResult {
+  deleted: boolean;
+  configuration_revision: number;
+  version_updated_at?: string | null;
+}
+
+export interface TierActivationChangeGroup {
+  count: number;
+  items: string[];
+  truncated: boolean;
+}
+
+export interface TierActivationNotice {
+  code: string;
+  message: string;
+  assignment_count?: number;
+}
+
+export interface TierActivationPreview {
+  draft: TierVersion;
+  draft_configuration_revision: number;
+  current_active_version?: TierVersion | null;
+  expected_active_version_id: string | null;
+  affected_assignment_count: number;
+  affected_organization_count: number;
+  pinned_assignment_count: number;
+  changes: {
+    policy_added: TierActivationChangeGroup;
+    policy_removed: TierActivationChangeGroup;
+    policy_changed: TierActivationChangeGroup;
+    pool_added: TierActivationChangeGroup;
+    pool_removed: TierActivationChangeGroup;
+    pool_changed: TierActivationChangeGroup;
+  };
+  warnings: TierActivationNotice[];
+  blockers: TierActivationNotice[];
+  can_activate: boolean;
 }
 
 export interface OrganizationTierAssignment {
@@ -1609,6 +1744,43 @@ export const settings = {
   update: (payload: any) => apiFetch<any>('/ui/api/settings', { method: 'PUT', json: payload }),
 };
 
+export interface UIBrandingResponse {
+  instance_name: string;
+  logo_mark_url: string | null;
+  logo_full_url: string | null;
+  favicon_url: string | null;
+  primary_color: string;
+  secondary_color: string;
+  menu_hover_color: string;
+}
+
+export type UIBrandingAssetKind = 'logo_mark' | 'logo_full' | 'favicon';
+
+export type UIBrandingUpdate = Pick<
+  UIBrandingResponse,
+  'instance_name' | 'primary_color' | 'secondary_color' | 'menu_hover_color'
+>;
+
+export const branding = {
+  get: (signal?: AbortSignal) => apiFetch<UIBrandingResponse>('/ui/api/branding', { signal }),
+  update: (payload: UIBrandingUpdate) => apiFetch<UIBrandingResponse>('/ui/api/branding', {
+    method: 'PUT',
+    json: payload,
+  }),
+  uploadAsset: (asset: UIBrandingAssetKind, file: File) => {
+    const body = new FormData();
+    body.append('file', file);
+    return apiFetch<UIBrandingResponse>(`/ui/api/branding/assets/${asset}`, {
+      method: 'PUT',
+      body,
+    });
+  },
+  deleteAsset: (asset: UIBrandingAssetKind) => apiFetch<UIBrandingResponse>(
+    `/ui/api/branding/assets/${asset}`,
+    { method: 'DELETE' },
+  ),
+};
+
 export const tierCapacity = {
   dashboard: (params?: { top_org_limit?: number; pool_limit?: number }) =>
     apiFetch<TierCapacityDashboard>(withQuery('/ui/api/tier-capacity/dashboard', params)),
@@ -1644,32 +1816,139 @@ export const tiers = {
     }
     return items;
   },
-  get: (tierId: string) =>
-    apiFetch<TierDetail>(`/ui/api/tiers/${encodeURIComponent(tierId)}`),
+  get: (tierId: string, params?: { include_versions?: boolean }) =>
+    apiFetch<TierDetail>(withQuery(`/ui/api/tiers/${encodeURIComponent(tierId)}`, params)),
   create: (payload: TierCreatePayload) =>
     apiFetch<Tier>('/ui/api/tiers', { method: 'POST', json: payload }),
+  bootstrap: (payload: TierCreatePayload, idempotencyKey: string) =>
+    apiFetch<TierBootstrapResponse>('/ui/api/tiers/bootstrap', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      json: payload,
+    }),
   update: (tierId: string, payload: TierUpdatePayload) =>
     apiFetch<Tier>(`/ui/api/tiers/${encodeURIComponent(tierId)}`, { method: 'PATCH', json: payload }),
   delete: (tierId: string) =>
     apiFetch<{ deleted: boolean; tier_id: string }>(`/ui/api/tiers/${encodeURIComponent(tierId)}`, { method: 'DELETE' }),
   createVersion: (tierId: string, payload: TierVersionCreatePayload = {}) =>
     apiFetch<TierVersion>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions`, { method: 'POST', json: payload }),
+  listVersions: (tierId: string, params?: { status?: string | string[]; limit?: number; offset?: number }) => {
+    const query = new URLSearchParams();
+    const statuses = Array.isArray(params?.status) ? params.status : params?.status ? [params.status] : [];
+    for (const status of statuses) {
+      if (status.trim()) query.append('status', status.trim());
+    }
+    if (params?.limit !== undefined) query.set('limit', String(params.limit));
+    if (params?.offset !== undefined) query.set('offset', String(params.offset));
+    const suffix = query.toString();
+    const path = `/ui/api/tiers/${encodeURIComponent(tierId)}/versions${suffix ? `?${suffix}` : ''}`;
+    return apiFetch<Paginated<TierVersion>>(path);
+  },
   cloneVersion: (tierId: string, sourceVersionId: string) =>
     apiFetch<TierVersion>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(sourceVersionId)}/clone`, { method: 'POST' }),
   getVersion: (tierId: string, versionId: string) =>
     apiFetch<TierVersionDetail>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}`),
-  replaceModelPolicies: (tierId: string, versionId: string, policies: TierModelPolicyPayload[]) =>
-    apiFetch<{ data: TierModelPolicy[] }>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/model-policies`, {
-      method: 'PUT',
-      json: { policies },
-    }),
-  replaceCapacityPools: (tierId: string, versionId: string, pools: TierCapacityPoolPayload[]) =>
-    apiFetch<{ data: TierCapacityPool[] }>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/capacity-pools`, {
-      method: 'PUT',
-      json: { pools },
-    }),
-  publishVersion: (tierId: string, versionId: string) =>
-    apiFetch<TierVersion>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/publish`, { method: 'POST' }),
+  listModelPolicies: (
+    tierId: string,
+    versionId: string,
+    params?: {
+      search?: string;
+      enabled?: boolean;
+      access_mode?: string;
+      capacity_pool_key?: string;
+      sort?: 'callable_key' | 'priority' | 'updated_at';
+      order?: 'asc' | 'desc';
+      limit?: number;
+      offset?: number;
+    },
+  ) => apiFetch<TierConfigurationPage<TierModelPolicy>>(
+    withQuery(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/model-policies`, params),
+  ),
+  createModelPolicy: (
+    tierId: string,
+    versionId: string,
+    payload: TierModelPolicyCreatePayload,
+  ) => apiFetch<TierConfigurationMutationResult<TierModelPolicy>>(
+    `/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/model-policies`,
+    { method: 'POST', json: payload },
+  ),
+  updateModelPolicy: (
+    tierId: string,
+    versionId: string,
+    policyId: string,
+    payload: TierModelPolicyPatchPayload,
+  ) => apiFetch<TierConfigurationMutationResult<TierModelPolicy>>(
+    `/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/model-policies/${encodeURIComponent(policyId)}`,
+    { method: 'PATCH', json: payload },
+  ),
+  deleteModelPolicy: (
+    tierId: string,
+    versionId: string,
+    policyId: string,
+    expectedRevision: number,
+  ) => apiFetch<TierConfigurationDeleteResult>(
+    `/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/model-policies/${encodeURIComponent(policyId)}`,
+    { method: 'DELETE', json: { expected_revision: expectedRevision } },
+  ),
+  bulkUpdateModelPolicyLimits: (
+    tierId: string,
+    versionId: string,
+    payload: TierModelPolicyBulkLimitsPayload,
+  ) => apiFetch<Omit<TierConfigurationDeleteResult, 'deleted'> & { affected_count: number }>(
+    `/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/model-policies/bulk-limits`,
+    { method: 'POST', json: payload },
+  ),
+  listCapacityPools: (
+    tierId: string,
+    versionId: string,
+    params?: {
+      search?: string;
+      callable_key?: string;
+      strategy?: string;
+      sort?: 'pool_key' | 'callable_key' | 'updated_at';
+      order?: 'asc' | 'desc';
+      limit?: number;
+      offset?: number;
+    },
+  ) => apiFetch<TierConfigurationPage<TierCapacityPool>>(
+    withQuery(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/capacity-pools`, params),
+  ),
+  createCapacityPool: (
+    tierId: string,
+    versionId: string,
+    payload: TierCapacityPoolCreatePayload,
+  ) => apiFetch<TierConfigurationMutationResult<TierCapacityPool>>(
+    `/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/capacity-pools`,
+    { method: 'POST', json: payload },
+  ),
+  updateCapacityPool: (
+    tierId: string,
+    versionId: string,
+    poolId: string,
+    payload: TierCapacityPoolPatchPayload,
+  ) => apiFetch<TierConfigurationMutationResult<TierCapacityPool>>(
+    `/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/capacity-pools/${encodeURIComponent(poolId)}`,
+    { method: 'PATCH', json: payload },
+  ),
+  deleteCapacityPool: (
+    tierId: string,
+    versionId: string,
+    poolId: string,
+    expectedRevision: number,
+  ) => apiFetch<TierConfigurationDeleteResult>(
+    `/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/capacity-pools/${encodeURIComponent(poolId)}`,
+    { method: 'DELETE', json: { expected_revision: expectedRevision } },
+  ),
+  activationPreview: (tierId: string, versionId: string) =>
+    apiFetch<TierActivationPreview>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/activation-preview`),
+  activateVersion: (
+    tierId: string,
+    versionId: string,
+    payload: { expected_revision: number; expected_active_version_id: string | null },
+  ) => apiFetch<TierVersion>(
+    `/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/activate`,
+    { method: 'POST', json: payload },
+  ),
   archiveVersion: (tierId: string, versionId: string) =>
     apiFetch<TierVersion>(`/ui/api/tiers/${encodeURIComponent(tierId)}/versions/${encodeURIComponent(versionId)}/archive`, { method: 'POST' }),
 };
@@ -2117,9 +2396,11 @@ export interface AuthSsoConfig {
 }
 
 export const auth = {
-  me: () => apiFetch<any>('/auth/me', { headers: new Headers({ 'Content-Type': 'application/json' }) }),
+  me: () => apiFetch<unknown>('/auth/me', { headers: new Headers({ 'Content-Type': 'application/json' }) }),
   internalLogin: (payload: { email: string; password: string; mfa_code?: string }) =>
     apiFetch<any>('/auth/internal/login', { method: 'POST', json: payload }),
+  masterLogin: (masterKey: string) =>
+    apiFetch<any>('/auth/master/login', { method: 'POST', json: { master_key: masterKey } }),
   internalLogout: () => apiFetch<any>('/auth/internal/logout', { method: 'POST' }),
   changePassword: (current_password: string | null, new_password: string) =>
     apiFetch<any>('/auth/internal/change-password', { method: 'POST', json: { current_password, new_password } }),
@@ -2133,7 +2414,9 @@ export const auth = {
   resetPassword: (token: string, new_password: string) =>
     apiFetch<{ changed: boolean }>('/auth/internal/reset-password', { method: 'POST', json: { token, new_password } }),
   ssoConfig: () => apiFetch<AuthSsoConfig>('/auth/sso-config'),
-  ssoLogin: (state: string) => apiFetch<{ authorize_url: string }>(`/auth/login?state=${encodeURIComponent(state)}`),
+  ssoLogin: (state: string, returnTo = '/') => apiFetch<{ authorize_url: string }>(
+    `/auth/login?state=${encodeURIComponent(state)}&return_to=${encodeURIComponent(returnTo)}`,
+  ),
   mfaEnrollStart: () => apiFetch<{ secret: string; otpauth_url: string }>('/auth/mfa/enroll/start', { method: 'POST' }),
   mfaEnrollConfirm: (code: string) => apiFetch<{ mfa_enabled: boolean }>('/auth/mfa/enroll/confirm', { method: 'POST', json: { code } }),
   mfaVerify: (code: string) => apiFetch<{ mfa_verified: boolean }>('/auth/mfa/verify', { method: 'POST', json: { code } }),

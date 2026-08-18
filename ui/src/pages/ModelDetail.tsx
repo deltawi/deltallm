@@ -25,6 +25,7 @@ import { modelEditPath } from '../lib/modelRoutes';
 import ModelUsageExamplesCard from '../components/ModelUsageExamplesCard';
 import { MODE_OPTIONS } from '../components/modelFormShared';
 import { HeroTabbedDetailShell, IconTabs, InlineStat, PanelCard } from '../components/admin/shells';
+import { useBranding } from '../lib/brandingContext';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -450,6 +451,7 @@ function CostsTab({ model }: { model: ModelDeploymentDetail }) {
 }
 
 function UsageTab({ modelName, mode }: { modelName: string; mode: string }) {
+  const { branding } = useBranding();
   return (
     <div className="space-y-4">
       <ModelUsageExamplesCard modelName={modelName} mode={mode} />
@@ -462,7 +464,7 @@ function UsageTab({ modelName, mode }: { modelName: string; mode: string }) {
             <span>
               Clients call{' '}
               <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs font-mono text-gray-900">{modelName}</code>.
-              {' '}DeltaLLM routes traffic transparently to the configured provider model.
+              {' '}{branding.instance_name} routes traffic transparently to the configured provider model.
             </span>
           </div>
           <div className="flex items-start gap-2">
@@ -529,7 +531,7 @@ export default function ModelDetail() {
   if (loading) {
     return (
       <div className="flex min-h-[400px] items-center justify-center p-6">
-        <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-blue-600" />
+        <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-brand-primary" />
       </div>
     );
   }
@@ -630,7 +632,7 @@ export default function ModelDetail() {
                   <>
                     <button
                       onClick={() => navigate(modelEditPath(deploymentId!))}
-                      className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-blue-700"
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-brand-primary px-3 py-2 text-sm font-medium text-brand-on-primary shadow-sm transition hover:bg-brand-primary-hover"
                     >
                       <Pencil className="h-4 w-4" /> Edit
                     </button>

@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { auth as authApi } from '../lib/api';
 import PublicAuthShell from '../components/auth/PublicAuthShell';
+import Button from '../components/Button';
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState('');
@@ -35,7 +36,7 @@ export default function ForgotPassword() {
           <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-green-800">
             If an account exists for that email, a reset link has been sent.
           </div>
-          <Link to="/login" className="inline-flex text-blue-600 hover:text-blue-700 font-medium">
+          <Link to="/login" className="inline-flex text-brand-primary-ink hover:text-brand-primary-ink-hover font-medium">
             Return to sign in
           </Link>
         </div>
@@ -52,18 +53,19 @@ export default function ForgotPassword() {
               type="email"
               value={email}
               onChange={(event) => { setEmail(event.target.value); setError(''); }}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
               placeholder="user@example.com"
               autoComplete="email"
             />
           </div>
-          <button
+          <Button
             type="submit"
-            disabled={loading}
-            className="w-full rounded-lg bg-blue-600 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+            loading={loading}
+            fullWidth
+            size="lg"
           >
             {loading ? 'Requesting…' : 'Send Reset Link'}
-          </button>
+          </Button>
         </form>
       )}
     </PublicAuthShell>

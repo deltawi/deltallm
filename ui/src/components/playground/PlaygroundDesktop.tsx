@@ -37,6 +37,7 @@ import { modeEmptyCopy, modeEndpoint } from './types';
 import type { ChatEngine } from './useChatEngine';
 import type { TTSEngine } from './useTTSEngine';
 import type { STTEngine } from './useSTTEngine';
+import { useBranding } from '../../lib/brandingContext';
 
 interface SharedProps {
   mode: PlaygroundMode;
@@ -58,7 +59,7 @@ function ModeUnavailableState({ mode }: { mode: PlaygroundMode }) {
     <div className="flex flex-1 items-center justify-center bg-gray-50/50 p-6">
       <div className="max-w-md rounded-2xl border border-dashed border-gray-300 bg-white px-8 py-10 text-center shadow-sm">
         <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50">
-          <Sparkles className="h-7 w-7 text-blue-600" />
+          <Sparkles className="h-7 w-7 text-brand-primary-ink" />
         </div>
         <h2 className="mb-2 text-lg font-semibold text-gray-900">
           {mode === 'tts' ? 'Text-to-Speech' : mode === 'stt' ? 'Speech-to-Text' : 'Chat'} unavailable
@@ -105,7 +106,7 @@ function ApiKeyInput({ value, onChange }: { value: string; onChange: (v: string)
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="sk-..."
-          className="w-full bg-white border border-gray-200 rounded-md py-1.5 pl-8 pr-8 text-sm text-gray-700 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          className="w-full bg-white border border-gray-200 rounded-md py-1.5 pl-8 pr-8 text-sm text-gray-700 font-mono focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
         />
         <button
           onClick={() => setVisible(!visible)}
@@ -195,7 +196,7 @@ function TTSView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
               step="0.25"
               value={speed}
               onChange={(e) => setSpeed(parseFloat(e.target.value))}
-              className="w-full accent-blue-600 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+              className="w-full accent-brand-primary h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer"
             />
             <div className="flex justify-between text-[10px] text-gray-400 mt-1">
               <span>0.25x</span>
@@ -208,7 +209,7 @@ function TTSView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
             <select
               value={format}
               onChange={(e) => setFormat(e.target.value)}
-              className="w-full appearance-none bg-white border border-gray-200 rounded-md py-1.5 pl-3 pr-8 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full appearance-none bg-white border border-gray-200 rounded-md py-1.5 pl-3 pr-8 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary"
             >
               <option value="mp3">MP3</option>
               <option value="opus">Opus</option>
@@ -228,7 +229,7 @@ function TTSView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value.slice(0, 4096))}
-            className="w-full h-40 p-3 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none leading-relaxed"
+            className="w-full h-40 p-3 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary resize-none leading-relaxed"
             placeholder="Enter the text you want to convert to speech..."
           />
         </div>
@@ -237,7 +238,7 @@ function TTSView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
           <button
             onClick={handleGenerate}
             disabled={!text.trim() || isGenerating || !apiKey}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:bg-gray-200 disabled:text-gray-400 transition-colors shadow-sm"
+            className="flex items-center gap-2 px-4 py-2 bg-brand-primary text-brand-on-primary text-sm font-medium rounded-lg hover:bg-brand-primary-hover disabled:bg-gray-200 disabled:text-gray-400 transition-colors shadow-sm"
           >
             {isGenerating ? (
               <>
@@ -277,7 +278,7 @@ function TTSView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-blue-50 rounded-lg flex items-center justify-center">
-                  <FileAudio className="w-5 h-5 text-blue-600" />
+                  <FileAudio className="w-5 h-5 text-brand-primary-ink" />
                 </div>
                 <div>
                   <div className="text-sm font-medium text-gray-900">Generated Audio</div>
@@ -289,7 +290,7 @@ function TTSView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
               </div>
               <button
                 onClick={handleDownload}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-brand-primary-ink bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
               >
                 <Download className="w-3.5 h-3.5" />
                 Download
@@ -299,7 +300,7 @@ function TTSView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
             <div className="flex items-center gap-3">
               <button
                 onClick={togglePlay}
-                className="w-10 h-10 bg-blue-600 text-white rounded-full flex items-center justify-center hover:bg-blue-700 shadow-sm transition-colors flex-none"
+                className="w-10 h-10 bg-brand-primary text-brand-on-primary rounded-full flex items-center justify-center hover:bg-brand-primary-hover shadow-sm transition-colors flex-none"
               >
                 {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
               </button>
@@ -312,7 +313,7 @@ function TTSView({ apiKey, tts }: { apiKey: string; tts: TTSEngine }) {
                   }}
                 >
                   <div
-                    className="bg-blue-600 h-2 rounded-full transition-all duration-100"
+                    className="bg-brand-primary h-2 rounded-full transition-all duration-100"
                     style={{ width: `${progress}%` }}
                   />
                 </div>
@@ -399,7 +400,7 @@ function STTView({ apiKey, stt }: { apiKey: string; stt: STTEngine }) {
             <select
               value={language}
               onChange={(e) => setLanguage(e.target.value)}
-              className="w-full appearance-none bg-white border border-gray-200 rounded-md py-1.5 pl-3 pr-8 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full appearance-none bg-white border border-gray-200 rounded-md py-1.5 pl-3 pr-8 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary"
             >
               <option value="">Auto-detect</option>
               <option value="en">English</option>
@@ -417,7 +418,7 @@ function STTView({ apiKey, stt }: { apiKey: string; stt: STTEngine }) {
             <select
               value={responseFormat}
               onChange={(e) => setResponseFormat(e.target.value)}
-              className="w-full appearance-none bg-white border border-gray-200 rounded-md py-1.5 pl-3 pr-8 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full appearance-none bg-white border border-gray-200 rounded-md py-1.5 pl-3 pr-8 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary"
             >
               <option value="json">JSON</option>
               <option value="text">Plain Text</option>
@@ -434,7 +435,7 @@ function STTView({ apiKey, stt }: { apiKey: string; stt: STTEngine }) {
               value={outputPrompt}
               onChange={(e) => setOutputPrompt(e.target.value)}
               placeholder="Guide the model style..."
-              className="w-full bg-white border border-gray-200 rounded-md py-1.5 px-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full bg-white border border-gray-200 rounded-md py-1.5 px-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
           </div>
         </div>
@@ -533,7 +534,7 @@ function STTView({ apiKey, stt }: { apiKey: string; stt: STTEngine }) {
             <button
               onClick={handleTranscribe}
               disabled={isTranscribing || !apiKey}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:bg-gray-200 disabled:text-gray-400 transition-colors shadow-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-brand-primary text-brand-on-primary text-sm font-medium rounded-lg hover:bg-brand-primary-hover disabled:bg-gray-200 disabled:text-gray-400 transition-colors shadow-sm"
             >
               {isTranscribing ? (
                 <>
@@ -624,6 +625,7 @@ export default function PlaygroundDesktop({
   tts,
   stt,
 }: SharedProps) {
+  const { branding } = useBranding();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<'stats' | 'request'>('stats');
   const [showConfig, setShowConfig] = useState(false);
@@ -668,7 +670,7 @@ export default function PlaygroundDesktop({
             </div>
             <div className="flex items-center gap-4">
               <h1 className="flex items-center gap-2 text-xl font-bold text-gray-900">
-                <Sparkles className="h-5 w-5 text-blue-600" />
+                <Sparkles className="h-5 w-5 text-brand-primary-ink" />
                 Playground
               </h1>
               <ModeSelector mode={mode} onChange={setMode} />
@@ -702,7 +704,7 @@ export default function PlaygroundDesktop({
                   <label className="block text-xs font-medium text-gray-500 mb-1">Model</label>
                   <div className="relative group">
                     <select
-                      className="w-full appearance-none bg-gray-50 border border-gray-200 rounded-md py-1.5 pl-3 pr-8 text-sm font-medium text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent cursor-pointer"
+                      className="w-full appearance-none bg-gray-50 border border-gray-200 rounded-md py-1.5 pl-3 pr-8 text-sm font-medium text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent cursor-pointer"
                       value={selectedModel?.id || ''}
                       onChange={(e) => setSelectedModel(currentModels.find((m) => m.id === e.target.value) || selectedModel)}
                     >
@@ -759,7 +761,7 @@ export default function PlaygroundDesktop({
                     <textarea
                       value={params.systemPrompt}
                       onChange={(e) => setParams((p) => ({ ...p, systemPrompt: e.target.value }))}
-                      className="w-full h-24 p-2.5 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                      className="w-full h-24 p-2.5 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary resize-none"
                       placeholder="You are a helpful assistant..."
                     />
                   </div>
@@ -777,7 +779,7 @@ export default function PlaygroundDesktop({
                         step="0.1"
                         value={params.temperature}
                         onChange={(e) => setParams((p) => ({ ...p, temperature: parseFloat(e.target.value) }))}
-                        className="w-full accent-blue-600 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                        className="w-full accent-brand-primary h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer"
                       />
                     </div>
                     <div>
@@ -792,7 +794,7 @@ export default function PlaygroundDesktop({
                         step="0.05"
                         value={params.topP}
                         onChange={(e) => setParams((p) => ({ ...p, topP: parseFloat(e.target.value) }))}
-                        className="w-full accent-blue-600 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                        className="w-full accent-brand-primary h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer"
                       />
                     </div>
                   </div>
@@ -804,7 +806,7 @@ export default function PlaygroundDesktop({
                         type="number"
                         value={params.maxTokens}
                         onChange={(e) => setParams((p) => ({ ...p, maxTokens: parseInt(e.target.value) || 0 }))}
-                        className="w-full px-2.5 py-1.5 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-full px-2.5 py-1.5 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
                       />
                     </div>
                     <div className="grid grid-cols-2 gap-3">
@@ -817,7 +819,7 @@ export default function PlaygroundDesktop({
                           max={2}
                           step={0.1}
                           onChange={(e) => setParams((p) => ({ ...p, freqPenalty: parseFloat(e.target.value) || 0 }))}
-                          className="w-full px-2.5 py-1.5 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          className="w-full px-2.5 py-1.5 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
                         />
                       </div>
                       <div>
@@ -829,7 +831,7 @@ export default function PlaygroundDesktop({
                           max={2}
                           step={0.1}
                           onChange={(e) => setParams((p) => ({ ...p, presPenalty: parseFloat(e.target.value) || 0 }))}
-                          className="w-full px-2.5 py-1.5 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          className="w-full px-2.5 py-1.5 text-sm bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
                         />
                       </div>
                     </div>
@@ -858,11 +860,11 @@ export default function PlaygroundDesktop({
                   {messages.length === 0 && !error ? (
                     <div className="flex flex-col items-center justify-center h-full min-h-[400px] text-center px-4">
                       <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center mb-6 shadow-sm ring-1 ring-blue-100">
-                        <Sparkles className="h-8 w-8 text-blue-600" />
+                        <Sparkles className="h-8 w-8 text-brand-primary-ink" />
                       </div>
                       <h2 className="text-xl font-semibold text-gray-900 mb-2">Start a Conversation</h2>
                       <p className="text-gray-500 max-w-md mb-8">
-                        Test your configured models and prompts in real-time. Requests are routed through the DeltaLLM gateway.
+                        Test your configured models and prompts in real-time. Requests are routed through the {branding.instance_name} gateway.
                       </p>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">
                         {[
@@ -888,7 +890,7 @@ export default function PlaygroundDesktop({
                         <div className="flex-none">
                           <div
                             className={`w-8 h-8 rounded-full flex items-center justify-center shadow-sm ${
-                              msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-700'
+                              msg.role === 'user' ? 'bg-brand-primary text-brand-on-primary' : 'bg-white border border-gray-200 text-gray-700'
                             }`}
                           >
                             {msg.role === 'user' ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
@@ -907,7 +909,7 @@ export default function PlaygroundDesktop({
                           </div>
                           <div
                             className={`relative px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm ${
-                              msg.role === 'user' ? 'bg-blue-600 text-white rounded-tr-sm' : 'bg-white border border-gray-200 text-gray-800 rounded-tl-sm'
+                              msg.role === 'user' ? 'bg-brand-primary text-brand-on-primary rounded-tr-sm' : 'bg-white border border-gray-200 text-gray-800 rounded-tl-sm'
                             }`}
                           >
                             <div className="space-y-3 whitespace-pre-wrap">
@@ -995,7 +997,7 @@ export default function PlaygroundDesktop({
                         <button
                           onClick={handleSend}
                           disabled={!input.trim() || !apiKey || !selectedModel}
-                          className="p-2 text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-200 disabled:text-gray-400 rounded-lg shadow-sm transition-colors flex items-center justify-center group"
+                          className="p-2 text-brand-on-primary bg-brand-primary hover:bg-brand-primary-hover disabled:bg-gray-200 disabled:text-gray-400 rounded-lg shadow-sm transition-colors flex items-center justify-center group"
                         >
                           <PlaySquare className="w-5 h-5 group-hover:-translate-y-0.5 group-hover:translate-x-0.5 transition-transform" />
                         </button>
@@ -1097,7 +1099,7 @@ export default function PlaygroundDesktop({
                       </div>
                       <div className="flex items-center justify-between text-xs">
                         <span className="text-gray-500">Endpoint</span>
-                        <code className="text-[10px] font-mono text-blue-600">{modeEndpoint(mode)}</code>
+                        <code className="text-[10px] font-mono text-brand-primary-ink">{modeEndpoint(mode)}</code>
                       </div>
                     </div>
                   </div>

@@ -3,6 +3,7 @@ import Card from './Card';
 import { ChevronDown, ExternalLink, Plus, X } from 'lucide-react';
 import AccessGroupTokenInput, { type AccessGroupTokenInputHandle } from './AccessGroupTokenInput';
 import ProviderBadge from './ProviderBadge';
+import Button from './Button';
 import { useApi } from '../lib/hooks';
 import { models, namedCredentials, type NamedCredential, type ProviderModelDiscoveryPayload, type ProviderModelOption } from '../lib/api';
 import {
@@ -35,7 +36,7 @@ function CollapsibleCard({ title, defaultOpen = false, children }: { title: stri
         onClick={() => setOpen(!open)}
         aria-expanded={open}
         aria-controls={id}
-        className="flex items-center justify-between w-full px-5 py-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset rounded-xl"
+        className="flex items-center justify-between w-full px-5 py-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-inset rounded-xl"
       >
         <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
         <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
@@ -200,7 +201,7 @@ interface ModelFormProps {
   error?: string | null;
 }
 
-const inputClass = "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500";
+const inputClass = "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary";
 type RequiredField = 'model_name' | 'provider' | 'model' | 'api_base' | 'named_credential_id';
 const CHAT_BATCHING_MODES: { value: ChatBatchingMode; label: string }[] = [
   { value: '', label: 'Default concurrent' },
@@ -633,7 +634,7 @@ export default function ModelForm({
               onClick={() => applyMode(opt.value)}
               className={`flex items-center gap-2 p-2.5 rounded-lg border text-left text-sm transition-colors ${
                 mode === opt.value
-                  ? 'border-blue-500 bg-blue-50 text-blue-700'
+                  ? 'border-brand-primary bg-blue-50 text-blue-700'
                   : 'border-gray-200 hover:border-gray-300 text-gray-600'
               }`}
             >
@@ -659,7 +660,7 @@ export default function ModelForm({
           </div>
           <div>
             <FieldLabel label="Provider and Provider Model" required />
-            <div className={`flex overflow-hidden rounded-lg border bg-white focus-within:ring-2 ${fieldErrors.provider || fieldErrors.model ? 'border-red-300 focus-within:ring-red-500' : 'border-gray-300 focus-within:ring-blue-500'}`}>
+            <div className={`flex overflow-hidden rounded-lg border bg-white focus-within:ring-2 ${fieldErrors.provider || fieldErrors.model ? 'border-red-300 focus-within:ring-red-500' : 'border-gray-300 focus-within:ring-brand-primary'}`}>
               <select
                 value={form.provider}
                 onChange={(e) => applyProvider(e.target.value)}
@@ -747,7 +748,7 @@ export default function ModelForm({
                 <button
                   type="button"
                   onClick={() => setCredentialSource('named')}
-                  className={`rounded-lg border px-3 py-3 text-left text-sm transition-colors ${form.credential_source === 'named' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'}`}
+                  className={`rounded-lg border px-3 py-3 text-left text-sm transition-colors ${form.credential_source === 'named' ? 'border-brand-primary bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'}`}
                 >
                   <div className="font-medium">Named Credential</div>
                   <div className="mt-0.5 text-xs text-gray-500">Recommended for shared provider access and credential rotation.</div>
@@ -755,7 +756,7 @@ export default function ModelForm({
                 <button
                   type="button"
                   onClick={() => setCredentialSource('inline')}
-                  className={`rounded-lg border px-3 py-3 text-left text-sm transition-colors ${form.credential_source === 'inline' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'}`}
+                  className={`rounded-lg border px-3 py-3 text-left text-sm transition-colors ${form.credential_source === 'inline' ? 'border-brand-primary bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'}`}
                 >
                   <div className="font-medium">Inline Credentials</div>
                   <div className="mt-0.5 text-xs text-gray-500">Use deployment-specific provider credentials directly on this model.</div>
@@ -958,7 +959,7 @@ export default function ModelForm({
                   href={MODEL_BATCH_CONFIG_DOCS_URL}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-brand-primary-ink hover:text-brand-primary-ink-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2"
                 >
                   Batch config docs
                   <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1239,7 +1240,7 @@ export default function ModelForm({
           <button
             type="button"
             onClick={() => setDefaultParams([...defaultParams, { key: '', value: '' }])}
-            className="flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-700 font-medium"
+            className="flex items-center gap-1.5 text-sm text-brand-primary-ink hover:text-brand-primary-ink-hover font-medium"
           >
             <Plus className="w-3.5 h-3.5" /> Add Default Parameter
           </button>
@@ -1249,8 +1250,8 @@ export default function ModelForm({
       {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>}
 
       <div className="flex justify-end gap-3">
-        <button onClick={onCancel} className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
-        <button onClick={handleSubmit} disabled={saving} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">{saving ? 'Saving...' : submitLabel}</button>
+        <Button variant="secondary" onClick={onCancel} disabled={saving}>Cancel</Button>
+        <Button onClick={handleSubmit} loading={saving}>{saving ? 'Saving...' : submitLabel}</Button>
       </div>
     </div>
   );

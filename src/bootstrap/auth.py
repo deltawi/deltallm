@@ -30,6 +30,7 @@ from src.services.email_token_service import EmailTokenService
 from src.services.invitation_service import InvitationService
 from src.services.key_service import KeyService
 from src.services.limit_counter import LimitCounter
+from src.services.master_session_service import MasterSessionService
 from src.services.platform_identity_service import PlatformIdentityService
 from src.services.self_registration_provisioning import SelfRegistrationProvisioningService
 from src.services.sso_state_store import SSOStateStore
@@ -70,8 +71,7 @@ def _cache_invalidation_worker_config(general_settings: Any) -> CacheInvalidatio
         getattr(general_settings, "cache_invalidation_worker_lease_seconds", 60) or 60
     )
     configured_record_timeout_seconds = float(
-        getattr(general_settings, "cache_invalidation_worker_record_timeout_seconds", 10.0)
-        or 10.0
+        getattr(general_settings, "cache_invalidation_worker_record_timeout_seconds", 10.0) or 10.0
     )
     record_timeout_seconds = min(
         max(0.001, configured_record_timeout_seconds),
@@ -118,6 +118,7 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
     statuses = [
         BootstrapStatus("key_service", "ready"),
         BootstrapStatus("platform_identity", "ready"),
+        BootstrapStatus("master_session_store", "ready"),
     ]
     runtime = AuthRuntime()
 
@@ -151,7 +152,9 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
     )
     if cache_invalidation_worker_enabled and app.state.redis is None:
         app.state.cache_invalidation_worker = None
-        statuses.append(BootstrapStatus("cache_invalidation_worker", "degraded", "redis unavailable"))
+        statuses.append(
+            BootstrapStatus("cache_invalidation_worker", "degraded", "redis unavailable")
+        )
     elif cache_invalidation_worker_enabled:
         runtime.cache_invalidation_worker = CacheInvalidationWorker(
             repository=cache_invalidation_repository,
@@ -170,9 +173,16 @@ async def init_auth_runtime(app: Any, cfg: Any) -> AuthRuntime:
         salt=app.state.salt_key,
         session_ttl_hours=cfg.general_settings.auth_session_ttl_hours,
     )
+    app.state.platform_identity_service.totp_issuer = str(
+        getattr(cfg.general_settings, "instance_name", "DeltaLLM") or "DeltaLLM"
+    )
     await app.state.platform_identity_service.ensure_bootstrap_admin(
         email=cfg.general_settings.platform_bootstrap_admin_email,
         password=cfg.general_settings.platform_bootstrap_admin_password,
+    )
+    app.state.master_session_service = MasterSessionService(
+        db_client=app.state.prisma_manager.client,
+        salt=app.state.salt_key,
     )
     app.state.self_registration_provisioning_service = SelfRegistrationProvisioningService(
         db_client=app.state.prisma_manager.client,

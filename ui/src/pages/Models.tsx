@@ -96,7 +96,7 @@ export default function Models() {
       action={canManageModels ? (
         <button
           onClick={() => navigate('/models/new')}
-          className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+          className="flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary transition-colors hover:bg-brand-primary-hover"
         >
           <Plus className="h-4 w-4" /> Add Model
         </button>
@@ -109,14 +109,14 @@ export default function Models() {
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Search models..."
-              className="h-9 w-full rounded-lg border border-gray-300 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="h-9 w-full rounded-lg border border-gray-300 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
           </div>
           <select
             value={modeFilter}
             onChange={(e) => handleModeFilterChange(e.target.value as ModelFilterValue)}
             aria-label="Filter model type"
-            className="h-9 rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="h-9 rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-primary"
           >
             <option value="all">All types</option>
             {MODE_OPTIONS.map((option) => (

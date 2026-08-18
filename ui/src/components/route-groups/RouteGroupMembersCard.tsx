@@ -159,7 +159,7 @@ export default function RouteGroupMembersCard({
               <button
                 type="button"
                 onClick={onToggleManualEntry}
-                className="text-xs text-blue-600 hover:underline"
+                className="text-xs text-brand-primary-ink hover:underline"
               >
                 {manualMemberEntry ? 'Hide manual ID entry' : 'Enter deployment ID manually'}
               </button>
@@ -170,7 +170,7 @@ export default function RouteGroupMembersCard({
                     value={memberForm.deployment_id}
                     onChange={(e) => onMemberFormChange({ ...memberForm, deployment_id: e.target.value })}
                     placeholder="deployment_id"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                   />
                 </label>
               )}
@@ -183,7 +183,7 @@ export default function RouteGroupMembersCard({
                     placeholder="e.g. 10"
                     type="number"
                     min="0"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                   />
                   <span className="block text-[11px] text-gray-500">For weighted traffic splits.</span>
                 </label>
@@ -195,7 +195,7 @@ export default function RouteGroupMembersCard({
                     placeholder="e.g. 1"
                     type="number"
                     min="0"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
                   />
                   <span className="block text-[11px] text-gray-500">For ordered fallback.</span>
                 </label>
@@ -222,7 +222,7 @@ export default function RouteGroupMembersCard({
               type="button"
               onClick={onAddMember}
               disabled={addingMember || !memberForm.deployment_id.trim()}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-50 transition-colors"
+              className="rounded-lg bg-brand-primary px-4 py-2 text-sm font-medium text-brand-on-primary shadow-sm hover:bg-brand-primary-hover disabled:opacity-50 transition-colors"
             >
               {addingMember ? 'Adding…' : 'Add'}
             </button>
@@ -245,7 +245,7 @@ export default function RouteGroupMembersCard({
           <button
             type="button"
             onClick={() => setShowAddForm((v) => !v)}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-700"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-1.5 text-xs font-medium text-brand-on-primary transition-colors hover:bg-brand-primary-hover"
           >
             {showAddForm ? (
               <><ChevronUp className="h-3.5 w-3.5" /> Cancel</>
@@ -277,7 +277,7 @@ export default function RouteGroupMembersCard({
                   <button
                     type="button"
                     onClick={() => setShowAddForm(true)}
-                    className="text-blue-600 hover:underline"
+                    className="text-brand-primary-ink hover:underline"
                   >
                     Add the first one
                   </button>
@@ -296,7 +296,7 @@ export default function RouteGroupMembersCard({
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-3">
                         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-50">
-                          <Server className="h-4 w-4 text-indigo-600" />
+                          <Server className="h-4 w-4 text-brand-secondary-ink" />
                         </div>
                         <div className="min-w-0">
                           <p className="truncate text-sm font-semibold text-gray-900">

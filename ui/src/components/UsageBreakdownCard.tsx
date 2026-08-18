@@ -431,7 +431,7 @@ export default function UsageBreakdownCard({
                   type="button"
                   aria-pressed={activeDimension === value}
                   onClick={() => changeDimension(value)}
-                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary ${
                     activeDimension === value ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
                   }`}
                 >
@@ -449,7 +449,7 @@ export default function UsageBreakdownCard({
                   type="button"
                   aria-pressed={metric === value}
                   onClick={() => changeMetric(value)}
-                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary ${
                     metric === value ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
                   }`}
                 >
@@ -480,7 +480,7 @@ export default function UsageBreakdownCard({
                 placeholder={selfScoped
                   ? `Search ${usageDimensionLabel(activeDimension, true).toLowerCase()}`
                   : userIdentityLabelsHidden ? 'Search user IDs' : 'Search owners'}
-                className="w-full rounded-lg border border-gray-300 py-2 pl-8 pr-3 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full rounded-lg border border-gray-300 py-2 pl-8 pr-3 text-xs focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
             </label>
           </div>
@@ -524,7 +524,7 @@ export default function UsageBreakdownCard({
                     type="button"
                     aria-pressed={selected}
                     onClick={() => selectOwner(row)}
-                    className={`relative w-full overflow-hidden rounded-lg border px-3 py-2.5 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+                    className={`relative w-full overflow-hidden rounded-lg border px-3 py-2.5 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary ${
                       selected
                         ? 'border-blue-200 bg-blue-50'
                         : 'border-transparent bg-gray-50 hover:border-gray-200 hover:bg-gray-100'
@@ -561,7 +561,7 @@ export default function UsageBreakdownCard({
                   onClick={() => setOffsetState({ scopeKey: ownerOffsetScopeKey, offset: Math.max(0, offset - OWNER_PAGE_SIZE) })}
                   disabled={offset === 0 || ownersLoading}
                   aria-label="Previous owners page"
-                  className="rounded-md p-1.5 hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-30"
+                  className="rounded-md p-1.5 hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary disabled:cursor-not-allowed disabled:opacity-30"
                 >
                   <ChevronLeft className="h-4 w-4" />
                 </button>
@@ -570,7 +570,7 @@ export default function UsageBreakdownCard({
                   onClick={() => setOffsetState({ scopeKey: ownerOffsetScopeKey, offset: offset + OWNER_PAGE_SIZE })}
                   disabled={!ownerPagination.has_more || ownersLoading}
                   aria-label="Next owners page"
-                  className="rounded-md p-1.5 hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-30"
+                  className="rounded-md p-1.5 hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary disabled:cursor-not-allowed disabled:opacity-30"
                 >
                   <ChevronRight className="h-4 w-4" />
                 </button>

@@ -120,7 +120,7 @@ export default function BatchJobs() {
   };
 
   const summaryCards = [
-    { label: 'Total Jobs', value: summary?.total ?? 0, icon: Layers, color: 'text-blue-600', bg: 'bg-blue-50' },
+    { label: 'Total Jobs', value: summary?.total ?? 0, icon: Layers, color: 'text-brand-primary-ink', bg: 'bg-blue-50' },
     { label: 'In Progress', value: (summary?.queued ?? 0) + (summary?.in_progress ?? 0), icon: Loader2, color: 'text-yellow-600', bg: 'bg-yellow-50' },
     { label: 'Completed', value: summary?.completed ?? 0, icon: CheckCircle2, color: 'text-green-600', bg: 'bg-green-50' },
     { label: 'Failed', value: summary?.failed ?? 0, icon: XCircle, color: 'text-red-600', bg: 'bg-red-50' },
@@ -215,7 +215,7 @@ export default function BatchJobs() {
               placeholder="Search by batch ID or model..."
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
-              className="w-full rounded-lg border border-gray-200 py-2 pl-9 pr-3 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-lg border border-gray-200 py-2 pl-9 pr-3 text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
           </div>
           <div className="flex flex-wrap gap-1">

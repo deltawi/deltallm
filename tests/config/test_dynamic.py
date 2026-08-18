@@ -14,6 +14,7 @@ from src.config_runtime.dynamic import (
     DynamicConfigRestartRequiredError,
     DynamicConfigValidationError,
 )
+from src.config_runtime.loader import deep_merge
 from src.config_runtime.models import ModelHotReloadManager
 from src.config_runtime.secrets import BaseSecretManager, SecretResolver
 from src.db.repositories import ModelDeploymentRecord
@@ -93,17 +94,38 @@ class FailingRedis(FakeRedis):
         return FailingPubSub()
 
 
+class FakeTransaction:
+    def __init__(self, db: FakeDB) -> None:
+        self.db = db
+
+    async def __aenter__(self) -> FakeDB:
+        await self.db.transaction_lock.acquire()
+        return self.db
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:  # noqa: ANN001
+        del exc_type, exc, traceback
+        self.db.transaction_lock.release()
+
+
 class FakeDB:
     def __init__(self, config_value: dict[str, Any] | None = None) -> None:
         self.config_value = config_value or {}
         self.updated_by: str | None = None
         self.fail_query = False
         self.fail_execute = False
+        self.transaction_lock = asyncio.Lock()
+        self.queries: list[str] = []
+
+    def tx(self) -> FakeTransaction:
+        return FakeTransaction(self)
 
     async def query_raw(self, query: str, name: str):
-        del query, name
+        del name
+        self.queries.append(query)
         if self.fail_query:
             raise RuntimeError("db read unavailable")
+        if "pg_advisory_xact_lock" in query:
+            return [{"locked": None}]
         return [{"config_value": json.dumps(self.config_value)}]
 
     async def execute_raw(self, query: str, name: str, payload: str, updated_by: str):
@@ -347,6 +369,112 @@ async def test_dynamic_config_generation_tracks_applied_config_changes():
     assert manager.get_config_generation() == 2
 
     await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_config_runs_related_database_mutation_inside_config_transaction():
+    db = FakeDB()
+    manager = DynamicConfigManager(db_client=db, redis_client=None, file_config={})
+    await manager.initialize()
+    calls: list[object] = []
+
+    async def related_mutation(transaction) -> None:  # noqa: ANN001
+        assert transaction is db
+        assert db.transaction_lock.locked()
+        calls.append(transaction)
+
+    await manager.update_config(
+        {"general_settings": {"ui_branding": {"logo_mark_url": "/asset?v=" + "a" * 64}}},
+        updated_by="test",
+        transaction_mutation=related_mutation,
+    )
+
+    assert calls == [db]
+    assert db.config_value["general_settings"]["ui_branding"]["logo_mark_url"].endswith("a" * 64)
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_config_validates_before_related_database_mutation():
+    db = FakeDB()
+    manager = DynamicConfigManager(db_client=db, redis_client=None, file_config={})
+    await manager.initialize()
+    called = False
+
+    async def related_mutation(_transaction) -> None:  # noqa: ANN001
+        nonlocal called
+        called = True
+
+    with pytest.raises(DynamicConfigValidationError):
+        await manager.update_config(
+            {"general_settings": {"db_pool_size": 0}},
+            updated_by="test",
+            transaction_mutation=related_mutation,
+        )
+
+    assert called is False
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_config_concurrent_replica_updates_merge_latest_database_state():
+    db = FakeDB()
+    first = DynamicConfigManager(db_client=db, redis_client=None, file_config={})
+    second = DynamicConfigManager(db_client=db, redis_client=None, file_config={})
+    await first.initialize()
+    await second.initialize()
+
+    try:
+        await asyncio.gather(
+            first.update_config(
+                {"general_settings": {"ui_branding": {"primary_color": "#112233"}}},
+                updated_by="first-replica",
+            ),
+            second.update_config(
+                {"router_settings": {"routing_strategy": "weighted"}},
+                updated_by="second-replica",
+            ),
+        )
+
+        assert db.config_value["general_settings"]["ui_branding"]["primary_color"] == "#112233"
+        assert db.config_value["router_settings"]["routing_strategy"] == "weighted"
+        lock_queries = [query for query in db.queries if "pg_advisory_xact_lock" in query]
+        assert lock_queries and all("::text" in query for query in lock_queries)
+    finally:
+        await first.close()
+        await second.close()
+
+
+@pytest.mark.asyncio
+async def test_theme_update_reloads_on_peer_replica_pubsub_event():
+    db = FakeDB()
+    peer_redis = FakeRedis()
+    writer = DynamicConfigManager(db_client=db, redis_client=None, file_config={})
+    peer = DynamicConfigManager(db_client=db, redis_client=peer_redis, file_config={})
+    await writer.initialize()
+    await peer.initialize()
+
+    try:
+        await writer.update_config(
+            {
+                "general_settings": {
+                    "instance_name": "Acme AI",
+                    "ui_branding": {"primary_color": "#112233"},
+                }
+            },
+            updated_by="admin_api",
+        )
+        await peer_redis.pubsub_obj.queue.put(
+            {"type": "message", "data": json.dumps({"type": "config_updated"})}
+        )
+        await asyncio.sleep(0.05)
+
+        peer_config = peer.get_app_config()
+        assert peer_config.general_settings.instance_name == "Acme AI"
+        assert peer_config.general_settings.ui_branding.primary_color == "#112233"
+    finally:
+        await writer.close()
+        await peer.close()
 
 
 @pytest.mark.asyncio
@@ -601,6 +729,7 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
             cooldown_manager=cooldown_manager,
             guardrail_registry=SimpleNamespace(load_from_config=lambda _: None),
             callback_manager=SimpleNamespace(load_from_settings=lambda **_: None),
+            platform_identity_service=SimpleNamespace(totp_issuer="DeltaLLM"),
             turn_off_message_logging=False,
         )
     )
@@ -621,6 +750,10 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
                 }
             ],
             "router_settings": {"routing_strategy": "weighted", "num_retries": 2},
+            "general_settings": {
+                **dynamic.get_app_config().general_settings.model_dump(mode="python"),
+                "instance_name": "Acme AI",
+            },
         }
     )
 
@@ -632,9 +765,48 @@ async def test_model_hot_reload_manager_updates_runtime_registries():
     assert app.state.router.strategy == RoutingStrategy.WEIGHTED
     assert app.state.router.config.num_retries == 2
     assert app.state.failover_manager.config.num_retries == 2
+    assert app.state.platform_identity_service.totp_issuer == "Acme AI"
     assert app.state.router.deployment_registry["gpt-4.1-mini"][0].deployment_id == "new-dep"
 
     await dynamic.close()
+
+
+@pytest.mark.asyncio
+async def test_model_hot_reload_manager_applies_theme_without_rebuilding_runtime():
+    initial_config = AppConfig.model_validate({})
+    updated_config = AppConfig.model_validate(
+        deep_merge(
+            initial_config.model_dump(mode="python"),
+            {
+                "general_settings": {
+                    "instance_name": "Acme AI",
+                    "ui_branding": {"primary_color": "#112233"},
+                }
+            },
+        )
+    )
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            app_config=initial_config,
+            platform_identity_service=SimpleNamespace(totp_issuer="DeltaLLM"),
+        )
+    )
+    dynamic = DynamicConfigManager(db_client=None, redis_client=None, file_config={})
+    route_group_cache = FakeRouteGroupCache()
+    manager = ModelHotReloadManager(
+        app=app,
+        dynamic_config=dynamic,
+        route_group_cache=route_group_cache,
+    )
+
+    await manager._on_config_change(
+        updated_config,
+        {"added": [], "removed": [], "modified": ["general_settings"]},
+    )
+
+    assert app.state.app_config.general_settings.ui_branding.primary_color == "#112233"
+    assert app.state.platform_identity_service.totp_issuer == "Acme AI"
+    assert route_group_cache.invalidate_calls == 0
 
 
 @pytest.mark.asyncio

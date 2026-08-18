@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from typing import Any
+
 
 class TierAdminError(Exception):
-    def __init__(self, detail: str) -> None:
-        super().__init__(detail)
+    def __init__(self, detail: str | dict[str, Any]) -> None:
+        message = detail.get("message") if isinstance(detail, dict) else detail
+        super().__init__(message or str(detail))
         self.detail = detail
 
 

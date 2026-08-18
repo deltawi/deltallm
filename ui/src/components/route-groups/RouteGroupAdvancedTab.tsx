@@ -203,7 +203,7 @@ export default function RouteGroupAdvancedTab({
         onToggle={() => toggle('prompt-binding')}
         icon={BookOpen}
         iconBg="bg-violet-100"
-        iconColor="text-violet-600"
+        iconColor="text-brand-secondary-ink"
         title="Prompt Binding"
         subtitle="Gateway resolves the bound prompt automatically for every request in this group."
         borderAccent="border-violet-200"
@@ -226,14 +226,14 @@ export default function RouteGroupAdvancedTab({
               {bindings.map((b) => (
                 <div
                   key={b.prompt_binding_id}
-                  className="inline-flex items-center gap-2 rounded-full bg-violet-100 pl-3 pr-1 py-1 text-sm text-violet-800 ring-1 ring-inset ring-violet-200"
+                  className="inline-flex items-center gap-2 rounded-full bg-violet-100 pl-3 pr-1 py-1 text-sm text-violet-800 ring-1 ring-inset ring-brand-primary/20"
                 >
                   <Tag className="h-3.5 w-3.5 text-violet-500 shrink-0" />
                   <span className="font-medium">{b.template_key}</span>
                   <span className="text-violet-400">/</span>
-                  <span className="text-violet-600">{b.label}</span>
+                  <span className="text-brand-secondary-ink">{b.label}</span>
                   <span className="text-violet-400">/</span>
-                  <span className="text-violet-600 text-xs">p={b.priority}</span>
+                  <span className="text-brand-secondary-ink text-xs">p={b.priority}</span>
                   {!b.enabled && (
                     <span className="text-violet-400 text-xs">(off)</span>
                   )}
@@ -245,7 +245,7 @@ export default function RouteGroupAdvancedTab({
                     aria-label="Remove binding"
                   >
                     {deletingBinding === b.prompt_binding_id ? (
-                      <div className="h-3 w-3 animate-spin rounded-full border-b border-violet-500" />
+                      <div className="h-3 w-3 animate-spin rounded-full border-b border-brand-primary" />
                     ) : (
                       <Trash2 className="h-3 w-3" />
                     )}
@@ -259,7 +259,7 @@ export default function RouteGroupAdvancedTab({
           {templates.length === 0 && !loadingTemplates ? (
             <div className="rounded-xl border border-dashed border-violet-200 bg-violet-50/40 px-4 py-5 text-center">
               <p className="text-sm font-medium text-violet-900">No prompts registered yet</p>
-              <p className="mt-1 text-xs text-violet-600/70">
+              <p className="mt-1 text-xs text-brand-secondary-ink/70">
                 Create a prompt in{' '}
                 <Link to="/prompts" className="underline hover:text-violet-900">
                   Prompt Registry
@@ -285,7 +285,7 @@ export default function RouteGroupAdvancedTab({
                     <select
                       value={bindingForm.template_key}
                       onChange={(e) => onBindingFormChange({ ...bindingForm, template_key: e.target.value })}
-                      className="w-full appearance-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 shadow-sm"
+                      className="w-full appearance-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary shadow-sm"
                     >
                       <option value="" disabled>{loadingTemplates ? 'Loading…' : 'Select a template...'}</option>
                       {templates.map((t) => (
@@ -303,7 +303,7 @@ export default function RouteGroupAdvancedTab({
                     value={bindingForm.label}
                     onChange={(e) => onBindingFormChange({ ...bindingForm, label: e.target.value })}
                     placeholder="production"
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 shadow-sm"
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary shadow-sm"
                   />
                 </div>
                 <div className="w-24">
@@ -313,14 +313,14 @@ export default function RouteGroupAdvancedTab({
                     onChange={(e) => onBindingFormChange({ ...bindingForm, priority: e.target.value })}
                     placeholder="100"
                     type="number"
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 shadow-sm"
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary shadow-sm"
                   />
                 </div>
                 <button
                   type="button"
                   onClick={onSaveBinding}
                   disabled={savingBinding || !bindingForm.template_key.trim()}
-                  className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-50 transition-colors"
+                  className="rounded-lg bg-brand-primary px-4 py-2 text-sm font-semibold text-brand-on-primary shadow-sm hover:bg-brand-primary-hover disabled:opacity-50 transition-colors"
                 >
                   {savingBinding ? 'Saving…' : 'Bind'}
                 </button>
@@ -331,7 +331,7 @@ export default function RouteGroupAdvancedTab({
                   role="switch"
                   aria-checked={bindingForm.enabled}
                   onClick={() => onBindingFormChange({ ...bindingForm, enabled: !bindingForm.enabled })}
-                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ${bindingForm.enabled ? 'bg-violet-600' : 'bg-slate-200'}`}
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ${bindingForm.enabled ? 'bg-brand-primary' : 'bg-slate-200'}`}
                 >
                   <span
                     className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ${bindingForm.enabled ? 'translate-x-4' : 'translate-x-0'}`}
@@ -353,7 +353,7 @@ export default function RouteGroupAdvancedTab({
         onToggle={() => toggle('routing-policy')}
         icon={GitBranch}
         iconBg="bg-blue-100"
-        iconColor="text-blue-600"
+        iconColor="text-brand-primary-ink"
         title="Routing Policy"
         subtitle="Override the default shuffle only when you need weighted splits, ordered fallback, or rate-limit awareness."
         borderAccent="border-blue-200"
@@ -418,7 +418,7 @@ export default function RouteGroupAdvancedTab({
                 type="button"
                 onClick={onPublish}
                 disabled={isPolicyBusy || !hasMembers}
-                className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                className="rounded-lg bg-brand-primary px-3 py-1.5 text-xs font-semibold text-brand-on-primary shadow-sm hover:bg-brand-primary-hover disabled:opacity-50 transition-colors"
               >
                 {policyAction === 'publish-json' ? 'Publishing…' : 'Publish ↑'}
               </button>
@@ -458,7 +458,7 @@ export default function RouteGroupAdvancedTab({
                 onChange={(e) => onPolicyTextChange(e.target.value)}
                 rows={10}
                 spellCheck={false}
-                className="w-full rounded-lg bg-gray-950 p-4 text-sm text-green-400 font-mono leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-inner"
+                className="w-full rounded-lg bg-gray-950 p-4 text-sm text-green-400 font-mono leading-relaxed focus:outline-none focus:ring-2 focus:ring-brand-primary shadow-inner"
               />
             ) : (
               <div className="rounded-lg bg-gray-950 p-4 shadow-inner overflow-x-auto">

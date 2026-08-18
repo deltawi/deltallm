@@ -5,7 +5,21 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.services.platform_identity_service import AccountInactiveError, LoginSessionCreationError, PlatformIdentityService
+from src.services.platform_identity_service import (
+    AccountInactiveError,
+    LoginSessionCreationError,
+    PlatformIdentityService,
+)
+
+
+def test_totp_uri_uses_the_configured_brand_name() -> None:
+    service = PlatformIdentityService(db_client=None, salt="salt-key")
+    service.totp_issuer = "Acme AI"
+
+    uri = service._totp_uri(secret="ABCDEFGHIJKLMNOP", account_name="acct-1")
+
+    assert uri.startswith("otpauth://totp/Acme%20AI%3Aacct-1?")
+    assert "issuer=Acme%20AI" in uri
 
 
 class FakePlatformIdentityDB:
@@ -196,7 +210,10 @@ class TransactionalFakePlatformIdentityDB(FakePlatformIdentityDB):
 
     async def query_raw(self, query: str, *params):  # noqa: ANN201
         normalized = " ".join(query.lower().split())
-        if self.hide_next_identity_join_lookup and "from deltallm_platformidentity identity_row" in normalized:
+        if (
+            self.hide_next_identity_join_lookup
+            and "from deltallm_platformidentity identity_row" in normalized
+        ):
             self.hide_next_identity_join_lookup = False
             return []
         return await super().query_raw(query, *params)
@@ -417,7 +434,9 @@ async def test_reconcile_sso_identity_updates_email_without_role_or_active_mutat
 
 
 @pytest.mark.asyncio
-async def test_create_sso_login_for_existing_account_reconciles_and_creates_session_atomically() -> None:
+async def test_create_sso_login_for_existing_account_reconciles_and_creates_session_atomically() -> (
+    None
+):
     db = TransactionalFakePlatformIdentityDB()
     db.add_account(account_id="acct-1", email="old@example.com", role="org_user", is_active=True)
     service = PlatformIdentityService(db_client=db, salt="salt-key")
@@ -445,7 +464,9 @@ async def test_create_sso_login_for_existing_account_reconciles_and_creates_sess
 
 
 @pytest.mark.asyncio
-async def test_create_sso_login_for_existing_account_rolls_back_reconcile_when_session_creation_fails() -> None:
+async def test_create_sso_login_for_existing_account_rolls_back_reconcile_when_session_creation_fails() -> (
+    None
+):
     db = TransactionalFakePlatformIdentityDB()
     db.add_account(account_id="acct-1", email="old@example.com", role="org_user", is_active=True)
     db.fail_session_insert = True
@@ -466,7 +487,9 @@ async def test_create_sso_login_for_existing_account_rolls_back_reconcile_when_s
 
 
 @pytest.mark.asyncio
-async def test_create_sso_login_for_existing_account_rejects_inactive_account_before_linking() -> None:
+async def test_create_sso_login_for_existing_account_rejects_inactive_account_before_linking() -> (
+    None
+):
     db = TransactionalFakePlatformIdentityDB()
     db.add_account(account_id="acct-1", email="old@example.com", role="org_user", is_active=False)
     service = PlatformIdentityService(db_client=db, salt="salt-key")

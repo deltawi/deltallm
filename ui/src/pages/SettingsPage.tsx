@@ -1,11 +1,22 @@
 import { useState, useEffect } from 'react';
 import { useApi } from '../lib/hooks';
-import { settings } from '../lib/api';
+import { branding as brandingApi, settings, type UIBrandingAssetKind } from '../lib/api';
 import {
   Settings, Route, Database, Shield, HeartPulse,
   Save, Check, ChevronRight, Plus, X, AlertTriangle,
-  RefreshCw, Info, Clock, RotateCcw,
+  RefreshCw, Info, Clock, RotateCcw, Paintbrush, Undo2, Upload, Trash2, Image,
 } from 'lucide-react';
+import BrandLogo from '../components/BrandLogo';
+import Button from '../components/Button';
+import {
+  contrastForeground,
+  normalizeBranding,
+  readableBrandInk,
+  type UIBranding,
+  visibleBrandSurface,
+  visibleMenuHoverSurface,
+} from '../lib/branding';
+import { useBranding } from '../lib/brandingContext';
 
 interface FallbackEntry {
   from: string;
@@ -42,6 +53,7 @@ function serializeFallbacks(entries: FallbackEntry[]): any[] {
 
 const TABS = [
   { id: 'general', label: 'General', icon: Settings },
+  { id: 'theme', label: 'Theme', icon: Paintbrush },
   { id: 'routing', label: 'Routing & Reliability', icon: Route },
   { id: 'caching', label: 'Caching', icon: Database },
   { id: 'fallbacks', label: 'Fallbacks', icon: Shield },
@@ -62,6 +74,126 @@ const STRATEGIES = [
   { value: 'weighted', label: 'Weighted', desc: 'Custom weight distribution' },
 ];
 
+const HEX_COLOR = /^#[0-9A-Fa-f]{6}$/;
+
+function validateBranding(value: UIBranding): string | null {
+  if (!value.instance_name.trim()) return 'Instance name is required.';
+  if (value.instance_name.trim().length > 80) return 'Instance name must be 80 characters or fewer.';
+  if ([...value.instance_name].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) {
+    return 'Instance name cannot contain control characters.';
+  }
+  if (!HEX_COLOR.test(value.primary_color)) return 'Primary colour must use the #RRGGBB format.';
+  if (!HEX_COLOR.test(value.secondary_color)) return 'Secondary colour must use the #RRGGBB format.';
+  if (!HEX_COLOR.test(value.menu_hover_color)) return 'Menu hover colour must use the #RRGGBB format.';
+  return null;
+}
+
+const BRANDING_IMAGE_ACCEPT = 'image/png,image/jpeg,image/webp,image/svg+xml';
+const BRANDING_FAVICON_ACCEPT = `${BRANDING_IMAGE_ACCEPT},image/x-icon,image/vnd.microsoft.icon`;
+const BRANDING_ASSET_MAX_BYTES = 2 * 1024 * 1024;
+
+function BrandingAssetField({
+  assetKey,
+  label,
+  hint,
+  url,
+  busy,
+  disabled,
+  onUpload,
+  onRemove,
+}: {
+  assetKey: UIBrandingAssetKind;
+  label: string;
+  hint: string;
+  url: string | null;
+  busy: boolean;
+  disabled: boolean;
+  onUpload: (file: File) => Promise<void>;
+  onRemove: () => Promise<void>;
+}) {
+  const previewClass = assetKey === 'logo_full'
+    ? 'h-12 max-w-full object-contain'
+    : 'h-12 w-12 object-contain';
+
+  return (
+    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+      <div className="mb-3 flex h-16 items-center justify-center rounded-lg border border-gray-200 bg-white px-3">
+        {url ? (
+          <img src={url} alt={`${label} preview`} className={previewClass} />
+        ) : (
+          <Image className="h-7 w-7 text-gray-300" aria-hidden="true" />
+        )}
+      </div>
+      <p className="text-sm font-medium text-gray-800">{label}</p>
+      <p className="mt-0.5 min-h-8 text-xs text-gray-500">{hint}</p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <label
+          className={`inline-flex items-center gap-1.5 rounded-lg bg-brand-primary px-3 py-2 text-xs font-medium text-brand-on-primary transition-colors hover:bg-brand-primary-hover ${disabled ? 'pointer-events-none opacity-50' : 'cursor-pointer'}`}
+        >
+          <Upload className="h-3.5 w-3.5" />
+          {busy ? 'Working…' : url ? 'Replace' : 'Upload'}
+          <input
+            type="file"
+            accept={assetKey === 'favicon' ? BRANDING_FAVICON_ACCEPT : BRANDING_IMAGE_ACCEPT}
+            className="sr-only"
+            disabled={disabled}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (file) void onUpload(file);
+            }}
+          />
+        </label>
+        {url && (
+          <button
+            type="button"
+            onClick={() => { void onRemove(); }}
+            disabled={disabled}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-600 transition-colors hover:border-red-200 hover:text-red-600 disabled:opacity-50"
+          >
+            <Trash2 className="h-3.5 w-3.5" /> Remove
+          </button>
+        )}
+      </div>
+      <p className="mt-2 text-[11px] text-gray-400">PNG, JPEG, WebP, SVG{assetKey === 'favicon' ? ', or ICO' : ''}; maximum 2 MB.</p>
+    </div>
+  );
+}
+
+function ColorField({
+  label,
+  value,
+  onChange,
+  hint,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  hint: string;
+}) {
+  const pickerValue = HEX_COLOR.test(value) ? value : '#000000';
+  return (
+    <FieldGroup label={label} hint={hint}>
+      <div className="flex items-center gap-2">
+        <input
+          type="color"
+          value={pickerValue}
+          onChange={(event) => onChange(event.target.value.toUpperCase())}
+          className="h-10 w-12 cursor-pointer rounded-lg border border-gray-200 bg-white p-1"
+          aria-label={`${label} picker`}
+        />
+        <input
+          value={value}
+          onChange={(event) => onChange(event.target.value.toUpperCase())}
+          className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 font-mono text-sm uppercase transition-all focus:border-transparent focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary"
+          maxLength={7}
+          spellCheck={false}
+        />
+      </div>
+    </FieldGroup>
+  );
+}
+
 function Toggle({ checked, onChange, id }: { checked: boolean; onChange: (v: boolean) => void; id: string }) {
   return (
     <button
@@ -70,7 +202,7 @@ function Toggle({ checked, onChange, id }: { checked: boolean; onChange: (v: boo
       role="switch"
       aria-checked={checked}
       onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${checked ? 'bg-violet-600' : 'bg-gray-200'}`}
+      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${checked ? 'bg-brand-primary' : 'bg-gray-200'}`}
     >
       <span className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-sm ring-0 transition-transform ${checked ? 'translate-x-5' : 'translate-x-0'}`} />
     </button>
@@ -92,8 +224,8 @@ function SectionCard({ title, description, icon: Icon, children }: { title: stri
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
       <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-3">
         {Icon && (
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-50">
-            <Icon className="h-4 w-4 text-violet-600" />
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-secondary-soft">
+            <Icon className="h-4 w-4 text-brand-secondary-ink" />
           </div>
         )}
         <div>
@@ -116,7 +248,7 @@ function FallbackEditor({ label, description, entries, onChange }: {
           <h4 className="text-sm font-medium text-gray-700">{label}</h4>
           {description && <p className="text-xs text-gray-400 mt-0.5">{description}</p>}
         </div>
-        <button onClick={() => onChange([...entries, { from: '', to: '' }])} className="flex items-center gap-1.5 text-xs font-medium text-violet-600 hover:text-violet-700 px-2 py-1 rounded-md hover:bg-violet-50 transition-colors">
+        <button onClick={() => onChange([...entries, { from: '', to: '' }])} className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-brand-primary-ink transition-colors hover:bg-brand-primary-soft hover:text-brand-primary-ink-hover">
           <Plus className="w-3.5 h-3.5" /> Add rule
         </button>
       </div>
@@ -129,13 +261,13 @@ function FallbackEditor({ label, description, entries, onChange }: {
         <div className="space-y-2">
           {entries.map((entry, i) => (
             <div key={i} className="flex items-center gap-2 group">
-              <input value={entry.from} onChange={(e) => { const u = [...entries]; u[i] = { ...u[i], from: e.target.value }; onChange(u); }} placeholder="Source model group" className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent transition-all" />
+              <input value={entry.from} onChange={(e) => { const u = [...entries]; u[i] = { ...u[i], from: e.target.value }; onChange(u); }} placeholder="Source model group" className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm transition-all focus:border-transparent focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary" />
               <ChevronRight className="w-4 h-4 text-gray-300 shrink-0" />
-              <input value={entry.to} onChange={(e) => { const u = [...entries]; u[i] = { ...u[i], to: e.target.value }; onChange(u); }} placeholder="Fallback model group" className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent transition-all" />
+              <input value={entry.to} onChange={(e) => { const u = [...entries]; u[i] = { ...u[i], to: e.target.value }; onChange(u); }} placeholder="Fallback model group" className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm transition-all focus:border-transparent focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary" />
               <button
                 onClick={() => onChange(entries.filter((_, idx) => idx !== i))}
                 aria-label="Remove fallback rule"
-                className="rounded-md p-1 text-gray-400 transition-colors hover:text-red-500 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:ring-offset-1 focus-visible:text-red-500"
+                className="rounded-md p-1 text-gray-400 transition-colors hover:text-red-500 focus:outline-none focus:ring-2 focus:ring-brand-primary focus:ring-offset-1 focus-visible:text-red-500"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -149,6 +281,7 @@ function FallbackEditor({ label, description, entries, onChange }: {
 
 export default function SettingsPage() {
   const { data, loading, refetch } = useApi(() => settings.get(), []);
+  const { branding, setBranding } = useBranding();
   const [activeTab, setActiveTab] = useState<TabId>('general');
   const [form, setForm] = useState<any>({});
   const [saving, setSaving] = useState(false);
@@ -158,6 +291,10 @@ export default function SettingsPage() {
   const [contentFallbacks, setContentFallbacks] = useState<FallbackEntry[]>([]);
   const [fallbackEvents, setFallbackEvents] = useState<any[]>([]);
   const [loadingEvents, setLoadingEvents] = useState(false);
+  const [brandingForm, setBrandingForm] = useState<UIBranding>(branding);
+  const [persistedBranding, setPersistedBranding] = useState<UIBranding>(branding);
+  const [brandingError, setBrandingError] = useState<string | null>(null);
+  const [busyBrandingAsset, setBusyBrandingAsset] = useState<UIBrandingAssetKind | null>(null);
 
   useEffect(() => {
     if (data) {
@@ -174,8 +311,13 @@ export default function SettingsPage() {
         background_health_checks: data.general_settings?.background_health_checks ?? false,
         health_check_interval: data.general_settings?.health_check_interval ?? 300,
         log_level: data.general_settings?.log_level || 'INFO',
-        instance_name: data.general_settings?.instance_name || 'DeltaLLM',
       });
+      const loadedBranding = normalizeBranding({
+        instance_name: data.general_settings?.instance_name,
+        ...data.general_settings?.ui_branding,
+      });
+      setBrandingForm(loadedBranding);
+      setPersistedBranding(loadedBranding);
       setFallbacks(parseFallbacks(data.deltallm_settings?.fallbacks || []));
       setCtxFallbacks(parseFallbacks(data.deltallm_settings?.context_window_fallbacks || []));
       setContentFallbacks(parseFallbacks(data.deltallm_settings?.content_policy_fallbacks || []));
@@ -214,7 +356,6 @@ export default function SettingsPage() {
           background_health_checks: form.background_health_checks,
           health_check_interval: Number(form.health_check_interval),
           log_level: form.log_level,
-          instance_name: form.instance_name,
         },
         deltallm_settings: {
           fallbacks: serializeFallbacks(fallbacks),
@@ -230,16 +371,90 @@ export default function SettingsPage() {
     }
   };
 
+  const handleBrandingSave = async () => {
+    const validationError = validateBranding(brandingForm);
+    if (validationError) {
+      setBrandingError(validationError);
+      return;
+    }
+
+    setSaving(true);
+    setBrandingError(null);
+    try {
+      const savedBranding = normalizeBranding(await brandingApi.update({
+        instance_name: brandingForm.instance_name.trim(),
+        primary_color: brandingForm.primary_color,
+        secondary_color: brandingForm.secondary_color,
+        menu_hover_color: brandingForm.menu_hover_color,
+      }));
+      setBrandingForm(savedBranding);
+      setPersistedBranding(savedBranding);
+      setBranding(savedBranding);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (error) {
+      setBrandingError(error instanceof Error ? error.message : 'Could not save theme.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const applySavedAsset = (assetKey: UIBrandingAssetKind, saved: UIBranding) => {
+    const field = assetKey === 'logo_mark'
+      ? 'logo_mark_url'
+      : assetKey === 'logo_full'
+        ? 'logo_full_url'
+        : 'favicon_url';
+    setBrandingForm((current) => ({ ...current, [field]: saved[field] }));
+    setPersistedBranding((current) => ({ ...current, [field]: saved[field] }));
+    setBranding(saved);
+  };
+
+  const handleBrandingAssetUpload = async (assetKey: UIBrandingAssetKind, file: File) => {
+    if (file.size > BRANDING_ASSET_MAX_BYTES) {
+      setBrandingError('Branding assets must be 2 MB or smaller.');
+      return;
+    }
+    setBusyBrandingAsset(assetKey);
+    setBrandingError(null);
+    try {
+      const saved = normalizeBranding(await brandingApi.uploadAsset(assetKey, file));
+      applySavedAsset(assetKey, saved);
+    } catch (error) {
+      setBrandingError(error instanceof Error ? error.message : 'Could not upload branding asset.');
+    } finally {
+      setBusyBrandingAsset(null);
+    }
+  };
+
+  const handleBrandingAssetRemove = async (assetKey: UIBrandingAssetKind) => {
+    setBusyBrandingAsset(assetKey);
+    setBrandingError(null);
+    try {
+      const saved = normalizeBranding(await brandingApi.deleteAsset(assetKey));
+      applySavedAsset(assetKey, saved);
+    } catch (error) {
+      setBrandingError(error instanceof Error ? error.message : 'Could not remove branding asset.');
+    } finally {
+      setBusyBrandingAsset(null);
+    }
+  };
+
   if (loading) {
     return (
       <div className="p-6 flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-violet-600" />
+        <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-brand-primary" />
       </div>
     );
   }
 
-  const inputClass = 'w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent transition-all';
+  const inputClass = 'w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent transition-all';
   const selectClass = inputClass;
+  const themePreview = normalizeBranding(brandingForm);
+  const primaryPreview = visibleBrandSurface(themePreview.primary_color);
+  const secondaryPreview = visibleBrandSurface(themePreview.secondary_color);
+  const menuHoverPreview = visibleMenuHoverSurface(themePreview.menu_hover_color);
+  const themeDirty = JSON.stringify(brandingForm) !== JSON.stringify(persistedBranding);
 
   return (
     <div className="p-4 sm:p-6">
@@ -247,12 +462,17 @@ export default function SettingsPage() {
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
           <div>
             <h1 className="text-xl font-bold text-gray-900">Settings</h1>
-            <p className="text-sm text-gray-500 mt-0.5">Configure proxy behavior, routing, caching, and reliability</p>
+            <p className="text-sm text-gray-500 mt-0.5">Configure appearance, proxy behavior, routing, caching, and reliability</p>
           </div>
-          <button onClick={handleSave} disabled={saving} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-sm disabled:opacity-50 ${saved ? 'bg-emerald-600 text-white' : 'bg-violet-600 text-white hover:bg-violet-700'}`}>
+          <Button
+            variant={saved ? 'success' : 'primary'}
+            onClick={activeTab === 'theme' ? handleBrandingSave : handleSave}
+            loading={saving}
+            disabled={activeTab === 'theme' && (!themeDirty || busyBrandingAsset !== null)}
+          >
             {saved ? <Check className="w-4 h-4" /> : <Save className="w-4 h-4" />}
             {saved ? 'Saved' : saving ? 'Saving...' : 'Save Changes'}
-          </button>
+          </Button>
         </div>
 
         <div className="flex flex-col gap-6 md:flex-row">
@@ -265,9 +485,9 @@ export default function SettingsPage() {
                   <button
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id)}
-                    className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${isActive ? 'bg-violet-50 text-violet-700' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'}`}
+                    className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${isActive ? 'bg-brand-secondary-soft text-brand-secondary-ink' : 'text-gray-600 hover:bg-brand-menu-hover hover:text-brand-menu-hover-foreground'}`}
                   >
-                    <Icon className={`w-4 h-4 ${isActive ? 'text-violet-600' : 'text-gray-400'}`} />
+                    <Icon className={`w-4 h-4 ${isActive ? 'text-brand-secondary-ink' : 'text-gray-400'}`} />
                     {tab.label}
                   </button>
                 );
@@ -284,9 +504,9 @@ export default function SettingsPage() {
                   <button
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id)}
-                    className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${isActive ? 'bg-violet-50 text-violet-700' : 'text-gray-600'}`}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${isActive ? 'bg-brand-secondary-soft text-brand-secondary-ink' : 'text-gray-600'}`}
                   >
-                    <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-violet-600' : 'text-gray-400'}`} />
+                    <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-brand-secondary-ink' : 'text-gray-400'}`} />
                     {tab.label}
                   </button>
                 );
@@ -297,11 +517,8 @@ export default function SettingsPage() {
           <div className="flex-1 min-w-0 space-y-5">
             {activeTab === 'general' && (
               <>
-                <SectionCard title="Instance" description="Basic proxy identity and logging" icon={Settings}>
+                <SectionCard title="Runtime" description="Basic proxy logging configuration" icon={Settings}>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                    <FieldGroup label="Instance Name" hint="Display name shown in the admin UI header">
-                      <input value={form.instance_name || ''} onChange={(e) => setForm({ ...form, instance_name: e.target.value })} className={inputClass} />
-                    </FieldGroup>
                     <FieldGroup label="Log Level" hint="Controls verbosity of system logs">
                       <select value={form.log_level || 'INFO'} onChange={(e) => setForm({ ...form, log_level: e.target.value })} className={selectClass}>
                         <option value="DEBUG">DEBUG</option>
@@ -323,6 +540,142 @@ export default function SettingsPage() {
               </>
             )}
 
+            {activeTab === 'theme' && (
+              <>
+                <SectionCard title="Theme identity" description="Customize the product shell for this installation" icon={Paintbrush}>
+                  <div className="space-y-5">
+                    {brandingError && (
+                      <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                        {brandingError}
+                      </div>
+                    )}
+                    <FieldGroup label="Instance Name" hint="Shown in the sidebar, authentication screens, browser title, and emails">
+                      <input
+                        value={brandingForm.instance_name}
+                        onChange={(event) => setBrandingForm({ ...brandingForm, instance_name: event.target.value })}
+                        className={inputClass}
+                        maxLength={80}
+                      />
+                    </FieldGroup>
+                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                      <BrandingAssetField
+                        assetKey="logo_mark"
+                        label="Simple logo"
+                        hint="Square mark used in collapsed and compact placements."
+                        url={brandingForm.logo_mark_url}
+                        busy={busyBrandingAsset === 'logo_mark'}
+                        disabled={busyBrandingAsset !== null}
+                        onUpload={(file) => handleBrandingAssetUpload('logo_mark', file)}
+                        onRemove={() => handleBrandingAssetRemove('logo_mark')}
+                      />
+                      <BrandingAssetField
+                        assetKey="logo_full"
+                        label="Expanded logo"
+                        hint="Horizontal wordmark used when enough space is available."
+                        url={brandingForm.logo_full_url}
+                        busy={busyBrandingAsset === 'logo_full'}
+                        disabled={busyBrandingAsset !== null}
+                        onUpload={(file) => handleBrandingAssetUpload('logo_full', file)}
+                        onRemove={() => handleBrandingAssetRemove('logo_full')}
+                      />
+                      <BrandingAssetField
+                        assetKey="favicon"
+                        label="Favicon"
+                        hint="Browser icon; the built-in mark is used when empty."
+                        url={brandingForm.favicon_url}
+                        busy={busyBrandingAsset === 'favicon'}
+                        disabled={busyBrandingAsset !== null}
+                        onUpload={(file) => handleBrandingAssetUpload('favicon', file)}
+                        onRemove={() => handleBrandingAssetRemove('favicon')}
+                      />
+                    </div>
+                  </div>
+                </SectionCard>
+
+                <SectionCard title="Theme colours" description="Semantic colours are applied without changing warning, success, or danger states" icon={Paintbrush}>
+                  <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
+                    <ColorField
+                      label="Primary"
+                      value={brandingForm.primary_color}
+                      onChange={(value) => setBrandingForm({ ...brandingForm, primary_color: value })}
+                      hint="Primary actions and focus rings"
+                    />
+                    <ColorField
+                      label="Secondary"
+                      value={brandingForm.secondary_color}
+                      onChange={(value) => setBrandingForm({ ...brandingForm, secondary_color: value })}
+                      hint="Secondary actions and navigation accents"
+                    />
+                    <ColorField
+                      label="Menu Hover"
+                      value={brandingForm.menu_hover_color}
+                      onChange={(value) => setBrandingForm({ ...brandingForm, menu_hover_color: value })}
+                      hint="Navigation hover background"
+                    />
+                  </div>
+                </SectionCard>
+
+                <SectionCard title="Preview" description="Review logo and control treatments before saving">
+                  <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+                    <div className="space-y-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Logo treatments</p>
+                      <div className="rounded-lg border border-gray-200 bg-white p-3">
+                        <BrandLogo variant="expanded" brandingOverride={themePreview} />
+                      </div>
+                      <div className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white p-3">
+                        <BrandLogo variant="mark" brandingOverride={themePreview} />
+                        <span className="text-xs text-gray-500">Collapsed mark</span>
+                      </div>
+                    </div>
+                    <div className="space-y-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Interactive treatments</p>
+                      <div className="flex flex-wrap gap-2">
+                        <span
+                          className="rounded-lg px-4 py-2 text-sm font-medium"
+                          style={{
+                            backgroundColor: primaryPreview,
+                            color: contrastForeground(primaryPreview),
+                          }}
+                        >
+                          Primary action
+                        </span>
+                        <span
+                          className="rounded-lg border bg-white px-4 py-2 text-sm font-medium"
+                          style={{
+                            borderColor: secondaryPreview,
+                            color: readableBrandInk(themePreview.secondary_color),
+                          }}
+                        >
+                          Secondary action
+                        </span>
+                      </div>
+                      <div
+                        className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium"
+                        style={{
+                          backgroundColor: menuHoverPreview,
+                          color: contrastForeground(menuHoverPreview),
+                        }}
+                      >
+                        <Settings className="h-4 w-4" /> Menu hover
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-5 flex justify-end">
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setBrandingForm(persistedBranding);
+                        setBrandingError(null);
+                      }}
+                      disabled={!themeDirty}
+                    >
+                      <Undo2 className="h-4 w-4" /> Discard changes
+                    </Button>
+                  </div>
+                </SectionCard>
+              </>
+            )}
+
             {activeTab === 'routing' && (
               <>
                 <SectionCard title="Routing Strategy" description="How requests are distributed across model deployments" icon={Route}>
@@ -330,7 +683,7 @@ export default function SettingsPage() {
                     {STRATEGIES.map((s) => (
                       <label
                         key={s.value}
-                        className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${form.routing_strategy === s.value ? 'border-violet-300 bg-violet-50/50 ring-1 ring-violet-200' : 'border-gray-100 hover:border-gray-200 hover:bg-gray-50'}`}
+                        className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${form.routing_strategy === s.value ? 'border-violet-300 bg-violet-50/50 ring-1 ring-brand-primary/20' : 'border-gray-100 hover:border-gray-200 hover:bg-gray-50'}`}
                       >
                         <input
                           type="radio"
@@ -338,7 +691,7 @@ export default function SettingsPage() {
                           value={s.value}
                           checked={form.routing_strategy === s.value}
                           onChange={(e) => setForm({ ...form, routing_strategy: e.target.value })}
-                          className="accent-violet-600"
+                          className="accent-brand-primary"
                         />
                         <div>
                           <p className={`text-sm font-medium ${form.routing_strategy === s.value ? 'text-violet-900' : 'text-gray-800'}`}>{s.label}</p>
@@ -479,7 +832,7 @@ export default function SettingsPage() {
 
                 <SectionCard title="Recent Fallback Events" description="Live feed of automatic failover activity" icon={AlertTriangle}>
                   <div className="flex items-center gap-3 mb-4">
-                    <button onClick={loadFallbackEvents} disabled={loadingEvents} className="flex items-center gap-2 text-sm font-medium text-violet-600 hover:text-violet-700 px-3 py-1.5 rounded-lg hover:bg-violet-50 transition-colors disabled:opacity-50">
+                    <button onClick={loadFallbackEvents} disabled={loadingEvents} className="flex items-center gap-2 text-sm font-medium text-brand-secondary-ink hover:text-brand-secondary-ink-hover px-3 py-1.5 rounded-lg hover:bg-violet-50 transition-colors disabled:opacity-50">
                       <RefreshCw className={`w-4 h-4 ${loadingEvents ? 'animate-spin' : ''}`} />
                       {loadingEvents ? 'Loading...' : 'Load Events'}
                     </button>

@@ -31,7 +31,7 @@ export function TierEditorAccordion({
         aria-expanded={open}
         aria-controls={panelId}
         onClick={onToggle}
-        className="flex w-full items-center justify-between gap-4 rounded-xl px-4 py-3 text-left hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500"
+        className="flex w-full items-center justify-between gap-4 rounded-xl px-4 py-3 text-left hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-brand-primary"
       >
         <span className="min-w-0">
           <span className="block text-sm font-semibold text-gray-900">{title}</span>
@@ -86,7 +86,7 @@ export function TierFieldHelp({ label, help }: { label: string; help: string }) 
         type="button"
         aria-label={`${label}: ${help}`}
         aria-describedby={tooltipId}
-        className="rounded text-gray-400 hover:text-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        className="rounded text-gray-400 hover:text-brand-primary-ink focus:outline-none focus:ring-2 focus:ring-brand-primary"
       >
         <CircleHelp aria-hidden="true" className="h-3.5 w-3.5" />
       </button>

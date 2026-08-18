@@ -7,12 +7,25 @@ from fastapi import HTTPException, Request, status
 
 from src.auth.roles import ORG_ROLE_PERMISSIONS, TEAM_ROLE_PERMISSIONS, Permission, has_platform_permission
 from src.models.platform_auth import PlatformAuthContext
+from src.services.master_session_service import MASTER_SESSION_COOKIE_NAME, MasterSessionStatus
 
 SESSION_COOKIE_NAME = "deltallm_session"
 
 
 async def attach_platform_auth_context(request: Request) -> None:
     request.state.platform_auth = None
+    request.state.master_session_status = MasterSessionStatus.MISSING
+
+    master_session_token = request.cookies.get(MASTER_SESSION_COOKIE_NAME)
+    if master_session_token:
+        service = getattr(request.app.state, "master_session_service", None)
+        if service is None:
+            request.state.master_session_status = MasterSessionStatus.UNAVAILABLE
+        else:
+            request.state.master_session_status = await service.validate_session(
+                master_session_token,
+                master_key=get_configured_master_key(request),
+            )
 
     token = request.cookies.get(SESSION_COOKIE_NAME)
     if not token:
@@ -36,6 +49,33 @@ def get_platform_auth_context(request: Request) -> PlatformAuthContext | None:
     return None
 
 
+def get_configured_master_key(request: Request) -> str | None:
+    app_config = getattr(request.app.state, "app_config", None)
+    configured = None
+    if app_config is not None:
+        configured = getattr(getattr(app_config, "general_settings", None), "master_key", None)
+    if not configured:
+        configured = getattr(getattr(request.app.state, "settings", None), "master_key", None)
+    value = str(configured or "").strip()
+    return value or None
+
+
+def has_master_key_session(request: Request) -> bool:
+    return get_master_session_status(request) == MasterSessionStatus.ACTIVE
+
+
+def get_master_session_status(request: Request) -> MasterSessionStatus:
+    value = getattr(getattr(request, "state", None), "master_session_status", MasterSessionStatus.MISSING)
+    try:
+        return MasterSessionStatus(value)
+    except (TypeError, ValueError):
+        return MasterSessionStatus.INVALID
+
+
+def master_key_session_unavailable(request: Request) -> bool:
+    return get_master_session_status(request) == MasterSessionStatus.UNAVAILABLE
+
+
 def requires_mfa_verification(context: PlatformAuthContext | None) -> bool:
     return bool(context is not None and context.mfa_enabled and not context.mfa_verified)
 
@@ -53,6 +93,8 @@ def require_platform_permission(permission: str) -> Callable[[Request], Any]:
 
 
 def has_platform_admin_session(request: Request) -> bool:
+    if has_master_key_session(request):
+        return True
     context = get_platform_auth_context(request)
     if context is None:
         return False

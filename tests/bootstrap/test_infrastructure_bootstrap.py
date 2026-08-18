@@ -39,6 +39,7 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
             self.redis_client = redis_client
             self.file_config = file_config
             self.closed = False
+            self.subscribers = []
 
         async def initialize(self) -> None:
             created["dynamic_initialized"] = True
@@ -56,6 +57,9 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
                 ),
                 deltallm_settings=SimpleNamespace(),
             )
+
+        def subscribe(self, callback) -> None:  # noqa: ANN001
+            self.subscribers.append(callback)
 
         async def close(self) -> None:
             self.closed = True
@@ -98,6 +102,17 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
         async def disconnect(self) -> None:
             self.disconnected = True
 
+    class FakeUIBrandingAssetService:
+        def __init__(self, db_client) -> None:  # noqa: ANN001
+            self.db_client = db_client
+            self.initialized_with = None
+
+        async def initialize(self, cfg) -> None:  # noqa: ANN001
+            self.initialized_with = cfg
+
+        async def on_config_change(self, cfg, changes) -> None:  # noqa: ANN001
+            del cfg, changes
+
     monkeypatch.setattr(
         "src.bootstrap.infrastructure.get_settings",
         lambda: SimpleNamespace(
@@ -131,6 +146,9 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
     )
     monkeypatch.setattr(
         "src.bootstrap.infrastructure.DynamicConfigManager", FakeDynamicConfigManager
+    )
+    monkeypatch.setattr(
+        "src.bootstrap.infrastructure.UIBrandingAssetService", FakeUIBrandingAssetService
     )
     monkeypatch.setattr("src.bootstrap.infrastructure.Redis", FakeRedis)
     monkeypatch.setattr("src.bootstrap.infrastructure.prisma_manager", FakePrismaManager())
@@ -192,6 +210,11 @@ async def test_init_and_shutdown_infrastructure_runtime(monkeypatch: pytest.Monk
         "postgresql://env-user:env-pass@env-host:5432/env-db?connection_limit=25&pool_timeout=45"
     )
     assert app.state.dynamic_config_manager is runtime.dynamic_config_manager
+    assert app.state.ui_branding_asset_service.db_client == "db-client"
+    assert app.state.ui_branding_asset_service.initialized_with is app.state.app_config
+    assert app.state.dynamic_config_manager.subscribers == [
+        app.state.ui_branding_asset_service.on_config_change
+    ]
     assert app.state.salt_key == "salt"
     assert runtime.http_client.timeout.connect == 7
     assert runtime.http_client.timeout.read == 301

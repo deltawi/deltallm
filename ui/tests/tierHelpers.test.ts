@@ -7,23 +7,27 @@ import {
   formatSimulationPrice,
   capacityPoolFormWithStrategy,
   capacityPoolFormToPayload,
-  capacityPoolsToPayload,
-  capacityPoolToPayload,
   isAssignableTierVersion,
   modelPolicyFormToPayload,
-  modelPoliciesToPayload,
   modelPolicyToForm,
-  modelPolicyToPayload,
   parseNonNegativeIntegerInput,
   parsePositiveIntegerInput,
+  pickEditableVersion,
   pricingEntries,
   pricingProfileForModelMode,
   poolOptionsForCallable,
   summarizePricing,
   summarizeSimulation,
+  tierConfigurationBadges,
+  tierConfigurationEmptyLabel,
+  tierPackageSummary,
   tierSimulationFormToPayload,
   tierAssignmentRequiresActiveVersion,
 } from '../src/lib/tiers';
+import {
+  clampTierPaginationOffset,
+  visibleTierPaginationPages,
+} from '../src/lib/tierPagination';
 import type { TierPolicySimulation } from '../src/lib/api';
 
 test('modelPolicyFormToPayload normalizes optional limits and pricing', () => {
@@ -49,6 +53,78 @@ test('modelPolicyFormToPayload normalizes optional limits and pricing', () => {
   });
   assert.equal(payload.capacity_pool_key, 'shared-chat');
   assert.equal(payload.priority, 3);
+});
+
+test('tier catalog configuration badges follow the Live and Draft truth table', () => {
+  const base = {
+    tier_id: 'tier-1',
+    tier_key: 'pro',
+    name: 'Pro',
+    enabled: true,
+    version_count: 0,
+    assignment_count: 0,
+  };
+  const live = {
+    tier_version_id: 'version-live',
+    version_number: 2,
+    configuration_revision: 0,
+    model_policy_count: 3,
+    capacity_pool_count: 1,
+    created_by_kind: 'account',
+  };
+  const draft = {
+    ...live,
+    tier_version_id: 'version-draft',
+    version_number: 3,
+    model_policy_count: 4,
+  };
+
+  assert.deepEqual(tierConfigurationBadges({ ...base, active_version: live }), [
+    { kind: 'active', label: 'Live v2' },
+  ]);
+  assert.deepEqual(tierConfigurationBadges({ ...base, version_count: 1, latest_draft_version: draft }), [
+    { kind: 'draft', label: 'Draft v3' },
+  ]);
+  assert.deepEqual(tierConfigurationBadges({ ...base, active_version: live, latest_draft_version: draft }), [
+    { kind: 'active', label: 'Live v2' },
+    { kind: 'draft', label: 'Draft v3' },
+  ]);
+  assert.equal(tierConfigurationEmptyLabel(base), 'No configuration');
+  assert.equal(tierConfigurationEmptyLabel({ ...base, version_count: 2 }), 'No live version');
+  assert.deepEqual(tierPackageSummary({ ...base, active_version: live, latest_draft_version: draft }), {
+    modelPolicyCount: 4,
+    capacityPoolCount: 1,
+    versionNumber: 3,
+    versionStatus: 'draft',
+  });
+});
+
+test('tier pagination exposes compact numbered pages', () => {
+  assert.deepEqual(visibleTierPaginationPages(1, 4), [1, 2, 3, 4]);
+  assert.deepEqual(visibleTierPaginationPages(5, 12), [1, null, 4, 5, 6, null, 12]);
+  assert.equal(clampTierPaginationOffset(51, 25, 75), 50);
+  assert.equal(clampTierPaginationOffset(25, 25, 25), 0);
+  assert.equal(clampTierPaginationOffset(0, 25, 50), 0);
+});
+
+test('tier workspace never silently chooses among multiple drafts', () => {
+  const live = {
+    tier_version_id: 'live',
+    tier_id: 'tier-1',
+    version_number: 1,
+    status: 'active',
+    configuration_revision: 0,
+    created_by_kind: 'unknown',
+    model_policy_count: 0,
+    capacity_pool_count: 0,
+    assignment_count: 0,
+  };
+  const draftTwo = { ...live, tier_version_id: 'draft-2', version_number: 2, status: 'draft' };
+  const draftThree = { ...live, tier_version_id: 'draft-3', version_number: 3, status: 'draft' };
+
+  assert.equal(pickEditableVersion([live, draftTwo])?.tier_version_id, 'draft-2');
+  assert.equal(pickEditableVersion([live, draftThree, draftTwo])?.tier_version_id, 'live');
+  assert.equal(pickEditableVersion([draftThree, draftTwo]), null);
 });
 
 test('modelPolicyFormToPayload supports full token pricing fields', () => {
@@ -105,7 +181,7 @@ test('modelPolicyFormToPayload supports image and audio pricing fields', () => {
   });
 });
 
-test('model policy payload helpers preserve metadata and strip response-only fields', () => {
+test('model policy form payload preserves existing metadata and pricing', () => {
   const existing = {
     tier_model_policy_id: 'policy-1',
     tier_version_id: 'version-1',
@@ -125,14 +201,9 @@ test('model policy payload helpers preserve metadata and strip response-only fie
     ...modelPolicyToForm(existing),
     rpm_limit: '240',
   }, existing);
-  const sanitized = modelPolicyToPayload(existing);
 
   assert.deepEqual(fromForm.metadata, { source: 'api' });
   assert.deepEqual(fromForm.pricing, { input_cost_per_token: 0.01 });
-  assert.deepEqual(sanitized.metadata, { source: 'api' });
-  assert.equal('tier_model_policy_id' in sanitized, false);
-  assert.equal('created_at' in sanitized, false);
-  assert.deepEqual(modelPoliciesToPayload([existing])[0], sanitized);
 });
 
 test('modelPolicyFormToPayload preserves hidden pricing keys while editing visible fields', () => {
@@ -268,7 +339,7 @@ test('capacityPoolFormToPayload normalizes optional shared capacity fields', () 
   assert.equal(payload.saturation_threshold, 0.9);
 });
 
-test('capacity pool payload helpers preserve metadata and strip response-only fields', () => {
+test('capacity pool form payload preserves existing metadata', () => {
   const existing = {
     tier_capacity_pool_id: 'pool-1',
     tier_version_id: 'version-1',
@@ -290,13 +361,8 @@ test('capacity pool payload helpers preserve metadata and strip response-only fi
     callable_key: 'gpt-4o-mini',
     rpm_capacity: '1200',
   }, existing);
-  const sanitized = capacityPoolToPayload(existing);
 
   assert.deepEqual(fromForm.metadata, { source: 'api' });
-  assert.deepEqual(sanitized.metadata, { source: 'api' });
-  assert.equal('tier_capacity_pool_id' in sanitized, false);
-  assert.equal('created_at' in sanitized, false);
-  assert.deepEqual(capacityPoolsToPayload([existing])[0], sanitized);
 });
 
 test('capacity pool strategy helper fills only relevant safe defaults', () => {

@@ -36,7 +36,7 @@ export default function TeamSelfServicePolicySection({
       <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 space-y-3">
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-2.5">
-            <Key className="w-4 h-4 text-indigo-600 mt-0.5 shrink-0" />
+            <Key className="w-4 h-4 text-brand-secondary-ink mt-0.5 shrink-0" />
             <div>
               <p className="text-sm font-medium text-gray-800">Allow developers to create personal API keys</p>
               <p className="text-xs text-gray-500 mt-0.5">
@@ -63,7 +63,7 @@ export default function TeamSelfServicePolicySection({
               type="button"
               onClick={() => setShowAdvanced((current) => !current)}
               disabled={disabled}
-              className="flex items-center gap-1.5 text-xs font-medium text-indigo-700 hover:text-indigo-800 disabled:opacity-50"
+              className="flex items-center gap-1.5 text-xs font-medium text-indigo-700 hover:text-brand-secondary-ink-hover disabled:opacity-50"
             >
               <ChevronRight className={`w-3.5 h-3.5 transition-transform ${showAdvanced ? 'rotate-90' : ''}`} />
               Optional self-service limits
@@ -81,7 +81,7 @@ export default function TeamSelfServicePolicySection({
                       min="1"
                       placeholder="Unlimited"
                       disabled={disabled}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:opacity-50"
                     />
                   </div>
                   <div>
@@ -96,7 +96,7 @@ export default function TeamSelfServicePolicySection({
                         step="0.01"
                         placeholder="No ceiling"
                         disabled={disabled}
-                        className="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                        className="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:opacity-50"
                       />
                     </div>
                   </div>
@@ -128,7 +128,7 @@ export default function TeamSelfServicePolicySection({
                         min="1"
                         placeholder="No limit"
                         disabled={disabled}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary disabled:opacity-50"
                       />
                     </div>
                   )}

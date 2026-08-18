@@ -12,7 +12,6 @@ class _FakePrisma:
         assignment_version_status: str = "active",
         assignment_tier_exists: bool = True,
         assignment_tier_enabled: bool = True,
-        mutation_version_status: str = "draft",
         version_lookup_status: str = "draft",
         unpinned_assignment_count: int = 0,
         pinned_assignment_count: int = 0,
@@ -31,7 +30,6 @@ class _FakePrisma:
         self.assignment_version_status = assignment_version_status
         self.assignment_tier_exists = assignment_tier_exists
         self.assignment_tier_enabled = assignment_tier_enabled
-        self.mutation_version_status = mutation_version_status
         self.version_lookup_status = version_lookup_status
         self.unpinned_assignment_count = unpinned_assignment_count
         self.pinned_assignment_count = pinned_assignment_count
@@ -60,8 +58,6 @@ class _FakePrisma:
                     "status": self.assignment_version_status,
                 }
             ]
-        if "SELECT status" in sql and "FROM deltallm_tierversion" in sql:
-            return [{"status": self.mutation_version_status}]
         if "pg_advisory_xact_lock" in sql:
             return [{"locked": None}]
         if "FROM deltallm_tier\n" in sql and "WHERE tier_id = $1" in sql:
@@ -130,6 +126,10 @@ class _FakePrisma:
             return [{"total": 1}]
         if "FROM deltallm_tier t" in sql and "ORDER BY t.created_at" in sql:
             return [_tier_row()]
+        if "FROM deltallm_tier t" in sql and (
+            "WHERE t.tier_id = $1" in sql or "WHERE t.tier_key = $1" in sql
+        ):
+            return [_tier_row()]
         if "INSERT INTO deltallm_tier (" in sql:
             return [
                 _tier_row(
@@ -141,6 +141,9 @@ class _FakePrisma:
                     active_version_id=None,
                     version_count=0,
                     assignment_count=0,
+                    draft_count=0,
+                    live_assignment_count=0,
+                    organization_count=0,
                 )
             ]
         if "INSERT INTO deltallm_tierversion" in sql:
@@ -151,7 +154,10 @@ class _FakePrisma:
                     status=str(params[2]),
                     published_at=params[3],
                     published_by_account_id=str(params[4]) if params[4] is not None else None,
-                    metadata=params[5],
+                    created_by_account_id=str(params[5]) if params[5] is not None else None,
+                    created_by_kind=str(params[6]),
+                    source_tier_version_id=str(params[7]) if params[7] is not None else None,
+                    metadata=params[8],
                 )
             ]
         if "UPDATE deltallm_tierversion AS v" in sql and "SET status = 'active'" in sql:
@@ -324,7 +330,6 @@ class _FakeTxContext:
             assignment_version_status=self.root.assignment_version_status,
             assignment_tier_exists=self.root.assignment_tier_exists,
             assignment_tier_enabled=self.root.assignment_tier_enabled,
-            mutation_version_status=self.root.mutation_version_status,
             version_lookup_status=self.root.version_lookup_status,
             unpinned_assignment_count=self.root.unpinned_assignment_count,
             pinned_assignment_count=self.root.pinned_assignment_count,
@@ -358,6 +363,9 @@ def _tier_row(
     active_version_id: str | None = "ver-active",
     version_count: int = 2,
     assignment_count: int = 3,
+    draft_count: int = 1,
+    live_assignment_count: int = 2,
+    organization_count: int = 2,
 ) -> dict[str, object]:
     return {
         "tier_id": "tier-1",
@@ -367,8 +375,33 @@ def _tier_row(
         "enabled": enabled,
         "metadata": metadata,
         "active_version_id": active_version_id,
+        "active_version_number": 1 if active_version_id else None,
+        "active_configuration_revision": 0 if active_version_id else None,
+        "active_model_policy_count": 1 if active_version_id else None,
+        "active_capacity_pool_count": 1 if active_version_id else None,
+        "active_created_by_account_id": None,
+        "active_created_by_kind": "unknown" if active_version_id else None,
+        "active_created_by_email": None,
+        "active_source_tier_version_id": None,
+        "active_created_at": None,
+        "active_updated_at": None,
+        "draft_version_id": "ver-draft" if draft_count else None,
+        "draft_version_number": 2 if draft_count else None,
+        "draft_configuration_revision": 3 if draft_count else None,
+        "draft_model_policy_count": 2 if draft_count else None,
+        "draft_capacity_pool_count": 1 if draft_count else None,
+        "draft_created_by_account_id": "account-1" if draft_count else None,
+        "draft_created_by_kind": "account" if draft_count else None,
+        "draft_created_by_email": "admin@example.com" if draft_count else None,
+        "draft_source_tier_version_id": active_version_id if draft_count else None,
+        "draft_created_at": None,
+        "draft_updated_at": None,
+        "draft_count": draft_count,
         "version_count": version_count,
         "assignment_count": assignment_count,
+        "live_assignment_count": live_assignment_count,
+        "organization_count": organization_count,
+        "last_activity_at": None,
         "created_at": None,
         "updated_at": None,
     }
@@ -379,8 +412,12 @@ def _version_row(
     tier_id: str = "tier-1",
     version_number: int = 1,
     status: str = "draft",
+    configuration_revision: int = 0,
     published_at: object = None,
     published_by_account_id: str | None = None,
+    created_by_account_id: str | None = None,
+    created_by_kind: str = "unknown",
+    source_tier_version_id: str | None = None,
     metadata: object = None,
 ) -> dict[str, object]:
     return {
@@ -388,8 +425,12 @@ def _version_row(
         "tier_id": tier_id,
         "version_number": version_number,
         "status": status,
+        "configuration_revision": configuration_revision,
         "published_at": published_at,
         "published_by_account_id": published_by_account_id,
+        "created_by_account_id": created_by_account_id,
+        "created_by_kind": created_by_kind,
+        "source_tier_version_id": source_tier_version_id,
         "metadata": metadata,
         "model_policy_count": 0,
         "capacity_pool_count": 0,

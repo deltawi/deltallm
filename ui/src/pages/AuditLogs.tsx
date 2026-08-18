@@ -94,7 +94,7 @@ function EventDetailPanel({ eventId, onClose, onViewTimeline }: { eventId: strin
   if (loading) {
     return (
       <div className="fixed inset-y-0 right-0 w-full max-w-lg bg-white shadow-xl z-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-primary" />
       </div>
     );
   }
@@ -176,7 +176,7 @@ function EventDetailPanel({ eventId, onClose, onViewTimeline }: { eventId: strin
                   onClose();
                   onViewTimeline(event.request_id || event.correlation_id || '');
                 }}
-                className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 mt-1"
+                className="inline-flex items-center gap-1 text-xs text-brand-primary-ink hover:text-brand-primary-ink-hover mt-1"
               >
                 <ExternalLink className="w-3 h-3" /> View Timeline
               </button>
@@ -286,8 +286,6 @@ export default function AuditLogs() {
     try {
       const url = audit.exportUrl({ ...filterParams, format, limit: 10000 });
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      const masterKey = sessionStorage.getItem('deltallm_master_key');
-      if (masterKey) headers['X-Master-Key'] = masterKey;
       const res = await fetch(url, { credentials: 'include', headers });
       if (!res.ok) throw new Error(`Export failed (${res.status})`);
       const blob = await res.blob();
@@ -414,7 +412,7 @@ export default function AuditLogs() {
           <div className="text-sm text-blue-800">
             Showing timeline for request: <code className="rounded bg-blue-100 px-1.5 py-0.5 font-mono text-xs">{requestIdFilter}</code>
           </div>
-          <button type="button" onClick={clearRequestIdFilter} className="text-sm font-medium text-blue-600 hover:text-blue-800">
+          <button type="button" onClick={clearRequestIdFilter} className="text-sm font-medium text-brand-primary-ink hover:text-brand-primary-ink-hover">
             Clear filter
           </button>
         </div>
@@ -424,7 +422,7 @@ export default function AuditLogs() {
           <select
             value={category}
             onChange={(e) => setCategory(e.target.value as Category)}
-            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary"
           >
             {CATEGORY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
@@ -432,7 +430,7 @@ export default function AuditLogs() {
           <select
             value={action}
             onChange={(e) => setAction(e.target.value)}
-            className="max-w-[260px] rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+            className="max-w-[260px] rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary"
           >
             <option value="">All Actions</option>
             {availableActions.map((item) => <option key={item} value={item}>{formatActionLabel(item)}</option>)}
@@ -441,7 +439,7 @@ export default function AuditLogs() {
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary"
           >
             <option value="">All Statuses</option>
             <option value="success">Success</option>
@@ -452,13 +450,13 @@ export default function AuditLogs() {
             type="date"
             value={startDate}
             onChange={(e) => setStartDate(e.target.value)}
-            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary"
           />
           <input
             type="date"
             value={endDate}
             onChange={(e) => setEndDate(e.target.value)}
-            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary"
           />
 
           <div className="relative min-w-[220px] flex-1">
@@ -468,7 +466,7 @@ export default function AuditLogs() {
               value={actorIdFilter}
               onChange={(e) => setActorIdFilter(e.target.value)}
               placeholder="Search by actor ID"
-              className="w-full rounded-lg border border-gray-300 py-2 pl-9 pr-3 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-lg border border-gray-300 py-2 pl-9 pr-3 text-sm focus:border-brand-primary focus:ring-2 focus:ring-brand-primary"
             />
           </div>
           <button

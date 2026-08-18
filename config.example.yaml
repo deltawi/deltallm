@@ -48,6 +48,11 @@ router_settings:
 
 general_settings:
   instance_name: DeltaLLM
+  # Installation-wide UI branding. Logo and favicon BLOBs are managed from Settings > Theme.
+  ui_branding:
+    primary_color: "#2563EB"
+    secondary_color: "#7C3AED"
+    menu_hover_color: "#F9FAFB"
 
   # Required secrets
   master_key: os.environ/DELTALLM_MASTER_KEY
